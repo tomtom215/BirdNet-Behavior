@@ -261,6 +261,10 @@ a:hover { text-decoration: underline; }
    stopped being a bare statement, and the list above is per-container rather
    than app-wide, so a new prose container has to join it. */
 .save-note a,
+/* The first-run checklist on Today: "set one in the setup wizard or Settings →
+   Accounts". It only renders on a station that has something to set up, so the
+   populated fixture never showed it; an empty one did, in the light theme. */
+.x-check-row .d a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -405,14 +409,14 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-avatar {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;
-  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: .5px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: .5px;
   background: color-mix(in oklch, var(--sp, var(--moss)) 22%, var(--surface));
   /* The hue keeps the species' identity; the mix towards --sp-ink is what
      makes it readable on the tint in both themes (DD-29). */
   color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
   position: relative; overflow: hidden;
 }
-.bnb-avatar.sm { width: 24px; height: 24px; font-size: 9px; }
+.bnb-avatar.sm { width: 24px; height: 24px; font-size: 10px; }
 .bnb-avatar.lg { width: 36px; height: 36px; font-size: 11px; }
 .bnb-avatar-img {
   position: absolute; inset: 0; width: 100%; height: 100%;
@@ -2540,6 +2544,9 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
   /* Hide the topnav links list; brand + theme toggle stay so the user can
      identify the station and flip dark/light from the top. */
   .topnav-links { display: none; }
+  /* …and the rule that separated the brand from them, which on a phone divided
+     the brand from nothing. */
+  .lay-vrule { display: none; }
   .topnav-right .nav-search { display: none; }
 }
 
@@ -2725,7 +2732,12 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 
 /* ── Configuration diagnostics page (/admin/doctor) — O-25 harmonisation ──
    Faithful extraction of the inline shapes doctor.rs used to build. */
-.doc-card     { max-width: 820px; margin: 8px auto; padding: 24px 28px; }
+/* `min-width: 0` and the wrap below: the card is a flex item with auto margins,
+   so it is as wide as its longest unbreakable run, and a finding that quotes a
+   model path ("…/BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx") made it 442px
+   on a 390px phone, and the whole page with it. The fixture's findings are
+   short; a station with models configured is not. */
+.doc-card     { max-width: 820px; min-width: 0; margin: 8px auto; padding: 24px 28px; }
 .doc-head     { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 0 0 6px; }
 .doc-head h1  { margin: 0; font-size: 22px; }
 .doc-path     { opacity: 0.7; margin: 0 0 16px; }
@@ -2734,7 +2746,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .doc-subhead  { font-size: 16px; margin: 18px 0 8px; }
 .doc-hr       { border: none; border-top: 1px solid var(--border-2); margin: 20px 0; }
 .doc-note     { opacity: 0.8; font-size: 14px; }
-.doc-finding  { border-left: 3px solid var(--border-2); padding: 8px 14px; margin: 8px 0; border-radius: var(--r-sm); }
+.doc-finding  { border-left: 3px solid var(--border-2); padding: 8px 14px; margin: 8px 0; border-radius: var(--r-sm); overflow-wrap: anywhere; }
 .doc-finding-key { font-weight: 600; }
 .doc-finding-msg { margin: 2px 0; }
 
@@ -2811,7 +2823,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .yir-tape      { display: flex; gap: 3px; align-items: stretch; margin-top: 6px; }
 .yir-tape-cell { flex: 1; height: 38px; border-radius: 3px; }
 .yir-months    { display: flex; gap: 3px; margin-top: 4px; }
-.yir-month     { flex: 1; text-align: center; font-size: 8px; }
+.yir-month     { flex: 1; text-align: center; font-size: 10px; }
 .yir-cols      { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--pad-3); margin-top: var(--pad-3); }
 .yir-row       { display: grid; grid-template-columns: 18px 28px 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-top: 0.5px solid var(--hairline); }
 .yir-row.first { border-top: 0; }
@@ -2966,7 +2978,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .dc-row-head   { display: flex; align-items: center; gap: 6px; }
 .dc-row-name   { font-weight: 500; }
 .dc-strip      { margin-top: 4px; }
-.dc-offchorus  { font-size: 9.5px; }
+.dc-offchorus  { font-size: 10px; }
 .dc-polar-svg  { max-width: 540px; max-height: 540px; display: block; }
 /* dc-row was an inline grid → collapsed to one column on phones by the global
    `[style*="grid-template-columns"]` reset. Match that exactly. */
@@ -2979,8 +2991,8 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
    (--primary/--warning/--success/--danger/--bg-hover/--text/--text-muted).
    Only the audio player keeps an inline width (self-contained control). */
 .qz-head       { margin-bottom: 1.5rem; }
-.qz-title-row  { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 0.25rem; }
-.qz-h1         { font-size: 1.5rem; font-weight: 700; margin: 0; }
+.qz-eyebrow    { display: flex; align-items: center; gap: 10px; }
+.qz-h1         { font-size: 34px; margin: 0 0 .5rem; }
 .qz-lede       { color: var(--text-muted); font-size: 0.9rem; }
 .qz-lede a     { color: var(--fg); }  /* underline: see "Prose links" */
 .qz-loading    { color: var(--text-muted); }
@@ -3156,10 +3168,31 @@ a.spp-inherit    { color: inherit; }
 .sp-cell { display: flex; align-items: center; gap: 11px; min-width: 0; text-decoration: none; color: inherit; }
 .sp-cell-tx { min-width: 0; display: flex; flex-direction: column; }
 .sp-nm { font-weight: 500; font-size: 13.5px; }
-.sp-nm .badge { font-size: 9.5px; padding: 1px 6px; margin-left: 6px; }
+.sp-nm .badge { font-size: 10px; padding: 1px 6px; margin-left: 6px; }
 .sp-sci { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); font-style: italic; }
 .sp-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .sp-row-link { color: inherit; text-decoration: none; display: contents; }
+/* The global `table { display: block; white-space: nowrap }` below 980px turns
+   this into a sideways scroller whose count and confidence columns start off
+   screen on a phone, with nothing to say they are there. Below 520px it is a
+   table again, wrapping, without the sparkline or the confidence bar (the
+   percentage stays), and without the rank below 400px. `data-fits-phone` on
+   the table holds it to that in tools/visual-qa/qa.mjs. */
+@media (max-width: 520px) {
+  .sp-table { display: table; white-space: normal; }
+  .sp-table th:nth-child(3), .sp-table td:nth-child(3) { display: none; }
+  .sp-table th, .sp-table td { padding-left: 5px; padding-right: 5px; }
+  .sp-table th { letter-spacing: 0.02em; }
+  .sp-table .bnb-conf .track { display: none; }
+  .sp-table .sp-rank { width: auto; }
+  .sp-table .sp-cell { gap: 8px; }
+  /* A German compound is one word, and its unbroken width alone made the table
+     314px in a 304px box at 390px. A name breaks inside a word only when it must. */
+  .sp-table .sp-nm, .sp-table .sp-sci { overflow-wrap: anywhere; }
+}
+@media (max-width: 400px) {
+  .sp-table th.sp-rank, .sp-table td.sp-rank { display: none; }
+}
 
 /* photos grid */
 .sp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
@@ -3252,12 +3285,12 @@ a.spp-inherit    { color: inherit; }
 .rp-new { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }
 .rp-new:first-child { border-top: 0; }
 .rp-new .when { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--moss-ink); }
-.rp-new .bnb-pill { font-size: 9.5px; }
+.rp-new .bnb-pill { font-size: 10px; }
 
 /* Year tape + milestones */
 .rp-tape { display: grid; grid-template-columns: repeat(52, 1fr); gap: 2px; }
 .rp-tape span { aspect-ratio: 1/2.4; border-radius: 2px; }
-.rp-tape-labels { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--font-mono); font-size: 9px; color: var(--fg-4); }
+.rp-tape-labels { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-4); }
 .rp-milestone { display: flex; gap: 13px; padding: 13px 0; border-top: 0.5px solid var(--hairline); }
 .rp-milestone:first-child { border-top: 0; }
 .rp-milestone .ic { width: 30px; height: 30px; border-radius: 999px; flex: none; display: grid; place-items: center; background: var(--dawn-soft); color: var(--dawn-ink); font-size: 14px; }
@@ -3276,7 +3309,7 @@ a.spp-inherit    { color: inherit; }
 .rp-day.empty { border: 0; background: transparent; cursor: default; }
 .rp-day .dn { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
 .rp-day .dc { position: absolute; left: 9px; bottom: 7px; font-family: var(--font-display); font-size: 17px; color: var(--fg); }
-.rp-day .dsp { position: absolute; right: 8px; bottom: 8px; font-family: var(--font-mono); font-size: 9px; color: var(--fg); }
+.rp-day .dsp { position: absolute; right: 8px; bottom: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--fg); }
 .rp-day.sel { border-color: var(--moss); box-shadow: 0 0 0 1px var(--moss); }
 .rp-legend { display: flex; align-items: center; gap: 5px; margin-top: 12px; justify-content: flex-end; font-size: 10.5px; color: var(--fg-4); }
 .rp-legend span { width: 13px; height: 13px; border-radius: 3px; }
@@ -3487,7 +3520,7 @@ a.tdl-time        { color: inherit; }
 /* ── Dashboard feed / top-species / species-list / most-recent partials
       (dashboard/partials.rs). The list-row column override relied on the global
       [style*="grid-template-columns"] ≤520px reset → own breakpoint. ──────── */
-.dp-badge       { font-size: 9.5px; }
+.dp-badge       { font-size: 10px; }
 .dp-audio-row   { height: 30px; width: 120px; }
 a.dp-ago        { color: inherit; text-decoration: none; }
 a.dp-link       { color: inherit; }
@@ -3727,7 +3760,7 @@ svg.eq-curve .eqc-grid  { stroke: var(--hairline); stroke-width: 1; }
 svg.eq-curve .eqc-zero  { stroke: var(--border-2); stroke-width: 1; }
 svg.eq-curve .eqc-line  { fill: none; stroke: var(--moss); stroke-width: 1.75;
                           stroke-linejoin: round; stroke-linecap: round; }
-svg.eq-curve text       { font-family: var(--font-mono); font-size: 8.5px; fill: var(--fg-4); }
+svg.eq-curve text       { font-family: var(--font-mono); font-size: 10px; fill: var(--fg-4); }
 svg.eq-curve .eqc-xlabel { text-anchor: middle; }
 svg.eq-curve .eqc-ylabel { text-anchor: end; }
 
@@ -3740,6 +3773,51 @@ a.am-nav-active   { color: var(--moss-ink); font-weight: 500; }
 .am-nav-group:first-child { padding-left: 0; border-left: 0; }
 .am-logout-form   { margin-left: auto; display: inline; }
 .am-signout-btn   { font-size: .875rem; padding: .25rem .75rem; }
+
+/* Live log viewer (admin/logs.rs) — styles that were an inline <style> in the
+   viewer's own document. The `.log-*` and `.level-*` names are the ones the SSE
+   stream's lines carry (`log_line_to_event`). */
+.logv-title { font-family: var(--font-display); font-size: 1.75rem; font-weight: 400; color: var(--fg); margin: 0 0 1rem; }
+.logv-controls { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-bottom: 1rem; align-items: center; }
+.logv-ctl { display: flex; align-items: center; gap: .5rem; font-size: .875rem; color: var(--fg-3); }
+.logv-select { background: var(--surface); border: 1px solid var(--border); color: var(--fg); border-radius: .25rem; padding: .25rem .5rem; font-size: .8rem; }
+.logv-status { font-size: .8rem; color: var(--fg-3); }
+.logv-status.connected { color: var(--moss-ink); }
+.logv-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: .5rem;
+  padding: 1rem; height: min(600px, 62vh); overflow-y: auto;
+  font-family: var(--font-mono); font-size: .8rem;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.log-line { display: flex; gap: .75rem; line-height: 1.4; }
+.log-level { min-width: 50px; font-weight: 700; }
+.log-target { color: var(--fg-4); min-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-msg { color: var(--fg-2); flex: 1; word-break: break-all; }
+.level-error .log-level { color: var(--rare); }
+.level-warn  .log-level { color: var(--dawn-ink); }
+.level-info  .log-level { color: var(--moss-ink); }
+.level-debug .log-level, .level-trace .log-level { color: var(--fg-3); }
+@media (max-width: 720px) { .log-target { display: none; } }
+
+/* The admin sub-navigation row, inside the shared layout (admin/mod.rs).
+   These rules were an inline <style> in the admin shell's own document. On a
+   phone the row was 20 links wrapped to five lines — 70 % of the first screen —
+   so below 720px it is one swipeable line with the trailing fade the other tab
+   strips use (`.bnb-subtabs`); the group labels stay, so the clusters read. */
+.admin-nav { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 0.5px solid var(--hairline); }
+.admin-nav a { color: var(--fg-3); text-decoration: none; font-size: .875rem; }
+.admin-nav a:hover { color: var(--moss-ink); }
+@media (max-width: 720px) {
+  .admin-nav {
+    flex-wrap: nowrap; overflow-x: auto; gap: 1rem; padding-right: 36px;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent 100%);
+  }
+  .admin-nav::-webkit-scrollbar { display: none; }
+  .admin-nav > * { flex: none; white-space: nowrap; }
+  .admin-nav a { padding: 10px 2px; }
+}
 
 /* ══ O-25 sweep — listen page + cross-cutting layout/partials ══════════════ */
 
@@ -3806,7 +3884,10 @@ a.ap-back        { color: var(--accent, var(--moss-ink)); text-decoration: none;
 .pm-404-text     { opacity: .8; margin: 0 0 20px; }
 
 /* empty_states.rs (6 blocks reuse .es-h / .es-sub; one a.es-link). */
-.es-h            { font-size: 22px; margin-top: 14px; }
+/* A `<p>`, not a heading: these fragments land under an h1 with no h2 as often
+   as under a card title, and either a fixed level or none skips one of them.
+   A paragraph's default bottom margin is zeroed to match the h3 it replaced. */
+.es-h            { font-size: 22px; margin: 14px 0 0; }
 .es-sub          { margin-top: 6px; }
 a.es-link        { color: var(--moss-ink); }
 
@@ -3912,7 +3993,7 @@ a.sr-about       { color: var(--fg-3); }
 .mig-band-spring { font-size: 10px; fill: var(--moss-ink); }
 .mig-band-fall   { font-size: 10px; fill: var(--dawn-ink); }
 .mig-name        { font-size: 12px; fill: var(--fg); font-weight: 500; }
-.mig-sub         { font-size: 9.5px; fill: var(--fg-3); }
+.mig-sub         { font-size: 10px; fill: var(--fg-3); }
 .mig-today       { font-size: 10px; fill: var(--bg); }
 .mig-peak-val    { font-size: 28px; }
 .mig-headline    { font-size: 20px; margin-top: 8px; }
@@ -3934,7 +4015,7 @@ a.sr-about       { color: var(--fg-3); }
 .dcv-hr      { font-size: 11px; fill: var(--fg-3); }
 .dcv-ctr     { font-size: 14px; fill: var(--fg-3); }
 .dcv-ctr-sub { font-size: 11px; fill: var(--fg-2); }
-.dcv-sun     { font-size: 9.5px; fill: var(--fg-3); }
+.dcv-sun     { font-size: 10px; fill: var(--fg-3); }
 /* Life-list monthly discovery chart svg (life_list.rs). */
 .ll-chart    { width: 100%; max-height: 180px; display: block; }
 /* Admin migration status "none in progress" fallback (admin/migration.rs). */
@@ -4266,7 +4347,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
 .rc-time .d { display: block; color: var(--fg-4); font-size: 10px; }
 .rc-dur { display: block; color: var(--fg-4); font-size: 10px; font-variant-numeric: tabular-nums; }
-.rc-badge { font-size: 9.5px; vertical-align: middle; }
+.rc-badge { font-size: 10px; vertical-align: middle; }
 .rc-who { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .rc-who-text { min-width: 0; display: flex; flex-direction: column; }
 .rc-who .nm { font-size: 13.5px; font-weight: 500; text-decoration: none; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

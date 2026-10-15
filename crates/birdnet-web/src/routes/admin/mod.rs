@@ -89,6 +89,15 @@ pub(crate) fn admin_subpage_shell(
 /// Shared shell renderer. `active` highlights its nav tab; `breadcrumb` is the
 /// pre-rendered trail (a top-level crumb from [`nav::breadcrumb`] or a sub-page
 /// crumb from [`nav::breadcrumb_subpage`]).
+///
+/// The page is the **shared layout** with the admin sub-navigation inside it, not
+/// a document of its own. It used to be its own `<html>`: a slim nav row, none
+/// of the site header, no footer, no theme toggle, and — on a phone — no bottom
+/// tab bar, so the one place an operator goes to fix something was the one
+/// place with no way back to Today but a breadcrumb, under a nav that wrapped
+/// to five rows and pushed the page below the fold. Every admin page is a
+/// detail of the Station home, so it is rendered as one: the Station tab is lit
+/// and the page takes the Station's width.
 fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> String {
     // The nav row is generated from the single-source manifest in `nav.rs`, so
     // every admin page renders the same tabs with consistent active-state.
@@ -98,72 +107,27 @@ fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> 
     // clearing the cookie. Safe to always render because /admin/* is
     // gated by the cookie middleware; if you're here, you're signed in
     // (or in the no-password "open admin" bypass, where the action is
-    // a no-op).
+    // a no-op). It lives here rather than in the site header (which is told
+    // `signed_in = false` below) because this shell has no request to read the
+    // session from, and one control is better than two.
     let _ = write!(
         nav_html,
         r#"<form action="/logout" method="post" class="am-logout-form">
   <button type="submit" class="bnb-btn ghost am-signout-btn">Sign out</button>
 </form>"#
     );
-    // Themed confirmation modal (O-17): admin pages render through this shell,
-    // not `render_page`, so the modal is injected here too.
-    let confirm_modal = crate::routes::pages::CONFIRM_MODAL_HTML;
-    // Toast / snackbar region (O-18): same rationale — admin POSTs attach OOB
-    // toasts that need a live region in the page.
-    let toast_region = crate::routes::pages::TOAST_REGION_HTML;
-    // Command palette overlay (O-19): ⌘K works on every page including admin.
-    let cmdk_partial = crate::routes::pages::CMDK_HTML;
-    // Help drawer dialog (O-20): admin pages reference Topic links too.
-    let help_drawer = crate::routes::pages::HELP_DRAWER_HTML;
-    // Versioned stylesheet URL — see `pages::with_asset_version`.
-    let css_v = env!("CARGO_PKG_VERSION");
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{title} — BirdNet-Behavior Admin</title>
-<script src="/static/theme-guard.js?v={css_v}"></script>
-<link rel="stylesheet" href="/static/css/app.css?v={css_v}">
-<script src="/static/htmx.min.js?v={css_v}"></script>
-<script src="/static/poll-visibility.js?v={css_v}"></script>
-<script src="/static/base-path.js?v={css_v}"></script>
-<style>
-  body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}
-  .admin-wrap {{ max-width:1180px; margin:0 auto; padding:1.5rem 1.25rem 3rem; }}
-  .admin-nav {{ display:flex; flex-wrap:wrap; gap:1.25rem; margin-bottom:1.75rem; padding-bottom:1rem; border-bottom:0.5px solid var(--hairline); }}
-  .admin-nav a {{ color:var(--fg-3); text-decoration:none; font-size:.875rem; }}
-  .admin-nav a:hover {{ color:var(--moss-ink); }}
-</style>
-</head>
-<body>
-<!-- A `<main>` and a skip link, which this shell had neither of.
-     Consequences, all three now fixed: every /admin/* page's content sat
-     outside all landmarks (axe `region` + `landmark-one-main`, 8 routes);
-     keyboard users tabbed through ~13 nav links on every page with no bypass,
-     while `layout.html` has had a skip link all along; and a `page-head`
-     block inside an admin body became a *banner* landmark here while the same
-     fragment rendered through `layout.html` on the matching Station tab was a
-     plain generic — identical markup, different semantics, depending on the
-     route it was reached by. -->
-<!-- Single-quoted href on purpose: a double quote followed by a hash closes
-     the raw string literal this shell is written in. -->
-<a href='#main-content' class="skip-link">Skip to content</a>
-<div class="admin-wrap">
-  <nav class="admin-nav" aria-label="Admin sections">{nav_html}</nav>
-  <main id="main-content">
-  {breadcrumb}
-  {body}
-  </main>
-</div>
-{toast_region}
-{confirm_modal}
-{cmdk_partial}
-{help_drawer}
-</body>
-</html>"#
+    let content = format!(
+        r#"<nav class="admin-nav" aria-label="Admin sections">{nav_html}</nav>
+{breadcrumb}
+{body}"#
+    );
+    crate::routes::pages::render_page_for_request(
+        title,
+        &content,
+        "station",
+        &axum::http::HeaderMap::new(),
     )
+    .0
 }
 
 /// Build the admin router and mount all sub-routes.

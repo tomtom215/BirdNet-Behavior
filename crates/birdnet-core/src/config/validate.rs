@@ -483,14 +483,18 @@ fn check_lang(config: &Config, out: &mut Vec<Finding>) {
         return;
     };
     let raw = raw.trim();
-    let is_iso639_1 = raw.len() == 2 && raw.chars().all(|c| c.is_ascii_lowercase());
-    if !is_iso639_1 {
-        out.push(Finding::warn(
-            "DATABASE_LANG",
-            format!("DATABASE_LANG={raw:?} is not a two-letter ISO-639-1 code"),
-            r#"use a code like "en", "de", "fr", "es", "pt", "it", "ja", or "zh""#.to_string(),
-        ));
+    if raw.is_empty() || crate::i18n::find_language(raw).is_some() {
+        return;
     }
+    let codes: Vec<&str> = crate::i18n::LANGUAGES.iter().map(|l| l.code).collect();
+    out.push(Finding::warn(
+        "DATABASE_LANG",
+        format!(
+            "DATABASE_LANG={raw:?} is not a language species names are available in; \
+             names are shown as the classifier gives them"
+        ),
+        format!("use one of: {}", codes.join(", ")),
+    ));
 }
 
 fn parse_float(config: &Config, key: &str) -> Option<Result<f64, std::num::ParseFloatError>> {
@@ -718,14 +722,33 @@ mod tests {
     }
 
     #[test]
-    fn database_lang_three_letters_warns() {
-        let c = cfg(&[("DATABASE_LANG", "eng")]);
-        let findings = validate(&c);
-        assert!(
-            findings
+    fn database_lang_that_is_not_a_language_we_have_warns_and_names_the_choices() {
+        for raw in ["eng", "xx", "zh", "english"] {
+            let c = cfg(&[("DATABASE_LANG", raw)]);
+            let findings = validate(&c);
+            let f = findings
                 .iter()
-                .any(|f| f.key == "DATABASE_LANG" && f.severity == Severity::Warning)
-        );
+                .find(|f| f.key == "DATABASE_LANG")
+                .unwrap_or_else(|| panic!("{raw:?} produced no finding"));
+            assert_eq!(f.severity, Severity::Warning, "{raw:?}");
+            assert!(
+                f.remediation.contains("zh_CN") && f.remediation.contains("de"),
+                "{}",
+                f.remediation
+            );
+        }
+    }
+
+    #[test]
+    fn database_lang_every_bundled_code_and_the_usual_spellings_are_clean() {
+        for lang in crate::i18n::LANGUAGES {
+            let c = cfg(&[("DATABASE_LANG", lang.code)]);
+            assert!(is_clean(&validate(&c)), "{}", lang.code);
+        }
+        for raw in ["DE", "de_DE", "pt-BR", "zh-cn", " fr ", ""] {
+            let c = cfg(&[("DATABASE_LANG", raw)]);
+            assert!(is_clean(&validate(&c)), "{raw:?}");
+        }
     }
 
     #[test]

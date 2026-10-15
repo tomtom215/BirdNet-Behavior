@@ -30,7 +30,7 @@ pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
     state
         .run_blocking(move |state| {
             let (exclude, include) = load_lists(state);
-            Html(render_species_partial(&exclude, &include))
+            Html(render_species_partial(&exclude, &include, state.names()))
         })
         .await
 }
@@ -48,7 +48,12 @@ pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
                 .into_iter()
                 .map(|s| (s.sci_name, s.com_name, s.count.max(0) as u64))
                 .collect();
-            Html(render_filter_test_page(&exclude, &include, &rows))
+            Html(render_filter_test_page(
+                &exclude,
+                &include,
+                &rows,
+                state.names(),
+            ))
         })
         .await
 }
@@ -88,7 +93,11 @@ pub async fn add_exclude(
                 None,
             );
             let (exclude, include) = load_lists(state);
-            Ok(Html(render_species_partial(&exclude, &include)))
+            Ok(Html(render_species_partial(
+                &exclude,
+                &include,
+                state.names(),
+            )))
         })
         .await
 }
@@ -117,7 +126,11 @@ pub async fn remove_exclude(
                 None,
             );
             let (exclude, include) = load_lists(state);
-            Ok(Html(render_species_partial(&exclude, &include)))
+            Ok(Html(render_species_partial(
+                &exclude,
+                &include,
+                state.names(),
+            )))
         })
         .await
 }
@@ -146,7 +159,11 @@ pub async fn add_include(
                 None,
             );
             let (exclude, include) = load_lists(state);
-            Ok(Html(render_species_partial(&exclude, &include)))
+            Ok(Html(render_species_partial(
+                &exclude,
+                &include,
+                state.names(),
+            )))
         })
         .await
 }
@@ -175,7 +192,11 @@ pub async fn remove_include(
                 None,
             );
             let (exclude, include) = load_lists(state);
-            Ok(Html(render_species_partial(&exclude, &include)))
+            Ok(Html(render_species_partial(
+                &exclude,
+                &include,
+                state.names(),
+            )))
         })
         .await
 }
@@ -208,8 +229,9 @@ fn load_thresholds_and_suggestions(
                 birdnet_db::thresholds::suggest_threshold(&reviews).map(|suggestion| {
                     SuggestedThreshold {
                         current: configured.get(sci_name.as_str()).copied(),
+                        // Read by the operator, not matched: in the station's language.
+                        com_name: state.names().name(&sci_name, &com_name).to_owned(),
                         sci_name,
-                        com_name,
                         suggestion,
                     }
                 })
@@ -385,7 +407,7 @@ pub fn configured_species_lists(
 /// include/exclude UI in the main shell.
 pub(crate) fn species_body(state: &AppState) -> String {
     let (exclude, include) = load_lists(state);
-    super::render::species_lists_body(&exclude, &include)
+    super::render::species_lists_body(&exclude, &include, state.names())
 }
 
 fn parse_list(val: Option<&str>) -> Vec<String> {
@@ -407,7 +429,18 @@ pub(crate) fn add_to_exclude_list(state: &AppState, sci_name: &str) {
 }
 
 fn modify_list(state: &AppState, key: &'static str, name: &str, action: &ListAction) {
-    let name = name.trim().to_string();
+    let name = name.trim();
+    // A name typed in the station's language is stored as the scientific name.
+    // The filter resolves entries against the classifier's label set, which has
+    // only the classifier's common names and the scientific names, so *Amsel*
+    // would be accepted, shown as a pill, and match nothing for ever. The
+    // scientific name is the one spelling that means the same in every language,
+    // so the list also survives a change of language.
+    let name = match action {
+        ListAction::Add => state.names().scientific_name_for(name).unwrap_or(name),
+        ListAction::Remove => name,
+    }
+    .to_string();
     if name.is_empty() {
         return;
     }

@@ -2272,6 +2272,7 @@ mod tests {
             &conn,
             birdnet_db::sqlite::RecordingsFilter::All,
             None,
+            &[],
             50,
             0,
         )

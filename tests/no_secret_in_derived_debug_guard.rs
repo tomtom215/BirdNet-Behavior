@@ -69,6 +69,11 @@ const NOT_SECRET: &[(&str, &str, &str)] = &[
         "the station's own listen, image and station links",
     ),
     (
+        "birdnet-integrations/src/notification.rs",
+        "NotificationTemplate",
+        "the station's own address, which every notification it sends carries",
+    ),
+    (
         "birdnet-integrations/src/model_catalog.rs",
         "CatalogEntry",
         "compiled-in public download URLs",

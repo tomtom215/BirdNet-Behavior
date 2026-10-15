@@ -145,8 +145,12 @@ pub(crate) fn series_color(index: usize, total: usize) -> String {
 /// `scientific` may be empty — an imported BirdNET-Pi database can carry a row
 /// with no `Sci_Name` — and then no `<img>` is emitted at all, rather than a
 /// request for `/api/v2/species/image//file` that could only 404.
+///
+/// `common` is the *stored* name and decides the code and the hue, so a species
+/// keeps both whatever language the station is shown in; `shown` is the name in
+/// that language and is only what the tooltip says.
 #[must_use]
-pub(crate) fn avatar(common: &str, scientific: &str, size: &str) -> String {
+pub(crate) fn avatar(common: &str, shown: &str, scientific: &str, size: &str) -> String {
     let cls = if size.is_empty() {
         "bnb-avatar".to_string()
     } else {
@@ -163,7 +167,7 @@ pub(crate) fn avatar(common: &str, scientific: &str, size: &str) -> String {
     format!(
         r#"<span class="{cls}" data-style="--sp:{color}" title="{title}">{code}{photo}</span>"#,
         color = species_color(common),
-        title = escape_html(common),
+        title = escape_html(shown),
         code = species_code(common),
     )
 }
@@ -420,7 +424,7 @@ mod tests {
 
     #[test]
     fn avatar_carries_code_and_color() {
-        let a = avatar("Blue Jay", "Cyanocitta cristata", "lg");
+        let a = avatar("Blue Jay", "Blue Jay", "Cyanocitta cristata", "lg");
         assert!(a.contains("BLJA"));
         assert!(a.contains("bnb-avatar lg"));
         assert!(a.contains("--sp:oklch"));

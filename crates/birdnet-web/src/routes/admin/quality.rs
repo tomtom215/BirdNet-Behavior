@@ -74,7 +74,16 @@ pub(crate) fn load_phantoms(
     let shapes = state
         .with_db(birdnet_db::sqlite::species_shapes)
         .map_err(|e| e.to_string())?;
-    Ok(birdnet_db::phantoms::report(&shapes))
+    let mut reports = birdnet_db::phantoms::report(&shapes);
+    // The report is read by the operator and acted on by scientific name, so the
+    // common name is the one field to put in the station's language.
+    for r in &mut reports {
+        r.shape.com_name = state
+            .names()
+            .name(&r.shape.sci_name, &r.shape.com_name)
+            .to_owned();
+    }
+    Ok(reports)
 }
 
 /// The report, or what to say when it could not be read.
@@ -231,7 +240,7 @@ async fn quality_page() -> axum::response::Redirect {
 /// (`crate::routes::pages::homes::station_tabs`). Call from a blocking context —
 /// `load_quality_data` runs several aggregate queries.
 pub(crate) fn quality_body(state: &AppState) -> String {
-    render_quality_page(&load_quality_data(state))
+    render_quality_page(&load_quality_data(state), state.names())
 }
 
 async fn quality_summary_partial(State(state): State<AppState>) -> Html<String> {
@@ -282,7 +291,14 @@ fn load_quality_data(state: &AppState) -> QualityData {
         conf_buckets: confidence_distribution(conn).unwrap_or([0; 6]),
         trend: confidence_trend(conn, 30).unwrap_or_default(),
         by_hour: detection_quality_by_hour(conn).unwrap_or_default(),
-        low_conf: low_confidence_species(conn, 0.60, 3).unwrap_or_default(),
+        // Drawn, not matched: the common name is in the station's language.
+        low_conf: low_confidence_species(conn, 0.60, 3)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(com, sci, count, avg)| {
+                (state.names().name(&sci, &com).to_owned(), sci, count, avg)
+            })
+            .collect(),
         review_trend: review_verdict_trend(conn, 30).unwrap_or_default(),
         model_vs_review: model_vs_review_by_species(conn, 12).unwrap_or_default(),
     })
@@ -293,14 +309,14 @@ fn load_quality_data(state: &AppState) -> QualityData {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_lines)]
-fn render_quality_page(data: &QualityData) -> String {
+fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocalizer) -> String {
     let summary_html = render_summary_cards(data.summary.as_ref());
     let dist_html = render_confidence_distribution(&data.conf_buckets);
     let trend_html = render_confidence_trend(&data.trend);
     let hour_html = render_hourly_quality(&data.by_hour);
     let low_conf_html = render_low_confidence_species(&data.low_conf);
     let review_trend_html = render_review_trend(&data.review_trend);
-    let model_vs_review_html = render_model_vs_review(&data.model_vs_review);
+    let model_vs_review_html = render_model_vs_review(&data.model_vs_review, names);
     let tuning_link = help_link(Topic::Tuning);
     // Skeletons for the partials that load via hx-trigger="load" (resolves
     // TODO(O-16-followup) for #quality-summary / #quality-trend).
@@ -717,7 +733,10 @@ fn render_review_trend(days: &[ReviewVerdictDay]) -> String {
     html
 }
 
-fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
+fn render_model_vs_review(
+    rows: &[ModelVsReviewRow],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     if rows.is_empty() {
         return r#"<p class="bnb-meta">Not enough reviewed detections yet. The panel needs at least 5 detections per species and 3 reviewer verdicts to compare model and human confidence.</p>"#.to_string();
     }
@@ -749,7 +768,7 @@ fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
   <div class="bnb-mvr-gap{gap_class}">Δ {gap_sign}{gap_abs:.0}%</div>
 </li>"#,
             href = escape_html(&species_link),
-            com = escape_html(&r.com_name),
+            com = escape_html(names.name(&r.sci_name, &r.com_name)),
             sci = escape_html(&r.sci_name),
             total = r.total,
             model_w = model_w,

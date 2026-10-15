@@ -42,10 +42,27 @@
 //! pre-rendered docs supplied separately) can set `BNB_SKIP_DOCS=1` to
 //! make this script a no-op and ship a different `BNB_HELP_DIR` at
 //! runtime instead.
+//!
+//! ## Built from a package, not a checkout
+//!
+//! A crate that `cargo publish` uploads (and `cargo install` unpacks into the
+//! registry cache) carries `.cargo_vcs_info.json`; a checkout never does. For a
+//! package this script does nothing. Cargo forbids a build script from writing
+//! outside `OUT_DIR` and `cargo package` fails the verification build if it
+//! does ("Source directory was modified by build.rs"); the registry cache is
+//! often read-only anyway; and the rendered tree is served from a path relative
+//! to the working directory, so one rendered into a registry directory would
+//! never be found. The published crate therefore ships no manual sources, and
+//! a `cargo install` binary answers `/help` with its "docs unavailable" panel
+//! until `BNB_HELP_DIR` points at a rendered copy, as the release archives'
+//! `help/` directory is.
 
 use std::path::{Path, PathBuf};
 
 fn main() {
+    if is_published_package() {
+        return;
+    }
     let book_root = book_source_root();
 
     // Always re-build when the source tree changes. Listing the directory
@@ -99,6 +116,15 @@ fn main() {
                 .join(" <- ")
         );
     }
+}
+
+/// Whether this source tree is a package cargo unpacked rather than a checkout.
+///
+/// `cargo package` writes `.cargo_vcs_info.json` into every package it builds,
+/// and a checkout has none, so its presence is how a build script can tell.
+fn is_published_package() -> bool {
+    std::env::var("CARGO_MANIFEST_DIR")
+        .is_ok_and(|dir| Path::new(&dir).join(".cargo_vcs_info.json").exists())
 }
 
 /// Locate the book root — the directory holding `book.toml`, whose `src` key

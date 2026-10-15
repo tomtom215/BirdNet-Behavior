@@ -207,6 +207,117 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
     )
 }
 
+/// Say which language species names will be shown in, and how much of the
+/// installed classifier it covers.
+///
+/// The setting used to do nothing at all and report nothing, so a station set
+/// to Korean showed English with no word of why. Now it works, and for a language
+/// the bundled tables only partly cover it still shows English for most birds —
+/// which reads as a bug unless something states the extent. This is that
+/// statement, from the same count `/api/v2/languages` serves.
+///
+/// Resolution follows what the daemon will end up using. `--doctor` runs from
+/// `ExecStartPre`, before the overlay has laid `/admin/settings` over the config,
+/// so a station configured on the dashboard has its language only in SQLite at
+/// this moment; the settings table is read first because once seeded it wins
+/// over the file.
+pub(super) fn check_species_names(cli: &Cli, config: Option<&Config>) -> Check {
+    let configured = if cli.explicit.has("lang") {
+        cli.lang.clone()
+    } else {
+        language_from_settings(config)
+            .unwrap_or_else(|| crate::helpers::language_setting(cli, config))
+    };
+    let labels = cli
+        .labels
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("LABELS_PATH")).map(PathBuf::from))
+        .and_then(|path| birdnet_core::inference::labels::LabelSet::load(&path).ok());
+    species_names(&configured, labels.as_ref())
+}
+
+/// The verdict for a configured language and the classifier's label set.
+fn species_names(
+    configured: &str,
+    labels: Option<&birdnet_core::inference::labels::LabelSet>,
+) -> Check {
+    use birdnet_core::i18n::{ENGLISH, LANGUAGES, LanguagePack, NameLocalizer, find_language};
+
+    const NAME: &str = "Species names";
+    let configured = configured.trim();
+    if configured.is_empty() {
+        return Check::pass(NAME, "shown as the classifier gives them (English)");
+    }
+    let Some(language) = find_language(configured) else {
+        let codes: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
+        return Check::warn(
+            NAME,
+            format!(
+                "{configured:?} is not a language species names are available in, \
+                 so they are shown as the classifier gives them"
+            ),
+            format!(
+                "choose one on Settings, or set DATABASE_LANG to one of: {}",
+                codes.join(", ")
+            ),
+        );
+    };
+    if language.code == ENGLISH {
+        return Check::pass(NAME, "shown as the classifier gives them (English)");
+    }
+    let Ok(pack) = LanguagePack::bundled(language.code) else {
+        return Check::fail(
+            NAME,
+            format!(
+                "the built-in {} names could not be read",
+                language.english_name
+            ),
+            "this is a defect in the build; please report it",
+        );
+    };
+    let names = NameLocalizer::new(pack, labels);
+    names.coverage().map_or_else(
+        || {
+            Check::pass(
+                NAME,
+                format!(
+                    "{} ({}); no classifier label file is configured, so how many species \
+                     have a name in it cannot be counted",
+                    language.english_name, language.native_name
+                ),
+            )
+        },
+        |c| {
+            Check::pass(
+                NAME,
+                format!(
+                    "{} ({}): {} of the classifier's {} species have a name in it; \
+                     the rest keep the classifier's own name",
+                    language.english_name, language.native_name, c.named, c.of
+                ),
+            )
+        },
+    )
+}
+
+/// The language `/admin/settings` has stored, if the database can be read and
+/// holds one. `None` on any failure: this check must not turn a database
+/// problem into a language finding (`check_database` owns that).
+fn language_from_settings(config: Option<&Config>) -> Option<String> {
+    let db_path = crate::helpers::db_path_from_config(config);
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+    birdnet_db::settings::get(&conn, "database_lang")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+}
+
 /// The one-line summary of how the two vocabularies lined up.
 ///
 /// Both directions are named because they fail differently and an operator
@@ -647,6 +758,79 @@ mod tests {
 
     fn cli() -> Cli {
         Cli::parse_from(["birdnet-behavior"])
+    }
+
+    // ── species names ──────────────────────────────────────────────────
+
+    fn two_species() -> birdnet_core::inference::labels::LabelSet {
+        birdnet_core::inference::labels::LabelSet::load_from_str(
+            "Turdus merula_Common Blackbird\nAcanthisitta chloris_Rifleman\n",
+        )
+        .expect("labels")
+    }
+
+    #[test]
+    fn species_names_says_how_much_of_the_classifier_a_language_covers() {
+        let set = two_species();
+        let de = species_names("de", Some(&set));
+        assert_eq!(de.status, Status::Pass);
+        assert!(
+            de.message.contains("2 of the classifier's 2 species"),
+            "{}",
+            de.message
+        );
+        // Korean has no name for the Rifleman: the same station reads differently.
+        let ko = species_names("ko", Some(&set));
+        assert!(
+            ko.message.contains("1 of the classifier's 2 species"),
+            "{}",
+            ko.message
+        );
+    }
+
+    #[test]
+    fn species_names_without_a_label_file_says_it_cannot_count() {
+        let c = species_names("de", None);
+        assert_eq!(c.status, Status::Pass);
+        assert!(c.message.contains("cannot be counted"), "{}", c.message);
+    }
+
+    #[test]
+    fn species_names_for_english_or_nothing_is_the_classifiers_own() {
+        for raw in ["en", "", "  ", "EN"] {
+            let c = species_names(raw, Some(&two_species()));
+            assert_eq!(c.status, Status::Pass, "{raw:?}");
+            assert!(
+                c.message.contains("as the classifier gives them"),
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn species_names_warns_about_a_value_that_is_not_a_language() {
+        let c = species_names("eng", None);
+        assert_eq!(c.status, Status::Warn);
+        assert!(
+            c.remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("zh_CN")),
+            "the fix must list the choices: {:?}",
+            c.remediation
+        );
+    }
+
+    #[test]
+    fn the_species_names_check_reads_the_flag_over_the_file() {
+        let mut cli = cli();
+        cli.explicit = crate::cli::ExplicitArgs::from_ids(["lang"]);
+        cli.lang = "fr".to_owned();
+        let cfg = crate::helpers::test_support::config_with(&[("DATABASE_LANG", "de")]);
+        let c = check_species_names(&cli, Some(&cfg));
+        assert!(c.message.contains("French"), "{}", c.message);
+        // Without the flag the file's value is the one in force.
+        let c = check_species_names(&self::cli(), Some(&cfg));
+        assert!(c.message.contains("German"), "{}", c.message);
     }
 
     // ── private mode (O-4) ─────────────────────────────────────────────

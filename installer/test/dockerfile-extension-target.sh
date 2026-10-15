@@ -36,7 +36,24 @@ if [ -z "${prologue}" ]; then
 fi
 
 # The ARG defaults that RUN sees, as shell assignments.
-args="$(sed -nE 's/^ARG (BEHAVIORAL_EXTENSION_[A-Z_]+)=(.*)$/\1=\2/p' "${DOCKERFILE}")"
+args="$(sed -nE 's/^ARG ((BEHAVIORAL_EXTENSION_|BUILD_FEATURES)[A-Z_]*)=(.*)$/\1=\3/p' "${DOCKERFILE}")"
+
+# The whole RUN that fetches the extensions, not just its prologue: from its
+# `RUN set -eu; \` through the last line of the continuation, which is the
+# `cargo build` that ends it. (Other RUNs also open with `set -eu;`; the one
+# that names the registry is the one wanted.)
+whole="$(awk '
+    /^RUN set -eu; \\$/ { grab = 1; buf = "" }
+    grab {
+        line = $0; cont = (line ~ /\\$/)
+        sub(/[[:space:]]*\\$/, "", line); sub(/^RUN /, "", line)
+        buf = buf line "\n"
+        if (!cont) {
+            grab = 0
+            if (buf ~ /community-extensions\.duckdb\.org/) { print buf; exit }
+        }
+    }
+' "${DOCKERFILE}")"
 
 # url_for <TARGETARCH as BuildKit sets it> [explicit --build-arg target]
 url_for() {
@@ -80,6 +97,57 @@ case "${got}" in
     */linux_arm64/behavioral.duckdb_extension.gz) pass "explicit linux_arm64 is used" ;;
     *) fail "the explicit build-arg was ignored: ${got}" ;;
 esac
+
+# run_whole <BUILD_FEATURES> <BEHAVIORAL_EXTENSION_OPTIONAL> <fetch: ok|fail>
+# Runs the whole RUN with `curl`, `gunzip` and `cargo` stubbed, and prints what
+# the stubbed `cargo` was handed. Exit status is the RUN's own.
+run_whole() {
+    (
+        eval "${args}"
+        # Exported, as a build ARG reaches a RUN: the body under test reads them by
+        # name through the `eval` below, which shellcheck cannot follow (SC2034).
+        export BUILD_FEATURES="$1"
+        export BEHAVIORAL_EXTENSION_OPTIONAL="$2"
+        export TARGETARCH=amd64
+        FETCH="$3"
+        curl() { [ "${FETCH}" = ok ]; }
+        gunzip() { :; }
+        cargo() { echo "cargo $*"; echo "behavioral=${BIRDNET_BUNDLED_EXTENSION_FILE:-unset} icu=${BIRDNET_BUNDLED_ICU_FILE:-unset}"; }
+        eval "${whole}"
+    ) 2>&1
+}
+
+echo "=== a failed fetch fails an image that embeds (the default features) ==="
+out="$(run_whole analytics "" fail)"; rc=$?
+if [ "${rc}" -ne 0 ] && grep -q 'ERROR: behavioral extension NOT fetched' <<<"${out}" && ! grep -q '^cargo ' <<<"${out}"; then
+    pass "exit ${rc}, says so, and never reaches cargo build"
+else
+    fail "a failed fetch with the default features exited ${rc}: ${out}"
+fi
+
+echo "=== counterpart: the opt-out builds anyway, and says what the image lacks ==="
+out="$(run_whole analytics 1 fail)"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -q 'WARNING: behavioral extension NOT fetched' <<<"${out}" && grep -q 'behavioral=unset icu=unset' <<<"${out}"; then
+    pass "BEHAVIORAL_EXTENSION_OPTIONAL=1 -> exit 0, warning, nothing embedded"
+else
+    fail "the opt-out exited ${rc}: ${out}"
+fi
+
+echo "=== counterpart: a lean build embeds nothing, so a failed fetch is not an error ==="
+out="$(run_whole "" "" fail)"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -q '^cargo build' <<<"${out}"; then
+    pass "BUILD_FEATURES empty -> exit 0 and cargo build runs"
+else
+    fail "a lean build exited ${rc}: ${out}"
+fi
+
+echo "=== counterpart: when the fetch works, both files reach cargo build ==="
+out="$(run_whole analytics "" ok)"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -q 'behavioral=/tmp/behavioral.duckdb_extension icu=/tmp/icu.duckdb_extension' <<<"${out}"; then
+    pass "exit 0, BIRDNET_BUNDLED_EXTENSION_FILE and BIRDNET_BUNDLED_ICU_FILE set"
+else
+    fail "a working fetch exited ${rc}: ${out}"
+fi
 
 if [ "${FAILED}" -ne 0 ]; then
     echo "dockerfile-extension-target: FAILED"

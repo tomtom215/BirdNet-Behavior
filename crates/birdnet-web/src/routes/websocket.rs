@@ -19,8 +19,12 @@ use crate::state::AppState;
 pub struct WsDetectionEvent {
     /// Event type (always "detection").
     pub event: &'static str,
-    /// Species common name.
+    /// Species common name, as the classifier names it and as it is stored.
     pub common_name: String,
+    /// The name to show: `common_name` in the station's language
+    /// (`DATABASE_LANG`), or `common_name` itself when it has none. `common_name`
+    /// stays the key a client matches on.
+    pub display_name: String,
     /// Species scientific name.
     pub scientific_name: String,
     /// Confidence score (0.0 - 1.0).
@@ -209,6 +213,7 @@ mod tests {
         let event = WsDetectionEvent {
             event: "detection",
             common_name: "Eurasian Blackbird".into(),
+            display_name: "Eurasian Blackbird".into(),
             scientific_name: "Turdus merula".into(),
             confidence: 0.87,
             date: "2026-03-12".into(),
@@ -229,6 +234,7 @@ mod tests {
         let event = WsDetectionEvent {
             event: "detection",
             common_name: "European Robin".into(),
+            display_name: "European Robin".into(),
             scientific_name: "Erithacus rubecula".into(),
             confidence: 0.92,
             date: "2026-03-12".into(),
@@ -266,6 +272,7 @@ mod tests {
         let event = WsDetectionEvent {
             event: "detection",
             common_name: "Great Tit".into(),
+            display_name: "Great Tit".into(),
             scientific_name: "Parus major".into(),
             confidence: 0.80,
             date: "2026-03-12".into(),

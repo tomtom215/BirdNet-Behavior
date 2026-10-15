@@ -488,6 +488,7 @@ fn ribbon_path(cx: f64, cy: f64, base_r: f64, hours: &[f32; 24], amp: f64) -> St
 // ---------------------------------------------------------------------------
 
 async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let names = state.names_handle();
     let result =
         tokio::task::spawn_blocking(move || state.with_db(|conn| collect_chorus(conn, 60, 8)))
             .await;
@@ -519,7 +520,7 @@ async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
             row_cls = row_cls,
             color = ribbon.color,
             short = escape_html(&alpha_code(&ribbon.name)),
-            name = escape_html(&ribbon.name),
+            name = escape_html(names.name_of_stored(&ribbon.name)),
             peak = peak_label,
             off_chorus_html = if off_chorus {
                 r#"<span class="bnb-pill dc-offchorus">off-chorus</span>"#

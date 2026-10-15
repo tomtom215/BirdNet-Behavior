@@ -19,9 +19,12 @@ on:
 
 # Cancel superseded runs on the same branch so a fast follow-up commit does
 # not have to wait behind the previous one.
+# A scheduled or manually dispatched run has its own group. The weekly advisory
+# scan runs on the default branch's ref, the same group as every push to `main`,
+# and `cancel-in-progress` cancelled it whenever anything was merged while it ran.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ (github.event_name == 'push' || github.event_name == 'pull_request') && github.ref || github.event_name }}"
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -35,9 +38,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20  # observed 59s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
@@ -53,11 +58,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20  # observed 3m05s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
+        run: cargo install --locked --version 0.22.2 cargo-audit
       - name: Run cargo-audit
         run: cargo audit --deny warnings
 
@@ -70,9 +77,66 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15  # observed 15s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install cargo-machete
         uses: bnjbvr/cargo-machete@ac30a525c0a8d163a92d727b3ff079ee3f6ecb08 # v0.9.2
+
+  # ── third-party notices ──────────────────────────────────────────────────
+  # The binary links several hundred packages, DuckDB and ONNX Runtime and
+  # serves fonts and htmx from memory. Their licences require the notice to
+  # travel with the binary, and release archives and the image carry
+  # THIRD_PARTY_LICENSES.txt for that. This fails when the committed file no
+  # longer matches Cargo.lock (a package added, removed, or its licence text
+  # changed), when a package's licence text cannot be found, or when a vendored
+  # text in third_party/ is for a different ONNX Runtime, DuckDB or htmx than the
+  # build links. Fix: python3 scripts/gen-third-party-licenses.py, commit.
+  third-party-notices:
+    name: third-party licence notices
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
+      - name: Unpack the locked crates
+        run: cargo fetch --locked
+      - name: THIRD_PARTY_LICENSES.txt is current and covers every package
+        run: python3 scripts/gen-third-party-licenses.py --check
+
+  # ── publishable ──────────────────────────────────────────────────────────
+  # `cargo package` for every crate, the first step of `cargo publish`: it
+  # refuses a dependency with a path and no version, an internal dependency whose
+  # version is not the crate's, missing metadata, and an include list that leaves
+  # out a file the crate reads. It does not build (that is a ten-minute DuckDB
+  # compile; `cargo package --workspace --no-default-features` without
+  # `--no-verify` does, and was run when this job was added). The package sizes
+  # are checked against crates.io's 10 MiB upload limit with room to spare.
+  publishable:
+    name: crates are publishable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
+      - name: Package every crate
+        run: cargo package --workspace --locked --no-verify
+      - name: Every package fits crates.io's upload limit with room to spare
+        run: |
+          set -euo pipefail
+          limit=$((8 * 1024 * 1024))
+          for f in target/package/*.crate; do
+            size=$(stat -c %s "$f")
+            echo "$(basename "$f"): $size bytes"
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error::$f is $size bytes; crates.io refuses uploads over 10 MiB and this gate leaves a margin at 8 MiB. Trim the crate's include list."
+              exit 1
+            fi
+          done
 
   # ── typo scan ────────────────────────────────────────────────────────────
   # Catches misspelled identifiers, log messages, and documentation without
@@ -83,9 +147,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10  # observed 8s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run typos
-        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+        uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
         with:
           config: ./.typos.toml
 
@@ -102,7 +166,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10  # observed 12s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install.sh is generated from installer/lib (no drift)
         run: bash installer/build.sh --check
       - name: Run shellcheck
@@ -134,6 +198,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10  # observed 8s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run the installer test suite
         run: bash installer/test/run-ci.sh

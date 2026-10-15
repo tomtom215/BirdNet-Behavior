@@ -172,8 +172,9 @@ fn build_weekly_report(
     let mut body = format!(
         "Bird Detection Weekly Summary\n\nPeriod: {week_start} to {week_end}\nTotal detections: {total}\n\nTop species:\n"
     );
-    for (i, (_, com_name, count)) in top_species.iter().enumerate() {
-        writeln!(body, "{}. {} — {count} detections", i + 1, com_name).unwrap_or_default();
+    for (i, (sci_name, com_name, count)) in top_species.iter().enumerate() {
+        let shown = state.names().name(sci_name, com_name);
+        writeln!(body, "{}. {shown} — {count} detections", i + 1).unwrap_or_default();
     }
 
     Ok((title, body))

@@ -45,6 +45,57 @@ they get their own gate.
 
          python3 scripts/check-ci-config.py --update-observed
 
+  6. A job that is not running the toolchain it is named for. The `msrv` job
+     installed Rust 1.95 with `dtolnay/rust-toolchain@1.95`, which only runs
+     `rustup default`; `rust-toolchain.toml` says `channel = "stable"`, and
+     rustup ranks a toolchain file above the default. Every `cargo` in the job
+     ran on the current stable — `rustup show active-toolchain` in the repo
+     reads "stable ... overridden by rust-toolchain.toml" — so "MSRV (Rust 1.95)"
+     was green for as long as stable compiled, whatever 1.95 would have said. The
+     Docker builder has the same exposure: `rust:1.95-slim-trixie` plus a
+     `COPY . .` that carries the toolchain file in. Found by reading rustup's
+     precedence rules and then reproducing them; the code does build on 1.95
+     (`cargo check --workspace --all-features --all-targets --locked`).
+
+  7. An action reference that moves. `dtolnay/rust-toolchain` was used by
+     branch name — `@stable` thirteen times, `@1.95` once — and the *ref* was
+     also the choice of Rust, so the one thing that must not move silently (the
+     MSRV job's compiler) and the one thing that is safe to leave alone (the
+     action's own revision) were the same string. Dependabot proposed
+     `@1.95` -> `@1.100`, a Rust that did not exist. Every use is now pinned to
+     a commit and names its toolchain in a `toolchain:` input, and this reads
+     every workflow to keep it so — a pin that nothing reads is a comment.
+
+  8. A required check that stopped existing. Branch protection matches checks
+     by name, so renaming a job silently drops the requirement, and a workflow
+     skipped by a `paths:` filter leaves its checks pending and blocks every
+     merge. `.github/workflows/README.md` lists the names `main` should require;
+     this keeps that list true.
+
+  9. A tool installed at whatever version is current. `cargo install
+     cargo-audit`, `tool: cargo-mutants`, `tool: cargo-llvm-cov`, `pip install
+     pyyaml` and the Dockerfile's `cargo install cargo-chef --version "^0.1"`
+     each took the newest release on the day of the run, so the same commit
+     could pass on Monday and fail on Tuesday for a reason that is nowhere in the
+     diff. Every one is pinned to an exact version now, and `npm install` in the
+     browser-QA job is `npm ci`, which refuses a lockfile that disagrees with
+     `package.json`.
+
+ 10. A fuzz target nothing runs. `fuzz/` held two harnesses for the parsers of
+     untrusted input for months, run by no workflow; the first run, once there
+     was one, crashed `decode_audio` inside a minute (see fuzz.yml and
+     fuzz/known/). A target added to the harness without a line in the
+     workflow's matrix is the same silence again.
+
+ 11. A lockfile the workflows name and the checkout does not contain.
+     `tools/visual-qa/package-lock.json` was ignored by two `.gitignore` files
+     ("installed on demand; never committed") while `osv.yml` scanned it and the
+     browser-QA job ran `npm ci` against it. Everything passed on the machine
+     that wrote them, because an ignored file is still on disk there; on GitHub
+     the scan stopped at `stat .../package-lock.json: no such file or directory`
+     and `npm ci` would have refused to run. A lockfile a workflow names has to
+     be a file git tracks, not a file that happens to exist.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -595,6 +646,341 @@ def check_embed_precedes_tests() -> None:
           f"the job runs its several test steps (found {len(tests)}: {tests})")
 
 
+def check_msrv_runs_the_msrv(
+    ci_path: str = CI_WORKFLOW,
+    dockerignore_path: str = ".dockerignore",
+    toolchain_path: str = "rust-toolchain.toml",
+) -> None:
+    """The `msrv` job must put the declared MSRV in charge, and prove it did.
+
+    See incident 6 in the module docstring. Three assertions, structural rather
+    than textual, because a comment explaining the fix is the shape of what this
+    script exists to distrust:
+
+      * an `msrv` step writes `RUSTUP_TOOLCHAIN` to `$GITHUB_ENV` — the only
+        thing that outranks `rust-toolchain.toml`;
+      * a *later* step asserts `rustc --version` against it, so the export is
+        read back from a fresh process rather than assumed;
+      * both come before the step that runs `cargo check`.
+
+    And the counterpart that makes them matter: while `rust-toolchain.toml`
+    names `stable`, the file does override the default, and the Docker build
+    context must not carry it into a builder pinned to the MSRV.
+    """
+    print("\nThe MSRV job runs the MSRV, not `stable` (incident 6)")
+    spec = yaml.safe_load(open(ci_path))
+    steps = spec["jobs"]["msrv"]["steps"]
+
+    def index_of(pred: "callable[[dict], bool]") -> int | None:
+        for i, st in enumerate(steps):
+            if pred(st):
+                return i
+        return None
+
+    run = lambda st: str(st.get("run", ""))  # noqa: E731
+    export = index_of(lambda st: "RUSTUP_TOOLCHAIN=" in run(st) and "GITHUB_ENV" in run(st))
+    prove = index_of(lambda st: "rustc --version" in run(st) and "RUSTUP_TOOLCHAIN" in run(st))
+    cargo = index_of(lambda st: "cargo check" in run(st))
+
+    check(export is not None,
+          "a step exports RUSTUP_TOOLCHAIN through $GITHUB_ENV (the only setting "
+          "that outranks rust-toolchain.toml)")
+    check(prove is not None,
+          "a step asserts `rustc --version` against RUSTUP_TOOLCHAIN")
+    check(cargo is not None, "the job still has the `cargo check` step")
+    if None not in (export, prove, cargo):
+        check(export < prove < cargo,
+              f"export (#{export + 1}) precedes the proof (#{prove + 1}), which "
+              f"precedes the cargo step (#{cargo + 1})")
+
+    # The counterpart: this is only a problem while the toolchain file pins
+    # `stable`. If it ever pins the MSRV itself the file is doing the job and
+    # the export is redundant, which this should say rather than fail on.
+    channel = None
+    for line in open(toolchain_path):
+        m = re.match(r'\s*channel\s*=\s*"([^"]+)"', line)
+        if m:
+            channel = m.group(1)
+    check(channel is not None, f"{toolchain_path} names a channel (found {channel!r})")
+
+    # The Docker builder is the other place the MSRV has to be what it says: the
+    # image compiles with the oldest compiler the project promises to support.
+    declared = None
+    for line in open("Cargo.toml"):
+        m = re.match(r'\s*rust-version\s*=\s*"([^"]+)"', line)
+        if m:
+            declared = m.group(1)
+            break
+    builder = None
+    if os.path.exists("Dockerfile"):
+        for line in open("Dockerfile"):
+            m = re.match(r"^FROM\s+rust:(\d+\.\d+)\b", line)
+            if m:
+                builder = m.group(1)
+                break
+    check(declared is not None and builder == declared,
+          f"the Docker builder's Rust ({builder}) is the declared rust-version ({declared})")
+
+    ignored = [ln.strip() for ln in open(dockerignore_path)
+               if ln.strip() and not ln.lstrip().startswith("#")]
+    check("rust-toolchain.toml" in ignored,
+          ".dockerignore keeps rust-toolchain.toml out of the build context, so "
+          "the builder image's pinned Rust is the one that compiles")
+
+
+def runs_on_every_pull_request(spec: dict) -> bool:
+    """A workflow with a `pull_request` trigger and no path filter on it."""
+    on = spec.get(True, spec.get("on"))  # PyYAML reads the key `on` as boolean True
+    if not isinstance(on, dict) or "pull_request" not in on:
+        return False
+    trigger = on["pull_request"]
+    return not (isinstance(trigger, dict) and ("paths" in trigger or "paths-ignore" in trigger))
+
+
+def tool_installs(workflows_glob: str, dockerfile_path: str) -> list[tuple[str, str, bool]]:
+    """Every tool install in the workflows and the Dockerfile: (where, what, pinned).
+
+    Three shapes are recognised: `taiki-e/install-action`'s `tool:` list, where
+    each entry needs `@version`; `cargo install`, which needs `--version` (or
+    `crate@version`); and `pip install`, whose packages need `==`. Comment lines
+    are not installs.
+    """
+    found: list[tuple[str, str, bool]] = []
+
+    def scan_shell(where: str, text: str) -> None:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line.startswith("#"):
+                continue
+            if re.search(r"\bcargo install\b", line):
+                # An exact version: a range (`^0.1`, `~0.1`) floats within it.
+                pinned = bool(re.search(r"--version[ =]\"?=?\d+\.\d+\.\d+\"?(\s|$)|\s[\w-]+@\d+\.\d+\.\d+(\s|$)", line))
+                found.append((where, line, pinned))
+            m = re.search(r"\bpip3? install\b(.*)", line)
+            if m:
+                packages = [a for a in m.group(1).split() if not a.startswith("-")]
+                for pkg in packages:
+                    found.append((where, f"pip install {pkg}", "==" in pkg))
+
+    for path in sorted(glob.glob(workflows_glob)):
+        for node in _walk_dicts(yaml.safe_load(open(path))):
+            uses = node.get("uses")
+            if isinstance(uses, str) and uses.startswith("taiki-e/install-action@"):
+                tools = str((node.get("with") or {}).get("tool", ""))
+                # Comma-separated, and an entry may contain spaces
+                # (`mdbook@${{ env.MDBOOK_VERSION }}`).
+                for tool in (t.strip() for t in tools.split(",")):
+                    if tool:
+                        found.append((path, f"install-action {tool}", "@" in tool))
+            if isinstance(node.get("run"), str):
+                scan_shell(path, node["run"])
+    if os.path.exists(dockerfile_path):
+        scan_shell(dockerfile_path, open(dockerfile_path).read())
+    return found
+
+
+def _walk_dicts(node: object):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _walk_dicts(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk_dicts(value)
+
+
+def check_tools_are_pinned(
+    workflows_glob: str = ".github/workflows/*.yml", dockerfile_path: str = "Dockerfile"
+) -> None:
+    """Every tool the CI installs names an exact version (incident 9)."""
+    print("\nEvery installed tool is pinned to a version (incident 9)")
+    installs = tool_installs(workflows_glob, dockerfile_path)
+    for where, what, pinned in installs:
+        check(pinned, f"{where}: {what} is pinned")
+    # The counterpart: a reader that found no installs would pass every
+    # assertion above.
+    check(len(installs) >= 6, f"the reader found the installs it is judging ({len(installs)})")
+
+    # Base images are tools too: a tag moves, a digest does not. A stage that
+    # builds `FROM` an earlier stage names no image.
+    stages: set[str] = set()
+    images = 0
+    if os.path.exists(dockerfile_path):
+        for line in open(dockerfile_path):
+            m = re.match(r"^FROM\s+(?:--\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", line, re.I)
+            if not m:
+                continue
+            image, stage = m.group(1), m.group(2)
+            if image not in stages:
+                images += 1
+                check(bool(re.search(r"@sha256:[0-9a-f]{64}$", image)),
+                      f"{dockerfile_path}: base image {image} is pinned to a digest")
+            if stage:
+                stages.add(stage)
+    if os.path.exists(dockerfile_path):
+        check(images >= 2, f"the reader found the base images it is judging ({images})")
+
+
+def named_lockfiles(workflows_glob: str) -> list[tuple[str, str]]:
+    """`(where, path)` for every lockfile a workflow relies on: the `--lockfile=`
+    arguments of a scan, and the `package-lock.json` beside every `npm ci`."""
+    found: list[tuple[str, str]] = []
+    for workflow in sorted(glob.glob(workflows_glob)):
+        text = open(workflow, encoding="utf-8").read()
+        for path in re.findall(r"--lockfile=(\S+)", text):
+            found.append((workflow, path))
+        for node in _walk_dicts(yaml.safe_load(text)):
+            run = node.get("run")
+            if isinstance(run, str) and re.search(r"\bnpm ci\b", run):
+                directory = node.get("working-directory", ".")
+                found.append((workflow, os.path.normpath(os.path.join(directory, "package-lock.json"))))
+    return found
+
+
+def is_tracked(path: str) -> bool:
+    """Whether git tracks `path`: an ignored file that exists on this disk is not
+    the file a fresh checkout has."""
+    return subprocess.run(["git", "ls-files", "--error-unmatch", "--", path],
+                          capture_output=True).returncode == 0
+
+
+def check_named_lockfiles_are_tracked(workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """Every lockfile a workflow names is tracked by git (incident 11)."""
+    print("\nEvery lockfile a workflow names is tracked, not just present (incident 11)")
+    named = named_lockfiles(workflows_glob)
+    for where, path in named:
+        check(is_tracked(path), f"{where}: {path} is tracked by git")
+    # The counterpart: a reader that found nothing would pass every line above.
+    check(len(named) >= 3, f"the reader found the lockfiles it is judging ({len(named)})")
+
+
+def check_fuzz_targets_are_run(
+    cargo_path: str = "fuzz/Cargo.toml", workflow_path: str = ".github/workflows/fuzz.yml"
+) -> None:
+    """Every fuzz target is run by the fuzz workflow, and it runs nothing else.
+
+    The two targets existed for months and no workflow ran either, so the first
+    run found a crash inside a minute (see fuzz.yml). A target added to the
+    harness without a line in the matrix would be the same silence again.
+    """
+    print("\nEvery fuzz target is in the fuzz workflow's matrix")
+    declared = set()
+    in_bin = False
+    for line in open(cargo_path):
+        if line.strip() == "[[bin]]":
+            in_bin = True
+            continue
+        m = re.match(r'\s*name\s*=\s*"([^"]+)"', line)
+        if in_bin and m:
+            declared.add(m.group(1))
+            in_bin = False
+    spec = yaml.safe_load(open(workflow_path))
+    run = set(spec["jobs"]["fuzz"]["strategy"]["matrix"]["target"])
+    for name in sorted(declared - run):
+        check(False, f"{cargo_path} declares fuzz target {name!r}, which {workflow_path} never runs")
+    for name in sorted(run - declared):
+        check(False, f"{workflow_path} runs {name!r}, which {cargo_path} does not declare")
+    check(len(declared) >= 2 and declared == run,
+          f"the {len(declared)} declared fuzz targets are exactly the {len(run)} the workflow runs")
+
+
+def check_workflows_readme(
+    workflows_glob: str = ".github/workflows/*.yml",
+    readme_path: str = ".github/workflows/README.md",
+) -> None:
+    """The workflows README lists every workflow, and its required checks exist.
+
+    A required status check is matched by *name*. Renaming a job drops the
+    requirement without a word, and a workflow skipped by a `paths:` filter
+    leaves its checks pending forever, so a required name must belong to a job
+    of a workflow that runs on every pull request. This reads the README the way
+    branch protection would read the repository.
+    """
+    print("\nThe workflows README lists every workflow, and its required checks are real jobs")
+    text = open(readme_path).read()
+    files = sorted(glob.glob(workflows_glob))
+
+    listed = set(re.findall(r"^\| `([^`]+\.yml)` \|", text, re.M))
+    for path in files:
+        base = os.path.basename(path)
+        check(base in listed, f"{base} has a row in the workflows README")
+    for name in sorted(listed - {os.path.basename(p) for p in files}):
+        check(False, f"the workflows README lists {name}, which is not a workflow")
+
+    section = text.split("## Required status checks", 1)
+    check(len(section) == 2, "the README has a 'Required status checks' section")
+    required = re.findall(r"^- `([^`]+)`$", section[1], re.M) if len(section) == 2 else []
+
+    always = {}
+    for path in files:
+        spec = yaml.safe_load(open(path))
+        if runs_on_every_pull_request(spec):
+            for job in spec["jobs"].values():
+                always[str(job.get("name"))] = os.path.basename(path)
+    for name in required:
+        check(name in always,
+              f"required check {name!r} is a job of a workflow that runs on every pull request")
+    # The counterpart: a reader that found no list, or no always-on jobs, would
+    # pass every assertion above.
+    check(len(required) >= 10 and len(always) >= 10,
+          f"the reader found {len(required)} required checks and {len(always)} always-on jobs")
+
+
+PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+
+
+def action_uses(node: object, found: list[tuple[str, dict]] | None = None
+                ) -> list[tuple[str, dict]]:
+    """Every remote `uses:` in a parsed workflow, with its `with:` inputs.
+
+    Walks the whole document rather than `jobs.*.steps`, so a reusable-workflow
+    call (`uses:` on a job) and a composite action's steps are read the same
+    way. Local (`./...`) and `docker://` references are not remote refs.
+    """
+    found = [] if found is None else found
+    if isinstance(node, dict):
+        ref = node.get("uses")
+        if isinstance(ref, str) and not ref.startswith(("./", "docker://")):
+            inputs = node.get("with")
+            found.append((ref, inputs if isinstance(inputs, dict) else {}))
+        for value in node.values():
+            action_uses(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            action_uses(value, found)
+    return found
+
+
+def check_actions_are_pinned(workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """Every remote action is a full commit SHA, and the toolchain is named.
+
+    See incident 7 in the module docstring. Two assertions over every workflow:
+
+      * each `uses:` ends in `@<40 hex>` — a tag or branch can be moved by
+        whoever controls the action, and these jobs build what ships;
+      * each `dtolnay/rust-toolchain` has a `toolchain:` input, because with the
+        ref no longer selecting the Rust, a use without one asks the action to
+        guess.
+
+    And the counterpart: the reader must have found the uses it is judging.
+    """
+    print("\nEvery action is pinned to a commit, and the toolchain is named (incident 7)")
+    files = sorted(glob.glob(workflows_glob))
+    seen = 0
+    toolchain_uses = 0
+    for path in files:
+        for ref, inputs in action_uses(yaml.safe_load(open(path))):
+            seen += 1
+            check(PINNED.match(ref) is not None, f"{path}: {ref} is pinned to a commit")
+            if ref.startswith("dtolnay/rust-toolchain@"):
+                toolchain_uses += 1
+                check(bool(inputs.get("toolchain")),
+                      f"{path}: {ref.split('@')[0]} names its toolchain")
+    check(seen >= 50 and toolchain_uses >= 15,
+          f"the reader found the uses it is judging ({seen} remote uses in "
+          f"{len(files)} workflows, {toolchain_uses} of them dtolnay/rust-toolchain)")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -784,6 +1170,12 @@ def main(argv: list[str] | None = None) -> int:
     check_timeouts()
     check_mutation_matrix()
     check_embed_precedes_tests()
+    check_msrv_runs_the_msrv()
+    check_actions_are_pinned()
+    check_tools_are_pinned()
+    check_named_lockfiles_are_tracked()
+    check_fuzz_targets_are_run()
+    check_workflows_readme()
     check_headroom_arithmetic()
 
     for job in unresolved:

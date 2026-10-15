@@ -791,15 +791,17 @@ async fn today_count_partial(
 ) -> impl IntoResponse {
     let today = today_date_string();
     let search = params.search.clone();
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            birdnet_db::sqlite::todays_detection_count(
-                conn,
+            let filter = super::name_search::todays_filter(
                 &today,
                 search.as_deref(),
                 TodayFilter::All,
-            )
+                &names,
+            );
+            birdnet_db::sqlite::search_detection_count(conn, &filter)
         })
     })
     .await;
@@ -897,23 +899,16 @@ async fn today_partial(
     let search = params.search.clone();
     let search2 = params.search.clone();
     let filter = TodayFilter::from_token(params.filter.as_deref());
+    // `state` moves into the blocking task; the names are needed after it.
+    let names_state = state.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let rows = birdnet_db::sqlite::todays_detections(
-                conn,
-                &today,
-                search.as_deref(),
-                filter,
-                limit,
-                offset,
-            )?;
-            let total = birdnet_db::sqlite::todays_detection_count(
-                conn,
-                &today,
-                search.as_deref(),
-                filter,
-            )?;
+            // The typed search also covers the station's own language.
+            let by =
+                super::name_search::todays_filter(&today, search.as_deref(), filter, state.names());
+            let rows = birdnet_db::sqlite::search_detections(conn, &by, limit, offset)?;
+            let total = birdnet_db::sqlite::search_detection_count(conn, &by)?;
             // Which clips are locked, so each card offers the right toggle.
             let locked: std::collections::HashSet<String> =
                 birdnet_db::sqlite::locked_file_names(conn)?
@@ -935,7 +930,7 @@ async fn today_partial(
             }
 
             for d in &detections {
-                render_detection_card(&mut html, d, &locked);
+                render_detection_card(&mut html, d, &locked, names_state.names());
             }
 
             // "Load more" button if there are more results. It replaces
@@ -1111,8 +1106,12 @@ fn render_detection_card(
     html: &mut String,
     d: &birdnet_db::sqlite::DetectionRow,
     locked: &std::collections::HashSet<String>,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) {
+    // The link and the detail URL carry the stored name; only what is *drawn*
+    // is in the station's language.
     let enc_name = simple_url_encode(&d.com_name);
+    let shown = names.name(&d.sci_name, &d.com_name);
 
     // Fixed-size play affordance (shared clip player) — native <audio>
     // controls render at different widths per row, so they never aligned.
@@ -1142,9 +1141,9 @@ fn render_detection_card(
             super::recordings::lock_button(&crate::state::RowRef::from(d), is_locked)
         })
         .unwrap_or_default();
-    let av = avatar(&d.com_name, &d.sci_name, "");
+    let av = avatar(&d.com_name, shown, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
-    let com_name = escape_html(&d.com_name);
+    let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
     let time = escape_html(&d.time);
     let date_enc = simple_url_encode(&d.date);

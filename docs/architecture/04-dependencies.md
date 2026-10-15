@@ -28,7 +28,7 @@
 | Purpose | Crate | Notes |
 |---------|-------|-------|
 | Audio decode | `symphonia` | WAV/FLAC/MP3, pure Rust, royalty-free codecs |
-| Resampling | `rubato` | High-quality async polynomial resampling |
+| Resampling | `rubato` | High-quality async windowed-sinc resampling |
 | File watching | `notify` | Cross-platform inotify wrapper |
 | Serialization | `serde` + `serde_json` | Derive-based, zero-overhead |
 | Logging | `tracing` + `tracing-subscriber` | Structured, async-aware |

@@ -106,6 +106,7 @@ fn rare_gap_days(state: &AppState) -> u32 {
 async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let base = resolve_base(q.base);
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         let sql = rare_detections_sql(rare_gap_days(&state));
@@ -134,6 +135,7 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
         "Rare birds",
         "/feeds/rare.rss",
         "First-ever detections at this station (confidence above 0.85).",
+        &names,
     );
 
     rss_response(body)
@@ -142,6 +144,7 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
 async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let base = resolve_base(q.base);
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -175,6 +178,7 @@ async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) ->
         "Today's detections",
         "/feeds/today.rss",
         "Every detection from this station today.",
+        &names,
     );
     rss_response(body)
 }
@@ -220,6 +224,7 @@ fn rss_response(body: String) -> Response {
 async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     let base = resolve_base(q.base);
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         let sql = rare_detections_sql(rare_gap_days(&state));
@@ -242,7 +247,7 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     let Some(rows) = result.ok().and_then(Result::ok) else {
         return feed_unavailable();
     };
-    let body = build_ics(&rows, &base);
+    let body = build_ics(&rows, &base, &names);
 
     let mut resp = (StatusCode::OK, body).into_response();
     resp.headers_mut().insert(
@@ -274,6 +279,7 @@ fn build_rss(
     title: &str,
     self_path: &str,
     description: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut s = String::with_capacity(4096);
     let _ = write!(
@@ -310,7 +316,7 @@ fn build_rss(
 <category>{cat}</category>
 </item>
 "#,
-            title = escape_xml(&d.com),
+            title = escape_xml(names.name(&d.sci, &d.com)),
             sci = escape_xml(&d.sci),
             date = escape_xml(&d.date),
             time = escape_xml(&d.time),
@@ -324,7 +330,7 @@ fn build_rss(
     s
 }
 
-fn build_ics(rows: &[DetRow], base: &str) -> String {
+fn build_ics(rows: &[DetRow], base: &str, names: &birdnet_core::i18n::NameLocalizer) -> String {
     let mut s = String::with_capacity(4096);
     s.push_str(
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//BirdNet-Behavior//RareBirds 1.0//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nX-WR-CALNAME:BirdNet rare detections\r\nX-WR-CALDESC:First-of-station detections from your listening station.\r\n",
@@ -334,7 +340,7 @@ fn build_ics(rows: &[DetRow], base: &str) -> String {
         let dt = ics_local_datetime(&d.date, &d.time);
         let uid = ics_uid(&d.date, &d.time, &d.sci);
         let url = detail_url(base, &d.date, &d.time, &d.com);
-        let name = escape_ics(&d.com);
+        let name = escape_ics(names.name(&d.sci, &d.com));
         let sci = escape_ics(&d.sci);
         #[allow(clippy::cast_possible_truncation)]
         let conf = (d.conf * 100.0).round() as i32;
@@ -638,7 +644,11 @@ mod tests {
             time: "20:46:32".to_owned(),
             conf: 0.87,
         }];
-        let ics = build_ics(&rows, "http://x");
+        let ics = build_ics(
+            &rows,
+            "http://x",
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         let dtstamp = ics
             .lines()
             .find_map(|l| l.trim_end().strip_prefix("DTSTAMP:"))
@@ -668,7 +678,11 @@ mod tests {
             time: "20:46:32".to_owned(),
             conf: 0.91,
         }];
-        let ics = build_ics(&rows, "https://a-fairly-long-station-hostname.example.org");
+        let ics = build_ics(
+            &rows,
+            "https://a-fairly-long-station-hostname.example.org",
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         for line in ics.split("\r\n") {
             assert!(
                 line.len() <= 75,
@@ -711,7 +725,14 @@ mod tests {
 
     #[test]
     fn build_rss_empty_is_valid() {
-        let body = build_rss(&[], "http://x", "Test", "/feeds/test.rss", "test feed");
+        let body = build_rss(
+            &[],
+            "http://x",
+            "Test",
+            "/feeds/test.rss",
+            "test feed",
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(body.contains("<rss version=\"2.0\""));
         assert!(body.contains("</channel></rss>"));
     }

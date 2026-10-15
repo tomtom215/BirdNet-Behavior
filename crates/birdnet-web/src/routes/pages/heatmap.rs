@@ -182,6 +182,11 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
             .then_with(|| a.0.cmp(&b.0))
     });
     series.truncate(8);
+    // Ordered and cut on the stored names; drawn in the station's language.
+    let series: Vec<(String, Vec<i64>)> = series
+        .into_iter()
+        .map(|(name, days)| (state.names().name_of_stored(&name).to_owned(), days))
+        .collect();
     // The sparkline series ends at today (local), which is what labels the
     // axis. Without it the chart showed no period at all.
     let today = state.with_db(|conn| {

@@ -40,6 +40,7 @@ pub mod homes;
 pub mod life_list;
 pub(crate) mod listen;
 pub mod migration;
+pub(crate) mod name_search;
 pub(crate) mod nav;
 pub mod notification_center;
 pub mod onboarding;
@@ -649,6 +650,21 @@ mod tests {
         assert_eq!(group_thousands(9914), "9,914");
         assert_eq!(group_thousands(1_234_567), "1,234,567");
         assert_eq!(group_thousands(-12_345), "-12,345");
+    }
+
+    /// Chart labels are scaled with their SVG; the layout loads the fitter that
+    /// keeps them readable, with the same version query as every other asset.
+    #[test]
+    fn every_page_loads_the_chart_text_fitter() {
+        use axum::http::HeaderMap;
+        let html = render_page_for_request("Test", "", "today", &HeaderMap::new()).0;
+        let version = env!("CARGO_PKG_VERSION");
+        assert!(
+            html.contains(&format!(
+                r#"<script src="/static/chart-text.js?v={version}" defer></script>"#
+            )),
+            "the layout must load chart-text.js, versioned and deferred"
+        );
     }
 
     #[test]

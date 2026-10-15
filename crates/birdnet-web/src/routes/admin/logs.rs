@@ -205,70 +205,37 @@ fn log_line_to_event(line: &LogLine) -> Event {
 // ---------------------------------------------------------------------------
 
 async fn log_page(_: State<AppState>) -> Html<String> {
-    Html(crate::routes::pages::with_asset_version(LOG_PAGE_HTML))
+    Html(render_log_page())
 }
 
-const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head><script src="/static/theme-guard.js?v={{version}}"></script><link rel="stylesheet" href="/static/css/app.css?v={{version}}">
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Live Logs — BirdNet-Behavior Admin</title>
-  <script src="/static/htmx.min.js?v={{version}}"></script>
-  <script src="/static/poll-visibility.js?v={{version}}"></script>
-  <script src="/static/base-path.js?v={{version}}"></script>
-  <script src="/static/htmx-sse.js?v={{version}}"></script>
-  <style>
-    body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }
-    .container { max-width:1100px; margin:0 auto; padding:2rem 1rem; }
-    nav a { color:var(--fg-3); text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
-    nav a:hover, nav a.active { color:var(--moss-ink); }
-    h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:1.5rem; }
-    #log-panel {
-      background:var(--bg); border:1px solid var(--surface); border-radius:.5rem;
-      padding:1rem; height:600px; overflow-y:auto; font-family:monospace;
-      font-size:.8rem; display:flex; flex-direction:column; gap:2px;
-    }
-    .log-line { display:flex; gap:.75rem; line-height:1.4; }
-    .log-level { min-width:50px; font-weight:700; }
-    .log-target { color:var(--fg-4); min-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .log-msg { color:var(--fg-2); flex:1; word-break:break-all; }
-    .level-error .log-level { color:var(--rare); }
-    .level-warn  .log-level { color:var(--warning); }
-    .level-info  .log-level { color:var(--moss); }
-    .level-debug .log-level { color:var(--moss-ink); }
-    .level-trace .log-level { color:var(--moss-ink); }
-    .controls { display:flex; gap:1rem; margin-bottom:1rem; align-items:center; }
-    .btn { padding:.4rem 1rem; border-radius:.375rem; border:1px solid var(--border);
-           background:var(--surface); color:var(--fg); cursor:pointer; font-size:.875rem; }
-    .btn:hover { border-color:var(--moss-ink); color:var(--moss-ink); }
-    .status { font-size:.8rem; color:var(--fg-4); }
-    .status.connected { color:var(--moss); }
-    nav { margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }
-    .ctl-label { display:flex; align-items:center; gap:.5rem; font-size:.875rem; color:var(--fg-3); }
-    .level-select { background:var(--surface); border:1px solid var(--border); color:var(--fg); border-radius:.25rem; padding:.25rem .5rem; font-size:.8rem; }
-  </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/system">System</a>
-    <a href="/admin/system/logs/page" class="active">Live Logs</a>
-  </nav>
+/// The log viewer inside the admin shell — what [`log_page`] answers, apart
+/// from the state it never reads.
+fn render_log_page() -> String {
+    crate::routes::admin::admin_subpage_shell(
+        "Live logs",
+        "system",
+        "Live logs",
+        &crate::routes::pages::with_asset_version(LOG_PAGE_BODY),
+    )
+}
 
-  <h1>Live Log Stream</h1>
+/// The log viewer's body. A page inside the admin shell like every other, not a
+/// document of its own: it used to carry its own `<html>`, a four-link nav that
+/// said "Dashboard" and named three of the admin pages, and its own styles.
+/// The SSE extension is loaded here, after the layout's `htmx.min.js`.
+const LOG_PAGE_BODY: &str = r#"<script src="/static/htmx-sse.js?v={{version}}"></script>
+<section class="logv">
+  <h1 class="logv-title">Live log stream</h1>
 
-  <div class="controls">
-    <button class="btn" id="clear-btn">Clear</button>
-    <button class="btn" id="pause-btn">Pause</button>
-    <label class="ctl-label">
+  <div class="logv-controls">
+    <button type="button" class="bnb-btn ghost" id="clear-btn">Clear</button>
+    <button type="button" class="bnb-btn ghost" id="pause-btn">Pause</button>
+    <label class="logv-ctl">
       <input type="checkbox" id="scroll-lock" checked> Auto-scroll
     </label>
-    <label class="ctl-label">
+    <label class="logv-ctl">
       Filter:
-      <select id="level-filter" class="level-select">
+      <select id="level-filter" class="logv-select">
         <option value="">All levels</option>
         <option value="level-error">ERROR</option>
         <option value="level-warn">WARN</option>
@@ -276,15 +243,16 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
         <option value="level-debug">DEBUG</option>
       </select>
     </label>
-    <span class="status" id="conn-status">Connecting…</span>
+    <span class="logv-status" id="conn-status" role="status">Connecting…</span>
   </div>
 
   <div id="log-panel"
+       class="logv-panel"
        hx-ext="sse"
        sse-connect="/admin/system/logs"
        sse-swap="log">
   </div>
-</div>
+</section>
 
 <script>
   let paused = false;
@@ -293,11 +261,11 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
 
   document.body.addEventListener('htmx:sseOpen', () => {
     document.getElementById('conn-status').textContent = '● Connected';
-    document.getElementById('conn-status').className = 'status connected';
+    document.getElementById('conn-status').className = 'logv-status connected';
   });
   document.body.addEventListener('htmx:sseError', () => {
     document.getElementById('conn-status').textContent = '✕ Disconnected';
-    document.getElementById('conn-status').className = 'status';
+    document.getElementById('conn-status').className = 'logv-status';
   });
   document.body.addEventListener('htmx:afterSwap', () => {
     if (paused) return;
@@ -324,9 +292,7 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
   document.getElementById('clear-btn').addEventListener('click', clearLog);
   document.getElementById('pause-btn').addEventListener('click', togglePause);
   document.getElementById('level-filter').addEventListener('change', applyFilter);
-</script>
-</body>
-</html>"#;
+</script>"#;
 
 #[cfg(test)]
 mod tests {
@@ -413,9 +379,35 @@ mod tests {
 
     #[test]
     fn log_page_has_no_inline_style_attributes() {
-        // P3-3 (O-25): page-specific styling lives in the page's own <style>
-        // block. (The JS `line.style.display` CSSOM mutation is not a CSP
+        // P3-3 (O-25): styling is classes in app.css, never a markup `style=`
+        // attribute. (The JS `line.style.display` CSSOM mutation is not a CSP
         // style-src concern — only markup `style=` attributes are.)
-        assert!(!LOG_PAGE_HTML.contains("style=\""));
+        assert!(!LOG_PAGE_BODY.contains("style=\""));
+        // ...and none of the page's own CSS is left in a `<style>` block either:
+        // it lives in app.css with the rest, where the shared layout loads it.
+        assert!(!LOG_PAGE_BODY.contains("<style"));
+    }
+
+    /// The viewer is a page in the admin shell, not a document of its own: it has
+    /// the site header and tab bar, the admin nav with System lit, and a
+    /// breadcrumb — and the stale four-link nav that said "Dashboard" is gone.
+    #[test]
+    fn the_log_viewer_is_rendered_through_the_shared_layout() {
+        let html = render_log_page();
+        assert_eq!(html.matches("<html").count(), 1, "one document, not two");
+        assert!(html.contains(r#"class="topnav""#), "the site header");
+        assert!(html.contains("bnb-tabbar"), "the phone tab bar");
+        assert!(html.contains(r#"href="/admin/system" class="am-nav-active""#));
+        assert!(html.contains("Live logs"), "the breadcrumb leaf");
+        assert!(!html.contains(">Dashboard<"), "the old bespoke nav");
+        assert!(
+            html.contains("htmx-sse.js"),
+            "the SSE extension is still loaded"
+        );
+        assert!(
+            html.find("htmx.min.js").unwrap() < html.find("htmx-sse.js").unwrap(),
+            "the extension registers against htmx, so htmx loads first"
+        );
+        assert!(!html.contains("{{version}}"), "asset versions are stamped");
     }
 }

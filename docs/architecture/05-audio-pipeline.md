@@ -92,7 +92,7 @@ Implemented in `crates/birdnet-core/src/audio/decode.rs`.
 
 Implemented in `crates/birdnet-core/src/audio/resample.rs`.
 
-- Asynchronous polynomial resampler for high-quality rate conversion
+- Asynchronous windowed-sinc resampler (rubato) for high-quality rate conversion
 - Chunk-based processing with zero-padded remainder
 - Smart passthrough when input rate already matches the target
 - Primary use: 48 kHz microphone input → 32 kHz (BirdNET+ V3.0, the default model) or 48 kHz (BirdNET V2.4) model input

@@ -23,6 +23,8 @@ mod system;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use birdnet_core::i18n::NameLocalizer;
+
 /// Every settings section on the full page, in the order it is rendered:
 /// `(anchor id, heading text)`.
 ///
@@ -151,11 +153,14 @@ fn fixed_form_default(key: &str) -> &'static str {
     }
 }
 
-pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String {
+pub(super) fn render_settings_page(
+    settings: &HashMap<String, String>,
+    names: &NameLocalizer,
+) -> String {
     // The document chrome (theme guard, app.css, htmx, the admin nav,
     // breadcrumbs, ⌘K/help/toasts) comes from the shared `admin_shell`; this
     // page contributes only its scoped <style> + content.
-    crate::routes::admin::admin_shell("Settings", "settings", &settings_body(settings))
+    crate::routes::admin::admin_shell("Settings", "settings", &settings_body(settings, names))
 }
 
 /// The page-specific body: a scoped `<style>` block plus the settings form.
@@ -165,8 +170,8 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
 /// `data-*-style` attributes that a naive `style="` substring check would
 /// otherwise trip over). The old `.container` / bare `nav` rules are dropped —
 /// the shell owns layout and the nav now.
-fn settings_body(settings: &HashMap<String, String>) -> String {
-    let form_html = render_settings_form(settings);
+fn settings_body(settings: &HashMap<String, String>, names: &NameLocalizer) -> String {
+    let form_html = render_settings_form(settings, names);
     let layout = crate::routes::admin::today_layout::render_section(
         &crate::routes::pages::today_layout::Layout::parse(
             settings
@@ -289,6 +294,12 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
          the same `.hint` markup through the main shell. */
       .hint a { color: var(--moss-ink); }
       .hint.flush { margin: -6px 0 8px; }
+      /* A hint with no field above it has nothing to tuck under. */
+      .hint.standalone { margin-top: 0; }
+      /* A checkbox and its words on one row, like the field above it
+         in rhythm: the element rules above give an input the full width. */
+      .bnb-check { display: flex; align-items: center; gap: 0.5rem; color: var(--fg); margin-bottom: 1rem; }
+      .bnb-check input { width: auto; margin: 0; }
       .mt-sm { margin-top: 0.5rem; }
       .mt-md { margin-top: 1rem; }
       .save-row { display: flex; align-items: center; gap: 1rem; }
@@ -323,6 +334,7 @@ pub(crate) enum Section {
 pub(crate) fn render_section_form(
     settings: &HashMap<String, String>,
     sections: &[Section],
+    names: &NameLocalizer,
 ) -> String {
     let mut out = String::with_capacity(8_192);
     out.push_str(
@@ -335,7 +347,7 @@ pub(crate) fn render_section_form(
             Section::Detection => detection::render(&mut out, settings),
             Section::Notifications => notifications::render(&mut out, settings),
             Section::Email => email::render(&mut out, settings),
-            Section::System => system::render(&mut out, settings),
+            Section::System => system::render(&mut out, settings, names),
         }
     }
     out.push_str(
@@ -349,7 +361,10 @@ pub(crate) fn render_section_form(
     out
 }
 
-pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String {
+pub(super) fn render_settings_form(
+    settings: &HashMap<String, String>,
+    names: &NameLocalizer,
+) -> String {
     let mut out = String::with_capacity(16_384);
     out.push_str(
         r##"<form hx-post="/admin/settings" hx-target="#settings-feedback"
@@ -360,7 +375,7 @@ pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String
     detection::render(&mut out, settings);
     notifications::render(&mut out, settings);
     species::render(&mut out, settings);
-    system::render(&mut out, settings);
+    system::render(&mut out, settings, names);
     email::render(&mut out, settings);
     out.push_str(
         r#"
@@ -389,7 +404,7 @@ mod tests {
     /// no longer exists, or misses a ninth that does.
     #[test]
     fn settings_index_matches_rendered_sections() {
-        let html = settings_body(&HashMap::new());
+        let html = settings_body(&HashMap::new(), &NameLocalizer::english());
         for (id, title) in SECTIONS {
             assert!(
                 html.contains(&format!(r##"href="#set-{id}""##)),
@@ -425,7 +440,7 @@ mod tests {
     /// tree.
     #[test]
     fn section_titles_are_headings() {
-        let html = settings_body(&HashMap::new());
+        let html = settings_body(&HashMap::new(), &NameLocalizer::english());
         assert!(
             !html.contains(r#"<div class="section-title">"#),
             "a section title is still a div"
@@ -441,7 +456,11 @@ mod tests {
     /// sections the tab does not render.
     #[test]
     fn station_tab_sections_carry_headings_but_no_index() {
-        let html = render_section_form(&HashMap::new(), &[Section::Audio, Section::Detection]);
+        let html = render_section_form(
+            &HashMap::new(),
+            &[Section::Audio, Section::Detection],
+            &NameLocalizer::english(),
+        );
         assert!(html.contains(r#"<h2 class="section-title" id="set-audio-h">"#));
         assert!(html.contains(r#"<h2 class="section-title" id="set-detection-h">"#));
         assert_eq!(html.matches(r#"<section class="card""#).count(), 2);
@@ -464,7 +483,7 @@ mod tests {
     /// section expanded, and nothing to click that does nothing.
     #[test]
     fn filter_ships_hidden_and_is_revealed_by_script() {
-        let html = settings_body(&HashMap::new());
+        let html = settings_body(&HashMap::new(), &NameLocalizer::english());
         assert!(
             html.contains(r#"<div class="set-filter" hidden>"#),
             "the filter must ship hidden"
@@ -496,7 +515,7 @@ mod tests {
     #[test]
     fn render_settings_form_contains_fields() {
         let settings = HashMap::new();
-        let html = render_settings_form(&settings);
+        let html = render_settings_form(&settings, &NameLocalizer::english());
         // Audio
         assert!(html.contains("alsa_device"));
         assert!(html.contains("audio_format"));
@@ -535,7 +554,7 @@ mod tests {
         // really lives; it must never again render an input for it. A password
         // field here stored plaintext in `settings`, echoed it back into this
         // HTML on every load, and changed no credential.
-        let html = render_settings_form(&HashMap::new());
+        let html = render_settings_form(&HashMap::new(), &NameLocalizer::english());
         assert!(
             !html.contains("name=\"auth_password\""),
             "settings form must not render an admin-password input"
@@ -569,11 +588,11 @@ mod tests {
         // that use `data-*-style` attributes, which a naive `style="` substring
         // check would flag even though they are not inline style attributes.
         assert!(
-            !settings_body(&settings).contains("style=\""),
+            !settings_body(&settings, &NameLocalizer::english()).contains("style=\""),
             "settings page body still emits an inline style attribute"
         );
         assert!(
-            !render_settings_form(&settings).contains("style=\""),
+            !render_settings_form(&settings, &NameLocalizer::english()).contains("style=\""),
             "settings form fragment still emits an inline style attribute"
         );
     }
@@ -584,16 +603,30 @@ mod tests {
         // must carry the shell's admin nav (with Settings active) and the page
         // content, not a bespoke per-page nav.
         let settings = HashMap::new();
-        let page = render_settings_page(&settings);
+        let page = render_settings_page(&settings, &NameLocalizer::english());
         assert!(page.contains("admin-nav"), "missing shared admin nav");
         assert!(
             page.contains(r#"href="/admin/settings" class="am-nav-active""#),
             "Settings tab should be active in the shell nav"
         );
         assert!(page.contains("Admin Settings"), "missing page heading");
-        // The shell wraps the body in `.admin-wrap` and emits a breadcrumb for
-        // non-overview pages — proof we render through it, not a bespoke page.
-        assert!(page.contains("admin-wrap"), "missing shared shell wrapper");
+        // The shell is the site's own layout — header, Station tab lit, tab bar —
+        // with a breadcrumb for non-overview pages: proof we render through it,
+        // not a bespoke page. (It used to be a separate `.admin-wrap` document
+        // with none of the site chrome.)
+        assert!(
+            page.contains(r#"class="topnav""#),
+            "missing the site header"
+        );
+        assert!(
+            page.contains(r#"data-home="station""#),
+            "an admin page is a page of the Station home"
+        );
+        assert!(page.contains("bnb-tabbar"), "missing the phone tab bar");
         assert!(page.contains("bnb-crumbs"), "missing shell breadcrumb");
+        assert!(
+            !page.contains("admin-wrap"),
+            "the standalone wrapper is gone"
+        );
     }
 }

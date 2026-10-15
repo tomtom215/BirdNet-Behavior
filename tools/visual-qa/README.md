@@ -32,6 +32,7 @@ runs on boot). Warm species photos with
 |--------|---------|
 | `qa.mjs` | Capture every route × `THEMES` × `VPS`; writes `report.json` flagging overflow, console errors, broken images, stuck "loading…". |
 | `interactions.mjs` | **Behavioural gate.** Drives controls the way an impatient operator does — clicking twice while the first action is still in flight — and asserts they do not undo or duplicate their own work. Exits non-zero on regression; runs in CI after `axe.mjs`. |
+| `legibility.mjs` | **Measured gate.** The on-screen size of every SVG chart label on every route at 1440 and 390 px (computed font size × the SVG's screen scale), failing below 8.5 px. Charts are fixed-canvas SVGs scaled to their card, so labels authored at 8 px rendered at 2.7–5 px on a phone while every other gate was green; `static/chart-text.js` is what keeps them readable. Fails when it grades fewer than 200 labels, so a run that found no charts cannot pass. Runs in CI after `interactions.mjs`. |
 | `base-path.mjs` | **Behavioural gate.** Against a fixture served under `BIRDNET_BASE_PATH=/bn` (`BNB_FIXTURE_ADDR`, `BNB_FIXTURE_DIR` run it beside the first), drives the pages and their scripted controls and fails on any same-origin request or socket outside the prefix. Runs in CI after `interactions.mjs`. |
 | `share.mjs` | Capture the `/r/{token}` share page, the tampered "gone" page, and the 404. |
 | `book.mjs` | Regenerate `docs/book/images/*.png` at a consistent 1440 width, height-clipped for docs. |

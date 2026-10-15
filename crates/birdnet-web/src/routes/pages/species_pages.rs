@@ -345,7 +345,7 @@ fn list_view(
     let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 500),
-            |q| birdnet_db::sqlite::search_species(conn, q, 500),
+            |q| super::name_search::search_species(conn, state.names(), q, 500),
         )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
         Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
@@ -376,12 +376,13 @@ fn list_view(
             .map(|d| sparkline(d, 84.0, 22.0, Some(&color)))
             .unwrap_or_default();
         let enc = simple_url_encode(&s.com_name);
+        let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(
             rows,
             r#"<tr><td class="sp-rank">{rank}</td><td><a class="sp-cell" href="/species/detail?name={enc}"><span class="sp-cell-av">{av}</span><span class="sp-cell-tx"><span class="sp-nm">{name}</span><span class="sp-sci">{sci}</span></span></a></td><td>{spark}</td><td class="sp-num">{count}</td><td>{conf}</td></tr>"#,
             rank = i + 1,
-            av = avatar(&s.com_name, &s.sci_name, ""),
-            name = escape_html(&s.com_name),
+            av = avatar(&s.com_name, shown, &s.sci_name, ""),
+            name = escape_html(shown),
             sci = escape_html(&s.sci_name),
             count = super::group_thousands(s.count),
             conf = conf_bar(s.avg_confidence),
@@ -390,10 +391,11 @@ fn list_view(
 
     let count_line = species_count_line(species.len(), filter, total);
     if species.is_empty() {
-        return format!("{chips}{count_line}{}", empty_note(search));
+        let narrowed = search.is_some() || filter == "week" || taxon.is_some();
+        return format!("{chips}{count_line}{}", empty_note(search, narrowed));
     }
     format!(
-        r#"{chips}{count_line}<div class="bnb-card pad"><table class="sp-table"><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
+        r#"{chips}{count_line}<div class="bnb-card pad"><table class="sp-table" data-fits-phone><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
     )
 }
 
@@ -414,7 +416,7 @@ fn photos_view(
     let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 200),
-            |q| birdnet_db::sqlite::search_species(conn, q, 200),
+            |q| super::name_search::search_species(conn, state.names(), q, 200),
         )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
         Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
@@ -440,10 +442,11 @@ fn photos_view(
         let code = species_code(&s.com_name);
         let enc = simple_url_encode(&s.com_name);
         let enc_sci = simple_url_encode(&s.sci_name);
+        let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(
             cards,
             r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
-            name = escape_html(&s.com_name),
+            name = escape_html(shown),
             count = super::group_thousands(s.count),
         );
     }
@@ -457,7 +460,8 @@ fn photos_view(
         },
     );
     if species.is_empty() {
-        return format!("{chips}{count_line}{}", empty_note(search));
+        let narrowed = search.is_some() || filter == "week" || taxon.is_some();
+        return format!("{chips}{count_line}{}", empty_note(search, narrowed));
     }
     format!(r#"{chips}{count_line}<div class="sp-grid">{cards}</div>"#)
 }
@@ -509,11 +513,12 @@ fn lifelist_view(state: &AppState) -> String {
     let mut firsts_html = String::new();
     for (com, sci, date) in &named {
         let enc = simple_url_encode(com);
+        let shown = state.names().name(sci, com);
         let _ = write!(
             firsts_html,
             r#"<a class="sp-first-row" href="/species/detail?name={enc}">{av}<div class="sp-cell-tx"><div class="sp-nm">{name}</div><div class="sp-sci">{sci}</div></div><span class="when">{date}</span></a>"#,
-            av = avatar(com, sci, ""),
-            name = escape_html(com),
+            av = avatar(com, shown, sci, ""),
+            name = escape_html(shown),
             sci = escape_html(sci),
             date = escape_html(date),
         );
@@ -590,8 +595,16 @@ fn species_count_line(n: usize, filter: &str, total: i64) -> String {
     )
 }
 
-/// An honest empty state for a search / filter that matched nothing.
-fn empty_note(search: Option<&str>) -> String {
+/// An honest empty state for a species list with nothing in it.
+///
+/// With nothing narrowing it (no search, no "this week", no taxon) the station
+/// has heard nothing, and says so, where to look and what to expect: the empty
+/// state the dashboard uses for the same moment. Otherwise a search or a filter
+/// matched nothing, and the words are about that.
+fn empty_note(search: Option<&str>, narrowed: bool) -> String {
+    if !narrowed {
+        return super::empty_states::no_species();
+    }
     let what = search.map_or_else(
         || "No species match this filter yet.".to_string(),
         |q| format!("No species match “{}”.", escape_html(q)),
@@ -614,6 +627,7 @@ async fn species_detail_page(
     };
 
     let com_name = name.clone();
+    let names = state.names_handle();
     let sci_name = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             // Raw `detections` on purpose. This resolves a display name, not a
@@ -632,9 +646,12 @@ async fn species_detail_page(
     .await
     .unwrap_or_default();
 
+    // The URL, the htmx fragments' `?name=` and the search link carry the name
+    // as stored; the heading and the tab title are in the station's language.
+    let shown = names.name(&sci_name, &name).to_owned();
     let encoded = simple_url_encode(&name);
     let content = SPECIES_DETAIL_HTML
-        .replace("{{species_name}}", &escape_html(&name))
+        .replace("{{species_name}}", &escape_html(&shown))
         .replace("{{scientific_name}}", &escape_html(&sci_name))
         .replace("{{species_encoded}}", &encoded)
         // Skeleton placeholders (O-16) shown until the htmx swap targets load.
@@ -644,7 +661,7 @@ async fn species_detail_page(
         .replace("{{skel_circadian}}", &super::skeletons::hourly_bars(24))
         .replace("{{skel_trend}}", super::skeletons::trend_line())
         .replace("{{skel_detections}}", &super::skeletons::list_rows(5));
-    super::render_page_for_request(&name, &content, "species", &headers)
+    super::render_page_for_request(&shown, &content, "species", &headers)
 }
 
 async fn species_summary_partial(
@@ -671,7 +688,7 @@ async fn species_summary_partial(
 <div class="stat-card"><div class="value">{conf_pct:.0}%</div><div class="label">Avg Confidence</div></div>
 <div class="stat-card"><div class="value">{f}</div><div class="label">First Seen</div></div>
 <div class="stat-card"><div class="value">{l}</div><div class="label">Last Seen</div></div>"#,
-                c = summary.count,
+                c = super::group_thousands(summary.count),
                 f = escape_html(&summary.first_seen),
                 l = escape_html(&summary.last_seen),
             );
@@ -870,6 +887,8 @@ async fn species_info_partial(
     .unwrap_or_default();
 
     let mut html = String::new();
+    // What is drawn; `name` stays the key for the cache and the external links.
+    let shown = state.names().name(&sci_name, &name).to_owned();
 
     // Species photos are cached by *scientific* name so the gallery,
     // species-detail, and detection-detail pages share one entry per bird
@@ -900,7 +919,7 @@ async fn species_info_partial(
             let _ = write!(
                 html,
                 r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" class="spp-info-img" />"#,
-                alt = escape_html(&name),
+                alt = escape_html(&shown),
             );
         }
         if let Some(desc) = &image.description {
@@ -916,10 +935,22 @@ async fn species_info_partial(
     }
 
     if html.is_empty() {
+        // Two different reasons, and they used to share one sentence that told a
+        // station with the cache already on to "enable" it. The reader is a
+        // person with a garden, so the first thing said is what is going on; the
+        // flag, for whoever installed the station, comes second and only when it
+        // is the thing that is missing.
+        let why = if state.image_cache().is_some() {
+            "A photo and a short description appear here once the station has fetched \
+             them from Wikipedia, which needs an internet connection."
+        } else {
+            "Photos and descriptions are switched off on this station. For whoever set it \
+             up: start it with <code>--image-cache-dir</code> to turn them on."
+        };
         html = format!(
-            r#"<p class="spp-muted">No additional info for <em>{}</em>.</p>
-<p class="spp-muted-sm">Enable <code>--image-cache-dir</code> to fetch species images.</p>"#,
-            escape_html(&name),
+            r#"<p class="spp-muted">No additional info for <em>{}</em> yet.</p>
+<p class="spp-muted-sm">{why}</p>"#,
+            escape_html(&shown),
         );
     }
 
@@ -943,7 +974,7 @@ async fn species_info_partial(
                 html.push_str(&ebird_link(
                     state.ebird_species_code(&sci_name),
                     if sci_name.is_empty() {
-                        &name
+                        &shown
                     } else {
                         &sci_name
                     },
@@ -992,13 +1023,14 @@ fn taxonomy_line(state: &AppState, scientific_name: &str) -> String {
 /// (`https://ebird.org/species/zothaw`), not on the scientific name: the link
 /// this replaced put the name in the path and every one of them 404'd. The
 /// code comes from the geomodel's label file, so a station without that file
-/// has none — and then this says so, with the flag that supplies it, rather
-/// than linking to a page that is not there.
+/// has none — and then this says so, in words for the reader with the flag that
+/// supplies it after, for whoever installed the station, rather than linking to a
+/// page that is not there.
 fn ebird_link(code: Option<&str>, shown_name: &str) -> String {
     code.map_or_else(
         || {
             format!(
-                r#"<p class="spp-muted-sm">No eBird link: this station has no eBird species code for <em>{}</em>. The geomodel's label file supplies the codes — see <code>--metadata-labels</code>.</p>"#,
+                r#"<p class="spp-muted-sm">No eBird link for <em>{}</em>: this station was set up without the range model that carries eBird's species codes. For whoever set it up: <code>--metadata-labels</code> supplies them.</p>"#,
                 escape_html(shown_name),
             )
         },
@@ -1155,6 +1187,7 @@ async fn species_companions_partial(
         );
     };
 
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::companion_species(conn, &name, 30, 10))
     })
@@ -1177,7 +1210,7 @@ async fn species_companions_partial(
                 let _ = write!(
                     html,
                     r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{count}</td></tr>"#,
-                    name = escape_html(&c.companion),
+                    name = escape_html(names.name_of_stored(&c.companion)),
                     count = c.shared_days,
                 );
             }

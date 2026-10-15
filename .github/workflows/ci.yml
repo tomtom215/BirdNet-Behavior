@@ -44,10 +44,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10  # observed 18s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + rustfmt)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --check --all
@@ -58,10 +59,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 8m18s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + clippy)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           components: clippy
       - name: Install native build dependencies
         # cmake + a host C++ compiler build the bundled libduckdb that the
@@ -72,7 +74,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-clippy
       - name: Clippy — default features (deny warnings)
@@ -105,6 +107,12 @@ jobs:
       # permitted — and still visible, because the skip prints a line naming
       # what was missing rather than a silent `return`.
       #
+      # What *is* fetched must be the build `crates/birdnet-behavioral/
+      # extension_pins.rs` pins by sha256: build.rs refuses anything else, on a
+      # pull request too. A registry that republishes an extension therefore
+      # turns this job red, which is the cue to verify the new build as that
+      # file describes and update the pin — not to skip the check.
+      #
       # Set here rather than by the fetch step on success: a flag the fetch
       # controls could not catch the fetch failing, which is the whole defect.
       BIRDNET_REQUIRE_LIVE_EXTENSION: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '' }}
@@ -116,7 +124,7 @@ jobs:
       # the extensions above it comes from the distribution, not a CDN.
       BNB_REQUIRE_FFMPEG: "1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free up runner disk space
         # The all-features step compiles the workspace a 4th time (bundled
         # DuckDB + analytics) atop the earlier lib/bins, integration-test, and
@@ -127,13 +135,15 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++ ffmpeg
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-test
       - name: Embed the behavioral extension (offline-load coverage)
@@ -247,20 +257,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 12m26s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free up runner disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-inference
       # The model is ~541 MB and immutable for a given release tag, so key the
@@ -359,15 +371,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 8m18s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-doc
       - name: Build docs (deny broken intra-doc links, all features)
@@ -381,15 +395,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 10m35s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-build
       - name: Build workspace (debug)
@@ -430,20 +446,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 8m33s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The MSRV is stated in three places that must agree: this job's
-      # toolchain ref, `workspace.package.rust-version` in Cargo.toml, and
-      # rust-toolchain.toml. For `dtolnay/rust-toolchain` the *ref is the
-      # configuration* — bumping it silently changes which Rust this job
-      # tests, so the job can keep passing while no longer testing the version
-      # we promise.
+      # `toolchain:` input, `workspace.package.rust-version` in Cargo.toml, and
+      # rust-toolchain.toml. The action is pinned to a commit and the Rust it
+      # installs is the `toolchain:` input, so editing that input silently
+      # changes which Rust this job tests — it could keep passing while no
+      # longer testing the version we promise.
       #
       # That is not hypothetical: Dependabot PR #188 proposed `@1.95` ->
-      # `@1.100`, and the `semver-major` ignore in dependabot.yml did not fire
-      # because 1.95 -> 1.100 is a *minor* bump. This check is what actually
-      # stops it — an ignore rule can be out-classified, a failing job cannot.
-      - name: MSRV ref matches Cargo.toml rust-version
+      # `@1.100` (when the toolchain was selected by the action's ref), and the
+      # `semver-major` ignore in dependabot.yml did not fire because 1.95 ->
+      # 1.100 is a *minor* bump. This check is what actually stops it — an
+      # ignore rule can be out-classified, a failing job cannot.
+      - name: MSRV input matches Cargo.toml rust-version
         shell: bash
         run: |
           set -euo pipefail
@@ -451,35 +468,69 @@ jobs:
             awk '/^\[workspace\.package\]/{f=1; next} /^\[/{f=0}
                  f && /^rust-version = /{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml
           )
-          # The ref this job actually installs, read back out of this file so
-          # the two can never be edited apart.
-          ref=$(
-            awk '/^  msrv:/{f=1} f && /dtolnay\/rust-toolchain@/{
-                   sub(/.*dtolnay\/rust-toolchain@/, ""); sub(/[[:space:]].*/, ""); print; exit }' \
+          # The toolchain this job actually installs, read back out of this
+          # file so the two can never be edited apart.
+          installed=$(
+            awk '/^  msrv:/{f=1} f && /^ +toolchain: /{gsub(/["\047 ]/, "", $2); print $2; exit}' \
               .github/workflows/ci.yml
           )
           echo "Cargo.toml rust-version : ${declared}"
-          echo "MSRV job toolchain ref  : ${ref}"
-          if [[ "$declared" != "$ref" ]]; then
-            echo "::error file=.github/workflows/ci.yml::MSRV job installs Rust '${ref}' but Cargo.toml declares rust-version '${declared}'. They must match, or this job is not testing the MSRV we promise."
+          echo "MSRV job toolchain      : ${installed}"
+          if [[ -z "$installed" || "$declared" != "$installed" ]]; then
+            echo "::error file=.github/workflows/ci.yml::MSRV job installs Rust '${installed}' but Cargo.toml declares rust-version '${declared}'. They must match, or this job is not testing the MSRV we promise."
             exit 1
           fi
           echo "::notice::MSRV is consistently ${declared}"
 
       - name: Install MSRV toolchain
-        uses: dtolnay/rust-toolchain@1.95
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: "1.95"
+      # `dtolnay/rust-toolchain` only runs `rustup default 1.95`, and rustup
+      # ranks a `rust-toolchain.toml` in the working directory *above* the
+      # default: ours says `channel = "stable"`, so without this step every
+      # `cargo` below ran on whatever stable is today and this job passed while
+      # testing nothing it promised (`rustup show active-toolchain` in the repo
+      # reads "stable ... overridden by rust-toolchain.toml"). `RUSTUP_TOOLCHAIN`
+      # outranks the file. The assertion is what keeps it true: it fails the job
+      # if the compiler is not the declared MSRV, so a future change to either
+      # file cannot quietly put this back.
+      - name: Run on the MSRV
+        shell: bash
+        run: |
+          set -euo pipefail
+          declared=$(
+            awk '/^\[workspace\.package\]/{f=1; next} /^\[/{f=0}
+                 f && /^rust-version = /{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml
+          )
+          echo "RUSTUP_TOOLCHAIN=${declared}" >> "$GITHUB_ENV"
+      # A separate step, so it reads the compiler a *later* step really gets:
+      # the export above only takes effect from the next step on.
+      - name: Prove the compiler is the MSRV
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(rustc --version)
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-<unset>}; compiler: ${actual}"
+          if [[ "${actual}" != "rustc ${RUSTUP_TOOLCHAIN:-?}."* ]]; then
+            echo "::error::The MSRV job is running '${actual}', not the declared MSRV."
+            exit 1
+          fi
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-msrv
       - name: Check MSRV build (all features incl. bundled DuckDB)
         # --all-features proves the DuckDB / duckdb-rs tree also builds on the
-        # declared MSRV, not just the default feature set.
-        run: cargo check --workspace --all-features
+        # declared MSRV, not just the default feature set. --all-targets puts the
+        # tests, benches and dev-dependencies on the same footing: this job used
+        # to check the library and binary only, so a dev-dependency that needed a
+        # newer Rust was invisible to it. --locked checks the lockfile that ships.
+        run: cargo check --workspace --all-features --all-targets --locked
 
   # ── aarch64 cross-check (Raspberry Pi) ───────────────────────────────────────
   cross-aarch64:
@@ -496,10 +547,11 @@ jobs:
       CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
       AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + aarch64 target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           targets: aarch64-unknown-linux-gnu
       - name: Install native + aarch64 cross build dependencies
         run: |
@@ -510,7 +562,7 @@ jobs:
             g++-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-cross-aarch64
       - name: Check aarch64 build (all features)
@@ -551,15 +603,17 @@ jobs:
     # real binary and need the model. Add a crate here when it gains code that
     # depends on the target, not before.
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-test-aarch64
       - name: Embed the ICU extension for this architecture (best effort)

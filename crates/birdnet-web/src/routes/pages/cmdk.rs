@@ -474,18 +474,39 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
         state2.with_db(|conn| {
             let pattern = birdnet_db::sqlite::like_contains(&qlc);
             let limit_i64 = i64::try_from(limit).unwrap_or(8);
-            let Ok(mut stmt) = conn.prepare(
+            // A station shown in another language is also searched by the names
+            // it shows: the stored ones are English. Bounded, because a one-letter
+            // term matches thousands of names and the palette lists a handful.
+            let in_language: Vec<String> = state2
+                .names()
+                .scientific_names_matching(&qlc)
+                .into_iter()
+                .take(50)
+                .map(str::to_owned)
+                .collect();
+            let in_clause = if in_language.is_empty() {
+                String::new()
+            } else {
+                let marks: Vec<String> = (3..3 + in_language.len())
+                    .map(|i| format!("?{i}"))
+                    .collect();
+                format!(" OR Sci_Name IN ({})", marks.join(","))
+            };
+            let sql = format!(
                 "SELECT Com_Name, Sci_Name, COUNT(*) AS n
                    FROM detections_analytic
                   WHERE LOWER(Com_Name) LIKE ?1 ESCAPE '\\'
-                     OR LOWER(Sci_Name) LIKE ?1 ESCAPE '\\'
+                     OR LOWER(Sci_Name) LIKE ?1 ESCAPE '\\'{in_clause}
                   GROUP BY Com_Name, Sci_Name
                   ORDER BY n DESC
-                  LIMIT ?2",
-            ) else {
+                  LIMIT ?2"
+            );
+            let Ok(mut stmt) = conn.prepare(&sql) else {
                 return Vec::new();
             };
-            let rows = stmt.query_map((&pattern, limit_i64), |row| {
+            let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&pattern, &limit_i64];
+            params.extend(in_language.iter().map(|s| s as &dyn rusqlite::types::ToSql));
+            let rows = stmt.query_map(params.as_slice(), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -495,10 +516,10 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
             let mut out = Vec::new();
             if let Ok(it) = rows {
                 for r in it.flatten() {
-                    let (com, _sci, n) = r;
+                    let (com, sci, n) = r;
                     out.push(Entry {
                         glyph: "♪",
-                        label: com.clone(),
+                        label: state2.names().name(&sci, &com).to_owned(),
                         sub: format!("{n} detections"),
                         href: format!("/species/detail?name={}", simple_url_encode(&com)),
                         synonyms: &[],
@@ -518,6 +539,7 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
 
 async fn render_recent(out: &mut String, state: &AppState) {
     let state2 = state.clone();
+    let names = state.names_handle();
     let recent: Vec<(String, String)> = tokio::task::spawn_blocking(move || {
         state2.with_db(|conn| {
             let Ok(mut stmt) = conn.prepare(
@@ -550,7 +572,7 @@ async fn render_recent(out: &mut String, state: &AppState) {
         .into_iter()
         .map(|(com, at)| Entry {
             glyph: "♪",
-            label: com.clone(),
+            label: names.name_of_stored(&com).to_owned(),
             sub: at,
             href: format!("/species/detail?name={}", simple_url_encode(&com)),
             synonyms: &[],

@@ -75,7 +75,8 @@
     name.className = "live-detection-name";
     // textContent (never innerHTML) so a crafted species name cannot inject
     // markup into the page.
-    name.textContent = d.common_name || d.scientific_name || "Unknown";
+    name.textContent =
+      d.display_name || d.common_name || d.scientific_name || "Unknown";
 
     var meta = document.createElement("span");
     meta.className = "live-detection-meta";

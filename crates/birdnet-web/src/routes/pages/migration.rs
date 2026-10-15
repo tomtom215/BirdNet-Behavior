@@ -193,7 +193,7 @@ fn compute_ridgeline(state: &AppState) -> Option<String> {
     if ridges.is_empty() {
         return Some(RIDGELINE_EMPTY.to_string());
     }
-    Some(render_ridgeline_svg(&ridges, current_week()))
+    Some(render_ridgeline_svg(&ridges, current_week(), state.names()))
 }
 
 async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
@@ -207,7 +207,11 @@ async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
     ok_html(html)
 }
 
-fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
+fn render_ridgeline_svg(
+    ridges: &[SpeciesRidge],
+    today_week: u8,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     const W: f64 = 1240.0;
     const H: f64 = 360.0;
     const PAD_L: f64 = 172.0; // room for the longest common names (e.g. "Ruby-throated Hummingbird")
@@ -364,7 +368,7 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
             r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mig-name">{name}</text>"#,
             x = PAD_L - 8.0,
             y = y_base - 6.0,
-            name = escape_html(&ridge.name),
+            name = escape_html(names.name_of_stored(&ridge.name)),
         );
         let _ = write!(
             s,
@@ -530,7 +534,8 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
     // saying so after the database recovered.
     let html = cached_fragment(&state, "migration-stats".to_string(), FRAGMENT_ERR, |s| {
         let today = crate::routes::pages::today_date_string();
-        s.with_db(|conn| stats_fragment(conn, &today)).ok()
+        s.with_db(|conn| stats_fragment(conn, &today, s.names()))
+            .ok()
     })
     .await;
     ok_html(html)
@@ -540,7 +545,11 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
 ///
 /// Every query propagates its error: the tiles are claims about the reader's
 /// data, and a count that failed is not a count of zero.
-fn stats_fragment(conn: &rusqlite::Connection, today: &str) -> rusqlite::Result<String> {
+fn stats_fragment(
+    conn: &rusqlite::Connection,
+    today: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> rusqlite::Result<String> {
     use rusqlite::OptionalExtension as _;
     let year = year_of(today);
     let prior = year - 1;
@@ -601,15 +610,15 @@ fn stats_fragment(conn: &rusqlite::Connection, today: &str) -> rusqlite::Result<
     let earliest_html = match earliest {
         Some((species, delta)) if delta < 0 => format!(
             r#"<span class="value">{delta} d</span><span class="bnb-meta">{species}</span>"#,
-            species = escape_html(&species),
+            species = escape_html(names.name_of_stored(&species)),
         ),
         Some((species, 0)) => format!(
             r#"<span class="value">on time</span><span class="bnb-meta">{species}</span>"#,
-            species = escape_html(&species),
+            species = escape_html(names.name_of_stored(&species)),
         ),
         Some((species, delta)) => format!(
             r#"<span class="value">+{delta} d</span><span class="bnb-meta">{species}</span>"#,
-            species = escape_html(&species),
+            species = escape_html(names.name_of_stored(&species)),
         ),
         None => r#"<span class="value">—</span><span class="bnb-meta">no prior-year data</span>"#
             .to_string(),
@@ -661,6 +670,7 @@ async fn card_partial(
     let year = current_year();
     let kind = q.kind;
     let kind_db = kind.clone();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| match kind_db.as_str() {
             "arrived" => {
@@ -689,7 +699,7 @@ async fn card_partial(
     })
     .await;
 
-    let (eyebrow, headline, sub) = match q_kind(&result, &kind) {
+    let (eyebrow, headline, sub) = match q_kind(&result, &kind, &names) {
         Some((eb, hd, sb)) => (eb, hd, sb),
         None => match kind.as_str() {
             "arrived" => ("Just arrived", "No arrivals yet".into(), "Watching…".into()),
@@ -716,17 +726,18 @@ async fn card_partial(
 fn q_kind(
     result: &Result<Option<(String, String)>, tokio::task::JoinError>,
     kind: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> Option<(&'static str, String, String)> {
     let row = result.as_ref().ok()?.as_ref()?;
     match kind {
         "arrived" => Some((
             "Just arrived",
-            row.0.clone(),
+            names.name_of_stored(&row.0).to_owned(),
             format!("First heard {}", row.1),
         )),
         "peaking" => Some((
             "Currently peaking",
-            row.0.clone(),
+            names.name_of_stored(&row.0).to_owned(),
             format!("{} detections this week", row.1),
         )),
         _ => None,
@@ -953,7 +964,12 @@ mod tests {
         ]);
         let weekly = weekly_diversity(&conn, 2026).expect("diversity");
         assert_eq!(weekly[51], 3, "the last week was dropped: {weekly:?}");
-        let html = stats_fragment(&conn, "2026-12-31").expect("tiles");
+        let html = stats_fragment(
+            &conn,
+            "2026-12-31",
+            &birdnet_core::i18n::NameLocalizer::english(),
+        )
+        .expect("tiles");
         assert!(
             html.contains(">w52<"),
             "the peak week is off the chart: {html}"
@@ -980,7 +996,12 @@ mod tests {
             ("Northern Cardinal", "2025-06-01"),
             ("Northern Cardinal", "2026-01-01"),
         ]);
-        let html = stats_fragment(&conn, "2026-03-01").expect("tiles");
+        let html = stats_fragment(
+            &conn,
+            "2026-03-01",
+            &birdnet_core::i18n::NameLocalizer::english(),
+        )
+        .expect("tiles");
         assert!(!html.contains("-151 d"), "{html}");
         assert!(html.contains("no prior-year data"), "{html}");
 
@@ -991,7 +1012,12 @@ mod tests {
             ("Barn Swallow", "2025-04-10"),
             ("Barn Swallow", "2026-04-01"),
         ]);
-        let html = stats_fragment(&conn, "2026-04-20").expect("tiles");
+        let html = stats_fragment(
+            &conn,
+            "2026-04-20",
+            &birdnet_core::i18n::NameLocalizer::english(),
+        )
+        .expect("tiles");
         assert!(html.contains("-9 d"), "{html}");
         assert!(html.contains("Barn Swallow"), "{html}");
     }

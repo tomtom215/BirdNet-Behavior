@@ -32,6 +32,7 @@ pub(super) async fn detections_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
@@ -52,7 +53,7 @@ pub(super) async fn detections_partial(
             }
             let mut html = String::new();
             for (i, d) in detections.iter().enumerate() {
-                render_feed_row(&mut html, d, &first_seen, &today, i == 0);
+                render_feed_row(&mut html, d, &first_seen, &today, i == 0, &names);
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -75,8 +76,10 @@ fn render_feed_row(
     first_seen: &std::collections::HashMap<String, String>,
     today: &str,
     fresh: bool,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) {
     let enc = simple_url_encode(&d.com_name);
+    let shown = names.name(&d.sci_name, &d.com_name);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
     let time_short = d.time.get(0..5).unwrap_or(&d.time);
@@ -126,8 +129,8 @@ fn render_feed_row(
     let _ = write!(
         html,
         r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
-        avatar = avatar(&d.com_name, &d.sci_name, ""),
-        name = escape_html(&d.com_name),
+        avatar = avatar(&d.com_name, shown, &d.sci_name, ""),
+        name = escape_html(shown),
         sci = escape_html(&d.sci_name),
         wave = waveform(row_seed(&d.com_name, &d.time), 24),
         conf = conf_bar(d.confidence),
@@ -148,6 +151,7 @@ pub(super) async fn best_detections_partial(
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
     let today_for_query = today.clone();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let best = birdnet_db::sqlite::best_detections_for_date(conn, &today_for_query, 5)?;
@@ -169,7 +173,7 @@ pub(super) async fn best_detections_partial(
             }
             let mut html = String::new();
             for d in &best {
-                render_best_row(&mut html, d, &first_seen, &today);
+                render_best_row(&mut html, d, &first_seen, &today, &names);
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -192,8 +196,10 @@ fn render_best_row(
     d: &birdnet_db::sqlite::DetectionRow,
     first_seen: &std::collections::HashMap<String, String>,
     today: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) {
     let enc = simple_url_encode(&d.com_name);
+    let shown = names.name(&d.sci_name, &d.com_name);
     let time_short = d.time.get(0..5).unwrap_or(&d.time);
     // Same exact-instant rule as the feed row above.
     let tag = first_seen.get(&d.sci_name).map_or("", |fs| {
@@ -230,8 +236,8 @@ fn render_best_row(
     let _ = write!(
         html,
         r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {pct}%{tag}</div></div>{play}</div>"#,
-        avatar = avatar(&d.com_name, &d.sci_name, ""),
-        name = escape_html(&d.com_name),
+        avatar = avatar(&d.com_name, shown, &d.sci_name, ""),
+        name = escape_html(shown),
     );
 }
 
@@ -278,6 +284,7 @@ pub(super) async fn top_species_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let species = todays_top_species(conn, &today, TOP_SPECIES_ROWS)?;
@@ -299,6 +306,7 @@ pub(super) async fn top_species_partial(
             let mut html = String::new();
             for (com_name, sci_name, count) in &species {
                 let enc = simple_url_encode(com_name);
+                let shown = names.name(sci_name, com_name);
                 let color = crate::routes::pages::atoms::species_color(com_name);
                 let spark = sparklines
                     .get(com_name)
@@ -309,8 +317,8 @@ pub(super) async fn top_species_partial(
                 let _ = write!(
                     html,
                     r#"<a class="x-top" href="/species/detail?name={enc}">{avatar}<div class="nm"><div class="t">{n}</div><div class="sc">{code}</div></div><span class="ct">{c}</span>{spark}</a>"#,
-                    avatar = avatar(com_name, sci_name, ""),
-                    n = escape_html(com_name),
+                    avatar = avatar(com_name, shown, sci_name, ""),
+                    n = escape_html(shown),
                     code = crate::routes::pages::atoms::species_code(com_name),
                     c = count,
                 );
@@ -345,11 +353,18 @@ pub(super) async fn species_list_partial(
     let search = query.q.unwrap_or_default();
     let search_trimmed = search.trim().to_string();
     let has_search = !search_trimmed.is_empty();
+    let names = state.names_handle();
+    let names_for_search = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let species = if has_search {
-                birdnet_db::sqlite::search_species(conn, &search_trimmed, 500)?
+                crate::routes::pages::name_search::search_species(
+                    conn,
+                    &names_for_search,
+                    &search_trimmed,
+                    500,
+                )?
             } else {
                 birdnet_db::sqlite::top_species(conn, 500)?
             };
@@ -374,6 +389,7 @@ pub(super) async fn species_list_partial(
             );
             for (i, s) in species.iter().enumerate() {
                 let enc = simple_url_encode(&s.com_name);
+                let shown = names.name(&s.sci_name, &s.com_name);
                 let color = species_color(&s.com_name);
                 let spark = sparklines
                     .get(&s.com_name)
@@ -383,8 +399,8 @@ pub(super) async fn species_list_partial(
                     html,
                     r#"<tr><td class="mono dp-rank">{rank}</td><td><div class="dp-cell">{avatar}<div class="dp-min0"><div class="dp-name-strong"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
                     rank = i + 1,
-                    avatar = avatar(&s.com_name, &s.sci_name, ""),
-                    n = escape_html(&s.com_name),
+                    avatar = avatar(&s.com_name, shown, &s.sci_name, ""),
+                    n = escape_html(shown),
                     sci = escape_html(&s.sci_name),
                     c = s.count,
                     conf = conf_bar(s.avg_confidence),
@@ -492,6 +508,7 @@ pub(super) async fn confidence_chart_partial(
 pub(super) async fn most_recent_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(birdnet_db::sqlite::latest_detection_full)
     })
@@ -507,7 +524,7 @@ pub(super) async fn most_recent_partial(
 
     let conf_pct = det.confidence * 100.0;
     let cls = conf_class(conf_pct);
-    let com_safe = escape_html(&det.com_name);
+    let com_safe = escape_html(names.name(&det.sci_name, &det.com_name));
     let sci_safe = escape_html(&det.sci_name);
     let date_safe = escape_html(&det.date);
     let time_safe = escape_html(&det.time);

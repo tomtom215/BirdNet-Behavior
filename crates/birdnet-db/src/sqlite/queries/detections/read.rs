@@ -687,19 +687,22 @@ pub fn recent_clips(
     conn: &Connection,
     filter: RecordingsFilter,
     search: Option<&str>,
+    also_species: &[String],
     limit: u32,
     offset: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
     let extra = filter.sql_clause();
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+    // `?1` is the pattern, `?2` and `?3` the page; the extra species follow.
+    let (sql, mut param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
                 let pattern = like_contains(&rest);
+                let not_also = sci_in(" AND Sci_Name NOT IN", 4, also_species.len());
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{extra} \
+                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{not_also}{extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
                     vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
@@ -707,11 +710,12 @@ pub fn recent_clips(
             }
             Some(SearchTerm::Include(term)) => {
                 let pattern = like_contains(&term);
+                let or_also = sci_in(" OR Sci_Name IN", 4, also_species.len());
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'){extra} \
+                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'{or_also}){extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
                     vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
@@ -726,6 +730,10 @@ pub fn recent_clips(
                 vec![Box::new(limit), Box::new(offset)],
             ),
         };
+    // Only a text search has anything for the extra species to extend.
+    if parse_search_term(search).is_some() {
+        param_values.extend(also_species.iter().map(|s| Box::new(s.clone()) as _));
+    }
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(AsRef::as_ref).collect();
@@ -734,6 +742,17 @@ pub fn recent_clips(
         .query_map(params_ref.as_slice(), map_detection_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// ` <lead> (?<first>, ?<first+1>, …)` for `n` bound scientific names starting at
+/// placeholder number `first`, or nothing for none. Numbered, because these
+/// statements bind `?1`…`?3` themselves.
+fn sci_in(lead: &str, first: usize, n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let marks: Vec<String> = (first..first + n).map(|i| format!("?{i}")).collect();
+    format!("{lead} ({})", marks.join(", "))
 }
 
 /// Count the clips [`recent_clips`] would return for the same filter and
@@ -747,28 +766,32 @@ pub fn recent_clips_count(
     conn: &Connection,
     filter: RecordingsFilter,
     search: Option<&str>,
+    also_species: &[String],
 ) -> Result<i64, DbError> {
     let extra = filter.sql_clause();
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+    // `?1` is the pattern; the extra species follow from `?2`.
+    let (sql, mut param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
                 let pattern = like_contains(&rest);
+                let not_also = sci_in(" AND Sci_Name NOT IN", 2, also_species.len());
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{extra}"
+                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{not_also}{extra}"
                     ),
                     vec![Box::new(pattern)],
                 )
             }
             Some(SearchTerm::Include(term)) => {
                 let pattern = like_contains(&term);
+                let or_also = sci_in(" OR Sci_Name IN", 2, also_species.len());
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'){extra}"
+                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'{or_also}){extra}"
                     ),
                     vec![Box::new(pattern)],
                 )
@@ -781,6 +804,9 @@ pub fn recent_clips_count(
                 vec![],
             ),
         };
+    if parse_search_term(search).is_some() {
+        param_values.extend(also_species.iter().map(|s| Box::new(s.clone()) as _));
+    }
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(AsRef::as_ref).collect();
@@ -1835,7 +1861,7 @@ mod tests {
         super::super::lock_detection(&conn, "2026-06-11", "06:10:00", "Troglodytes aedon").unwrap();
 
         let names = |filter: RecordingsFilter| -> Vec<String> {
-            recent_clips(&conn, filter, None, 50, 0)
+            recent_clips(&conn, filter, None, &[], 50, 0)
                 .unwrap()
                 .into_iter()
                 .map(|d| d.com_name)
@@ -1850,17 +1876,37 @@ mod tests {
 
         // Search rides the shared include / NOT-exclude grammar.
         assert_eq!(
-            recent_clips(&conn, RecordingsFilter::All, Some("Robin"), 50, 0)
+            recent_clips(&conn, RecordingsFilter::All, Some("Robin"), &[], 50, 0)
                 .unwrap()
                 .len(),
             2
         );
         assert_eq!(
-            recent_clips(&conn, RecordingsFilter::All, Some("NOT Robin"), 50, 0)
+            recent_clips(&conn, RecordingsFilter::All, Some("NOT Robin"), &[], 50, 0)
                 .unwrap()
                 .len(),
             2
         );
+
+        // A term typed in another language finds a species by the scientific name
+        // the caller resolved it to, and a `NOT` term leaves it out. The listing
+        // and the count agree, and species with no text change nothing.
+        let wren = vec!["Troglodytes aedon".to_owned()];
+        let listed = |search: Option<&str>, also: &[String]| {
+            let rows = recent_clips(&conn, RecordingsFilter::All, search, also, 50, 0).unwrap();
+            let count = recent_clips_count(&conn, RecordingsFilter::All, search, also).unwrap();
+            assert_eq!(i64::try_from(rows.len()).unwrap(), count, "{search:?}");
+            rows.into_iter().map(|d| d.com_name).collect::<Vec<_>>()
+        };
+        assert!(listed(Some("Zaunkönig"), &[]).is_empty());
+        assert_eq!(listed(Some("Zaunkönig"), &wren), ["House Wren"]);
+        assert_eq!(
+            listed(Some("Robin"), &wren),
+            ["House Wren", "Robin", "Robin"],
+            "extra species add to the text match"
+        );
+        assert_eq!(listed(Some("NOT Robin"), &wren), ["Dunnock"]);
+        assert_eq!(listed(None, &wren).len(), 4, "no text, nothing to extend");
 
         // Count agrees with the listing for every category (and the file gate).
         for f in [
@@ -1871,7 +1917,7 @@ mod tests {
         ] {
             let listed = i64::try_from(names(f).len()).unwrap();
             assert_eq!(
-                recent_clips_count(&conn, f, None).unwrap(),
+                recent_clips_count(&conn, f, None, &[]).unwrap(),
                 listed,
                 "count mismatch {f:?}"
             );
@@ -1879,7 +1925,7 @@ mod tests {
 
         // Pagination terminates past the end.
         assert!(
-            recent_clips(&conn, RecordingsFilter::All, None, 10, 100)
+            recent_clips(&conn, RecordingsFilter::All, None, &[], 10, 100)
                 .unwrap()
                 .is_empty()
         );

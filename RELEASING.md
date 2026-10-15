@@ -23,6 +23,9 @@ cargo deny check advisories        # or: cargo audit
 cargo test --workspace --all-features
 # 1. Bump the version + roll the changelog (on a branch, via PR).
 #    Cargo.toml workspace.package.version = X.Y.Z
+#    Cargo.toml [workspace.dependencies]: `version` of the eight `birdnet-*` entries
+#                (release validate runs `cargo package --workspace` and fails if
+#                they disagree with the crates' version)
 #    CITATION.cff:  version + date-released   (release validate enforces this)
 #    crates/birdnet-web/openapi.json: info.version  (release validate enforces this)
 #    CHANGELOG.md: [Unreleased] -> ## [X.Y.Z] - YYYY-MM-DD  (+ fresh [Unreleased])
@@ -42,6 +45,75 @@ git push origin vX.Y.Z
 
 That single tag push drives everything else.
 
+## Publishing to crates.io (the maintainer, not a workflow)
+
+Nothing publishes to crates.io automatically, and the project has never been
+published; the nine names (`birdnet-behavior` and the eight `birdnet-*` library
+crates) were unclaimed on 2026-10-15. What is ready: every crate packages
+(`cargo package --workspace`, run by the `crates are publishable` job and by
+`validate`), every package is under 2.1 MB, the internal dependencies carry
+versions, and `cargo package --workspace --no-default-features` also *builds* all
+nine from their tarballs (it was run once; the bundled-DuckDB build was not).
+
+To publish, after the tag is pushed and the release is verified, from the tagged
+commit, with a crates.io token in `CARGO_REGISTRY_TOKEN`:
+
+```bash
+cargo publish --workspace --locked   # dependency order is worked out by cargo
+```
+
+Publishing cannot be undone (a version can only be yanked), so look first at what
+it would do (`cargo publish --workspace --dry-run`) and at these:
+
+- **The licence is CC BY-NC-SA 4.0**, which forbids commercial use. crates.io
+  accepts the SPDX identifier; whether a non-commercial licence belongs on a
+  registry that most consumers read as open source is yours to decide.
+- **The library crates are internal.** Their READMEs say so and `STABILITY.md`
+  promises nothing about their API; they are published only so the binary can be.
+- **`cargo install birdnet-behavior` builds the bundled DuckDB** (minutes of C++)
+  and downloads ONNX Runtime. A package build does not render the in-app manual
+  (`build.rs` skips it: a build script may not write into the registry source), so
+  `/help` shows its "docs unavailable" panel until `BNB_HELP_DIR` points at a
+  rendered copy such as a release archive's `help/`.
+- **docs.rs** builds the two crates whose default features pull in the bundled
+  engine without it (`no-default-features` in their `[package.metadata.docs.rs]`);
+  that was reasoned from docs.rs's offline builds, not tried.
+
+## When ONNX Runtime, DuckDB or htmx moves
+
+`THIRD_PARTY_LICENSES.txt` carries the licence texts the binary's third-party
+code requires, and release archives and the image ship it with `NOTICE`. It is
+generated (`python3 scripts/gen-third-party-licenses.py`, after
+`cargo fetch --locked`) from `Cargo.lock` and from the directories in
+`third_party/`, which are named for the version they belong to. The `third-party
+licence notices` job and the release `validate` job fail when the committed file
+is stale, when any package's licence text cannot be found, or when the
+ONNX Runtime, DuckDB or htmx the build links is not the version a
+`third_party/` directory is for. `third_party/README.md` says how to replace one.
+A new or removed dependency needs only a regeneration.
+
+## When DuckDB or an extension moves
+
+The `duckdb` pin in the root `Cargo.toml` decides which engine ships, and the
+`behavioral` and `icu` extensions embedded in the binary must be the builds made
+for it. The engine version `v1.5.6` is written out in four files — three fetch
+URLs in `ci.yml`, two in `upgrade.yml`, the two `ddb_ver` lines in `release.yml`
+and `BEHAVIORAL_EXTENSION_DUCKDB_VERSION` in the `Dockerfile` — and
+`crates/birdnet-behavioral/extension_pins.rs` pins the sha256 of each build
+(`build.rs` refuses to embed any other). Update them together:
+
+1. Change the version in those places.
+2. Download each build, load it into a stock DuckDB of the same version with
+   unsigned extensions disallowed (that is the signature check), and replace the
+   rows in `extension_pins.rs`; its header gives the steps and says which
+   platforms could and could not be checked that way.
+3. `cargo test -p birdnet-behavioral --all-features --lib extension_pins`, then
+   a build with `BIRDNET_BUNDLED_EXTENSION_FILE` and `BIRDNET_BUNDLED_ICU_FILE`
+   set to the new files. A file the table does not name stops the build.
+
+Release and Docker builds fail when an extension cannot be fetched; the Docker
+build takes `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` to build without them.
+
 ## What each workflow emits
 
 Pushing a `vX.Y.Z` tag triggers **three** workflows in parallel:
@@ -55,12 +127,12 @@ validate ──► ci ──► build (matrix) ──► package ──► githu
 
 | Job | Emits |
 |-----|-------|
-| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
+| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md` (the heading must carry its date). On a tag push it also requires the tag to be **annotated** (`git tag -a`; a lightweight tag is refused) and its commit to be in the default branch's history. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in and on by default, in `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns it off). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
-| `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
+| `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives, the SBOMs, `install.sh`, `uninstall.sh` and `SHA256SUMS`, signed via GitHub OIDC. |
 | `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install/Docker/verify notes. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
-| `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum. Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
+| `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum, and each of them (and `SHA256SUMS`) carrying a valid build-provenance attestation from this repository (`gh attestation verify`). Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
 
 **Build targets** (three — there is no armv7 and no musl):
 
@@ -202,10 +274,12 @@ Copy-paste this into the release PR or issue and tick it off:
 # Checksums
 sha256sum -c SHA256SUMS --ignore-missing
 
-# SLSA build provenance on a binary archive
+# SLSA build provenance on a binary archive, and on the scripts and the
+# checksum manifest (releases after the one that introduced this check)
 gh attestation verify \
   --repo tomtom215/BirdNet-Behavior \
   birdnet-behavior-X.Y.Z-aarch64-unknown-linux-gnu.tar.gz
+gh attestation verify --repo tomtom215/BirdNet-Behavior install.sh
 
 # Docker image signature (keyless cosign)
 cosign verify \

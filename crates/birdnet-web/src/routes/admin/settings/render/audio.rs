@@ -58,8 +58,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
       <div>
         <label>Audio Channels</label>
-        <p class="hint">Every source is recorded in mono; there is no control for this.
-        On <a href="/admin/audio">Audio &amp; Microphones</a> you set a source\'s
+        <p class="hint standalone">Every source is recorded in mono; there is no control for this.
+        On <a href="/admin/audio">Audio &amp; Microphones</a> you set a source's
         recording quality when you add it, and its noise filtering and quiet hours
         at any time.</p>
       </div>

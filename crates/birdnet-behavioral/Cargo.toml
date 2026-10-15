@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 description = "DuckDB behavioral analytics for bird detection patterns"
@@ -27,6 +27,10 @@ duckdb.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+# Hashes the extension binaries `build.rs` embeds, against `extension_pins.rs`.
+sha2.workspace = true
 
 [lints]
 workspace = true

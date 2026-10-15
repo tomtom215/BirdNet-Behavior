@@ -86,7 +86,7 @@ BirdNet-Behavior/
 │   │       ├── audio/
 │   │       │   ├── capture/        # arecord / ffmpeg / tmpfs / disk manager
 │   │       │   ├── decode.rs       # symphonia WAV/FLAC/MP3
-│   │       │   ├── resample.rs     # rubato polynomial resampler
+│   │       │   ├── resample.rs     # rubato windowed-sinc resampler
 │   │       │   ├── extraction/     # Per-detection WAV extraction + metadata
 │   │       │   ├── quality/        # SNR, noise floor, rain, stream faults
 │   │       │   ├── eq/, biquad.rs  # EQ filter chains (tee and ffmpeg backends)

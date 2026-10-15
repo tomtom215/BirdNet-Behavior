@@ -210,6 +210,15 @@ pub struct DetectionFilter {
     /// (case-insensitive) inverts it — the BirdNET-Pi syntax operators already
     /// have written down.
     pub text: Option<String>,
+    /// Scientific names the free-text search also covers: with a plain term they
+    /// match even when neither of their names contains it; with a `NOT ` term
+    /// they are excluded as well. Ignored when `text` is `None`.
+    ///
+    /// The database holds the classifier's names, so a term typed in another
+    /// language matches none of them. The caller, which knows the station's
+    /// language, resolves the term to the species it names and passes their
+    /// scientific names here; this crate stays ignorant of languages.
+    pub text_also_species: Vec<String>,
     /// Exact species names (common or scientific, case-insensitive). Multiple
     /// entries are OR-ed: "show me these three birds".
     pub species: Vec<String>,
@@ -312,16 +321,26 @@ impl DetectionFilter {
                 // `char(92)` is `\`, the escape `like_contains` uses. Written as
                 // an expression, not `'\'`, so this SQL stays free of quoted
                 // literals and counting its `?` placeholders stays sound.
-                parts.push(
-                    "(Com_Name LIKE ? ESCAPE char(92) OR Sci_Name LIKE ? ESCAPE char(92))".into(),
-                );
+                parts.push(format!(
+                    "(Com_Name LIKE ? ESCAPE char(92) OR Sci_Name LIKE ? ESCAPE char(92){})",
+                    sci_in_list(" OR", self.text_also_species.len())
+                ));
                 let pattern = like_contains(&term);
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
+                for sci in &self.text_also_species {
+                    params.push(Box::new(sci.clone()));
+                }
             }
             Some(SearchTerm::Exclude(rest)) => {
                 parts.push("Com_Name NOT LIKE ? ESCAPE char(92)".into());
                 params.push(Box::new(like_contains(&rest)));
+                if !self.text_also_species.is_empty() {
+                    parts.push(sci_in_list("Sci_Name NOT", self.text_also_species.len()));
+                    for sci in &self.text_also_species {
+                        params.push(Box::new(sci.clone()));
+                    }
+                }
             }
             None => {}
         }
@@ -398,6 +417,21 @@ impl DetectionFilter {
         } else {
             (format!(" WHERE {body}"), params)
         }
+    }
+}
+
+/// ` <lead> Sci_Name IN (?, ?, …)` for `n` bound scientific names, or nothing for
+/// none. `lead` is `" OR"` (appended to a clause) or `"Sci_Name NOT"` (a clause
+/// of its own, read as `Sci_Name NOT IN (…)`).
+fn sci_in_list(lead: &str, n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let marks = vec!["?"; n].join(", ");
+    if lead == " OR" {
+        format!(" OR Sci_Name IN ({marks})")
+    } else {
+        format!("{lead} IN ({marks})")
     }
 }
 
@@ -502,6 +536,7 @@ mod tests {
     fn full_filter() -> DetectionFilter {
         DetectionFilter {
             text: Some("robin".into()),
+            text_also_species: vec!["Parus major".into(), "Cyanistes caeruleus".into()],
             species: vec!["Erithacus rubecula".into(), "Turdus merula".into()],
             dates: DateRange::between("2026-01-01", "2026-02-01"),
             hours: Some(HourWindow::new(5, 9)),
@@ -523,10 +558,17 @@ mod tests {
         // remembered: the whole point of positional `?` is that the fragment
         // adding a placeholder is the fragment pushing its value, and this is
         // what makes that checkable rather than merely intended.
-        let texts = [
-            None,
-            Some("robin".to_string()),
-            Some("NOT crow".to_string()),
+        // `(text, the species it also covers)`: the extra species only mean
+        // anything with a text, so the combinations are the ones that can occur.
+        let texts: [(Option<String>, Vec<String>); 5] = [
+            (None, vec![]),
+            (Some("robin".to_string()), vec![]),
+            (Some("robin".to_string()), vec!["Parus major".into()]),
+            (Some("NOT crow".to_string()), vec![]),
+            (
+                Some("NOT crow".to_string()),
+                vec!["Parus major".into(), "Cyanistes caeruleus".into()],
+            ),
         ];
         let dates = [
             DateRange::Any,
@@ -548,7 +590,7 @@ mod tests {
         let confs = [(None, None), (Some(0.3), None), (Some(0.3), Some(0.9))];
 
         let mut checked = 0_usize;
-        for text in &texts {
+        for (text, also) in &texts {
             for date in &dates {
                 for sp in &species {
                     for src in &sources {
@@ -566,6 +608,7 @@ mod tests {
                                     ] {
                                         let f = DetectionFilter {
                                             text: text.clone(),
+                                            text_also_species: also.clone(),
                                             species: sp.clone(),
                                             dates: date.clone(),
                                             hours: *hour,
@@ -592,7 +635,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 3 * 3 * 3 * 3 * 3 * 3 * 3 * 3, "matrix shrank");
+        assert_eq!(checked, 5 * 3 * 3 * 3 * 3 * 3 * 3 * 3, "matrix shrank");
     }
 
     #[test]
@@ -922,6 +965,72 @@ mod tests {
                 "selecting {name:?} should find both owl rows"
             );
         }
+    }
+
+    // ── a term typed in another language ───────────────────────────────────
+
+    #[test]
+    fn species_a_term_also_covers_match_by_scientific_name_whatever_the_text_says() {
+        // The owl rows hold "Tawny Owl" / "Strix aluco"; a German station's
+        // reader types "Waldkauz", which neither contains. The caller resolves
+        // it to the scientific name and passes that.
+        let conn = seeded();
+        let typed = |also: &[&str]| DetectionFilter {
+            text: Some("Waldkauz".into()),
+            text_also_species: also.iter().map(|s| (*s).to_owned()).collect(),
+            ..DetectionFilter::default()
+        };
+        assert_eq!(search_detection_count(&conn, &typed(&[])).unwrap(), 0);
+        let found = typed(&["Strix aluco"]);
+        assert_eq!(search_detection_count(&conn, &found).unwrap(), 2);
+        assert_eq!(
+            names(&search_detections(&conn, &found, 50, 0).unwrap()),
+            ["Tawny Owl", "Tawny Owl"]
+        );
+    }
+
+    #[test]
+    fn the_extra_species_add_to_the_text_match_and_do_not_replace_it() {
+        let conn = seeded();
+        let f = DetectionFilter {
+            text: Some("robin".into()),
+            text_also_species: vec!["Strix aluco".into()],
+            ..DetectionFilter::default()
+        };
+        // Two robin rows by their own name, two owl rows by the extra species,
+        // and not the blackbird.
+        assert_eq!(search_detection_count(&conn, &f).unwrap(), 4);
+    }
+
+    #[test]
+    fn a_not_term_excludes_the_extra_species_too() {
+        let conn = seeded();
+        let f = DetectionFilter {
+            text: Some("NOT Waldkauz".into()),
+            text_also_species: vec!["Strix aluco".into()],
+            ..DetectionFilter::default()
+        };
+        // Nothing is called Waldkauz in the database, so only the resolved
+        // species is left out: robin ×2 and blackbird remain.
+        assert_eq!(search_detection_count(&conn, &f).unwrap(), 3);
+        // Without them the same term excludes nothing and finds everything.
+        let bare = DetectionFilter {
+            text_also_species: vec![],
+            ..f
+        };
+        assert_eq!(search_detection_count(&conn, &bare).unwrap(), 5);
+    }
+
+    #[test]
+    fn extra_species_without_a_text_change_nothing() {
+        let conn = seeded();
+        let f = DetectionFilter {
+            text: None,
+            text_also_species: vec!["Strix aluco".into()],
+            ..DetectionFilter::default()
+        };
+        assert_eq!(search_detection_count(&conn, &f).unwrap(), 5);
+        assert_eq!(f.where_prefix().0, "");
     }
 
     #[test]

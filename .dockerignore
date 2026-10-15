@@ -1,5 +1,11 @@
 # Build artifacts — excluded to keep the build context small and fast
 target/
+
+# The toolchain file names `channel = "stable"`, and rustup ranks a toolchain
+# file above the image's own default. Copied in by `COPY . .`, it made the
+# builder (`rust:1.95-slim-trixie`, pinned to the MSRV) download and use
+# whatever stable is today. Left out, the pinned image compiles.
+rust-toolchain.toml
 **/*.rs.bk
 
 # Version control

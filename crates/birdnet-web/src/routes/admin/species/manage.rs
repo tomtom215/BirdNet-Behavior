@@ -81,11 +81,18 @@ async fn manage_partial(State(state): State<AppState>) -> Html<String> {
 }
 
 async fn load(state: AppState) -> Vec<SpeciesUsage> {
-    tokio::task::spawn_blocking(move || {
+    let names = state.names_handle();
+    let mut rows = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::species_disk_usage(conn).unwrap_or_default())
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_default();
+    // `com_name` is only drawn here — every action posts `sci_name` — so it is
+    // the one field to put in the station's language.
+    for r in &mut rows {
+        r.com_name = names.name(&r.sci_name, &r.com_name).to_owned();
+    }
+    rows
 }
 
 /// `POST /admin/species/manage/exclude` — stop recording this species.

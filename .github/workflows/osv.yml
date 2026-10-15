@@ -1,0 +1,93 @@
+# OSV-Scanner: every tracked lockfile against the OSV database.
+#
+# Beside cargo-deny and cargo-audit (supply-chain.yml), which read RustSec,
+# this reads OSV, which also carries GitHub's advisory database, and it reads
+# the one non-Rust lockfile the repository tracks, `tools/visual-qa/package-
+# lock.json` (the browser-QA tooling that gates the web UI). A finding fails the
+# job: it is ours to fix, or to waive in an `osv-scanner.toml` with a reason and
+# an `ignoreUntil` date, as deny.toml does for RustSec. The cost is the same one
+# cargo-deny has: an advisory published against an unchanged lockfile reddens
+# every open pull request until it is fixed or waived.
+#
+# Inline rather than the reusable workflow, step for step what that workflow
+# runs (google/osv-scanner-action's osv-scanner-reusable.yml at v2.6.0): a
+# reusable-workflow job cannot declare `timeout-minutes`, and a job with none
+# gets GitHub's six-hour default. check-ci-config.py refuses that.
+
+name: OSV-Scanner
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  schedule:
+    - cron: "27 6 * * *"
+  workflow_dispatch:
+
+# A scheduled or dispatched run has its own group and is not cancelled.
+concurrency:
+  group: "${{ github.workflow }}-${{ (github.event_name == 'push' || github.event_name == 'pull_request') && github.ref || github.event_name }}"
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: OSV-Scanner (lockfiles)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run scanner
+        id: scan
+        uses: google/osv-scanner-action/osv-scanner-action@7f58dd6750d78fc29a900ba64b1a0f946f62fba4 # v2.6.0
+        env:
+          GOTOOLCHAIN: auto
+        with:
+          scan-args: |-
+            --output=results.json
+            --format=json
+            --lockfile=Cargo.lock
+            --lockfile=tools/visual-qa/package-lock.json
+        continue-on-error: true
+
+      - name: Check that the scan completed
+        if: ${{ steps.scan.outcome == 'failure' }}
+        run: |
+          if [ ! -s results.json ]; then
+            echo "::error::OSV-Scanner failed without writing results.json, so there are no results to report on."
+            exit 1
+          fi
+
+      - name: Report
+        uses: google/osv-scanner-action/osv-reporter-action@7f58dd6750d78fc29a900ba64b1a0f946f62fba4 # v2.6.0
+        with:
+          scan-args: |-
+            --output=osv.sarif
+            --new=results.json
+            --gh-annotations=false
+            --fail-on-vuln=true
+
+      - name: Upload artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: osv-sarif
+          path: osv.sarif
+          retention-days: 5
+
+      - name: Upload to code scanning
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: osv.sarif

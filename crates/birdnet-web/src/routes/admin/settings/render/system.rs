@@ -3,9 +3,73 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use birdnet_core::i18n::{ENGLISH, LANGUAGES, NameLocalizer, find_language};
+
 use super::get_setting;
 
-pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
+/// The common-name language control: one option per language the station has
+/// names for, each with the share of the installed classifier's species it
+/// covers, so a Korean station finds out *before* choosing it that most birds
+/// will keep their English names.
+///
+/// A stored value that is not a language (a typo from the old free-text box)
+/// selects English, which is what the station shows for it, and the hint says
+/// so. Saving then replaces it with a real choice rather than refusing the
+/// whole form over a value the page no longer lets anyone type.
+fn language_picker(stored: &str, names: &NameLocalizer) -> String {
+    let stored = stored.trim();
+    let chosen = find_language(stored).map_or(ENGLISH, |l| l.code);
+    let mut options = String::new();
+    for language in LANGUAGES {
+        let label = if language.code == ENGLISH {
+            "English — the classifier's own names".to_owned()
+        } else {
+            let share = names.coverage_of(language.code).map_or(String::new(), |c| {
+                format!(" — {}%", (c.named * 100 + c.of / 2) / c.of)
+            });
+            if language.native_name == language.english_name {
+                format!("{}{share}", language.english_name)
+            } else {
+                format!(
+                    "{} ({}){share}",
+                    language.english_name, language.native_name
+                )
+            }
+        };
+        let selected = if language.code == chosen {
+            " selected"
+        } else {
+            ""
+        };
+        let _ = write!(
+            options,
+            r#"<option value="{}"{selected}>{}</option>"#,
+            language.code,
+            crate::routes::pages::escape_html(&label)
+        );
+    }
+    let unrecognised = if stored.is_empty() || find_language(stored).is_some() {
+        String::new()
+    } else {
+        format!(
+            r" <b>The stored value <code>{}</code> is not a language with names available, so names are shown as the classifier gives them; choose one to replace it.</b>",
+            crate::routes::pages::escape_html(stored)
+        )
+    };
+    let share_note = names.coverage_of("de").map_or(String::new(), |c| {
+        format!(
+            " The percentages are the share of the {} species your classifier can report that have a name in that language; the rest keep the classifier's name.",
+            crate::routes::pages::group_thousands(i64::try_from(c.of).unwrap_or(i64::MAX))
+        )
+    });
+    format!(
+        r#"<label for="database_lang">Common-name language</label>
+        <select id="database_lang" name="database_lang">{options}</select>
+        <p class="hint">The language species common names are shown in. Only what is <em>shown</em> changes: detections, lists, filters and exports keep the classifier's names, so you can switch back at any time and nothing is lost or split.{share_note}{unrecognised} Applies when the station next starts (BirdNET-Pi: DATABASE_LANG)</p>"#
+    )
+}
+
+pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &NameLocalizer) {
     // Default 0 = keep audio forever, which is what every station does
     // today; age-based retention is strictly opt-in.
     let days = get_setting(s, "clip_retention_days");
@@ -25,7 +89,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let isite = get_setting(s, "info_site");
     // Command-line only until 0.12.0, so a non-English station could not pick
     // its own language from the UI at all.
-    let lang = get_setting(s, "database_lang");
+    let lang_picker = language_picker(s.get("database_lang").map_or("", String::as_str), names);
     let is_ebird = if isite == "ebird" { " selected" } else { "" };
     let is_aab = if isite == "allaboutbirds" {
         " selected"
@@ -55,10 +119,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     </div>
     <div class="grid-2">
       <div>
-        <label for="database_lang">Common-name language</label>
-        <input id="database_lang" name="database_lang" type="text" value="{lang}"
-               placeholder="en" maxlength="8" class="bnb-w-num">
-        <p class="hint">Two-letter code for the language species common names are shown in, e.g. <code>en</code>, <code>de</code>, <code>fr</code>. Scientific names are unaffected (BirdNET-Pi: DATABASE_LANG)</p>
+        {lang_picker}
       </div>
       <div></div>
     </div>

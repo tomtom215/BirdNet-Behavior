@@ -35,6 +35,36 @@ on the next restart.
 The **Send Test Push Notification** button under **Station → Alerts** (`/station/alerts`) uses the values saved on the
 Settings page, so a successful test means live detections will notify too.
 
+### Message templates
+
+The title and body of a push notification are templates, set under
+Settings → Notifications (or `APPRISE_TITLE_TEMPLATE` / `APPRISE_BODY_TEMPLATE`
+in the config file). They use BirdNET-Pi's `$variable` names, so a template
+moved over from a BirdNET-Pi station keeps working:
+
+| Variable | Replaced with |
+|---|---|
+| `$comname`, `$sciname` | Common and scientific name |
+| `$confidence`, `$confidencepct` | Confidence as `0.92`, and as `92` |
+| `$date`, `$time`, `$week` | The detection's local date, time, and ISO week |
+| `$latitude`, `$longitude` | The station's coordinates to six places; nothing at all when the station has none |
+| `$reason` | Why this detection notified: `detection`, `first time today`, or `only seen N times in last 7d` — whichever the trigger mode found |
+| `$cutoff`, `$sens`, `$overlap` | The confidence bar this detection cleared, and the sensitivity and overlap the station was running with |
+| `$listenurl` | The detection's own page, with its clip and spectrogram |
+| `$friendlyurl` | The same address as a Markdown link, `[Listen here](…)` |
+| `$image`, `$flickrimage` | The species picture, served by the station |
+
+A value the station does not have renders as nothing, never as a placeholder
+such as `0.000000`.
+
+The three link variables need the station's address as the phone sees it.
+`BNB_PUBLIC_URL` is read first, then `BNB_BASE_URL`, then the machine's name on
+the local network (`http://<hostname>.local:8502`, the same address the
+installer prints). If none of these can be worked out the links are left empty
+rather than pointing at `localhost`, which would be the phone itself. A station
+that is only reachable through a reverse proxy or a VPN name should set
+`BNB_PUBLIC_URL`.
+
 ### Keeping the credential out of the environment
 
 A notification URL carries its bot token *inside* the URL, and an environment

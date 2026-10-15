@@ -77,7 +77,7 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
     let section_form = |sections: &[Section]| {
         settings.as_ref().map_or_else(
             |e| crate::routes::admin::settings::handler::unreadable_notice(e),
-            |s| render_section_form(s, sections),
+            |s| render_section_form(s, sections, state.names()),
         )
     };
     format!(
@@ -118,7 +118,7 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
     let section_form = |sections: &[Section]| {
         settings.as_ref().map_or_else(
             |e| crate::routes::admin::settings::handler::unreadable_notice(e),
-            |s| render_section_form(s, sections),
+            |s| render_section_form(s, sections, state.names()),
         )
     };
     format!(
@@ -191,7 +191,7 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
     let section_form = |sections: &[Section]| {
         settings.as_ref().map_or_else(
             |e| crate::routes::admin::settings::handler::unreadable_notice(e),
-            |s| render_section_form(s, sections),
+            |s| render_section_form(s, sections, state.names()),
         )
     };
     format!(

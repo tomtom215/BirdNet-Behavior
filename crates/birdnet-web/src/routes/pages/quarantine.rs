@@ -97,7 +97,7 @@ pub struct ActionForm {
 async fn quarantine_page(Query(params): Query<ListParams>, headers: HeaderMap) -> Html<String> {
     let filter = params.filter.as_deref().unwrap_or("pending");
     let content = build_page_html(filter);
-    super::render_page_for_request("Quarantine Review", &content, "quarantine", &headers)
+    super::render_page_for_request("Quarantine Review", &content, "species", &headers)
 }
 
 fn build_page_html(active_filter: &str) -> String {
@@ -120,18 +120,14 @@ fn build_page_html(active_filter: &str) -> String {
     // Initial HTMX load passes the active filter so the list matches the URL.
     format!(
         "<div class=\"qz-head\">\
-  <div class=\"qz-title-row\">\
-    <h1 class=\"qz-h1\">\
-      &#128269; Rare Bird Quarantine\
-    </h1>\
-    {help_link}\
-  </div>\
+  <div class=\"bnb-eyebrow qz-eyebrow\"><span>Review</span>{help_link}</div>\
+  <h1 class=\"display qz-h1\">Rare bird quarantine</h1>\
   <p class=\"qz-lede\">\
-    Detections that passed the global confidence threshold but failed a stricter \
-    per-species threshold are held here for manual review. Approve to admit into \
-    the detection log; reject or delete to discard. To confirm or reject \
-    detections already in the log, use \
-    <a href=\"/detection-reviews\">Detection reviews</a>.\
+    Some detections are held back until you have had a look: either the bird is \
+    unlikely here at this time of year, or the model was not sure enough for a \
+    species you asked to be strict about. Approve one to add it to your records; \
+    reject or delete it to discard. To confirm or reject detections already in \
+    your records, use <a href=\"/detection-reviews\">Detection reviews</a>.\
   </p>\
 </div>\
 <div id=\"quarantine-stats\" \
@@ -243,6 +239,7 @@ async fn quarantine_list_partial(
     let filter = parse_filter(params.filter.as_deref());
     let limit = params.limit.unwrap_or(30).min(100);
     let offset = params.offset.unwrap_or(0);
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let rows = birdnet_db::sqlite::list_quarantine(conn, filter, limit, offset)?;
@@ -270,7 +267,7 @@ async fn quarantine_list_partial(
                 render_table_header(&mut html);
             }
             for row in &rows {
-                render_quarantine_row(&mut html, row, &filter_str(filter));
+                render_quarantine_row(&mut html, row, &filter_str(filter), &names);
             }
 
             // Pagination
@@ -330,6 +327,7 @@ fn render_quarantine_row(
     html: &mut String,
     row: &birdnet_db::sqlite::QuarantineRow,
     filter_param: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) {
     let conf_pct = row.confidence * 100.0;
     let conf_cls = if conf_pct >= 80.0 {
@@ -339,7 +337,8 @@ fn render_quarantine_row(
     } else {
         "low"
     };
-    let com_name = escape_html(&row.com_name);
+    // What is read; the link and the share token below carry the stored name.
+    let com_name = escape_html(names.name(&row.sci_name, &row.com_name));
     let sci_name = escape_html(&row.sci_name);
     let date = escape_html(&row.date);
     let time = escape_html(&row.time);
@@ -347,7 +346,12 @@ fn render_quarantine_row(
         escape_html(birdnet_db::sqlite::QuarantineReason::from_db_str(&row.reason).label());
     let sf_info = row
         .sf_probability
-        .map(|p| format!("<div class=\"qz-sf\">SF prob: {:.1}%</div>", p * 100.0))
+        .map(|p| {
+            format!(
+                "<div class=\"qz-sf\">{:.0}% likely here this week</div>",
+                p * 100.0
+            )
+        })
         .unwrap_or_default();
     let enc_species = simple_url_encode(&row.com_name);
     let status = if row.reviewed {

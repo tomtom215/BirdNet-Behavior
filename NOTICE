@@ -1,0 +1,97 @@
+BirdNet-Behavior
+================
+
+BirdNet-Behavior is licensed under CC BY-NC-SA 4.0 (LICENSE; the full text is in
+LICENSE-UPSTREAM). It is a rewrite of BirdNET-Pi and is built to work with it;
+the lineage and credits are in LICENSE and docs/book/about.md.
+
+This file says, in prose, whose work a build contains or fetches, and under what
+terms. The licence texts themselves are in THIRD_PARTY_LICENSES.txt, which is
+generated from Cargo.lock and the files in third_party/ and ships with every
+release archive and container image.
+
+Linked into the binary
+----------------------
+
+* Rust packages: every package in the build's dependency tree, under MIT,
+  Apache-2.0, BSD, ISC, Zlib, Unicode-3.0 and similar licences. Twelve of them,
+  the `symphonia` family (audio decoding), are under MPL-2.0 and are used
+  unmodified; their source is at https://crates.io/crates/symphonia and
+  https://github.com/pdeljanov/Symphonia.
+* ONNX Runtime 1.31.0, MIT, Copyright (c) Microsoft Corporation, linked
+  statically through the `ort` crate. Its own third-party notices are in
+  THIRD_PARTY_LICENSES.txt.
+* DuckDB 1.5.6, MIT, Copyright Stichting DuckDB Foundation, linked statically
+  through `libduckdb-sys`, with the libraries it bundles (their licences are
+  in THIRD_PARTY_LICENSES.txt).
+
+Compiled into the binary as data
+--------------------------------
+
+* Species-name translations: the common names of about 7,000 species in 35
+  languages, from BirdNET-Pi's `model/l18n/` (Nachtzuster's fork, commit
+  88985a3), reduced to the names that are genuine translations. BirdNET-Pi is
+  licensed CC BY-NC-SA 4.0, as this project is, and credits the names to
+  @patlevin's BirdNET label translations and to Wikipedia; it does not record
+  which name came from which, and neither does this repository. Details, the
+  per-source checksums and the rebuild command are in
+  crates/birdnet-core/data/l18n/README.md.
+
+Embedded in builds that have analytics
+--------------------------------------
+
+* The DuckDB `icu` extension, built by the DuckDB project from ICU (the ICU
+  licence, text in THIRD_PARTY_LICENSES.txt), pinned by sha256.
+* The DuckDB `behavioral` extension, from
+  https://github.com/tomtom215/duckdb-behavioral (MIT, the same author as this
+  project), pinned by sha256.
+
+Served by the web interface from the binary
+-------------------------------------------
+
+* htmx 2.0.4, Zero-Clause BSD.
+* Inter Tight, Instrument Serif, JetBrains Mono and Noto Sans, Latin and
+  Latin-extended subsets, unmodified from the @fontsource 5.3.0 packages, under
+  the SIL Open Font License 1.1. Each family's copyright line and the licence
+  are in crates/birdnet-web/static/fonts/LICENSES.txt.
+
+Downloaded, not distributed with the source or the archives
+-----------------------------------------------------------
+
+* The BirdNET+ V3.0 classifier and labels, "BirdNET+ V3.0 model developer
+  preview" (Preview 3, 2026-01-14), by Mario Lasseck, Maximilian Eibl, Holger
+  Klinck and Stefan Kahl, DOI 10.5281/zenodo.18247420, licensed CC BY-SA 4.0
+  according to that Zenodo record. The installer fetches it from this project's
+  `models-v3.0-preview3` release, which holds an unmodified copy, and falls back
+  to Zenodo; both are checked against a pinned sha256.
+* The BirdNET geomodel, v3.0.2, from https://github.com/birdnet-team/geomodel:
+  source MIT; the trained weights CC BY-SA 4.0, according to that repository's
+  README at that tag. Mirrored unmodified in the same release, checked against a
+  pinned sha256.
+* Other classifiers (for example Google Perch v2, as an ONNX conversion hosted
+  on Hugging Face) are fetched only when the operator runs
+  `birdnet-behavior --install-model`; their terms are their publishers'.
+* Species photographs are cached from Wikimedia Commons (and, when enabled,
+  Flickr) under the licence each photograph carries, with the attribution that
+  licence requires shown beside it.
+
+In the repository only
+----------------------
+
+* tests/testdata/Pica_pica_30s.wav is byte-identical (SHA-256 16fe8840...0098)
+  to the test recording in BirdNET-Pi's `tests/testdata/` as of Nachtzuster's
+  fork at commit 88985a3, a CC BY-NC-SA 4.0 project, and is used under that
+  licence. The original recording credit is not recorded there.
+* crates/birdnet-integrations/src/testdata/ holds small samples of public API
+  responses (eBird, MET Norway) kept as test fixtures. They are not in any
+  release archive.
+
+Not affiliated
+--------------
+
+BirdNET is a project of the K. Lisa Yang Center for Conservation Bioacoustics at
+the Cornell Lab of Ornithology; BirdNET-Pi is by Patrick McGuire and its fork by
+Nachtzuster; Perch is Google's; eBird is a service of the Cornell Lab; DuckDB is
+a project of the DuckDB Foundation. BirdNet-Behavior is not affiliated with,
+endorsed by, or sponsored by any of them, and uses their names only to say what
+it is compatible with or built on.

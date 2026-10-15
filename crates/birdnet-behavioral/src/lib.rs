@@ -44,3 +44,9 @@ pub mod memory;
 pub mod phenology;
 pub mod queries;
 pub mod types;
+
+// The build script embeds only the extension builds this file names; compiling
+// it here, under test, is how its table and its `check` get tested.
+#[cfg(test)]
+#[path = "../extension_pins.rs"]
+mod extension_pins;

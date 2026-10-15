@@ -9,11 +9,14 @@
 # for release builds using LTO + codegen-units=1 (emulated linker OOMs on
 # standard GitHub-hosted runners).
 #
+# Base images are named in the two `FROM` lines below, each pinned to a manifest
+# digest (the tag says what it is for; the digest is what is fetched). They used
+# to be `ARG`s interpolated into `FROM`, which let a build-arg change the
+# compiler or the distribution but kept the pin out of Dependabot's sight and
+# off the digest. Bump a base by changing its line; Dependabot's `docker`
+# ecosystem does it weekly.
+#
 # Build arguments:
-#   RUST_VERSION      Rust toolchain version (default: 1.95 — MSRV)
-#   DEBIAN_CODENAME   Debian base image codename (default: trixie — keep this
-#                     line in step with the ARG below; it said `bookworm` for
-#                     as long as the ARG said `trixie`)
 #   BUILD_FEATURES    Comma-separated Cargo features (default: "analytics")
 #                     DuckDB behavioral analytics is built in by default, to
 #                     match the release binaries. Pass BUILD_FEATURES="" for a
@@ -28,7 +31,6 @@
 #   docker build -t birdnet-behavior --build-arg BUILD_FEATURES="" .   # lean
 # =============================================================================
 
-ARG RUST_VERSION=1.95
 # Debian 13 "trixie" is required here, not "bookworm": the pre-built
 # ONNX Runtime binaries that the `ort` crate downloads link against
 # glibc ≥ 2.38 (they use the C23 `__isoc23_strtol` / `strtoll` / `strtoull`
@@ -36,7 +38,10 @@ ARG RUST_VERSION=1.95
 # Debian bookworm ships glibc 2.36 and GCC 12, so those symbols are missing
 # and the final `cargo build` link step aborts with "undefined reference".
 # Trixie ships glibc 2.41 and GCC 14, which matches what pyke builds against.
-ARG DEBIAN_CODENAME=trixie
+#
+# The builder is Rust 1.95, the MSRV (`rust-version` in Cargo.toml), on purpose:
+# the image compiles with the oldest compiler the project promises to support.
+# Dependabot is told not to move it (see .github/dependabot.yml).
 
 # -----------------------------------------------------------------------------
 # Stage 1 — cargo-chef base
@@ -46,12 +51,12 @@ ARG DEBIAN_CODENAME=trixie
 # file is copied into the cook stage, so the dependency layer is invalidated
 # solely when Cargo.lock or manifest files change — not on every source edit.
 # -----------------------------------------------------------------------------
-FROM rust:${RUST_VERSION}-slim-${DEBIAN_CODENAME} AS chef
+FROM rust:1.95-slim-trixie@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0 AS chef
 WORKDIR /build
 # cargo-chef is pinned to the 0.1 minor series for reproducibility.  The
 # --locked flag forces cargo to honour the bundled Cargo.lock from the
 # cargo-chef crate, which prevents transitive-dependency drift between builds.
-RUN cargo install cargo-chef --locked --version "^0.1"
+RUN cargo install cargo-chef --locked --version 0.1.78
 
 # -----------------------------------------------------------------------------
 # Stage 2 — planner
@@ -149,9 +154,10 @@ COPY . .
 # embed it into the binary via build.rs, so the released station loads the
 # extension out of the box without needing network at first run. The DuckDB
 # version is the one libduckdb-sys bundles (kept in sync with the duckdb crate
-# pin in Cargo.toml). If the download fails — restricted CI / offline build —
-# the variable stays unset and the build.rs falls through to the runtime
-# LOAD / INSTALL FROM community path.
+# pin in Cargo.toml). If the download fails the build fails, unless
+# BEHAVIORAL_EXTENSION_OPTIONAL is set (below); with it, the variable stays
+# unset and the image falls back to the runtime LOAD / INSTALL FROM community
+# path.
 # MUST equal the DuckDB version libduckdb-sys bundles — the `duckdb = "~1.10506"`
 # pin in the root Cargo.toml, where `10506` encodes DuckDB 1.5.6. Both registries
 # publish per engine version, and ICU (a C++ extension) loads only into the exact
@@ -182,6 +188,17 @@ ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.6"
 # network at first run after all. docker.yml still passes it explicitly.
 ARG TARGETARCH
 ARG BEHAVIORAL_EXTENSION_TARGET=""
+# A build that embeds the extensions (the default `analytics` feature) fails
+# when it cannot fetch them, rather than producing an image that needs the
+# network at first run — the 0.13.1 fault. Set this to 1 to build anyway, e.g.
+# where the registries are unreachable; the image then has no offline analytics.
+# Whatever *is* fetched must match the sha256 in
+# `crates/birdnet-behavioral/extension_pins.rs`, or `cargo build` refuses it.
+ARG BEHAVIORAL_EXTENSION_OPTIONAL=""
+# The final build is `--locked`: Cargo.lock is what ships (and what cargo-deny
+# graded), so a lock that disagrees with a manifest fails the build instead of
+# being rewritten. `cargo chef cook` above is not, because it builds a skeleton
+# whose manifests are not the real ones.
 RUN set -eu; \
     ext_target="${BEHAVIORAL_EXTENSION_TARGET}"; \
     if [ -z "$ext_target" ]; then \
@@ -197,31 +214,39 @@ RUN set -eu; \
     fi; \
     echo "embedding DuckDB extensions for ${ext_target}"; \
     url="https://community-extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${ext_target}/behavioral.duckdb_extension.gz"; \
-    if curl -fsSL --max-time 30 -o /tmp/behavioral.duckdb_extension.gz "$url"; then \
+    must_embed=""; \
+    case ",${BUILD_FEATURES}," in *,analytics,*) [ -n "${BEHAVIORAL_EXTENSION_OPTIONAL}" ] || must_embed=1 ;; esac; \
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 30 -o /tmp/behavioral.duckdb_extension.gz "$url"; then \
         gunzip -f /tmp/behavioral.duckdb_extension.gz; \
         echo "embedding behavioral extension from $url"; \
         export BIRDNET_BUNDLED_EXTENSION_FILE=/tmp/behavioral.duckdb_extension; \
+    elif [ -n "$must_embed" ]; then \
+        echo "ERROR: behavioral extension NOT fetched ($url). This image would have no offline analytics. Retry, or pass --build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1 to build without it."; \
+        exit 1; \
     else \
         echo "WARNING: behavioral extension NOT fetched ($url) — this image has no offline analytics; docker.yml asserts against exactly this"; \
     fi; \
     icu_url="https://extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${ext_target}/icu.duckdb_extension.gz"; \
-    if curl -fsSL --max-time 120 -o /tmp/icu.duckdb_extension.gz "$icu_url"; then \
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o /tmp/icu.duckdb_extension.gz "$icu_url"; then \
         gunzip -f /tmp/icu.duckdb_extension.gz; \
         echo "embedding icu extension from $icu_url"; \
         export BIRDNET_BUNDLED_ICU_FILE=/tmp/icu.duckdb_extension; \
+    elif [ -n "$must_embed" ]; then \
+        echo "ERROR: icu extension NOT fetched ($icu_url). CURRENT_DATE lives in ICU, so this image's date-ranged dashboard queries would depend on a run-time install. Retry, or pass --build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1 to build without it."; \
+        exit 1; \
     else \
         echo "WARNING: icu extension NOT fetched ($icu_url) — CURRENT_DATE lives in ICU, so every date-ranged dashboard query in this image depends on DuckDB being able to autoinstall it at run time"; \
     fi; \
     if [ -n "${BUILD_FEATURES}" ]; then \
-        cargo build --release --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
+        cargo build --release --locked --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
     else \
-        cargo build --release --verbose --bin birdnet-behavior; \
+        cargo build --release --locked --verbose --bin birdnet-behavior; \
     fi
 
 # Stage the release binary for the runtime image.
 #
 # Despite the `copy-dylibs` feature being enabled on the `ort` crate,
-# `ort-sys` 2.0.0-rc.12 ships only `libonnxruntime.a` (a static archive)
+# `ort-sys` 2.0.0-rc.14 ships only `libonnxruntime.a` (a static archive)
 # inside its pyke-hosted dfbin tarball — there is no `libonnxruntime.so`.
 # rustc therefore static-links ONNX Runtime directly into the
 # birdnet-behavior binary, and the only dynamic runtime dependencies left
@@ -229,6 +254,14 @@ RUN set -eu; \
 # installed in the runtime stage below.  Nothing extra to carry over.
 RUN install -D -m 0755 target/release/birdnet-behavior \
         /staging/usr/local/bin/birdnet-behavior
+
+# The licence notices the binary's third-party code requires travel with it:
+# the binary statically links packages and libraries whose licences (MIT, BSD,
+# Apache-2.0, MPL-2.0, the SIL OFL for the fonts) ask for exactly that.
+# `supply-chain.yml` fails when THIRD_PARTY_LICENSES.txt is stale.
+RUN install -d /staging/usr/share/doc/birdnet-behavior \
+    && install -m 0644 LICENSE LICENSE-UPSTREAM NOTICE THIRD_PARTY_LICENSES.txt \
+        /staging/usr/share/doc/birdnet-behavior/
 
 # Stage the operator manual the binary serves at /help/*. build.rs rendered the
 # mdBook into docs/book/_generated/html during the cargo build above. Downscale
@@ -267,12 +300,11 @@ RUN set -eu; \
 #   curl             — used by the entrypoint to fetch the BirdNET+ model.
 #   tini             — PID 1 init, reaps zombies and forwards signals.
 # -----------------------------------------------------------------------------
-FROM debian:${DEBIAN_CODENAME}-slim AS runtime
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime
 
-# Re-declare global ARGs so they are in scope for the ENV / LABEL
+# Re-declare the global ARG so it is in scope for the ENV / LABEL
 # instructions below.  ARGs declared before the first FROM are only
 # visible inside a stage if re-declared with another ARG instruction.
-ARG DEBIAN_CODENAME
 ARG BUILD_FEATURES="analytics"
 
 # Environment knobs
@@ -399,5 +431,5 @@ LABEL org.opencontainers.image.title="BirdNet-Behavior" \
       org.opencontainers.image.description="Real-time acoustic bird classification with DuckDB behavioral analytics" \
       org.opencontainers.image.source="https://github.com/tomtom215/BirdNet-Behavior" \
       org.opencontainers.image.licenses="CC-BY-NC-SA-4.0" \
-      org.opencontainers.image.base.name="docker.io/library/debian:${DEBIAN_CODENAME}-slim" \
+      org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
       io.birdnet-behavior.build-features="${BUILD_FEATURES}"
