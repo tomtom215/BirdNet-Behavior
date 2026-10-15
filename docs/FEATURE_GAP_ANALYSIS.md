@@ -729,3 +729,26 @@ suspect-species report read a failed query as "Nothing looks suspicious", and
 the dawn-sequence card read one as "Not enough dawn activity yet". Both now say
 the data could not be read.
 
+
+## Part 7 — birdnet-go `780ce51` → `f4f019a` (2026‑10‑11 → 2026‑10‑15)
+
+Thirty-seven commits. Twelve of them are generated dependency-licence updates or
+the like; the rest were sorted by subject line, and three were looked at beyond that, to
+the depth each row says (one diff's key lines, one change's file list, one
+change's message and test). A subject-line triage can miss a change whose message undersells
+it, so a row saying "not applicable" means the subject did not touch anything this
+project has, not that the diff was checked.
+
+| birdnet-go change | Here |
+|---|---|
+| `5eb998d` third-octave bands measured with a tested DSP library, "correcting high-band levels" | Same class of defect as ours, found independently: the top bands' edges were wrong near Nyquist. Ours is corrected and measured in `tests/soundlevel_accuracy.rs` (CHANGELOG, "Make each third-octave band measure the band it names"). Their change was not compared sample for sample. |
+| `a122b6b` *read*: float → 16-bit conversion by 32768, round half to even, saturating; was 32767 and truncation (resampler) | Ours had the truncation (fixed earlier in this release) and the 32767 scale (fixed in `Export a 16-bit recording's clip bit for bit`). Rounding here is half away from zero, not half to even; they differ only on exact ties. The live-gain half of that commit (gain edits applied to running sources without a restart) was not compared. |
+| `00941d4` trim a trailing partial sample before WAV/FLAC export | Not applicable: clips here are written from decoded `f32` samples, never from raw byte buffers. |
+| `4610` evaluate every new voice-activity hop before trimming | Not applicable: there is no voice-activity stage here. Whether there should be is a feature gap that predates this range; it is not in the plan above. |
+| `ed89e32` *read (stat only)*: trusted reverse proxies configurable from the Security page, and a read-only endpoint saying how the requester's connection relates to the list | Gap in kind, not in function: the list exists here (`BIRDNET_TRUSTED_PROXIES`, `client_ip.rs`) and is set from the environment or the config file only; no page edits it, and no endpoint reports how a request was classified. |
+| `2ddb837` *read (message and test only)*: Perch sound-class labels such as `Bathtub_(filling_or_washing)` kept whole instead of split at the first underscore | Not verified here. The text-format label parser splits at the first underscore; the CSV and TSV parsers do not. Whether a Perch label file in text form reaches the first one was not checked, and no Perch label file is on this machine. |
+| `da2938f`, `ba1e9f4` clip clean-up leaving spectrogram renders, stale clip references | Not applicable to the first: spectrograms are rendered on demand here and never stored. The second (stale clip references on aged-out libraries) was not compared against `maintenance.rs`. |
+| `335d8d1`, `c275285` reconcile-pass back-off | Not compared. |
+| `86a9863` unreadable cgroup memory limits reported as unknown | Not compared against `memory.rs`. |
+| the `go-audio-dsp`, `go-flac`, `go-mp3`, `go-m4a`, `go-opus` refactors; native AAC/MP3/Opus clip encoding with no FFmpeg; Node 26 CI | Implementation changes in a Go project. Native non-WAV clip export would be a feature here (clips are WAV only); it is not in the plan above. |
+| `9642f74`, `c77f11b` interface-language and settings-page fixes | Not applicable: this interface is English, and species names are the localised part (Part 5). |
