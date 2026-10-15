@@ -42,33 +42,76 @@ default setup, secret scanning, who has write access.
 
 ## 3. What the last session changed, and how far it was checked
 
-Everything is on branch `claude/vigilant-goldberg-grdjk1`. **No pull request has
-been opened, so no GitHub Actions workflow has run on any of it**; the
-`pull_request`-triggered gates never see an un-PR'd branch. The first thing to
-do is open a draft pull request and read what CI says.
+Everything is on branch `claude/vigilant-goldberg-grdjk1`. The draft pull request
+opened from it is the first thing to read: until it was opened no GitHub Actions
+workflow had run on any of this (the `pull_request`-triggered gates never see an
+un-PR'd branch), and what CI says about it is not recorded here.
 
-Checked locally, by running it (details in each commit message):
+Checked locally, by running it (details in each commit message). "The tested
+tree" is that of `204e296`; the commits after it change `CLAUDE.md` and this file
+only.
 
-- the whole Rust workspace: `fmt`, `clippy --all-targets --all-features -D
-  warnings`, library and binary tests, every integration test of `birdnet-web`
-  and of the root crate, doc tests, `cargo doc` with warnings denied;
-- the browser gates (axe, interactions, base path, visual sweep, chart-label
-  legibility) against the CI screenshot fixture;
-- `actionlint` on every workflow, the hermetic installer test suite, and the
-  parts of `scripts/check-ci-config.py` that do not need `cargo-mutants` or a
-  token;
-- the extension pins against freshly downloaded extension builds, and the
-  licence generator against the real dependency tree.
+- **Static checks, on the tested tree:** `cargo fmt --check`; `cargo clippy
+  --workspace --all-targets -- -D warnings` with default features,
+  `--all-features` and `--no-default-features`; `cargo doc --no-deps
+  --document-private-items --all-features` with warnings denied; `typos` 1.51.1
+  (the binary's digest was not verified).
+- **Tests, on the tested tree:** 110 steps — every library, binary and
+  integration-test file of every crate, and the doctests — with 4,984 tests
+  passing, 0 failing, 10 ignored. That figure is the logged 4,970 with the
+  `birdnet-behavioral` lib step counted at its rerun's 125 (it logged 121 passed
+  and 4 failed) plus the 10 tests of the chunk that did not link. Default
+  features, except `birdnet-behavioral` and `birdnet-timeseries`, run with
+  `--features analytics` (the workspace enables it through the root crate; a
+  crate selected alone does not, and those tests then do not exist). The
+  `--all-features` *test* build was not run; clippy with it was. Two steps failed
+  once, both when the disk allowance was nearly spent, and passed on rerun: the
+  four `birdnet-behavioral` ICU and extension tests that `CLAUDE.md` already lists
+  as an out-of-space symptom (125 passed on each of three reruns; the cause was
+  not proven), and a link step that died at 8 KB free.
+- **Browser, on the final build:** the five steps of the `a11y` job replayed
+  against the CI screenshot fixture (axe over 38 routes x 2 themes x 2 widths:
+  152 legs, 0 violations; the interaction gate; the legibility gate; the
+  base-path gate; the strict visual sweep: 0 pages with issues); axe over the
+  same legs against a station running the real BirdNET+ V3.0 and geomodel set to
+  German, and against an empty station (`QA_EMPTY=1`): 0 violations each; the
+  visual sweep against the real-model station: 0 pages with issues.
+- **Real models:** that station detected a magpie four times from
+  `tests/testdata/Pica_pica_30s.wav`, stored "Eurasian Magpie", and drew "Elster"
+  on every Today fragment; `--doctor --lang de` reported 6593 of 11560 species
+  named. `--doctor` exited 1 there for five environment warnings (no admin
+  password, no HTTPS, no offsite backup, no audio source, 1 GiB free); it
+  reported no errors.
+- **Earlier in this branch, not re-run on this tree:** `actionlint` on every
+  workflow, the hermetic installer test suite, the extension pins against freshly
+  downloaded builds, the licence generator against the real dependency tree.
+  `scripts/check-ci-config.py` fails only where `cargo-mutants` is needed and is
+  not installed here ("generates 0 mutants").
 
 **Not run, anywhere:** any workflow on GitHub; the Docker build and its offline
-boot test; the release workflow; `cargo-mutants`; `typos`; the container image's
-new `/usr/share/doc/birdnet-behavior/` files; anything on Raspberry Pi hardware
+boot test; the release workflow; `cargo-mutants`; the container image's new
+`/usr/share/doc/birdnet-behavior/` files; `cargo publish` and a verifying
+`cargo package` (`birdnet-core` was packaged without building: 102 files, 1.8 MiB
+compressed, with the species-name table in it); anything on Raspberry Pi hardware
 (the cgroup memory-limit fix in `memory.rs` is tested against a directory tree
-laid out as the kernel lays it out, not against a unit under cgroup v2).
+laid out as the kernel lays it out, not against a unit under cgroup v2). Not
+covered by a page fetch in the species-name gate: the share page, migration, the
+behavioural and correlation pages, and `live-detections.js`.
+
+**A note on the history.** `ff51acc` (the species-name languages) does not
+compile its test targets on its own: a tool I used to split the batch into two
+commits misplaced hunks in `species_pages.rs`, `detection_detail.rs` and
+`settings/render/mod.rs`. `204e296` holds the whole tested tree and is the first
+good commit of the pair, so a bisect should skip `ff51acc`. A corrected pair was
+built and checked in the working clone (it compiles, lints and passes the
+species-name gates, and its second commit has `204e296`'s tree), but replacing
+the pushed commits needs a force-push, which the session's safety check declined,
+so history was fixed forward instead.
 
 ## 4. Where to start
 
-1. Open a draft PR from `claude/vigilant-goldberg-grdjk1` and fix what CI finds.
+1. Read what CI says on the draft pull request from `claude/vigilant-goldberg-grdjk1`
+   and fix what it finds.
    Expect the `third-party licence notices`, `CI config` and `a11y` jobs to be
    the first to run something new.
 2. Do the settings in section 1.
