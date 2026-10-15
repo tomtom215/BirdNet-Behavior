@@ -275,14 +275,27 @@ Corollaries, each learned the same way:
   disk inside a `cc-rs` build script reported as four failing `birdnet-behavioral`
   ICU/extension tests, in a crate that had not been touched. `df -h /` reads
   "Avail 1.9M" with "Used 38G" — the allowance is spent, not the machine. The
-  cheapest ~3–6 GB back is `rm -rf target/debug/incremental`.
+  cheapest ~3–6 GB back is `rm -rf target/debug/incremental`. With
+  `CARGO_INCREMENTAL=0` there is none to delete, and the bigger store is
+  `target/debug/deps`: every edit to a workspace crate leaves another
+  `libbirdnet_web-<hash>.rlib` (about 190 MB), and 21 of them held 5.3 GB.
+  `find target/debug/deps -maxdepth 1 -type f \( -name 'libbirdnet_*.rlib' -o
+  -name 'libbirdnet_*.rmeta' \) -mmin +75 -delete` between runs gives it back
+  and cargo rebuilds what it needs. The same four tests failed again in one
+  full run, with about 0.7 GB reported free, and passed three reruns at 5.5 GB;
+  a link step in that run died with "linking with `cc` failed" at 8 KB free.
+  Rerun at a healthy `df` before suspecting the code.
 
 - **`pgrep -f` / `pkill -f` match the shell that runs them.** A command line
   that contains the pattern — `kill $(pgrep -f "listen 127.0.0.1:8601")`, or
   a loop over `pgrep -f '[s]creenshot_server'` in a command that also copies
   `screenshot_server` — matches its own shell and kills it (exit 144). Start
   long-lived processes from a script that writes a pid file, or select by
-  `readlink /proc/$pid/exe`.
+  `readlink /proc/$pid/exe`. A script that scans `/proc/*/cmdline` for the
+  pattern is no safer when the call that *wrote* it carries the pattern in a
+  heredoc: that call's own shell holds the whole command text in its argv, and
+  the scan killed it (exit 144, twice in one session). Run the script from a
+  call that does not contain the pattern.
 - **A gate route that names a record the fixture does not have grades the
   not-found page.** `qa.mjs` opened `/detections/detail` at a hard-coded time
   the fixture never seeds, so the sweep — and axe, which imports its routes —
