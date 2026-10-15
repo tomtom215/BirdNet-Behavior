@@ -214,7 +214,7 @@ proptest = "1.11"
 tempfile = "3"
 # Source gates that need a parse, not a grep (see
 # tests/database_work_stays_off_the_async_runtime.rs).
-syn = { version = "2", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "visit"] }
+syn = { version = "3", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "visit"] }
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
 
 # Benchmarking
