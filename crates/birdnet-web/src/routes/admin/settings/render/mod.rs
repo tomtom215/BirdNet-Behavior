@@ -294,6 +294,12 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
          the same `.hint` markup through the main shell. */
       .hint a { color: var(--moss-ink); }
       .hint.flush { margin: -6px 0 8px; }
+      /* A hint with no field above it has nothing to tuck under. */
+      .hint.standalone { margin-top: 0; }
+      /* A checkbox and its words on one row, like the field above it
+         in rhythm: the element rules above give an input the full width. */
+      .bnb-check { display: flex; align-items: center; gap: 0.5rem; color: var(--fg); margin-bottom: 1rem; }
+      .bnb-check input { width: auto; margin: 0; }
       .mt-sm { margin-top: 0.5rem; }
       .mt-md { margin-top: 1rem; }
       .save-row { display: flex; align-items: center; gap: 1rem; }
@@ -328,13 +334,13 @@ pub(crate) enum Section {
 pub(crate) fn render_section_form(
     settings: &HashMap<String, String>,
     sections: &[Section],
+    names: &NameLocalizer,
 ) -> String {
     let mut out = String::with_capacity(8_192);
     out.push_str(
         r##"<div class="set-scope"><div id="settings-feedback"></div><form hx-post="/admin/settings" hx-target="#settings-feedback" hx-swap="innerHTML" hx-indicator="#save-spinner">"##,
     );
     for section in sections {
-    names: &NameLocalizer,
         match section {
             Section::Audio => audio::render(&mut out, settings),
             Section::Location => location::render(&mut out, settings),

@@ -91,6 +91,12 @@ Not done, in the order they seem to matter:
   check covers), the sort order is by the stored name, and the surfaces that
   need data to render (migration, the behavioural pages, the correlation matrix)
   are covered by the source scan but not by a page fetch.
+- **The browser sweeps grade a populated station.** axe and `qa.mjs` run against
+  a fixture that has detections, so a page's empty state is only reached where a
+  fixture happens to be empty: a real station's empty Rare bird quarantine list
+  carried a `heading-order` finding the sweep had never shown. The empty and
+  failure fragments now have a unit gate; the pages that host them do not have a
+  sweep over an empty station.
 - **Workflows that have never run:** `codeql.yml`, `osv.yml` and `scorecard.yml`
   were adapted from a2a-rust's, which run, and checked with actionlint; the first
   run on GitHub is their test. Scorecard needs the repository to be public (it

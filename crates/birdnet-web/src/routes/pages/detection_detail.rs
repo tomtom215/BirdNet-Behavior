@@ -409,20 +409,26 @@ fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
     if let (Some(lat), Some(lon)) = (det.lat, det.lon) {
         let _ = write!(
             out,
-            "<tr><td>Location</td><td>{}</td></tr>",
+            r#"<tr><td class="bnb-meta">Location</td><td>{}</td></tr>"#,
             coordinates(lat, lon)
         );
     }
     if let Some(sens) = det.sens {
-        let _ = write!(out, "<tr><td>Sensitivity</td><td>{sens:.2}</td></tr>");
+        let _ = write!(
+            out,
+            r#"<tr><td class="bnb-meta">Sensitivity</td><td>{sens:.2}</td></tr>"#
+        );
     }
     if let Some(overlap) = det.overlap {
-        let _ = write!(out, "<tr><td>Overlap</td><td>{overlap:.1}s</td></tr>");
+        let _ = write!(
+            out,
+            r#"<tr><td class="bnb-meta">Overlap</td><td>{overlap:.1}s</td></tr>"#
+        );
     }
     if let Some(cutoff) = det.cutoff {
         let _ = write!(
             out,
-            "<tr><td>Cutoff</td><td>{:.0}%</td></tr>",
+            r#"<tr><td class="bnb-meta">Cutoff</td><td>{:.0}%</td></tr>"#,
             cutoff * 100.0
         );
     }
@@ -492,6 +498,32 @@ mod tests {
             source: None,
             ..Default::default()
         }
+    }
+
+    /// The Date and Time rows are written in the template with a `bnb-meta`
+    /// label; Location, Sensitivity, Overlap and Cutoff come from here. They
+    /// were plain cells, so the first two labels were small and grey and the
+    /// rest full-size and black in the same table.
+    #[test]
+    fn every_label_in_the_details_table_is_styled_as_the_first_two_are() {
+        let det = DetectionRow {
+            lat: Some(51.48),
+            lon: Some(-0.13),
+            cutoff: Some(0.7),
+            sens: Some(1.25),
+            overlap: Some(0.0),
+            ..row_with_id(None)
+        };
+        let rows = super::build_meta_rows(&det);
+        for label in ["Location", "Sensitivity", "Overlap", "Cutoff"] {
+            assert!(
+                rows.contains(&format!(r#"<td class="bnb-meta">{label}</td>"#)),
+                "{label} is not labelled like Date and Time: {rows}"
+            );
+        }
+        // The counterpart: a row that is absent stays absent, not blank.
+        let bare = super::build_meta_rows(&row_with_id(None));
+        assert!(bare.is_empty(), "{bare}");
     }
 
     #[test]

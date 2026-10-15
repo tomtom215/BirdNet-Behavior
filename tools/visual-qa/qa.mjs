@@ -15,6 +15,7 @@
 //   MOTION    reduced|"" (default "")
 //   CONTRAST  high|"" (default "")
 //   ONLY      substring filter on route name
+//   QA_EMPTY  "1" when BASE is a station with no detections (see REAL below)
 //
 // Also flags duplicate element ids, and any `table[data-fits-phone]` that
 // still needs a sideways scroll (see diagnose()).
@@ -72,7 +73,16 @@ async function realDetection() {
     throw new Error(`qa: no detection to open at ${BASE}/api/v2/detections — is the fixture up? (${e})`);
   }
 }
-const REAL = await realDetection();
+// `QA_EMPTY=1` is for a station with no detections at all: there is nothing to
+// resolve, so the two detail routes name a bird the station has not heard and
+// are graded as the not-found / "no records" pages an empty station serves. The
+// populated fixture never reaches an empty list's markup, so this is how a
+// page's empty state is swept (a real station's empty quarantine queue carried
+// a heading-order finding the fixture never showed).
+const EMPTY = process.env.QA_EMPTY === '1';
+const REAL = EMPTY
+  ? { date: TODAY, time: '00:00:00', com_name: 'Eurasian Magpie' }
+  : await realDetection();
 const DETECTION_DETAIL = `/detections/detail?date=${REAL.date}&time=${REAL.time}&name=${enc(REAL.com_name)}`;
 // The same for a species page: this route named European Robin, which the
 // (North American) fixture has never heard, so the sweep graded the empty
@@ -199,9 +209,26 @@ async function diagnose(page) {
     // meant to be read whole on a phone says so with `data-fits-phone`, and
     // one that still needs the scroll is reported.
     const fitsPhone = [...document.querySelectorAll('table[data-fits-phone]')];
+    //
+    // The table can be the scroller itself (the global rule makes it
+    // `display: block; overflow-x: auto`) or, once a rule makes it a table
+    // again, its card can: `.bnb-card` scrolls below 720px. Reading only the
+    // table passed the species list at 314px in a 304px card, so the nearest
+    // ancestor that clips is read as well.
+    const clipper = (el) => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        if (getComputedStyle(p).overflowX !== 'visible') return p;
+      }
+      return document.documentElement;
+    };
     const unfit = fitsPhone
-      .filter((t) => t.scrollWidth > t.clientWidth + 1)
-      .map((t) => `${t.className || 'table'}:${t.scrollWidth}>${t.clientWidth}`);
+      .map((t) => {
+        const c = clipper(t);
+        if (t.scrollWidth > t.clientWidth + 1) return `${t.className || 'table'}:${t.scrollWidth}>${t.clientWidth}`;
+        if (c.scrollWidth > c.clientWidth + 1) return `${t.className || 'table'} in ${c.className || c.tagName}:${c.scrollWidth}>${c.clientWidth}`;
+        return null;
+      })
+      .filter(Boolean);
     return {
       dupIds,
       unfit,

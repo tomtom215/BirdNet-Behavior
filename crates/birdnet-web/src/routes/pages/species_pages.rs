@@ -391,10 +391,11 @@ fn list_view(
 
     let count_line = species_count_line(species.len(), filter, total);
     if species.is_empty() {
-        return format!("{chips}{count_line}{}", empty_note(search));
+        let narrowed = search.is_some() || filter == "week" || taxon.is_some();
+        return format!("{chips}{count_line}{}", empty_note(search, narrowed));
     }
     format!(
-        r#"{chips}{count_line}<div class="bnb-card pad"><table class="sp-table"><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
+        r#"{chips}{count_line}<div class="bnb-card pad"><table class="sp-table" data-fits-phone><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
     )
 }
 
@@ -441,8 +442,8 @@ fn photos_view(
         let code = species_code(&s.com_name);
         let enc = simple_url_encode(&s.com_name);
         let enc_sci = simple_url_encode(&s.sci_name);
-        let _ = write!(
         let shown = state.names().name(&s.sci_name, &s.com_name);
+        let _ = write!(
             cards,
             r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
             name = escape_html(shown),
@@ -459,7 +460,8 @@ fn photos_view(
         },
     );
     if species.is_empty() {
-        return format!("{chips}{count_line}{}", empty_note(search));
+        let narrowed = search.is_some() || filter == "week" || taxon.is_some();
+        return format!("{chips}{count_line}{}", empty_note(search, narrowed));
     }
     format!(r#"{chips}{count_line}<div class="sp-grid">{cards}</div>"#)
 }
@@ -511,9 +513,9 @@ fn lifelist_view(state: &AppState) -> String {
     let mut firsts_html = String::new();
     for (com, sci, date) in &named {
         let enc = simple_url_encode(com);
+        let shown = state.names().name(sci, com);
         let _ = write!(
             firsts_html,
-        let shown = state.names().name(sci, com);
             r#"<a class="sp-first-row" href="/species/detail?name={enc}">{av}<div class="sp-cell-tx"><div class="sp-nm">{name}</div><div class="sp-sci">{sci}</div></div><span class="when">{date}</span></a>"#,
             av = avatar(com, shown, sci, ""),
             name = escape_html(shown),
@@ -593,8 +595,16 @@ fn species_count_line(n: usize, filter: &str, total: i64) -> String {
     )
 }
 
-/// An honest empty state for a search / filter that matched nothing.
-fn empty_note(search: Option<&str>) -> String {
+/// An honest empty state for a species list with nothing in it.
+///
+/// With nothing narrowing it (no search, no "this week", no taxon) the station
+/// has heard nothing, and says so, where to look and what to expect: the empty
+/// state the dashboard uses for the same moment. Otherwise a search or a filter
+/// matched nothing, and the words are about that.
+fn empty_note(search: Option<&str>, narrowed: bool) -> String {
+    if !narrowed {
+        return super::empty_states::no_species();
+    }
     let what = search.map_or_else(
         || "No species match this filter yet.".to_string(),
         |q| format!("No species match “{}”.", escape_html(q)),
@@ -617,6 +627,7 @@ async fn species_detail_page(
     };
 
     let com_name = name.clone();
+    let names = state.names_handle();
     let sci_name = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             // Raw `detections` on purpose. This resolves a display name, not a
@@ -627,7 +638,6 @@ async fn species_detail_page(
             conn.query_row(
                 "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
                 [&com_name],
-    let names = state.names_handle();
                 |row| row.get::<_, String>(0),
             )
             .unwrap_or_default()
@@ -636,6 +646,9 @@ async fn species_detail_page(
     .await
     .unwrap_or_default();
 
+    // The URL, the htmx fragments' `?name=` and the search link carry the name
+    // as stored; the heading and the tab title are in the station's language.
+    let shown = names.name(&sci_name, &name).to_owned();
     let encoded = simple_url_encode(&name);
     let content = SPECIES_DETAIL_HTML
         .replace("{{species_name}}", &escape_html(&shown))
@@ -646,9 +659,6 @@ async fn species_detail_page(
         .replace("{{skel_hero}}", super::skeletons::hero_card())
         .replace("{{skel_species_stats}}", &super::skeletons::stat_row(4))
         .replace("{{skel_circadian}}", &super::skeletons::hourly_bars(24))
-    // The URL, the htmx fragments' `?name=` and the search link carry the name
-    // as stored; the heading and the tab title are in the station's language.
-    let shown = names.name(&sci_name, &name).to_owned();
         .replace("{{skel_trend}}", super::skeletons::trend_line())
         .replace("{{skel_detections}}", &super::skeletons::list_rows(5));
     super::render_page_for_request(&shown, &content, "species", &headers)
@@ -678,7 +688,7 @@ async fn species_summary_partial(
 <div class="stat-card"><div class="value">{conf_pct:.0}%</div><div class="label">Avg Confidence</div></div>
 <div class="stat-card"><div class="value">{f}</div><div class="label">First Seen</div></div>
 <div class="stat-card"><div class="value">{l}</div><div class="label">Last Seen</div></div>"#,
-                c = summary.count,
+                c = super::group_thousands(summary.count),
                 f = escape_html(&summary.first_seen),
                 l = escape_html(&summary.last_seen),
             );
@@ -877,6 +887,8 @@ async fn species_info_partial(
     .unwrap_or_default();
 
     let mut html = String::new();
+    // What is drawn; `name` stays the key for the cache and the external links.
+    let shown = state.names().name(&sci_name, &name).to_owned();
 
     // Species photos are cached by *scientific* name so the gallery,
     // species-detail, and detection-detail pages share one entry per bird
@@ -887,8 +899,6 @@ async fn species_info_partial(
         sci_name.clone()
     };
 
-    // What is drawn; `name` stays the key for the cache and the external links.
-    let shown = state.names().name(&sci_name, &name).to_owned();
     // The /file image route is cache-only, so warm this species' photo in the
     // background (non-blocking) on first view — a later view then shows it.
     if let Some(cache) = state.image_cache()
@@ -1177,6 +1187,7 @@ async fn species_companions_partial(
         );
     };
 
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::companion_species(conn, &name, 30, 10))
     })
@@ -1187,7 +1198,6 @@ async fn species_companions_partial(
             if companions.is_empty() {
                 return (
                     StatusCode::OK,
-    let names = state.names_handle();
                     [(header::CONTENT_TYPE, "text/html")],
                     r#"<p class="spp-muted">No companion species data yet.</p>"#.to_string(),
                 );

@@ -284,6 +284,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the `active` code. Before, it listed all 36 languages as available
   whether or not anything could be shown in them. `openapi.json` describes it.
 
+- **The species list fits a phone.** Below 520px its Detections and
+  Avg-confidence columns started past the card's edge, behind a sideways scroll
+  that nothing said was there; it is a wrapping table again, without the
+  sparkline or the confidence bar (the percentage stays) and, below 400px,
+  without the rank. A name breaks inside a word only when it must: a German
+  compound alone made it 314px in a 304px card. Held by `data-fits-phone` in
+  `tools/visual-qa/qa.mjs`, whose check read only the table and so passed this
+  one at 350px in a 340px card; it now reads the nearest ancestor that clips as
+  well, and reported `sp-table in bnb-card pad:350>340` before the last rule
+  went in.
+
 - A network source is labelled **Network stream** rather than "Network
   camera", and the Capture tab's section is **Cameras and streams**.
 
@@ -464,6 +475,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build matrix.
 
 ### Fixed
+
+- **The Settings page printed `source\'s`.** The Audio Channels note was written
+  with a Rust escape inside a raw string, so the page showed a backslash. The
+  Bare spectrograms checkbox row had no style at all and drew over its own hint,
+  and the Audio Channels note sat on its label. A test fetches the page and
+  scans every raw string in the web crate and the binary for the escape. Beside
+  them, the species page's Detections tile read `2583` under a `2,583
+  detections` pill; it groups digits now.
+
+- **A new station's first screens had two defects the sweeps could not see.**
+  The Today "Getting ready" checklist's links (the setup wizard, Accounts, the
+  doctor) were told apart from their sentence by colour alone, which WCAG 1.4.1
+  and axe's `link-in-text-block` call serious, in the light theme; they are
+  underlined like every other link in prose. And the Species list and gallery
+  told a station that had heard nothing "No species match this filter yet.",
+  with no filter chosen; they now show the "No species heard yet" state the
+  dashboard already had, and a search or filter that misses still says so.
+  Both come from sweeping a station with no detections, which the fixture the
+  sweeps run against never is: `QA_EMPTY=1` makes `qa.mjs` and `axe.mjs` do it.
+  axe reported two serious violations on that station before the underline and
+  none across 152 route, theme and width legs after. CI does not run it.
+
+- **A detection's Details table labelled half its rows differently.** Date and
+  Time were small and grey; Location, Sensitivity, Overlap and Cutoff, which
+  come from another function, were full-size and black. All six share one label
+  style now.
+
+- **Diagnostics overflowed a phone once the station had models configured.** A
+  finding that quotes a model path has no place to break, and the card, a flex
+  item with auto margins, is as wide as its longest unbreakable run: 442px on a
+  390px screen, and the page with it. Short findings (the CI fixture's) never
+  showed it; `qa.mjs` against a station running the real models did
+  (`overflowX(466>390)` on both themes). The card may now shrink and a finding
+  breaks inside a word when it must.
+
+- **Empty and failure states skipped a heading level.** The shared fragments in
+  `empty_states.rs` and `error_states.rs` each drew an `<h3>`. Dropped under a
+  page's `<h1>` with no `<h2>` — the Rare bird quarantine list on a station with
+  nothing to review — that skips a level, which axe reports as `heading-order`.
+  The CI sweep never saw it, because its fixture's quarantine list is not empty;
+  a station with real detections did, on all four theme and width legs. The
+  title is a paragraph now, spaced as the heading was, and a test fails on any
+  heading tag in these fragments.
 
 - **`--labels-dir` was documented with the wrong file names.** `--help` said
   `labels_de.txt`; the loader reads `de_labels.txt` (or the same name under
