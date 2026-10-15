@@ -145,7 +145,7 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 | `auth.` | `login.ok`, `login.fail`, `login.throttled`, `logout` |
 | `account.` | `user.create`, `user.delete`, `password.set`, `session.revoke`, `session.revoke_others` |
 | `settings.` | `update` |
-| `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `threshold.set`, `threshold.delete`, `detections.delete`, `clips.delete` |
+| `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `whitelist.add`, `whitelist.remove`, `threshold.set`, `threshold.delete`, `detections.delete`, `clips.delete` |
 | `audio.` | `source.create`, `source.update`, `source.delete`, `source.restart`, `source.listen_default` |
 | `rule.` | `create`, `delete`, `toggle`, `import` |
 | `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run` |
