@@ -203,21 +203,64 @@ pub fn record_last_good(config_path: &Path) -> std::io::Result<()> {
 /// say why. If the ownership cannot be carried over, nothing is installed.
 fn install_config(bytes: &[u8], target: &Path) -> std::io::Result<()> {
     let part = PathBuf::from(format!("{}.part", target.display()));
-    let result = std::fs::write(&part, bytes).and_then(|()| {
-        if let Ok(meta) = std::fs::metadata(target) {
-            std::fs::set_permissions(&part, meta.permissions())?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt as _;
-                std::os::unix::fs::chown(&part, Some(meta.uid()), Some(meta.gid()))?;
-            }
-        }
-        std::fs::rename(&part, target)
-    });
+    let result = write_part(bytes, target, &part).and_then(|()| std::fs::rename(&part, target));
     if result.is_err() {
         let _ = std::fs::remove_file(&part);
     }
     result
+}
+
+/// Write `bytes` to the new file `part`, giving it `target`'s mode and owner
+/// *before* anything is written to it.
+fn write_part(bytes: &[u8], target: &Path, part: &Path) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = create_fresh(part)?;
+    if let Ok(meta) = std::fs::metadata(target) {
+        file.set_permissions(meta.permissions())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            std::os::unix::fs::fchown(&file, Some(meta.uid()), Some(meta.gid()))?;
+        }
+    }
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Create a file that did not exist, readable by its owner only until the
+/// caller says otherwise.
+///
+/// `--apply-config` runs as root in `/etc/birdnet`, which the installer makes
+/// group-writable by the service user so the service can keep its own
+/// last-good copy. The names written here (`<target>.part`, the backup) are
+/// predictable, so the service user could plant a symlink at one and have
+/// root write through it to any file on the machine, then `chown` and
+/// `chmod` that file as well. `create_new` is `O_EXCL`, which refuses an
+/// existing name **including a symlink**, and a stale file from an earlier
+/// crash is removed first (`remove_file` removes a symlink itself, never what
+/// it points at). Planting a new one between the two calls makes the open
+/// fail rather than follow it.
+fn create_fresh(path: &Path) -> std::io::Result<std::fs::File> {
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+/// Copy `source` to the new file `backup`, with `source`'s mode. As
+/// [`create_fresh`]: a name that already exists is replaced, never written
+/// through.
+fn make_backup(source: &Path, backup: &Path) -> std::io::Result<()> {
+    let mut from = std::fs::File::open(source)?;
+    let permissions = from.metadata()?.permissions();
+    let mut to = create_fresh(backup)?;
+    std::io::copy(&mut from, &mut to)?;
+    to.set_permissions(permissions)
 }
 
 /// `--apply-config <candidate>`: validate, back up, install, restart.
@@ -260,7 +303,7 @@ pub fn run_apply_config(candidate: &Path, target: &Path) -> i32 {
             .unwrap_or_default()
             .as_secs();
         let backup = PathBuf::from(format!("{}.bak-{stamp}", target.display()));
-        if let Err(e) = std::fs::copy(target, &backup) {
+        if let Err(e) = make_backup(target, &backup) {
             eprintln!(
                 "cannot back up {} to {}: {e}",
                 target.display(),
@@ -335,6 +378,70 @@ mod tests {
         );
         assert_eq!(meta.permissions().mode() & 0o777, 0o640);
         assert!(std::fs::read_to_string(&target).unwrap().contains("Better"));
+    }
+
+    /// `--apply-config` runs as root in a directory the service user can write
+    /// to, and names its scratch file `<target>.part`. A symlink planted there
+    /// was written through, then `chmod`ed and `chown`ed: the candidate's text
+    /// landed in whatever file it pointed at.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_planted_at_the_part_name_is_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("birdnet.conf");
+        std::fs::write(&target, GOOD).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "ROOT ONLY\n").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join("birdnet.conf.part")).unwrap();
+
+        install_config(GOOD.replace("Good", "Better").as_bytes(), &target).expect("install");
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "ROOT ONLY\n",
+            "the candidate was written through the planted link"
+        );
+        assert!(std::fs::read_to_string(&target).unwrap().contains("Better"));
+        assert!(
+            !std::fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the live config became a link"
+        );
+    }
+
+    /// The same for the backup, whose name (`.bak-<epoch seconds>`) is just as
+    /// easy to guess; and the counterpart, that an ordinary backup is still a
+    /// byte-for-byte copy with the original's mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_is_a_copy_and_never_written_through_a_link() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("birdnet.conf");
+        std::fs::write(&target, GOOD).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        let plain = dir.path().join("birdnet.conf.bak-1");
+        make_backup(&target, &plain).expect("backup");
+        assert_eq!(std::fs::read_to_string(&plain).unwrap(), GOOD);
+        assert_eq!(
+            std::fs::metadata(&plain).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "ROOT ONLY\n").unwrap();
+        let planted = dir.path().join("birdnet.conf.bak-2");
+        std::os::unix::fs::symlink(&victim, &planted).unwrap();
+        make_backup(&target, &planted).expect("backup over a stale name");
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "ROOT ONLY\n",
+            "the backup was written through the planted link"
+        );
+        assert_eq!(std::fs::read_to_string(&planted).unwrap(), GOOD);
     }
 
     /// The gate for LC-6's start-side half: a file with errors reverts to the
