@@ -275,6 +275,18 @@ lock hold on the history calendar at 3.3 M rows). `birdnet-web::db_pool`
 now opens a few read-only connections for queries and keeps the single
 writer for inserts; no `r2d2`/`deadpool`.
 
+**Why a heavy-read gate on top of the pool:** the routes that scan the whole
+detection history (the RSS feeds, the exports, the insights routes, the
+migration cards, the analytics fragments) would otherwise take every reader
+at once, and a cheap page — `/api/v2/health`, the species list — then waits
+behind them (measured: 22 s with the pool alone). `AppState` holds a
+semaphore of half the pool, at least one slot; a heavy route takes a slot
+(`run_blocking_heavy`, `heavy_read_permit`) before it takes a reader. The feeds
+use `try_heavy_read_permit` and answer `503` with `Retry-After: 15` rather than
+queueing. The gate bounds readers, not time: a single scan is as slow as its
+query. `heavy_reads_leave_readers_for_the_cheap_requests` is the gate on the
+width.
+
 **Why `spawn_blocking` for DB:** SQLite operations block the calling thread.
 Running them on tokio's blocking thread pool keeps the async runtime responsive
 for WebSocket and HTTP handling.
