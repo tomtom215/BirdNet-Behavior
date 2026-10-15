@@ -121,8 +121,14 @@ pub async fn dispatch_webhook(
     if let Ok(parsed) = reqwest::Url::parse(url) {
         crate::egress_guard::check_url(&parsed).map_err(WebhookError::Refused)?;
     }
-    let client = crate::egress_guard::guarded_client_builder()
-        .timeout(std::time::Duration::from_secs(10))
+    let mut builder =
+        crate::egress_guard::guarded_client_builder().timeout(std::time::Duration::from_secs(10));
+    if matches!(auth, Some(WebhookAuth::Header { .. })) {
+        // `reqwest` strips only the standard credential headers when a redirect
+        // leaves the origin; a header the operator named is not one of them.
+        builder = builder.redirect(crate::egress_guard::same_origin_redirects());
+    }
+    let client = builder
         .build()
         .map_err(|e| WebhookError::ClientBuild(e.to_string()))?;
 
@@ -434,6 +440,110 @@ mod tests {
         assert_eq!(
             header_of(&headers, "content-type"),
             Some("application/json")
+        );
+    }
+
+    // ── a credential does not follow a redirect to another origin ───────
+    //
+    // `reqwest` drops `Authorization` and `Cookie` when a redirect leaves the
+    // origin, and nothing else: a rule's `X-API-Key` (or any name the operator
+    // chose) went to wherever the first server said. Measured: `X-Secret:
+    // TOPSECRET` reached a second port after a 302.
+
+    /// A server that answers every request with `reply` and reports whether,
+    /// and what, it was asked.
+    fn stub_replying(reply: String) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr").to_string();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = vec![0_u8; 8192];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+                let _ = sock.write_all(reply.as_bytes());
+                let _ = sock.flush();
+            }
+        });
+        (addr, rx)
+    }
+
+    fn header_credential() -> WebhookAuth {
+        WebhookAuth::Header {
+            name: "X-Secret".into(),
+            value: "TOPSECRET".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_custom_header_credential_is_not_sent_to_another_origin() {
+        let (elsewhere, seen_elsewhere) =
+            stub_replying("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".into());
+        let (first, _) = stub_replying(format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://{elsewhere}/stolen\r\nContent-Length: 0\r\n\r\n"
+        ));
+        let status = dispatch_webhook(
+            &format!("http://{first}/hook"),
+            "GET",
+            None,
+            Some(&header_credential()),
+        )
+        .await;
+        let leaked = seen_elsewhere.recv_timeout(std::time::Duration::from_millis(700));
+        assert!(
+            leaked.is_err(),
+            "the second origin was asked, with: {}",
+            leaked.unwrap_or_default()
+        );
+        // The redirect is reported, not silently swallowed.
+        assert_eq!(status.expect("the 302 is the answer"), 302);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_within_one_origin_still_carries_the_credential() {
+        // Counterpart: refusing every redirect would be a different fix. The
+        // second request goes to the same host and port.
+        let (addr, seen) = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+            let addr = listener.local_addr().expect("addr").to_string();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for reply in [
+                    "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n",
+                    "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
+                ] {
+                    let Ok((mut sock, _)) = listener.accept() else {
+                        return;
+                    };
+                    let mut buf = vec![0_u8; 8192];
+                    let n = sock.read(&mut buf).unwrap_or(0);
+                    let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+                    let _ = sock.write_all(reply.as_bytes());
+                    let _ = sock.flush();
+                }
+            });
+            (addr, rx)
+        };
+        let status = dispatch_webhook(
+            &format!("http://{addr}/hook"),
+            "GET",
+            None,
+            Some(&header_credential()),
+        )
+        .await
+        .expect("dispatched");
+        assert_eq!(status, 204);
+        let first = seen
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let second = seen
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(first.starts_with("GET /hook"), "{first}");
+        assert!(second.starts_with("GET /next"), "{second}");
+        assert!(
+            second.to_ascii_lowercase().contains("x-secret: topsecret"),
+            "the same origin keeps its credential: {second}"
         );
     }
 

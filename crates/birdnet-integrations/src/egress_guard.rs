@@ -128,6 +128,40 @@ pub fn guarded_client_builder() -> reqwest::ClientBuilder {
         }))
 }
 
+/// The redirect policy for a request that carries a credential `reqwest` does
+/// not know to protect.
+///
+/// It makes the guard's checks, and a hop that leaves the origin (scheme, host,
+/// port) of the request it answers is **not followed**: the 3xx itself is the
+/// response.
+///
+/// `reqwest` drops `Authorization`, `Cookie` and a few others when a redirect
+/// crosses origins, and nothing else. A webhook's `X-API-Key` (any name the
+/// operator chose) went to wherever the first server pointed.
+#[must_use]
+pub fn same_origin_redirects() -> reqwest::redirect::Policy {
+    fn origin(url: &reqwest::Url) -> (&str, Option<&str>, Option<u16>) {
+        (url.scheme(), url.host_str(), url.port_or_known_default())
+    }
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= MAX_REDIRECTS {
+            return attempt.error(format!("more than {MAX_REDIRECTS} redirects"));
+        }
+        if let Err(refused) = check_url(attempt.url()) {
+            return attempt.error(refused);
+        }
+        let same_origin = attempt
+            .previous()
+            .last()
+            .is_some_and(|from| origin(from) == origin(attempt.url()));
+        if same_origin {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
 /// The system resolver, with every answer checked by [`is_refused`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GuardedResolver;
@@ -164,6 +198,10 @@ fn refused_as_is(ip: IpAddr) -> bool {
                 // 224.0.0.0/24, the IPv4 link-local multicast block.
                 || v4.octets()[..3] == [224, 0, 0]
                 || v4 == Ipv4Addr::new(100, 100, 100, 200)
+                // Azure's WireServer / host agent (instance metadata's sibling).
+                || v4 == Ipv4Addr::new(168, 63, 129, 16)
+                // Oracle Cloud's alternate metadata address.
+                || v4 == Ipv4Addr::new(192, 0, 0, 192)
         }
         IpAddr::V6(v6) => {
             v6.is_unicast_link_local()
@@ -171,6 +209,8 @@ fn refused_as_is(ip: IpAddr) -> bool {
                 // ff02::/16, link-local scope multicast.
                 || v6.segments()[0] == 0xff02
                 || v6 == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)
+                // Google Compute Engine's IPv6 metadata server.
+                || v6 == Ipv6Addr::new(0xfd20, 0x00ce, 0, 0, 0, 0, 0, 0x0254)
         }
     }
 }
@@ -218,6 +258,9 @@ mod tests {
             "::",
             "ff02::fb",
             "fd00:ec2::254",
+            "fd20:ce::254",                         // Google Compute Engine, IPv6
+            "168.63.129.16",                        // Azure WireServer
+            "192.0.0.192",                          // Oracle Cloud, alternate
             "::ffff:169.254.169.254",               // IPv4-mapped
             "::169.254.169.254",                    // IPv4-compatible
             "64:ff9b::a9fe:a9fe",                   // NAT64
@@ -241,6 +284,9 @@ mod tests {
             "172.16.4.4",
             "100.101.102.103", // Tailscale (CGNAT), not the Alibaba address
             "fd12:3456::1",    // unique-local, not the AWS address
+            "fd20:cf::254",    // next to Google's, not it
+            "168.63.129.17",   // next to Azure's, not it
+            "192.0.0.193",     // next to Oracle's, not it
             "203.0.113.9",
             "2001:db8::1", // inside 2001::/16 but not Teredo's 2001::/32
             "::ffff:192.168.1.20",
