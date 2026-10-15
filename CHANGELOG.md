@@ -626,6 +626,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the old formula: `v24_confidence_reproduces_birdnet_pis_expected_values`
   (0.9802 vs 0.912) and, with the real model, `tests/v24_matches_birdnet_pi.rs`.
   birdnet-go's setting is the slope itself; enter `2 − value` to carry one across.
+- **A clip cut from a 16-bit recording was not the recording's samples.** The decoder
+  reads 16-bit audio as `value / 32768` and the clip writer scaled back by 32767, so
+  32,703 of the 65,536 possible values came back one step smaller in magnitude (every
+  sample past about a quarter of full scale), and `-32768` could not be written at
+  all. Inaudible, but a clip is meant to be the recorded audio, and the rounding fix
+  above had left the scale factor alone. The writer scales by 32768, rounds and
+  saturates, so `a_sixteen_bit_recording_exports_bit_for_bit` passes for every 16-bit
+  value through the real decoder and writer (it reported 32,703 changed against the
+  old writer). birdnet-go made the same change on 2026-10-15 (`a122b6b`; samples
+  differ by at most 1 LSB).
 - **Every resampled recording ran late and short.** The resampler left rubato's
   start-up delay in, so a recording converted between rates (every default-install
   file, 48 → 32 kHz for V3.0; any 44.1 kHz microphone) was `128 × ratio` samples
