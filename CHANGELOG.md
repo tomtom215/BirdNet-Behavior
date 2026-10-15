@@ -316,8 +316,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overflow in `symphonia-format-riff` 0.6.1 (32 769 channels × 2 bytes in `u16`,
   computed only to log a block-align mismatch). It panics with overflow checks and
   wraps harmlessly without them; the release build has none, so the workflow
-  fuzzes with `-O`, and 150 seconds of `decode_audio` and 45 of `parse_labels`
-  that way found nothing. The input is kept in `fuzz/known/`, and check 10 of
+  fuzzes with `-O`. With it, 150 seconds of `decode_audio` and 20 of `parse_labels`
+  found nothing, and neither did 45 seconds of `parse_labels` with the defaults. The input is kept in `fuzz/known/`, and check 10 of
   `scripts/check-ci-config.py` fails when a harness target is not in the
   workflow's matrix (seen failing against an unrun target and a dropped one).
 
