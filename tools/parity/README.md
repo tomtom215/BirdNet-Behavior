@@ -99,6 +99,12 @@ Other goldens: `selfcheck.json`; `species_list_e.json` (spec (e), with first/las
 `.npy` files: `<clip>.chunks.npy` = the float32 `[n,144000]` input BirdNET-Pi fed the interpreter at OVERLAP 0, rows 0-2 are the
 "first 3 chunks"; `<clip>.logits.npy` = raw TFLite output `[n,6522]`; `.ov1/.ov2.logits.npy`).  The `.npy` files themselves are not in the tree.
 
+## The V3.0 reference
+
+`v3_reference.py` is an independent implementation of the default V3.0 path (soundfile,
+soxr VHQ, numpy windows, onnxruntime); see `docs/book/guides/parity.md` for the result
+(same top species in 17 of 17 windows; every window at or above 0.7 within 0.0015).
+
 ## Findings
 
 Self-check (**VALIDATED**): under `tests/helpers.py::Settings.with_defaults()` (lat 50, lon 5, SF_THRESH **0.003**, week 8 from the file name

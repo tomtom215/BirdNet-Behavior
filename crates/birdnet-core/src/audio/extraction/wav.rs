@@ -48,9 +48,11 @@ fn write_wav_to(samples: &[f32], sample_rate: u32, path: &Path) -> Result<(), Ex
         hound::WavWriter::create(path, spec).map_err(|e| ExtractionError::Write(e.to_string()))?;
 
     for &sample in samples {
-        // Clamp to [-1.0, 1.0] then scale to i16 range.
+        // Clamp to [-1.0, 1.0], scale to the i16 range and ROUND. A bare `as`
+        // cast truncates toward zero, which doubles the quantisation noise
+        // (0.58 LSB RMS against 0.29) in every clip a person listens to.
         let clamped = sample.clamp(-1.0, 1.0);
-        let scaled = (clamped * f32::from(i16::MAX)) as i16;
+        let scaled = (clamped * f32::from(i16::MAX)).round() as i16;
         writer
             .write_sample(scaled)
             .map_err(|e| ExtractionError::Write(e.to_string()))?;
@@ -93,6 +95,38 @@ pub fn generate_spectrogram(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clip's samples are rounded to the nearest 16-bit value, not cut toward
+    /// zero: 2.6 LSB is stored as 3, and -2.6 LSB as -3. Full scale stays full
+    /// scale, and anything beyond it is clamped.
+    #[test]
+    fn clip_samples_are_rounded_not_truncated() {
+        let lsb = 1.0 / f32::from(i16::MAX);
+        let samples = [
+            2.6 * lsb,
+            -2.6 * lsb,
+            2.4 * lsb,
+            -2.4 * lsb,
+            1.0,
+            -1.0,
+            1.7,
+            -1.7,
+        ];
+        let dir = std::env::temp_dir().join(format!("bnb-wav-round-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("round.wav");
+        write_wav_to(&samples, 48_000, &path).unwrap();
+        let got: Vec<i16> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<i16>()
+            .map(Result::unwrap)
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            got,
+            vec![3, -3, 2, -2, i16::MAX, -i16::MAX, i16::MAX, -i16::MAX]
+        );
+    }
 
     /// Where the worker below writes: handed over in an environment variable
     /// because a `#[ignore]`d test takes no arguments.

@@ -55,6 +55,40 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
    shellcheck -S warning -x install.sh
    ```
 
+## Getting a working tree
+
+- **A cold build takes about 12 minutes and several GB.** The workspace statically
+  links ONNX Runtime and a bundled libduckdb (an rlib of about 480 MB), and every
+  integration test is its own binary of 200-300 MB. Keep 20 GB free,
+  `export CARGO_INCREMENTAL=0`, and select tests (`cargo test -p birdnet-core --lib`,
+  `--test <name>`) rather than building `--all-targets` on a small disk. `df` can
+  mislead on a quota; "No space left on device" shows up as unrelated build or
+  test failures, so rerun at a healthy `df` before suspecting the code.
+- **A cold build fails with `ort-sys ... UnknownIssuer`?** You are behind a
+  TLS-intercepting proxy: run `scripts/setup-onnxruntime.sh` once.
+- **The tests that need a real model** skip loudly unless you point them at one:
+  `BIRDNET_TEST_MODEL` / `BIRDNET_TEST_LABELS` for BirdNET+ V3.0 (what
+  `--install-model birdnet-v3` fetches), and `BIRDNET_TEST_V24_MODEL`,
+  `BIRDNET_TEST_V24_LABELS`, `BIRDNET_TEST_V24_MDATA` for BirdNET V2.4 and its range
+  filter (`--install-model birdnet-v24`, `birdnet-v24-range-v2`). Set
+  `BIRDNET_REQUIRE_MODEL=1` / `BIRDNET_REQUIRE_V24_MODEL=1` to make a skip a
+  failure, as CI does. Detection changes should be run against them; a green
+  suite without them has not exercised the classifier.
+- **The browser gates** (axe, interactions, legibility, base path, layout) run
+  against a seeded fixture: see `tools/visual-qa/README.md`.
+- **The BirdNET-Pi comparison** (`tools/parity`) regenerates its goldens with
+  `tools/parity/regenerate.sh`; `docs/book/guides/parity.md` says what it covers.
+
+## Testing conventions
+
+The one that matters most: **a new gate must be observed failing against the code
+it was written for, and the commit message must say how.** Revert the fix or
+mutate the constant, run the test, watch it go red, restore, `touch` the file (an
+older mtime does not trigger a rebuild), watch it go green. A test that was only
+ever seen passing proves nothing about what it would catch. When a gate covers a
+discrimination, write the counterpart too and check it stays green. The long form,
+with the ways this has gone wrong, is in [`CLAUDE.md`](CLAUDE.md).
+
 ## Code conventions
 
 Documented in [`CLAUDE.md`](CLAUDE.md). The short version:
