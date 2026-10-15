@@ -10,13 +10,22 @@ consume fully untrusted input:
 
 ## Running
 
-Requires a nightly toolchain (libFuzzer instrumentation):
+Requires a nightly toolchain (libFuzzer instrumentation). Fuzz what ships: copy
+the root lockfile in first, so the dependencies are the versions the release
+contains, and pass `-O`, because the shipped binary has no overflow checks (see
+[`known/README.md`](known/README.md) for the one finding cargo-fuzz's default
+debug assertions produce):
 
 ```bash
-cargo install cargo-fuzz
-cargo +nightly fuzz run decode_audio -- -max_total_time=300
-cargo +nightly fuzz run parse_labels -- -max_total_time=300
+cargo install --locked --version 0.13.2 cargo-fuzz
+cp Cargo.lock fuzz/Cargo.lock
+cargo metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+cargo +nightly fuzz run -O decode_audio -- -max_total_time=300 -timeout=30 -rss_limit_mb=2048
+cargo +nightly fuzz run -O parse_labels -- -max_total_time=300 -timeout=30 -rss_limit_mb=2048
 ```
+
+`.github/workflows/fuzz.yml` does exactly this, weekly and on pull requests that
+touch a fuzzed surface. `fuzz/Cargo.lock` is deliberately not committed.
 
 Seed the audio corpus from the committed fixture for much better coverage:
 

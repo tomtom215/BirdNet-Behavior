@@ -306,6 +306,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **The two fuzz targets run in CI, and the first run found something.**
+  `fuzz/` held harnesses for the audio decoder and the label parser that nothing
+  ever ran. `fuzz.yml` runs both weekly (10 minutes a target) and on pull
+  requests that touch them (60 seconds), with a dated nightly, a locked
+  `cargo-fuzz`, the shipped lockfile's dependency versions, `-timeout` and
+  `-rss_limit_mb`, and keeps the failing input. A 60-second local run with
+  cargo-fuzz's defaults crashed `decode_audio` on a 37-byte WAV: an arithmetic
+  overflow in `symphonia-format-riff` 0.6.1 (32 769 channels × 2 bytes in `u16`,
+  computed only to log a block-align mismatch). It panics with overflow checks and
+  wraps harmlessly without them; the release build has none, so the workflow
+  fuzzes with `-O`, and 150 seconds of `decode_audio` and 45 of `parse_labels`
+  that way found nothing. The input is kept in `fuzz/known/`, and check 10 of
+  `scripts/check-ci-config.py` fails when a harness target is not in the
+  workflow's matrix (seen failing against an unrun target and a dropped one).
+
 - **CodeQL, OSV-Scanner and OpenSSF Scorecard workflows.** `codeql.yml` runs
   CodeQL's `security-extended` queries over Rust, the workflows, the JavaScript
   the interface serves and the Python gate scripts; `osv.yml` scans `Cargo.lock`

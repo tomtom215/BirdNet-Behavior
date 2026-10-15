@@ -81,6 +81,12 @@ they get their own gate.
      browser-QA job is `npm ci`, which refuses a lockfile that disagrees with
      `package.json`.
 
+ 10. A fuzz target nothing runs. `fuzz/` held two harnesses for the parsers of
+     untrusted input for months, run by no workflow; the first run, once there
+     was one, crashed `decode_audio` inside a minute (see fuzz.yml and
+     fuzz/known/). A target added to the harness without a line in the
+     workflow's matrix is the same silence again.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -806,6 +812,36 @@ def check_tools_are_pinned(
         check(images >= 2, f"the reader found the base images it is judging ({images})")
 
 
+def check_fuzz_targets_are_run(
+    cargo_path: str = "fuzz/Cargo.toml", workflow_path: str = ".github/workflows/fuzz.yml"
+) -> None:
+    """Every fuzz target is run by the fuzz workflow, and it runs nothing else.
+
+    The two targets existed for months and no workflow ran either, so the first
+    run found a crash inside a minute (see fuzz.yml). A target added to the
+    harness without a line in the matrix would be the same silence again.
+    """
+    print("\nEvery fuzz target is in the fuzz workflow's matrix")
+    declared = set()
+    in_bin = False
+    for line in open(cargo_path):
+        if line.strip() == "[[bin]]":
+            in_bin = True
+            continue
+        m = re.match(r'\s*name\s*=\s*"([^"]+)"', line)
+        if in_bin and m:
+            declared.add(m.group(1))
+            in_bin = False
+    spec = yaml.safe_load(open(workflow_path))
+    run = set(spec["jobs"]["fuzz"]["strategy"]["matrix"]["target"])
+    for name in sorted(declared - run):
+        check(False, f"{cargo_path} declares fuzz target {name!r}, which {workflow_path} never runs")
+    for name in sorted(run - declared):
+        check(False, f"{workflow_path} runs {name!r}, which {cargo_path} does not declare")
+    check(len(declared) >= 2 and declared == run,
+          f"the {len(declared)} declared fuzz targets are exactly the {len(run)} the workflow runs")
+
+
 def check_workflows_readme(
     workflows_glob: str = ".github/workflows/*.yml",
     readme_path: str = ".github/workflows/README.md",
@@ -1095,6 +1131,7 @@ def main(argv: list[str] | None = None) -> int:
     check_msrv_runs_the_msrv()
     check_actions_are_pinned()
     check_tools_are_pinned()
+    check_fuzz_targets_are_run()
     check_workflows_readme()
     check_headroom_arithmetic()
 

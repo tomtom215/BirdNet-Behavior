@@ -83,7 +83,8 @@ Not done, in the order they seem to matter:
   were adapted from a2a-rust's, which run, and checked with actionlint; the first
   run on GitHub is their test. Scorecard needs the repository to be public (it
   is) and will score low on branch protection and vulnerability reporting until
-  section 1 is done. The two fuzz targets under `fuzz/` are still not run in CI.
+  section 1 is done. `fuzz.yml` (new, tested here by running its commands) is
+  the same kind of untried.
 - **Pins that are still floating:** the `ubuntu:24.04` container that
   `install-smoke.yml` starts with `docker run` is a tag (Dependabot does not read
   `docker run` arguments, so a digest there would go stale unseen);
