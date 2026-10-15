@@ -105,8 +105,12 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
     }
     ribbons.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
+    // The top and bottom 36 units are cropped from the viewBox: the outermost labels
+    // sit tangent to the ring, so they need ~40 units beyond it, not the 110 the ring
+    // was inset by, and the rest was a band of blank card above and below the chart.
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {size:.0} {size:.0}" width="100%" role="img" class="viz-svg-chord">"#
+        r#"<svg viewBox="0 36 {size:.0} {h:.0}" width="100%" role="img" class="viz-svg-chord">"#,
+        h = size - 72.0,
     );
     svg.push_str(&svg_a11y(
         "Acoustic co-occurrence network",
@@ -165,7 +169,12 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
     for (i, &(_, _, mid, _)) in arcs.iter().enumerate() {
         let label_r = r_outer + 22.0;
         let deg = mid.to_degrees() + 90.0;
-        let flip = (mid > pi / 2.0 && mid < pi * 1.5) || (mid < -pi / 2.0);
+        // `deg` is the arc's tangent, which reads upright only in the upper half of
+        // the ring (screen y grows downward, so that is angles in (π, 2π)). The old
+        // test flipped the left half instead — which turned the labels in the
+        // upper-left quadrant upside down, and left the ones in the lower-right
+        // quadrant tilted past vertical.
+        let flip = mid.rem_euclid(std::f64::consts::TAU) < pi;
         let final_deg = if flip { deg + 180.0 } else { deg };
         let radius = if flip { label_r + 8.0 } else { label_r };
         let (tx, ty) = polar(cx, cy, radius, mid);
@@ -180,7 +189,9 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
     // Centre caption.
     let _ = write!(
         svg,
-        r#"<text x="{cx:.1}" y="{y0:.1}" text-anchor="middle" class="display" font-size="15" fill="var(--fg-3)">5-minute</text><text x="{cx:.1}" y="{y1:.1}" text-anchor="middle" class="display" font-size="15" fill="var(--fg-3)">co-occurrence</text>"#,
+        // A --surface halo behind the caption: it sits over the ribbons, and grey on a
+        // translucent coloured ribbon is not readable.
+        r#"<text x="{cx:.1}" y="{y0:.1}" text-anchor="middle" class="display" font-size="15" fill="var(--fg-3)" stroke="var(--surface)" stroke-width="4" paint-order="stroke" stroke-linejoin="round">5-minute</text><text x="{cx:.1}" y="{y1:.1}" text-anchor="middle" class="display" font-size="15" fill="var(--fg-3)" stroke="var(--surface)" stroke-width="4" paint-order="stroke" stroke-linejoin="round">co-occurrence</text>"#,
         y0 = cy - 6.0,
         y1 = cy + 12.0,
     );
@@ -210,5 +221,51 @@ mod tests {
         assert!(svg.contains("<title>Acoustic co-occurrence network</title>"));
         assert!(svg.contains("<desc>Species arranged on a ring;"));
         assert!(!svg.contains("aria-label"));
+    }
+
+    /// No species name is ever drawn upside down, wherever its arc falls.
+    ///
+    /// Observed failing against the old flip rule (`mid` in (π/2, 3π/2) or
+    /// below -π/2): with ten species the labels in the upper-left quadrant came
+    /// out rotated about 90-180 degrees, i.e. reading upside down, and the ones
+    /// in the lower-right quadrant were past vertical.
+    #[test]
+    fn chord_labels_are_never_upside_down() {
+        let n = 10;
+        let labels: Vec<String> = (0..n).map(|i| format!("Species {i}")).collect();
+        // Symmetric, every pair above the 0.20 ribbon threshold, strengths varied so
+        // the arcs differ in length and the labels land all the way round the ring.
+        let m: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        if i == j {
+                            return 0.0;
+                        }
+                        let k = u8::try_from((i.min(j) * 7 + i.max(j) * 3) % 10).unwrap_or(0);
+                        0.25 + f64::from(k) / 14.0
+                    })
+                    .collect()
+            })
+            .collect();
+        let svg = chord_diagram(&labels, &m);
+        let mut checked = 0;
+        for chunk in svg.split("rotate(").skip(1) {
+            let deg: f64 = chunk
+                .split(')')
+                .next()
+                .and_then(|d| d.parse().ok())
+                .expect("rotate() holds a number");
+            let norm = (deg + 180.0).rem_euclid(360.0) - 180.0;
+            assert!(
+                norm.abs() <= 90.0 + 1e-6,
+                "a label rotated {deg} degrees (normalised {norm}) reads upside down"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, n,
+            "one rotate() per species, or the gate is vacuous"
+        );
     }
 }

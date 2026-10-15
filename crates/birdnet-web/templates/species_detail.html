@@ -162,10 +162,11 @@
   /* Scoped overrides — keep additions tiny and token-driven. */
   .species-hero {
     display: grid;
-    grid-template-columns: 1.4fr 1fr;
-    gap: var(--pad-4);
+    grid-template-columns: 1.5fr 1fr;
+    gap: var(--pad-3);
     align-items: end;
     padding-top: 6px;
+    margin-bottom: var(--pad-2);
   }
   .species-hero__title { min-width: 0; }
   .species-hero__title .pill-row { margin-top: 14px; }
@@ -178,7 +179,7 @@
      The body grid override used to rely on the global ≤520px
      [style*="grid-template-columns"] reset, so it carries its own breakpoint. */
   a.sd-back     { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-3); text-decoration: none; }
-  .sd-h1        { font-size: 64px; line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; margin-top: 6px; }
+  .sd-h1        { font-size: var(--fs-hero); line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; margin-top: 6px; }
   .sd-sci       { color: var(--fg-3); font-style: italic; font-size: 14px; margin-top: 6px; }
   .sd-actions   { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
   .sd-body      { grid-template-columns: 1.5fr 1fr; }

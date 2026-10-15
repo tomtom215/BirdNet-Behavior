@@ -235,9 +235,19 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let stride = (n / 6).max(1);
     for (i, (label, _)) in points.iter().enumerate() {
         if i % stride == 0 || i == n - 1 {
+            // The first and last labels are anchored inward: centred on the plot's
+            // edge, half of each hung outside the SVG, and the label-fitting script
+            // (static/chart-text.js) then cut them to "25-…" and "26-…".
+            let anchor = if i == 0 {
+                "start"
+            } else if i == n - 1 {
+                "end"
+            } else {
+                "middle"
+            };
             let _ = write!(
                 svg,
-                r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="8" fill="var(--fg-4)">{label}</text>"#,
+                r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="8" fill="var(--fg-4)">{label}</text>"#,
                 x = x_at(i),
                 ty = h - 6.0,
             );

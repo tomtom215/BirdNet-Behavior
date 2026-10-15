@@ -305,6 +305,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Typography, motion, stacking and focus are design tokens now, and a layout gate
+  checks what axe cannot.** `app.css` declared 368 font sizes as literal pixels in 34
+  different values; it now declares 36 in 12 (a font-size ladder `--fs-2xs`…`--fs-lg`,
+  `--fs-title`, `--fs-stat`, `--fs-stat-lg`, two fluid sizes `--fs-h1` and `--fs-hero`),
+  with 450 uses of the `--fs-*` tokens. New tokens: `--dur-fast/base/slow` and the two
+  easing curves, `--z-raised/sticky/tabbar/toast/skip`, `--r-pill`, `--scrim`,
+  `--ring` and `--ring-soft`; badge text uses `--on-fill` (white on bright amber in
+  dark mode before). `docs/book/reference/design-tokens.md` documents the set, and
+  `tests/design_tokens_doc_matches_the_stylesheet.rs` fails when the page and the
+  stylesheet disagree (changing `--fs-md` from 13 px to 14 px in the page fails it with
+  the line and both values; restored, it passes).
+  `tools/visual-qa/layout.mjs` reports text drawn over text or over a form control,
+  columns squeezed to nothing, controls that escape their card and text under 9 px, at
+  both viewports and both themes. Run against the stylesheet and templates this
+  release replaces, it reports 56 findings over 152 page states (52 overlaps, 2
+  escapes among them); against this tree it reports none, and it is a CI step
+  (`a11y.yml`). The same pass, working from screenshots of every route in both themes
+  at 1440 and 390 px as well as the gate, changed (the gate covers overlaps, escapes and
+  squeezes; the rest were judged by eye): form hints no longer struck through
+  by the input above them, the Data quality histograms and tiles styled again after
+  being folded into the Station tab, the species page's stat band and hero aligned,
+  the empty Access, audit and sessions states no longer squeezed into a 92 px column,
+  legacy admin forms using the stylesheet's own control style (their inputs had no
+  `type` attribute), the migration ridgeline's "today" pill off its caption, the chord
+  diagram's species names never upside down (`chord_labels_are_never_upside_down`
+  fails against the old rule at 124.6°) and the life-list axis labels no longer cut to
+  "25-…", a phone layout that no longer runs rows past the screen edge, 40 px touch
+  targets and 16 px fields on coarse pointers, and `print.css` printing absolute link
+  addresses only. Checked on this tree: axe over 38 routes × 2 themes × 2 widths with
+  the WCAG 2.2 and best-practice rules blocking, 0 findings; the interaction gate, 74
+  passed; the legibility gate (482 chart labels, none under 8.5 px); the base-path
+  gate; the strict visual sweep, 0 pages with issues; and all of `birdnet-web`'s
+  tests. Not checked: Firefox and Safari, a screen reader, the compact and comfy
+  density settings, print beyond three pages, real Pi hardware. Known and left:
+  `/admin/*` nav wraps to two rows at 1180 px, Quarantine uses four button styles in
+  one row, the patterns activity grid scrolls sideways on a phone, the dark-theme
+  chart fills are a deliberate bright boost.
+
 - **`rubato` 4 → 5 and `argon2` 0.5 → 0.6 (with `password-hash` 0.6 and
   `audioadapter-buffers` 5).** Dependabot had held both pairs until their releases
   existed; each now arrives as one grouped pull request. A password hash and an

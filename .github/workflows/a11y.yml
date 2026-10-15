@@ -104,6 +104,14 @@ jobs:
         # 1440 and 390 px. Labels authored at 8 px rendered at 2.7-5 px on a
         # phone while axe, the sweep and every screenshot called the pages clean.
         run: node legibility.mjs
+      - name: Layout gate (nothing overlaps, squeezes or escapes its card)
+        working-directory: tools/visual-qa
+        # What axe cannot see: text drawn over text or over a form control, a
+        # column squeezed to nothing, a control that escapes its card, text under
+        # 9 px. It found form hints struck through by the input above them and a
+        # species-name column at 0 px on a phone, on pages every other gate
+        # called clean. Both viewports, both themes.
+        run: node layout.mjs
       - name: Base-path gate (served under a prefix, nothing leaves it)
         working-directory: tools/visual-qa
         run: |

@@ -216,7 +216,10 @@ fn render_ridgeline_svg(
     const H: f64 = 360.0;
     const PAD_L: f64 = 172.0; // room for the longest common names (e.g. "Ruby-throated Hummingbird")
     const PAD_R: f64 = 16.0;
-    const PAD_T: f64 = 24.0;
+    // 36, not 24: the two season captions and the "today" pill each need a row of
+    // their own above the plot. At 24 they shared one, the pill covered the fall
+    // caption, and the fall caption's overlap hid the pill's own text.
+    const PAD_T: f64 = 36.0;
     const PAD_B: f64 = 32.0;
     let inner_w = W - PAD_L - PAD_R;
     let inner_h = H - PAD_T - PAD_B;
@@ -260,7 +263,7 @@ fn render_ridgeline_svg(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-band-spring">spring migration</text>"#,
         x = x(14.0),
-        y = PAD_T + 12.0,
+        y = 12.0,
     );
     let _ = write!(
         s,
@@ -274,7 +277,7 @@ fn render_ridgeline_svg(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-band-fall">fall migration</text>"#,
         x = x(39.0),
-        y = PAD_T + 12.0,
+        y = 12.0,
     );
 
     // Ridges.
@@ -387,20 +390,20 @@ fn render_ridgeline_svg(
         s,
         r#"<g><line x1="{x:.2}" y1="{y1}" x2="{x:.2}" y2="{y2:.2}" stroke="var(--fg)" stroke-width="1" stroke-dasharray="3 3"/>"#,
         x = x(today_week as f64),
-        y1 = PAD_T,
+        y1 = PAD_T - 4.0,
         y2 = PAD_T + inner_h,
     );
     let _ = write!(
         s,
         r#"<rect x="{rx:.2}" y="{ry}" width="48" height="14" rx="3" fill="var(--fg)"/>"#,
         rx = x(today_week as f64) - 24.0,
-        ry = PAD_T - 2.0,
+        ry = PAD_T - 18.0,
     );
     let _ = write!(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-today">today</text></g>"#,
         x = x(today_week as f64),
-        y = PAD_T + 8.0,
+        y = PAD_T - 8.0,
     );
 
     s.push_str("</svg>");
@@ -510,7 +513,9 @@ fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
     let _ = write!(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mono mig-sub">species / wk</text>"#,
-        x = PAD_L - 8.0,
+        // 16 left of the first bar's centre, not 8: bars are centred on their week and
+        // the first one reaches 11 units left of PAD_L, so the label ended under it.
+        x = PAD_L - 16.0,
         y = H - 12.0,
     );
     let _ = write!(

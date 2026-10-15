@@ -55,7 +55,8 @@ const PAGES = [
   ['admin-backups.png', '/station/data', 'light'],
 ];
 
-const browser = await chromium.launch();
+// Same knob as qa.mjs / axe.mjs: sandboxes ship their own Chromium rather than the build this playwright pins.
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 for (const [name, route, theme] of PAGES) {
   const ctx = await browser.newContext({
     viewport: { width: W, height: 1000 },

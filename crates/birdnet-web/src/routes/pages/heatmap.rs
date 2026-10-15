@@ -266,7 +266,9 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     let label_w = 36;
     let label_h = 20;
     let svg_w = label_w + 24 * cell_w + 20;
-    let svg_h = label_h + 7 * cell_h + 40;
+    // 26, not 40: the legend ends 16px under the last row, and the extra 14 drew
+    // a blank band under it (about 28px once the SVG is scaled to its card).
+    let svg_h = label_h + 7 * cell_h + 26;
 
     let mut svg = format!(
         r#"<div class="hm-scroll" tabindex="0" role="group" aria-label="Hour by day-of-week activity grid, scrolls sideways">
