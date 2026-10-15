@@ -42,14 +42,21 @@ default setup, secret scanning, who has write access.
 
 ## 3. What the last session changed, and how far it was checked
 
-Everything is on branch `claude/vigilant-goldberg-grdjk1`. The draft pull request
-opened from it is the first thing to read: until it was opened no GitHub Actions
-workflow had run on any of this (the `pull_request`-triggered gates never see an
-un-PR'd branch), and what CI says about it is not recorded here.
+Everything is on branch `claude/vigilant-goldberg-grdjk1`, and draft pull request
+#258 was opened from it on 2026-10-15; until then no GitHub Actions workflow had
+run on any of this (the `pull_request`-triggered gates never see an un-PR'd
+branch). Its first CI run failed two checks, both this branch's own: OSV-Scanner
+(`tools/visual-qa/package-lock.json` was ignored by two `.gitignore` files and not
+in the checkout) and shellcheck (SC2034 in one installer test script). `7c61bf9`
+and `03170f0` fixed them. On `03170f0` all 71 check runs completed, 69 with
+success and 2 skipped by design (`deploy` and `Merge multi-arch manifest`, which
+do not run on a pull request). That includes the `cargo-mutants` jobs, which on a
+pull request mutate only the diff, so most of them mutated nothing.
 
 Checked locally, by running it (details in each commit message). "The tested
-tree" is that of `204e296`; the commits after it change `CLAUDE.md` and this file
-only.
+tree" is that of `204e296`; the four commits after it change no Rust file: they
+touch `CLAUDE.md`, this file, the changelog, `.gitignore`, the browser-QA
+lockfile, `scripts/check-ci-config.py` and one installer test script.
 
 - **Static checks, on the tested tree:** `cargo fmt --check`; `cargo clippy
   --workspace --all-targets -- -D warnings` with default features,
@@ -88,15 +95,22 @@ only.
   `scripts/check-ci-config.py` fails only where `cargo-mutants` is needed and is
   not installed here ("generates 0 mutants").
 
-**Not run, anywhere:** any workflow on GitHub; the Docker build and its offline
-boot test; the release workflow; `cargo-mutants`; the container image's new
-`/usr/share/doc/birdnet-behavior/` files; `cargo publish` and a verifying
-`cargo package` (`birdnet-core` was packaged without building: 102 files, 1.8 MiB
-compressed, with the species-name table in it); anything on Raspberry Pi hardware
-(the cgroup memory-limit fix in `memory.rs` is tested against a directory tree
-laid out as the kernel lays it out, not against a unit under cgroup v2). Not
-covered by a page fetch in the species-name gate: the share page, migration, the
-behavioural and correlation pages, and `live-detections.js`.
+**Not run, anywhere:** the release workflow; pushing the Docker image (the
+manifest merge is skipped on a pull request; the per-architecture builds, the
+offline extension load and the tool-spawn checks did run and passed, but no step
+lists the final image's `/usr/share/doc/birdnet-behavior/`, which a `RUN install`
+in the `Dockerfile` fills and would fail on if a source file were missing);
+`cargo-mutants` on the whole of any file (CI ran it on the diff, and it is not
+installed in the working clone);
+`cargo publish` and a verifying `cargo package` (`birdnet-core` was packaged
+without building: 102 files, 1.8 MiB compressed, with the species-name table in
+it); anything on Raspberry Pi hardware (CI's native aarch64 tests ran on a
+GitHub arm64 runner, which is not one, and the cgroup memory-limit fix in
+`memory.rs` is tested against a directory tree laid out as the kernel lays it
+out, not against a unit under cgroup v2).
+
+**Not covered by a page fetch in the species-name gate:** the share page,
+migration, the behavioural and correlation pages, and `live-detections.js`.
 
 **A note on the history.** `ff51acc` (the species-name languages) does not
 compile its test targets on its own: a tool I used to split the batch into two
