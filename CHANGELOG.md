@@ -484,6 +484,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them, the species page's Detections tile read `2583` under a `2,583
   detections` pill; it groups digits now.
 
+- **The browser-QA lockfile was ignored while two workflows named it.**
+  `tools/visual-qa/package-lock.json` was excluded by two `.gitignore` files
+  ("never committed"), yet `osv.yml` scanned it and the `a11y` job ran `npm ci`
+  against it. Both worked on the machine that wrote them, where an ignored file
+  is still on disk, and neither could work on GitHub: the first pull request
+  that ran them stopped at `stat .../package-lock.json: no such file or
+  directory`. The lockfile (five packages, all from `registry.npmjs.org`, with
+  integrity hashes; `npm ci` accepts it and `npm audit` finds 0 vulnerabilities)
+  is tracked now, and `scripts/check-ci-config.py` fails when a workflow names a
+  lockfile git does not track: it reported the two workflows before the file
+  was tracked and passed after.
+
 - **A new station's first screens had two defects the sweeps could not see.**
   The Today "Getting ready" checklist's links (the setup wizard, Accounts, the
   doctor) were told apart from their sentence by colour alone, which WCAG 1.4.1

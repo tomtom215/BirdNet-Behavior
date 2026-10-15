@@ -87,6 +87,15 @@ they get their own gate.
      fuzz/known/). A target added to the harness without a line in the
      workflow's matrix is the same silence again.
 
+ 11. A lockfile the workflows name and the checkout does not contain.
+     `tools/visual-qa/package-lock.json` was ignored by two `.gitignore` files
+     ("installed on demand; never committed") while `osv.yml` scanned it and the
+     browser-QA job ran `npm ci` against it. Everything passed on the machine
+     that wrote them, because an ignored file is still on disk there; on GitHub
+     the scan stopped at `stat .../package-lock.json: no such file or directory`
+     and `npm ci` would have refused to run. A lockfile a workflow names has to
+     be a file git tracks, not a file that happens to exist.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -812,6 +821,39 @@ def check_tools_are_pinned(
         check(images >= 2, f"the reader found the base images it is judging ({images})")
 
 
+def named_lockfiles(workflows_glob: str) -> list[tuple[str, str]]:
+    """`(where, path)` for every lockfile a workflow relies on: the `--lockfile=`
+    arguments of a scan, and the `package-lock.json` beside every `npm ci`."""
+    found: list[tuple[str, str]] = []
+    for workflow in sorted(glob.glob(workflows_glob)):
+        text = open(workflow, encoding="utf-8").read()
+        for path in re.findall(r"--lockfile=(\S+)", text):
+            found.append((workflow, path))
+        for node in _walk_dicts(yaml.safe_load(text)):
+            run = node.get("run")
+            if isinstance(run, str) and re.search(r"\bnpm ci\b", run):
+                directory = node.get("working-directory", ".")
+                found.append((workflow, os.path.normpath(os.path.join(directory, "package-lock.json"))))
+    return found
+
+
+def is_tracked(path: str) -> bool:
+    """Whether git tracks `path`: an ignored file that exists on this disk is not
+    the file a fresh checkout has."""
+    return subprocess.run(["git", "ls-files", "--error-unmatch", "--", path],
+                          capture_output=True).returncode == 0
+
+
+def check_named_lockfiles_are_tracked(workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """Every lockfile a workflow names is tracked by git (incident 11)."""
+    print("\nEvery lockfile a workflow names is tracked, not just present (incident 11)")
+    named = named_lockfiles(workflows_glob)
+    for where, path in named:
+        check(is_tracked(path), f"{where}: {path} is tracked by git")
+    # The counterpart: a reader that found nothing would pass every line above.
+    check(len(named) >= 3, f"the reader found the lockfiles it is judging ({len(named)})")
+
+
 def check_fuzz_targets_are_run(
     cargo_path: str = "fuzz/Cargo.toml", workflow_path: str = ".github/workflows/fuzz.yml"
 ) -> None:
@@ -1131,6 +1173,7 @@ def main(argv: list[str] | None = None) -> int:
     check_msrv_runs_the_msrv()
     check_actions_are_pinned()
     check_tools_are_pinned()
+    check_named_lockfiles_are_tracked()
     check_fuzz_targets_are_run()
     check_workflows_readme()
     check_headroom_arithmetic()

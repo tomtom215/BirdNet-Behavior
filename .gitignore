@@ -79,10 +79,16 @@ fuzz/corpus/**
 !fuzz/corpus/*/seed-*
 
 # Node tooling for the Playwright visual-QA script (scripts/visual_qa.mjs).
-# Installed on demand; never committed.
+# Installed on demand; node_modules is never committed.
 node_modules/
 package.json
 package-lock.json
+# The browser-QA tooling's lockfile is the exception: the a11y job runs `npm ci`
+# against it and osv.yml scans it, and a file that is ignored is present on the
+# machine that wrote the workflow and absent from the checkout that runs it.
+# scripts/check-ci-config.py (incident 11) fails if a workflow names a lockfile
+# git does not track.
+!tools/visual-qa/package-lock.json
 
 # Python bytecode from scripts/ (check-ci-config.py)
 __pycache__/
