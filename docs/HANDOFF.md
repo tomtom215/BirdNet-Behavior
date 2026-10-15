@@ -2,11 +2,13 @@
 
 What only the maintainer can do, what the last working session did and did not
 verify, and where the next one should start. Facts about GitHub are as read on
-**2026-10-14** with read-only API calls; re-read them before relying on them.
+**2026-10-14** (settings) and **2026-10-15** (open pull requests) with read-only
+calls; re-read them before relying on them.
 
 ## 1. Repository settings only the maintainer can change
 
-These are settings, not files, so no commit can make them true.
+These are settings, not files, so no commit can make them true. They were read on
+2026-10-14 and **not re-read** by the last session.
 
 | Setting | State on 2026-10-14 | Why it matters | Where |
 |---|---|---|---|
@@ -19,16 +21,35 @@ These are settings, not files, so no commit can make them true.
 Not readable from here, so unknown: Actions permissions, environments, CodeQL
 default setup, secret scanning, who has write access.
 
+Open pull requests on 2026-10-15, all from Dependabot: #261 (`taiki-e/install-action`
+patch bump), #260 (rubato 4 → 5.0.1) and #228 (argon2 0.5 → 0.6), which this branch
+supersedes (it takes both, with the API changes they need: close them once it is
+merged), and #200 and #199 (`actions/checkout` 7.0.1, `actions/cache` 6.1.0), open
+since 2026-08-09 and not looked at.
+
 ## 2. Decisions that are the maintainer's
 
+- **The default classifier.** It is BirdNET+ V3.0 preview: a different network from
+  the one BirdNET-Pi and birdnet-go run (V2.4), with different windows, calibrated
+  probabilities and 11 560 species. The same audio does **not** give BirdNET-Pi's
+  detections on it, by design. V2.4 is one command (`--install-model birdnet-v24`)
+  and was measured against BirdNET-Pi's own code (see
+  [`docs/book/guides/parity.md`](book/guides/parity.md)). If "install it and see what
+  BirdNET-Pi saw" is the promise to people migrating, the default should be V2.4;
+  the recommendation was to leave it and document it (done), because V3.0 is the
+  newer model and the README now says which is which. Changing it touches every place that names the default model: the
+  installer, the Docker entrypoint and compose file, the CI model fetch, the README
+  and the book.
+- **Publishing BirdNET-Pi's default range filter (MData v1) as ONNX.** It is not
+  hosted anywhere. `tools/model-convert` converts it (and v2) and checks the result
+  against the TFLite originals; the catalogue carries v2 only (a pinned birdnet-go
+  file). Hosting the v1 conversion, and under what licence terms, is yours.
 - **Accept, amend or drop [`STABILITY.md`](../STABILITY.md).** It is marked
-  *proposed*; every number in it was re-measured from the tree on 2026-10-14
-  (53 migrations, 147 configuration keys, 111 option lines in `--help`, 85
-  OpenAPI paths and 87 operations, 24 releases).
+  *proposed*. Every number in it was re-measured on 2026-10-14 and has **not** been
+  re-measured since.
 - **Publishing to crates.io.** The licence is CC BY-NC-SA 4.0 because the work
-  derives from BirdNET-Pi. Whether to publish, under which crate names, and who holds the
-  account is not something the repository can decide. See section 5 for what is
-  and is not ready.
+  derives from BirdNET-Pi. Whether to publish, under which crate names, and who holds
+  the account is not something the repository can decide. See section 5.
 - **Whether the bundled species names may be redistributed.** The 35 language
   tables behind *Common-name language* are BirdNET-Pi's `model/l18n/`, which its
   README credits to @patlevin and to Wikipedia without saying which name came
@@ -39,101 +60,112 @@ default setup, secret scanning, who has write access.
 - **Release signing.** Tags and `SHA256SUMS` are unsigned; the in-app updater
   trusts the GitHub release. A signing key and a verifier in the updater would
   close that, and the key is yours to create.
+- **Where the installer one-liner points.** README, the book and the installer's
+  own usage text all say `curl … raw.githubusercontent.com/…/main/install.sh | sudo bash`,
+  and the admin "Check for updates" text does too. `main` can be ahead of the last
+  release, and the release's own `install.sh` is the one the release workflow attests
+  (`releases/latest/download/install.sh`). Switching is twelve places and a decision
+  about what an install should track; nothing here consumes the attestation yet.
+- **The local TLS certificate authority has no Name Constraints.** The CA that
+  `--tls-mode self-signed` makes (`crates/birdnet-web/src/tls.rs`, `ca_params`) is
+  valid for ten years and may sign for any name; its key is `0600` under the service
+  user. Anything running as that user can mint a certificate for any site that every
+  device which imported the CA will trust. A name constraint limited to the station's
+  own names would close it, and would mean regenerating the CA when the names change.
+  Not done: it changes what operators must re-import.
 
 ## 3. What the last session changed, and how far it was checked
 
-Everything is on branch `claude/vigilant-goldberg-grdjk1`, and draft pull request
-#258 was opened from it on 2026-10-15; until then no GitHub Actions workflow had
-run on any of this (the `pull_request`-triggered gates never see an un-PR'd
-branch). Its first CI run failed two checks, both this branch's own: OSV-Scanner
-(`tools/visual-qa/package-lock.json` was ignored by two `.gitignore` files and not
-in the checkout) and shellcheck (SC2034 in one installer test script). `7c61bf9`
-and `03170f0` fixed them. On `03170f0` all 71 check runs completed, 69 with
-success and 2 skipped by design (`deploy` and `Merge multi-arch manifest`, which
-do not run on a pull request). That includes 32 `cargo-mutants` jobs. On a pull
-request they mutate only the changed lines, so a job for a file the pull request
-did not touch passes having tested nothing: the one log I read, `civil.rs` shard
-1/3, says "no mutants on the changed lines ... nothing to check on this PR". I
-did not read the other 31 (the `src/daemon/*.rs` shard 1/6 ran for about twelve
-minutes, so it did mutate something), so how many mutants CI ran, and how many it
-caught, is not recorded here.
+Everything is on branch `claude/gallant-gates-txf2k5`, directly on `main`
+(`e34fd55`), as 22 commits; no pull request was opened from it, so **no GitHub
+Actions workflow has run on any of it** (the `pull_request`-triggered gates never see
+an un-PR'd branch). Open a draft pull request first and read what CI says.
 
-Checked locally, by running it (details in each commit message). "The tested
-tree" is that of `204e296`; the four commits after it change no Rust file: they
-touch `CLAUDE.md`, this file, the changelog, `.gitignore`, the browser-QA
-lockfile, `scripts/check-ci-config.py` and one installer test script.
+What the commits are, each with its red/green evidence in its message:
 
-- **Static checks, on the tested tree:** `cargo fmt --check`; `cargo clippy
-  --workspace --all-targets -- -D warnings` with default features,
-  `--all-features` and `--no-default-features`; `cargo doc --no-deps
-  --document-private-items --all-features` with warnings denied; `typos` 1.51.1
-  (the binary's digest was not verified).
-- **Tests, on the tested tree:** 110 steps — every library, binary and
-  integration-test file of every crate, and the doctests — with 4,984 tests
-  passing, 0 failing, 10 ignored. That figure is the logged 4,970 with the
-  `birdnet-behavioral` lib step counted at its rerun's 125 (it logged 121 passed
-  and 4 failed) plus the 10 tests of the chunk that did not link. Default
-  features, except `birdnet-behavioral` and `birdnet-timeseries`, run with
-  `--features analytics` (the workspace enables it through the root crate; a
-  crate selected alone does not, and those tests then do not exist). The
-  `--all-features` *test* build was not run; clippy with it was. Two steps failed
-  once, both when the disk allowance was nearly spent, and passed on rerun: the
-  four `birdnet-behavioral` ICU and extension tests that `CLAUDE.md` already lists
-  as an out-of-space symptom (125 passed on each of three reruns; the cause was
-  not proven), and a link step that died at 8 KB free.
-- **Browser, on the final build:** the five steps of the `a11y` job replayed
-  against the CI screenshot fixture (axe over 38 routes x 2 themes x 2 widths:
-  152 legs, 0 violations; the interaction gate; the legibility gate; the
-  base-path gate; the strict visual sweep: 0 pages with issues); axe over the
-  same legs against a station running the real BirdNET+ V3.0 and geomodel set to
-  German, and against an empty station (`QA_EMPTY=1`): 0 violations each; the
-  visual sweep against the real-model station: 0 pages with issues.
-- **Real models:** that station detected a magpie four times from
-  `tests/testdata/Pica_pica_30s.wav`, stored "Eurasian Magpie", and drew "Elster"
-  on every Today fragment; `--doctor --lang de` reported 6593 of 11560 species
-  named. `--doctor` exited 1 there for five environment warnings (no admin
-  password, no HTTPS, no offsite backup, no audio source, 1 GiB free); it
-  reported no errors.
-- **Earlier in this branch, not re-run on this tree:** `actionlint` on every
-  workflow, the hermetic installer test suite, the extension pins against freshly
-  downloaded builds, the licence generator against the real dependency tree.
-  `scripts/check-ci-config.py` fails only where `cargo-mutants` is needed and is
-  not installed here ("generates 0 mutants").
+- *Same audio, same detections* (V2.4 against BirdNET-Pi): `SENSITIVITY` maps as
+  BirdNET-Pi's does; the chunk tail, resampler delay and clip rounding follow it;
+  V2.4 and its range filter are installable and pinned; a parity harness
+  (`tools/parity`) and three Rust tests diff against BirdNET-Pi's own code on 14
+  clips; the Docker entrypoint no longer overwrites a user's own model files.
+- *Security*: a hostile BirdNET-Pi database, CSV or backup header cannot exhaust the
+  station; two public pages no longer reflect a URL value as markup (and a sweep gate
+  covers the class); `--apply-config` is not steerable through a planted symlink; a
+  webhook's custom header stays on its origin; the Docker quickstart has an admin
+  password and a private `.env`; argon2 0.6 and rubato 5.
+- *Correctness*: the third-octave meter's edges, the retention query's cost (74 s →
+  6.65 s on 300 000 rows, identical output), clip export bit for bit, the species
+  whitelist with BirdNET-Pi's meaning, htmx 2.0.11, `THIRD_PARTY_LICENSES.txt`
+  regenerated (it was stale against the dependency tree).
+- *Interface*: the design-token set, a layout gate, and the visual fixes the gate and
+  a screenshot review found.
 
-**Not run, anywhere:** the release workflow; pushing the Docker image (the
-manifest merge is skipped on a pull request; the per-architecture builds, the
-offline extension load and the tool-spawn checks did run and passed, but no step
-lists the final image's `/usr/share/doc/birdnet-behavior/`, which a `RUN install`
-in the `Dockerfile` fills and would fail on if a source file were missing);
-`cargo-mutants` on the whole of any file (CI ran it on the diff, and it is not
-installed in the working clone);
-`cargo publish` and a verifying `cargo package` (`birdnet-core` was packaged
-without building: 102 files, 1.8 MiB compressed, with the species-name table in
-it); anything on Raspberry Pi hardware (CI's native aarch64 tests ran on a
-GitHub arm64 runner, which is not one, and the cgroup memory-limit fix in
-`memory.rs` is tested against a directory tree laid out as the kernel lays it
-out, not against a unit under cgroup v2).
+How far each was checked is in [`CHANGELOG.md`](../CHANGELOG.md) under
+*Unreleased*, entry by entry. What follows is the last session's own run, on the tree
+at the head of the branch.
 
-**Not covered by a page fetch in the species-name gate:** the share page,
-migration, the behavioural and correlation pages, and `live-detections.js`.
+- **Static:** `cargo fmt --check --all`; `cargo clippy --workspace --all-targets -- -D warnings`
+  with default features and with `--all-features`; `RUSTDOCFLAGS="-D warnings" cargo doc
+  --workspace --no-deps --document-private-items --all-features`: clean. (The
+  `--no-default-features` clippy build, which an earlier handoff listed, was not run.)
+- **Tests**, from one scripted run that deletes regenerable executables between
+  batches (the disk allowance does not hold a workspace's worth at once): 229 test
+  executables reported, 4,041 tests passed, 1 failed, 11 ignored, summed from that run's
+  log. The failure was `every_action_written_is_one_this_list_documents`, which found
+  the two new whitelist audit actions undocumented; fixed in `4fe4e54`, and the
+  target now passes (10 tests). Two things the script did not cover were run by hand
+  afterwards and passed: the 990 tests of the root binary (its own `--lib --bins`
+  invocation was wrong: the root package has no library) and the three root targets
+  that follow the failed one in its batch. Not run: `cargo test --workspace
+  --all-features` as one build (the feature sets were exercised per crate: the root and
+  web crates and `birdnet-behavioral` with `analytics`).
+- **Real models**, with `BIRDNET_REQUIRE_MODEL` and `BIRDNET_REQUIRE_V24_MODEL` set so a
+  missing model is a failure, not a skip: BirdNET+ V3.0 preview with its geomodel, and
+  V2.4 with the MData v2 range filter, all from files on the working machine (not
+  re-downloaded by the gate). `inference_e2e` (2), `pipeline_e2e` (3),
+  `v24_matches_birdnet_pi` (1), `v24_range_filter_matches_birdnet_pi` (1) and the
+  geomodel test in `birdnet-core` (2) passed; on the Eurasian Magpie recording V3.0
+  stored 93.3 %, 92.3 % and 93.4 % in chunks 1, 4 and 7. `tests/parity_dump.rs` skips
+  without its `PARITY_*` variables and was run against the BirdNET-Pi goldens earlier
+  in the session (see `docs/book/guides/parity.md`), not in this run.
+- **Browser**, on a fixture built from this branch: the full gates were run on the
+  tree at `3e7ccd8` (everything but the clip-export, audit-list and handoff commits):
+  axe over 38 routes × 2 themes × 2 widths with the WCAG 2.2 and best-practice rules
+  blocking, 0 findings; interactions 74 passed (the fixture's `hls/default/start`
+  answers 503 and the run still passes; not investigated); legibility, 0
+  labels under 8.5 px; base-path; the strict sweep, 0 pages with issues, on a second
+  run (the first reported all six photos on the life-list page failed, on a cold
+  image cache; not investigated). The layout gate was run in full on the interface
+  commit and, after the whitelist card was added, on the three pages it changed
+  (axe and layout both clean). I looked at renders of the dashboard (desktop and
+  phone), the species page and the Capture tab's species section.
+- **Elsewhere:** the hermetic installer test suite passes; the versioned manual builds
+  and every tree passes the link check; `gen-third-party-licenses.py --check` passes;
+  `scripts/check-ci-config.py` fails only for the things this machine does not have
+  (`cargo-mutants`, a GitHub token).
 
-**A note on the history.** `ff51acc` (the species-name languages) does not
-compile its test targets on its own: a tool I used to split the batch into two
-commits misplaced hunks in `species_pages.rs`, `detection_detail.rs` and
-`settings/render/mod.rs`. `204e296` holds the whole tested tree and is the first
-good commit of the pair, so a bisect should skip `ff51acc`. A corrected pair was
-built and checked in the working clone (it compiles, lints and passes the
-species-name gates, and its second commit has `204e296`'s tree), but replacing
-the pushed commits needs a force-push, which the session's safety check declined,
-so history was fixed forward instead.
+**Not run, anywhere:** the release workflow; pushing the Docker image; the
+`cargo-mutants` jobs on any of this; the BirdNET-Pi FP16 model on a Raspberry Pi
+(the parity numbers are against its FP16 TFLite model on an x86 machine); a verifying
+`cargo package` of any crate (it was packaged with `--no-verify`, so the bundled
+DuckDB build of a packaged crate was not run); Firefox, Safari, a screen reader,
+and the compact and comfy density settings; anything on Raspberry Pi hardware;
+`cargo publish`.
+
+**Not verified, and why it matters less than it might:** the documentation images
+(`docs/book/images/`) are from an older interface (the navigation says *Station*,
+the status pills say *Healthy*). A regeneration by the visual-QA tooling was made and
+**not kept**: the screenshot fixture publishes no audio source as up, so every
+dashboard shot would show a *Not recording* pill. A regeneration needs the fixture to
+publish a healthy capture gauge (`metrics().set_source_up`, and the daemon-running
+flag) and a clock whose last detection is recent enough that no outage banner shows.
 
 ## 4. Where to start
 
-1. Read what CI says on the draft pull request from `claude/vigilant-goldberg-grdjk1`
-   and fix what it finds.
-   Expect the `third-party licence notices`, `CI config` and `a11y` jobs to be
-   the first to run something new.
-2. Do the settings in section 1.
+1. Open a draft pull request from `claude/gallant-gates-txf2k5` and read what CI says.
+   Expect the `third-party licence notices`, `CI config`, `a11y` (it has a new layout
+   step) and the V2.4 model-fetch step in `ci.yml` to be the first to run something new.
+2. Do the settings in section 1; close #260 and #228 when this merges.
 3. Read the open items below; each is real and none was started unless it says so.
 
 ## 5. Open items
@@ -145,36 +177,48 @@ Not done, in the order they seem to matter:
   [`RELEASING.md`](../RELEASING.md#publishing-to-cratesio-the-maintainer-not-a-workflow):
   the bundled-DuckDB build of the packaged crates, docs.rs, and `cargo publish`
   itself were not run.
+- **The analytics store is one connection behind a mutex.** Heavy analytics requests
+  queue behind each other and every one of them holds a blocking-pool thread while
+  it waits. The retention query was the audited case and is faster; the others
+  (the audit reported `/feeds/rare.rss` starving even cheap reads under sixteen
+  concurrent requests) were not re-measured. Public pages that scan the whole history are
+  protected only by the per-address rate limit and, if you enable it, private mode.
+- **The nonce stamper trusts any `<script` in the body** (`inject_script_nonce`), so an
+  unescaped reflection anywhere becomes script execution that the CSP does not stop.
+  Two were fixed and `a_query_value_is_never_echoed_as_markup.rs` sweeps GET
+  reflections across the page layer; it does not cover POST bodies, JSON, or a value
+  stored by one page and rendered by another. Client scripts were swept for DOM sinks
+  (`innerHTML`, `eval`, …): the only one is the log viewer's event stream, whose
+  producer escapes (`logs.rs`, with a test).
+- **Smaller audit findings, not fixed** (read or run by the audit, not re-checked since): the staged upload of a migration file lives
+  in the system temp directory (up to 4 GiB; with a tmpfs `/tmp` that is memory) and a
+  WAL-mode source leaves `-shm`/`-wal` files beside it; RTSP credentials are on the
+  `ffmpeg` command line (`ps` shows them; logs are redacted); the unit runs as the
+  login user with `ProtectHome=read-only`, so that user's `~/.ssh` is readable by the
+  service; the compose file has no `cap_drop` or `no-new-privileges`; the macOS
+  formula carries an all-zero `sha256` (it fails closed); `/api/v2/soundlevel?source=`
+  echoes its raw query value into its JSON (not HTML, and no client script reads it
+  into the DOM).
 - **Feature parity.** The gap analysis against birdnet-go and BirdNET-Pi is in
-  [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md). Species names in 35
-  languages now work (N‑5 there); what that leaves open: the interface text is
-  still English (birdnet-go localizes its own, see Part 5), pages carry
-  `lang="en"` around names in other scripts (WCAG 3.1.2, which no automated
-  check covers), the sort order is by the stored name, and the surfaces that
-  need data to render (migration, the behavioural pages, the correlation matrix)
-  are covered by the source scan but not by a page fetch.
-- **The browser sweeps grade a populated station.** axe and `qa.mjs` run against
-  a fixture that has detections, so a page's empty state is only reached where a
-  fixture happens to be empty: a real station's empty Rare bird quarantine list
-  carried a `heading-order` finding the sweep had never shown. The empty and
-  failure fragments now have a unit gate; the pages that host them do not have a
-  sweep over an empty station.
-- **Workflows that have never run:** `codeql.yml`, `osv.yml` and `scorecard.yml`
-  were adapted from a2a-rust's, which run, and checked with actionlint; the first
-  run on GitHub is their test. Scorecard needs the repository to be public (it
-  is) and will score low on branch protection and vulnerability reporting until
-  section 1 is done. `fuzz.yml` (new, tested here by running its commands) is
-  the same kind of untried.
+  [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md); Part 7 triages birdnet-go's
+  last 37 commits and says which were read. Open there: the interface text is still
+  English, pages carry `lang="en"` around names in other scripts, voice-activity
+  detection, a page to edit trusted proxies, native non-WAV clip export, and
+  birdnet-go's `range/heatmap`.
+- **The browser sweeps grade a populated station.** axe, `qa.mjs` and `layout.mjs`
+  run against a fixture that has detections, so a page's empty state is only reached
+  where a fixture happens to be empty.
+- **Workflows that have never run:** `codeql.yml`, `osv.yml`, `scorecard.yml` and
+  `fuzz.yml` were adapted or written without a first run on GitHub.
 - **Pins that are still floating:** the `ubuntu:24.04` container that
   `install-smoke.yml` starts with `docker run` is a tag (Dependabot does not read
-  `docker run` arguments, so a digest there would go stale unseen);
-  `taiki-e/install-action` and `EmbarkStudios/cargo-deny-action` choose their own
-  tool builds from the version named. Nothing checked whether Dependabot honours
-  the `ignore` rule for the builder's Rust tag: the first docker PR will say.
-- **Dependencies:** `argon2`, `rubato` and htmx are behind their latest releases
-  (`CHANGELOG.md` and `dependabot.yml` say why each was held).
+  `docker run` arguments); `taiki-e/install-action` and
+  `EmbarkStudios/cargo-deny-action` choose their own tool builds from the version
+  named.
+- **Dependencies.** `cargo update --dry-run` on 2026-10-15 locked nothing and
+  listed four packages with newer releases that their parents hold back
+  (`comfy-table`, `generic-array`, `matchit`, `psm`). htmx is 2.0.11, the latest 2.x;
+  npm also publishes a 4.0.0, which was not evaluated.
 - **The OpenAPI document is not complete** (`api.md` says so): eight REST paths
-  and two WebSockets are routed but undocumented, and nothing checks that
-  direction (the gates check documented-and-routed, and the bearer tables both
-  ways). `redocly.yaml` is committed but no workflow runs `redocly lint`, and
-  nothing diffs `openapi.json` against the previous release for breaking changes.
+  and two WebSockets are routed but undocumented, and nothing checks that direction. `redocly.yaml` is
+  committed but no workflow runs `redocly lint`.
