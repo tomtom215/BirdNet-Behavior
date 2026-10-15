@@ -512,6 +512,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The retention analysis took 74 seconds on a 300 000-detection station and held
+  the analytics connection the whole time.** The query joined every pair of a
+  species' active days and let the `retention()` aggregate discard the pairs no
+  interval looks at, so its cost grew with the square of those days. It now joins
+  only the days within the longest interval, which cannot change an answer: no
+  condition looks further. Measured on 300 000 rows over 700 days and 150 species,
+  a debug build of the test harness on this machine: 74.4 s before, 6.65 s after,
+  150 species rows identical. (A second formulation, an equality join on each
+  offset, measured 217 s and was dropped.) The new test holds the old query as the
+  definition and compares raw rows over six interval sets, including an unsorted
+  one and one longer than the data; each of three mutations of the reach (the
+  shortest interval, the last in the list, an off-by-one bound) fails it. Six
+  seconds is still a long time for a request on the public router; the analytics
+  store is one connection behind a mutex, so heavy analytics requests queue, and
+  that is unchanged.
+- **A password changed on the Accounts page is replaced at the next restart while
+  `CADDY_PWD` is set, and nothing said so.** That has always been the design
+  (`CADDY_PWD` is applied at every start), but the Accounts page invited the
+  change and the log recorded the reversal at `info`. The page, the FAQ and the log
+  (now `warn`) say it. The behaviour is unchanged: separating "set from the
+  environment" from "set by a person" needs a record of which it was, and the
+  accounts table has none.
 - **The sound-level meter's top bands did not measure the band they named.** The
   band filter was designed with its bandwidth pre-warped for the bilinear
   transform but its edges were not, so near Nyquist one edge landed too low and the
@@ -977,6 +999,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it says so and names the flag for whoever set the station up.
 
 ### Security
+
+- **Two pages put a URL value into their HTML unescaped, and the nonce stamper
+  turned that into script execution.** `/quarantine?filter=` wrote the raw value
+  into an `hx-get="…"` attribute, and `/pages/weekly-content?week=` accepted any
+  ten characters as a date and wrote them into its navigation links. Both are on
+  the public router; `?filter="><script>…</script>` ran in a real Chromium on the
+  station's own origin. The Content-Security-Policy did not stop it, because
+  `inject_script_nonce` stamps the per-request nonce onto **every** `<script` in
+  the finished body, an attacker's included (the page-title fix before this was the
+  same class). Both values are now normalised before they are written: a filter
+  becomes one of four known words, a week must be a `YYYY-MM-DD` date. The class is
+  now swept mechanically: `tests/a_query_value_is_never_echoed_as_markup.rs`
+  requests every page and partial route the visual-QA sweep lists, the page layer
+  registers, or the pages load with `hx-get`, with every `String`-typed parameter
+  name found in `src/routes` set to a probe, and fails on a probe that comes back as
+  a tag or ends an attribute. Against the unfixed code it reports exactly those
+  two routes (four findings: the quarantine page three times, the weekly report
+  once); the counterpart test shows a valid week and a known filter still work. It does not cover POST bodies, JSON, or
+  a value stored and rendered by a later page, and the stamper itself still trusts
+  whatever `<script` is in the body, so the next unescaped reflection outside the
+  sweep's reach would be exploitable the same way.
+- **`--apply-config` can no longer be steered through a planted symlink.** It runs
+  as root in `/etc/birdnet`, which the installer makes group-writable by the
+  service user, and wrote `<target>.part` and `<target>.bak-<epoch>` with
+  `std::fs::write` and `std::fs::copy`: a link planted at either name was written
+  through, then `chmod`ed and `chown`ed, and the live config was left a link to it.
+  Both files are now created with `O_EXCL` (which refuses a symlink), mode `0600`,
+  and given the target's mode and owner on the open descriptor before any text is
+  written. Red against the old behaviour: both new tests overwrite the victim file.
+- **A webhook's custom auth header no longer follows a redirect to another
+  origin.** `reqwest` drops `Authorization` and `Cookie` there and nothing else, so
+  an `X-API-Key` (any name the rule chose) reached whatever host the first server
+  named: `X-Secret: TOPSECRET` arrived at a second port after a 302 in the audit's
+  reproduction and in the new test. A rule with a header credential now stops at a
+  cross-origin redirect and reports the 3xx; a same-origin redirect still carries
+  the header. The outbound-address guard also refuses Azure's WireServer
+  (`168.63.129.16`), Oracle Cloud's alternate metadata address (`192.0.0.192`) and
+  Google's IPv6 metadata server (`fd20:ce::254`), which it let through.
+- **The Docker quickstart no longer leaves `/admin` open to the network.**
+  `quickstart.sh` published the dashboard on every interface with no password, and
+  wrote `.env` (which can hold an RTSP URL with a camera's credentials) with the
+  default umask. It now generates a 22-character admin password as the bare-metal
+  installer does, writes it to a `0600` `.env`, and prints it once at the end. The
+  test runs the generator under `set -eo pipefail` in a process of its own on both
+  of its branches; an earlier draft of that test ran it in a `||` list, where bash
+  disables `set -e`, and passed a mutant that makes every call fail.
 
 - **A BirdNET-Pi database or CSV chosen for import, and a backup envelope read
   back from storage, can no longer be made to exhaust the station.** Found by

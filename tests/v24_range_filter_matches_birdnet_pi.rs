@@ -1,6 +1,6 @@
 //! Does the V2.4 range filter let through the species BirdNET-Pi's does?
 //!
-//! BirdNET-Pi runs the V2.4 "MData" model on `[lat, lon, week]` and keeps the
+//! BirdNET-Pi runs the V2.4 `MData` model on `[lat, lon, week]` and keeps the
 //! species it scores at or above `SF_THRESH`. This loads the ONNX conversion of
 //! the same model into the shipping `SpeciesFilter`, asks it the same twelve
 //! questions BirdNET-Pi's own code was asked (`tools/parity`, golden
