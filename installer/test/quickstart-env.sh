@@ -97,6 +97,80 @@ else
     fail "the writer does not guard the coordinates"
 fi
 
+echo "=== the Docker station is born with an admin password, in a file only its owner can read ==="
+# The compose file publishes the dashboard on every interface and viewing is
+# open, so a .env with no CADDY_PWD left /admin open to the whole LAN. The
+# installer generates one; quickstart.sh did not mention a password at all.
+genfn="$(extract gen_password "${QS}")"
+if [ -z "${genfn}" ]; then
+    fail "quickstart.sh has no gen_password"
+else
+    # Both branches, under the strictness the script runs with, each call in a
+    # process of its own. In a `|| …` list bash switches errexit off inside a
+    # command substitution, so a check written that way cannot see the failure
+    # this exists to catch: the urandom branch once returned 141 from every
+    # call under `set -eo pipefail` (`tr … </dev/urandom | head -c 22`; nothing
+    # ever ends /dev/urandom, so `tr` always takes SIGPIPE), and the
+    # second branch here passed that mutation until it was run this way.
+    eval "${genfn}"     # the writer block below calls it in this shell
+    nobin="$(mktemp -d)"
+    for t in tr head; do ln -s "$(command -v "$t")" "${nobin}/${t}"; done
+    bash_bin="$(command -v bash)"
+    gen() { # $1 = PATH for the child
+        env PATH="$1" "${bash_bin}" -c 'set -eo pipefail; eval "$1"; gen_password' _ "${genfn}"
+    }
+    for mode in openssl urandom; do
+        bad=0
+        for _ in $(seq 1 40); do
+            if [ "${mode}" = openssl ]; then pw="$(gen "${PATH}")"; else pw="$(gen "${nobin}")"; fi
+            rc=$?
+            if [ "${rc}" -ne 0 ] || [ "${#pw}" -ne 22 ]; then bad=1; break; fi
+            case "${pw}" in *[!A-Za-z0-9]*) bad=1; break ;; esac
+        done
+        if [ "${bad}" -eq 0 ]; then pass "gen_password (${mode} branch) gives 22 letters and digits, 40 of 40 under errexit and pipefail"
+        else fail "gen_password (${mode} branch) failed (status ${rc}) or gave an unusable password ('${pw}')"; fi
+    done
+    rm -rf "${nobin}"
+fi
+
+# The writer itself: run its block in a scratch directory with a lax umask.
+block="$(sed -n '/^hdr "Writing your \.env"/,/^ok "Wrote/p' "${QS}")"
+if [ -z "${block}" ]; then
+    fail "could not find the .env writer in quickstart.sh"
+else
+    scratch="$(mktemp -d)"
+    (
+        cd "${scratch}"
+        umask 022
+        hdr() { :; }; ok() { :; }; fail() { echo "writer failed: $*" >&2; exit 1; }
+        LAT=51.5; LON=-0.1; STATION_TZ=UTC; AUDIO_KIND=rtsp
+        AUDIO_VALUE='rtsp://u:p@cam.lan/s'; IMAGE_TAG=latest
+        eval "${block}"
+        touch after-the-writer && stat -c %a after-the-writer > mode-after
+    )
+    envfile="${scratch}/.env"
+    if [ -f "${envfile}" ]; then
+        check "$(stat -c %a "${envfile}")" "600" ".env is readable by its owner only"
+        pw="$(sed -n 's/^CADDY_PWD=//p' "${envfile}")"
+        if [ "${#pw}" -eq 22 ] && [ "$(grep -c '^CADDY_PWD=' "${envfile}")" -eq 1 ]; then
+            pass ".env carries exactly one generated CADDY_PWD"
+        else
+            fail ".env has no usable CADDY_PWD (got '${pw}')"
+        fi
+        if grep -q "^BIRDNET_RTSP_URL=" "${envfile}"; then pass "the rest of .env is still written"
+        else fail "the rest of .env went missing"; fi
+        check "$(cat "${scratch}/mode-after" 2>/dev/null)" "644" "the writer did not leave its umask behind"
+    else
+        fail "the writer block produced no .env"
+    fi
+    rm -rf "${scratch}"
+fi
+if grep -qE '^say "  \$\{BLD\}Admin login:\$\{RST\}.*\$\{ADMIN_PASSWORD\}' "${QS}"; then
+    pass "the summary shows the password once"
+else
+    fail "the summary does not show the generated password"
+fi
+
 echo "=== the host's timezone reaches .env, so the container does not run on UTC ==="
 # shellcheck disable=SC1090
 source <(extract detect_host_tz "${QS}"; extract tz_name_ok "${QS}")
