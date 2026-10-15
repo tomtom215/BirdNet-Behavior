@@ -45,10 +45,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL.
 5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ip-api.com).
 6. (DuckDB behavioral analytics is built into every image and on by default — nothing to choose.)
-7. Writes a short `.env` with only your chosen values.
+7. Writes a short `.env` with only your chosen values and a generated admin password (the file is readable by you alone).
 8. Starts the container with the matching compose overlay.
 9. Streams logs so you can watch the one-time 541 MB model download.
-10. Stops tailing as soon as the web server reports healthy, then prints the dashboard URL and your LAN IP.
+10. Stops tailing as soon as the web server reports healthy, then prints the dashboard URL, your LAN IP and the admin login (user `admin`; the password is also in `~/birdnet-behavior/.env`, as `CADDY_PWD`).
 
 </details>
 
