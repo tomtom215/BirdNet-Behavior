@@ -44,25 +44,52 @@ const REQUIRE: &str = "BIRDNET_REQUIRE_MODEL";
 /// anything other than `0`/empty — the signal that this environment promised a
 /// model, so a silent skip would be a regression in the gate itself.
 pub fn model_paths() -> Option<(PathBuf, PathBuf)> {
-    let required = std::env::var(REQUIRE).is_ok_and(|v| !v.is_empty() && v != "0");
+    paths_from_env(
+        REQUIRE,
+        "BIRDNET_TEST_MODEL",
+        "BIRDNET_TEST_LABELS",
+        "the scientific core (decode → resample → inference → confidence)",
+    )
+}
+
+/// The same, for a BirdNET **V2.4** ONNX and its labels
+/// (`BIRDNET_TEST_V24_MODEL` / `BIRDNET_TEST_V24_LABELS`, required by
+/// `BIRDNET_REQUIRE_V24_MODEL`). `v24_matches_birdnet_pi` uses it: the V3.0
+/// the other suites run is a 32 kHz probability model, so the 48 kHz logit path
+/// and its sensitivity mapping — what a BirdNET-Pi user's detections depend on —
+/// have no coverage from it.
+#[allow(dead_code)] // used by one suite only; every suite compiles this module
+pub fn v24_model_paths() -> Option<(PathBuf, PathBuf)> {
+    paths_from_env(
+        "BIRDNET_REQUIRE_V24_MODEL",
+        "BIRDNET_TEST_V24_MODEL",
+        "BIRDNET_TEST_V24_LABELS",
+        "the V2.4 logit path (48 kHz raw waveform → sensitivity-scaled sigmoid)",
+    )
+}
+
+fn paths_from_env(
+    require_var: &str,
+    model_var: &str,
+    labels_var: &str,
+    what: &str,
+) -> Option<(PathBuf, PathBuf)> {
+    let required = std::env::var(require_var).is_ok_and(|v| !v.is_empty() && v != "0");
 
     let missing = |reason: String| -> Option<(PathBuf, PathBuf)> {
         assert!(
             !required,
-            "{REQUIRE} is set, so the model-gated tests must run — but {reason}.\n\
-             This means the scientific core (decode → resample → inference → confidence) \
+            "{require_var} is set, so the model-gated tests must run — but {reason}.\n\
+             This means {what} \
              was NOT exercised, while the suite would still have reported `ok`. Fix the \
-             model paths, or unset {REQUIRE} if this environment genuinely has no model."
+             model paths, or unset {require_var} if this environment genuinely has no model."
         );
-        eprintln!("SKIP: {reason} (set {REQUIRE}=1 to make this a failure)");
+        eprintln!("SKIP: {reason} (set {require_var}=1 to make this a failure)");
         None
     };
 
-    let (Ok(model), Ok(labels)) = (
-        std::env::var("BIRDNET_TEST_MODEL"),
-        std::env::var("BIRDNET_TEST_LABELS"),
-    ) else {
-        return missing("BIRDNET_TEST_MODEL / BIRDNET_TEST_LABELS are not both set".to_string());
+    let (Ok(model), Ok(labels)) = (std::env::var(model_var), std::env::var(labels_var)) else {
+        return missing(format!("{model_var} / {labels_var} are not both set"));
     };
 
     let (model, labels) = (PathBuf::from(model), PathBuf::from(labels));

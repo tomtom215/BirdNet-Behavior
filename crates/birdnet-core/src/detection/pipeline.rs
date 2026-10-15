@@ -166,6 +166,46 @@ pub struct PreparedChunk {
     pub recording: RecordingFile,
 }
 
+/// The shortest trailing remainder of a recording that still gets a chunk of
+/// its own, in seconds.
+///
+/// BirdNET-Pi's `splitSignal` stops at the first window shorter than
+/// `minlen=1.5` and zero-pads any longer one, whatever the window length
+/// (`scripts/utils/analysis.py`). This project used a quarter of the window
+/// (0.75 s at 3 s) until that was measured against it: a 16 s recording gave
+/// a sixth chunk here (1 s of audio padded with 2 s of silence) and none
+/// there, so the same file could store a detection BirdNET-Pi never made.
+const MIN_TAIL_SECS: f32 = 1.5;
+
+/// [`MIN_TAIL_SECS`] in samples, never more than half the window, so a model
+/// with a window shorter than 3 s still keeps the tail it is half-way through.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn min_tail_samples(chunk_samples: usize, sample_rate: u32) -> usize {
+    ((MIN_TAIL_SECS * sample_rate as f32) as usize).min(chunk_samples / 2)
+}
+
+/// Where each chunk of a `len`-sample recording starts.
+///
+/// The first chunk always exists, however short the recording (it is padded
+/// by the caller). After each chunk the next starts `step` samples on, and
+/// the walk stops when that leaves less than `min_tail` samples, or none.
+fn chunk_starts(len: usize, step: usize, min_tail: usize) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut pos = 0;
+    while pos < len {
+        starts.push(pos);
+        pos += step;
+        if pos >= len || len - pos < min_tail {
+            break;
+        }
+    }
+    starts
+}
+
 /// Process a single audio file through the pipeline.
 ///
 /// Decodes, resamples, splits into chunks, and computes mel spectrograms.
@@ -200,10 +240,10 @@ pub fn process_file(
     let chunk_samples = (config.chunk_duration_secs * config.target_sample_rate as f32) as usize;
     let step = chunk_step_samples(config);
 
+    let min_tail = min_tail_samples(chunk_samples, config.target_sample_rate);
     let mut chunks = Vec::new();
-    let mut pos = 0;
 
-    while pos < samples.len() {
+    for pos in chunk_starts(samples.len(), step, min_tail) {
         let end = (pos + chunk_samples).min(samples.len());
         let mut chunk_data = samples[pos..end].to_vec();
 
@@ -239,13 +279,6 @@ pub fn process_file(
             end_secs,
             recording: recording.clone(),
         });
-
-        pos += step;
-
-        // Don't create a chunk if remaining audio is too short
-        if pos >= samples.len() || samples.len() - pos < chunk_samples / 4 {
-            break;
-        }
     }
 
     Ok(chunks)
@@ -313,6 +346,104 @@ pub fn watch_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BirdNET-Pi's `splitSignal` (`scripts/utils/analysis.py`), transcribed:
+    /// the start offsets of the windows it keeps.
+    fn birdnet_pi_split_starts(
+        len: usize,
+        rate: usize,
+        overlap: f64,
+        seconds: f64,
+        minlen: f64,
+    ) -> Vec<usize> {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            clippy::cast_sign_loss
+        )]
+        let (step, window, min) = (
+            ((seconds - overlap) * rate as f64) as usize,
+            (seconds * rate as f64) as usize,
+            (minlen * rate as f64) as usize,
+        );
+        let mut starts = Vec::new();
+        let mut i = 0;
+        while i < len {
+            if (len - i).min(window) < min {
+                break;
+            }
+            starts.push(i);
+            i += step;
+        }
+        starts
+    }
+
+    /// Our chunk starts for the same recording, through the code
+    /// `process_file` runs (config -> step -> minimum tail -> starts).
+    fn our_chunk_starts(len: usize, overlap: f32, seconds: f32) -> Vec<usize> {
+        let config = PipelineConfig {
+            chunk_duration_secs: seconds,
+            chunk_overlap_secs: overlap,
+            ..PipelineConfig::default()
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            clippy::cast_sign_loss
+        )]
+        let chunk = (seconds * config.target_sample_rate as f32) as usize;
+        chunk_starts(
+            len,
+            chunk_step_samples(&config),
+            min_tail_samples(chunk, config.target_sample_rate),
+        )
+    }
+
+    /// Differential gate against BirdNET-Pi's splitting: every recording
+    /// length from 1.5 s to 40 s in quarter-second steps, at every overlap the
+    /// settings page offers a representative of. A recording shorter than
+    /// `minlen` is the one case that differs on purpose (we always keep one
+    /// chunk), so it starts at `minlen`.
+    #[test]
+    fn chunk_starts_match_birdnet_pis_split_signal() {
+        const RATE: usize = 48_000;
+        let mut checked = 0;
+        for overlap in [0.0_f32, 0.5, 1.0, 1.5, 2.0, 2.5] {
+            for quarter_secs in 6..=160 {
+                let len = quarter_secs * RATE / 4;
+                let theirs = birdnet_pi_split_starts(len, RATE, f64::from(overlap), 3.0, 1.5);
+                let ours = our_chunk_starts(len, overlap, 3.0);
+                assert_eq!(
+                    ours,
+                    theirs,
+                    "{} s at overlap {overlap}",
+                    f64::from(u32::try_from(quarter_secs).unwrap()) / 4.0
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 6 * 155, "the sweep must actually have run");
+    }
+
+    /// The case the sweep above exists for: a 16 s recording is five windows,
+    /// with the last second dropped, as in BirdNET-Pi. At the old quarter-window
+    /// minimum it was six, the sixth being one second of audio and two of silence.
+    #[test]
+    fn a_one_second_tail_is_dropped_as_birdnet_pi_drops_it() {
+        let starts = our_chunk_starts(16 * 48_000, 0.0, 3.0);
+        assert_eq!(starts.len(), 5, "{starts:?}");
+        assert_eq!(starts.last().copied(), Some(12 * 48_000));
+        // And a tail of exactly the minimum is kept, one sample under is not.
+        assert_eq!(chunk_starts(144_000 + 72_000, 144_000, 72_000).len(), 2);
+        assert_eq!(chunk_starts(144_000 + 71_999, 144_000, 72_000).len(), 1);
+    }
+
+    /// A recording shorter than the minimum still gets its one (padded) chunk.
+    #[test]
+    fn a_recording_shorter_than_the_minimum_still_gets_one_chunk() {
+        assert_eq!(our_chunk_starts(48_000, 0.0, 3.0), vec![0]);
+        assert!(our_chunk_starts(0, 0.0, 3.0).is_empty());
+    }
 
     #[test]
     fn is_audio_file_accepts_supported_extensions() {

@@ -249,6 +249,60 @@ else
     pass "verify_sha256 refuses when it cannot check"
 fi
 
+# run_acquire <BIRDNET_MODEL> <BIRDNET_LABELS> — drive `acquire_default_models`
+# with every download stubbed; prints the files it asked `ensure_model_file`
+# about, one per line, so a caller can see which it considered its own.
+run_acquire() {
+    (
+        set -uo pipefail
+        log()  { :; }
+        warn() { :; }
+        # shellcheck disable=SC1090
+        source <(sed -n '/^acquire_default_models()/,/^}/p' "${ENTRYPOINT}")
+        if ! declare -F acquire_default_models >/dev/null; then echo "NO_FUNCTION"; exit 0; fi
+        ensure_model_file() { echo "managed:$1"; return 0; }
+        # shellcheck disable=SC2034  # read by the sourced function
+        {
+            MODEL_DIR="/data/model"; MODEL_FILE="bundled.onnx"; LABELS_FILE="bundled.csv"
+            MODEL_DEFAULT="${MODEL_DIR}/${MODEL_FILE}"; LABELS_DEFAULT="${MODEL_DIR}/${LABELS_FILE}"
+            GH_BASE=x; ZENODO_BASE=x; MODEL_RELEASE_TAG=x; MODEL_SHA256=x; LABELS_SHA256=x
+        }
+        mkdir() { :; }
+        unset BIRDNET_SKIP_MODEL_DOWNLOAD
+        BIRDNET_MODEL="$1"; BIRDNET_LABELS="$2"
+        acquire_default_models
+    ) 2>&1
+}
+
+echo "=== a model the operator pointed BIRDNET_MODEL at is theirs: never verified against V3.0, never replaced ==="
+got="$(run_acquire /data/model/BirdNET_v2.4.onnx /data/model/v24_labels.txt)"
+if [ "${got}" = "NO_FUNCTION" ]; then
+    fail "acquire_default_models is missing from the entrypoint"
+elif printf '%s\n' "${got}" | grep -q '^managed:'; then
+    fail "the entrypoint would verify, delete and re-download an operator-supplied file:"
+    printf '%s\n' "${got}" | sed 's/^/        /'
+else
+    pass "an operator-supplied model and labels are left alone"
+fi
+
+echo "=== the counterpart: the bundled model at its default path IS managed ==="
+got="$(run_acquire /data/model/bundled.onnx /data/model/bundled.csv)"
+if [ "$(printf '%s\n' "${got}" | grep -c '^managed:')" = "2" ]; then
+    pass "the bundled model and labels are still verified and fetched"
+else
+    fail "the bundled model is no longer managed:"
+    printf '%s\n' "${got}" | sed 's/^/        /'
+fi
+
+echo "=== only the file that differs is the operator's: custom labels beside the bundled model ==="
+got="$(run_acquire /data/model/bundled.onnx /data/model/my_labels.csv)"
+if [ "${got}" = "managed:/data/model/bundled.onnx" ]; then
+    pass "the bundled model is managed and the custom labels are not"
+else
+    fail "unexpected handling of a custom labels file with the bundled model:"
+    printf '%s\n' "${got}" | sed 's/^/        /'
+fi
+
 echo
 if [ "${FAILED}" -ne 0 ]; then
     echo "container-model-cache.sh: FAILED"

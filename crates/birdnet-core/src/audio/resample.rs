@@ -34,7 +34,6 @@
 use std::fmt;
 
 use audioadapter_buffers::direct::InterleavedSlice;
-use rubato::audioadapter::Adapter;
 use rubato::{Async, FixedAsync, Resampler, SincInterpolationParameters, WindowFunction};
 
 /// Errors during resampling.
@@ -81,76 +80,25 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
     }
 
     let ratio = f64::from(to_rate) / f64::from(from_rate);
-    let chunk_size = 1024;
 
-    let resampler = Async::<f32>::new_sinc(
+    let mut resampler = Async::<f32>::new_sinc(
         ratio,
         1.1,
         &SincInterpolationParameters::new(256, WindowFunction::BlackmanHarris2),
-        chunk_size,
+        1024,
         1, // mono
         FixedAsync::Input,
     )
     .map_err(|e| ResampleError::Process(e.to_string()))?;
-    run_resampler(samples, ratio, chunk_size, resampler)
-}
-
-/// Push `samples` through `resampler` in fixed input chunks, zero-padding the
-/// last one and trimming its output to the input it carried.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss
-)]
-fn run_resampler(
-    samples: &[f32],
-    ratio: f64,
-    chunk_size: usize,
-    mut resampler: Async<f32>,
-) -> Result<Vec<f32>, ResampleError> {
-    let estimated_output_len = (samples.len() as f64 * ratio) as usize + chunk_size;
-    let mut output = Vec::with_capacity(estimated_output_len);
-    let input_frames_needed = resampler.input_frames_next();
-    let mut pos = 0;
-
-    // Process full chunks using InterleavedSlice adapter (mono: channels=1)
-    while pos + input_frames_needed <= samples.len() {
-        let chunk = &samples[pos..pos + input_frames_needed];
-        let adapter = InterleavedSlice::new(chunk, 1, input_frames_needed)
-            .map_err(|e| ResampleError::Process(e.to_string()))?;
-        let result = resampler
-            .process(&adapter, None)
-            .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?;
-        let frames = result.frames();
-        for i in 0..frames {
-            if let Some(sample) = result.read_sample(0, i) {
-                output.push(sample);
-            }
-        }
-        pos += input_frames_needed;
-    }
-
-    // Process remaining samples padded with zeros
-    if pos < samples.len() {
-        let remaining = samples.len() - pos;
-        let mut last_chunk = vec![0.0_f32; input_frames_needed];
-        last_chunk[..remaining].copy_from_slice(&samples[pos..]);
-        let adapter = InterleavedSlice::new(&last_chunk[..], 1, input_frames_needed)
-            .map_err(|e| ResampleError::Process(e.to_string()))?;
-        let result = resampler
-            .process(&adapter, None)
-            .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?;
-        let output_frames = (remaining as f64 * ratio) as usize;
-        let available = result.frames();
-        let take = output_frames.min(available);
-        for i in 0..take {
-            if let Some(sample) = result.read_sample(0, i) {
-                output.push(sample);
-            }
-        }
-    }
-
-    Ok(output)
+    // `process_all` resets the filter, trims its start-up delay and returns
+    // exactly `ceil(ratio * len)` frames, so the output lines up with the input
+    // instead of running `128 * ratio` samples late and short.
+    let adapter = InterleavedSlice::new(samples, 1, samples.len())
+        .map_err(|e| ResampleError::Process(e.to_string()))?;
+    let out = resampler
+        .process_all(&adapter, samples.len(), None)
+        .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?;
+    Ok(out.take_data())
 }
 
 #[cfg(test)]
@@ -223,6 +171,55 @@ mod tests {
             let out = resample(&tone(f, 2.0), 48_000, 32_000).unwrap();
             let l = level_db(&out, f);
             assert!(l.abs() < 0.1, "{f} Hz at {l:.2} dB");
+        }
+    }
+
+    /// A resampler's filter delays its output; the output must not be shifted.
+    /// An impulse at input sample `n` has to come back at `n * ratio`, to
+    /// within one output sample. The first version of this module left rubato's
+    /// start-up delay in, so every resampled recording ran `128 * ratio`
+    /// samples late (+138 at 44.1 -> 48 kHz, +85 at 48 -> 32 kHz, +278 at
+    /// 22.05 -> 48 kHz) and lost that much from its end; measured against
+    /// BirdNET-Pi's resampled samples as a lag of exactly those numbers.
+    #[test]
+    fn an_impulse_comes_back_where_it_went_in() {
+        for (from, to) in [
+            (44_100_u32, 48_000_u32),
+            (48_000, 32_000),
+            (22_050, 48_000),
+            (32_000, 48_000),
+        ] {
+            let at = 20_000_usize;
+            let mut x = vec![0.0_f32; 40_000];
+            x[at] = 1.0;
+            let y = resample(&x, from, to).unwrap();
+            let peak = y
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+                .map(|(i, _)| i)
+                .unwrap();
+            let expected = at as f64 * f64::from(to) / f64::from(from);
+            assert!(
+                (peak as f64 - expected).abs() <= 1.0,
+                "{from} -> {to} Hz: impulse at {at} came back at {peak}, expected {expected:.1}"
+            );
+        }
+    }
+
+    /// The output is the length the ratio says, with nothing trimmed from the
+    /// end to pay for the delay.
+    #[test]
+    fn the_output_has_the_length_the_ratio_says() {
+        for (from, to, n) in [
+            (44_100_u32, 48_000_u32, 44_100_usize),
+            (48_000, 32_000, 720_000),
+            (22_050, 48_000, 22_050),
+            (48_000, 32_000, 48_001),
+        ] {
+            let y = resample(&vec![0.1_f32; n], from, to).unwrap();
+            let expected = (f64::from(to) / f64::from(from) * n as f64).ceil() as usize;
+            assert_eq!(y.len(), expected, "{from} -> {to} Hz, {n} samples");
         }
     }
 

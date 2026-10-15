@@ -8,8 +8,8 @@ Out of the box BirdNet-Behavior is tuned to be sensible. But every station is di
 
 | Symptom | What's happening | Turn this way |
 |---|---|---|
-| **Too many wrong birds** (false positives) | The model is logging low-quality guesses | *Raise* confidence / sensitivity *down* / add a per-species threshold |
-| **Missing birds you can hear** (false negatives) | The bar is too high, or the signal is poor | *Lower* confidence / sensitivity *up* / check mic levels first |
+| **Too many wrong birds** (false positives) | The model is logging low-quality guesses | *Raise* confidence / (V2.4 only) sensitivity *up* / add a per-species threshold |
+| **Missing birds you can hear** (false negatives) | The bar is too high, or the signal is poor | *Lower* confidence / (V2.4 only) sensitivity *down* / check mic levels first |
 
 If you're getting both at once, it's almost always an **audio** problem (wind, clipping, a bad mic position) — fix that first on the [Audio page](../admin/audio.md) before touching detection settings.
 
@@ -34,13 +34,14 @@ The [Quality dashboard](../admin/settings.md#data-quality) lists your lowest-con
 
 ### 3. Sensitivity
 
-The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.conf`). It reshapes the model's confidence curve:
+The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.conf`), with BirdNET-Pi's meaning. It reshapes the confidence curve of a V2.4 model, whose raw scores are passed through a sigmoid with slope `clamp(2 − sensitivity, 0.5, 1.5)`:
 
-- **Higher (→1.5)** makes the model more eager — more detections, more borderline calls.
-- **Lower (→0.5)** makes it more conservative.
+- **Higher (→1.5)** is a *flatter* curve. Every score moves toward 0.5, so at any confidence threshold above 0.5 fewer calls clear the bar, and the confidence you see for a strong call is lower.
+- **Lower (→0.5)** is a *steeper* curve: strong calls score higher and more of them clear the bar.
+- The default, 1.25, is a slope of 0.75: the same figure BirdNET-Pi gives a station with its defaults. A magpie whose raw score is 3.12 reads 91.2 % here and there.
 - Most stations leave this at the default and tune the confidence threshold instead. Reach for sensitivity only when the threshold alone can't find a good balance.
 - It only affects BirdNET V2.4 models; the bundled V3.0 model reports calibrated probabilities and ignores it.
-- It runs the opposite way to BirdNET-Pi's setting of the same name. If you migrated, don't copy BirdNET-Pi's number across expecting the same result.
+- birdnet-go's setting of the same name is the slope itself (its default, 1.0, is a plain sigmoid). To carry a birdnet-go value across, enter `2 − value`.
 
 ### 4. Species-frequency (SF) filter
 

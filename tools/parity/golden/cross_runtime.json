@@ -1,0 +1,232 @@
+{
+ "a": "matrix",
+ "b": "matrix-crosscheck",
+ "runs_compared": 509,
+ "runs_with_different_detections": 0,
+ "runs_with_different_mdata_list": 0,
+ "chunks_with_different_top10_label_order": 0,
+ "max_abs_top10_score_difference": 2.115964889526367e-06,
+ "arrays": {
+  "crow_19s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "crow_19s.logits.npy": {
+   "max_abs": 3.814697265625e-05,
+   "mean_abs": 5.469131428163092e-06
+  },
+  "crow_19s.ov1.logits.npy": {
+   "max_abs": 3.62396240234375e-05,
+   "mean_abs": 5.936217659794901e-06
+  },
+  "crow_19s.ov2.logits.npy": {
+   "max_abs": 3.814697265625e-05,
+   "mean_abs": 5.743821664227845e-06
+  },
+  "ij_mono_22k05_12s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_mono_22k05_12s.logits.npy": {
+   "max_abs": 3.814697265625e-05,
+   "mean_abs": 7.129566185918917e-06
+  },
+  "ij_mono_22k05_12s.ov1.logits.npy": {
+   "max_abs": 3.814697265625e-05,
+   "mean_abs": 6.817431087924283e-06
+  },
+  "ij_mono_22k05_12s.ov2.logits.npy": {
+   "max_abs": 4.1961669921875e-05,
+   "mean_abs": 6.204234286451097e-06
+  },
+  "ij_mono_44k1_12s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_mono_44k1_12s.logits.npy": {
+   "max_abs": 3.4332275390625e-05,
+   "mean_abs": 5.090002019651753e-06
+  },
+  "ij_mono_44k1_12s.ov1.logits.npy": {
+   "max_abs": 3.24249267578125e-05,
+   "mean_abs": 5.281666549061457e-06
+  },
+  "ij_mono_44k1_12s.ov2.logits.npy": {
+   "max_abs": 3.4332275390625e-05,
+   "mean_abs": 5.34365543778522e-06
+  },
+  "ij_mono_48k_12s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_mono_48k_12s.logits.npy": {
+   "max_abs": 3.24249267578125e-05,
+   "mean_abs": 5.0312690082703295e-06
+  },
+  "ij_mono_48k_12s.ov1.logits.npy": {
+   "max_abs": 3.337860107421875e-05,
+   "mean_abs": 5.2086443095854015e-06
+  },
+  "ij_mono_48k_12s.ov2.logits.npy": {
+   "max_abs": 3.62396240234375e-05,
+   "mean_abs": 5.561044316452523e-06
+  },
+  "ij_mono_48k_1s2.chunks.npy": {
+   "empty": true
+  },
+  "ij_mono_48k_1s2.logits.npy": {
+   "empty": true
+  },
+  "ij_mono_48k_1s2.ov1.logits.npy": {
+   "empty": true
+  },
+  "ij_mono_48k_1s2.ov2.logits.npy": {
+   "empty": true
+  },
+  "ij_mono_48k_7s4.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_mono_48k_7s4.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 4.878661194596324e-06
+  },
+  "ij_mono_48k_7s4.ov1.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 5.113204832056555e-06
+  },
+  "ij_mono_48k_7s4.ov2.logits.npy": {
+   "max_abs": 3.24249267578125e-05,
+   "mean_abs": 5.095092830854874e-06
+  },
+  "ij_mono_48k_7s5.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_mono_48k_7s5.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 4.933970503118352e-06
+  },
+  "ij_mono_48k_7s5.ov1.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 5.096050904083018e-06
+  },
+  "ij_mono_48k_7s5.ov2.logits.npy": {
+   "max_abs": 3.24249267578125e-05,
+   "mean_abs": 5.096226340499141e-06
+  },
+  "ij_mono_48k_7s6.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_mono_48k_7s6.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 4.940843041123733e-06
+  },
+  "ij_mono_48k_7s6.ov1.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 5.101205307587053e-06
+  },
+  "ij_mono_48k_7s6.ov2.logits.npy": {
+   "max_abs": 3.0517578125e-05,
+   "mean_abs": 5.094784497953607e-06
+  },
+  "ij_stereo_48k_12s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "ij_stereo_48k_12s.logits.npy": {
+   "max_abs": 3.4332275390625e-05,
+   "mean_abs": 5.56171676089741e-06
+  },
+  "ij_stereo_48k_12s.ov1.logits.npy": {
+   "max_abs": 3.62396240234375e-05,
+   "mean_abs": 5.497929875158306e-06
+  },
+  "ij_stereo_48k_12s.ov2.logits.npy": {
+   "max_abs": 3.62396240234375e-05,
+   "mean_abs": 5.4472145824608375e-06
+  },
+  "pica_pica_30s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "pica_pica_30s.logits.npy": {
+   "max_abs": 6.29425048828125e-05,
+   "mean_abs": 8.102612640184334e-06
+  },
+  "pica_pica_30s.ov1.logits.npy": {
+   "max_abs": 9.34600830078125e-05,
+   "mean_abs": 9.038253855537103e-06
+  },
+  "pica_pica_30s.ov2.logits.npy": {
+   "max_abs": 9.34600830078125e-05,
+   "mean_abs": 8.898459348196655e-06
+  },
+  "soundscape_ba_12s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "soundscape_ba_12s.logits.npy": {
+   "max_abs": 4.00543212890625e-05,
+   "mean_abs": 7.0153396577785365e-06
+  },
+  "soundscape_ba_12s.ov1.logits.npy": {
+   "max_abs": 4.57763671875e-05,
+   "mean_abs": 6.141167141281607e-06
+  },
+  "soundscape_ba_12s.ov2.logits.npy": {
+   "max_abs": 4.57763671875e-05,
+   "mean_abs": 6.839994394411319e-06
+  },
+  "speech_librivox_44k1_12s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "speech_librivox_44k1_12s.logits.npy": {
+   "max_abs": 2.86102294921875e-05,
+   "mean_abs": 4.599436921087813e-06
+  },
+  "speech_librivox_44k1_12s.ov1.logits.npy": {
+   "max_abs": 2.765655517578125e-05,
+   "mean_abs": 4.512844770022676e-06
+  },
+  "speech_librivox_44k1_12s.ov2.logits.npy": {
+   "max_abs": 2.86102294921875e-05,
+   "mean_abs": 4.670384743013526e-06
+  },
+  "synthetic_noise_silence_9s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "synthetic_noise_silence_9s.logits.npy": {
+   "max_abs": 3.4332275390625e-05,
+   "mean_abs": 5.627486050939263e-06
+  },
+  "synthetic_noise_silence_9s.ov1.logits.npy": {
+   "max_abs": 5.340576171875e-05,
+   "mean_abs": 7.018157901006474e-06
+  },
+  "synthetic_noise_silence_9s.ov2.logits.npy": {
+   "max_abs": 5.340576171875e-05,
+   "mean_abs": 6.181145945380561e-06
+  },
+  "tawny_owl_s32_9s.chunks.npy": {
+   "max_abs": 0.0,
+   "mean_abs": 0.0
+  },
+  "tawny_owl_s32_9s.logits.npy": {
+   "max_abs": 5.14984130859375e-05,
+   "mean_abs": 9.111974010995886e-06
+  },
+  "tawny_owl_s32_9s.ov1.logits.npy": {
+   "max_abs": 5.14984130859375e-05,
+   "mean_abs": 9.079582301505099e-06
+  },
+  "tawny_owl_s32_9s.ov2.logits.npy": {
+   "max_abs": 5.14984130859375e-05,
+   "mean_abs": 8.583594340921289e-06
+  }
+ },
+ "details": []
+}
