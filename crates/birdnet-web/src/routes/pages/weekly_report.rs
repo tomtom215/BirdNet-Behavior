@@ -43,7 +43,7 @@ async fn weekly_partial(
 ) -> impl IntoResponse {
     let week_start = params
         .week
-        .filter(|w| w.len() == 10)
+        .filter(|w| is_ymd(w))
         .unwrap_or_else(current_week_monday);
 
     let week_end = add_days(&week_start, 6);
@@ -412,6 +412,23 @@ fn add_days(date: &str, delta: i64) -> String {
     format!("{y}-{m:02}-{d:02}")
 }
 
+/// Is `s` a `YYYY-MM-DD` date: digits where digits go, a month of 01–12 and a
+/// day of 01–31? The week comes from the query string and is written back into
+/// the page's navigation links, so "ten characters long" is not a date.
+fn is_ymd(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+        && matches!(s[5..7].parse::<u8>(), Ok(1..=12))
+        && matches!(s[8..10].parse::<u8>(), Ok(1..=31))
+}
+
 /// Current Monday's date (start of ISO week) as YYYY-MM-DD.
 fn current_week_monday() -> String {
     let today = today_string();
@@ -558,6 +575,28 @@ mod tests {
                     t["y"]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_week_is_a_date_not_ten_characters() {
+        assert!(is_ymd("2026-03-09"));
+        assert!(is_ymd("2026-12-31"));
+        // Ten characters, and each a way to be wrong.
+        for bad in [
+            "\"><zq-p>12",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-02-32",
+            "2026-02-00",
+            "2026/03/09",
+            "2026-3-009",
+            "abcd-ef-gh",
+            "２０２６-03-09",
+            "",
+            "2026-03-091",
+        ] {
+            assert!(!is_ymd(bad), "{bad:?} must not pass as a date");
         }
     }
 
