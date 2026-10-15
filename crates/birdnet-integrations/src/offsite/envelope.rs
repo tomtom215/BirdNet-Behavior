@@ -108,6 +108,34 @@ pub const ARGON2_T_COST: u32 = 2;
 /// argon2id parallelism.
 pub const ARGON2_P_COST: u32 = 1;
 
+/// Largest argon2 memory cost, in KiB, this will derive a key at when
+/// *reading* an envelope: 256 MiB, thirteen times what this writes.
+///
+/// The cost comes out of the header, which is read before anything can be
+/// authenticated (the key it feeds is what authenticates it). A file from a
+/// storage host or a mislabelled download that names 4 TiB would otherwise be
+/// handed straight to the allocator on a station with 1 GiB of RAM, and one
+/// that names `u32::MAX` passes would hold a CPU for days. Room is left above
+/// RFC 9106's 64 MiB profile, so raising what this writes does not strand the
+/// files it already made; a build that wants more than this raises the ceiling
+/// in the same change.
+pub const MAX_ARGON2_M_COST: u32 = 256 * 1024;
+
+/// Largest argon2 pass count this will accept when reading an envelope.
+/// See [`MAX_ARGON2_M_COST`].
+pub const MAX_ARGON2_T_COST: u32 = 16;
+
+/// Largest argon2 lane count this will accept when reading an envelope.
+/// See [`MAX_ARGON2_M_COST`].
+pub const MAX_ARGON2_P_COST: u32 = 16;
+
+// The ceilings must admit every envelope this build writes.
+const _: () = assert!(
+    ARGON2_M_COST <= MAX_ARGON2_M_COST
+        && ARGON2_T_COST <= MAX_ARGON2_T_COST
+        && ARGON2_P_COST <= MAX_ARGON2_P_COST
+);
+
 /// Smallest passphrase this will encrypt under.
 ///
 /// Not a policy about password strength — it is the line below which the
@@ -235,6 +263,29 @@ impl Sealed {
     }
 }
 
+/// Refuse argon2 costs a header names that this build will not spend.
+///
+/// The costs are read before anything is authenticated, so they are bounded
+/// before they reach the allocator and the CPU.
+const fn check_kdf_costs(m_cost: u32, t_cost: u32, p_cost: u32) -> Result<(), EnvelopeError> {
+    if m_cost > MAX_ARGON2_M_COST {
+        return Err(EnvelopeError::MalformedHeader(
+            "argon2 memory cost is above the ceiling this build will derive a key at",
+        ));
+    }
+    if t_cost > MAX_ARGON2_T_COST {
+        return Err(EnvelopeError::MalformedHeader(
+            "argon2 pass count is above the ceiling this build will derive a key at",
+        ));
+    }
+    if p_cost > MAX_ARGON2_P_COST {
+        return Err(EnvelopeError::MalformedHeader(
+            "argon2 lane count is above the ceiling this build will derive a key at",
+        ));
+    }
+    Ok(())
+}
+
 /// Derive the key named by a header, and bundle it with the header.
 fn seal_from_header(passphrase: &str, header: [u8; HEADER_LEN]) -> Result<Sealed, EnvelopeError> {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
@@ -266,6 +317,8 @@ fn seal_from_header(passphrase: &str, header: [u8; HEADER_LEN]) -> Result<Sealed
             "chunk size is larger than 64 MiB; refusing to buffer it",
         ));
     }
+
+    check_kdf_costs(m_cost, t_cost, p_cost)?;
 
     let params = argon2::Params::new(m_cost, t_cost, p_cost, Some(32))
         .map_err(|e| EnvelopeError::KeyDerivation(e.to_string()))?;
@@ -771,6 +824,43 @@ mod tests {
             decrypt(PASS, &mut &huge[..], &mut out2),
             Err(EnvelopeError::MalformedHeader(_))
         ));
+    }
+
+    #[test]
+    fn a_header_cannot_make_the_reader_spend_more_than_the_ceiling() {
+        let mut sealed = Vec::new();
+        encrypt(PASS, &mut &b"x"[..], &mut sealed).expect("encrypt");
+
+        // One past each ceiling, written into a real header. Only a value just
+        // over the line keeps this test cheap to run against the unfixed code
+        // (which would derive at it); the extreme values would hang or abort it.
+        for (at, over, what) in [
+            (12, MAX_ARGON2_M_COST + 1, "memory"),
+            (16, MAX_ARGON2_T_COST + 1, "passes"),
+            (20, MAX_ARGON2_P_COST + 1, "lanes"),
+        ] {
+            let original: [u8; 4] = sealed[at..at + 4].try_into().expect("four bytes");
+            sealed[at..at + 4].copy_from_slice(&over.to_be_bytes());
+            let mut out = Vec::new();
+            let err = decrypt(PASS, &mut &sealed[..], &mut out)
+                .expect_err("a header over the ceiling must be refused");
+            assert!(
+                matches!(err, EnvelopeError::MalformedHeader(_)),
+                "{what}: refused as {err}, not as a malformed header"
+            );
+            sealed[at..at + 4].copy_from_slice(&original);
+        }
+    }
+
+    #[test]
+    fn the_ceilings_are_inclusive_and_cover_what_this_writes() {
+        // Counterpart: the check is a ceiling, not an alarm. Exact values, no
+        // key derivation, so the memory cost at the ceiling costs nothing here.
+        assert!(check_kdf_costs(MAX_ARGON2_M_COST, MAX_ARGON2_T_COST, MAX_ARGON2_P_COST).is_ok());
+        assert!(check_kdf_costs(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST).is_ok());
+        assert!(check_kdf_costs(MAX_ARGON2_M_COST + 1, 1, 1).is_err());
+        assert!(check_kdf_costs(8, MAX_ARGON2_T_COST + 1, 1).is_err());
+        assert!(check_kdf_costs(8, 1, MAX_ARGON2_P_COST + 1).is_err());
     }
 
     #[test]

@@ -123,21 +123,24 @@ impl CsvImporter {
     ) -> Result<MigrationSummary, MigrateError> {
         progress.set_stage(MigrationStage::Importing, "Opening CSV source file");
 
-        let file = std::fs::File::open(source_path).map_err(MigrateError::Io)?;
+        let file = open_regular_file(source_path)?;
 
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        // Read header line to detect delimiter.
-        let header = match lines.next() {
-            Some(Ok(h)) => h,
-            Some(Err(e)) => return Err(MigrateError::Io(e)),
-            None => return Err(MigrateError::CsvParse("file is empty".to_string())),
-        };
-        let layout = Layout::detect(&header);
+        // Read the header line, to detect the delimiter, through the same
+        // byte-capped reader as every other line: `BufRead::lines()` would
+        // buffer a hostile multi-gigabyte first line before anything could
+        // refuse it.
+        let mut reader = BufReader::new(file);
+        let mut header_bytes = Vec::with_capacity(512);
+        if read_capped_line(&mut reader, &mut header_bytes)? == 0 {
+            return Err(MigrateError::CsvParse("file is empty".to_string()));
+        }
+        let header = String::from_utf8(header_bytes)
+            .map_err(|_| MigrateError::CsvParse("the file is not UTF-8 text".to_string()))?;
+        let header = header.trim_end_matches(['\n', '\r']);
+        let layout = Layout::detect(header);
 
         // Pre-scan to estimate total lines (for progress reporting).
-        drop(lines);
+        drop(reader);
         let total = count_lines(source_path)?.saturating_sub(usize::from(layout.has_header()));
 
         progress.update(MigrationProgress {
@@ -247,7 +250,10 @@ impl CsvImporter {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(err = %e, line = %line, "skipping unparseable CSV line");
+                    // The line number, never its text: the source is any file an admin
+                    // names, and a log line is not where its contents belong (the
+                    // journal outlives the request and goes into the support bundle).
+                    tracing::warn!(err = %e, data_line = data_lines, "skipping unparseable CSV line");
                     if first_error.is_none() {
                         first_error = Some(e.to_string());
                     }
@@ -718,11 +724,32 @@ fn count_lines(path: &Path) -> Result<usize, MigrateError> {
     Ok(count)
 }
 
+/// Open `path` for reading, refusing anything that is not a regular file.
+///
+/// The path is whatever an admin typed into the migration form. `/dev/zero`
+/// opens and reads forever; a FIFO blocks the request thread for good; a
+/// directory opens and then fails on the first read. A regular file is the only
+/// thing a BirdNET-Pi export can be.
+pub(super) fn open_regular_file(path: &Path) -> Result<std::fs::File, MigrateError> {
+    let file = std::fs::File::open(path).map_err(MigrateError::Io)?;
+    let meta = file.metadata().map_err(MigrateError::Io)?;
+    if !meta.is_file() {
+        return Err(MigrateError::SourceNotFound(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
 /// Read one line into `out`, capped at `MAX_LINE_BYTES` bytes (including the
 /// trailing newline). Returns the number of bytes read (0 at EOF). A line
 /// exceeding the cap returns `MigrateError::CsvParse` rather than swallowing
 /// arbitrary memory.
-fn read_capped_line<R: BufRead>(reader: &mut R, out: &mut Vec<u8>) -> Result<usize, MigrateError> {
+pub(super) fn read_capped_line<R: BufRead>(
+    reader: &mut R,
+    out: &mut Vec<u8>,
+) -> Result<usize, MigrateError> {
     let mut total = 0;
     loop {
         let available = match reader.fill_buf() {

@@ -978,6 +978,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A BirdNET-Pi database or CSV chosen for import, and a backup envelope read
+  back from storage, can no longer be made to exhaust the station.** Found by
+  reading the import and restore paths as someone who controls the file, and
+  reproduced against the running binary before fixing.
+  (1) A 16 KiB SQLite file whose `detections` is an FTS5 external-content table
+  over a view of its own choosing passed schema detection and then generated rows
+  and allocations of its own choosing: 100,000 rows validated in 5.8 s, and three
+  rows of `hex(zeroblob(1e8))` took the process from 120 MB to 2.4 GB. The source
+  is now opened with `SQLITE_LIMIT_LENGTH` at 1 MiB (the `rusqlite` `limits`
+  feature), refused when it defines any virtual table, and refused when it is not
+  a regular file.
+  (2) CSV validation and the header read used `BufRead::lines()`, which buffers a
+  line of any length: one 300 MB line took the process from 123 MB to 709 MB, and
+  `/dev/zero`, which the migration form accepts as a path, ended it. Both now use
+  the importer's 1 MiB capped reader, and a path that is not a regular file is
+  refused before it is read.
+  (3) The importer logged the full text of every unparseable CSV line, so naming
+  any file as the source put its contents in the journal and the support bundle.
+  It logs the data-line number now.
+  (4) The backup envelope's header carries its own argon2 cost, read before
+  anything is authenticated. A header naming 8 GiB of memory ended in an
+  out-of-memory error (an OOM kill without a `ulimit`), and one naming
+  `t_cost = u32::MAX` was still running after ten seconds; reaching either needs
+  write access to wherever the backup is stored. Reading is now bounded to
+  256 MiB, 16 passes and 16 lanes (this build writes 19 MiB, 2 and 1), and the
+  frozen-vector test of an envelope written by argon2 0.5 still decrypts.
+  Each fix was watched failing first by removing it: with the cost check gone, a
+  header one KiB over the memory ceiling derives for 8.6 s in a debug build and
+  fails afterwards as a bad passphrase.
+
 - **`rustls` 0.23.46, for four advisories published 2026-10-14.**
   RUSTSEC-2026-0346 (client session values print TLS secrets through `Debug`),
   -0347 (application data sent to the outer server after an ECH rejection),
