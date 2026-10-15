@@ -324,6 +324,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **htmx 2.0.4 → 2.0.11**, and the third-party licence notices regenerated.
+  Both tarballs were checked against the registry's integrity hash; the vendored
+  2.0.4 file was byte-identical to its package's `dist/htmx.min.js`, and so is the new
+  one. The 2.0.5–2.0.11 changelog was read for what this interface depends on: the
+  default that never swaps a 4xx or 5xx body (`{code:"[45]..",swap:false,error:true}`,
+  which several handlers answer around) is unchanged in the new file. On the new file:
+  the interaction gate passes 74 of 74, the base-path gate passes, axe reports 0
+  findings on both viewports and themes, and the strict visual sweep reports 0 pages
+  with issues, on a second run: the first run, on a cold fixture, reported all six
+  species photos on the life-list page as failed, and a rerun with the image cache
+  warm did not (the cause was not investigated; CI's `a11y` job loads every page in
+  axe before the sweep). `THIRD_PARTY_LICENSES.txt` had not been regenerated since the
+  rubato 5 and argon2 0.6 bump (it still listed `audio-core`, which rubato 5 no longer
+  uses, and lacked `audio-codec-algorithms` and `phc`); `gen-third-party-licenses.py
+  --check` passes now.
 - **Typography, motion, stacking and focus are design tokens now, and a layout gate
   checks what axe cannot.** `app.css` declared 368 font sizes as literal pixels in 34
   different values; it now declares 36 in 12 (a font-size ladder `--fs-2xs`…`--fs-lg`,

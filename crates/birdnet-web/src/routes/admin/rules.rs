@@ -680,7 +680,7 @@ async fn create_rule(
 
 /// A failure here answers 200 with a toast rather than a 5xx.
 ///
-/// htmx 2.0.4 ships `{code:"[45]..", swap:false, error:true}`, so a 5xx body is
+/// htmx 2.0.11 ships `{code:"[45]..", swap:false, error:true}`, so a 5xx body is
 /// discarded, and `layout.html`'s `htmx:responseError` fallback is gated on
 /// `cfg.verb === 'get'`. Between them, a delete that failed removed nothing,
 /// said nothing, and left the operator looking at a row that is still there

@@ -156,7 +156,7 @@ async fn add_blacklist(
     })
     .await;
 
-    // 200 with a toast, not 500 with a body. htmx 2.0.4 ships
+    // 200 with a toast, not 500 with a body. htmx 2.0.11 ships
     // `{code:"[45]..", swap:false, error:true}`, so a 5xx body is never
     // swapped; and `layout.html`'s `htmx:responseError` fallback is gated on
     // `cfg.verb === 'get'`, so it does nothing for a form post. Between them,
