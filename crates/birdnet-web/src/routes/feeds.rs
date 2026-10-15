@@ -41,6 +41,35 @@ struct FeedQuery {
 }
 
 // ---------------------------------------------------------------------------
+// Admission
+// ---------------------------------------------------------------------------
+
+// Feeds are public and each scans the detection history: the rare-bird query
+// took 5.2 s on a 300 000-detection station, measured against the real binary.
+// They used to take the single writer lock (`with_db`), which the detection
+// processor and 245 other call sites also take, so sixteen concurrent requests
+// held every one of them for 81 s and a plain `/api/v2/detections?limit=1`
+// waited 38.9 s. They read through the pooled readers now, inside the shared
+// heavy-read gate ([`AppState::try_heavy_read_permit`]), so a flood cannot take
+// every reader. Past the gate a request is turned away with a `503` and
+// `Retry-After` rather than queued: a feed reader retries, and a queue is what
+// held the threads.
+
+/// Every slot is taken: `503`, uncached, with a short `Retry-After`.
+fn feed_busy() -> Response {
+    let mut resp = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "feed busy; try again shortly",
+    )
+        .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("15"));
+    resp
+}
+
+// ---------------------------------------------------------------------------
 // Rare RSS — last N "first today" or quarantine-confirmed detections.
 // ---------------------------------------------------------------------------
 
@@ -93,7 +122,7 @@ fn rare_detections_sql(gap_days: u32) -> String {
 /// Read the configured rare-species gap, in days.
 fn rare_gap_days(state: &AppState) -> u32 {
     state
-        .with_db(|conn| {
+        .with_read_db(|conn| {
             birdnet_db::settings::get_or(conn, "rare_species_days", "30")
                 .unwrap_or_else(|_| "30".to_owned())
         })
@@ -107,10 +136,14 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let base = resolve_base(q.base);
     let names = state.names_handle();
+    let Some(permit) = state.try_heavy_read_permit() else {
+        return feed_busy();
+    };
 
     let result = tokio::task::spawn_blocking(move || {
+        let _slot = permit;
         let sql = rare_detections_sql(rare_gap_days(&state));
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([&limit], |r| {
                 Ok(DetRow {
@@ -145,9 +178,13 @@ async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) ->
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let base = resolve_base(q.base);
     let names = state.names_handle();
+    let Some(permit) = state.try_heavy_read_permit() else {
+        return feed_busy();
+    };
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let _slot = permit;
+        state.with_read_db(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
                  FROM detections_analytic \
@@ -225,10 +262,14 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     let base = resolve_base(q.base);
     let names = state.names_handle();
+    let Some(permit) = state.try_heavy_read_permit() else {
+        return feed_busy();
+    };
 
     let result = tokio::task::spawn_blocking(move || {
+        let _slot = permit;
         let sql = rare_detections_sql(rare_gap_days(&state));
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([&limit], |r| {
                 Ok(DetRow {
@@ -847,5 +888,75 @@ mod rare_threshold_tests {
             conn.prepare(&rare_detections_sql(gap))
                 .unwrap_or_else(|e| panic!("gap={gap} produced invalid SQL: {e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt as _;
+
+    fn station() -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+    }
+
+    async fn status(app: &Router, path: &str) -> (StatusCode, Option<String>) {
+        let res = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        let retry = res
+            .headers()
+            .get(header::RETRY_AFTER)
+            .map(|v| v.to_str().unwrap_or("").to_owned());
+        (res.status(), retry)
+    }
+
+    /// Past the slots a request is turned away at once, not queued behind the
+    /// others: a queue is what held the threads. With the slots free again the
+    /// same requests answer, so "turned away" cannot be a broken route.
+    #[tokio::test]
+    async fn a_request_past_the_slots_is_turned_away_not_queued() {
+        let state = station();
+        let app = router().with_state(state.clone());
+        let paths = ["/feeds/rare.rss", "/feeds/rare.ics", "/feeds/today.rss"];
+
+        // Take every slot there is.
+        let mut held = Vec::new();
+        while let Some(permit) = state.try_heavy_read_permit() {
+            held.push(permit);
+        }
+        assert!(!held.is_empty(), "precondition: the gate has a slot");
+        for path in paths {
+            let (code, retry) = status(&app, path).await;
+            assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(retry.as_deref(), Some("15"), "{path}");
+        }
+        drop(held);
+
+        for path in paths {
+            assert_eq!(
+                status(&app, path).await.0,
+                StatusCode::OK,
+                "{path} with the slots free"
+            );
+        }
+    }
+
+    /// The slot is released when the query ends, not leaked: more requests than
+    /// slots, one after another, all answer.
+    #[tokio::test]
+    async fn slots_are_given_back() {
+        let state = station();
+        let app = router().with_state(state.clone());
+        for _ in 0..4 {
+            assert_eq!(status(&app, "/feeds/rare.rss").await.0, StatusCode::OK);
+        }
+        assert!(state.heavy_read_slots_free() >= 1);
     }
 }

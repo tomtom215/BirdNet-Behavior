@@ -189,7 +189,9 @@ fn collect_ridges(
 /// their fallback is an error message.
 fn compute_ridgeline(state: &AppState) -> Option<String> {
     let year = current_year();
-    let ridges = state.with_db(|conn| collect_ridges(conn, year, 12)).ok()?;
+    let ridges = state
+        .with_read_db(|conn| collect_ridges(conn, year, 12))
+        .ok()?;
     if ridges.is_empty() {
         return Some(RIDGELINE_EMPTY.to_string());
     }
@@ -448,7 +450,9 @@ fn weekly_diversity(conn: &rusqlite::Connection, year: i32) -> rusqlite::Result<
 
 fn compute_diversity(state: &AppState) -> Option<String> {
     let year = current_year();
-    let weekly = state.with_db(|conn| weekly_diversity(conn, year)).ok()?;
+    let weekly = state
+        .with_read_db(|conn| weekly_diversity(conn, year))
+        .ok()?;
     // Same contract as `compute_ridgeline`: a year with nothing in it is data,
     // not a failure, and gets its own body rather than the error fallback.
     if weekly.iter().all(|&n| n == 0) {
@@ -539,7 +543,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
     // saying so after the database recovered.
     let html = cached_fragment(&state, "migration-stats".to_string(), FRAGMENT_ERR, |s| {
         let today = crate::routes::pages::today_date_string();
-        s.with_db(|conn| stats_fragment(conn, &today, s.names()))
+        s.with_read_db(|conn| stats_fragment(conn, &today, s.names()))
             .ok()
     })
     .await;
@@ -676,8 +680,10 @@ async fn card_partial(
     let kind = q.kind;
     let kind_db = kind.clone();
     let names = state.names_handle();
+    let permit = state.heavy_read_permit().await;
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| match kind_db.as_str() {
+        let _slot = permit;
+        state.with_read_db(|conn| match kind_db.as_str() {
             "arrived" => {
                 // most recent species whose first-ever detection is in this year
                 conn.query_row(

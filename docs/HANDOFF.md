@@ -177,12 +177,22 @@ Not done, in the order they seem to matter:
   [`RELEASING.md`](../RELEASING.md#publishing-to-cratesio-the-maintainer-not-a-workflow):
   the bundled-DuckDB build of the packaged crates, docs.rs, and `cargo publish`
   itself were not run.
-- **The analytics store is one connection behind a mutex.** Heavy analytics requests
-  queue behind each other and every one of them holds a blocking-pool thread while
-  it waits. The retention query was the audited case and is faster; the others
-  (the audit reported `/feeds/rare.rss` starving even cheap reads under sixteen
-  concurrent requests) were not re-measured. Public pages that scan the whole history are
-  protected only by the per-address rate limit and, if you enable it, private mode.
+- **Public pages that scan the whole history are still slow one at a time, and the
+  analytics store is one connection behind a mutex.** What changed in this branch is
+  that they no longer starve everything else: the feeds, exports, insights and
+  migration cards read through the pool with a heavy-read gate (CHANGELOG, *Fixed*),
+  measured with sixteen in flight on a 300 000-row station: cheap reads 0.01–0.10 s.
+  The scans themselves were not made faster. Timing every public GET on that station
+  (debug build, one request at a time) found, in seconds: analytics retention 6.0,
+  `rare.ics` 4.9, `rare.rss` 4.8, the detection export 4.5, its raven / birddb / ebird
+  variants 4.2 / 4.1 / 2.5, `/station/data` 3.9, analytics species summary 2.4,
+  dashboard KPIs 2.4, insights migration 1.9. `(Com_Name, Date)` has no index; that
+  and the analytics mutex are the next two things to look at. 223 `with_db(` lines in
+  56 files of `birdnet-web/src` still take the single writer (62 `with_read_db(`
+  lines do not); `a_public_read_does_not_hold_the_writer_lock` covers ten routes,
+  not those. With four readers the gate has two slots: a visitor holding both makes
+  other heavy requests wait (the feeds are refused with 503), and the per-address
+  rate limit and private mode are the only other limits on that.
 - **The nonce stamper trusts any `<script` in the body** (`inject_script_nonce`), so an
   unescaped reflection anywhere becomes script execution that the CSP does not stop.
   Two were fixed and `a_query_value_is_never_echoed_as_markup.rs` sweeps GET

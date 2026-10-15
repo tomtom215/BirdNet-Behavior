@@ -152,8 +152,11 @@ pub(super) async fn export_ebird(
     }
 
     let query_coords = (query.lat, query.lon);
+    let permit = state.heavy_read_permit().await;
+
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let _slot = permit;
+        state.with_read_db(|conn| {
             let configured = (
                 setting_f64(conn, "latitude"),
                 setting_f64(conn, "longitude"),

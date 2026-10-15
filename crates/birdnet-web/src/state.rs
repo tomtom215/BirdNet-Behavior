@@ -80,6 +80,15 @@ impl Taxon {
     }
 }
 
+/// How many reads that scan the whole history may hold a pooled reader at once:
+/// half the pool, at least one, so what remains is always free for the health
+/// probe and the page partials. A station with no pool (an in-memory test
+/// database) reads through the writer and gets one slot.
+fn heavy_gate(readers: Option<&ReaderPool>) -> Arc<tokio::sync::Semaphore> {
+    let slots = readers.map_or(1, |pool| (pool.len() / 2).max(1));
+    Arc::new(tokio::sync::Semaphore::new(slots))
+}
+
 /// Inner state (wrapped in Arc for sharing).
 #[derive(Debug)]
 struct AppStateInner {
@@ -96,6 +105,9 @@ struct AppStateInner {
     /// what most tests use — and reads then take the writer, exactly as they did
     /// before this existed. See [`crate::db_pool`].
     readers: Option<ReaderPool>,
+    /// Admission for reads that scan the whole history. See
+    /// [`AppState::heavy_read_permit`].
+    heavy_reads: Arc<tokio::sync::Semaphore>,
     /// Path to the `SQLite` database file (for diagnostics).
     db_path: PathBuf,
     /// Directory containing extracted audio recording clips.
@@ -289,9 +301,11 @@ impl AppState {
             .unwrap_or_else(|| Path::new("."))
             .join("recordings");
 
+        let readers = ReaderPool::open(&db_path);
         Ok(Self {
             inner: Arc::new(AppStateInner {
-                readers: ReaderPool::open(&db_path),
+                heavy_reads: heavy_gate(readers.as_ref()),
+                readers,
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
@@ -533,9 +547,11 @@ impl AppState {
             }
         };
 
+        let readers = ReaderPool::open(&db_path);
         Ok(Self {
             inner: Arc::new(AppStateInner {
-                readers: ReaderPool::open(&db_path),
+                heavy_reads: heavy_gate(readers.as_ref()),
+                readers,
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
@@ -588,9 +604,11 @@ impl AppState {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("recordings");
+        let readers = ReaderPool::open(&db_path);
         Self {
             inner: Arc::new(AppStateInner {
-                readers: ReaderPool::open(&db_path),
+                heavy_reads: heavy_gate(readers.as_ref()),
+                readers,
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
@@ -950,6 +968,22 @@ impl AppState {
         }
     }
 
+    /// As [`Self::run_blocking`], for a closure that scans the whole history:
+    /// waits for a heavy-read slot first ([`Self::heavy_read_permit`]) and holds
+    /// it until the closure ends.
+    pub async fn run_blocking_heavy<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&Self) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = self.heavy_read_permit().await;
+        self.run_blocking(move |state| {
+            let _slot = permit;
+            f(state)
+        })
+        .await
+    }
+
     /// Execute a **read-only** closure against a pooled reader.
     ///
     /// # When to use this instead of [`Self::with_db`]
@@ -980,6 +1014,43 @@ impl AppState {
             Some(pool) => pool.with(f),
             None => self.with_db(f),
         }
+    }
+
+    /// Wait for permission to run a read that scans the whole history (an export,
+    /// a feed, a multi-year insight), and hold the returned permit until the
+    /// query ends: move it into the blocking task, not the handler, so a client
+    /// that hangs up does not free the slot while the query runs on.
+    ///
+    /// Without this, enough of them take every pooled reader at once and the
+    /// cheap requests that share the pool wait behind them: against the real
+    /// binary with 300 000 detections, sixteen concurrent heavy reads kept
+    /// `/api/v2/health`, which the container `HEALTHCHECK` polls, waiting 22 s.
+    /// The wait here is a future, not a thread, so a queue of them costs memory
+    /// and no blocking-pool thread.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: it panics only if the gate has been closed, and
+    /// nothing closes it.
+    pub async fn heavy_read_permit(&self) -> tokio::sync::OwnedSemaphorePermit {
+        Arc::clone(&self.inner.heavy_reads)
+            .acquire_owned()
+            .await
+            .expect("the heavy-read gate is never closed")
+    }
+
+    /// As [`Self::heavy_read_permit`], but `None` instead of waiting when every
+    /// slot is taken: for the public, unauthenticated surfaces (the feeds) where
+    /// turning a request away with a `503` is the right answer to a flood.
+    #[must_use]
+    pub fn try_heavy_read_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.inner.heavy_reads).try_acquire_owned().ok()
+    }
+
+    /// How many heavy-read slots are free right now. Diagnostics and tests.
+    #[must_use]
+    pub fn heavy_read_slots_free(&self) -> usize {
+        self.inner.heavy_reads.available_permits()
     }
 
     /// How many pooled readers this state holds. `0` when reads share the

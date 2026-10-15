@@ -163,8 +163,10 @@ pub(super) async fn export_raven(
     }
     let db = state.clone();
     let (from, to) = (query.from.clone(), query.to.clone());
+    let permit = db.heavy_read_permit().await;
     let result = tokio::task::spawn_blocking(move || {
-        db.with_db(|conn| {
+        let _slot = permit;
+        db.with_read_db(|conn| {
             birdnet_db::sqlite::analytic_detections(
                 conn,
                 from.as_deref(),
@@ -219,7 +221,7 @@ async fn rows_for_clip(
     let db = state.clone();
     let name = filename.to_owned();
     let rows = tokio::task::spawn_blocking(move || {
-        db.with_db(|conn| birdnet_db::sqlite::detections_for_clip(conn, &name))
+        db.with_read_db(|conn| birdnet_db::sqlite::detections_for_clip(conn, &name))
     })
     .await
     .map_err(|e| Box::new(db_error(&e.to_string())))?

@@ -110,8 +110,8 @@ async fn dawn_chorus(State(state): State<AppState>, Query(q): Query<DawnQuery>) 
     };
     let today = crate::routes::pages::today_date_string();
     let result = state
-        .run_blocking(move |s| {
-            s.with_db(|conn| {
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::dawn_first_songs(conn, &today, period_days, min_days)
             })
         })
@@ -141,8 +141,8 @@ async fn dawn_chorus(State(state): State<AppState>, Query(q): Query<DawnQuery>) 
 async fn migration(State(state): State<AppState>) -> Response {
     let today = crate::routes::pages::today_date_string();
     let result = state
-        .run_blocking(move |s| {
-            s.with_db(|conn| {
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| {
                 let arrivals =
                     birdnet_db::sqlite::new_arrivals(conn, &today, MIGRATION_RECENT_DAYS)?;
                 let quiet = birdnet_db::sqlite::gone_quiet(
@@ -189,8 +189,8 @@ async fn migration(State(state): State<AppState>) -> Response {
 async fn phantom_species(State(state): State<AppState>) -> Response {
     let today = crate::routes::pages::today_date_string();
     let result = state
-        .run_blocking(move |s| {
-            s.with_db(|conn| {
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::phantom_species(
                     conn,
                     &today,
@@ -269,8 +269,8 @@ async fn species_summary(State(state): State<AppState>, Query(q): Query<SummaryQ
         .and_then(|l| l.parse::<usize>().ok())
         .filter(|l| *l > 0);
     let result = state
-        .run_blocking(move |s| {
-            s.with_db(|conn| {
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::species_range_summary(conn, start.as_deref(), end.as_deref())
             })
         })
@@ -337,8 +337,8 @@ async fn sources(State(state): State<AppState>, Query(q): Query<RangeQuery>) -> 
         return bad_request("start_date is after end_date");
     }
     let result = state
-        .run_blocking(move |s| {
-            s.with_db(|conn| {
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| {
                 let counts =
                     birdnet_db::sqlite::source_counts(conn, start.as_deref(), end.as_deref())?;
                 let names = birdnet_db::audio_sources::AudioSourceStore::list(conn);
@@ -436,8 +436,8 @@ async fn new_species(State(state): State<AppState>, Query(q): Query<NewSpeciesQu
         limit
     };
     let result = state
-        .run_blocking(move |s| {
-            s.with_db(|conn| {
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::first_heard_between(conn, &start, &end, limit, offset)
             })
         })
@@ -487,7 +487,7 @@ fn read_expected(
     today: &str,
 ) -> Result<(Vec<birdnet_db::sqlite::ExpectedSpecies>, u32), birdnet_db::sqlite::connection::DbError>
 {
-    state.with_db(|conn| {
+    state.with_read_db(|conn| {
         birdnet_db::sqlite::expected_today(conn, today, EXPECTED_WINDOW_DAYS, EXPECTED_MAX_YEARS)
     })
 }
@@ -497,7 +497,9 @@ fn read_expected(
 async fn expected_today(State(state): State<AppState>) -> Response {
     let today = crate::routes::pages::today_date_string();
     let doy = day_of_year(&today);
-    let result = state.run_blocking(move |s| read_expected(s, &today)).await;
+    let result = state
+        .run_blocking_heavy(move |s| read_expected(s, &today))
+        .await;
     match result {
         Ok((species, years)) => Json(json!({
             "species": species.iter().map(|e| json!({
@@ -528,7 +530,9 @@ async fn expected_today_regional(State(state): State<AppState>) -> Response {
         return Json(json!({ "species": [], "available": false })).into_response();
     };
     let today = crate::routes::pages::today_date_string();
-    let result = state.run_blocking(move |s| read_expected(s, &today)).await;
+    let result = state
+        .run_blocking_heavy(move |s| read_expected(s, &today))
+        .await;
     let local = match result {
         Ok((species, _)) => species,
         Err(e) => return read_failed("station's own expected species", &e),
@@ -566,7 +570,9 @@ async fn expected_today_regional(State(state): State<AppState>) -> Response {
 async fn dashboard_kpis(State(state): State<AppState>) -> Response {
     let today = crate::routes::pages::today_date_string();
     let result = state
-        .run_blocking(move |s| s.with_db(|conn| birdnet_db::sqlite::dashboard_kpis(conn, &today)))
+        .run_blocking_heavy(move |s| {
+            s.with_read_db(|conn| birdnet_db::sqlite::dashboard_kpis(conn, &today))
+        })
         .await;
     match result {
         Ok(k) => {

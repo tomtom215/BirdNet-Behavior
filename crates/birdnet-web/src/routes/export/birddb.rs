@@ -40,8 +40,11 @@ pub(super) async fn export_birddb(
     let from = query.from.clone();
     let to = query.to.clone();
 
+    let permit = state.heavy_read_permit().await;
+
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let _slot = permit;
+        state.with_read_db(|conn| {
             birdnet_db::sqlite::analytic_detections(
                 conn,
                 from.as_deref(),

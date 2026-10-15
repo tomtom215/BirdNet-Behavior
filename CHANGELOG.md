@@ -584,6 +584,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sixteen visitors to the public heavy pages could keep the station from answering
+  anything else.** The RSS feeds, the four detection exports, the insights routes and
+  the migration cards read the whole detection history through `with_db`, the one
+  connection every writer also uses, so each held the lock the capture daemon, the
+  settings form and every cheap page wait on. They now read through the pool of
+  read-only connections (`with_read_db`), and a second limit, the heavy-read gate
+  (half the pool, at least one), keeps them from taking every reader: a heavy request
+  past the gate waits for a slot (exports, insights, analytics fragments) or is
+  refused at once with `503` and `Retry-After: 15` (the three feeds, which
+  aggregators poll and will retry). The first attempt, the pool alone, was measured
+  and was not enough: the heavy reads took all four readers and `/api/v2/health`
+  waited 22 s behind them. Measured on a 300 000-row station (SQLite, a debug build,
+  four cores), sixteen heavy requests in flight, then three cheap ones:
+  `detections?limit=1` 38.9 s before and 0.01 s after, `/species` 10.5 s before and
+  0.07–0.10 s after, `/api/v2/health` 0.00 s. A single `rare.rss` is **not** faster
+  (5.2 s before, 4.6–4.9 s after: the query is unchanged and `(Com_Name, Date)` has
+  no index), and under that load the heavy requests themselves take 7–31 s because
+  they queue for the two slots; what changed is that nothing else waits with them.
+  Two new gates, each seen failing: `a_public_read_does_not_hold_the_writer_lock`
+  holds the writer lock and requests ten routes (red with the conversions reverted),
+  and `heavy_reads_leave_readers_for_the_cheap_requests` runs twelve scans and then a
+  cheap read (red with the gate widened to 100 slots: the cheap read waited 1.7 s).
+  `database_work_stays_off_the_async_runtime` knows `run_blocking_heavy`. **Not
+  done:** 223 `with_db(` lines in 56 files of `birdnet-web/src` still take the writer
+  (62 `with_read_db(` lines do not); these routes were chosen because timing every
+  public GET found them slow (the 4.3 s export, the 2.4 s dashboard KPIs, and the
+  others listed in `docs/HANDOFF.md`), not because the other 223 were each judged.
+  The analytics store is still one connection behind a mutex.
 - **The retention analysis took 74 seconds on a 300 000-detection station and held
   the analytics connection the whole time.** The query joined every pair of a
   species' active days and let the `retention()` aggregate discard the pairs no

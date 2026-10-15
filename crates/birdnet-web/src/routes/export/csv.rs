@@ -41,8 +41,11 @@ pub(super) async fn export_detections(
     let from = query.from.clone();
     let to = query.to.clone();
 
+    let permit = state.heavy_read_permit().await;
+
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let _slot = permit;
+        state.with_read_db(|conn| {
             let rows = birdnet_db::sqlite::analytic_detections(
                 conn,
                 from.as_deref(),
@@ -124,8 +127,11 @@ pub(super) async fn export_species(
     let format = query.format.as_deref().unwrap_or("csv");
     let limit = query.limit.unwrap_or(100_000);
 
+    let permit = state.heavy_read_permit().await;
+
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::top_species(conn, limit))
+        let _slot = permit;
+        state.with_read_db(|conn| birdnet_db::sqlite::top_species(conn, limit))
     })
     .await;
 

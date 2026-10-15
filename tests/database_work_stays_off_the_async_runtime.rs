@@ -45,11 +45,14 @@ const PRIMITIVES: &[&str] = &[
 /// Calls whose closure arguments run on another thread.
 ///
 /// `cached_fragment` is here because it runs its `compute` closure under
-/// `spawn_blocking` itself (`birdnet-web/src/analytics_cache.rs`).
+/// `spawn_blocking` itself (`birdnet-web/src/analytics_cache.rs`);
+/// `run_blocking_heavy` because it is `run_blocking` behind a heavy-read slot
+/// (`birdnet-web/src/state.rs`).
 const BOUNDARIES: &[&str] = &[
     "spawn_blocking",
     "block_in_place",
     "run_blocking",
+    "run_blocking_heavy",
     "cached_fragment",
 ];
 
@@ -451,6 +454,7 @@ fn the_scan_passes_each_boundary() {
         mod other { pub fn record(s: &S) {} }
         async fn a(s: S) { tokio::task::spawn_blocking(move || audit(&s)).await; }
         async fn b(s: S) { s.run_blocking(|s| audit(s)).await; }
+        async fn b2(s: S) { s.run_blocking_heavy(|s| audit(s)).await; }
         async fn c(s: S) { cached_fragment(&s, k, F, |s| audit(s)).await; }
         async fn d(s: S) { std::thread::spawn(move || audit(&s)); }
         async fn e(s: S) { pool.with_db(q).await; }
