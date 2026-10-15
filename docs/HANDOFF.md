@@ -108,17 +108,17 @@ at the head of the branch.
   with default features and with `--all-features`; `RUSTDOCFLAGS="-D warnings" cargo doc
   --workspace --no-deps --document-private-items --all-features`: clean. (The
   `--no-default-features` clippy build, which an earlier handoff listed, was not run.)
-- **Tests**, from one scripted run that deletes regenerable executables between
-  batches (the disk allowance does not hold a workspace's worth at once): 229 test
-  executables reported, 4,041 tests passed, 1 failed, 11 ignored, summed from that run's
-  log. The failure was `every_action_written_is_one_this_list_documents`, which found
-  the two new whitelist audit actions undocumented; fixed in `4fe4e54`, and the
-  target now passes (10 tests). Two things the script did not cover were run by hand
-  afterwards and passed: the 990 tests of the root binary (its own `--lib --bins`
-  invocation was wrong: the root package has no library) and the three root targets
-  that follow the failed one in its batch. Not run: `cargo test --workspace
-  --all-features` as one build (the feature sets were exercised per crate: the root and
-  web crates and `birdnet-behavioral` with `analytics`).
+- **Tests**, from one scripted run (`final-gate.sh`, kept outside the repository) that
+  deletes regenerable executables between batches, because the disk allowance does
+  not hold a workspace's worth at once. All 27 steps of the last run exited 0. Summed
+  from its log: 229 test executables, 5,044 tests passed, 0 failed, 5 ignored, plus
+  12 doctests passed (6 ignored). The run was made on the code of `af1967f` (the
+  heavy-read gate); `ccb06b9` after it changed one documentation file. An earlier run
+  of the same script, before that change, had one failure,
+  `every_action_written_is_one_this_list_documents` (two new whitelist audit actions
+  undocumented), fixed in `4fe4e54`. Not run: `cargo test --workspace --all-features`
+  as one build (the feature sets were exercised per crate: the root and web crates and
+  `birdnet-behavioral` with `analytics`).
 - **Real models**, with `BIRDNET_REQUIRE_MODEL` and `BIRDNET_REQUIRE_V24_MODEL` set so a
   missing model is a failure, not a skip: BirdNET+ V3.0 preview with its geomodel, and
   V2.4 with the MData v2 range filter, all from files on the working machine (not
@@ -138,7 +138,11 @@ at the head of the branch.
   image cache; not investigated). The layout gate was run in full on the interface
   commit and, after the whitelist card was added, on the three pages it changed
   (axe and layout both clean). I looked at renders of the dashboard (desktop and
-  phone), the species page and the Capture tab's species section.
+  phone), the species page and the Capture tab's species section. The browser
+  gates were not re-run after `af1967f` (the heavy-read gate); it changed no
+  template, stylesheet or script (checked with `git diff --name-only`), but it did
+  change how the migration-stats cards and the feeds read the database, and the
+  measurements for it are over HTTP, not in a browser.
 - **Elsewhere:** the hermetic installer test suite passes; the versioned manual builds
   and every tree passes the link check; `gen-third-party-licenses.py --check` passes;
   `scripts/check-ci-config.py` fails only for the things this machine does not have
