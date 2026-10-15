@@ -133,8 +133,10 @@ REQUIRED_FREE_MB=900
 # so we know to restart it afterwards rather than leave it down.
 SERVICE_WAS_RUNNING=0
 
-# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB): the same model BirdNET-Pi
-# uses, arch-independent and working on every platform.
+# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB), arch-independent and working
+# on every platform. This is the successor to BirdNET V2.4, the network
+# BirdNET-Pi and birdnet-go run, not the same model: its detections differ by
+# design. To run V2.4 instead, see docs/book/guides/parity.md.
 #
 # Primary origin is a stable, arch-independent GitHub release shared by all app
 # releases (uploaded once, never re-pushed per patch), so a fresh install pulls

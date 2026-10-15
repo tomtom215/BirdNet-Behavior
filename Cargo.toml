@@ -401,6 +401,9 @@ rusqlite.workspace = true
 [dev-dependencies]
 hound.workspace = true
 tempfile.workspace = true
+# The V2.4 range-filter parity test hashes the species list it gets, as
+# tools/parity does for BirdNET-Pi's.
+sha2.workspace = true
 rusqlite.workspace = true
 tower.workspace = true
 birdnet-web.workspace = true

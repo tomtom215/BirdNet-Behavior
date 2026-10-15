@@ -19,7 +19,7 @@ If you're getting both at once, it's almost always an **audio** problem (wind, c
 
 The minimum score (0–1) a detection must clear to be logged. This is your main dial.
 
-- **Default ~0.7.** Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
+- **Default 0.75** (BirdNET-Pi's is 0.7). Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
 - Lower toward **0.5–0.6** only if you're confident your audio is clean and you want maximum recall.
 - Set it at `/admin/settings → Detection`.
 
@@ -109,9 +109,9 @@ Once it is running:
 - Make sure your latitude/longitude are correct first — the filter is only as good as your coordinates.
 - Raise `SF_THRESH` to be stricter about out-of-range species; lower it (or 0) to let everything through (useful if you *want* to catch vagrants).
 
-### 5. Quality pre-filter
+### 5. Rain, wind and other broadband noise
 
-Optionally drops audio segments dominated by **rain, wind, or broadband noise** *before* they ever reach the model — cheaper and more reliable than cleaning up the resulting false positives. Enable it under Detection when your station is exposed to weather.
+Nothing in the station drops rainy or windy audio before it reaches the model. Weather shows up as false positives, and the levers are the ones above: a modestly higher confidence threshold, a per-species threshold for the species it keeps producing, and the noise filter in §7 for a recurring non-bird sound. The cheapest fix is at the microphone: a windshield and shelter from direct rain do more than any setting. The [Quality dashboard](../admin/settings.md#data-quality) lists the species whose confidence is lowest, which is where weather-driven false positives collect.
 
 ### 6. Rare-bird quarantine
 
@@ -285,7 +285,7 @@ birdwatchers. An unmarked row is not a row eBird disagrees with.
 1. Set your **location** accurately.
 2. Get mic **levels** right (peaks near −6 dB).
 3. Run the defaults for a few days and read the [Quality dashboard](../admin/settings.md#data-quality).
-4. If false positives dominate: enable the **quality pre-filter**, then nudge the **confidence threshold** up by 0.05.
+4. If false positives dominate: nudge the **confidence threshold** up by 0.05, and use the **noise filter** if a particular non-bird sound (a dog, a siren) is the cause.
 5. Add **per-species overrides** for the one or two species generating the most noise.
 6. Turn on **quarantine** for rare birds so you can keep recall high without losing trust in the log.
 7. Review a mixture of good and bad detections for a week, then check the **suggested thresholds** on the Species page and the **suspect species** list under Station → Data — by then both have something to say.

@@ -66,6 +66,12 @@ Every imported detection is tagged with the batch that brought it in. Each batch
 
 **Carries over:** every detection row — date, time, scientific and common name, confidence, coordinates, and the BirdNET parameters (cutoff, week, sensitivity, overlap). BirdNET-Pi config keys (`ALSA_CARD`, `LATITUDE`/`LONGITUDE`, `OVERLAP`, `SF_THRESH`, `BIRDWEATHER_TOKEN`, …) are also understood when reading a `birdnet.conf`; see the mapping table in [Configuration](../getting-started/configuration.md).
 
+**Check these after moving a `birdnet.conf` across.** Most keys mean the same here. Three do not, or depend on what you run:
+
+- **The model.** BirdNET-Pi runs BirdNET V2.4; this project's default is BirdNET+ V3.0, which gives different detections. To keep V2.4, install it and set `CONFIDENCE=0.7`: [Same audio, same detections](./parity.md) has the commands and says what was measured.
+- **`PRIVACY_THRESHOLD`.** BirdNET-Pi's is a percentage of the species list; here it is the model's confidence for a human sound. A BirdNET-Pi `1` masks almost nothing here (`--doctor` warns above 0.5); use about `0.02`.
+- **The species lists.** BirdNET-Pi's `whitelist_species_list.txt` (species exempt from the occurrence filter) has no equivalent here yet; include and exclude lists are set at `/admin/species`, not read from files.
+
 **Does not carry over: the audio.** The importer copies rows, not files. Imported detections keep their original `File_Name`, but the WAV is not brought across, so the clip player on an imported detection's page has nothing behind it. Your counts, species lists and every analytic are unaffected — only playback is.
 
 If you want the audio too, copy it yourself before importing, into the station's recordings directory — `~/BirdNet-Behavior/recordings` under the service user on a default `install.sh`, `/data/recordings` in Docker — keeping the original filenames.

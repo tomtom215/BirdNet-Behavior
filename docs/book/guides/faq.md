@@ -2,7 +2,7 @@
 
 ## Is it accurate? Which model does it use?
 
-It uses the **BirdNET+ V3.0** model — the same neural network as upstream BirdNET, so identification accuracy matches BirdNET-Pi. The model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, falling back to Zenodo (the upstream source) if that asset is unavailable.
+It uses the **BirdNET+ V3.0** preview model, the successor to the BirdNET V2.4 network that BirdNET-Pi and birdnet-go run. It is a *different* model: it hears 4.5-second windows rather than 3, reports calibrated probabilities rather than raw scores, and covers about 11 500 species rather than 6 500, so its detections are not BirdNET-Pi's and are not meant to be. If you need the same detections BirdNET-Pi gives for the same audio, install V2.4 and set the settings as BirdNET-Pi sets them: see [Same audio, same detections](./parity.md), which also says what was measured. The V3.0 model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, falling back to Zenodo (the upstream source) if that asset is unavailable.
 
 ## Do I need a Raspberry Pi?
 

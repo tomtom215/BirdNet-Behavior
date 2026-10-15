@@ -71,6 +71,27 @@ pub fn v24_model_paths() -> Option<(PathBuf, PathBuf)> {
     )
 }
 
+/// [`v24_model_paths`] for a suite that needs the V2.4 range-filter ONNX too
+/// (`BIRDNET_TEST_V24_MDATA`). The classifier model is not used by it, so only
+/// the labels path is returned meaningfully.
+pub fn v24_model_paths_with_mdata() -> Option<(PathBuf, PathBuf)> {
+    let found = v24_model_paths()?;
+    let required =
+        std::env::var("BIRDNET_REQUIRE_V24_MODEL").is_ok_and(|v| !v.is_empty() && v != "0");
+    let mdata_ok =
+        std::env::var("BIRDNET_TEST_V24_MDATA").is_ok_and(|p| std::path::Path::new(&p).is_file());
+    assert!(
+        mdata_ok || !required,
+        "BIRDNET_REQUIRE_V24_MODEL is set, so the V2.4 range-filter test must run, but \
+         BIRDNET_TEST_V24_MDATA does not name a file"
+    );
+    if !mdata_ok {
+        eprintln!("SKIP: BIRDNET_TEST_V24_MDATA does not name a file");
+        return None;
+    }
+    Some(found)
+}
+
 fn paths_from_env(
     require_var: &str,
     model_var: &str,

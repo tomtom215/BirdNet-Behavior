@@ -344,6 +344,51 @@ jobs:
           # path: a CDN outage leaves it unset, so an upstream problem degrades
           # to a visible skip rather than failing an unrelated build.
           echo "BIRDNET_REQUIRE_MODEL=1" >> "$GITHUB_ENV"
+      # The V2.4 model BirdNET-Pi and birdnet-go run. The V3.0 above is a 32 kHz
+      # probability model; nothing in it exercises the 48 kHz raw-logit path or
+      # the sensitivity-scaled sigmoid that a BirdNET-Pi user's detections
+      # depend on, which is how that path shipped untested against a real V2.4.
+      # 51 MiB, pinned to a HuggingFace revision and to the digests in
+      # `crates/birdnet-integrations/src/model_catalog.rs`.
+      - name: Cache the BirdNET V2.4 model
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/birdnet-v24
+          key: birdnet-v24-3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d
+      - name: Fetch the BirdNET V2.4 model and labels
+        # Same rule as the V3.0 step: a download failure skips, a wrong
+        # checksum fails, and the require flag is set only once both verified.
+        shell: bash
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/birdnet-v24"
+          model="$dir/model.onnx"
+          labels="$dir/labels.txt"
+          base="https://huggingface.co/tphakala/BirdNET-v2.4/resolve/acd49768d227c726ac94550c94f0effb3e1dd04c"
+          mkdir -p "$dir"
+          if [ ! -f "$model" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 600 -o "$model" \
+              "$base/BirdNET_v2.4_fp32_dfttrunc.onnx" \
+              || { echo "::warning::could not fetch the V2.4 model; the V2.4 test will skip"; exit 0; }
+          fi
+          if [ ! -f "$labels" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 300 -o "$labels" "$base/labels.txt" \
+              || { echo "::warning::could not fetch the V2.4 labels; the V2.4 test will skip"; exit 0; }
+          fi
+          # The V2.4 range filter (v2), at a commit of birdnet-go, as the catalogue pins it.
+          mdata="$dir/mdata-v2.onnx"
+          if [ ! -f "$mdata" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 300 -o "$mdata" \
+              "https://raw.githubusercontent.com/tphakala/birdnet-go/f4f019a3d79cb547b432bd8729fb4cf9c71aa2e7/internal/classifier/data/BirdNET_MData_V2.onnx" \
+              || { echo "::warning::could not fetch the V2.4 range filter; the V2.4 tests will skip"; exit 0; }
+          fi
+          echo "3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d  $model" | sha256sum -c -
+          echo "487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d  $labels" | sha256sum -c -
+          echo "b1810073d16c6c39df95a7419f9a11a02f98dbea562c96d4993c6af52b54b271  $mdata" | sha256sum -c -
+          echo "BIRDNET_TEST_V24_MODEL=$model"  >> "$GITHUB_ENV"
+          echo "BIRDNET_TEST_V24_LABELS=$labels" >> "$GITHUB_ENV"
+          echo "BIRDNET_TEST_V24_MDATA=$mdata"  >> "$GITHUB_ENV"
+          echo "BIRDNET_REQUIRE_V24_MODEL=1" >> "$GITHUB_ENV"
       - name: Run the end-to-end inference tests
         # These are the only tests that exercise the scientific core —
         # decode → resample → chunk → ONNX inference → confidence mapping —
@@ -362,6 +407,7 @@ jobs:
         run: |
           cargo test --test inference_e2e --test pipeline_e2e --test species_filter_e2e \
             --test a_lowered_species_threshold_reaches_the_model \
+            --test v24_matches_birdnet_pi --test v24_range_filter_matches_birdnet_pi \
             -- --nocapture
           cargo test -p birdnet-core --test the_geomodel_keeps_out_birds_that_do_not_occur_here \
             -- --nocapture

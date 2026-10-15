@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BirdNET V2.4 is installable, and measured against BirdNET-Pi.**
+  `--install-model birdnet-v24` fetches birdnet-go's published FP32 ONNX of the
+  network BirdNET-Pi and birdnet-go run, with its labels;
+  `--install-model birdnet-v24-range-v2` fetches the matching species-occurrence
+  filter. Both URLs are pinned to a repository revision and a sha256 (installed
+  through the real binary: digests verified, labels byte-identical to the file the
+  harness used), and the post-install text says what each is for. Before, no V2.4
+  ONNX had ever been run through this pipeline: the CI model is V3.0, a 32 kHz
+  probability model. `tools/parity` runs BirdNET-Pi's own unmodified code on its
+  FP16 TFLite model over 14 clips (byte-identical across two full runs) and writes
+  goldens; `tests/v24_matches_birdnet_pi.rs`, `tests/v24_range_filter_matches_birdnet_pi.rs`
+  and `tests/parity_dump.rs` diff this project against them, and CI now fetches the
+  models, checks their sha256 and runs both. Measured: native-48 kHz audio decodes
+  bit-identically (6 clips, stereo and 32-bit included); chunk counts and starts
+  equal on 13 of 13; the magpie recording stores 0.9123 / 0.9318 / 0.8864 against
+  BirdNET-Pi's own asserted 0.912 / 0.9316 / 0.8857; the same species in the same
+  chunks at `CONFIDENCE=0.7` on 12 of 13 clips; all 12 range-filter questions
+  return BirdNET-Pi's exact species list. What differs, and why, is in
+  `docs/book/guides/parity.md`. `tools/model-convert` converts BirdNET-Pi's two
+  range-filter models to ONNX (max difference 3.7e-6 from TFLite over 1,344 calls;
+  v1, BirdNET-Pi's default, is not hosted anywhere, so it is not in the catalogue).
+  `GET /api/v2/models/catalog` gains `use`.
+- **`--doctor` warns about a BirdNET-Pi `PRIVACY_THRESHOLD`.** The key is shared and
+  the scale is not (BirdNET-Pi: a percentage of the species list; here: the model's
+  confidence for a human sound). A BirdNET-Pi `1` is in range here and masks nothing
+  short of certainty. Any value above 0.5 now warns.
+
 - **Bird names in 35 languages besides English.** Choose one under
   *Settings → System & Display → Common-name language*, or set `DATABASE_LANG`
   (`--lang`, `BIRDNET_LANG`); it applies when the station next starts. The names
@@ -278,6 +305,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`rubato` 4 → 5 and `argon2` 0.5 → 0.6 (with `password-hash` 0.6 and
+  `audioadapter-buffers` 5).** Dependabot had held both pairs until their releases
+  existed; each now arrives as one grouped pull request. A password hash and an
+  encrypted backup written by the 0.5 line, captured before the upgrade, are frozen
+  as tests and pass on 0.6; with the backup KDF's Argon2 version changed, only the
+  frozen vector went red. The web crate's session ids, CSP nonces and share keys now
+  draw from one `random::fill` over `getrandom`, replacing a re-export that no
+  longer exists. Resampled output differs only in the first ~20 ms of a file.
+
 - **`GET /api/v2/languages` says what a station can show.** Each language
   carries `native_name`, `active` and `coverage` (`named` of `of` species in the
   installed classifier; null for English or without a label file), and the body
@@ -475,6 +511,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build matrix.
 
 ### Fixed
+
+- **`SENSITIVITY` meant the opposite of BirdNET-Pi's on a V2.4 model.** It was
+  applied as the sigmoid slope itself (default 1.25); BirdNET-Pi and BirdNET-Analyzer
+  use `clamp(2 − S, 0.5, 1.5)` (default 0.75). A raw score of 3.12 stored 0.980 here
+  and 0.912 there, and a station carrying its settings across stored more
+  detections than the one it left. It now maps as BirdNET-Pi does
+  (`inference::model::logit_slope`); the settings hint, the tuning guide and the
+  settings page say which way it runs. This changes V2.4 results only: the bundled
+  V3.0 ignores the setting, and V2.4 was bring-your-own before this release. Red
+  against the old formula: `v24_confidence_reproduces_birdnet_pis_expected_values`
+  (0.9802 vs 0.912) and, with the real model, `tests/v24_matches_birdnet_pi.rs`.
+  birdnet-go's setting is the slope itself; enter `2 − value` to carry one across.
+- **Every resampled recording ran late and short.** The resampler left rubato's
+  start-up delay in, so a recording converted between rates (every default-install
+  file, 48 → 32 kHz for V3.0; any 44.1 kHz microphone) was `128 × ratio` samples
+  late, +138 at 44.1 → 48 kHz, +85 at 48 → 32, and lost that much from its end.
+  Measured against BirdNET-Pi's resampled samples as a lag of +138 and +278
+  samples; now `process_all`, lag under one sample. Red: an impulse came back at
+  21,907 where 21,768.7 was expected.
+- **A trailing remainder under 1.5 s is dropped, as BirdNET-Pi drops it.** It was
+  kept down to a quarter window (0.75 s), so a 16 s file gave a sixth chunk of one
+  second of audio and two of silence that BirdNET-Pi never analyses. Differential-
+  tested against a transcription of `splitSignal` over six overlaps and 155 lengths.
+- **Docker deleted an operator's own model.** `docker/entrypoint.sh` checked any
+  `BIRDNET_MODEL` against the V3.0 digest, removed a mismatch and downloaded V3.0
+  bytes under that name: a V2.4 or Perch model was destroyed and replaced by a
+  different network with labels that did not match it. Only files at the default
+  paths are managed now.
+- **Documentation that was not true.** The FAQ and the installer said the default
+  model is "the same neural network BirdNET-Pi uses" (it is its successor, and
+  different); three pages described a rain-and-wind "quality pre-filter" that does
+  not exist; the tuning guide gave a default of 0.7 (it is 0.75); `SF_THRESH=0` was
+  labelled "disabled" while a species the occurrence model has no entry for is never
+  let through; the stored `week` was called the ISO week (it is the 48-week value);
+  and the overlap docs said 3-second windows (V3.0's is 4.5 s).
+- **Model catalogue URLs follow no branch.** `perch-v2` pointed at HuggingFace
+  `resolve/main/`, so an upstream edit would have failed every install's checksum at
+  once. Pinned to the revision whose LFS metadata lists the same sha256 and size;
+  a gate (`no_catalogue_url_follows_a_branch`) keeps it so.
 
 - **The Settings page printed `source\'s`.** The Audio Channels note was written
   with a Rust escape inside a raw string, so the page showed a backslash. The

@@ -112,7 +112,8 @@ impl Default for DynamicThresholdConfig {
     /// Off, with the values a station would get if it switched this on and
     /// changed nothing else.
     ///
-    /// `trigger` at 0.80 is well above the 0.70 default global threshold, so a
+    /// `trigger` at 0.80 is well above a 0.70 global threshold (BirdNET-Pi's default;
+    /// this station's is 0.75), so a
     /// confirmation means the model was confident rather than merely willing.
     /// `min` at 0.25 is the floor a 0.70 base reaches at level 3 anyway, so the
     /// default floor binds only for a station that has *raised* its global

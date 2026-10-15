@@ -830,7 +830,8 @@ pub struct Cli {
 
     /// Analysis window overlap in seconds (0.0-2.9, default 0.0).
     ///
-    /// Controls how much consecutive 3-second analysis windows overlap.
+    /// Controls how much consecutive analysis windows overlap (the model's
+    /// window: 3 s for BirdNET V2.4, 4.5 s for the bundled V3.0).
     /// Higher overlap increases sensitivity at the cost of more CPU time.
     /// BirdNET-Pi equivalent: OVERLAP config option.
     #[arg(long, default_value = "0.0", env = "BIRDNET_OVERLAP", value_parser = overlap_in_range)]

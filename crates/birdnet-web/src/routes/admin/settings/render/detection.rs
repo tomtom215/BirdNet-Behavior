@@ -90,7 +90,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="sf_thresh" name="sf_thresh" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
                value="{sf}" placeholder="0.03" class="bnb-w-num">
-        <p class="hint">Filter unlikely species by occurrence frequency. Lower = more species. 0 = disabled (BirdNET-Pi: SF_THRESH)</p>
+        <p class="hint">Filter unlikely species by occurrence frequency. Lower = more species. 0 lets through every species the occurrence model scores; one it has no entry for is never let through while the filter is on. With no location or occurrence model the filter is off. (BirdNET-Pi: SF_THRESH)</p>
       </div>
     </div>
     <div>
@@ -98,7 +98,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <input id="privacy_threshold" name="privacy_threshold" type="text"
              inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
              value="{priv_t}" placeholder="0.0" class="bnb-w-num">
-      <p class="hint">Suppress an analysis window, and its neighbours, when the model's confidence for a human class reaches this value. Lower = suppresses more. Independent of the confidence threshold above. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
+      <p class="hint">Suppress an analysis window, and its neighbours, when the model's confidence for a human class reaches this value. Lower = suppresses more. Independent of the confidence threshold above. Typical: 0.01–0.03. 0 = disabled. Same key as BirdNET-Pi's PRIVACY_THRESHOLD but a different scale (there it is a percentage of the species list), so a BirdNET-Pi value does not carry across.</p>
     </div>
     <div>
       <label for="confirmation_level">Repeat Confirmation</label>
