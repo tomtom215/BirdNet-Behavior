@@ -1036,15 +1036,40 @@ pub(super) fn event_processor(
             }
         }
 
+        // What a person is shown for this species. Every channel below that
+        // *keys* on the name — the cooldown gate, the watchlist, the database,
+        // BirdWeather, MQTT — keeps `detection.common_name`; only the ones that
+        // put it in a sentence for a reader use this.
+        let shown_name = state
+            .names()
+            .name(&detection.scientific_name, &detection.common_name)
+            .to_owned();
+
         // Evaluate alert rules (loaded fresh for each detection to reflect UI changes).
         let rule_suppressed = state.with_db(|conn| {
             let rules = birdnet_db::alert_rules::list_rules(conn).unwrap_or_default();
-            let matched = birdnet_db::alert_rules::evaluate_rules(
+            let mut matched = birdnet_db::alert_rules::evaluate_rules(
                 &rules,
                 &detection.common_name,
                 f64::from(detection.confidence),
                 &detection.time,
             );
+            // A rule's species pattern is typed by a person, in the language they
+            // read, so a station shown in German is also checked by the German
+            // name: `Elster*` has to match the bird the page calls Elster. A rule
+            // that matches by either name fires once.
+            if shown_name != detection.common_name {
+                for rule in birdnet_db::alert_rules::evaluate_rules(
+                    &rules,
+                    &shown_name,
+                    f64::from(detection.confidence),
+                    &detection.time,
+                ) {
+                    if !matched.iter().any(|m| std::ptr::eq(*m, rule)) {
+                        matched.push(rule);
+                    }
+                }
+            }
 
             let mut suppressed = false;
             for rule in matched {
@@ -1132,6 +1157,7 @@ pub(super) fn event_processor(
         let ws_event = birdnet_web::routes::websocket::WsDetectionEvent {
             event: "detection",
             common_name: detection.common_name.clone(),
+            display_name: shown_name.clone(),
             scientific_name: detection.scientific_name.clone(),
             confidence: detection.confidence,
             date: detection.date.clone(),
@@ -1167,6 +1193,7 @@ pub(super) fn event_processor(
         let notify_ctx = NotificationContext {
             sci_name: detection.scientific_name.clone(),
             com_name: detection.common_name.clone(),
+            shown_name: Some(shown_name.clone()),
             confidence: detection.confidence,
             confidence_pct: confidence_pct_trunc(detection.confidence),
             date: detection.date.clone(),
@@ -1397,7 +1424,7 @@ pub(super) fn event_processor(
         {
             let notifier = std::sync::Arc::clone(notifier);
             let alert = birdnet_integrations::email::DetectionEmail {
-                common_name: detection.common_name.clone(),
+                common_name: shown_name.clone(),
                 scientific_name: detection.scientific_name.clone(),
                 confidence: f64::from(detection.confidence),
                 date: detection.date.clone(),
@@ -1971,6 +1998,17 @@ mod tests {
         config: birdnet_integrations::apprise::NotifyConfig,
         times: &[&str],
     ) -> usize {
+        apprise_attempts_in(|state| state, filter, config, times).await
+    }
+
+    /// [`apprise_attempts`] against a station `prepare` has set up — a language,
+    /// a rule — before the processor starts.
+    async fn apprise_attempts_in(
+        prepare: impl FnOnce(birdnet_web::state::AppState) -> birdnet_web::state::AppState,
+        filter: birdnet_integrations::notification::NotificationFilter,
+        config: birdnet_integrations::apprise::NotifyConfig,
+        times: &[&str],
+    ) -> usize {
         // A listener that answers every request 200, so each notification is
         // a real, successful send: a refused port trips the dispatcher's
         // circuit breaker after a couple of failures, and the count would
@@ -2006,6 +2044,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let state = prepare(state);
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel();
         for (i, time) in times.iter().enumerate() {
@@ -2560,6 +2599,210 @@ mod tests {
                 "the notification should contain {expected:?}; it was sent as:\n{request}"
             );
         }
+    }
+
+    /// A station shown in German: the bundled names, no classifier label file.
+    fn in_german(state: birdnet_web::state::AppState) -> birdnet_web::state::AppState {
+        state.with_names(birdnet_core::i18n::NameLocalizer::new(
+            birdnet_core::i18n::LanguagePack::bundled("de").expect("German is bundled"),
+            None,
+        ))
+    }
+
+    /// A Suppress rule for `pattern`, added to the station's database.
+    fn suppress_rule(pattern: &'static str) -> impl FnOnce(&birdnet_web::state::AppState) {
+        move |state| {
+            state.with_db(|c| {
+                birdnet_db::alert_rules::insert_rule(
+                    c,
+                    &birdnet_db::alert_rules::NewAlertRule {
+                        name: format!("suppress {pattern}"),
+                        enabled: true,
+                        species_pattern: Some(pattern.to_owned()),
+                        confidence_min: 0.0,
+                        confidence_max: 1.0,
+                        hour_start: None,
+                        hour_end: None,
+                        days_of_week: None,
+                        action: birdnet_db::alert_rules::AlertAction::Suppress,
+                    },
+                )
+                .unwrap();
+            });
+        }
+    }
+
+    /// An alert rule is written by a person in the language they read, so a
+    /// station shown in German must match `Elster*` against the bird its pages
+    /// call *Elster* — and must still match the classifier's own name, which is
+    /// what a rule written before the language was chosen says.
+    #[tokio::test]
+    async fn an_alert_rule_matches_the_name_the_station_shows_as_well_as_the_stored_one() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let quiet = || birdnet_integrations::apprise::NotifyConfig {
+            cooldown: std::time::Duration::ZERO,
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        let filter = || NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        let attempts = |german: bool, pattern: &'static str| {
+            let rule = suppress_rule(pattern);
+            apprise_attempts_in(
+                move |state| {
+                    rule(&state);
+                    if german { in_german(state) } else { state }
+                },
+                filter(),
+                quiet(),
+                &["09:00:00"],
+            )
+        };
+        // The German name suppresses in a German station...
+        assert_eq!(attempts(true, "Elster*").await, 0, "Elster* did not match");
+        // ...and the stored name still does.
+        assert_eq!(
+            attempts(true, "Eurasian*").await,
+            0,
+            "the stored name stopped matching"
+        );
+        // Counterparts: the rule is not a blanket suppression. An English station
+        // does not call the bird Elster; an unrelated German name matches nothing.
+        assert_eq!(
+            attempts(false, "Elster*").await,
+            1,
+            "Elster* matched an English station"
+        );
+        assert_eq!(
+            attempts(true, "Amsel*").await,
+            1,
+            "an unrelated name suppressed"
+        );
+    }
+
+    /// A notification is read by a person, so it names the bird in the station's
+    /// language; its link is a key, so it carries the name as stored.
+    #[tokio::test]
+    async fn a_notification_names_the_bird_in_the_stations_language_and_links_by_the_stored_name() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .ok();
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 4096];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let _ = seen_tx.send(String::from_utf8_lossy(&request).into_owned());
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig {
+                cooldown: std::time::Duration::ZERO,
+                ..birdnet_integrations::apprise::NotifyConfig::default()
+            },
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state =
+            in_german(birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap());
+        let broadcast = state.detection_broadcast();
+        let mut live = broadcast.subscribe();
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "a",
+            ))
+            .unwrap();
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(apprise),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::new(
+                    "Bird: $comname".to_owned(),
+                    "page=$listenurl".to_owned(),
+                )
+                .with_station_url(Some("http://birdnet.local:8502".to_owned())),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        let request = tokio::task::spawn_blocking(move || {
+            seen_rx.recv_timeout(std::time::Duration::from_secs(10))
+        })
+        .await
+        .unwrap()
+        .expect("the stub route received the notification");
+        assert!(
+            request.contains("Bird: Elster"),
+            "the title is in German:\n{request}"
+        );
+        assert!(
+            request.contains("name=Eurasian%20Magpie") && !request.contains("name=Elster"),
+            "the link must carry the stored name:\n{request}"
+        );
+
+        // The live-feed event carries both: the key and the name to show.
+        let event = live.try_recv().expect("the live event was broadcast");
+        let event: serde_json::Value = serde_json::from_str(&event).expect("json");
+        assert_eq!(event["common_name"], "Eurasian Magpie");
+        assert_eq!(event["display_name"], "Elster");
     }
 
     /// The watchlist the settings form asks for — common names — must let the

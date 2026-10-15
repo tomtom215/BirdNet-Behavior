@@ -22,8 +22,14 @@ use std::fmt;
 pub struct NotificationContext {
     /// Scientific name of the detected species.
     pub sci_name: String,
-    /// Common name of the detected species.
+    /// Common name of the detected species, as the classifier names it and as
+    /// it is stored. It is the key: the detection's page is found by it, so the
+    /// links are built from it.
     pub com_name: String,
+    /// The name to read, when the station shows common names in another
+    /// language (`$comname`); `None` shows [`Self::com_name`]. Never used in a
+    /// link — see [`Self::com_name`].
+    pub shown_name: Option<String>,
     /// Detection confidence (0.0 - 1.0).
     pub confidence: f32,
     /// Detection confidence as percentage (0 - 100).
@@ -202,7 +208,10 @@ fn substitute(template: &str, ctx: &NotificationContext) -> String {
     let image = ctx.image_url.as_deref().unwrap_or("");
     template
         .replace("$sciname", &ctx.sci_name)
-        .replace("$comname", &ctx.com_name)
+        .replace(
+            "$comname",
+            ctx.shown_name.as_deref().unwrap_or(&ctx.com_name),
+        )
         .replace("$confidencepct", &ctx.confidence_pct.to_string())
         .replace("$confidence", &format!("{:.2}", ctx.confidence))
         .replace("$date", &ctx.date)
@@ -421,6 +430,7 @@ mod tests {
         NotificationContext {
             sci_name: "Erithacus rubecula".to_string(),
             com_name: "European Robin".to_string(),
+            shown_name: None,
             confidence: 0.92,
             confidence_pct: 92,
             date: "2026-03-14".to_string(),
@@ -560,6 +570,26 @@ mod tests {
             body.ends_with("&name=Bird%20%26%20Co%3Fx%3D1%23y"),
             "{body}"
         );
+    }
+
+    /// A station shown in another language reads `$comname` in that language,
+    /// and its links still find the detection by the name it is stored under.
+    #[test]
+    fn the_shown_name_is_read_and_the_stored_name_is_linked() {
+        let ctx = NotificationContext {
+            com_name: "Eurasian Magpie".to_owned(),
+            shown_name: Some("Elster".to_owned()),
+            ..bare_context()
+        };
+        let body = render_body("$comname | $listenurl", Some("http://s"), &ctx);
+        assert!(body.starts_with("Elster | "), "{body}");
+        assert!(body.ends_with("&name=Eurasian%20Magpie"), "{body}");
+        // Counterpart: with no shown name, `$comname` is the stored one.
+        let plain = NotificationContext {
+            shown_name: None,
+            ..ctx
+        };
+        assert!(render_body("$comname", None, &plain).starts_with("Eurasian Magpie"));
     }
 
     struct Counts(u64, u64);

@@ -57,6 +57,7 @@ async fn weekly_partial(
     let week_end2 = week_end.clone();
     let prev_week_c = prev_week.clone();
     let prev_week_end_c = prev_week_end.clone();
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -85,6 +86,7 @@ async fn weekly_partial(
             &new_species,
             &daily,
             is_current,
+            &names,
         ),
         // 200 either way, so this string is the reader's last word — it has
         // to carry the same "this is a fault, not an empty week" framing and
@@ -118,6 +120,7 @@ fn render_weekly_content(
     new_species: &[(String, String, String)],
     daily: &[birdnet_db::sqlite::DailyCount],
     is_current: bool,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut html = String::new();
 
@@ -221,12 +224,13 @@ fn render_weekly_content(
         html.push_str(r#"<p class="wk-muted">No detections this week.</p>"#);
     } else {
         for (i, (sci, com, count)) in top.iter().take(10).enumerate() {
+            let shown = names.name(sci, com);
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<div class="nm">{name}</div><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(com, sci, ""),
-                name = escape_html(com),
+                av = avatar(com, shown, sci, ""),
+                name = escape_html(shown),
             );
         }
     }
@@ -239,11 +243,12 @@ fn render_weekly_content(
         html.push_str(r#"<p class="wk-muted">No new species this week.</p>"#);
     } else {
         for (sci, com, date) in new_species {
+            let shown = names.name(sci, com);
             let _ = write!(
                 html,
                 r#"<div class="rp-new">{av}<div class="nm">{name} <span class="bnb-pill rare badge">first ever</span></div><span class="when">{date}</span></div>"#,
-                av = avatar(com, sci, ""),
-                name = escape_html(com),
+                av = avatar(com, shown, sci, ""),
+                name = escape_html(shown),
                 date = escape_html(date),
             );
         }

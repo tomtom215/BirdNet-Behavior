@@ -26,6 +26,9 @@ extend-exclude = [
     "THIRD_PARTY_LICENSES.txt",
     "third_party/**",
     "**/static/fonts/LICENSES.txt",
+    # Bird names in 35 languages, byte for byte from BirdNET-Pi's tables; the
+    # README beside them is made of the same names.
+    "crates/birdnet-core/data/l18n/**",
     # Vendored / minified JS (htmx, etc.) — too dense for spell-check and
     # not our code to fix.
     "**/static/htmx.min.js",
@@ -86,6 +89,10 @@ extend-ignore-re = [
     # in [default.extend-words], which is global: a real misspelling of
     # "Privileges" anywhere else in the repository is still caught.
     'NoNewPrivilages',
+    # The DuckDB Foundation's legal name, as its licence file spells it
+    # ("Stichting" is Dutch for foundation, and typos reads it as "Stitching").
+    # Matched as the whole name so "stichting" stays caught elsewhere.
+    'Stichting DuckDB Foundation',
     # `PUT /api/v2/settings` refuses unknown keys rather than ignoring them,
     # because a caller who misspells one and gets a 200 has been told their
     # change landed. The misspelling is the fixture:

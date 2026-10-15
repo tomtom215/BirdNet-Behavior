@@ -13,6 +13,7 @@ pub(super) async fn activity_heatmap_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::today_species_hour_heatmap(conn, &today, 12))
     })
@@ -74,7 +75,9 @@ pub(super) async fn activity_heatmap_partial(
     // Species rows
     for name in &species_order {
         let hours = species_map.get(name).copied().unwrap_or([0i64; 24]);
-        let safe_name = escape_html(name);
+        // Keyed and ordered on the stored name; drawn in the station's language.
+        let shown = names.name_of_stored(name);
+        let safe_name = escape_html(shown);
         let _ = write!(
             html,
             "<div class=\"ah-lbl\" title=\"{safe_name}\">{safe_name}</div>"
@@ -86,7 +89,7 @@ pub(super) async fn activity_heatmap_partial(
                 #[allow(clippy::cast_precision_loss)]
                 let ratio = count as f64 / max_count as f64;
                 let alpha = ratio.mul_add(0.80, 0.12);
-                let title = format!("{name} {h:02}:00 \u{2014} {count}");
+                let title = format!("{shown} {h:02}:00 \u{2014} {count}");
                 let safe_title = escape_html(&title);
                 let _ = write!(
                     html,

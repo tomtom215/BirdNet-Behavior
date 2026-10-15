@@ -46,6 +46,7 @@ pub(super) async fn content(state: AppState) -> String {
     // three years' detections as "your year".
     let today = today_date_string();
     let start = year_start(&today);
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let daily = birdnet_db::sqlite::range_daily_counts(conn, &start, &today)?;
@@ -69,7 +70,7 @@ pub(super) async fn content(state: AppState) -> String {
         }
     };
 
-    render_content(&today, &daily, &top, &new)
+    render_content(&today, &daily, &top, &new, &names)
 }
 
 /// `YYYY-01-01` for the year `today` falls in.
@@ -92,6 +93,7 @@ fn render_content(
     daily: &[birdnet_db::sqlite::DailyCount],
     top: &[(String, String, i64)],
     new: &[(String, String, String)],
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let year = today.get(0..4).unwrap_or("----");
     let total: i64 = daily.iter().map(|d| d.count).sum();
@@ -221,13 +223,14 @@ fn render_content(
         );
     } else {
         for (i, (sci, com, count)) in top.iter().take(10).enumerate() {
+            let shown = names.name(sci, com);
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(com, sci, ""),
+                av = avatar(com, shown, sci, ""),
                 enc = simple_url_encode(com),
-                name = escape_html(com),
+                name = escape_html(shown),
                 count = group_thousands(*count),
             );
         }
@@ -239,8 +242,10 @@ fn render_content(
     let first_voice = daily.first().map(|d| d.date.as_str());
     let newest = new
         .last()
-        .map(|(_, com, date)| (com.as_str(), date.as_str()));
-    let leader = top.first().map(|(_, com, count)| (com.as_str(), *count));
+        .map(|(sci, com, date)| (names.name(sci, com), date.as_str()));
+    let leader = top
+        .first()
+        .map(|(sci, com, count)| (names.name(sci, com), *count));
 
     html.push_str(
         r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Milestones</div><h2 class="sh-h">Moments that mattered</h2></div></div>"#,
@@ -259,14 +264,14 @@ fn render_content(
             &format!("Not yet — nothing heard in {year} so far"),
         ),
     }
-    if let Some((com, count)) = leader {
+    if let Some((shown, count)) = leader {
         milestone(
             &mut html,
             "♪",
             "Most-heard species",
             &format!(
                 "{} · {} detections",
-                escape_html(com),
+                escape_html(shown),
                 group_thousands(count)
             ),
         );
@@ -283,12 +288,12 @@ fn render_content(
             ),
         );
     }
-    if let Some((com, date)) = newest {
+    if let Some((shown, date)) = newest {
         milestone(
             &mut html,
             "✸",
             "Newest arrival",
-            &format!("{} · first heard {}", escape_html(com), escape_html(date)),
+            &format!("{} · first heard {}", escape_html(shown), escape_html(date)),
         );
     }
     html.push_str("</div></div>");
@@ -341,7 +346,13 @@ mod tests {
             "Northern Cardinal".to_string(),
             30,
         )];
-        let html = render_content("2026-05-22", &daily, &top, &[]);
+        let html = render_content(
+            "2026-05-22",
+            &daily,
+            &top,
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(html.contains("Your year in"));
         assert!(html.contains("rp-stats"));
         assert!(html.contains("Northern Cardinal"));
@@ -361,6 +372,7 @@ mod tests {
             &[day("2026-03-01"), day("2026-04-01")],
             &[],
             &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("2026-03-01 · 5 · the loudest"), "{html}");
     }

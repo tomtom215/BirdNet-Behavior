@@ -264,7 +264,12 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
             "{{toast_region}}",
             crate::routes::pages::TOAST_REGION_HTML,
         )
-        .replace("{{species_name}}", &escape_html(&det.com_name))
+        // The page is read by a visitor, so the name is in the station's language;
+        // the token, the audio links and `species_encoded` carry the stored one.
+        .replace(
+            "{{species_name}}",
+            &escape_html(state.names().name(&det.sci_name, &det.com_name)),
+        )
         .replace("{{scientific_name}}", &escape_html(&det.sci_name))
         .replace("{{species_encoded}}", &simple_url_encode(&det.com_name))
         .replace("{{date}}", &escape_html(&det.date))

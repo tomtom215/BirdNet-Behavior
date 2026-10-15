@@ -31,7 +31,7 @@ pub async fn settings_page(
     state
         .run_blocking(move |state| {
             Ok(Html(match load_settings_for(state, user.as_deref()) {
-                Ok(settings_map) => render_settings_page(&settings_map),
+                Ok(settings_map) => render_settings_page(&settings_map, state.names()),
                 Err(e) => crate::routes::admin::admin_shell(
                     "Settings",
                     "settings",
@@ -58,7 +58,7 @@ pub async fn settings_partial(
     state
         .run_blocking(move |state| {
             Ok(Html(match load_settings_for(state, user.as_deref()) {
-                Ok(settings_map) => render_settings_form(&settings_map),
+                Ok(settings_map) => render_settings_form(&settings_map, state.names()),
                 Err(e) => unreadable_notice(&e),
             }))
         })
@@ -202,6 +202,23 @@ fn birdweather_token_problem(form: &SettingsForm) -> Option<String> {
     )
 }
 
+/// A common-name language that is not one the station has names for, explained.
+///
+/// The page offers a list, so only a hand-made request can send anything else.
+/// It is refused rather than stored because an unknown value is silently the
+/// same as English at start-up, and a station whose owner picked German and
+/// got English with no word of why is a worse failure than a refused form.
+/// Empty is a real answer: it clears the setting.
+fn language_problem(form: &SettingsForm) -> Option<String> {
+    let lang = form.database_lang.as_deref()?.trim();
+    if lang.is_empty() || birdnet_core::i18n::find_language(lang).is_some() {
+        return None;
+    }
+    Some(format!(
+        "{lang:?} is not a language species names are available in. Choose one from the list."
+    ))
+}
+
 /// Save submitted settings and return an HTMX feedback partial.
 ///
 /// # Errors
@@ -242,6 +259,7 @@ pub async fn save_settings(
     // would leave the form showing one thing and the station running another.
     let mut problems = range_problems(&form);
     problems.extend(birdweather_token_problem(&form));
+    problems.extend(language_problem(&form));
     if !problems.is_empty() {
         let list = problems.iter().fold(String::new(), |mut acc, p| {
             use std::fmt::Write as _;

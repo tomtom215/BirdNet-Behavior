@@ -401,7 +401,8 @@ async fn serve(
     };
     let state = helpers::init_species_codes(state, &cli, config.as_ref());
     let state = helpers::init_taxonomy(state, &cli, config.as_ref());
-    let state = helpers::init_i18n(state, &cli, config.as_ref());
+    let observed = state.run_blocking(helpers::observed_names).await;
+    let state = helpers::init_i18n(state, &cli, config.as_ref(), &observed);
     let state = helpers::init_private_mode(state, &cli, config.as_ref());
 
     // The capture supervisor publishes per-source health into this shared

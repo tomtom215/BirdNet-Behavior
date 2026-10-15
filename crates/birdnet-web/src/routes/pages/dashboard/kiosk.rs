@@ -77,6 +77,7 @@ pub(super) async fn kiosk_page() -> Html<String> {
 pub(super) async fn kiosk_content_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         // A kiosk hangs on a wall and nobody is reading a log beside it, so a
         // failed read must not paint three zeroes and an empty list. Each of
@@ -122,7 +123,7 @@ pub(super) async fn kiosk_content_partial(
   <span class="conf {cls}">{conf_pct:.0}%</span>
   <span class="time">{time} &middot; {date}</span>
 </div>"#,
-                    com = escape_html(&d.com_name),
+                    com = escape_html(names.name(&d.sci_name, &d.com_name)),
                     sci = escape_html(&d.sci_name),
                     time = escape_html(&d.time),
                     date = escape_html(&d.date),

@@ -56,6 +56,7 @@ async fn detection_detail_page(
     // An in-memory read, so it happens here rather than on the blocking pool,
     // and before `state` is moved into the closure below.
     let nearby = state.nearby();
+    let names = state.names_handle();
 
     // The detection and its verdict are propagated, not defaulted: a failed
     // read rendered "Detection not found" (with a 200), which tells someone
@@ -121,6 +122,7 @@ async fn detection_detail_page(
         &corroboration,
         nearby.as_deref(),
         &headers,
+        &names,
     )
     .into_response())
 }
@@ -154,10 +156,14 @@ fn render_detail_page(
     corroboration: &[birdnet_db::sqlite::ConcurrentDetection],
     nearby: Option<&birdnet_integrations::ebird::Snapshot>,
     headers: &HeaderMap,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
-    let com = escape_html(&det.com_name);
+    // The links, the share token and the review form carry the stored name;
+    // the heading and the tab title are in the station's language.
+    let shown = names.name(&det.sci_name, &det.com_name);
+    let com = escape_html(shown);
     let sci = escape_html(&det.sci_name);
     let date = escape_html(&det.date);
     let time = escape_html(&det.time);
@@ -229,7 +235,7 @@ fn render_detail_page(
 
     super::render_page_for_request(
         // Raw text: the layout escapes the title itself.
-        &format!("{} · {} {}", det.com_name, det.date, det.time),
+        &format!("{shown} · {} {}", det.date, det.time),
         &content,
         "today",
         headers,

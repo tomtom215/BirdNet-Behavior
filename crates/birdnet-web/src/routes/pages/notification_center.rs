@@ -47,6 +47,7 @@ async fn notif_history_partial(
 ) -> impl axum::response::IntoResponse {
     let channel = params.channel.clone();
     let limit = params.limit.unwrap_or(50).min(200);
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -85,7 +86,12 @@ async fn notif_history_partial(
                     "failed" => "low",
                     _ => "mid",
                 };
-                let species = e.species_com_name.as_deref().unwrap_or("\u{2014}");
+                // The log keeps the name as it was stored; the table shows it in
+                // the station's language.
+                let shown = e
+                    .species_com_name
+                    .as_deref()
+                    .map_or("\u{2014}", |stored| names.name_of_stored(stored));
                 let msg = e.message.as_deref().unwrap_or("\u{2014}");
                 let _ = write!(
                     html,
@@ -98,7 +104,7 @@ async fn notif_history_partial(
                      </tr>",
                     time = escape_html(&e.sent_at),
                     channel = escape_html(&e.channel),
-                    species = escape_html(species),
+                    species = escape_html(shown),
                     status = escape_html(&e.status),
                     msg = escape_html(msg),
                 );

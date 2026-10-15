@@ -159,45 +159,134 @@ fn default_image_cache_dir(db_path: &std::path::Path) -> PathBuf {
         .join("images")
 }
 
-/// Initialize i18n language settings.
+/// Choose the language species common names are shown in.
+///
+/// Always installs a [`NameLocalizer`](birdnet_core::i18n::NameLocalizer), even
+/// for English, so that the Settings page can show what each other language
+/// would cover of this station's classifier. The names stored with detections
+/// are never changed; see [`birdnet_core::i18n`].
+///
+/// A value that names no language we have is reported and treated as English,
+/// not as an error: the station keeps recording either way, and
+/// `/admin/settings` refuses to save one.
+///
+/// `observed` is `(scientific name, common name)` for every species the
+/// database already holds (see [`observed_names`]). It is passed in rather than
+/// read here because this runs from `serve`, an async function, and a database
+/// read on a runtime worker is what `database_work_stays_off_the_async_runtime`
+/// exists to refuse.
 pub fn init_i18n(
     state: birdnet_web::state::AppState,
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
+    observed: &[(String, String)],
 ) -> birdnet_web::state::AppState {
-    let lang = if cli.lang == "en" {
-        config
-            .and_then(|c| c.get("DATABASE_LANG"))
-            .map_or_else(|| "en".to_string(), std::string::ToString::to_string)
-    } else {
-        cli.lang.clone()
-    };
+    use birdnet_core::i18n::{ENGLISH, LanguagePack, NameLocalizer, find_language};
 
-    if lang == "en" {
-        return state;
-    }
+    let configured = language_setting(cli, config);
+    let configured = configured.trim();
+    let code = if configured.is_empty() {
+        ENGLISH
+    } else if let Some(language) = find_language(configured) {
+        language.code
+    } else {
+        tracing::warn!(
+            lang = configured,
+            "DATABASE_LANG is not a language species names are available in; \
+             names are shown as the classifier gives them (see /api/v2/languages)"
+        );
+        ENGLISH
+    };
 
     let labels_dir = cli
         .labels_dir
         .clone()
         .or_else(|| config?.get("LABELS_DIR").map(PathBuf::from));
+    let pack = LanguagePack::bundled_with_overrides(code, labels_dir.as_deref(), |e| {
+        tracing::warn!(
+            lang = code,
+            error = %e,
+            "the labels file in LABELS_DIR could not be used; the bundled names are shown"
+        );
+    })
+    .unwrap_or_else(|e| {
+        tracing::warn!(lang = code, error = %e, "species names are unavailable; showing them as stored");
+        LanguagePack::bundled(ENGLISH).expect("English is always bundled")
+    });
 
-    let Some(labels_dir) = labels_dir else {
-        tracing::warn!(lang = %lang, "language set but no --labels-dir configured");
-        return state;
-    };
-
-    let mut mgr = birdnet_core::i18n::I18nManager::new(&lang);
-    match mgr.load_language(&lang, &labels_dir) {
-        Ok(()) => {
-            tracing::info!(lang = %lang, "i18n language loaded");
-            state.with_i18n(mgr)
+    let labels = classifier_label_path(cli, config)
+        .and_then(|path| birdnet_core::inference::labels::LabelSet::load(&path).ok());
+    // The names actually stored — an import's, an earlier model's — as well as the
+    // label file's, so a page that has only the stored name can still translate it.
+    let names = NameLocalizer::new(pack, labels.as_ref()).with_observed_names(
+        observed
+            .iter()
+            .map(|(sci, com)| (sci.as_str(), com.as_str())),
+    );
+    match names.coverage() {
+        Some(c) => tracing::info!(
+            lang = names.language().code,
+            named = c.named,
+            of = c.of,
+            "species common names shown in {}; the rest keep the classifier's name",
+            names.language().english_name
+        ),
+        None if names.is_identity() => {
+            tracing::debug!("species common names shown as the classifier gives them");
         }
+        None => tracing::info!(
+            lang = names.language().code,
+            "species common names shown in {} (no classifier label file to count coverage against)",
+            names.language().english_name
+        ),
+    }
+    state.with_names(names)
+}
+
+/// `(scientific name, common name)` for every species the database holds, for
+/// [`init_i18n`]. Blocks on the database: call it through
+/// `AppState::run_blocking` from async code.
+///
+/// A database that cannot be read gives an empty list and a warning: the names
+/// are then those of the classifier's label file, which is what a station with
+/// no history has, and the station still starts.
+pub fn observed_names(state: &birdnet_web::state::AppState) -> Vec<(String, String)> {
+    match state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 100_000)) {
+        Ok(species) => species
+            .into_iter()
+            .map(|s| (s.sci_name, s.com_name))
+            .collect(),
         Err(e) => {
-            tracing::warn!(lang = %lang, error = %e, "failed to load language pack");
-            state
+            tracing::warn!(
+                error = %e,
+                "could not read the species already stored; only the classifier's \
+                 labels will be translated"
+            );
+            Vec::new()
         }
     }
+}
+
+/// The configured common-name language, before it is checked against the
+/// languages there are: `--lang` when it was given, else `DATABASE_LANG`
+/// (which `/admin/settings` writes through the overlay), else `"en"`.
+///
+/// `--lang en` given explicitly wins over a `DATABASE_LANG=de` in the file, as
+/// every other flag does; the old test for "is the flag still its default"
+/// could not tell that from not passing it.
+pub fn language_setting(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> String {
+    super::resolve::setting_str(cli, "lang", &cli.lang, config, "DATABASE_LANG")
+}
+
+/// Where the classifier's label file is, resolved as the daemon resolves it
+/// (`--labels`, else `LABELS_PATH`).
+fn classifier_label_path(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<PathBuf> {
+    cli.labels
+        .clone()
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from))
 }
 
 /// Initialize custom site name.
@@ -291,11 +380,7 @@ pub fn init_taxonomy(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) -> birdnet_web::state::AppState {
-    let path = cli
-        .labels
-        .clone()
-        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
-    let Some(path) = path else {
+    let Some(path) = classifier_label_path(cli, config) else {
         tracing::info!(
             "no classifier label file configured: the species pages will not offer browsing by order or genus"
         );
@@ -518,7 +603,7 @@ pub fn run_refresh_extension(
 
 #[cfg(test)]
 mod tests {
-    use super::{init_i18n, init_image_cache, init_site_name, init_species_codes};
+    use super::{init_i18n, init_image_cache, init_site_name, init_species_codes, observed_names};
     use crate::helpers::test_support::{config_with, default_cli, test_state};
 
     /// `/admin/settings` writes `info_site`, which the overlay turns into
@@ -620,36 +705,150 @@ mod tests {
 
     // ── init_i18n ──────────────────────────────────────────────────────
 
-    #[test]
-    fn i18n_noop_when_lang_is_english() {
-        // English is the default; no language pack needs loading.
-        let cli = default_cli();
-        let state = init_i18n(test_state(), &cli, None);
-        // i18n manager not installed — i18n_ref returns None.
-        assert!(state.with_i18n_ref(|_| ()).is_none());
+    /// Two species and the names a German station would show for them, in the
+    /// classifier's V2.4 text format.
+    fn label_file(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("labels.txt");
+        std::fs::write(
+            &path,
+            "Turdus merula_Common Blackbird\nAcanthisitta chloris_Rifleman\n",
+        )
+        .unwrap();
+        path
     }
 
     #[test]
-    fn i18n_warns_and_returns_state_when_no_labels_dir() {
-        // lang != "en" but no labels_dir → helper logs a warning and
-        // returns state unchanged. The unit test pins the unchanged
-        // return; the warning emission lives in tracing and is verified
-        // by hand.
+    fn english_shows_every_name_as_stored() {
+        let state = init_i18n(test_state(), &default_cli(), None, &[]);
+        assert!(state.names().is_identity());
+        assert_eq!(state.names().language().code, "en");
+        assert_eq!(
+            state.names().name("Turdus merula", "Common Blackbird"),
+            "Common Blackbird"
+        );
+    }
+
+    #[test]
+    fn a_language_on_the_command_line_translates_with_no_label_file_and_no_labels_dir() {
+        // The setting used to need a `--labels-dir` nobody had, and without one
+        // logged a warning and did nothing at all.
         let mut cli = default_cli();
         cli.lang = "de".to_owned();
-        let state = init_i18n(test_state(), &cli, None);
-        assert!(state.with_i18n_ref(|_| ()).is_none());
+        let state = init_i18n(test_state(), &cli, None, &[]);
+        assert_eq!(state.names().language().code, "de");
+        assert_eq!(
+            state.names().name("Turdus merula", "Common Blackbird"),
+            "Amsel"
+        );
     }
 
     #[test]
-    fn i18n_uses_config_database_lang_when_cli_default() {
-        // CLI defaults to "en"; config overrides to "de" but no labels
-        // dir is provided, so the helper still logs and returns
-        // unchanged state.
-        let cli = default_cli();
+    fn the_language_setting_in_the_config_is_the_one_used_when_the_flag_is_default() {
         let cfg = config_with(&[("DATABASE_LANG", "de")]);
-        let state = init_i18n(test_state(), &cli, Some(&cfg));
-        assert!(state.with_i18n_ref(|_| ()).is_none());
+        let state = init_i18n(test_state(), &default_cli(), Some(&cfg), &[]);
+        assert_eq!(
+            state.names().name("Turdus merula", "Common Blackbird"),
+            "Amsel"
+        );
+        // And an explicit flag wins over it, `--lang en` included.
+        let mut cli = crate::helpers::test_support::cli_with_explicit(&["lang"]);
+        cli.lang = "fr".to_owned();
+        let state = init_i18n(test_state(), &cli, Some(&cfg), &[]);
+        assert_eq!(
+            state.names().name("Turdus merula", "Common Blackbird"),
+            "Merle noir"
+        );
+        cli.lang = "en".to_owned();
+        let state = init_i18n(test_state(), &cli, Some(&cfg), &[]);
+        assert!(
+            state.names().is_identity(),
+            "an explicit --lang en must beat DATABASE_LANG=de"
+        );
+    }
+
+    #[test]
+    fn a_regional_or_oddly_cased_code_still_picks_the_language() {
+        for raw in ["DE", " de ", "de_AT", "de-DE"] {
+            let cfg = config_with(&[("DATABASE_LANG", raw)]);
+            let state = init_i18n(test_state(), &default_cli(), Some(&cfg), &[]);
+            assert_eq!(state.names().language().code, "de", "{raw:?}");
+        }
+        let cfg = config_with(&[("DATABASE_LANG", "zh-cn")]);
+        let state = init_i18n(test_state(), &default_cli(), Some(&cfg), &[]);
+        assert_eq!(state.names().language().code, "zh_CN");
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_language_is_english_not_a_failure() {
+        for raw in ["xx", "eng", "zh", "", "   "] {
+            let cfg = config_with(&[("DATABASE_LANG", raw)]);
+            let state = init_i18n(test_state(), &default_cli(), Some(&cfg), &[]);
+            assert!(state.names().is_identity(), "{raw:?}");
+            assert_eq!(state.names().language().code, "en", "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn the_classifier_label_file_lets_every_language_be_counted_even_in_english() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cli = default_cli();
+        cli.labels = Some(label_file(tmp.path()));
+        let state = init_i18n(test_state(), &cli, None, &[]);
+        // The station is in English, yet can say what German or Korean would cover.
+        assert!(state.names().is_identity());
+        let de = state.names().coverage_of("de").expect("counted");
+        let ko = state.names().coverage_of("ko").expect("counted");
+        assert_eq!((de.named, de.of), (2, 2));
+        assert_eq!((ko.named, ko.of), (1, 2), "Korean has no Rifleman");
+    }
+
+    #[test]
+    fn names_already_stored_in_the_database_are_translated_too() {
+        // An import from another station: rows named by *its* labels, which the
+        // station's own label file does not contain.
+        let state = test_state();
+        state.with_db(|conn| {
+            conn.execute(
+                "INSERT INTO detections
+                     (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
+                      File_Name, chunk_offset_secs)
+                 VALUES ('2026-05-01', '06:00:00', 'Turdus merula', 'Eurasian Blackbird',
+                         0.9, 0.7, 18, 1.25, 0.0, 'a.wav', 0)",
+                [],
+            )
+            .expect("insert");
+        });
+        let mut cli = default_cli();
+        cli.lang = "de".to_owned();
+        let observed = observed_names(&state);
+        assert_eq!(observed.len(), 1, "the row just inserted");
+        let state = init_i18n(state, &cli, None, &observed);
+        assert_eq!(state.names().name_of_stored("Eurasian Blackbird"), "Amsel");
+        // Counterpart: a name nothing has stored is not guessed.
+        assert_eq!(state.names().name_of_stored("Great Tit"), "Great Tit");
+    }
+
+    #[test]
+    fn a_labels_dir_file_overrides_the_bundled_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("de_labels.txt"),
+            "Turdus merula_Schwarzdrossel\n",
+        )
+        .unwrap();
+        let mut cli = default_cli();
+        cli.lang = "de".to_owned();
+        cli.labels_dir = Some(tmp.path().to_owned());
+        let state = init_i18n(test_state(), &cli, None, &[]);
+        assert_eq!(
+            state.names().name("Turdus merula", "Common Blackbird"),
+            "Schwarzdrossel"
+        );
+        assert_eq!(
+            state.names().name("Parus major", "Great Tit"),
+            "Kohlmeise",
+            "the rest is still the bundle"
+        );
     }
 
     // ── init_image_cache ───────────────────────────────────────────────

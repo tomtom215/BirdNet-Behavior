@@ -6,7 +6,7 @@
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
 use birdnet_core::audio::capture::{CaptureControlHandle, CaptureStatusHandle, LiveAudioHubHandle};
-use birdnet_core::i18n::I18nManager;
+use birdnet_core::i18n::NameLocalizer;
 
 use crate::analytics_cache::AnalyticsCache;
 use crate::api_token::ApiToken;
@@ -20,7 +20,7 @@ use rusqlite::Connection;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 use crate::metrics::{self, SharedMetrics};
@@ -117,8 +117,10 @@ struct AppStateInner {
     /// close promptly so axum's connection drain finishes, instead of holding
     /// the socket open until the `SHUTDOWN_GRACE` backstop force-exits.
     shutdown: watch::Sender<bool>,
-    /// Localization manager for species common names.
-    i18n: Option<RwLock<I18nManager>>,
+    /// What to show for a species' stored common name: the station's language,
+    /// resolved once at startup. English (every name as stored) unless
+    /// `DATABASE_LANG` names another language.
+    names: Arc<NameLocalizer>,
     /// Custom site name for branding.
     site_name: Option<String>,
     /// Species info link site: "ebird", "allaboutbirds", or "none".
@@ -300,7 +302,7 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
                 shutdown: watch::channel(false).0,
-                i18n: None,
+                names: Arc::new(NameLocalizer::english()),
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
@@ -543,7 +545,7 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
                 shutdown: watch::channel(false).0,
-                i18n: None,
+                names: Arc::new(NameLocalizer::english()),
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
@@ -599,7 +601,7 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
                 shutdown: watch::channel(false).0,
-                i18n: None,
+                names: Arc::new(NameLocalizer::english()),
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
@@ -658,12 +660,16 @@ impl AppState {
         }
     }
 
-    /// Set the i18n manager for species name translation.
+    /// Show species common names in the station's language.
+    ///
+    /// Only what is *drawn* changes. The names stored with detections, and so
+    /// every link, form value, query and API field that carries one, stay the
+    /// classifier's; see [`birdnet_core::i18n`] for why.
     #[must_use]
-    pub fn with_i18n(self, manager: I18nManager) -> Self {
-        let inner = unwrap_inner(self.inner, "with_i18n");
+    pub fn with_names(self, names: NameLocalizer) -> Self {
+        let inner = unwrap_inner(self.inner, "with_names");
         Self {
-            inner: rebuild_inner(inner, |s| s.i18n = Some(RwLock::new(manager))),
+            inner: rebuild_inner(inner, |s| s.names = Arc::new(names)),
         }
     }
 
@@ -1749,25 +1755,20 @@ impl AppState {
         self.inner.shutdown.send_replace(true);
     }
 
-    /// Execute a closure with a reference to the i18n manager.
+    /// What to show for a species' stored common name.
     ///
-    /// Recovers from a poisoned `RwLock` (reading through the inner value)
-    /// instead of panicking: release builds are `panic = "abort"`, so a
-    /// propagated poison here would take down the whole daemon. In practice the
-    /// i18n lock is only ever write-locked once at construction, before it is
-    /// shared, so it cannot actually poison — this just keeps the policy
-    /// consistent with every other lock in the crate, which all recover via
-    /// `PoisonError::into_inner`.
-    pub fn with_i18n_ref<F, T>(&self, f: F) -> Option<T>
-    where
-        F: FnOnce(&I18nManager) -> T,
-    {
-        self.inner.i18n.as_ref().map(|lock| {
-            let mgr = lock
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            f(&mgr)
-        })
+    /// Call it wherever a name is drawn for a person to read. Do not call it
+    /// for a name that is a key: a link, a hidden form field, a query argument,
+    /// a JSON field or an export column carries the name as stored.
+    pub fn names(&self) -> &NameLocalizer {
+        &self.inner.names
+    }
+
+    /// The same, as a handle that outlives the state: for the handlers that
+    /// move `state` into a blocking task and draw names after it returns.
+    /// A reference count, not a copy of the tables.
+    pub fn names_handle(&self) -> Arc<NameLocalizer> {
+        Arc::clone(&self.inner.names)
     }
 
     /// Get the custom species image directory, if configured.

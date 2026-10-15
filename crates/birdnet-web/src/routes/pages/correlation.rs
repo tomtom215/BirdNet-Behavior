@@ -152,7 +152,7 @@ fn compute_correlation_pairs(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
         .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 25, MIN_SHARED_BLOCKS))
         .ok()?;
-    Some(render_pairs_table(&pairs, days))
+    Some(render_pairs_table(&pairs, days, state.names()))
 }
 
 async fn correlation_pairs_partial(
@@ -176,7 +176,10 @@ fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
         .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
     let (labels, matrix) = build_matrix(&pairs, 10);
-    Some(super::viz::cooccurrence_matrix(&labels, &matrix))
+    Some(super::viz::cooccurrence_matrix(
+        &displayed(&labels, state.names()),
+        &matrix,
+    ))
 }
 
 async fn cooccurrence_matrix_partial(
@@ -201,7 +204,10 @@ fn compute_acoustic_network(state: &AppState, days: u32) -> Option<String> {
         .ok()?;
     // Fewer arcs read more clearly as a chord than the 10-wide matrix.
     let (labels, matrix) = build_matrix(&pairs, 9);
-    Some(super::viz::chord_diagram(&labels, &matrix))
+    Some(super::viz::chord_diagram(
+        &displayed(&labels, state.names()),
+        &matrix,
+    ))
 }
 
 async fn acoustic_network_partial(
@@ -214,6 +220,15 @@ async fn acoustic_network_partial(
     })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// The species labels as the station's language names them. The matrix is built,
+/// ranked and indexed on the stored names; only what is drawn changes.
+fn displayed(labels: &[String], names: &birdnet_core::i18n::NameLocalizer) -> Vec<String> {
+    labels
+        .iter()
+        .map(|l| names.name_of_stored(l).to_owned())
+        .collect()
 }
 
 /// Reduce co-occurrence pairs to a square matrix over the `max_species` most
@@ -263,7 +278,11 @@ fn build_matrix(
     (labels, matrix)
 }
 
-fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> String {
+fn render_pairs_table(
+    pairs: &[birdnet_db::sqlite::SpeciesPair],
+    _days: u32,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     if pairs.is_empty() {
         return super::empty_states::no_co_signal();
     }
@@ -306,8 +325,8 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
     </div>
   </td>
 </tr>"#,
-            a = escape_html(&pair.species_a),
-            b = escape_html(&pair.species_b),
+            a = escape_html(names.name_of_stored(&pair.species_a)),
+            b = escape_html(names.name_of_stored(&pair.species_b)),
             blocks = pair.shared_blocks,
         );
     }
@@ -322,9 +341,14 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
 
 fn compute_companion(state: &AppState, species: &str, days: u32) -> Option<String> {
     let companions = state
-        .with_db(|conn| companion_species(conn, species, days, 15))
+        .with_db(|conn| {
+            // Typed in the station's language, asked of the database in the
+            // classifier's.
+            let stored = super::name_search::stored_name_for_typed(conn, state.names(), species);
+            companion_species(conn, &stored, days, 15)
+        })
         .ok()?;
-    Some(render_companion_table(&companions))
+    Some(render_companion_table(&companions, state.names()))
 }
 
 async fn companion_partial(
@@ -350,7 +374,10 @@ async fn companion_partial(
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
-fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String {
+fn render_companion_table(
+    companions: &[birdnet_db::sqlite::FollowOn],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     if companions.is_empty() {
         return r#"<p class="co-hint">
           No companion species found. Try a different name or extend the time window.
@@ -401,7 +428,7 @@ fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String
     <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
   </td>
 </tr>"#,
-            name = escape_html(&c.companion),
+            name = escape_html(names.name_of_stored(&c.companion)),
             days = c.shared_days,
             conf = conf_pct,
         );
@@ -433,7 +460,7 @@ mod tests {
 
     #[test]
     fn render_pairs_table_empty() {
-        let html = render_pairs_table(&[], 30);
+        let html = render_pairs_table(&[], 30, &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("Not enough overlap"));
     }
 
@@ -447,7 +474,7 @@ mod tests {
             blocks_b: 8,
             overlap: 5.0 / 13.0,
         }];
-        let html = render_pairs_table(&pairs, 30);
+        let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("Robin"));
         assert!(html.contains("Wren"));
         assert!(html.contains("<td>5</td>"), "{html}");
@@ -464,14 +491,14 @@ mod tests {
             blocks_b: 1,
             overlap: 1.0,
         }];
-        let html = render_pairs_table(&pairs, 30);
+        let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
     }
 
     #[test]
     fn render_companion_table_empty() {
-        let html = render_companion_table(&[]);
+        let html = render_companion_table(&[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("No companion"));
     }
 
@@ -483,7 +510,8 @@ mod tests {
             shared_days: 8,
             avg_confidence: 0.85,
         }];
-        let html = render_companion_table(&companions);
+        let html =
+            render_companion_table(&companions, &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("Blue Tit"));
         assert!(html.contains("85%"));
     }

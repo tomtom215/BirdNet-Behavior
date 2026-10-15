@@ -172,6 +172,7 @@ impl SearchParams {
 
         DetectionFilter {
             text: present(self.q.as_ref()).map(str::to_owned),
+            text_also_species: Vec::new(),
             species: present(self.species.as_ref())
                 .map(str::to_owned)
                 .into_iter()
@@ -275,8 +276,18 @@ async fn search_results_partial(
     if !headers.contains_key("hx-request") {
         return axum::response::Redirect::to(&page_url).into_response();
     }
-    let filter = params.to_filter();
+    let mut filter = params.to_filter();
     let offset = params.offset.unwrap_or(0);
+    let names = state.names_handle();
+    // What was typed is read in the station's language: the free text also covers
+    // the species whose name contains it, and an exact species name is turned into
+    // the scientific name the database matches it by.
+    filter.text_also_species = super::name_search::also_species(&names, filter.text.as_deref());
+    for species in &mut filter.species {
+        if let Some(scientific) = names.scientific_name_for(species) {
+            *species = scientific.to_owned();
+        }
+    }
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
@@ -288,7 +299,7 @@ async fn search_results_partial(
     .await;
 
     let html = match result {
-        Ok(Ok((rows, total))) => render_results(&rows, total, offset, &params),
+        Ok(Ok((rows, total))) => render_results(&rows, total, offset, &params, &names),
         // Not "Could not run that search", which reads as a verdict on what was
         // typed, and not a bare 200 with no way forward: this partial answers
         // 200 either way, so the layout's `htmx:responseError` fallback never
@@ -666,6 +677,7 @@ fn render_results(
     total: i64,
     offset: u32,
     params: &SearchParams,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     if rows.is_empty() {
         return "<p class=\"sr-empty\">Nothing matched. Widen a filter, or \
@@ -733,7 +745,7 @@ fn render_results(
              </li>",
             key = escape_html(&key),
             name_q = super::simple_url_encode(&d.com_name),
-            name = escape_html(&d.com_name),
+            name = escape_html(names.name(&d.sci_name, &d.com_name)),
             date = escape_html(&d.date),
             time = escape_html(&d.time),
         );

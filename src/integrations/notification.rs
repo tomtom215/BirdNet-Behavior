@@ -178,6 +178,7 @@ mod tests {
         birdnet_integrations::notification::NotificationContext {
             sci_name: "Pica pica".to_owned(),
             com_name: "Eurasian Magpie".to_owned(),
+            shown_name: None,
             confidence: 0.9,
             confidence_pct: 90,
             date: "2026-05-19".to_owned(),

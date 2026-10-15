@@ -345,7 +345,7 @@ fn list_view(
     let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 500),
-            |q| birdnet_db::sqlite::search_species(conn, q, 500),
+            |q| super::name_search::search_species(conn, state.names(), q, 500),
         )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
         Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
@@ -376,12 +376,13 @@ fn list_view(
             .map(|d| sparkline(d, 84.0, 22.0, Some(&color)))
             .unwrap_or_default();
         let enc = simple_url_encode(&s.com_name);
+        let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(
             rows,
             r#"<tr><td class="sp-rank">{rank}</td><td><a class="sp-cell" href="/species/detail?name={enc}"><span class="sp-cell-av">{av}</span><span class="sp-cell-tx"><span class="sp-nm">{name}</span><span class="sp-sci">{sci}</span></span></a></td><td>{spark}</td><td class="sp-num">{count}</td><td>{conf}</td></tr>"#,
             rank = i + 1,
-            av = avatar(&s.com_name, &s.sci_name, ""),
-            name = escape_html(&s.com_name),
+            av = avatar(&s.com_name, shown, &s.sci_name, ""),
+            name = escape_html(shown),
             sci = escape_html(&s.sci_name),
             count = super::group_thousands(s.count),
             conf = conf_bar(s.avg_confidence),
@@ -414,7 +415,7 @@ fn photos_view(
     let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 200),
-            |q| birdnet_db::sqlite::search_species(conn, q, 200),
+            |q| super::name_search::search_species(conn, state.names(), q, 200),
         )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
         Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
@@ -441,9 +442,10 @@ fn photos_view(
         let enc = simple_url_encode(&s.com_name);
         let enc_sci = simple_url_encode(&s.sci_name);
         let _ = write!(
+        let shown = state.names().name(&s.sci_name, &s.com_name);
             cards,
             r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
-            name = escape_html(&s.com_name),
+            name = escape_html(shown),
             count = super::group_thousands(s.count),
         );
     }
@@ -511,9 +513,10 @@ fn lifelist_view(state: &AppState) -> String {
         let enc = simple_url_encode(com);
         let _ = write!(
             firsts_html,
+        let shown = state.names().name(sci, com);
             r#"<a class="sp-first-row" href="/species/detail?name={enc}">{av}<div class="sp-cell-tx"><div class="sp-nm">{name}</div><div class="sp-sci">{sci}</div></div><span class="when">{date}</span></a>"#,
-            av = avatar(com, sci, ""),
-            name = escape_html(com),
+            av = avatar(com, shown, sci, ""),
+            name = escape_html(shown),
             sci = escape_html(sci),
             date = escape_html(date),
         );
@@ -624,6 +627,7 @@ async fn species_detail_page(
             conn.query_row(
                 "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
                 [&com_name],
+    let names = state.names_handle();
                 |row| row.get::<_, String>(0),
             )
             .unwrap_or_default()
@@ -634,7 +638,7 @@ async fn species_detail_page(
 
     let encoded = simple_url_encode(&name);
     let content = SPECIES_DETAIL_HTML
-        .replace("{{species_name}}", &escape_html(&name))
+        .replace("{{species_name}}", &escape_html(&shown))
         .replace("{{scientific_name}}", &escape_html(&sci_name))
         .replace("{{species_encoded}}", &encoded)
         // Skeleton placeholders (O-16) shown until the htmx swap targets load.
@@ -642,9 +646,12 @@ async fn species_detail_page(
         .replace("{{skel_hero}}", super::skeletons::hero_card())
         .replace("{{skel_species_stats}}", &super::skeletons::stat_row(4))
         .replace("{{skel_circadian}}", &super::skeletons::hourly_bars(24))
+    // The URL, the htmx fragments' `?name=` and the search link carry the name
+    // as stored; the heading and the tab title are in the station's language.
+    let shown = names.name(&sci_name, &name).to_owned();
         .replace("{{skel_trend}}", super::skeletons::trend_line())
         .replace("{{skel_detections}}", &super::skeletons::list_rows(5));
-    super::render_page_for_request(&name, &content, "species", &headers)
+    super::render_page_for_request(&shown, &content, "species", &headers)
 }
 
 async fn species_summary_partial(
@@ -880,6 +887,8 @@ async fn species_info_partial(
         sci_name.clone()
     };
 
+    // What is drawn; `name` stays the key for the cache and the external links.
+    let shown = state.names().name(&sci_name, &name).to_owned();
     // The /file image route is cache-only, so warm this species' photo in the
     // background (non-blocking) on first view — a later view then shows it.
     if let Some(cache) = state.image_cache()
@@ -900,7 +909,7 @@ async fn species_info_partial(
             let _ = write!(
                 html,
                 r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" class="spp-info-img" />"#,
-                alt = escape_html(&name),
+                alt = escape_html(&shown),
             );
         }
         if let Some(desc) = &image.description {
@@ -931,7 +940,7 @@ async fn species_info_partial(
         html = format!(
             r#"<p class="spp-muted">No additional info for <em>{}</em> yet.</p>
 <p class="spp-muted-sm">{why}</p>"#,
-            escape_html(&name),
+            escape_html(&shown),
         );
     }
 
@@ -955,7 +964,7 @@ async fn species_info_partial(
                 html.push_str(&ebird_link(
                     state.ebird_species_code(&sci_name),
                     if sci_name.is_empty() {
-                        &name
+                        &shown
                     } else {
                         &sci_name
                     },
@@ -1178,6 +1187,7 @@ async fn species_companions_partial(
             if companions.is_empty() {
                 return (
                     StatusCode::OK,
+    let names = state.names_handle();
                     [(header::CONTENT_TYPE, "text/html")],
                     r#"<p class="spp-muted">No companion species data yet.</p>"#.to_string(),
                 );
@@ -1190,7 +1200,7 @@ async fn species_companions_partial(
                 let _ = write!(
                     html,
                     r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{count}</td></tr>"#,
-                    name = escape_html(&c.companion),
+                    name = escape_html(names.name_of_stored(&c.companion)),
                     count = c.shared_days,
                 );
             }

@@ -842,16 +842,20 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_SITENAME")]
     pub site_name: Option<String>,
 
-    /// Language code for species name translation (e.g., "de", "fr", "ja").
+    /// Language to show species common names in (e.g. `de`, `fr`, `ja`, `zh_CN`).
     ///
-    /// When set, species common names are translated to the specified language
-    /// using `BirdNET` label files. Default: "en" (English).
+    /// Only what is shown changes: the names stored with detections stay the
+    /// classifier's. 35 languages are built in (`/api/v2/languages` lists them
+    /// with their coverage of the installed classifier); species a language has
+    /// no name for keep the classifier's. Default: "en" (English).
     #[arg(long, default_value = "en", env = "BIRDNET_LANG")]
     pub lang: String,
 
-    /// Directory containing `BirdNET` language label files for i18n.
+    /// Directory of optional species-name files that replace the built-in names.
     ///
-    /// Label files should be named like `labels_de.txt`, `labels_fr.txt`, etc.
+    /// Files are named `de_labels.txt`, `fr_labels.txt` and so on (or sit in a
+    /// `labels_l18n/` subdirectory), one `Scientific name_Common name` per line.
+    /// Not needed for the built-in languages.
     #[arg(long, env = "BIRDNET_LABELS_DIR")]
     pub labels_dir: Option<PathBuf>,
 

@@ -325,6 +325,7 @@ async fn history_chart_partial(
         .unwrap_or_else(today_date_string);
 
     let date2 = date.clone();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let hours = birdnet_db::sqlite::hourly_activity(conn, &date)?;
@@ -336,7 +337,9 @@ async fn history_chart_partial(
     .await;
 
     let html = match result {
-        Ok(Ok((hours, total, species))) => render_chart_content(&date2, total, &species, &hours),
+        Ok(Ok((hours, total, species))) => {
+            render_chart_content(&date2, total, &species, &hours, &names)
+        }
         _ => super::error_states::inline("this day's hourly chart"),
     };
 
@@ -358,6 +361,7 @@ async fn day_page(
         .unwrap_or_else(today_date_string);
 
     let date2 = date.clone();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let hours = birdnet_db::sqlite::hourly_activity(conn, &date)?;
@@ -371,7 +375,7 @@ async fn day_page(
 
     let content = match result {
         Ok(Ok((hours, total, species, rows))) => {
-            render_day_page(&date2, total, &species, &hours, &rows)
+            render_day_page(&date2, total, &species, &hours, &rows, &names)
         }
         _ => format!(
             r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>{}"#,
@@ -407,6 +411,7 @@ fn render_chart_content(
     total: i64,
     species: &[(String, String, i64)],
     hours: &[birdnet_db::sqlite::HourlyCount],
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut html = String::new();
     // A day with detections gets an "Open day →" link to its full-page recap
@@ -436,12 +441,13 @@ fn render_chart_content(
         html.push_str(r#"<p class="bnb-meta">No detections on this day.</p>"#);
     } else {
         for (i, (com, sci, count)) in species.iter().take(6).enumerate() {
+            let shown = names.name(sci, com);
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<div class="nm">{name}</div><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(com, sci, ""),
-                name = escape_html(com),
+                av = avatar(com, shown, sci, ""),
+                name = escape_html(shown),
             );
         }
     }
@@ -457,6 +463,7 @@ fn render_day_page(
     species: &[(String, String, i64)],
     hours: &[birdnet_db::sqlite::HourlyCount],
     rows: &[birdnet_db::sqlite::DetectionRow],
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut html = String::new();
     let _ = write!(
@@ -482,13 +489,14 @@ fn render_day_page(
     // Every species heard that day (the panel only shows the top six).
     html.push_str(r#"<div class="bnb-card pad"><div class="rp-h3">Species heard</div>"#);
     for (i, (com, sci, count)) in species.iter().enumerate() {
+        let shown = names.name(sci, com);
         let _ = write!(
             html,
             r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
             rank = i + 1,
-            av = avatar(com, sci, ""),
+            av = avatar(com, shown, sci, ""),
             enc = simple_url_encode(com),
-            name = escape_html(com),
+            name = escape_html(shown),
         );
     }
     html.push_str("</div>");
@@ -498,7 +506,7 @@ fn render_day_page(
         r#"<div class="bnb-card pad"><div class="rp-h3">Every detection · newest first</div>"#,
     );
     for d in rows {
-        render_day_log_row(&mut html, d);
+        render_day_log_row(&mut html, d, names);
     }
     html.push_str("</div>");
     html
@@ -508,8 +516,13 @@ fn render_day_page(
 /// confidence · scientific name · the time (→ that detection's detail). The
 /// `tdl-card` treatment matches the Today log; the lock/delete/play affordances
 /// are dropped — a past day is for reading, not managing.
-fn render_day_log_row(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
+fn render_day_log_row(
+    html: &mut String,
+    d: &birdnet_db::sqlite::DetectionRow,
+    names: &birdnet_core::i18n::NameLocalizer,
+) {
     let enc_name = simple_url_encode(&d.com_name);
+    let shown = names.name(&d.sci_name, &d.com_name);
     let _ = write!(
         html,
         "<div class=\"bnb-card tdl-card\">\
@@ -522,9 +535,9 @@ fn render_day_log_row(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
          <div class=\"bnb-meta mono tdl-card-sci\">{sci} · \
          <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
          </div></div>",
-        av = avatar(&d.com_name, &d.sci_name, ""),
+        av = avatar(&d.com_name, shown, &d.sci_name, ""),
         conf = conf_bar(d.confidence),
-        com = escape_html(&d.com_name),
+        com = escape_html(shown),
         sci = escape_html(&d.sci_name),
         time = escape_html(&d.time),
         date_enc = simple_url_encode(&d.date),
@@ -662,7 +675,13 @@ mod tests {
 
     #[test]
     fn render_chart_content_no_data() {
-        let html = render_chart_content("2026-03-14", 0, &[], &[]);
+        let html = render_chart_content(
+            "2026-03-14",
+            0,
+            &[],
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(html.contains("2026-03-14"));
         assert!(html.contains("No detections on this day"));
     }
@@ -700,11 +719,23 @@ mod tests {
             hour: "06".into(),
             count: 3,
         }];
-        let with = render_chart_content("2026-06-14", 3, &species, &hours);
+        let with = render_chart_content(
+            "2026-06-14",
+            3,
+            &species,
+            &hours,
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(with.contains("Open day"));
         assert!(with.contains("/reports/day?date="));
         // An empty day has nothing to open.
-        let without = render_chart_content("2026-06-14", 0, &[], &[]);
+        let without = render_chart_content(
+            "2026-06-14",
+            0,
+            &[],
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(!without.contains("Open day"));
     }
 
@@ -730,7 +761,14 @@ mod tests {
             row("European Robin", "Erithacus rubecula", "06:12:00", 0.88),
             row("Blue Tit", "Cyanistes caeruleus", "05:40:00", 0.71),
         ];
-        let html = render_day_page("2026-06-14", 7, &species, &hours, &rows);
+        let html = render_day_page(
+            "2026-06-14",
+            7,
+            &species,
+            &hours,
+            &rows,
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         // Back link + header with the day's totals.
         assert!(html.contains(r#"href="/reports?tab=history""#));
         assert!(html.contains("2026-06-14"));
@@ -748,7 +786,14 @@ mod tests {
 
     #[test]
     fn render_day_page_empty_day_has_no_log() {
-        let html = render_day_page("2026-06-14", 0, &[], &[], &[]);
+        let html = render_day_page(
+            "2026-06-14",
+            0,
+            &[],
+            &[],
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(html.contains("No detections were recorded"));
         assert!(html.contains("Back to history"));
         assert!(!html.contains("tdl-card"));

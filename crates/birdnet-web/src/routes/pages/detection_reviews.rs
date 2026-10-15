@@ -128,6 +128,7 @@ async fn detection_reviews_queue_partial(
         .as_deref()
         .and_then(birdnet_db::sqlite::ReviewStatus::parse);
     let offset = q.offset.unwrap_or(0);
+    let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -156,6 +157,7 @@ async fn detection_reviews_queue_partial(
                     offset,
                     matching,
                 },
+                &names,
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -187,6 +189,7 @@ fn render_queue(
     confirmed: i64,
     rejected: i64,
     view: QueueView,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut html = String::with_capacity(8192);
 
@@ -208,7 +211,7 @@ fn render_queue(
         );
     } else {
         for d in pending {
-            render_pending_row(&mut html, d);
+            render_pending_row(&mut html, d, names);
         }
     }
     html.push_str("</div>");
@@ -233,7 +236,7 @@ fn render_queue(
         });
     } else {
         for r in recent {
-            render_verdict_row(&mut html, r);
+            render_verdict_row(&mut html, r, names);
         }
     }
     html.push_str(&render_pager(view));
@@ -242,8 +245,14 @@ fn render_queue(
     html
 }
 
-fn render_pending_row(html: &mut String, d: &birdnet_db::sqlite::UnreviewedDetection) {
+fn render_pending_row(
+    html: &mut String,
+    d: &birdnet_db::sqlite::UnreviewedDetection,
+    names: &birdnet_core::i18n::NameLocalizer,
+) {
+    // `com` is the identity the form posts back; `shown` is what is read.
     let com = escape_html(&d.com_name);
+    let shown = escape_html(names.name(&d.sci_name, &d.com_name));
     let sci = escape_html(&d.sci_name);
     let date = escape_html(&d.date);
     let time = escape_html(&d.time);
@@ -268,7 +277,7 @@ fn render_pending_row(html: &mut String, d: &birdnet_db::sqlite::UnreviewedDetec
   <input type=\"hidden\" name=\"sci_name\" value=\"{sci}\">\
   <input type=\"hidden\" name=\"com_name\" value=\"{com}\">\
   <div class=\"dr-row-main\">\
-    <a href=\"/species/detail?name={enc_com}\" class=\"dr-row-name\">{com}</a>\
+    <a href=\"/species/detail?name={enc_com}\" class=\"dr-row-name\">{shown}</a>\
     <div class=\"dr-row-sci\">{sci}</div>\
     <div class=\"dr-row-meta\">{date} · {time}</div>\
   </div>\
@@ -364,8 +373,12 @@ fn render_pager(view: QueueView) -> String {
     out
 }
 
-fn render_verdict_row(html: &mut String, r: &birdnet_db::sqlite::DetectionReview) {
-    let com = escape_html(&r.com_name);
+fn render_verdict_row(
+    html: &mut String,
+    r: &birdnet_db::sqlite::DetectionReview,
+    names: &birdnet_core::i18n::NameLocalizer,
+) {
+    let com = escape_html(names.name(&r.sci_name, &r.com_name));
     let date = escape_html(&r.date);
     let time = escape_html(&r.time);
     let sci = escape_html(&r.sci_name);

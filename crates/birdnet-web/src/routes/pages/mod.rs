@@ -40,6 +40,7 @@ pub mod homes;
 pub mod life_list;
 pub(crate) mod listen;
 pub mod migration;
+pub(crate) mod name_search;
 pub(crate) mod nav;
 pub mod notification_center;
 pub mod onboarding;

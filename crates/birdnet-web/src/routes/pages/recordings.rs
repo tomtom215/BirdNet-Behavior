@@ -157,7 +157,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
         filter_tok = filter.as_token(),
     );
 
-    let list = render_clips_block(&data, filter, search.as_deref(), 0);
+    let list = render_clips_block(&data, filter, search.as_deref(), 0, state.names());
 
     format!(r#"{lede}{controls}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
 }
@@ -177,7 +177,7 @@ async fn clips_partial(
     let offset = params.offset.unwrap_or(0);
 
     let data = fetch_clips(&state, filter, search.clone(), offset).await;
-    let html = render_clips_block(&data, filter, search.as_deref(), offset);
+    let html = render_clips_block(&data, filter, search.as_deref(), offset, state.names());
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
@@ -221,12 +221,15 @@ async fn fetch_clips(
 ) -> ClipsData {
     let state = state.clone();
     let present = recording_basenames(&state.recording_dir());
+    // The typed search also covers the station's own language.
+    let also = super::name_search::also_species(state.names(), search.as_deref());
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let clips = birdnet_db::sqlite::recent_clips(
                 conn,
                 filter,
                 search.as_deref(),
+                &also,
                 CLIP_PAGE,
                 offset,
             );
@@ -235,8 +238,9 @@ async fn fetch_clips(
                 tracing::warn!(error = %e, "recordings: recent_clips failed");
             }
             let rows = clips.unwrap_or_default();
-            let total = birdnet_db::sqlite::recent_clips_count(conn, filter, search.as_deref())
-                .unwrap_or(0);
+            let total =
+                birdnet_db::sqlite::recent_clips_count(conn, filter, search.as_deref(), &also)
+                    .unwrap_or(0);
             let locked = birdnet_db::sqlite::locked_file_names(conn)
                 .unwrap_or_default()
                 .iter()
@@ -281,6 +285,7 @@ fn render_clips_block(
     filter: RecordingsFilter,
     search: Option<&str>,
     offset: u32,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let rows = &data.rows;
     let total = data.total;
@@ -305,7 +310,7 @@ fn render_clips_block(
 
     let mut html = String::with_capacity(rows.len() * 512);
     for d in rows {
-        render_clip_row(&mut html, d, data, &today);
+        render_clip_row(&mut html, d, data, &today, names);
     }
 
     let shown = offset + u32::try_from(rows.len()).unwrap_or(0);
@@ -332,14 +337,23 @@ fn fmt_clip_duration(secs: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today: &str) {
+fn render_clip_row(
+    html: &mut String,
+    d: &DetectionRow,
+    page: &ClipsData,
+    today: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
+) {
     let file = d.file_name.as_deref().unwrap_or_default();
     let base = base_name(file);
     let is_locked = !base.is_empty() && page.locked.contains(&base);
     let safe_file = escape_html(&base);
 
+    // The link and the row's `hx-vals` carry the stored name; the text, the
+    // player's label and the accessible names are in the station's language.
     let enc_name = simple_url_encode(&d.com_name);
-    let com_name = escape_html(&d.com_name);
+    let shown = names.name(&d.sci_name, &d.com_name);
+    let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
     let time = escape_html(&d.time);
     let date = escape_html(&d.date);
@@ -353,7 +367,7 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
     let meta = format!("{} · {} · {meta_pct}%", d.time, d.date);
     let meta = escape_html(&meta);
 
-    let av = avatar(&d.com_name, &d.sci_name, "");
+    let av = avatar(&d.com_name, shown, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let row = crate::state::RowRef::from(d);
     let lock = lock_button(&row, is_locked);
@@ -773,7 +787,13 @@ mod tests {
     fn a_failed_query_is_not_reported_as_an_empty_shelf() {
         let mut d = data_with(vec![], 0, HashMap::new(), HashSet::new());
         d.failed = true;
-        let html = render_clips_block(&d, RecordingsFilter::All, None, 0);
+        let html = render_clips_block(
+            &d,
+            RecordingsFilter::All,
+            None,
+            0,
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(
             !html.contains("No saved clips yet"),
             "a database error told the operator their recordings were gone: {html}"
@@ -789,6 +809,7 @@ mod tests {
             RecordingsFilter::All,
             None,
             0,
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(unfiltered.contains("No saved clips yet"));
         let filtered = render_clips_block(
@@ -796,6 +817,7 @@ mod tests {
             RecordingsFilter::Rare,
             None,
             0,
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(filtered.contains("No clips match"));
         // A later empty page is silent (just the end of the list).
@@ -805,6 +827,7 @@ mod tests {
                 RecordingsFilter::All,
                 None,
                 24,
+                &birdnet_core::i18n::NameLocalizer::english(),
             )
             .is_empty()
         );
@@ -839,6 +862,7 @@ mod tests {
             &clip_row(Some(9.2)),
             &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(with.contains(r#"<span class="rc-dur">0:09</span>"#));
         // None → no rc-dur element (historical / imported rows aren't faked).
@@ -848,6 +872,7 @@ mod tests {
             &clip_row(None),
             &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(!without.contains("rc-dur"));
         // A zero/unknown length is also omitted, never rendered as "0:00".
@@ -857,6 +882,7 @@ mod tests {
             &clip_row(Some(0.0)),
             &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(!zero.contains("rc-dur"));
     }
@@ -876,6 +902,7 @@ mod tests {
             &clip_row(Some(9.0)),
             &data_with(vec![], 0, first, HashSet::new()),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(a.contains(r#"<span class="bnb-pill moss rc-badge">first ever</span>"#));
 
@@ -891,6 +918,7 @@ mod tests {
             &clip_row(Some(9.0)),
             &data_with(vec![], 0, same_day, HashSet::new()),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(
             !dup.contains("rc-badge"),
@@ -906,6 +934,7 @@ mod tests {
             &clip_row(Some(9.0)),
             &data_with(vec![], 0, rare, HashSet::new()),
             "2026-06-20",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(b.contains(r#"<span class="bnb-pill rare rc-badge">rare</span>"#));
 
@@ -918,6 +947,7 @@ mod tests {
             &clip_row(Some(9.0)),
             &data_with(vec![], 0, old, HashSet::new()),
             "2026-06-20",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(!c.contains("rc-badge"));
     }
@@ -933,6 +963,7 @@ mod tests {
             &clip_row(Some(9.0)),
             &data_with(vec![], 0, HashMap::new(), present),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(
             shown.contains(r#"src="/api/v2/spectrogram/robin.wav?thumb=1""#),
@@ -951,6 +982,7 @@ mod tests {
             &clip_row(Some(9.0)),
             &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(absent.contains("rc-spectro-empty"));
         assert!(!absent.contains("/api/v2/spectrogram/"));

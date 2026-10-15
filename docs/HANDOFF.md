@@ -29,6 +29,13 @@ default setup, secret scanning, who has write access.
   derives from BirdNET-Pi. Whether to publish, under which crate names, and who holds the
   account is not something the repository can decide. See section 5 for what is
   and is not ready.
+- **Whether the bundled species names may be redistributed.** The 35 language
+  tables behind *Common-name language* are BirdNET-Pi's `model/l18n/`, which its
+  README credits to @patlevin and to Wikipedia without saying which name came
+  from where. Wikipedia text is CC BY-SA 4.0; this project is CC BY-NC-SA 4.0.
+  `NOTICE` and `crates/birdnet-core/data/l18n/README.md` give the credit and say
+  the question is not settled here. It matters most before a crates.io release,
+  because the 3.7 MB table ships inside `birdnet-core`.
 - **Release signing.** Tags and `SHA256SUMS` are unsigned; the in-app updater
   trusts the GitHub release. A signing key and a verifier in the updater would
   close that, and the key is yours to create.
@@ -77,9 +84,13 @@ Not done, in the order they seem to matter:
   the bundled-DuckDB build of the packaged crates, docs.rs, and `cargo publish`
   itself were not run.
 - **Feature parity.** The gap analysis against birdnet-go and BirdNET-Pi is in
-  [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md); species-name translation
-  (`DATABASE_LANG`) was left alone because its data licence and its effect on
-  species identity need a decision first.
+  [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md). Species names in 35
+  languages now work (N‑5 there); what that leaves open: the interface text is
+  still English (birdnet-go localizes its own, see Part 5), pages carry
+  `lang="en"` around names in other scripts (WCAG 3.1.2, which no automated
+  check covers), the sort order is by the stored name, and the surfaces that
+  need data to render (migration, the behavioural pages, the correlation matrix)
+  are covered by the source scan but not by a page fetch.
 - **Workflows that have never run:** `codeql.yml`, `osv.yml` and `scorecard.yml`
   were adapted from a2a-rust's, which run, and checked with actionlint; the first
   run on GitHub is their test. Scorecard needs the repository to be public (it

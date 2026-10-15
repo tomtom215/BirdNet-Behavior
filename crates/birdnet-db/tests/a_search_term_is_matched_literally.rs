@@ -57,8 +57,8 @@ fn filter_names(conn: &Connection, text: &str) -> Vec<String> {
 }
 
 fn clip_names(conn: &Connection, text: &str) -> Vec<String> {
-    let rows = recent_clips(conn, RecordingsFilter::All, Some(text), 50, 0).unwrap();
-    let count = recent_clips_count(conn, RecordingsFilter::All, Some(text)).unwrap();
+    let rows = recent_clips(conn, RecordingsFilter::All, Some(text), &[], 50, 0).unwrap();
+    let count = recent_clips_count(conn, RecordingsFilter::All, Some(text), &[]).unwrap();
     assert_eq!(
         usize::try_from(count).unwrap(),
         rows.len(),

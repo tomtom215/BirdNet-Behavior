@@ -5,11 +5,15 @@ use std::fmt::Write as _;
 use crate::routes::pages::escape_html;
 
 /// Render the full species list management admin page (shell + content).
-pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
+pub fn render_species_page(
+    exclude: &[String],
+    include: &[String],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     crate::routes::admin::admin_shell(
         "Species lists",
         "species",
-        &species_lists_body(exclude, include),
+        &species_lists_body(exclude, include, names),
     )
 }
 
@@ -19,7 +23,11 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
 /// page's own markup; the `.container` / bare `nav` rules are dropped since the
 /// shell owns layout + nav. Shared with the Station **Capture** tab via
 /// `super::species_body`.
-pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> String {
+pub(crate) fn species_lists_body(
+    exclude: &[String],
+    include: &[String],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     format!(
         r#"<div class="spl-scope"><style>
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
@@ -51,12 +59,16 @@ pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> Stri
   <div id="species-lists">
     {inner}
   </div></div>"#,
-        inner = render_species_partial(exclude, include)
+        inner = render_species_partial(exclude, include, names)
     )
 }
 
 /// Render the HTMX partial fragment containing both the exclusion and allow-list cards.
-pub fn render_species_partial(exclude: &[String], include: &[String]) -> String {
+pub fn render_species_partial(
+    exclude: &[String],
+    include: &[String],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
     let mut out = String::with_capacity(4096);
     render_list_card(
         &mut out,
@@ -65,6 +77,7 @@ pub fn render_species_partial(exclude: &[String], include: &[String]) -> String 
         exclude,
         "Species that will <strong>never</strong> be saved or notified.",
         "exclude",
+        names,
     );
     render_list_card(
         &mut out,
@@ -73,6 +86,7 @@ pub fn render_species_partial(exclude: &[String], include: &[String]) -> String 
         include,
         "When non-empty, <strong>only</strong> these species are saved or notified.",
         "include",
+        names,
     );
     // Per-species thresholds section (loaded via HTMX)
     out.push_str(
@@ -88,6 +102,7 @@ fn render_list_card(
     list: &[String],
     description: &str,
     kind: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) {
     let _ = write!(
         out,
@@ -99,10 +114,19 @@ fn render_list_card(
 
     for name in list {
         let esc = escape_html(name);
+        // An entry that is a scientific name is shown with the species' name in
+        // the station's language beside it; what is stored, and what the remove
+        // button posts back, is the entry itself.
+        let shown = names.name(name, name);
+        let label = if shown == name.as_str() {
+            esc.clone()
+        } else {
+            format!("{} <i class=\"sci\">{esc}</i>", escape_html(shown))
+        };
         let _ = write!(
             out,
             r##"<span class="pill">
-    {esc}
+    {label}
     <form hx-post="/admin/species/{kind}/remove" hx-target="#species-lists" hx-swap="innerHTML" class="inline-form">
       <input type="hidden" name="name" value="{esc}">
       <button type="submit" class="pill-x" title="Remove">&#x2715;</button>
@@ -193,12 +217,13 @@ pub fn render_filter_test_page(
     exclude: &[String],
     include: &[String],
     species: &[(String, String, u64)],
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     crate::routes::admin::admin_subpage_shell(
         "Filter test",
         "species",
         "Filter test",
-        &filter_test_body(exclude, include, species),
+        &filter_test_body(exclude, include, species, names),
     )
 }
 
@@ -209,6 +234,7 @@ fn filter_test_body(
     exclude: &[String],
     include: &[String],
     species: &[(String, String, u64)], // (sci_name, com_name, count)
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     use birdnet_core::inference::labels::SpeciesLabel;
     use birdnet_core::inference::species_filter::matches_species;
@@ -257,7 +283,8 @@ fn filter_test_body(
             },
         );
 
-        let esc_com = escape_html(com_name);
+        // Matched on the stored name above; drawn in the station's language.
+        let esc_com = escape_html(names.name(sci_name, com_name));
         let esc_sci = escape_html(sci_name);
         let _ = std::fmt::write(
             &mut rows,
@@ -359,7 +386,7 @@ mod tests {
 
     #[test]
     fn render_empty_lists() {
-        let html = render_species_partial(&[], &[]);
+        let html = render_species_partial(&[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("No species in this list"));
         assert!(html.contains("Exclusion List"));
         assert!(html.contains("Allow-List"));
@@ -370,6 +397,7 @@ mod tests {
         let html = render_species_partial(
             &["House Sparrow".to_string()],
             &["European Robin".to_string()],
+            &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("House Sparrow"));
         assert!(html.contains("European Robin"));
@@ -383,8 +411,22 @@ mod tests {
         // Check the page *bodies*, not the full `render_*` (the shared admin
         // shell adds `data-confirm-style` attributes a naive substring check
         // would otherwise flag).
-        assert!(!species_lists_body(&["House Sparrow".to_string()], &[]).contains("style=\""));
-        assert!(!render_species_partial(&["House Sparrow".to_string()], &[]).contains("style=\""));
+        assert!(
+            !species_lists_body(
+                &["House Sparrow".to_string()],
+                &[],
+                &birdnet_core::i18n::NameLocalizer::english()
+            )
+            .contains("style=\"")
+        );
+        assert!(
+            !render_species_partial(
+                &["House Sparrow".to_string()],
+                &[],
+                &birdnet_core::i18n::NameLocalizer::english()
+            )
+            .contains("style=\"")
+        );
         let species = vec![
             (
                 "Turdus merula".to_string(),
@@ -398,7 +440,13 @@ mod tests {
             ),
         ];
         assert!(
-            !filter_test_body(&["House Sparrow".to_string()], &[], &species).contains("style=\"")
+            !filter_test_body(
+                &["House Sparrow".to_string()],
+                &[],
+                &species,
+                &birdnet_core::i18n::NameLocalizer::english()
+            )
+            .contains("style=\"")
         );
     }
 
@@ -406,11 +454,12 @@ mod tests {
     fn species_pages_render_through_admin_shell() {
         // Both species pages render through the shared shell with the Species
         // tab active; the filter-test sub-page also carries the breadcrumb.
-        let lists = render_species_page(&[], &[]);
+        let lists = render_species_page(&[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(lists.contains(r#"href="/admin/species" class="am-nav-active""#));
         assert!(lists.contains(r#"id="species-lists""#));
         assert!(lists.contains("Exclusion List"));
-        let test = render_filter_test_page(&[], &[], &[]);
+        let test =
+            render_filter_test_page(&[], &[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(test.contains(r#"href="/admin/species" class="am-nav-active""#));
         assert!(test.contains("bnb-crumbs"));
         assert!(test.contains("Filter test"));

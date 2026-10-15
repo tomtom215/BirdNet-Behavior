@@ -239,6 +239,7 @@ async fn quarantine_list_partial(
     let filter = parse_filter(params.filter.as_deref());
     let limit = params.limit.unwrap_or(30).min(100);
     let offset = params.offset.unwrap_or(0);
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let rows = birdnet_db::sqlite::list_quarantine(conn, filter, limit, offset)?;
@@ -266,7 +267,7 @@ async fn quarantine_list_partial(
                 render_table_header(&mut html);
             }
             for row in &rows {
-                render_quarantine_row(&mut html, row, &filter_str(filter));
+                render_quarantine_row(&mut html, row, &filter_str(filter), &names);
             }
 
             // Pagination
@@ -326,6 +327,7 @@ fn render_quarantine_row(
     html: &mut String,
     row: &birdnet_db::sqlite::QuarantineRow,
     filter_param: &str,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) {
     let conf_pct = row.confidence * 100.0;
     let conf_cls = if conf_pct >= 80.0 {
@@ -335,7 +337,8 @@ fn render_quarantine_row(
     } else {
         "low"
     };
-    let com_name = escape_html(&row.com_name);
+    // What is read; the link and the share token below carry the stored name.
+    let com_name = escape_html(names.name(&row.sci_name, &row.com_name));
     let sci_name = escape_html(&row.sci_name);
     let date = escape_html(&row.date);
     let time = escape_html(&row.time);

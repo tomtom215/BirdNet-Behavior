@@ -50,6 +50,7 @@ pub(super) async fn analytics_sessions_partial(
     }
     let params = birdnet_behavioral::types::SessionizeParams::default();
     let (gap_minutes, limit) = (params.gap_minutes, params.limit);
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
             .with_analytics(|adb| adb.sessionize(&params))
@@ -67,7 +68,7 @@ pub(super) async fn analytics_sessions_partial(
         Ok(Ok(sessions)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_bursts(&sessions, gap_minutes, limit),
+            render_bursts(&sessions, gap_minutes, limit, &names),
         ),
         Ok(Err(e)) => analytics_error_html("activity sessions", &e),
         // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
@@ -96,6 +97,7 @@ fn render_bursts(
     sessions: &[birdnet_behavioral::types::ActivitySession],
     gap_minutes: u32,
     limit: u32,
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     const SHOWN: usize = 20;
     let bursts: Vec<_> = sessions.iter().filter(|s| s.detection_count > 1).collect();
@@ -113,7 +115,7 @@ fn render_bursts(
         let _ = write!(
             html,
             r"<tr><td>{sp}</td><td>{c}</td><td>{st}</td><td>{d}</td></tr>",
-            sp = escape_html(&s.species),
+            sp = escape_html(names.name_of_stored(&s.species)),
             c = s.detection_count,
             st = escape_html(&s.start_time),
             d = duration,
@@ -151,6 +153,7 @@ pub(super) async fn analytics_retention_partial(
         return analytics_unavailable_html("Species retention");
     }
     let params = birdnet_behavioral::types::RetentionParams::default();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
             .with_analytics(|adb| adb.retention(&params))
@@ -186,7 +189,7 @@ pub(super) async fn analytics_retention_partial(
                 let _ = write!(
                     html,
                     r#"<tr><td>{sp}</td><td><span class="conf {cls}">{label}</span></td><td class="mono">{wk} of {of}</td><td>{d1}</td><td>{d7}</td><td>{d30}</td></tr>"#,
-                    sp = escape_html(&r.species),
+                    sp = escape_html(names.name_of_stored(&r.species)),
                     // The class is read from this, so it is shown beside it.
                     wk = r.weeks_present,
                     of = r.station_weeks,
@@ -264,6 +267,7 @@ pub(super) async fn analytics_next_partial(
     };
 
     let display = trigger.clone();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
             .with_analytics(|adb| {
@@ -289,7 +293,7 @@ pub(super) async fn analytics_next_partial(
                     [(header::CONTENT_TYPE, "text/html")],
                     format!(
                         r#"<p class="bh-muted">No predictions for <strong>{}</strong> yet.</p>"#,
-                        escape_html(&display)
+                        escape_html(names.name_of_stored(&display))
                     ),
                 );
             }
@@ -302,8 +306,8 @@ pub(super) async fn analytics_next_partial(
                 .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
                 .collect();
             let mut html = String::new();
-            render_neighbours(&mut html, "Before", &display, &before);
-            render_neighbours(&mut html, "After", &display, &after);
+            render_neighbours(&mut html, "Before", &display, &before, &names);
+            render_neighbours(&mut html, "After", &display, &after, &names);
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("what sings next", &e),
@@ -318,11 +322,17 @@ pub(super) async fn analytics_next_partial(
 /// One "Before"/"After" table of the follow-on card: `(species, probability,
 /// sessions)` rows for the species heard adjacent to `trigger`.
 #[cfg(feature = "analytics")]
-fn render_neighbours(html: &mut String, side: &str, trigger: &str, rows: &[(&str, f64, u64)]) {
+fn render_neighbours(
+    html: &mut String,
+    side: &str,
+    trigger: &str,
+    rows: &[(&str, f64, u64)],
+    names: &birdnet_core::i18n::NameLocalizer,
+) {
     let _ = write!(
         html,
         r#"<p class="bh-after">{side} <strong>{}</strong>:</p>"#,
-        escape_html(trigger),
+        escape_html(names.name_of_stored(trigger)),
     );
     if rows.is_empty() {
         html.push_str(r#"<p class="bh-muted">Nothing yet.</p>"#);
@@ -350,7 +360,7 @@ fn render_neighbours(html: &mut String, side: &str, trigger: &str, rows: &[(&str
         let _ = write!(
             html,
             r#"<tr><td>{sp}{note}</td><td><span class="conf {cls}">{pct:.0}%</span></td><td>{frequency}</td></tr>"#,
-            sp = escape_html(species),
+            sp = escape_html(names.name_of_stored(species)),
             note = if self_follow {
                 r#" <span class="bnb-meta">(calls again)</span>"#
             } else {
@@ -395,6 +405,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
     if !state.has_analytics() {
         return analytics_unavailable_html("Dawn sequence");
     }
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         // A failed read is an error on the card, not "not enough dawn
         // activity yet" — that sentence is a claim about the station's data.
@@ -449,7 +460,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
         Ok(Ok(Some((sequence, counts, events, funnel)))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_dawn_sequence(&sequence, &counts, &events, &funnel),
+            render_dawn_sequence(&sequence, &counts, &events, &funnel, &names),
         ),
         Ok(Ok(None)) => (
             StatusCode::OK,
@@ -560,10 +571,11 @@ fn render_dawn_sequence(
     counts: &[birdnet_behavioral::types::PatternCount],
     events: &[birdnet_behavioral::types::PatternMatchEvents],
     funnel: &[birdnet_behavioral::types::ChorusFunnel],
+    names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let chain = sequence
         .iter()
-        .map(|s| escape_html(s))
+        .map(|s| escape_html(names.name_of_stored(s)))
         .collect::<Vec<_>>()
         .join(" \u{2192} ");
 
@@ -580,7 +592,11 @@ fn render_dawn_sequence(
     // nothing reached even the first step.
     let step_counts = funnel_step_counts(funnel, sequence.len());
     if step_counts.first().is_some_and(|c| *c > 0) {
-        let steps: Vec<(String, u64)> = sequence.iter().cloned().zip(step_counts).collect();
+        let steps: Vec<(String, u64)> = sequence
+            .iter()
+            .map(|s| names.name_of_stored(s).to_owned())
+            .zip(step_counts)
+            .collect();
         html.push_str(r#"<p class="bnb-meta">Mornings reaching each step:</p>"#);
         html.push_str(&super::viz::sequence_funnel(&steps));
     }
@@ -609,7 +625,7 @@ fn render_dawn_sequence(
             let _ = write!(
                 html,
                 "<tr><td>{sp}</td><td>{t}</td></tr>",
-                sp = escape_html(sp),
+                sp = escape_html(names.name_of_stored(sp)),
                 t = escape_html(step_time_hhmm(t)),
             );
         }
@@ -949,7 +965,12 @@ mod tests {
     fn the_bursts_footnote_counts_bursts() {
         let mut sessions: Vec<_> = (0..25).map(|_| session(3)).collect();
         sessions.extend((0..75).map(|_| session(1)));
-        let html = super::render_bursts(&sessions, 30, 100);
+        let html = super::render_bursts(
+            &sessions,
+            30,
+            100,
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(
             html.contains(
                 "Showing the 20 most recent of 25 bursts found among the latest 100 sessions."
@@ -957,14 +978,24 @@ mod tests {
             "{html}"
         );
         // Counterpart: under the limit, no claim about a cut.
-        let html = super::render_bursts(&sessions[..30], 30, 100);
+        let html = super::render_bursts(
+            &sessions[..30],
+            30,
+            100,
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(html.contains("of 25 bursts.</p>"), "{html}");
     }
 
     /// The empty state names the gap the grouping actually used.
     #[test]
     fn the_empty_bursts_message_names_the_real_gap() {
-        let html = super::render_bursts(&[session(1), session(1)], 30, 100);
+        let html = super::render_bursts(
+            &[session(1), session(1)],
+            30,
+            100,
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
         assert!(html.contains("within 30 minutes"), "{html}");
         assert!(!html.contains("20 minutes"), "{html}");
     }

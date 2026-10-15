@@ -6,7 +6,7 @@
 //! | Path | Purpose |
 //! |------|---------|
 //! | `GET /stream` | Raw MP3 audio stream via HTTP chunked transfer |
-//! | `GET /api/v2/languages` | List available i18n languages |
+//! | `GET /api/v2/languages` | The languages species names can be shown in, and the active one |
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Query, State};
@@ -14,6 +14,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use birdnet_core::audio::capture::LiveSubscription;
+use birdnet_core::i18n::LANGUAGES;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, LazyLock};
@@ -180,39 +181,37 @@ fn freq_shift_filter(base_rate: u32, shift_hz: i32) -> Option<String> {
 // GET /api/v2/languages
 // ---------------------------------------------------------------------------
 
-/// List available languages for species name translation.
+/// The languages species common names can be shown in, and the one this
+/// station is using.
 ///
-/// Returns a JSON array of `{"code": "...", "name": "..."}` objects for all
-/// loaded language packs. If no i18n manager is configured, returns the full
-/// list of supported languages (indicating they *could* be loaded).
+/// Each language's `coverage` says how many of the installed classifier's
+/// species it has a name for, so a station can see what choosing it would give
+/// it; the rest keep the classifier's own name. It is `null` for English (every
+/// name is shown as stored) and when no classifier label file was available to
+/// count against.
 async fn list_languages(State(state): State<AppState>) -> Json<Value> {
-    let langs = state.with_i18n_ref(|mgr| {
-        mgr.available_languages()
-            .into_iter()
-            .map(|(code, name)| {
-                json!({
-                    "code": code,
-                    "name": name,
-                })
+    let names = state.names();
+    let active = names.language().code;
+    let langs: Vec<Value> = LANGUAGES
+        .iter()
+        .map(|l| {
+            let coverage = names
+                .coverage_of(l.code)
+                .map(|c| json!({ "named": c.named, "of": c.of }));
+            json!({
+                "code": l.code,
+                "name": l.english_name,
+                "native_name": l.native_name,
+                "active": l.code == active,
+                "coverage": coverage,
             })
-            .collect::<Vec<_>>()
-    });
-
-    let langs = langs.unwrap_or_else(|| {
-        birdnet_core::i18n::SUPPORTED_LANGUAGES
-            .iter()
-            .map(|(code, name)| {
-                json!({
-                    "code": code,
-                    "name": name,
-                })
-            })
-            .collect()
-    });
+        })
+        .collect();
 
     Json(json!({
         "languages": langs,
         "count": langs.len(),
+        "active": active,
     }))
 }
 

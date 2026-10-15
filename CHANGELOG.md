@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bird names in 35 languages besides English.** Choose one under
+  *Settings → System & Display → Common-name language*, or set `DATABASE_LANG`
+  (`--lang`, `BIRDNET_LANG`); it applies when the station next starts. The names
+  are BirdNET-Pi's `model/l18n` tables at a pinned commit, reduced to the
+  entries that are genuine translations and compiled into the binary: 7,008
+  species across 35 languages, in `crates/birdnet-core/data/l18n/` with each
+  source file's sha256 and `scripts/build-species-names.py` to rebuild it.
+  Only what is *drawn* changes. A detection is still stored under the
+  classifier's English name, so switching language loses and splits nothing, a
+  species list that excludes "Dog" keeps excluding the dog, and links, forms,
+  the JSON API, exports, MQTT and webhooks carry the stored name. The pages a
+  person reads draw the translated name — Today, species, recordings, history,
+  reports, the review queue, quarantine, the dashboard and kiosk, the share
+  page, the RSS and calendar feeds, notifications, the weekly report and the
+  live feed — and the species search, the command palette and the Today,
+  Recordings and Search boxes understand a name typed in that language (a name
+  added to an exclusion or allow list is saved as the scientific name). A
+  language does not name every species: the Settings picker, `--doctor` and
+  `GET /api/v2/languages` say how many of the installed classifier's species
+  each one names, and a species without a name keeps the classifier's. Before,
+  the setting was a dead control: it built a label manager only when
+  `--labels-dir` pointed at files the project did not ship, and nothing asked
+  that manager to translate a name. Held by
+  `every_name_a_reader_sees_is_in_the_stations_language`: 31 pages and feeds
+  fetched from a German station must show German names and none of the English
+  ones, links, forms and the API must still carry the stored name, and every
+  place that escapes a stored name must be classified; and by
+  `the_language_setting_is_a_language_we_have`, and `species_names_table.rs`
+  (the table, `SOURCES.tsv` and the coverage table in its README agree). Not
+  fetched, because they need data the gate does not seed: the share page, the
+  migration, behavioural and correlation pages; they are covered by the source
+  scan or by reading, as is the live feed's script. Limits: the sort order is
+  the stored name's; an alert rule's webhook body carries the stored name (its
+  pattern matches either); non-Latin scripts need a system font, which a bare
+  Raspberry Pi kiosk may not have; the names are upstream's and unreviewed; and
+  whether names derived from Wikipedia may be combined with CC BY-NC-SA 4.0 is
+  open (`docs/HANDOFF.md`). See `docs/book/admin/species-names.md`.
+
 - **Live audio as HLS, so a phone keeps playing through a network
   handover.** `POST /api/v2/streams/hls/{source_id}/start` answers with a
   token and a playlist of two-second AAC segments, with `stop`,
@@ -240,6 +278,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`GET /api/v2/languages` says what a station can show.** Each language
+  carries `native_name`, `active` and `coverage` (`named` of `of` species in the
+  installed classifier; null for English or without a label file), and the body
+  carries the `active` code. Before, it listed all 36 languages as available
+  whether or not anything could be shown in them. `openapi.json` describes it.
+
 - A network source is labelled **Network stream** rather than "Network
   camera", and the Capture tab's section is **Cameras and streams**.
 
@@ -420,6 +464,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build matrix.
 
 ### Fixed
+
+- **`--labels-dir` was documented with the wrong file names.** `--help` said
+  `labels_de.txt`; the loader reads `de_labels.txt` (or the same name under
+  `labels_l18n/`). `--lang`'s help is corrected with it, and
+  `docs/book/_generated/cli-help.txt` regenerated.
+
+- **`typos` read the DuckDB Foundation's name as a misspelling.** `NOTICE` gives
+  the legal name, *Stichting DuckDB Foundation* (its first word is Dutch for
+  foundation), and the checker offered "Stitching". That whole name is ignored,
+  and the bundled name tables are excluded.
 
 - **Notification templates sent blanks and zeros for the station's own
   values.** `$latitude` and `$longitude` printed `0.000000` on every push, and

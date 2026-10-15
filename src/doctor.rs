@@ -209,7 +209,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 25] = [
+const CHECK_FAMILIES: [(&str, Family); 26] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -231,6 +231,9 @@ const CHECK_FAMILIES: [(&str, Family); 25] = [
     }),
     ("config::check_occurrence_filter", |cli, cfg| {
         vec![config::check_occurrence_filter(cli, cfg)]
+    }),
+    ("config::check_species_names", |cli, cfg| {
+        vec![config::check_species_names(cli, cfg)]
     }),
     ("config::check_confirmation_filter", |cli, cfg| {
         vec![config::check_confirmation_filter(cli, cfg)]

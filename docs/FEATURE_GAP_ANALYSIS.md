@@ -60,8 +60,10 @@ cross-reference lands on, so that is what has to be updated when work lands.
 The configuration file is the fork's own feature list, so it is the right place
 to start. `scripts/install_config.sh` defines 57 settings. Mapping each onto
 this project (`.env.example`, the `settings` table keys rendered by
-`crates/birdnet-web/src/routes/admin/settings/render/`) leaves four genuine
-gaps and a handful of deliberate divergences.
+`crates/birdnet-web/src/routes/admin/settings/render/`) leaves five genuine
+gaps and a handful of deliberate divergences. (The fifth, N‑5, was missed by the
+first mapping because the setting existed: `DATABASE_LANG` was a field on the
+settings page and a bridged key, so it counted as present. Nothing used it.)
 
 ### N‑1 · Flickr image provider — SHIPPED
 
@@ -106,6 +108,17 @@ gaps and a handful of deliberate divergences.
 | **Bytes are measured, not tabulated** | Clip size is not in the database, so a byte total is `stat` per file — thousands of syscalls for the species this page exists for. It is a per-row **Measure** action rather than a column: a page that took twenty seconds to open on an SD card would not be worth the number. |
 | **A path that unlinks** | `File_Name` comes from the database, which on a migrated station holds whatever BirdNET-Pi wrote there, and this page removes what it resolves. Paths are canonicalised and checked to be under the recordings directory, with a gate that puts a file outside the tree and asserts it survives a `../` filename. |
 | **A gate that was green for the wrong reason** | The "worst first" ordering test used a fixture in which detection-count order and alphabetical order coincided, so a mutation replacing `ORDER BY count DESC` with `ORDER BY name` passed. Found by running the mutation rather than by reading the test. The fixture now makes the two orders disagree, and the repaired gate also catches a rejected-detections mutation it could not have caught before. |
+
+### N‑5 · Species names in the station's language — SHIPPED
+
+| | |
+|---|---|
+| **Upstream** | `DATABASE_LANG`, and `model/l18n/labels_<code>.json`: 36 files of 7,058 `{scientific: common}` pairs each, activated by `install_language_label.sh`. BirdNET-Pi writes the translated name into the detection row. |
+| **Ours before** | A dead control. `init_i18n` built a label manager only when `--labels-dir` pointed at `{lang}_labels.txt` files that nothing shipped; no code called `translate` on a name (`git grep` at `378afbe` finds none outside `i18n.rs`); `GET /api/v2/languages` listed all 36 as available whether or not anything could be shown; and `--help` named the files `labels_de.txt` where the loader reads `de_labels.txt`. The settings-page guard passed because the key *is read*; nothing asked whether the result is *used*. |
+| **Why it matters** | A station whose owner does not read English bird names cannot read its own Today page. |
+| **Resolution** | The tables are compiled into `birdnet-core` (`data/l18n/`, reduced to genuine translations, with per-file sha256, licence and a coverage table that a test holds equal to the data). **Read-time, not write-time** — a deliberate divergence: the stored name stays the classifier's, so changing language splits no history and species lists keep matching; `NameLocalizer` resolves a stored name to the name to show, keyed by scientific name. Every page, feed, notification and the live feed draws through it, and a name typed into a search box is understood in the station's language. |
+| **How it is held** | `every_name_a_reader_sees_is_in_the_stations_language` fetches the pages from a German station and fails on any English name a reader sees, fails when a link, form or API field carries a translated one, and fails on any web-crate site that escapes a stored name and is not classified. `the_language_setting_is_a_language_we_have`, `species_names_table.rs`, and a doctor check cover the rest. |
+| **Still open** | Coverage is uneven (Korean 8.8% of the table's 7,058, Swedish 98.4%) and the BirdNET+ V3.0 classifier has 11,560 species, of which 6,632 have a name in at least one language. The interface text is not translated. The table's licence fit is the maintainer's to decide (`HANDOFF.md`). |
 
 ### Deliberate divergences from BirdNET-Pi — DECLINED
 

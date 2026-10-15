@@ -4674,12 +4674,12 @@
         "tags": [
           "meta"
         ],
-        "summary": "Available languages",
-        "description": "The installed common-name translation packs.",
+        "summary": "Languages species names can be shown in",
+        "description": "Every language bird names are available in, with how many of the installed classifier's species each one names. Stored names do not change with the language; only what is displayed does.",
         "operationId": "languages",
         "responses": {
           "200": {
-            "description": "Language list.",
+            "description": "The languages and the one in use.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4691,16 +4691,46 @@
                         "type": "object",
                         "properties": {
                           "code": {
-                            "type": "string"
+                            "type": "string",
+                            "description": "`en`, `de`, `zh_CN`, …"
                           },
                           "name": {
+                            "type": "string",
+                            "description": "In English."
+                          },
+                          "native_name": {
                             "type": "string"
+                          },
+                          "active": {
+                            "type": "boolean",
+                            "description": "The language this station shows."
+                          },
+                          "coverage": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "description": "Null for English, and when no classifier labels are loaded.",
+                            "properties": {
+                              "named": {
+                                "type": "integer",
+                                "description": "Classifier species this language has a name for."
+                              },
+                              "of": {
+                                "type": "integer",
+                                "description": "Species in the installed classifier."
+                              }
+                            }
                           }
                         }
                       }
                     },
                     "count": {
                       "type": "integer"
+                    },
+                    "active": {
+                      "type": "string",
+                      "description": "Code of the language in use."
                     }
                   }
                 }
