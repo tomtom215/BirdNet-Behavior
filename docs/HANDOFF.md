@@ -50,8 +50,13 @@ branch). Its first CI run failed two checks, both this branch's own: OSV-Scanner
 in the checkout) and shellcheck (SC2034 in one installer test script). `7c61bf9`
 and `03170f0` fixed them. On `03170f0` all 71 check runs completed, 69 with
 success and 2 skipped by design (`deploy` and `Merge multi-arch manifest`, which
-do not run on a pull request). That includes the `cargo-mutants` jobs, which on a
-pull request mutate only the diff, so most of them mutated nothing.
+do not run on a pull request). That includes 32 `cargo-mutants` jobs. On a pull
+request they mutate only the changed lines, so a job for a file the pull request
+did not touch passes having tested nothing: the one log I read, `civil.rs` shard
+1/3, says "no mutants on the changed lines ... nothing to check on this PR". I
+did not read the other 31 (the `src/daemon/*.rs` shard 1/6 ran for about twelve
+minutes, so it did mutate something), so how many mutants CI ran, and how many it
+caught, is not recorded here.
 
 Checked locally, by running it (details in each commit message). "The tested
 tree" is that of `204e296`; the four commits after it change no Rust file: they
