@@ -62,6 +62,7 @@ fn filter_for(state: &AppState) -> SpeciesFilter {
     SpeciesFilter::new_passthrough(SpeciesFilterConfig {
         include_list: lists.include,
         exclude_list: lists.exclude,
+        whitelist: lists.whitelist.into_iter().collect(),
         ..SpeciesFilterConfig::default()
     })
 }
@@ -191,7 +192,7 @@ fn a_list_change_applies_without_rebuilding_the_filter() {
     store_list(&state, "species_exclude", "Human");
     // … and the daemon's next refresh pushes it into the running filter.
     let fresh = configured_species_lists(&state);
-    filter.set_lists(fresh.include, fresh.exclude);
+    filter.set_lists(fresh);
 
     let allowed = filter
         .filter_species(Some((42.36, -71.06)), 20, &labels)

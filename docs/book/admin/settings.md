@@ -44,13 +44,21 @@ Rare-bird **quarantine** rules decide which detections are held for manual revie
 
 ### Allow and exclude lists
 
-The two lists under **Station → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
+The lists under **Station → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
 
 - **Exclude** — these species are never recorded. Nothing is written to the
   database, no notification is sent, and nothing is uploaded to BirdWeather.
   Use it for a persistent local false positive, or for a species you would
   rather not log.
 - **Allow** — when non-empty, *only* these species are recorded.
+- **Always allowed (whitelist)** — species the species-occurrence filter would
+  hold back as unlikely for your location and week are recorded anyway. This is
+  BirdNET-Pi's `whitelist_species_list.txt`, with its meaning: it exempts a
+  species from the occurrence threshold and from nothing else. A species on the
+  exclude list stays excluded, one missing from a non-empty allow list stays out,
+  and it does nothing on a station with no location set (nothing is held back
+  there). It is for the one or two birds you know visit; lowering the occurrence
+  threshold under Detection is the broader tool.
 
 Enter either the common name or the scientific name; both work, and case and
 surrounding spaces don't matter. Changes take effect within about half a minute

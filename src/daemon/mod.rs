@@ -344,8 +344,13 @@ pub fn start_detection_daemon(
     // /admin/species page uses so the two cannot drift.
     let species_lists =
         birdnet_web::routes::admin::species::handler::configured_species_lists(&state);
-    if let Some((include, exclude)) = species_lists_log_counts(&species_lists) {
-        tracing::info!(include, exclude, "loaded operator species filter lists");
+    if let Some((include, exclude, whitelist)) = species_lists_log_counts(&species_lists) {
+        tracing::info!(
+            include,
+            exclude,
+            whitelist,
+            "loaded operator species filter lists"
+        );
     }
 
     // Re-read on a TTL inside the daemon loop so excluding a species takes

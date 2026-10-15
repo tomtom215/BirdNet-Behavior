@@ -31,6 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   range-filter models to ONNX (max difference 3.7e-6 from TFLite over 1,344 calls;
   v1, BirdNET-Pi's default, is not hosted anywhere, so it is not in the catalogue).
   `GET /api/v2/models/catalog` gains `use`.
+- **The species whitelist, with BirdNET-Pi's meaning.** BirdNET-Pi's
+  `whitelist_species_list.txt` lets a species through the occurrence filter when
+  the range model holds it back, and does nothing else: its `run_analysis` checks
+  the include list, then the exclude list, then occurrence-or-whitelist. The core
+  filter had a `whitelist` field that nothing set, and that added the whitelist
+  back *after* both lists (so it overrode them, unlike BirdNET-Pi). It is now
+  settable under Station → Capture → Species ("Always allowed", add/remove like the
+  other two lists, audited as `species.whitelist.add` / `.remove`) and in the
+  Settings form, stored as `species_whitelist`, re-read by the daemon with the other
+  lists within about half a minute, and applied with BirdNET-Pi's order. Red
+  against the old add-back: `a_whitelisted_species_that_is_also_excluded_stays_excluded`
+  and `a_whitelisted_species_outside_a_non_empty_include_list_stays_out` fail, while
+  the threshold-exemption test stays green; three more mutations (the handler not
+  storing it, the daemon's list not reading it, the page without the control) each
+  fail `a_whitelist_posted_on_the_settings_page_is_what_the_daemon_reads`. It only
+  matters on a station with a location and an occurrence model (it exempts nothing
+  otherwise), and BirdNET-Pi's own text calls it a last resort.
+  `SpeciesFilter::set_lists` now takes a `SpeciesLists` (`include`, `exclude`,
+  `whitelist`).
 - **`--doctor` warns about a BirdNET-Pi `PRIVACY_THRESHOLD`.** The key is shared and
   the scale is not (BirdNET-Pi: a percentage of the species list; here: the model's
   confidence for a human sound). A BirdNET-Pi `1` is in range here and masks nothing

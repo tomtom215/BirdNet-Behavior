@@ -342,7 +342,7 @@ pub(super) fn build_species_filter_config(
         sf_thresh,
         include_list: lists.include,
         exclude_list: lists.exclude,
-        ..SpeciesFilterConfig::default()
+        whitelist: lists.whitelist.into_iter().collect(),
     }
 }
 
@@ -618,8 +618,8 @@ pub(super) fn species_thresholds_log_count(thresholds: &HashMap<String, f64>) ->
 
 /// "Should we log the operator's species lists, and how long are they?"
 ///
-/// Returns `Some((include_len, exclude_len))` when *either* list has an entry;
-/// `None` when the operator has configured neither. Same reason as
+/// Returns `Some((include_len, exclude_len, whitelist_len))` when *any* list has
+/// an entry; `None` when the operator has configured none. Same reason as
 /// [`species_thresholds_log_count`] one function up, and the same shape: the
 /// inline `if !include.is_empty() || !exclude.is_empty()` guard left three
 /// cargo-mutants survivors — the `||`, and each of the two `!` — because its
@@ -628,11 +628,17 @@ pub(super) fn species_thresholds_log_count(thresholds: &HashMap<String, f64>) ->
 /// A one-list station is the case that matters: it is both the common
 /// configuration and the one the `||`→`&&` mutant silently breaks.
 #[must_use]
-pub(super) const fn species_lists_log_counts(lists: &SpeciesLists) -> Option<(usize, usize)> {
-    if lists.include.is_empty() && lists.exclude.is_empty() {
+pub(super) const fn species_lists_log_counts(
+    lists: &SpeciesLists,
+) -> Option<(usize, usize, usize)> {
+    if lists.include.is_empty() && lists.exclude.is_empty() && lists.whitelist.is_empty() {
         None
     } else {
-        Some((lists.include.len(), lists.exclude.len()))
+        Some((
+            lists.include.len(),
+            lists.exclude.len(),
+            lists.whitelist.len(),
+        ))
     }
 }
 
@@ -1080,12 +1086,17 @@ mod tests {
         let lists = SpeciesLists {
             include: vec!["Eurasian Blackbird".into()],
             exclude: vec!["Human".into(), "Turdus merula".into()],
+            whitelist: vec!["Great Tit".into()],
         };
         let cfg = build_species_filter_config(0.03, lists);
         assert_eq!(cfg.include_list, vec!["Eurasian Blackbird".to_string()]);
         assert_eq!(
             cfg.exclude_list,
             vec!["Human".to_string(), "Turdus merula".to_string()]
+        );
+        assert!(
+            cfg.whitelist.contains("Great Tit"),
+            "the whitelist arrived empty, so it exempted nothing from the occurrence threshold"
         );
     }
 
@@ -1328,6 +1339,7 @@ mod tests {
         SpeciesLists {
             include: include.iter().map(|s| (*s).to_owned()).collect(),
             exclude: exclude.iter().map(|s| (*s).to_owned()).collect(),
+            whitelist: Vec::new(),
         }
     }
 
@@ -1340,7 +1352,7 @@ mod tests {
     fn species_lists_log_counts_some_for_an_include_only_station() {
         assert_eq!(
             species_lists_log_counts(&lists(&["Pica pica"], &[])),
-            Some((1, 0))
+            Some((1, 0, 0))
         );
     }
 
@@ -1348,7 +1360,7 @@ mod tests {
     fn species_lists_log_counts_some_for_an_exclude_only_station() {
         assert_eq!(
             species_lists_log_counts(&lists(&[], &["Corvus corax"])),
-            Some((0, 1))
+            Some((0, 1, 0))
         );
     }
 
@@ -1356,8 +1368,17 @@ mod tests {
     fn species_lists_log_counts_reports_both_lengths() {
         assert_eq!(
             species_lists_log_counts(&lists(&["Pica pica", "Turdus merula"], &["Corvus corax"])),
-            Some((2, 1))
+            Some((2, 1, 0))
         );
+    }
+
+    #[test]
+    fn species_lists_log_counts_some_for_a_whitelist_only_station() {
+        let whitelist_only = SpeciesLists {
+            whitelist: vec!["Parus major".into()],
+            ..SpeciesLists::default()
+        };
+        assert_eq!(species_lists_log_counts(&whitelist_only), Some((0, 0, 1)));
     }
 
     // ── minimum-confidence resolution ───────────────────────────────────

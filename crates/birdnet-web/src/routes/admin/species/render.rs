@@ -8,12 +8,13 @@ use crate::routes::pages::escape_html;
 pub fn render_species_page(
     exclude: &[String],
     include: &[String],
+    whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     crate::routes::admin::admin_shell(
         "Species lists",
         "species",
-        &species_lists_body(exclude, include, names),
+        &species_lists_body(exclude, include, whitelist, names),
     )
 }
 
@@ -26,6 +27,7 @@ pub fn render_species_page(
 pub(crate) fn species_lists_body(
     exclude: &[String],
     include: &[String],
+    whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     format!(
@@ -59,14 +61,16 @@ pub(crate) fn species_lists_body(
   <div id="species-lists">
     {inner}
   </div></div>"#,
-        inner = render_species_partial(exclude, include, names)
+        inner = render_species_partial(exclude, include, whitelist, names)
     )
 }
 
-/// Render the HTMX partial fragment containing both the exclusion and allow-list cards.
+/// Render the HTMX partial fragment containing the exclusion, allow-list and
+/// whitelist cards.
 pub fn render_species_partial(
     exclude: &[String],
     include: &[String],
+    whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut out = String::with_capacity(4096);
@@ -86,6 +90,18 @@ pub fn render_species_partial(
         include,
         "When non-empty, <strong>only</strong> these species are saved or notified.",
         "include",
+        names,
+    );
+    render_list_card(
+        &mut out,
+        "Always allowed (whitelist)",
+        "species_whitelist",
+        whitelist,
+        "Species the occurrence filter would hold back as unlikely for your \
+         location and week are saved anyway. <strong>Nothing else changes:</strong> \
+         a species on the exclusion list stays excluded, and one missing from a \
+         non-empty allow-list stays out.",
+        "whitelist",
         names,
     );
     // Per-species thresholds section (loaded via HTMX)
@@ -386,10 +402,12 @@ mod tests {
 
     #[test]
     fn render_empty_lists() {
-        let html = render_species_partial(&[], &[], &birdnet_core::i18n::NameLocalizer::english());
+        let html =
+            render_species_partial(&[], &[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("No species in this list"));
         assert!(html.contains("Exclusion List"));
         assert!(html.contains("Allow-List"));
+        assert!(html.contains("Always allowed (whitelist)"));
     }
 
     #[test]
@@ -397,10 +415,16 @@ mod tests {
         let html = render_species_partial(
             &["House Sparrow".to_string()],
             &["European Robin".to_string()],
+            &["Snowy Owl".to_string()],
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("House Sparrow"));
         assert!(html.contains("European Robin"));
+        assert!(html.contains("Snowy Owl"));
+        // Each card posts to its own list: a whitelist entry's remove button
+        // must not remove from the exclusion list.
+        assert!(html.contains(r#"hx-post="/admin/species/whitelist/remove""#));
+        assert!(html.contains(r#"hx-post="/admin/species/whitelist/add""#));
     }
 
     #[test]
@@ -415,6 +439,7 @@ mod tests {
             !species_lists_body(
                 &["House Sparrow".to_string()],
                 &[],
+                &["Snowy Owl".to_string()],
                 &birdnet_core::i18n::NameLocalizer::english()
             )
             .contains("style=\"")
@@ -423,6 +448,7 @@ mod tests {
             !render_species_partial(
                 &["House Sparrow".to_string()],
                 &[],
+                &["Snowy Owl".to_string()],
                 &birdnet_core::i18n::NameLocalizer::english()
             )
             .contains("style=\"")
@@ -454,7 +480,8 @@ mod tests {
     fn species_pages_render_through_admin_shell() {
         // Both species pages render through the shared shell with the Species
         // tab active; the filter-test sub-page also carries the breadcrumb.
-        let lists = render_species_page(&[], &[], &birdnet_core::i18n::NameLocalizer::english());
+        let lists =
+            render_species_page(&[], &[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(lists.contains(r#"href="/admin/species" class="am-nav-active""#));
         assert!(lists.contains(r#"id="species-lists""#));
         assert!(lists.contains("Exclusion List"));

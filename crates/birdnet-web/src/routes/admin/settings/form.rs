@@ -57,6 +57,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     // Species
     "species_exclude",
     "species_include",
+    "species_whitelist",
     // System
     "clip_retention_days",
     "image_cache_dir",
@@ -182,6 +183,9 @@ pub struct SettingsForm {
     /// Comma-separated list of species (common names) that are the *only* ones saved.
     /// Empty means no restriction.
     pub species_include: Option<String>,
+    /// Comma-separated list of species (common names) exempt from the occurrence
+    /// threshold (BirdNET-Pi's whitelist). The include and exclude lists still apply.
+    pub species_whitelist: Option<String>,
     // System
     /// Number of days of recordings to retain before the oldest are purged.
     pub clip_retention_days: Option<String>,

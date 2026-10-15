@@ -44,9 +44,14 @@ pub struct SpeciesFilterConfig {
     /// Species frequency threshold (species below this are filtered out).
     /// Default: 0.03.
     pub sf_thresh: f32,
-    /// Species that always pass the filter regardless of model output.
+    /// Species exempt from the **occurrence** threshold: they are let through
+    /// even when the metadata model scores them below `sf_thresh` here.
     ///
-    /// Entries may be a common or a scientific name.
+    /// BirdNET-Pi's `whitelist_species_list.txt`, with its semantics: the
+    /// include and exclude lists still apply afterwards, so a whitelisted
+    /// species that is also excluded stays excluded, and one missing from a
+    /// non-empty include list is dropped. Entries may be a common or a
+    /// scientific name.
     pub whitelist: HashSet<String>,
     /// If non-empty, only species in this list are considered (before threshold).
     ///
@@ -83,7 +88,7 @@ pub fn matches_species(entry: &str, label: &SpeciesLabel) -> bool {
             || entry.eq_ignore_ascii_case(label.scientific_name.trim()))
 }
 
-/// The operator's include/exclude species lists.
+/// The operator's include, exclude and whitelist species lists.
 ///
 /// Entries may be common or scientific names — see [`matches_species`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -92,6 +97,9 @@ pub struct SpeciesLists {
     pub include: Vec<String>,
     /// These species are never reported.
     pub exclude: Vec<String>,
+    /// These species are exempt from the occurrence threshold only; see
+    /// [`SpeciesFilterConfig::whitelist`].
+    pub whitelist: Vec<String>,
 }
 
 /// A callback the daemon re-reads on a TTL to pick up list changes.
@@ -465,6 +473,29 @@ impl SpeciesFilter {
             )));
         }
 
+        let result = self.passing_species(&probabilities, labels);
+
+        tracing::debug!(
+            lat,
+            lon,
+            week,
+            passing_count = result.len(),
+            total_labels = labels.len(),
+            "species filter applied"
+        );
+
+        // Cache the result
+        self.cache_key = Some(key);
+        self.cache_result = Some(result.clone());
+
+        Ok(result)
+    }
+
+    /// The species the metadata model's scores let through, after the whitelist
+    /// and the operator's lists: what [`Self::filter_species`] returns, from the
+    /// probabilities alone. Separate so the order of those three steps can be
+    /// tested without a model file.
+    fn passing_species(&self, probabilities: &[f32], labels: &LabelSet) -> HashSet<String> {
         // Collect species above threshold.
         //
         // Which list the index refers to depends on how the model was loaded.
@@ -499,27 +530,13 @@ impl SpeciesFilter {
             }
         }
 
-        // Add whitelisted species. Resolved through the label set so an entry
-        // typed as a common name lands as the scientific name the rest of the
-        // pipeline compares against.
+        // Whitelisted species are exempt from the threshold: add them to what
+        // the model passed. Resolved through the label set so an entry typed as
+        // a common name lands as the scientific name the rest of the pipeline
+        // compares against. The include and exclude lists still apply next.
         passing.extend(resolve_to_scientific(self.config.whitelist.iter(), labels));
 
-        let result = self.apply_lists(passing, labels);
-
-        tracing::debug!(
-            lat,
-            lon,
-            week,
-            passing_count = result.len(),
-            total_labels = labels.len(),
-            "species filter applied"
-        );
-
-        // Cache the result
-        self.cache_key = Some(key);
-        self.cache_result = Some(result.clone());
-
-        Ok(result)
+        self.apply_lists(passing, labels)
     }
 
     /// Every species in `labels` the operator's lists allow, with no
@@ -561,22 +578,26 @@ impl SpeciesFilter {
             }
         }
 
-        // Always add whitelisted species back (even if excluded or not in include list).
-        species.extend(resolve_to_scientific(self.config.whitelist.iter(), labels));
-
+        // The whitelist is **not** applied here. It exempts a species from the
+        // occurrence threshold (see `filter_species`, which adds it before this
+        // runs) and from nothing else: BirdNET-Pi checks include, then exclude,
+        // then occurrence-or-whitelist, so an excluded species stays excluded
+        // whatever the whitelist says. This function used to add the whitelist
+        // back at the end, which made it override both lists.
         species
     }
 
-    /// Replace the operator's include/exclude lists at runtime.
+    /// Replace the operator's include, exclude and whitelist lists at runtime.
     ///
     /// Invalidates the cached model result, since the cache holds the
     /// post-list species set. Used by the daemon to pick up a change made on
     /// `/admin/species` without a restart — excluding a species is something an
     /// operator does *because* it is spamming them right now, so waiting for the
     /// next service restart is the wrong answer.
-    pub fn set_lists(&mut self, include: Vec<String>, exclude: Vec<String>) {
-        self.config.include_list = include;
-        self.config.exclude_list = exclude;
+    pub fn set_lists(&mut self, lists: SpeciesLists) {
+        self.config.include_list = lists.include;
+        self.config.exclude_list = lists.exclude;
+        self.config.whitelist = lists.whitelist.into_iter().collect();
         self.invalidate_cache();
     }
 
@@ -826,7 +847,10 @@ mod tests {
             4
         );
 
-        filter.set_lists(Vec::new(), vec!["Human".into()]);
+        filter.set_lists(SpeciesLists {
+            exclude: vec!["Human".into()],
+            ..SpeciesLists::default()
+        });
         let result = filter
             .filter_species(Some((42.0, -71.0)), 10, &labels)
             .unwrap();
@@ -885,36 +909,84 @@ mod tests {
         assert!(result.contains("Parus major"));
     }
 
-    #[test]
-    fn whitelist_always_passes() {
+    /// What the filter lets through when the metadata model scores Blackbird,
+    /// Robin and Human at 0.9 and Great Tit at 0.01, against a threshold of 0.5.
+    fn thresholded(whitelist: &[&str], include: &[&str], exclude: &[&str]) -> HashSet<String> {
+        let own = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         let config = SpeciesFilterConfig {
-            include_list: vec!["Turdus merula".into()],
-            whitelist: HashSet::from(["Parus major".into()]),
-            ..SpeciesFilterConfig::default()
+            sf_thresh: 0.5,
+            whitelist: own(whitelist).into_iter().collect(),
+            include_list: own(include),
+            exclude_list: own(exclude),
         };
-        let mut filter = SpeciesFilter::new_passthrough(config);
-        let labels = test_labels();
-        let result = filter
-            .filter_species(Some((42.0, -71.0)), 10, &labels)
-            .unwrap();
-        assert_eq!(result.len(), 2);
-        assert!(result.contains("Turdus merula"));
-        assert!(result.contains("Parus major"));
+        SpeciesFilter::new_passthrough(config)
+            .passing_species(&[0.9, 0.9, 0.01, 0.9], &test_labels())
     }
 
     #[test]
-    fn whitelist_overrides_exclude() {
-        let config = SpeciesFilterConfig {
-            exclude_list: vec!["Turdus merula".into()],
-            whitelist: HashSet::from(["Turdus merula".into()]),
-            ..SpeciesFilterConfig::default()
-        };
-        let mut filter = SpeciesFilter::new_passthrough(config);
-        let labels = test_labels();
-        let result = filter
-            .filter_species(Some((42.0, -71.0)), 10, &labels)
-            .unwrap();
+    fn whitelist_lets_a_species_below_the_occurrence_threshold_through() {
+        let without = thresholded(&[], &[], &[]);
+        assert!(without.contains("Turdus merula"));
+        assert!(
+            !without.contains("Parus major"),
+            "precondition: the model scores it below the threshold"
+        );
+        let with = thresholded(&["Parus major"], &[], &[]);
+        assert!(with.contains("Parus major"));
+        assert!(with.contains("Turdus merula"));
+        // A common name works as it does in the other lists.
+        assert!(thresholded(&["Great Tit"], &[], &[]).contains("Parus major"));
+    }
+
+    /// BirdNET-Pi checks include, then exclude, then occurrence-or-whitelist
+    /// (`analysis.py`, `run_analysis`): the whitelist only ever helps with the
+    /// last. The first draft of this feature added the whitelist back after both
+    /// lists, as this function used to.
+    #[test]
+    fn a_whitelisted_species_that_is_also_excluded_stays_excluded() {
+        let result = thresholded(&["Parus major"], &[], &["Parus major"]);
+        assert!(!result.contains("Parus major"));
+    }
+
+    #[test]
+    fn a_whitelisted_species_outside_a_non_empty_include_list_stays_out() {
+        let result = thresholded(&["Parus major"], &["Turdus merula"], &[]);
+        assert!(!result.contains("Parus major"));
         assert!(result.contains("Turdus merula"));
+        // Counterpart: named in the include list as well, it passes.
+        let both = thresholded(&["Parus major"], &["Turdus merula", "Parus major"], &[]);
+        assert!(both.contains("Parus major"));
+    }
+
+    #[test]
+    fn set_lists_replaces_the_whitelist_too() {
+        let mut filter = SpeciesFilter::new_passthrough(SpeciesFilterConfig {
+            sf_thresh: 0.5,
+            ..SpeciesFilterConfig::default()
+        });
+        let labels = test_labels();
+        let scores = [0.9, 0.9, 0.01, 0.9];
+        assert!(
+            !filter
+                .passing_species(&scores, &labels)
+                .contains("Parus major")
+        );
+        filter.set_lists(SpeciesLists {
+            whitelist: vec!["Parus major".into()],
+            ..SpeciesLists::default()
+        });
+        assert!(
+            filter
+                .passing_species(&scores, &labels)
+                .contains("Parus major")
+        );
+        filter.set_lists(SpeciesLists::default());
+        assert!(
+            !filter
+                .passing_species(&scores, &labels)
+                .contains("Parus major"),
+            "an emptied whitelist is a cleared one"
+        );
     }
 
     #[test]

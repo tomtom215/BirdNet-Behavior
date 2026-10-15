@@ -785,6 +785,11 @@ pub(crate) fn build_settings_items(
         "species_include",
         SettingsCategory::Species
     );
+    push!(
+        form.species_whitelist,
+        "species_whitelist",
+        SettingsCategory::Species
+    );
     // System
     push!(
         form.clip_retention_days,
@@ -984,6 +989,7 @@ mod tests {
             weekly_report_schedule: None,
             species_exclude: None,
             species_include: None,
+            species_whitelist: None,
             clip_retention_days: None,
             image_cache_dir: None,
             custom_image_dir: None,
