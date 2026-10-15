@@ -104,9 +104,11 @@ esac
 run_whole() {
     (
         eval "${args}"
-        BUILD_FEATURES="$1"
-        BEHAVIORAL_EXTENSION_OPTIONAL="$2"
-        TARGETARCH=amd64
+        # Exported, as a build ARG reaches a RUN: the body under test reads them by
+        # name through the `eval` below, which shellcheck cannot follow (SC2034).
+        export BUILD_FEATURES="$1"
+        export BEHAVIORAL_EXTENSION_OPTIONAL="$2"
+        export TARGETARCH=amd64
         FETCH="$3"
         curl() { [ "${FETCH}" = ok ]; }
         gunzip() { :; }
