@@ -50,6 +50,7 @@ It ships as **one self-contained binary** (~75 MB). The ONNX Runtime inference e
 | Install | `pip` into a venv + system packages | one file, or one `curl` installer |
 | Upgrade | re-resolve pip dependencies | replace one file |
 | Inference | TensorFlow Lite (Python) | ONNX Runtime, linked in-process |
+| Detection model | BirdNET V2.4 | BirdNET+ V3.0 preview by default; V2.4 is one command away, [measured against BirdNET-Pi](docs/book/guides/parity.md) |
 | Analytics | — | DuckDB behavioral engine, built in |
 | HTTPS | reverse proxy (Caddy/nginx) | built in — `--tls-mode self-signed` or your own certificate |
 | Offsite backups | copy them yourself | built in — encrypted on the station, to S3-compatible or SFTP |
