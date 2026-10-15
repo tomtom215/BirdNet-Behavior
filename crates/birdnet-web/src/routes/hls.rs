@@ -172,9 +172,8 @@ fn playlist_ready(path: &Path) -> bool {
 
 /// 128 random bits as 32 hex digits.
 fn new_token() -> Option<String> {
-    use password_hash::rand_core::{OsRng, RngCore};
     let mut bytes = [0u8; 16];
-    OsRng.try_fill_bytes(&mut bytes).ok()?;
+    crate::random::fill(&mut bytes).ok()?;
     Some(bytes.iter().fold(String::with_capacity(32), |mut hex, b| {
         let _ = write!(hex, "{b:02x}");
         hex

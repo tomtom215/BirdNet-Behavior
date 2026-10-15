@@ -19,6 +19,7 @@ pub mod notification_probes;
 pub mod notifier;
 pub mod open_admin_host;
 pub mod private_mode;
+pub mod random;
 pub mod rate_limit;
 pub mod routes;
 pub mod security;

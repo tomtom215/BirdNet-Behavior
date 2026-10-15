@@ -75,11 +75,9 @@ form_urlencoded.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 base64.workspace = true
-# password-hash::rand_core::OsRng feeds the session-id CSPRNG. The
-# argon2 crate (birdnet-db's dep) pulls password-hash in transitively;
-# declaring it here exposes the OsRng re-export to the session module
-# without adding a fresh top-level dependency.
-password-hash.workspace = true
+# OS randomness for the session-id CSPRNG, CSP nonces, share keys and HLS
+# tokens (`random::fill`).
+getrandom.workspace = true
 
 [dev-dependencies]
 # `tower::ServiceExt::oneshot` drives the admin router in the nav route-parity

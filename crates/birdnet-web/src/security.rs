@@ -80,12 +80,11 @@ fn content_security_policy(nonce: &str) -> String {
 /// Mint a fresh 128-bit CSP nonce (base64, unpadded).
 fn generate_nonce() -> String {
     use base64::Engine;
-    use password_hash::rand_core::{OsRng, RngCore};
     let mut bytes = [0_u8; 16];
-    if OsRng.try_fill_bytes(&mut bytes).is_ok() {
+    if crate::random::fill(&mut bytes).is_ok() {
         base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
     } else {
-        // OsRng failure is essentially impossible on Linux; defer to the
+        // An OS randomness failure is essentially impossible on Linux; defer to the
         // session-id generator (its own documented fail-secure fallback)
         // rather than ever hand out an empty, CSP-breaking nonce.
         crate::session::generate_session_id()

@@ -23,48 +23,32 @@ updates:
       prefix: "deps"
       include: "scope"
     labels: ["dependencies", "rust"]
-    ignore:
-      # `password-hash` must move in lock-step with `argon2`: argon2 0.5.x
-      # implements password-hash 0.5's PasswordHasher/PasswordVerifier traits,
-      # and our accounts code passes password-hash types straight into Argon2.
-      # Taking password-hash 0.6 alone puts two distinct PasswordHasher traits
-      # in the graph and does not compile.
-      #
-      # Checked against the registry index on 2026-08-08: argon2's newest
-      # published version is `0.6.0-rc.8` — there is no stable 0.6, so the
-      # pairing cannot be taken yet at all. PR #148 proposed exactly this and
-      # sat open for two months because it can never be green.
-      #
-      # Remove this entry when argon2 0.6.0 ships, and take both together.
-      - dependency-name: "password-hash"
-        versions: ["0.6.x"]
-      # `audioadapter-buffers` must move in lock-step with `rubato`, for the
-      # same reason and with the same failure mode. rubato 4 requires
-      # `audioadapter ^4.0`, and `resample.rs` hands an
-      # `audioadapter_buffers::direct::InterleavedSlice` straight to
-      # `rubato::audioadapter::Adapter`. Taking a new major alone puts two
-      # versions of the crate in the graph, and the v5 type cannot implement
-      # the v4 trait:
-      #
-      #   error[E0277]: ... there are multiple different versions of crate
-      #   `audioadapter_buffers` in the dependency graph
-      #   note: required for `audioadapter_buffers::direct::InterleavedSlice
-      #         <&[f32]>` to implement `Adapter<f32>`
-      #
-      # That is PR #202 (4.0.0 -> 5.1.0), which failed 9 of 15 checks. The
-      # coupling was already written down at the top of `resample.rs`; nothing
-      # enforced it, so the bot proposed it anyway.
-      #
-      # Checked against the registry index on 2026-08-10: rubato's newest
-      # published version is 4.0.0, so there is no rubato that accepts
-      # audioadapter 5 — this cannot be taken at all yet, by anyone.
-      #
-      # Majors only: 4.x patch and minor updates are still wanted. Remove this
-      # entry when rubato publishes a release built on the newer audioadapter,
-      # and take both together.
-      - dependency-name: "audioadapter-buffers"
-        update-types: ["version-update:semver-major"]
     groups:
+      # Two pairs that must move together, so each arrives as ONE pull request
+      # rather than two that can never be green apart (they were proposed apart
+      # as #148, #202, #228 and #260, and held by `ignore` rules, until both
+      # upstream releases existed; both pairs were taken together on 2026-10-15).
+      #
+      # `argon2` and `password-hash`: argon2 implements password-hash's
+      # PasswordHasher/PasswordVerifier traits and the accounts code passes
+      # password-hash types straight into it, so one alone puts two distinct
+      # `PasswordHasher` traits in the graph.
+      #
+      # `rubato` and `audioadapter-buffers`: `resample.rs` hands an
+      # `audioadapter_buffers::direct::InterleavedSlice` to rubato, which needs
+      # the same major of `audioadapter`; one alone fails with "multiple
+      # different versions of crate `audioadapter_buffers`".
+      #
+      # These two groups come first: a dependency that matches several groups
+      # goes to the first one listed.
+      cargo-argon2-pair:
+        patterns:
+          - "argon2"
+          - "password-hash"
+      cargo-rubato-pair:
+        patterns:
+          - "rubato"
+          - "audioadapter-buffers"
       cargo-patch-and-minor:
         update-types: ["patch", "minor"]
         exclude-patterns:

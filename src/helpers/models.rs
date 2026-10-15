@@ -385,10 +385,10 @@ pub fn model_dir(config: Option<&Config>) -> PathBuf {
 /// function and none of them entered a runtime.
 #[must_use]
 pub fn install_from_catalogue(id: &str, dest: &std::path::Path) -> i32 {
-    use birdnet_integrations::model_catalog::{CATALOG, install};
+    use birdnet_integrations::model_catalog::{CATALOG, Use, install};
 
     if id.trim().is_empty() || id.trim().eq_ignore_ascii_case("list") {
-        println!("Classifiers this build can install:\n");
+        println!("Models this build can install:\n");
         for entry in CATALOG {
             println!("  {}", entry.id);
             println!("    {}", entry.name);
@@ -397,15 +397,29 @@ pub fn install_from_catalogue(id: &str, dest: &std::path::Path) -> i32 {
                 entry.model_bytes / (1024 * 1024),
                 entry.model_sha256
             );
-            println!("    needs MODEL_n_SAMPLE_RATE={}", entry.sample_rate);
-            println!(
-                "    labels: {}",
-                if entry.labels_url.is_some() {
-                    "installed alongside, verified"
-                } else {
-                    "not shipped — supply your own"
+            match entry.usage {
+                Use::Classifier => println!(
+                    "    a second classifier; needs MODEL_n_SAMPLE_RATE={}",
+                    entry.sample_rate
+                ),
+                Use::PrimaryReplacement => println!(
+                    "    replaces the primary classifier ({} Hz)",
+                    entry.sample_rate
+                ),
+                Use::RangeFilter => {
+                    println!("    a species-occurrence filter (METADATA_MODEL_PATH)");
                 }
-            );
+            }
+            if entry.usage != Use::RangeFilter {
+                println!(
+                    "    labels: {}",
+                    if entry.labels_url.is_some() {
+                        "installed alongside, verified"
+                    } else {
+                        "not shipped — supply your own"
+                    }
+                );
+            }
             println!("    {}\n", entry.notes);
         }
         println!("Install one with:  birdnet-behavior --install-model <id>");
@@ -417,23 +431,60 @@ pub fn install_from_catalogue(id: &str, dest: &std::path::Path) -> i32 {
         Ok(installed) => {
             println!("\nInstalled and verified.");
             println!("  model:  {}", installed.model_path.display());
-            match &installed.labels_path {
-                Some(p) => println!("  labels: {}", p.display()),
-                None => println!(
-                    "  labels: not shipped with this model — supply your own, with one row \
-                     per class, or species are reported under other species' names"
-                ),
+            if installed.usage != Use::RangeFilter {
+                match &installed.labels_path {
+                    Some(p) => println!("  labels: {}", p.display()),
+                    None => println!(
+                        "  labels: not shipped with this model — supply your own, with one row \
+                         per class, or species are reported under other species' names"
+                    ),
+                }
             }
-            println!("\nTo run it as a second classifier, set:");
-            println!("  BIRDNET_MODEL_2_PATH={}", installed.model_path.display());
-            println!("  BIRDNET_MODEL_2_LABELS=<your labels file>");
-            println!("  BIRDNET_MODEL_2_ID={id}");
-            println!("  BIRDNET_MODEL_2_SAMPLE_RATE={}", installed.sample_rate);
+            print_next_steps(&installed);
             0
         }
         Err(e) => {
             eprintln!("\nInstall failed: {e}");
             1
+        }
+    }
+}
+
+/// What to configure after an install, by what the file is for.
+fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) {
+    use birdnet_integrations::model_catalog::Use;
+    let model = installed.model_path.display();
+    match installed.usage {
+        Use::Classifier => {
+            println!("\nTo run it as a second classifier, set:");
+            println!("  BIRDNET_MODEL_2_PATH={model}");
+            println!("  BIRDNET_MODEL_2_LABELS=<your labels file>");
+            println!("  BIRDNET_MODEL_2_ID={}", installed.id);
+            println!("  BIRDNET_MODEL_2_SAMPLE_RATE={}", installed.sample_rate);
+        }
+        Use::PrimaryReplacement => {
+            let labels = installed.labels_path.as_ref().map_or_else(
+                || "<your labels file>".to_owned(),
+                |p| p.display().to_string(),
+            );
+            println!(
+                "\nTo make it the station's classifier, set (birdnet.conf, or the BIRDNET_* variables), then restart:"
+            );
+            println!("  MODEL_PATH={model}      (BIRDNET_MODEL)");
+            println!("  LABELS_PATH={labels}      (BIRDNET_LABELS)");
+            println!("\nIts scores are BirdNET-Pi's when CONFIDENCE and SENSITIVITY are:");
+            println!("  CONFIDENCE=0.7     (BirdNET-Pi's default; this station's is 0.75)");
+            println!("  SENSITIVITY=1.25   (the default here too, with BirdNET-Pi's meaning)");
+            println!("\nFor the species-occurrence filter:");
+            println!("  birdnet-behavior --install-model birdnet-v24-range-v2");
+        }
+        Use::RangeFilter => {
+            println!("\nTo use it, set your LATITUDE and LONGITUDE and:");
+            println!("  METADATA_MODEL_PATH={model}      (BIRDNET_METADATA_MODEL)");
+            println!(
+                "No METADATA_LABELS_PATH is needed: it is indexed like the V2.4 labels. Use it \
+                 only with the BirdNET V2.4 classifier."
+            );
         }
     }
 }

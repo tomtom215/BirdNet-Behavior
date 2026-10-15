@@ -482,6 +482,34 @@ fn read_up_to<R: Read>(src: &mut R, buf: &mut [u8]) -> io::Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    /// An envelope written by the argon2 0.5 line this project shipped through
+    /// 0.17.1 must still decrypt after the library is upgraded: it is the only
+    /// copy of someone's recordings, possibly years old, and the key is derived
+    /// from their passphrase by the very function being upgraded. The bytes are
+    /// the output of that code for the passphrase below, frozen.
+    #[test]
+    fn an_envelope_written_by_argon2_0_5_still_decrypts() {
+        const ENVELOPE_HEX: &str = "424e4242414b310a0101000000004c00000000020000000100100000e40dadc6073a8a8363c4ecaf850abf70d6a9e32f1d4d2300879cdec46077425d1361c394c236bd58664acb591343a50dcc1b6ae79f8c4ff1d9af45aa43";
+        let bytes: Vec<u8> = (0..ENVELOPE_HEX.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&ENVELOPE_HEX[i..i + 2], 16).unwrap())
+            .collect();
+        let mut out = Vec::new();
+        let n = super::decrypt("correct horse battery staple", &mut &bytes[..], &mut out)
+            .expect("a frozen 0.5-era envelope must decrypt");
+        assert_eq!(out, b"hello bird 0123456789");
+        assert_eq!(n, 21);
+        assert!(
+            super::decrypt(
+                "correct horse battery stapl3",
+                &mut &bytes[..],
+                &mut Vec::new()
+            )
+            .is_err(),
+            "and a wrong passphrase must not"
+        );
+    }
+
     use super::*;
 
     const PASS: &str = "correct horse battery staple";

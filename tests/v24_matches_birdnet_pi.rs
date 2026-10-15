@@ -15,7 +15,7 @@
 //! * its per-chunk top-10 for all ten 3-second windows.
 //!
 //! The model under test is birdnet-go's published FP32 V2.4 ONNX
-//! (`tphakala/BirdNET-v2.4`), BirdNET-Pi runs the FP16 TFLite build of the same
+//! (`tphakala/BirdNET-v2.4`); BirdNET-Pi runs the `FP16` `TFLite` build of the same
 //! network, so scores agree to a few thousandths rather than bit for bit:
 //! `TOL_CONF` and `TOL_LOGIT` are set from the measured gap with headroom, not
 //! to hide one.
@@ -41,7 +41,7 @@ const GOLDEN: &str = "tools/parity/golden/matrix/a1_station.json";
 const PI_EXPECTED: [(f32, f32); 3] = [(3.0, 0.912), (12.0, 0.9316), (21.0, 0.8857)];
 
 /// Largest confidence gap tolerated against BirdNET-Pi's rounded values.
-/// Measured: 3e-4, 2e-4, 7e-4 (FP32 ONNX against FP16 TFLite weights).
+/// Measured: 3e-4, 2e-4, 7e-4 (`FP32` ONNX against `FP16` `TFLite` weights).
 const TOL_CONF: f32 = 2e-3;
 
 /// Largest raw-logit gap tolerated on labels both sides report. Measured on

@@ -48,7 +48,7 @@ fn parity_dump() {
     let labels = LabelSet::load(Path::new(&labels_p)).unwrap();
     let mut model = BirdNetModel::load(
         Path::new(&model_p),
-        labels.clone(),
+        labels,
         ModelConfig {
             sensitivity: 1.0,
             confidence_threshold: 0.0,

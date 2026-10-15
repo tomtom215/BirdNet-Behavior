@@ -28,6 +28,10 @@
 //! * fetch failed (CDN outage) → variable unset → a skip is reported and
 //!   tolerated, so an upstream outage cannot fail an unrelated build.
 
+// Every test suite compiles this module, and each uses only the helper for the
+// model it needs (V3.0 or V2.4), so the other is dead there.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 /// Env var CI sets once the model has been fetched and checksum-verified.
@@ -58,7 +62,6 @@ pub fn model_paths() -> Option<(PathBuf, PathBuf)> {
 /// the other suites run is a 32 kHz probability model, so the 48 kHz logit path
 /// and its sensitivity mapping — what a BirdNET-Pi user's detections depend on —
 /// have no coverage from it.
-#[allow(dead_code)] // used by one suite only; every suite compiles this module
 pub fn v24_model_paths() -> Option<(PathBuf, PathBuf)> {
     paths_from_env(
         "BIRDNET_REQUIRE_V24_MODEL",

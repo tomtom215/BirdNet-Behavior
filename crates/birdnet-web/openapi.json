@@ -827,8 +827,8 @@
         "tags": [
           "system"
         ],
-        "summary": "Classifiers this build can install",
-        "description": "The classifiers this build knows how to install, each with the sha256 it will be checked against.\n\nThe catalogue is **compiled in**, not fetched. A fetched catalogue is a remote document that decides which URL a station downloads hundreds of megabytes from and which digest it checks them against; pinning both in the binary makes the checksum a promise this repository makes, verifiable by anyone reading the source.\n\nThere is no install endpoint. Installing is a 400 MB download taking hours on the uplink a field station has — a request handler is the wrong place for it, with nowhere to report progress and a retry that would start a second download beside the first. Use `birdnet-behavior --install-model <id>`, which runs in the foreground where failing is visible.\n\n`ships_labels` is false where no labels file accompanies the model; the operator supplies one, and its row count must match the model's output width or species are reported under other species' names.",
+        "summary": "Models this build can install",
+        "description": "The models (classifiers and range filters) this build knows how to install, each with the sha256 it will be checked against.\n\nThe catalogue is **compiled in**, not fetched. A fetched catalogue is a remote document that decides which URL a station downloads hundreds of megabytes from and which digest it checks them against; pinning both in the binary makes the checksum a promise this repository makes, verifiable by anyone reading the source.\n\nThere is no install endpoint. Installing is a 400 MB download taking hours on the uplink a field station has — a request handler is the wrong place for it, with nowhere to report progress and a retry that would start a second download beside the first. Use `birdnet-behavior --install-model <id>`, which runs in the foreground where failing is visible.\n\n`ships_labels` is false where no labels file accompanies the model; the operator supplies one, and its row count must match the model's output width or species are reported under other species' names.",
         "operationId": "modelsCatalog",
         "security": [
           {
@@ -857,6 +857,7 @@
                           "bytes",
                           "sample_rate",
                           "ships_labels",
+                          "use",
                           "notes"
                         ],
                         "properties": {
@@ -883,6 +884,15 @@
                           "ships_labels": {
                             "type": "boolean",
                             "description": "Whether a verified labels file is installed alongside."
+                          },
+                          "use": {
+                            "type": "string",
+                            "enum": [
+                              "classifier",
+                              "primary_classifier",
+                              "range_filter"
+                            ],
+                            "description": "What it is for: a second classifier that can run beside the primary, a classifier that replaces the primary, or a species-occurrence (range) filter for METADATA_MODEL_PATH. For a range filter `sample_rate` is 0."
                           },
                           "notes": {
                             "type": "string"

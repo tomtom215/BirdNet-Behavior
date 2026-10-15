@@ -1374,6 +1374,7 @@ async fn models_catalog() -> (StatusCode, Json<Value>) {
                 "bytes": e.model_bytes,
                 "sample_rate": e.sample_rate,
                 "ships_labels": e.labels_url.is_some(),
+                "use": e.usage.as_str(),
                 "notes": e.notes,
             })
         })

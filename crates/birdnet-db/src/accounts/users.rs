@@ -1,7 +1,9 @@
 //! The `users` table store and the argon2id password-hashing helpers.
 
 use argon2::Argon2;
-use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
+use password_hash::PasswordHasher as _;
+use password_hash::PasswordVerifier as _;
+use password_hash::phc::PasswordHash;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{AccountsError, Role, User};
@@ -22,9 +24,9 @@ use super::{AccountsError, Role, User};
 /// pathologically long passwords; the wrapper surface is the public-facing
 /// failure type the accounts surface already uses).
 pub fn hash_password(password: &str) -> Result<String, AccountsError> {
-    let salt = SaltString::generate(&mut OsRng);
+    // The salt is drawn from the OS CSPRNG inside `hash_password`.
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map(|h| h.to_string())
         .map_err(|e| AccountsError::Invalid(format!("password hash failed: {e}")))
 }
@@ -283,6 +285,29 @@ fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
 
 #[cfg(test)]
 mod tests {
+    /// A password hash written by the argon2 0.5 line this project shipped
+    /// through 0.17.1 must keep verifying after the library is upgraded: it is
+    /// in every existing station's `users` table, and the owner is the one
+    /// person who cannot be asked to reset it. Captured from that code, not
+    /// derived from anything this crate computes today.
+    #[test]
+    fn a_hash_written_by_argon2_0_5_still_verifies() {
+        const HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$C4Sce5Cf93w40GeLlxcKig$D1T4yttgZq2vHHEUiNsHE5yslKjdpwyesxMeWbYo9uU";
+        assert!(verify_password(HASH, "correct horse battery staple").unwrap());
+        assert!(!verify_password(HASH, "correct horse battery stapl").unwrap());
+        assert!(!verify_password(HASH, "").unwrap());
+    }
+
+    /// The cost a new hash is written at is part of what an upgrade must not
+    /// change silently: a library whose default drops it would weaken every
+    /// password set after, with every test still green.
+    #[test]
+    fn a_new_hash_is_argon2id_at_the_cost_the_project_chose() {
+        let h = hash_password("correct horse battery staple").unwrap();
+        assert!(h.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"), "{h}");
+        assert!(verify_password(&h, "correct horse battery staple").unwrap());
+    }
+
     use super::*;
     use crate::migration;
 

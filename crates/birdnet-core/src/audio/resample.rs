@@ -24,12 +24,16 @@
 //! the 16 kHz output Nyquist. Cost, release profile on a 2.8 GHz Xeon: 0.19 s
 //! per 60 s of audio against the polynomial's 0.05 s.
 //!
-//! `rubato` and `audioadapter-buffers` are a version-locked pair: rubato 4
-//! requires `audioadapter ^4.0`, so `audioadapter-buffers` must stay on 4.x
-//! until rubato takes 5. Bumping either alone puts two versions of the crate
-//! that defines `Adapter` in the graph, and the `InterleavedSlice` below then
-//! implements the wrong one. Dependabot proposes them separately (#177), so
-//! they have to be taken together by hand.
+//! `rubato` and `audioadapter-buffers` are a version-locked pair: rubato 5
+//! requires `audioadapter ^5`, so `audioadapter-buffers` must stay on 5.x until
+//! rubato takes 6. Bumping either alone puts two versions of the crate that
+//! defines `Adapter` in the graph, and the `InterleavedSlice` below then
+//! implements the wrong one. `.github/dependabot.yml` groups them so they
+//! arrive as one pull request.
+//!
+//! rubato's filter delays its output by `128 * ratio` samples; `process_all`
+//! trims that, so a sound lands where it went in (see the impulse test). The
+//! module once did not, and every resampled recording ran that much late.
 
 use std::fmt;
 
