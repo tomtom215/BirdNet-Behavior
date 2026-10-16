@@ -15,7 +15,7 @@ pub(super) async fn activity_heatmap_partial(
     let today = today_date_string();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::today_species_hour_heatmap(conn, &today, 12))
+        state.with_read_db(|conn| birdnet_db::sqlite::today_species_hour_heatmap(conn, &today, 12))
     })
     .await;
 

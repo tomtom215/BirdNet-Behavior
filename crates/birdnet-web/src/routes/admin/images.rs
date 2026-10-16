@@ -51,7 +51,7 @@ pub struct BlacklistForm {
 async fn images_page(State(state): State<AppState>) -> Html<String> {
     state.run_blocking(move |state| {
     let entries =
-        state.with_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
+        state.with_read_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
 
     let mut rows = String::new();
     for entry in &entries {

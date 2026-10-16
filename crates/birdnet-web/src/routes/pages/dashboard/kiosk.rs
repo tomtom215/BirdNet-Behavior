@@ -86,7 +86,7 @@ pub(super) async fn kiosk_content_partial(
         // A kiosk hangs on a wall and nobody is reading a log beside it, so a
         // failed read must not paint three zeroes and an empty list. Each of
         // these is a claim about the reader's birds; all four propagate.
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let today = today_date_string();
             let total = birdnet_db::sqlite::detection_count(conn)?;
             let today_count = birdnet_db::sqlite::todays_detection_count(

@@ -383,6 +383,11 @@ fn session_cookie(request: &Request<Body>) -> Option<session::ValidatedToken> {
         .and_then(session::validate_token)
 }
 
+/// `last_seen` is rewritten no more often than this. The Accounts page shows it
+/// and nothing else reads it, so a minute of granularity is invisible; a request
+/// used to rewrite it every time, under the lock the detection writer shares.
+const TOUCH_AFTER_IDLE_SECS: u32 = 60;
+
 /// The signed-in user behind a validated `bnb-session` cookie, if its session
 /// row is live and its user not disabled. `None` covers every way of not
 /// being signed in; the reason is logged at debug.
@@ -396,24 +401,39 @@ fn session_user(
 ) -> Option<RequestUser> {
     let validated = validated?;
 
-    let lookup = state.with_db(|conn| -> Result<RequestUser, accounts::AccountsError> {
-        let session = conn.find_active_session(&validated.session_id)?;
-        // Touch last_seen; failure is non-fatal (the auth still succeeds).
-        let _ = SessionStore::touch_session(conn, &validated.session_id);
-        let user = conn.find_user(session.user_id)?;
-        if user.disabled_at.is_some() {
-            return Err(accounts::AccountsError::Invalid(
-                "user disabled".to_string(),
-            ));
-        }
-        Ok(RequestUser {
-            user,
-            session_id: validated.session_id,
-        })
-    });
+    let lookup = state.with_read_db(
+        |conn| -> Result<(RequestUser, bool), accounts::AccountsError> {
+            let session = conn.find_active_session(&validated.session_id)?;
+            let user = conn.find_user(session.user_id)?;
+            if user.disabled_at.is_some() {
+                return Err(accounts::AccountsError::Invalid(
+                    "user disabled".to_string(),
+                ));
+            }
+            // Whether `last_seen` has gone stale is decided here, on the reader.
+            // A failed check is "not due": the next request asks again.
+            let touch_due = conn
+                .session_touch_due(&validated.session_id, TOUCH_AFTER_IDLE_SECS)
+                .unwrap_or(false);
+            Ok((
+                RequestUser {
+                    user,
+                    session_id: validated.session_id.clone(),
+                },
+                touch_due,
+            ))
+        },
+    );
 
     match lookup {
-        Ok(u) => Some(u),
+        Ok((user, touch_due)) => {
+            if touch_due {
+                // The one write, and only once the stored value is a minute old.
+                // Failure is non-fatal: the authentication already succeeded.
+                let _ = state.with_db(|conn| SessionStore::touch_session(conn, &user.session_id));
+            }
+            Some(user)
+        }
         Err(e) => {
             tracing::debug!(error = %e, "cookie auth: session/user lookup failed");
             None
@@ -447,13 +467,13 @@ pub fn admin_password_configured(state: &AppState) -> bool {
         return true;
     }
     state
-        .with_db(|conn| conn.find_user_by_name("admin"))
+        .with_read_db(|conn| conn.find_user_by_name("admin"))
         .map_or(true, |u| !accounts::is_legacy_password_hash(&u.pwd_argon2))
 }
 
 fn synthesise_seed_admin(state: &AppState) -> Option<RequestUser> {
     state
-        .with_db(|conn| conn.find_user_by_name("admin"))
+        .with_read_db(|conn| conn.find_user_by_name("admin"))
         .ok()
         .map(|user| RequestUser {
             user,

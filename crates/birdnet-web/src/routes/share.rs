@@ -235,9 +235,10 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
 
     let station_label = state.site_name().to_string();
     let db = state.clone();
-    let result =
-        tokio::task::spawn_blocking(move || db.with_db(|conn| lookup(conn, &date, &time, &com)))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        db.with_read_db(|conn| lookup(conn, &date, &time, &com))
+    })
+    .await;
 
     let Ok(Some(det)) = result else {
         return gone_page();
@@ -332,7 +333,7 @@ async fn share_spectrogram(State(state): State<AppState>, Path(token): Path<Stri
 async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> Option<String> {
     let (d, t, c) = (date.to_string(), time.to_string(), com.to_string());
     tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             conn.query_row(
                 // Same rule as `lookup`: a rejected detection's audio must
                 // stop being served too, or the clip outlives the claim it was

@@ -1038,11 +1038,82 @@ impl AnalyticsDb {
     pub const fn conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// A second handle on the same database, for running reads beside this one.
+    ///
+    /// `DuckDB` connections to one database instance read concurrently with each
+    /// other and with a writer (snapshot isolation), and share the instance's
+    /// extensions, memory limit and thread setting; a connection itself is `Send`
+    /// but not `Sync`, so each is owned by one query at a time. The analytics
+    /// store used to be exactly one connection, so a six-second retention query
+    /// held every other analytics request, however cheap, behind it.
+    ///
+    /// Clone after [`Self::load_extension`]: the behavioral functions are
+    /// registered on the instance, and the clone sees them (checked, not assumed:
+    /// `the_clone_sees_the_extension_and_what_the_writer_commits`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnalyticsError`] if the engine refuses a new connection.
+    pub fn try_clone_reader(&self) -> Result<Self, AnalyticsError> {
+        Ok(Self {
+            conn: self.conn.try_clone()?,
+            path: self.path.clone(),
+            extension_loaded: self.extension_loaded,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The property the reader pool stands on, with no clocks in it: a clone
+    /// sees what the writer commits, does not see what it has not committed,
+    /// and is not held up by an open write transaction on the first connection.
+    #[test]
+    fn the_clone_sees_the_extension_and_what_the_writer_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut adb = AnalyticsDb::open(&dir.path().join("a.duckdb")).unwrap();
+        let loaded = adb.load_extension().is_ok();
+        let reader = adb.try_clone_reader().expect("clone");
+        let count = |db: &AnalyticsDb| -> i64 {
+            db.conn()
+                .query_row("SELECT count(*) FROM clone_probe", [], |r| r.get(0))
+                .unwrap()
+        };
+        adb.conn()
+            .execute_batch(
+                "CREATE TABLE clone_probe (a INTEGER); INSERT INTO clone_probe VALUES (1), (2);",
+            )
+            .unwrap();
+        assert_eq!(count(&reader), 2, "committed rows are visible to the clone");
+
+        adb.conn()
+            .execute_batch("BEGIN TRANSACTION; INSERT INTO clone_probe VALUES (3);")
+            .unwrap();
+        assert_eq!(
+            count(&reader),
+            2,
+            "the clone read while the writer's transaction was open, and did not see its uncommitted row"
+        );
+        adb.conn().execute_batch("COMMIT;").unwrap();
+        assert_eq!(count(&reader), 3, "and sees it once committed");
+
+        if loaded {
+            let known: i64 = reader
+                .conn()
+                .query_row(
+                    "SELECT count(*) FROM duckdb_functions() WHERE function_name = 'retention'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                known > 0,
+                "the extension's functions are not visible on the clone"
+            );
+        }
+    }
 
     /// DD-25: the classifier reads `DuckDB`'s two lock phrasings and nothing
     /// else, and the retry gives up as `Locked` only once the grace has

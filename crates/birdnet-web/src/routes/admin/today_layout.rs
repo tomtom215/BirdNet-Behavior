@@ -92,7 +92,8 @@ async fn change(
             let Some(block) = Block::ALL.into_iter().find(|b| b.id() == block) else {
                 return toast::not_applied(&Toast::warn("That part of the page does not exist."));
             };
-            let stored = state.with_db(|conn| birdnet_db::settings::get_or(conn, SETTING_KEY, ""));
+            let stored =
+                state.with_read_db(|conn| birdnet_db::settings::get_or(conn, SETTING_KEY, ""));
             let mut layout = match stored {
                 Ok(v) => Layout::parse(&v),
                 Err(e) => {

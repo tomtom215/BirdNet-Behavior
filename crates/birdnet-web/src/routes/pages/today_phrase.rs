@@ -43,7 +43,7 @@ pub async fn today_phrase_partial(State(state): State<AppState>) -> impl IntoRes
     let today = today_date_string();
     let now = now_time_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let today_count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM detections_analytic WHERE Date = ?1",
                 [&today],

@@ -72,7 +72,7 @@ pub(crate) fn load_phantoms(
     state: &AppState,
 ) -> Result<Vec<birdnet_db::phantoms::PhantomReport>, String> {
     let shapes = state
-        .with_db(birdnet_db::sqlite::species_shapes)
+        .with_read_db(birdnet_db::sqlite::species_shapes)
         .map_err(|e| e.to_string())?;
     let mut reports = birdnet_db::phantoms::report(&shapes);
     // The report is read by the operator and acted on by scientific name, so the
@@ -286,7 +286,7 @@ impl QualityData {
 }
 
 fn load_quality_data(state: &AppState) -> QualityData {
-    state.with_db(|conn| QualityData {
+    state.with_read_db(|conn| QualityData {
         summary: quality_summary(conn).ok(),
         conf_buckets: confidence_distribution(conn).unwrap_or([0; 6]),
         trend: confidence_trend(conn, 30).unwrap_or_default(),

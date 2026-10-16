@@ -228,7 +228,7 @@ fn authenticate(
     configured_env: Option<&(String, String)>,
 ) -> Option<i64> {
     // Path 1: DB lookup.
-    if let Ok(user) = state.with_db(|conn| conn.find_user_by_name(username)) {
+    if let Ok(user) = state.with_read_db(|conn| conn.find_user_by_name(username)) {
         if user.disabled_at.is_some() {
             return None;
         }
@@ -253,7 +253,7 @@ fn authenticate(
         && constant_time_eq(password.as_bytes(), p.as_bytes())
     {
         return state
-            .with_db(|conn| conn.find_user_by_name("admin"))
+            .with_read_db(|conn| conn.find_user_by_name("admin"))
             .map(|admin| admin.id)
             .ok();
     }
@@ -337,7 +337,7 @@ pub(crate) fn mint_session_cookie(
 /// station before the operator has chosen a password.
 fn open_bypass_redirect(state: &AppState, next: &str, device: &DeviceFingerprint) -> Response {
     let session_id = session::generate_session_id();
-    let Ok(admin) = state.with_db(|conn| conn.find_user_by_name("admin")) else {
+    let Ok(admin) = state.with_read_db(|conn| conn.find_user_by_name("admin")) else {
         return Redirect::to(next).into_response();
     };
     let admin_id = admin.id;
@@ -405,7 +405,7 @@ async fn logout_submit(State(state): State<AppState>, req: Request) -> Response 
                 // `RequestUser`: `/logout` is deliberately reachable without the auth
                 // middleware, so a stale cookie can still be cleared.
                 let user_id = state
-                    .with_db(|conn| {
+                    .with_read_db(|conn| {
                         <_ as SessionStore>::find_active_session(conn, &validated.session_id)
                     })
                     .ok()

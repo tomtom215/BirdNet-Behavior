@@ -1,0 +1,21 @@
+# Every `with_analytics(` / `with_timeseries(` in crates/birdnet-web/src that is allowed to take the
+# single writer connection of the DuckDB analytics store.
+#
+# Reads use `with_analytics_read` / `with_timeseries_read`, which run on two further connections to
+# the same database, so a six-second retention query no longer holds the status badge and the charts
+# behind it. What is listed here changes the store: it mirrors a SQLite write into DuckDB.
+# (The capture daemon's insert, `src/daemon/processor.rs`, is outside this crate and also a write.)
+# `the_writer_lock_is_for_writing.rs` fails on a site that is not listed and on a listing that no
+# longer exists.
+#
+# file :: fn   count   reason
+
+routes/admin/migration.rs :: delete_batch_handler  1  POST /admin/migrate/batches/delete (removes the batch's rows from the analytics copy)
+routes/admin/migration.rs :: provenance_handler  1  POST /admin/migrate/batches/provenance (sets the import-exclusion setting)
+state.rs :: with_analytics_read  1  the fallback inside with_analytics_read itself: no reader connections were opened
+state.rs :: delete_detection  1  mirrors a detection delete
+state.rs :: relabel_detection  1  mirrors a relabel
+state.rs :: approve_quarantine  1  mirrors a quarantine approval
+state.rs :: clear_detections  1  mirrors clear-all
+state.rs :: set_detection_review  1  mirrors a review verdict
+state.rs :: clear_detection_review  1  mirrors clearing a review verdict

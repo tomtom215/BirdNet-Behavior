@@ -46,8 +46,9 @@ pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
     state
         .run_blocking(move |state| {
             let (exclude, include, _) = load_lists(state);
-            let species = state
-                .with_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default());
+            let species = state.with_read_db(|conn| {
+                birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default()
+            });
             #[allow(clippy::cast_sign_loss)]
             let rows: Vec<(String, String, u64)> = species
                 .into_iter()
@@ -290,7 +291,7 @@ fn load_thresholds_and_suggestions(
     Vec<birdnet_db::sqlite::SpeciesThreshold>,
     Vec<SuggestedThreshold>,
 ) {
-    state.with_db(|conn| {
+    state.with_read_db(|conn| {
         let thresholds = birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default();
         let configured: std::collections::HashMap<&str, f64> = thresholds
             .iter()
@@ -466,14 +467,13 @@ fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>, Vec<String>) {
 pub fn configured_species_lists(
     state: &AppState,
 ) -> birdnet_core::inference::species_filter::SpeciesLists {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        birdnet_core::inference::species_filter::SpeciesLists {
+    state.with_read_db(
+        |conn| birdnet_core::inference::species_filter::SpeciesLists {
             include: parse_list(get(conn, "species_include").ok().as_deref()),
             exclude: parse_list(get(conn, "species_exclude").ok().as_deref()),
             whitelist: parse_list(get(conn, "species_whitelist").ok().as_deref()),
-        }
-    })
+        },
+    )
 }
 
 /// Render the species-list management body (no document shell).

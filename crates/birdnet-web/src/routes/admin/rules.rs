@@ -96,7 +96,7 @@ async fn export_rules(
     // backup of their rules, and a failed read produced a well-formed file
     // with `"rules": []` in it — a backup that restores to nothing.
     let (rules, metric_rules) = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             Ok::<_, String>((
                 list_rules(conn).map_err(|e| e.to_string())?,
                 birdnet_db::metric_rules::list(conn).map_err(|e| e.to_string())?,
@@ -519,7 +519,7 @@ async fn test_rule(
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
     let rule = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::alert_rules::get_rule(conn, id).ok().flatten())
+        state.with_read_db(|conn| birdnet_db::alert_rules::get_rule(conn, id).ok().flatten())
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -578,7 +578,7 @@ async fn rules_page() -> axum::response::Redirect {
 
 async fn rules_list_partial(State(state): State<AppState>) -> Html<String> {
     let rules = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| list_rules(conn).unwrap_or_default())
+        state.with_read_db(|conn| list_rules(conn).unwrap_or_default())
     })
     .await
     .unwrap_or_default();
@@ -788,7 +788,7 @@ struct MetricRuleForm {
 
 async fn metric_rules_list_partial(State(state): State<AppState>) -> Html<String> {
     let rules = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::list(conn).unwrap_or_default())
+        state.with_read_db(|conn| birdnet_db::metric_rules::list(conn).unwrap_or_default())
     })
     .await
     .unwrap_or_default();

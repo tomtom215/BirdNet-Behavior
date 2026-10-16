@@ -4,8 +4,8 @@
 //! public, and each scans the detection history: the rare-bird feed took 5.2 s
 //! on a 300 000-detection station, the exports 2.7 to 4.3 s, the dashboard's KPI
 //! block 2.4 s (measured against the real binary, debug build). They called
-//! `with_db`, the single writer lock the detection processor and 245 other call
-//! sites also take, so sixteen concurrent feed requests held all of them for 81 s
+//! `with_db`, the single writer lock the detection processor and every other
+//! writer also take, so sixteen concurrent feed requests held all of them for 81 s
 //! and `GET /api/v2/detections?limit=1` waited 38.9 s behind them (audit scenario
 //! 2), and a single export stalled every detection write for its duration.
 //!
@@ -17,8 +17,10 @@
 //!
 //! The counterpart asks for the same routes with the lock free: they answer 200,
 //! so "answers while the writer is held" cannot pass by a route being broken.
-//! The list is the routes moved so far, not every public read: 245 call sites
-//! still take the writer, and a route is added here when it is moved.
+//! The list is the heaviest routes, the ones that were measured. Every other
+//! database call in a handler is covered by `the_writer_lock_is_for_writing.rs`
+//! (reads use the pool; each remaining `with_db` is a listed write) and
+//! `every_route_answers_through_a_read_only_connection.rs`.
 
 use std::time::Duration;
 

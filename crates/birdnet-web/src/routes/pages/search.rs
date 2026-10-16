@@ -490,7 +490,7 @@ async fn bulk_action(
                     // it reviews is a quiet corruption of the curation record.
                     // The lookup doubles as the existence check — a row
                     // somebody else already deleted is a skip, not an error.
-                    let com_name = state.with_db(|conn| {
+                    let com_name = state.with_read_db(|conn| {
                         birdnet_db::sqlite::com_name_for(conn, &k.date, &k.time, &k.sci_name)
                     })?;
                     match com_name {

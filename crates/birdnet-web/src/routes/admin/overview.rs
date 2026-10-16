@@ -54,7 +54,7 @@ fn blocking_stats(state: &AppState) -> String {
     // Three counts of the reader's own birds. Defaulted, a failed read drew
     // "Total Detections 0 · Unique Species 0 · Today 0" on the admin overview
     // — the screen an operator opens to find out whether the station is well.
-    let counts = state.with_db(|conn| {
+    let counts = state.with_read_db(|conn| {
         let t = birdnet_db::sqlite::detection_count(conn)?;
         let s = birdnet_db::sqlite::species_count(conn)?;
         let d = today_count(conn)?;

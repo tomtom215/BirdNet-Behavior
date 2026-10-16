@@ -117,7 +117,7 @@ fn gather(state: &AppState) -> DataFacts {
     snapshots.sort_by_key(|s| std::cmp::Reverse(s.modified_unix));
     let snapshot_bytes = snapshots.iter().map(|s| s.bytes).sum();
 
-    let scheduled_last_run_unix = state.with_db(|conn| {
+    let scheduled_last_run_unix = state.with_read_db(|conn| {
         birdnet_db::sqlite::last_run_unix(conn, birdnet_db::sqlite::JOB_BACKUP_VACUUM)
             .unwrap_or(None)
     });

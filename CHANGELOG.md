@@ -584,6 +584,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Only writes take the writer connection now, and the analytics store has readers.**
+  `with_db` is the one SQLite connection the capture daemon's inserts share, and 223
+  `with_db(` lines in 56 files of `birdnet-web/src` took it, so any page that read
+  waited behind a detection being stored and the detection behind the page. A
+  classification of every one of them (read from source, each callee opened; a
+  second, independent scan of the closures and what they call found no write in the
+  ones moved, and its one false positive was a trait declaration) found 117
+  production sites that only read. They use `with_read_db` (the pool of read-only
+  connections) now, including the three on every authenticated request:
+  `admin_password_configured`, the seed-admin lookup and the session lookup. The
+  session's `last_seen` is rewritten only once it is a minute old (it is displayed on
+  the Accounts page and read nowhere else), instead of on every request, under the
+  lock. What remains on the writer is listed with its reason in
+  `crates/birdnet-web/tests/writer_lock_sites.txt` (55 call sites: logins, account,
+  rule, source and settings changes, detection edits, the audit log, the daemon's
+  insert path) and fails `the_writer_lock_is_for_writing` when a new one appears or a
+  listed one goes; the same test fails on a write verb inside any closure given to a
+  read method, which covers the case no response shows (an error swallowed by `.ok()`).
+  `every_route_answers_through_a_read_only_connection` requests the pages and
+  partials of the visual-QA route list and every parameterless documented read on a
+  file-backed station (over 120 requests), and fails on a server error, an error state, or `readonly` in
+  the log. Seen failing: a read put back on `with_db`, a swallowed write planted in a
+  reader (the ledger test); a write planted on a converted read (the crawl: four
+  pages rendered "readonly database"); and with the old session code a signed-in
+  request waited for a held writer lock for the whole 3 s the test allows and rewrote
+  `last_seen` on every request. `/stream` and the other tests that held the writer to
+  show a waiting request does not stall the runtime now hold every pooled reader.
+  **The DuckDB analytics store had one connection behind one `Mutex`**, so a
+  six-second retention query held the status badge and every chart behind it. It has
+  two further connections to the same database for reads
+  (`with_analytics_read`, `with_timeseries_read`; 35 call sites moved), and the
+  original is left to what writes (nine call sites, in
+  `tests/analytics_writer_sites.txt`). Checked rather than assumed: a clone sees what
+  the writer commits and not what it has not, reads while a write transaction is open,
+  and sees the behavioral extension's functions. `analytics_reads_answer_while_the_writer_connection_is_held`
+  fails on the single connection and passes on the readers. **Not measured:** the
+  throughput of concurrent heavy analytics queries (DuckDB already uses every thread
+  of one query, so two at once finish later each; what changed is that a cheap request
+  no longer waits for them), and Raspberry Pi behaviour.
+- **The rare-bird feeds and the "has this species been heard before" probes seek by
+  species and date instead of walking the species.** Every index that could answer
+  the question led with `Date` or with the species alone, so each probe read every
+  row of the species, once per candidate row. Migration 54 adds
+  `idx_detections_species_date (Com_Name, Date)` and the feed's query states its
+  window as a `Date` range as well as the day count (identical rows, held against the
+  previous query over data built to sit on the rule's edges; a window one day short
+  fails it). The index alone made the old query slower (17 s against 3.25 s: the
+  planner then walked each species from its first day), which is why they travel
+  together. Measured on a 300 000-row station, SQLite 3.45.1: 3.25 s to 0.94 s for
+  `rare_species_days = 30`, and **300 s to 0.96 s for `rare_species_days = 0`**
+  (`MIN(Date)` per row). Through the real binary (debug build): `rare.rss` 4.6–4.9 s
+  to 1.5 s, `rare.ics` 4.9 s to 1.4 s. Cost: 0.30 s to build, +8.2 MB on a 147 MB
+  database (+5.6 %), no measurable change to 2 000 inserts (77 ms with it, 82 ms
+  without). A Raspberry Pi builds it slower, once, at the first start after
+  upgrading.
 - **Sixteen visitors to the public heavy pages could keep the station from answering
   anything else.** The RSS feeds, the four detection exports, the insights routes and
   the migration cards read the whole detection history through `with_db`, the one
@@ -606,12 +661,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds the writer lock and requests ten routes (red with the conversions reverted),
   and `heavy_reads_leave_readers_for_the_cheap_requests` runs twelve scans and then a
   cheap read (red with the gate widened to 100 slots: the cheap read waited 1.7 s).
-  `database_work_stays_off_the_async_runtime` knows `run_blocking_heavy`. **Not
-  done:** 223 `with_db(` lines in 56 files of `birdnet-web/src` still take the writer
-  (62 `with_read_db(` lines do not); these routes were chosen because timing every
-  public GET found them slow (the 4.3 s export, the 2.4 s dashboard KPIs, and the
-  others listed in `docs/HANDOFF.md`), not because the other 223 were each judged.
-  The analytics store is still one connection behind a mutex.
+  `database_work_stays_off_the_async_runtime` knows `run_blocking_heavy`. The other
+  database calls in the web crate were swept in the entry above.
 - **The retention analysis took 74 seconds on a 300 000-detection station and held
   the analytics connection the whole time.** The query joined every pair of a
   species' active days and let the `retention()` aggregate discard the pairs no

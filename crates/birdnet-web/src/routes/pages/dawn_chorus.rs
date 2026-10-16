@@ -210,7 +210,7 @@ fn collect_chorus(
 
 async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| (collect_chorus(conn, 60, 8), super::solar_times_local(conn)))
+        state.with_read_db(|conn| (collect_chorus(conn, 60, 8), super::solar_times_local(conn)))
     })
     .await;
 
@@ -491,7 +491,7 @@ fn ribbon_path(cx: f64, cy: f64, base_r: f64, hours: &[f32; 24], amp: f64) -> St
 async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
     let names = state.names_handle();
     let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| collect_chorus(conn, 60, 8)))
+        tokio::task::spawn_blocking(move || state.with_read_db(|conn| collect_chorus(conn, 60, 8)))
             .await;
     let ribbons = match result {
         Ok(Ok(r)) if !r.is_empty() => r,

@@ -60,7 +60,7 @@ async fn weekly_partial(
     let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let total = birdnet_db::sqlite::weekly_detection_count(conn, &week_start, &week_end)?;
             // Large limit so the returned list length is the true weekly species
             // count; the leaderboard still renders only the top 10.

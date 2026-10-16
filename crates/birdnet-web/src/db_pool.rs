@@ -59,14 +59,20 @@ use rusqlite::Connection;
 /// disk is the limit rather than the pool.
 const READER_COUNT: usize = 4;
 
-/// A fixed set of read-only connections, handed out one at a time.
+/// A fixed set of connections, handed out one at a time.
+///
+/// Generic over the connection so the `DuckDB` analytics readers share the
+/// lending logic (and its panic safety) with the `SQLite` ones.
 #[derive(Debug)]
-pub struct ReaderPool {
+pub struct Pool<T> {
     /// Connections not currently in use.
-    idle: Mutex<Vec<Connection>>,
+    idle: Mutex<Vec<T>>,
     /// Signalled whenever a connection is returned.
     returned: Condvar,
 }
+
+/// The read-only `SQLite` connections.
+pub type ReaderPool = Pool<Connection>;
 
 /// Returns a borrowed connection to the pool however the caller leaves.
 ///
@@ -75,12 +81,12 @@ pub struct ReaderPool {
 /// test would shrink the pool for every test after it in the same binary —
 /// eventually to nothing, at which point the suite hangs in [`Condvar::wait`]
 /// instead of failing. A hang is a much worse test failure than an assertion.
-struct Lease<'p> {
-    pool: &'p ReaderPool,
-    conn: Option<Connection>,
+struct Lease<'p, T> {
+    pool: &'p Pool<T>,
+    conn: Option<T>,
 }
 
-impl Drop for Lease<'_> {
+impl<T> Drop for Lease<'_, T> {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
             self.pool
@@ -93,7 +99,7 @@ impl Drop for Lease<'_> {
     }
 }
 
-impl ReaderPool {
+impl Pool<Connection> {
     /// Open `READER_COUNT` read-only connections to `path`.
     ///
     /// Returns `None` when the pool cannot be built — the database is
@@ -132,10 +138,18 @@ impl ReaderPool {
             path = %path.display(),
             "read-only connection pool open"
         );
-        Some(Self {
-            idle: Mutex::new(conns),
+        Some(Self::new(conns))
+    }
+}
+
+impl<T> Pool<T> {
+    /// A pool lending out `items`, one at a time.
+    #[must_use]
+    pub const fn new(items: Vec<T>) -> Self {
+        Self {
+            idle: Mutex::new(items),
             returned: Condvar::new(),
-        })
+        }
     }
 
     /// How many connections this pool holds. Test and diagnostic use.
@@ -165,7 +179,7 @@ impl ReaderPool {
     /// Only if `f` panics, which propagates after the connection has been
     /// returned to the pool by the `Lease` guard. The pool's own locking
     /// recovers from poisoning rather than unwrapping.
-    pub fn with<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
         let conn = loop {
             if let Some(conn) = idle.pop() {

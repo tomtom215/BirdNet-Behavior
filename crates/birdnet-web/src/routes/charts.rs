@@ -147,7 +147,7 @@ async fn confidence_distribution(
     let limit = confidence_limit(q.limit.as_deref());
     let result = state
         .run_blocking(move |s| {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::confidence_histograms(
                     conn,
                     &start,
@@ -280,7 +280,7 @@ async fn year_over_year(
     let (current, previous) = year_over_year_windows(at.year, at.month, at.day);
     let result = state
         .run_blocking(move |s| {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 let mut per_day = std::collections::HashMap::new();
                 for (start, end) in [previous, current] {
                     per_day.extend(birdnet_db::sqlite::day_counts_between(
@@ -397,7 +397,7 @@ async fn dawn_onset(State(state): State<AppState>, Query(q): Query<DayChartQuery
     let species = species_filter(q.species.as_deref());
     let result = state
         .run_blocking(move |s| {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 let days = birdnet_db::sqlite::day_onsets(
                     conn,
                     &start,
@@ -499,7 +499,7 @@ async fn heatmap(State(state): State<AppState>, Query(q): Query<HeatmapQuery>) -
     let species = species_filter(q.species.as_deref());
     let result = state
         .run_blocking(move |s| {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::slot_counts(
                     conn,
                     &start,
@@ -631,7 +631,7 @@ async fn hour_chart(
     };
     let result = state
         .run_blocking(move |s| {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 birdnet_db::sqlite::species_hours(
                     conn,
                     &request.start,
@@ -802,7 +802,7 @@ async fn species_daily(State(state): State<AppState>, Query(q): Query<DailyQuery
         .unwrap_or(DAILY_DEFAULT_SPECIES);
     let result = state
         .run_blocking(move |s| {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 let latitude = crate::routes::pages::station_location(conn).map(|l| l.lat);
                 let (season, season_start) =
                     season_of(at.year, at.month, at.day, seasons_for(latitude));

@@ -520,8 +520,10 @@ pub(crate) fn load_settings_for(
 /// defaults as the configuration, the save counted every field as changed
 /// and wrote all of them, and the API reported `{}`.
 pub(crate) fn load_all_settings(state: &AppState) -> Result<HashMap<String, String>, String> {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
+    // A read: the table exists on any migrated database, so the `CREATE TABLE
+    // IF NOT EXISTS` this used to run (errors discarded) had nothing to do, and
+    // it kept this read on the one writer connection.
+    state.with_read_db(|conn| {
         list(conn, None)
             .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect())
             .map_err(|e| e.to_string())

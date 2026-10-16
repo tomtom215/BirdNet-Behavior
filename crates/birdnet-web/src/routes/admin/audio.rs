@@ -193,10 +193,12 @@ async fn page() -> axum::response::Redirect {
 /// camera's password, so a read-only account sees it with the password masked
 /// (`redact_value`), exactly as the settings API shows it.
 pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
-    let mut sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
-        tracing::error!(error = %err, "audio_sources list failed");
-        Vec::new()
-    });
+    let mut sources = state
+        .with_read_db(AudioSourceStore::list)
+        .unwrap_or_else(|err| {
+            tracing::error!(error = %err, "audio_sources list failed");
+            Vec::new()
+        });
     if !show_credentials {
         for s in &mut sources {
             s.device_id = birdnet_core::config::redact::redact_value(&s.device_id);
@@ -209,7 +211,7 @@ pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
 /// The `audio_sources` id `/stream` serves when the listener has not chosen
 /// one, or `""` when the station has never picked a default.
 fn listen_default_id(state: &AppState) -> String {
-    state.with_db(|conn| {
+    state.with_read_db(|conn| {
         birdnet_db::settings::get_or(
             conn,
             crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
@@ -449,7 +451,7 @@ async fn create(
             // without this an operator who can't tell the save registered just clicks
             // "Save" again and silently ends up with the same mic/stream listed twice.
             let already_configured = state
-                .with_db(AudioSourceStore::list)
+                .with_read_db(AudioSourceStore::list)
                 .unwrap_or_default()
                 .iter()
                 .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
@@ -615,7 +617,7 @@ async fn restart(
 
             // Confirm the source exists before claiming anything happened: an id from a
             // stale page must not answer "restarting" for a source that was removed.
-            let row = match state.with_db(|conn| conn.get(&id)) {
+            let row = match state.with_read_db(|conn| conn.get(&id)) {
                 Ok(Some(row)) => row,
                 Ok(None) => return not_found_row(&id),
                 Err(e) => {
@@ -668,7 +670,7 @@ async fn listen_default(
     Path(id): Path<String>,
 ) -> Response {
     state.run_blocking(move |state| {
-    let row = match state.with_db(|conn| conn.get(&id)) {
+    let row = match state.with_read_db(|conn| conn.get(&id)) {
         Ok(Some(row)) => row,
         Ok(None) => return not_found_row(&id),
         Err(e) => {
@@ -703,7 +705,7 @@ async fn listen_default(
         None,
     );
 
-    let sources = state.with_db(AudioSourceStore::list).unwrap_or_default();
+    let sources = state.with_read_db(AudioSourceStore::list).unwrap_or_default();
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
@@ -722,7 +724,7 @@ async fn listen_default(
 async fn edit_form(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     state
         .run_blocking(move |state| {
-            let result = state.with_db(|conn| conn.get(&id));
+            let result = state.with_read_db(|conn| conn.get(&id));
             let row = match result {
                 Ok(Some(row)) => row,
                 Ok(None) => return not_found_row(&id),
@@ -755,7 +757,7 @@ async fn update(
             let device_id = form.device_id.trim().to_string();
             if !device_id.is_empty() {
                 // A changed stream URL is held to the same rule as a new one.
-                match state.with_db(|conn| conn.get(&id)) {
+                match state.with_read_db(|conn| conn.get(&id)) {
                     Ok(Some(row)) => {
                         if let Err(msg) = check_stream_url(row.kind, &device_id) {
                             return validation_response(&msg);
@@ -816,7 +818,7 @@ async fn update(
             if form.eq_chain.is_some() {
                 let effective_rate = match patch.sample_rate {
                     Some(rate) => rate,
-                    None => match state.with_db(|conn| conn.get(&id)) {
+                    None => match state.with_read_db(|conn| conn.get(&id)) {
                         Ok(Some(row)) => row.sample_rate,
                         Ok(None) => return not_found_row(&id),
                         Err(e) => {
@@ -882,7 +884,7 @@ async fn eq_preview(
 ) -> Response {
     state
         .run_blocking(move |state| {
-            let sample_rate = match state.with_db(|conn| conn.get(&id)) {
+            let sample_rate = match state.with_read_db(|conn| conn.get(&id)) {
                 Ok(Some(row)) => row.sample_rate,
                 Ok(None) => return not_found_row(&id),
                 Err(e) => {
@@ -926,7 +928,7 @@ fn eq_preview_problem(id: &str, message: &str) -> String {
 async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     state
         .run_blocking(move |state| {
-            let row = match state.with_db(|conn| conn.get(&id)) {
+            let row = match state.with_read_db(|conn| conn.get(&id)) {
                 Ok(Some(row)) => row,
                 Ok(None) => return not_found_row(&id),
                 Err(e) => {
@@ -946,19 +948,21 @@ async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Respons
 /// the edit form stuck open — Cancel appeared to do nothing.)
 async fn row(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     state
-        .run_blocking(move |state| match state.with_db(|conn| conn.get(&id)) {
-            Ok(Some(src)) => Html(render_row(
-                &src,
-                daemon_status(&src, state),
-                &listen_default_id(state),
-            ))
-            .into_response(),
-            Ok(None) => not_found_row(&id),
-            Err(e) => {
-                tracing::error!(error = %e, "audio source get failed");
-                internal_response("Could not load that source.")
-            }
-        })
+        .run_blocking(
+            move |state| match state.with_read_db(|conn| conn.get(&id)) {
+                Ok(Some(src)) => Html(render_row(
+                    &src,
+                    daemon_status(&src, state),
+                    &listen_default_id(state),
+                ))
+                .into_response(),
+                Ok(None) => not_found_row(&id),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source get failed");
+                    internal_response("Could not load that source.")
+                }
+            },
+        )
         .await
 }
 
@@ -1010,7 +1014,9 @@ fn oob_count(span_id: &str, n: usize, singular: &str, plural: &str) -> String {
 /// add/remove responses so the header totals stay truthful the instant a source
 /// is added or removed.
 fn count_oobs(state: &AppState) -> String {
-    let sources = state.with_db(AudioSourceStore::list).unwrap_or_default();
+    let sources = state
+        .with_read_db(AudioSourceStore::list)
+        .unwrap_or_default();
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));

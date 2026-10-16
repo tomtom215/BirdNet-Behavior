@@ -164,7 +164,7 @@ async fn onboarding_page(State(state): State<AppState>, req: Request) -> Respons
             }
             // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
             let (sources, prefill) = state
-                .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
+                .with_read_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
                 .unwrap_or_else(|err| {
                     tracing::error!(error = %err, "onboarding: audio_sources list failed");
                     (Vec::new(), Prefill::default())

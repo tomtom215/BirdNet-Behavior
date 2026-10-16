@@ -343,7 +343,7 @@ fn render_pairs_table(
 
 fn compute_companion(state: &AppState, species: &str, days: u32) -> Option<String> {
     let companions = state
-        .with_db(|conn| {
+        .with_read_db(|conn| {
             // Typed in the station's language, asked of the database in the
             // classifier's.
             let stored = super::name_search::stored_name_for_typed(conn, state.names(), species);

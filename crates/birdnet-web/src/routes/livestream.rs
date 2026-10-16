@@ -763,7 +763,7 @@ struct ResolvedSource {
 /// fails. Callers treat all three as "404 no such source".
 fn resolve_by_source_id(state: &AppState, id: &str) -> Option<ResolvedSource> {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let sources = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
+    let sources = state.with_read_db(|conn| AudioSourceStore::list(conn).ok())?;
     pick_by_id(&sources, id)
 }
 
@@ -785,7 +785,7 @@ pub const LIVESTREAM_SOURCE_SETTING: &str = "livestream_source";
 /// `audio_sources` table now.)
 fn resolve_default_source(state: &AppState) -> Option<ResolvedSource> {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let (sources, configured) = state.with_db(|conn| {
+    let (sources, configured) = state.with_read_db(|conn| {
         (
             AudioSourceStore::list(conn).unwrap_or_default(),
             birdnet_db::settings::get_or(conn, LIVESTREAM_SOURCE_SETTING, "").unwrap_or_default(),

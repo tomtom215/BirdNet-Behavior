@@ -181,22 +181,23 @@ Not done, in the order they seem to matter:
   [`RELEASING.md`](../RELEASING.md#publishing-to-cratesio-the-maintainer-not-a-workflow):
   the bundled-DuckDB build of the packaged crates, docs.rs, and `cargo publish`
   itself were not run.
-- **Public pages that scan the whole history are still slow one at a time, and the
-  analytics store is one connection behind a mutex.** What changed in this branch is
-  that they no longer starve everything else: the feeds, exports, insights and
-  migration cards read through the pool with a heavy-read gate (CHANGELOG, *Fixed*),
-  measured with sixteen in flight on a 300 000-row station: cheap reads 0.01–0.10 s.
-  The scans themselves were not made faster. Timing every public GET on that station
-  (debug build, one request at a time) found, in seconds: analytics retention 6.0,
-  `rare.ics` 4.9, `rare.rss` 4.8, the detection export 4.5, its raven / birddb / ebird
-  variants 4.2 / 4.1 / 2.5, `/station/data` 3.9, analytics species summary 2.4,
-  dashboard KPIs 2.4, insights migration 1.9. `(Com_Name, Date)` has no index; that
-  and the analytics mutex are the next two things to look at. 223 `with_db(` lines in
-  56 files of `birdnet-web/src` still take the single writer (62 `with_read_db(`
-  lines do not); `a_public_read_does_not_hold_the_writer_lock` covers ten routes,
-  not those. With four readers the gate has two slots: a visitor holding both makes
-  other heavy requests wait (the feeds are refused with 503), and the per-address
-  rate limit and private mode are the only other limits on that.
+- **Public pages that scan the whole history are still slow one at a time.** They no
+  longer starve everything else (the feeds, exports, insights and migration cards
+  read through the pool behind a heavy-read gate; every other read in the web crate
+  uses a read connection, and what is left on the single writer is listed with its
+  reason in `crates/birdnet-web/tests/writer_lock_sites.txt` and
+  `analytics_writer_sites.txt`, enforced by `the_writer_lock_is_for_writing`). The
+  scans themselves are not faster except the rare-bird feeds (migration 54 and a
+  windowed query: 4.6 to 1.5 s in the real binary). Timing every public GET on a
+  300 000-row station before the index (debug build, one at a time): analytics
+  retention 6.0, the detection export 4.5 and its raven / birddb / ebird variants
+  4.2 / 4.1 / 2.5, `/station/data` 3.9, analytics species summary 2.4, dashboard
+  KPIs 2.4, insights migration 1.9 seconds. The exports and KPIs are whole-history
+  aggregates; whether an index or a maintained summary table helps was not
+  examined. With four readers the heavy-read gate has two slots: a visitor holding
+  both makes other heavy requests wait (the feeds are refused with 503), and the
+  per-address rate limit and private mode are the only other limits on that.
+  Throughput of concurrent heavy DuckDB queries was not measured.
 - **Unescaped reflection still injects markup.** The CSP nonce now goes only onto the
   tags the server sealed, and every other `<script` is rewritten to text
   (`src/seal.rs`; CHANGELOG, *Security*), checked in Chromium for a full page and for

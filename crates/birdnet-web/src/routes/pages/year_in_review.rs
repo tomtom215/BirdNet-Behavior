@@ -48,7 +48,7 @@ pub(super) async fn content(state: AppState) -> String {
     let start = year_start(&today);
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let daily = birdnet_db::sqlite::range_daily_counts(conn, &start, &today)?;
             // 1000 is more species than any station has heard.
             let top = birdnet_db::sqlite::weekly_top_species(conn, &start, &today, 1000)?;

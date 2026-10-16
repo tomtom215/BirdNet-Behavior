@@ -483,7 +483,7 @@ where
 /// the config file because that is where the onboarding wizard and the settings
 /// form write it, and it is what every other location-dependent surface reads.
 fn station_coords(state: &AppState) -> (Option<f64>, Option<f64>) {
-    state.with_db(|conn| {
+    state.with_read_db(|conn| {
         let get = |key: &str| -> Option<f64> {
             conn.query_row(
                 "SELECT value FROM settings WHERE key = ?1",

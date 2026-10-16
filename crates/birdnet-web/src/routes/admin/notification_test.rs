@@ -32,7 +32,6 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use std::fmt::Write as _;
 
-use birdnet_db::settings::ensure_settings_table;
 use birdnet_db::settings::get as get_setting;
 use birdnet_integrations::apprise::NotifyType;
 
@@ -146,10 +145,7 @@ fn render_test_page_for(state: &AppState) -> String {
 /// Still a settings read, and correctly so: `ping_birdweather` reads the token
 /// at request time, so the settings row *is* what that test uses.
 fn birdweather_configured(state: &AppState) -> bool {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        get_setting(conn, "birdweather_token").is_ok_and(|v| !v.is_empty())
-    })
+    state.with_read_db(|conn| get_setting(conn, "birdweather_token").is_ok_and(|v| !v.is_empty()))
 }
 
 /// Render the channels Send-test body (no document shell).
@@ -361,8 +357,7 @@ async fn test_push(State(state): State<AppState>) -> (StatusCode, Html<String>) 
 
 /// The stored BirdWeather token, if one is set. Blocks on the database.
 fn birdweather_token(state: &AppState) -> Option<String> {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
+    state.with_read_db(|conn| {
         get_setting(conn, "birdweather_token")
             .ok()
             .filter(|v| !v.is_empty())

@@ -50,7 +50,7 @@ async fn notif_history_partial(
     let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             channel.as_deref().map_or_else(
                 || birdnet_db::notifications::recent_notifications(conn, limit, 0),
                 |ch| birdnet_db::notifications::notifications_by_channel(conn, ch, limit),
@@ -128,7 +128,7 @@ async fn notif_history_partial(
 /// HTMX partial: notification channel summary stats.
 async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::notifications::notification_stats(conn, 30))
+        state.with_read_db(|conn| birdnet_db::notifications::notification_stats(conn, 30))
     })
     .await;
 

@@ -471,7 +471,7 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
     let qlc = qlc.to_string();
     let state2 = state.clone();
     tokio::task::spawn_blocking(move || {
-        state2.with_db(|conn| {
+        state2.with_read_db(|conn| {
             let pattern = birdnet_db::sqlite::like_contains(&qlc);
             let limit_i64 = i64::try_from(limit).unwrap_or(8);
             // A station shown in another language is also searched by the names
@@ -541,7 +541,7 @@ async fn render_recent(out: &mut String, state: &AppState) {
     let state2 = state.clone();
     let names = state.names_handle();
     let recent: Vec<(String, String)> = tokio::task::spawn_blocking(move || {
-        state2.with_db(|conn| {
+        state2.with_read_db(|conn| {
             let Ok(mut stmt) = conn.prepare(
                 "SELECT Com_Name, Date || ' ' || Time AS at
                    FROM detections_analytic

@@ -1,0 +1,68 @@
+# Every `with_db(` in crates/birdnet-web/src that is allowed to hold the single writer connection.
+#
+# `with_db` takes the connection every writer shares, the capture daemon's detection inserts
+# included. A read does not belong there: it waits behind a write, and the write waits behind it.
+# Reads go through `with_read_db` (the pool of read-only connections), and through
+# `heavy_read_permit` / `run_blocking_heavy` when they scan the whole history.
+#
+# A new `with_db` must be added here with the reason it writes. That is the point: the default for
+# a database call in a handler is the pool, and a line in this file is the review of the exception.
+# `the_writer_lock_is_for_writing.rs` fails on a site that is not listed and on a listing that no
+# longer exists.
+#
+# file :: fn   count   reason
+
+audit.rs :: audit  1  writes the audit log; called inline from the mutating handlers, after their change
+audit.rs :: audit_user_id  1  writes the audit log for POST /login (success and failure)
+auth_middleware.rs :: session_user  1  the last_seen touch, only once the stored value is a minute old
+routes/admin/accounts.rs :: create_user  1  POST /admin/accounts/users
+routes/admin/accounts.rs :: remove_user  1  DELETE /admin/accounts/users/{id}
+routes/admin/accounts.rs :: set_password  2  POST /admin/accounts/users/{id}
+routes/admin/accounts.rs :: revoke_session_handler  1  DELETE /admin/accounts/sessions/{id}
+routes/admin/accounts.rs :: revoke_others_handler  1  POST /admin/accounts/sessions/revoke-others
+routes/admin/audio.rs :: create  1  POST /admin/audio/sources
+routes/admin/audio.rs :: remove  1  DELETE /admin/audio/sources/{id}
+routes/admin/audio.rs :: listen_default  1  POST /admin/audio/sources/{id}/listen-default (stores a setting)
+routes/admin/audio.rs :: update  1  PATCH /admin/audio/sources/{id}
+routes/admin/images.rs :: add_blacklist  1  POST /admin/images/blacklist
+routes/admin/images.rs :: remove_blacklist  1  DELETE /admin/images/blacklist/{id}
+routes/admin/migration.rs :: delete_batch_handler  1  POST /admin/migrate/batches/delete
+routes/admin/migration.rs :: provenance_handler  1  POST /admin/migrate/batches/provenance
+routes/admin/notifications.rs :: prune_handler  1  DELETE /admin/notifications/prune
+routes/admin/rules.rs :: import_rules  1  POST /admin/rules/import
+routes/admin/rules.rs :: create_rule  1  POST /admin/rules
+routes/admin/rules.rs :: delete_rule_handler  1  POST /admin/rules/{id}/delete
+routes/admin/rules.rs :: toggle_rule_handler  1  POST /admin/rules/{id}/toggle
+routes/admin/rules.rs :: create_metric_rule  1  POST /admin/metric-rules
+routes/admin/rules.rs :: delete_metric_rule_handler  1  DELETE /admin/metric-rules/{id}
+routes/admin/rules.rs :: toggle_metric_rule_handler  1  POST /admin/metric-rules/{id}/toggle
+routes/admin/species/handler.rs :: set_threshold  1  POST /admin/species/thresholds/set
+routes/admin/species/handler.rs :: delete_threshold  1  POST /admin/species/thresholds/delete
+routes/admin/species/handler.rs :: modify_list  1  POST /admin/species/{exclude,include,whitelist}/{add,remove}
+routes/admin/species/manage.rs :: delete_detections  1  POST /admin/species/manage/detections
+routes/admin/species/manage.rs :: delete_clips  1  POST /admin/species/manage/clips
+routes/admin/system_controls/data.rs :: clear_detections  1  POST /admin/system/clear-detections
+routes/admin/today_layout.rs :: change  1  POST /admin/today-layout/{block}/{action}
+routes/api_write.rs :: add_comment  1  POST /api/v2/detections/comments
+routes/api_write.rs :: delete_comment  1  POST /api/v2/detections/comments/delete
+routes/api_write.rs :: write_settings  1  PUT /api/v2/settings
+routes/auth_pages.rs :: login_submit  1  POST /login
+routes/auth_pages.rs :: authenticate  1  POST /login
+routes/auth_pages.rs :: mint_session_cookie  1  writes a session row: first-password path of POST /admin/accounts/users/{id} and POST /onboarding/save
+routes/auth_pages.rs :: open_bypass_redirect  1  POST /login
+routes/auth_pages.rs :: logout_submit  1  POST /logout
+routes/pages/detection_comments.rs :: add_comment  1  POST /pages/detection-comments/add
+routes/pages/detection_comments.rs :: delete_comment  1  POST /pages/detection-comments/delete
+routes/pages/onboarding.rs :: onboarding_save  1  POST /onboarding/save
+routes/pages/onboarding.rs :: set_first_admin_password  1  POST /onboarding/save
+routes/pages/quarantine.rs :: quarantine_reject  1  POST /pages/quarantine-reject
+routes/pages/quarantine.rs :: quarantine_delete  1  POST /pages/quarantine-delete
+state.rs :: with_read_db  1  the fallback inside with_read_db itself: an in-memory database has no readers
+state.rs :: delete_detection  1  POST /api/v2/detections/delete
+state.rs :: relabel_detection  1  POST /pages/today-relabel
+state.rs :: set_detection_lock  1  POST /api/v2/detections/lock|unlock
+state.rs :: approve_quarantine  1  POST /pages/quarantine-approve
+state.rs :: clear_detections  1  POST /admin/system/clear-detections
+state.rs :: set_detection_review  1  POST /pages/search-bulk
+state.rs :: clear_detection_review  1  POST /pages/detection-review-clear
+state.rs :: with_ingest_db  1  the capture daemon's detection insert path (src/daemon/processor.rs)

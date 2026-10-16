@@ -44,7 +44,7 @@ async fn notifications_page() -> axum::response::Redirect {
 
 async fn notifications_partial(State(state): State<AppState>) -> Html<String> {
     let entries = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| recent_notifications(conn, 100, 0))
+        state.with_read_db(|conn| recent_notifications(conn, 100, 0))
     })
     .await;
     // A failed read is not "No notifications yet": the log is what an
@@ -110,7 +110,7 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
 /// alerts sent" surface in the main shell.
 #[allow(clippy::similar_names)]
 pub(crate) fn recent_body(state: &AppState) -> String {
-    let (entries, stats) = state.with_db(|conn| {
+    let (entries, stats) = state.with_read_db(|conn| {
         let entries = recent_notifications(conn, 100, 0).unwrap_or_default();
         let stats = notification_stats(conn, 30).unwrap_or((0, 0, 0));
         (entries, stats)

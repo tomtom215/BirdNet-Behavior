@@ -36,7 +36,7 @@ pub(super) async fn stats_partial(
     // `daily` stays defaulted: it draws the 12-day sparkline, which is
     // decoration beside the numbers rather than a claim of its own.
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let today = today_date_string();
             let total = birdnet_db::sqlite::analytic_detection_count(conn)?;
             let species = birdnet_db::sqlite::species_count(conn)?;
@@ -124,7 +124,7 @@ pub(super) async fn hero_status_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| species_today(conn, &today_date_string()))
+        state.with_read_db(|conn| species_today(conn, &today_date_string()))
     })
     .await;
     // "hearing 0 species today" is a sentence about the reader's garden. If

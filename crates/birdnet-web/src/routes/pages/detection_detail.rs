@@ -64,7 +64,7 @@ async fn detection_detail_page(
     // read showed a rejected detection as unreviewed. The corroboration list
     // below is decoration and still defaults.
     let found = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let Some(det) = find_detection(conn, &date2, &time2, &com2)? else {
                 return Ok(None);
             };

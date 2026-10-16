@@ -47,6 +47,13 @@ const DEFAULT_BROADCAST_CAPACITY: usize = 256;
 /// shallow ring is both correct and bounds worst-case retention to a few MB.
 const SPECTROGRAM_BROADCAST_CAPACITY: usize = 16;
 
+/// How many extra connections the analytics store opens for reads. Two: a heavy
+/// query on one leaves the other for the cheap requests. They share the
+/// instance's memory limit and thread count, so each costs a few hundred KB, not
+/// a second copy of anything.
+#[cfg(feature = "analytics")]
+const ANALYTICS_READERS: usize = 2;
+
 /// Shared application state.
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -115,6 +122,12 @@ struct AppStateInner {
     /// `DuckDB` analytics database (file-backed, for behavioral queries).
     #[cfg(feature = "analytics")]
     analytics_db: Option<Mutex<AnalyticsDb>>,
+    /// Further connections to the same `DuckDB` database, for reads. The writer
+    /// above serialises everything that takes it; these let a cheap analytics
+    /// request run while a heavy one is in progress. `None` when the clone
+    /// failed (reads then share the writer, as they always did).
+    #[cfg(feature = "analytics")]
+    analytics_readers: Option<crate::db_pool::Pool<AnalyticsDb>>,
     /// Species image cache (Wikipedia/Wikimedia Commons).
     image_cache: Option<Arc<ImageCache>>,
     /// Broadcast channel for live detection WebSocket streaming.
@@ -311,6 +324,8 @@ impl AppState {
                 recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
+                #[cfg(feature = "analytics")]
+                analytics_readers: None,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
@@ -382,6 +397,7 @@ impl AppState {
         // every analytics page silently empty on every subsequent start, with
         // nothing but one warning line to say why — a state an unattended
         // station never recovers from on its own.
+        let mut analytics_readers = None;
         let analytics_db = match AnalyticsDb::open_or_quarantine(analytics_path) {
             Ok((mut adb, outcome)) => {
                 match &outcome {
@@ -527,6 +543,20 @@ impl AppState {
                     );
                 }
 
+                // After the extension is loaded: the clones see what is registered
+                // on the instance, and they are taken last so a failure here leaves
+                // a working single-connection store behind it.
+                match (0..ANALYTICS_READERS)
+                    .map(|_| adb.try_clone_reader())
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(readers) => analytics_readers = Some(crate::db_pool::Pool::new(readers)),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "could not open the analytics read connections; analytics reads share one connection"
+                    ),
+                }
+
                 Some(Mutex::new(adb))
             }
             Err(e @ birdnet_behavioral::connection::AnalyticsError::Locked(_)) => {
@@ -556,6 +586,8 @@ impl AppState {
                 db_path,
                 recording_dir,
                 analytics_db,
+                #[cfg(feature = "analytics")]
+                analytics_readers,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
@@ -614,6 +646,8 @@ impl AppState {
                 recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
+                #[cfg(feature = "analytics")]
+                analytics_readers: None,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
@@ -1074,6 +1108,44 @@ impl AppState {
         })
     }
 
+    /// Execute a read-only closure against the analytics database on one of its
+    /// read connections, so that it does not queue behind the writer connection
+    /// or behind another read.
+    ///
+    /// Returns `None` when analytics is not enabled. Use [`Self::with_analytics`]
+    /// for anything that writes: the mirror of a detection, a delete, the
+    /// import-exclusion setting. A reader sees what the writer has committed, so
+    /// a request that writes through `with_analytics` and then reads here reads
+    /// its own write.
+    #[cfg(feature = "analytics")]
+    pub fn with_analytics_read<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&AnalyticsDb) -> T,
+    {
+        self.inner.analytics_db.as_ref()?;
+        match &self.inner.analytics_readers {
+            Some(pool) => Some(pool.with(f)),
+            None => self.with_analytics(f),
+        }
+    }
+
+    /// [`Self::with_timeseries`] on a read connection; see
+    /// [`Self::with_analytics_read`].
+    #[cfg(feature = "analytics")]
+    pub fn with_timeseries_read<F, T>(
+        &self,
+        f: F,
+    ) -> Option<Result<T, birdnet_timeseries::TimeSeriesError>>
+    where
+        F: FnOnce(
+            birdnet_timeseries::executor::TimeSeriesDb<'_>,
+        ) -> Result<T, birdnet_timeseries::TimeSeriesError>,
+    {
+        self.with_analytics_read(|adb| {
+            birdnet_timeseries::executor::TimeSeriesDb::new(adb.conn()).and_then(f)
+        })
+    }
+
     /// Execute a closure with a `TimeSeriesDb` executor backed by the DuckDB connection.
     ///
     /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
@@ -1226,7 +1298,7 @@ impl AppState {
     /// clip of a neighbour's conversation, and it was still public. A clip
     /// that another detection shares (two species in one segment) stays.
     fn remove_orphaned_clip(&self, file_name: &str) {
-        let still_named = self.with_db(|conn| {
+        let still_named = self.with_read_db(|conn| {
             conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM detections WHERE File_Name = ?1)",
                 [file_name],
@@ -1359,14 +1431,14 @@ impl AppState {
     pub fn approve_quarantine(&self, id: i64) -> Result<bool, birdnet_db::sqlite::DbError> {
         // Read the row *before* approving: `approve_quarantine` reports only
         // whether a row moved, and the analytics insert needs its values.
-        let row = self.with_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
+        let row = self.with_read_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
         let admitted = self.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))?;
         // Read back what migration 32's trigger stamped on the SQLite side, so
         // the mirror carries the same instant rather than a second computation
         // of it.
         #[cfg(feature = "analytics")]
         let instant = row.as_ref().and_then(|r| {
-            self.with_db(|conn| {
+            self.with_read_db(|conn| {
                 birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name)
             })
             .ok()
