@@ -1,6 +1,6 @@
 # Migrating from BirdNET-Pi
 
-BirdNet-Behavior imports an existing BirdNET-Pi history safely and **non-destructively** — the source database is opened read-only and never modified. It can import *your own* station's history, which is the common case and needs almost no thought, or *another* station's, which needs two answers from you before it will be right.
+BirdNet-Behavior imports an existing BirdNET-Pi history safely and **non-destructively** — the source database is opened read-only and no row of it is ever changed. (If it is in WAL mode, SQLite may create `-shm` and `-wal` bookkeeping files beside it while it is read; that is the other reason to stop BirdNET-Pi first. An uploaded file is held in `migration-staging`, next to this station's own database, and removed together with those files once it is imported or replaced.) It can import *your own* station's history, which is the common case and needs almost no thought, or *another* station's, which needs two answers from you before it will be right.
 
 ## The common case: your own station's history
 

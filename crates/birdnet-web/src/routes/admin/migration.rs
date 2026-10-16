@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use axum::{Form, Router, routing::get};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use birdnet_migrate::progress::{MigrationProgress, MigrationStage, ProgressHandle};
@@ -73,8 +73,8 @@ static STAGING_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 /// A validated upload waiting for confirmation.
 struct Staged {
     /// Kept alive so the file survives until the import reads it; dropping this
-    /// removes it from disk.
-    tmp: tempfile::NamedTempFile,
+    /// removes it from disk, and the `-wal`/`-shm` files SQLite left beside it.
+    tmp: StagedFile,
     /// The name the browser sent, for the progress message and the log line.
     file_name: String,
     /// The reconciliation the operator asked for on the upload form.
@@ -83,6 +83,73 @@ struct Staged {
     rows_hint: u64,
     /// Identifies this staging. See [`StagedUpload`].
     token: u64,
+}
+
+/// Where an uploaded database waits for confirmation and then import.
+///
+/// Beside the station's own database, on the data disk, and not in the system
+/// temporary directory: on a distribution whose `/tmp` is a `tmpfs` (Debian
+/// Trixie) a 4 GiB upload there is RAM, charged to the service's `MemoryMax`
+/// before the import has read a byte of it.
+fn staging_dir(db_path: &Path) -> PathBuf {
+    crate::data_volume::data_dir_of(db_path).join("migration-staging")
+}
+
+/// A staging file older than this is a leftover from a process that died; the
+/// next upload removes it.
+const STALE_STAGING: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// An uploaded database in the staging directory.
+///
+/// A temporary file that removes itself, plus what opening a WAL-mode database
+/// makes SQLite create beside it. The audit reproduced the leak: a read-only
+/// open of an uploaded WAL database left a 32 KiB `-shm` and a `-wal` next to
+/// a staged file whose own removal was handled and theirs was not.
+struct StagedFile {
+    file: tempfile::NamedTempFile,
+}
+
+impl StagedFile {
+    /// Create one in `dir`, creating `dir` (mode 0700) and clearing stale
+    /// leftovers from it first.
+    fn create_in(dir: &Path) -> std::io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age > STALE_STAGING);
+                if stale {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        let file = tempfile::Builder::new().suffix(".db").tempfile_in(dir)?;
+        Ok(Self { file })
+    }
+
+    fn path(&self) -> &Path {
+        self.file.path()
+    }
+}
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let path = self.file.path().as_os_str().to_owned();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut sibling = path.clone();
+            sibling.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(sibling));
+        }
+    }
 }
 
 /// Upper bound on an uploaded BirdNET-Pi database. axum's default request-body
@@ -500,9 +567,11 @@ async fn upload_handler(
     // which is why the loop below no longer breaks the moment it has the file.
     let mut source_label: Option<String> = None;
     let mut source_utc_offset_secs: Option<i64> = None;
-    // NamedTempFile reserves a unique path and auto-cleans it on drop (even on
-    // an early return); we stream into that path asynchronously below.
-    let tmp = tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".db").tempfile())
+    // The staged file reserves a unique path in the data directory and cleans
+    // up after itself on drop (even on an early return); we stream into that
+    // path asynchronously below.
+    let staging = staging_dir(state.db_path());
+    let tmp = tokio::task::spawn_blocking(move || StagedFile::create_in(&staging))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

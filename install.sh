@@ -560,13 +560,20 @@ EOT
 # Download helpers (curl or wget) and release-version resolution
 # ---------------------------------------------------------------------------
 
+# Every origin this installer talks to is https (GitHub, and the model hosts it
+# falls back to). Say so to curl and wget, so that a redirect cannot move a
+# download onto plain http or an older TLS, where the SHA256SUMS that the
+# archive is checked against would be read over a channel anyone on the path
+# can rewrite.
+CURL_HTTPS_ONLY=(--proto '=https' --proto-redir '=https' --tlsv1.2)
+
 download() {
     local url="$1"
     local dest="$2"
     if command -v curl &>/dev/null; then
-        curl -fsSL -L --retry 3 --retry-delay 2 -o "${dest}" "${url}"
+        curl "${CURL_HTTPS_ONLY[@]}" -fsSL -L --retry 3 --retry-delay 2 -o "${dest}" "${url}"
     elif command -v wget &>/dev/null; then
-        wget -q --tries=3 -O "${dest}" "${url}"
+        wget --https-only -q --tries=3 -O "${dest}" "${url}"
     else
         fatal "Neither curl nor wget is available. Please install one and retry."
     fi
@@ -590,7 +597,7 @@ download_or_absent() {
     fi
     # No -f: an HTTP error is read from the status code instead of printed.
     # -S still reports transport failures (DNS, TLS, timeouts).
-    if ! code="$(curl -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
+    if ! code="$(curl "${CURL_HTTPS_ONLY[@]}" -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
         rm -f "${dest}"
         return 1
     fi
@@ -629,13 +636,13 @@ download_large() {
     info "  Fetching ${name}…"
     if command -v curl &>/dev/null; then
         # -C - : resume; -# : progress bar.
-        curl -fL -C - -# \
+        curl "${CURL_HTTPS_ONLY[@]}" -fL -C - -# \
             --retry 5 --retry-delay 2 --retry-connrefused --retry-max-time 600 \
             --connect-timeout 30 \
             -o "${dest}" "${url}"
     elif command -v wget &>/dev/null; then
         # -c : resume; --show-progress to stderr; tolerate transient failures.
-        wget -c --tries=5 --waitretry=2 --timeout=30 --show-progress -O "${dest}" "${url}"
+        wget --https-only -c --tries=5 --waitretry=2 --timeout=30 --show-progress -O "${dest}" "${url}"
     else
         fatal "Neither curl nor wget is available. Please install one and retry."
     fi

@@ -35,6 +35,7 @@ CI_TESTS=(
     container-model-cache.sh
     coord-parse.sh
     dockerfile-extension-target.sh
+    downloads-are-https-only.sh
     geomodel-fallback-quiet.sh
     geomodel-resume.sh
     location-notice.sh

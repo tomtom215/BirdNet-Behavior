@@ -200,6 +200,8 @@ The URL decides the protocol:
 
 Credentials go where the protocol puts them — `user:pass@host` in the address, an SRT `passphrase=`, a `token=` in a signed URL. The station hides all three in its logs and support bundle. A URL that starts any other way is refused when you save it, with the list above, rather than saved and left to fail at every restart.
 
+**Where the credentials are visible.** ffmpeg has no way to read its input address from a file or the environment (`-/i` is not an option in 6.1, and RTSP takes its user and password only from the address), so the station has to pass the whole address, credentials included, as an argument. Anyone who can list processes on the host sees `rtsp://user:pass@camera/…` in `ps` or `/proc/<pid>/cmdline` while the stream runs. On a station where you are the only user that is nothing; on a shared host, give the station a camera account that can only read the stream, or mount `/proc` with `hidepid=2` so users see only their own processes. The Docker image shows it only inside the container.
+
 `rtp://` is not on the list. A bare RTP stream does not say what it carries: ffmpeg reads one carrying G.711, but not one carrying AAC, which needs a description file it has no way to be given. Send MPEG-TS over `udp://` instead.
 
 Every protocol was checked end to end against a MediaMTX 1.21.2 server and ffmpeg 6.1 — each recorded its own test tone — and against a stalled server: a source whose server stops answering is restarted on its own, and resumes when the server does. Two things differ from a camera:

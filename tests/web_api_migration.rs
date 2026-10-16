@@ -662,3 +662,96 @@ async fn confirming_with_a_stale_token_imports_nothing() {
         "refusing A's stale token discarded B's staging instead of keeping it"
     );
 }
+
+/// The names in `dir`, sorted; empty when it does not exist.
+fn names_in(dir: &std::path::Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// A staged database itself, as opposed to the `-shm`/`-wal` beside it.
+fn is_staged_db(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("db"))
+}
+
+/// A BirdNET-Pi database in WAL mode: the main file's header says so, which is
+/// what makes SQLite create `-shm` and `-wal` beside it even for a read-only
+/// open.
+fn wal_mode_birdnet_pi_db(path: &std::path::Path) {
+    birdnet_pi_db(path);
+    let conn = Connection::open(path).expect("reopen source");
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .expect("switch the source to WAL");
+}
+
+/// V10: an uploaded database used to wait in the system temporary directory
+/// (RAM on a distribution whose `/tmp` is a tmpfs, up to the 4 GiB upload
+/// limit, charged to the service's memory ceiling) and leave the `-shm`/`-wal`
+/// SQLite made beside it behind when it was replaced or imported.
+#[tokio::test]
+async fn an_uploaded_database_waits_on_the_data_disk_and_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src_path = dir.path().join("birds-pi.db");
+    wal_mode_birdnet_pi_db(&src_path);
+    let db_bytes = std::fs::read(&src_path).expect("read source db");
+    assert_eq!(
+        &db_bytes[18..20],
+        &[2, 2],
+        "the fixture must be a WAL-mode file or this test proves nothing"
+    );
+
+    let dst_path = dir.path().join("station.db");
+    let conn = Connection::open(&dst_path).expect("open dest");
+    birdnet_db::migration::migrate(&conn).expect("migrate dest");
+    drop(conn);
+    let app = build_router(AppState::new(dst_path.clone()).expect("state"));
+    let staging = dir.path().join("migration-staging");
+
+    // ---- staged beside the station's own database --------------------------
+    let (status, body) = post_upload(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let first = names_in(&staging);
+    assert!(
+        first.iter().any(|n| is_staged_db(n)),
+        "the upload must be staged under {staging:?}, found {first:?}"
+    );
+
+    // ---- a second upload replaces it: nothing of the first may remain ------
+    let (status, body) = post_upload(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let second = names_in(&staging);
+    let dbs: Vec<&String> = second.iter().filter(|n| is_staged_db(n)).collect();
+    assert_eq!(dbs.len(), 1, "one staging at a time, found {second:?}");
+    assert!(
+        second.iter().all(|n| n.starts_with(dbs[0].as_str())),
+        "files from the replaced upload were left behind: {second:?}"
+    );
+    assert!(
+        !first.iter().any(|n| second.contains(n) && n != dbs[0]),
+        "the replaced upload's files survived: {first:?} -> {second:?}"
+    );
+
+    // ---- importing it removes the rest -------------------------------------
+    let (status, body) = post_confirm(&app).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    await_import_finished(&app).await;
+    let mut left = names_in(&staging);
+    for _ in 0..100 {
+        if left.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        left = names_in(&staging);
+    }
+    assert!(left.is_empty(), "the import left files behind: {left:?}");
+    assert_eq!(detection_count(&dst_path), 4);
+}

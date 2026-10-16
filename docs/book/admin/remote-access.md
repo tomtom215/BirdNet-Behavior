@@ -50,6 +50,17 @@ certificate is minted: the station serves plain HTTP on the same address,
 says so in the journal and in `--doctor`, and restarts itself to mint one as
 soon as the clock is set.
 
+The CA is **limited to this station's own names**: `localhost`, `.local`
+names, the loopback, private and link-local address ranges, and any extra name
+you gave with `--tls-hostnames`. Anything that can read the CA's private key
+(it is `local-ca.key`, mode 0600, owned by the service user) can therefore not
+mint a certificate for a public website that your devices would trust. A phone
+joining the network, a new DHCP lease or a new `.local` name needs nothing from
+you. A new *public* name added to `--tls-hostnames` does: the station makes a
+new CA for it, logs a warning saying so, and you import the new `local-ca.crt`
+on the devices that trusted the old one. The same happens once, when you
+upgrade from a release before CAs were limited this way.
+
 To serve **only** HTTPS on the usual port, point both at the same address:
 
 ```bash

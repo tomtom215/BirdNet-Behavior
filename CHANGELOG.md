@@ -1142,6 +1142,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   origin check passes, the request being same-origin); escaping stays the primary
   defence and `a_query_value_is_never_echoed_as_markup.rs` still sweeps it, for GET
   parameters only, not POST bodies or stored values.
+- **The local HTTPS CA can no longer vouch for a public website.** `--tls-mode
+  self-signed` makes a CA and a leaf it signs, and the operator imports the CA into
+  browsers and phones; the CA had no name constraint and its private key
+  (`local-ca.key`, mode 0600) is readable by the service user, so anything running
+  as that user could mint a certificate for any site that every importing device
+  would trust. The CA now carries a critical `nameConstraints` extension permitting
+  `localhost`, `.local`, the loopback, private and link-local ranges (so a new DHCP
+  lease or phone costs nothing) and the names given with `--tls-hostnames`.
+  Measured with rustls's own WebPKI verifier, not assumed: before, a leaf for
+  `bank.example.com` signed by the station's CA verified; after, it and leaves for
+  `accounts.google.com`, `8.8.8.8` and `203.0.113.7` are refused, while the
+  station's names and other LAN names (`10.9.8.7`, `other-pi.local`, `::1`) still
+  verify (the counterpart that stops a blanket refusal from passing). **One-time
+  cost:** the CA from before this release is replaced at the next start, so devices
+  that imported it import the new `local-ca.crt` once; so is a CA that cannot
+  vouch for a newly added public name. Both log a warning. The private-key
+  temporary file is also created with its final mode instead of being widened by
+  the umask and narrowed after (`create_private`, which also refuses a symlink
+  planted at the temporary name); that test pins the helper, not the race.
+- **An uploaded migration database no longer waits in `/tmp` or leaves SQLite's
+  `-shm`/`-wal` behind.** The staged upload (up to 4 GiB) now lives in
+  `migration-staging/` beside the station's database, and removing it removes the
+  bookkeeping files SQLite creates when it reads a WAL-mode file. Before, on a
+  distribution whose `/tmp` is a tmpfs that was RAM charged to the service's memory
+  ceiling, and a replaced upload left `.tmpXXXX.db-shm` and `.db-wal` files behind
+  (shown by the test against the old drop). `an_uploaded_database_waits_on_the_data_disk_and_leaves_nothing_behind`
+  fails both with the old location and with the data-disk location but no sibling
+  cleanup. The migration guide no longer says the source is "never modified": no row
+  of it is, but SQLite may create `-shm`/`-wal` beside a WAL-mode file that is read
+  in place.
+- **The installer's downloads are https-only, and the update check names the
+  release, not `main`.** `curl`/`wget` in the installer followed a redirect to plain
+  http without comment, over the connection that carries the `SHA256SUMS` the
+  archive is checked against. They now pass `--proto '=https' --proto-redir '=https'
+  --tlsv1.2` / `--https-only` (`installer/test/downloads-are-https-only.sh` fails
+  on all five helpers against the previous file, passes on this one). The
+  admin "Check for updates" text told operators to pipe `main/install.sh` through
+  `sudo bash`; it, the can't-replace-the-binary message and the release notes now
+  give the `install.sh` attached to the release (built from the tagged commit and
+  attested by the release workflow). **Not changed:** the first-install one-liners in
+  the README and the installation page still fetch `main`; pointing them at
+  `releases/latest/download/install.sh` is the maintainer's call. `ffmpeg` command
+  lines are unchanged: RTSP credentials appear in them (see below).
+- **RTSP credentials are visible in `ffmpeg`'s command line, and the audio guide now
+  says so instead of implying otherwise.** Not fixed, because it cannot be with the
+  tool: `ffmpeg` takes its input address only as an argument, RTSP takes its user and
+  password only from that address, and `-/i` (read an option from a file) is not an
+  option in 6.1.1 (`Unrecognized option '/i'`, run here). Logs and the support bundle
+  already redact it. The guide says who can see it (anyone who can list processes
+  on the host; nobody outside the container under Docker) and what to do on a shared
+  host: a read-only camera account, or `/proc` mounted with `hidepid=2`. The
+  unit's `ProtectProc=invisible` hides other users' processes *from the service*,
+  not the service from them, so it is not the mitigation.
 - **Two pages put a URL value into their HTML unescaped, and the nonce stamper
   turned that into script execution.** `/quarantine?filter=` wrote the raw value
   into an `hx-get="…"` attribute, and `/pages/weekly-content?week=` accepted any

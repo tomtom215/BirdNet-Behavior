@@ -2,6 +2,22 @@
 
 use axum::response::{Html, IntoResponse};
 
+/// The command that updates a station to `version`.
+///
+/// It names the `install.sh` attached to that release, which the release
+/// workflow builds from the tagged commit and attests, and not the copy on
+/// `main`, which is whatever was last merged. `--proto '=https'` and
+/// `--tlsv1.2` keep a redirect from moving the script onto plain http. The
+/// installer then checks the archive it downloads against the release's
+/// `SHA256SUMS` before it installs anything.
+pub fn update_command(version: &str) -> String {
+    format!(
+        "curl --proto '=https' --tlsv1.2 -fsSL \
+         https://github.com/tomtom215/BirdNet-Behavior/releases/download/v{version}/install.sh \
+         | sudo bash -s -- --version {version}"
+    )
+}
+
 /// Check GitHub Releases API for a newer version of birdnet-behavior.
 ///
 /// Returns HTML: update badge or "up to date" message.
@@ -44,10 +60,11 @@ pub(super) async fn check_update() -> axum::response::Response {
                               <a href="{url}" target="_blank" rel="noopener"
                                  class="ctl-link">View release notes →</a><br>
                               <span class="ctl-muted-sm">
-                                Run: <code>curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash</code>
+                                Run: <code>{command}</code>
                               </span>
                             </div>"#,
-                            url = release.html_url
+                            url = release.html_url,
+                            command = update_command(&latest),
                         )
                     } else {
                         format!(
@@ -106,6 +123,28 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S1: the update command used to pipe `main/install.sh` (whatever was last
+    /// merged) through `sudo bash`, over a curl that would follow a redirect to
+    /// plain http. It names the release's own asset now.
+    #[test]
+    fn the_update_command_names_the_release_not_main() {
+        let cmd = update_command("0.18.0");
+        assert!(
+            cmd.contains("/releases/download/v0.18.0/install.sh"),
+            "{cmd}"
+        );
+        assert!(cmd.contains("--version 0.18.0"), "{cmd}");
+        assert!(
+            cmd.contains("--proto '=https'") && cmd.contains("--tlsv1.2"),
+            "{cmd}"
+        );
+        assert!(!cmd.contains("/main/"), "{cmd}");
+        assert!(
+            !cmd.contains('\n'),
+            "the command is shown in a <code> element and copied as one line: {cmd:?}"
+        );
+    }
 
     #[test]
     fn version_comparison() {

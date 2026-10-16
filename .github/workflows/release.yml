@@ -930,7 +930,7 @@ jobs:
             echo '### One-line installer (Raspberry Pi / bare-metal Linux)'
             echo ""
             echo '```bash'
-            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash -s -- --version ${VERSION}"
+            echo "curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${{ github.repository }}/releases/download/v${VERSION}/install.sh | sudo bash -s -- --version ${VERSION}"
             echo '```'
             echo ""
             echo '> Run it as root via the pipe above. Do not use `sudo bash <(curl ...)` — sudo'
