@@ -34,7 +34,8 @@ use crate::routes::pages::escape_html;
 use crate::session;
 use crate::state::AppState;
 
-const LOGIN_TEMPLATE: &str = include_str!("../../templates/login.html");
+static LOGIN_TEMPLATE: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../templates/login.html"));
 
 /// Mount the sign-in and sign-out routes.
 pub fn router() -> Router<AppState> {

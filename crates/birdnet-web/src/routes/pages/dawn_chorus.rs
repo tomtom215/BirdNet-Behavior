@@ -43,7 +43,8 @@ use crate::state::AppState;
 use super::atoms::series_color;
 use super::escape_html;
 
-const PAGE_HTML: &str = include_str!("../../../templates/dawn_chorus.html");
+static PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/dawn_chorus.html"));
 
 /// Mount the Dawn Chorus page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {

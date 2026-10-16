@@ -215,7 +215,7 @@ fn render_log_page() -> String {
         "Live logs",
         "system",
         "Live logs",
-        &crate::routes::pages::with_asset_version(LOG_PAGE_BODY),
+        &crate::routes::pages::with_asset_version(LOG_PAGE_BODY.as_str()),
     )
 }
 
@@ -223,7 +223,8 @@ fn render_log_page() -> String {
 /// document of its own: it used to carry its own `<html>`, a four-link nav that
 /// said "Dashboard" and named three of the admin pages, and its own styles.
 /// The SSE extension is loaded here, after the layout's `htmx.min.js`.
-const LOG_PAGE_BODY: &str = r#"<script src="/static/htmx-sse.js?v={{version}}"></script>
+static LOG_PAGE_BODY: crate::seal::Sealed = crate::seal::Sealed::new(
+    r#"<script src="/static/htmx-sse.js?v={{version}}"></script>
 <section class="logv">
   <h1 class="logv-title">Live log stream</h1>
 
@@ -292,7 +293,8 @@ const LOG_PAGE_BODY: &str = r#"<script src="/static/htmx-sse.js?v={{version}}"><
   document.getElementById('clear-btn').addEventListener('click', clearLog);
   document.getElementById('pause-btn').addEventListener('click', togglePause);
   document.getElementById('level-filter').addEventListener('change', applyFilter);
-</script>"#;
+</script>"#,
+);
 
 #[cfg(test)]
 mod tests {

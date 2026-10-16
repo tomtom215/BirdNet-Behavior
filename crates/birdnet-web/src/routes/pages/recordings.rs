@@ -41,7 +41,8 @@ use crate::state::AppState;
 
 /// The page shell + behaviour scripts; `{{content}}` is the server-rendered
 /// view (page-head + sub-tabs + body).
-const PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
+static PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/recordings.html"));
 
 /// The two Recordings views, in tab order.
 const VIEWS: &[SubTab] = &[

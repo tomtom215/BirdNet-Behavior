@@ -998,7 +998,8 @@ fn render_metric_rules_table(rules: &[birdnet_db::metric_rules::MetricRule]) -> 
 /// things, which is the same reason the settings page keeps its own CSS in a
 /// `const`. (A `<style>` block carries no CSP nonce burden; the inline-style
 /// guard forbids `style="` attributes, not stylesheets.)
-const RULES_CSS: &str = r"<style>
+static RULES_CSS: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
       .ar-title { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
       .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
@@ -1042,10 +1043,29 @@ const RULES_CSS: &str = r"<style>
       .toggle-state { font-weight:600; }
       .toggle-state.on { color:var(--moss); }
       .toggle-state.off { color:var(--fg-3); }
-    </style>";
+    </style>",
+);
+
+static RULES_SCRIPT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<script>
+  document.getElementById('action_type').addEventListener('change', function() {
+    document.getElementById('webhook-fields').style.display = this.value === 'webhook' ? 'block' : 'none';
+  });
+  // Set from script rather than a `style` attribute: `style-src` carries no
+  // 'unsafe-inline', so an inline style would be dropped by CSP and the field
+  // would render visible for every scheme. CSSOM assignment is not blocked.
+  var authKind = document.getElementById('action_webhook_auth_kind');
+  var headerField = document.getElementById('webhook-header-name-field');
+  function syncHeaderNameField() {
+    headerField.style.display = authKind.value === 'header' ? 'block' : 'none';
+  }
+  authKind.addEventListener('change', syncHeaderNameField);
+  syncHeaderNameField();
+</script>",
+);
 
 pub(crate) fn rules_body() -> String {
-    ["<div class=\"ar-scope\">", RULES_CSS, r##"
+    ["<div class=\"ar-scope\">", RULES_CSS.as_str(), r##"
 
   <h2 class="ar-title">Alert Rules</h2>
   <p class="subtitle">
@@ -1202,21 +1222,9 @@ pub(crate) fn rules_body() -> String {
     </form>
     <div id="rule-import-result"></div>
   </div>
-<script>
-  document.getElementById('action_type').addEventListener('change', function() {
-    document.getElementById('webhook-fields').style.display = this.value === 'webhook' ? 'block' : 'none';
-  });
-  // Set from script rather than a `style` attribute: `style-src` carries no
-  // 'unsafe-inline', so an inline style would be dropped by CSP and the field
-  // would render visible for every scheme. CSSOM assignment is not blocked.
-  var authKind = document.getElementById('action_webhook_auth_kind');
-  var headerField = document.getElementById('webhook-header-name-field');
-  function syncHeaderNameField() {
-    headerField.style.display = authKind.value === 'header' ? 'block' : 'none';
-  }
-  authKind.addEventListener('change', syncHeaderNameField);
-  syncHeaderNameField();
-</script>"##, "</div>"]
+"##,
+    RULES_SCRIPT.as_str(),
+    "</div>"]
     .concat()
     .replace("{METRIC_RULES_CARD}", &metric_rules_card())
 }

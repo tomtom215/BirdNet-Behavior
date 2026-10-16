@@ -52,7 +52,8 @@ pub(super) fn content() -> String {
     )
 }
 
-const HEATMAP_CONTENT: &str = r#"<div class="page-head">
+static HEATMAP_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r#"<div class="page-head">
   <div>
     <div class="bnb-eyebrow hm-eyebrow"><span>Behavioral analytics</span>{{help_link}}</div>
     <h1 class="display hm-h1">When the yard is alive</h1>
@@ -110,7 +111,8 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
   const btn = e.target.closest('button[data-days]');
   if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
 });
-</script>"#;
+</script>"#,
+);
 
 // ---------------------------------------------------------------------------
 // GET /pages/heatmap-grid — SVG heatmap partial

@@ -45,7 +45,8 @@ use crate::state::AppState;
 use super::atoms::{species_code, species_color};
 use super::escape_html;
 
-const PAGE_HTML: &str = include_str!("../../../templates/migration.html");
+static PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/migration.html"));
 
 /// Empty-state body for a year with no migratory detections yet.
 ///

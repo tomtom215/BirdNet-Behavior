@@ -22,6 +22,7 @@ pub mod private_mode;
 pub mod random;
 pub mod rate_limit;
 pub mod routes;
+mod seal;
 pub mod security;
 pub mod server;
 pub mod session;

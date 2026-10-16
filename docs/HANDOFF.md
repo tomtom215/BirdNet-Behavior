@@ -197,13 +197,16 @@ Not done, in the order they seem to matter:
   not those. With four readers the gate has two slots: a visitor holding both makes
   other heavy requests wait (the feeds are refused with 503), and the per-address
   rate limit and private mode are the only other limits on that.
-- **The nonce stamper trusts any `<script` in the body** (`inject_script_nonce`), so an
-  unescaped reflection anywhere becomes script execution that the CSP does not stop.
-  Two were fixed and `a_query_value_is_never_echoed_as_markup.rs` sweeps GET
-  reflections across the page layer; it does not cover POST bodies, JSON, or a value
+- **Unescaped reflection still injects markup.** The CSP nonce now goes only onto the
+  tags the server sealed, and every other `<script` is rewritten to text
+  (`src/seal.rs`; CHANGELOG, *Security*), checked in Chromium for a full page and for
+  an htmx-swapped fragment. What an unescaped reflection can still do is inject other
+  markup, notably an `hx-post` attribute that htmx fires on load, same-origin, past
+  the CSRF origin check. `a_query_value_is_never_echoed_as_markup.rs` sweeps GET
+  parameters across the page layer; it does not cover POST bodies, JSON, or a value
   stored by one page and rendered by another. Client scripts were swept for DOM sinks
   (`innerHTML`, `eval`, …): the only one is the log viewer's event stream, whose
-  producer escapes (`logs.rs`, with a test).
+  producer escapes (`logs.rs`, with a test). Not tested in Firefox or Safari.
 - **Smaller audit findings, not fixed** (read or run by the audit, not re-checked since): the staged upload of a migration file lives
   in the system temp directory (up to 4 GiB; with a tmpfs `/tmp` that is memory) and a
   WAL-mode source leaves `-shm`/`-wal` files beside it; RTSP credentials are on the

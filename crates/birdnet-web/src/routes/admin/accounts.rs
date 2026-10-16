@@ -34,7 +34,8 @@ use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
-const ACCOUNTS_TEMPLATE: &str = include_str!("../../../templates/admin_accounts.html");
+static ACCOUNTS_TEMPLATE: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/admin_accounts.html"));
 const AUDIT_PREVIEW_LIMIT: usize = 6;
 
 /// Mount the accounts and sessions admin routes.

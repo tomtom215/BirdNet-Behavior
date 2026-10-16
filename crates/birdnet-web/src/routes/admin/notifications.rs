@@ -118,6 +118,47 @@ pub(crate) fn recent_body(state: &AppState) -> String {
     notifications_body(&entries, stats)
 }
 
+static NOTIFICATIONS_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
+             padding:1.5rem; margin-bottom:1.5rem; }
+    .stat { text-align:center; }
+    .stat .value { font-size:2rem; font-weight:700; }
+    .stat .label { font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }
+    :where(.nh-scope) table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+    :where(.nh-scope) th { text-align:left; color:var(--fg-4); font-weight:600; padding:0.5rem 0.75rem;
+          border-bottom:1px solid var(--border); }
+    :where(.nh-scope) td { padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); }
+    :where(.nh-scope) tr:hover td { background:var(--surface); }
+    .badge { display:inline-block; padding:0.15rem 0.5rem; border-radius:9999px;
+              font-size:0.75rem; font-weight:600; }
+    .badge-sent { background:var(--moss-soft); color:var(--moss-ink); }
+    .badge-failed { background:var(--rare-soft); color:var(--rare); }
+    .badge-skipped { background:var(--dawn-soft); color:var(--dawn-ink); }
+    .btn { padding:0.4rem 1rem; border-radius:0.375rem; border:none;
+            cursor:pointer; font-weight:600; font-size:0.8rem; }
+    .btn-danger { background:var(--rare-soft); color:var(--rare); }
+    .btn-danger:hover { background:var(--rare-soft); }
+    .empty { color:var(--fg-4); text-align:center; padding:2rem; }
+    .nh-title { font-size:1.5rem; font-weight:700; color:var(--fg); }
+    .page-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }
+    .stat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem; }
+    .value.moss { color:var(--moss); }
+    .value.rare { color:var(--rare); }
+    .value.dawn { color:var(--dawn-ink); }
+    .card.flush { padding:0; overflow:hidden; }
+    .table-head { padding:1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .th-title { font-weight:600; color:var(--fg); }
+    .th-count { color:var(--fg-4); font-size:0.85rem; }
+    td.col-time { white-space:nowrap; color:var(--fg-3); }
+    :where(.nh-scope) td code { font-size:0.8rem; }
+    td.col-muted { color:var(--fg-3); }
+    .row-error { color:var(--rare); font-size:0.75rem; }
+    .prune-ok { color:var(--moss); padding:0.5rem 0; }
+    .prune-err { color:var(--rare); padding:0.5rem 0; }
+  </style>",
+);
+
 /// The notification-history body (scoped `<style>` + stats cards + table).
 #[allow(clippy::too_many_lines)]
 fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
@@ -138,44 +179,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     });
 
     format!(
-        r#"<div class="nh-scope"><style>
-    .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
-             padding:1.5rem; margin-bottom:1.5rem; }}
-    .stat {{ text-align:center; }}
-    .stat .value {{ font-size:2rem; font-weight:700; }}
-    .stat .label {{ font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }}
-    :where(.nh-scope) table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
-    :where(.nh-scope) th {{ text-align:left; color:var(--fg-4); font-weight:600; padding:0.5rem 0.75rem;
-          border-bottom:1px solid var(--border); }}
-    :where(.nh-scope) td {{ padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); }}
-    :where(.nh-scope) tr:hover td {{ background:var(--surface); }}
-    .badge {{ display:inline-block; padding:0.15rem 0.5rem; border-radius:9999px;
-              font-size:0.75rem; font-weight:600; }}
-    .badge-sent {{ background:var(--moss-soft); color:var(--moss-ink); }}
-    .badge-failed {{ background:var(--rare-soft); color:var(--rare); }}
-    .badge-skipped {{ background:var(--dawn-soft); color:var(--dawn-ink); }}
-    .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none;
-            cursor:pointer; font-weight:600; font-size:0.8rem; }}
-    .btn-danger {{ background:var(--rare-soft); color:var(--rare); }}
-    .btn-danger:hover {{ background:var(--rare-soft); }}
-    .empty {{ color:var(--fg-4); text-align:center; padding:2rem; }}
-    .nh-title {{ font-size:1.5rem; font-weight:700; color:var(--fg); }}
-    .page-head {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }}
-    .stat-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem; }}
-    .value.moss {{ color:var(--moss); }}
-    .value.rare {{ color:var(--rare); }}
-    .value.dawn {{ color:var(--dawn-ink); }}
-    .card.flush {{ padding:0; overflow:hidden; }}
-    .table-head {{ padding:1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }}
-    .th-title {{ font-weight:600; color:var(--fg); }}
-    .th-count {{ color:var(--fg-4); font-size:0.85rem; }}
-    td.col-time {{ white-space:nowrap; color:var(--fg-3); }}
-    :where(.nh-scope) td code {{ font-size:0.8rem; }}
-    td.col-muted {{ color:var(--fg-3); }}
-    .row-error {{ color:var(--rare); font-size:0.75rem; }}
-    .prune-ok {{ color:var(--moss); padding:0.5rem 0; }}
-    .prune-err {{ color:var(--rare); padding:0.5rem 0; }}
-  </style>
+        r#"<div class="nh-scope">{NOTIFICATIONS_STYLE}
 
   <div class="page-head">
     <h2 class="nh-title">Notification History</h2>

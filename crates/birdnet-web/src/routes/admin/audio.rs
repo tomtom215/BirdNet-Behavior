@@ -40,8 +40,11 @@ use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
 // Embedded templates.
-const PAGE_TPL: &str = include_str!("../../../templates/admin_audio_sources.html");
-const ROW_TPL: &str = include_str!("../../../templates/_partial_audio_source_row.html");
+static PAGE_TPL: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/admin_audio_sources.html"));
+static ROW_TPL: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
+    "../../../templates/_partial_audio_source_row.html"
+));
 
 /// Every `settings` key this page can persist.
 ///

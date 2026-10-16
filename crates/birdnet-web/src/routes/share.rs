@@ -43,7 +43,8 @@ use sha2::Sha256;
 use crate::routes::pages::{escape_html, simple_url_encode};
 use crate::state::AppState;
 
-const TEMPLATE: &str = include_str!("../../templates/share_rare.html");
+static TEMPLATE: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../templates/share_rare.html"));
 const DEFAULT_TTL_SECS: u64 = 30 * 86_400; // 30 days
 const TRUNCATED_HMAC_LEN: usize = 16; // 128 bits — ample against forgery
 const FIELD_SEP: char = '\u{1f}'; // ASCII unit separator — never appears in our fields
@@ -262,7 +263,7 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
         // O-18: toast live region for the share page's "Copy permalink" UX.
         .replace(
             "{{toast_region}}",
-            crate::routes::pages::TOAST_REGION_HTML,
+            crate::routes::pages::TOAST_REGION_HTML.as_str(),
         )
         // The page is read by a visitor, so the name is in the station's language;
         // the token, the audio links and `species_encoded` carry the stored one.

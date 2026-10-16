@@ -36,7 +36,9 @@ use crate::state::AppState;
 /// The display-preferences card (theme · density · motion · contrast), saved to
 /// this device's `localStorage`. Self-contained (its own scoped style + script);
 /// the inline script is nonce-stamped by the security layer like any other.
-const DISPLAY_PREFS_HTML: &str = include_str!("../../../../templates/_partial_display_prefs.html");
+static DISPLAY_PREFS_HTML: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
+    "../../../../templates/_partial_display_prefs.html"
+));
 
 /// Mount the five gated Station tabs.
 ///
@@ -208,7 +210,7 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
   <div class="st-card-lede">A full-screen, auto-refreshing display for a dedicated screen — latest detections and the live signal. Press <span class="mono">Esc</span> to exit.</div>
 </div>"#,
         tabs = station_subtabs("settings"),
-        display = DISPLAY_PREFS_HTML,
+        display = DISPLAY_PREFS_HTML.as_str(),
         settings_css = SETTINGS_FORM_CSS,
         form = section_form(&[Section::System]),
     )

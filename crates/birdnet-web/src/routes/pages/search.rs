@@ -568,6 +568,9 @@ fn option(value: &str, label: &str, current: Option<&str>) -> String {
     )
 }
 
+static SEARCH_SELECT_SCRIPT: crate::seal::Sealed =
+    crate::seal::Sealed::new(r#"<script src="/static/search-select.js" defer></script>"#);
+
 /// The filter form plus the results container.
 fn render_page(p: &SearchParams, sources: &[String]) -> String {
     let val = |v: Option<&String>| present(v).map(escape_html).unwrap_or_default();
@@ -667,7 +670,7 @@ fn render_page(p: &SearchParams, sources: &[String]) -> String {
      hx-trigger=\"load\" hx-swap=\"innerHTML\">\
   <p class=\"sr-loading\">Searching\u{2026}</p>\
 </div>\
-<script src=\"/static/search-select.js\" defer></script>"
+{SEARCH_SELECT_SCRIPT}"
     )
 }
 

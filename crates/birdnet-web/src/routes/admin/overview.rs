@@ -125,31 +125,35 @@ fn render_overview_page(stats_html: &str) -> String {
     crate::routes::admin::admin_shell("Overview", "overview", &overview_body(stats_html))
 }
 
+static OVERVIEW_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
+      .quick-links { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; }
+      .quick-link { background:var(--bg); border:1px solid var(--border); border-radius:0.5rem; padding:1rem; text-decoration:none; color:var(--fg); transition:border-color 0.2s; }
+      .quick-link:hover { border-color:var(--moss-ink); color:var(--moss-ink); }
+      .quick-link-title { font-weight:600; font-size:0.95rem; }
+      .quick-link-desc { font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }
+      h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
+      .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; }
+      .stat-grid.mb { margin-bottom:1.5rem; }
+      .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1rem; text-align:center; }
+      .stat-card .value { font-size:1.5rem; font-weight:700; }
+      .stat-card .value.moss-ink { color:var(--moss-ink); }
+      .stat-card .value.moss { color:var(--moss); }
+      .stat-card .value.dawn { color:var(--dawn-ink); }
+      .stat-card .value.rare { color:var(--rare); }
+      .stat-card .label { font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }
+    </style>",
+);
+
 /// Page-specific body (scoped `<style>` + content). Kept separate from the
 /// shared shell so the inline-style guard checks the page's own markup, not the
 /// shell's chrome (whose confirm modal uses `data-confirm-style` attributes). The
 /// old `.container` / bare `nav` rules are dropped — the shell owns layout + nav.
 fn overview_body(stats_html: &str) -> String {
     format!(
-        r#"<style>
-      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
-      .quick-links {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; }}
-      .quick-link {{ background:var(--bg); border:1px solid var(--border); border-radius:0.5rem; padding:1rem; text-decoration:none; color:var(--fg); transition:border-color 0.2s; }}
-      .quick-link:hover {{ border-color:var(--moss-ink); color:var(--moss-ink); }}
-      .quick-link-title {{ font-weight:600; font-size:0.95rem; }}
-      .quick-link-desc {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }}
-      h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
-      .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; }}
-      .stat-grid.mb {{ margin-bottom:1.5rem; }}
-      .stat-card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1rem; text-align:center; }}
-      .stat-card .value {{ font-size:1.5rem; font-weight:700; }}
-      .stat-card .value.moss-ink {{ color:var(--moss-ink); }}
-      .stat-card .value.moss {{ color:var(--moss); }}
-      .stat-card .value.dawn {{ color:var(--dawn-ink); }}
-      .stat-card .value.rare {{ color:var(--rare); }}
-      .stat-card .label {{ font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }}
-    </style>
+        r#"{OVERVIEW_STYLE}
 
   <h1>Admin Overview</h1>
 

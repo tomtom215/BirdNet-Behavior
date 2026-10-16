@@ -61,7 +61,8 @@ pub(super) fn content() -> String {
     )
 }
 
-const CORRELATION_CONTENT: &str = r##"<div class="page-head">
+static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r##"<div class="page-head">
   <div>
     <div class="bnb-eyebrow">Behavioral analytics</div>
     <h1 class="display co-h1">Who sings with whom</h1>
@@ -142,7 +143,8 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
   const btn = e.target.closest('button[data-days]');
   if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
 });
-</script>"##;
+</script>"##,
+);
 
 // ---------------------------------------------------------------------------
 // GET /pages/correlation-pairs — top co-occurring pairs partial

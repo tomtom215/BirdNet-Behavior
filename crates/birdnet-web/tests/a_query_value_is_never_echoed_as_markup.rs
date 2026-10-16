@@ -1,9 +1,13 @@
 //! A value in the URL is text on the page, never markup.
 //!
-//! `inject_script_nonce` stamps the per-request nonce onto **every** `<script`
-//! in the finished body, an attacker's included, so any renderer that puts a
-//! query value into HTML unescaped is a script-execution bug that the strict
-//! CSP does not stop. Two were found by an audit, one at a time:
+//! The per-request nonce used to be stamped onto **every** `<script` in the
+//! finished body, an attacker's included, so any renderer that put a query
+//! value into HTML unescaped was a script-execution bug that the strict CSP did
+//! not stop. It is now stamped only onto tags the server sealed (`src/seal.rs`,
+//! held by `security::tests::a_script_reflected_into_a_page_does_not_come_out_as_a_script`),
+//! so a reflected `<script>` is refused by the browser. An unescaped
+//! reflection is still markup injection (a form, a link, an attribute), which
+//! is what this sweep catches. Two were found by an audit, one at a time:
 //! `/quarantine?filter=` (written into an `hx-get="…"` attribute) and
 //! `/pages/weekly-content?week=` (checked only for being ten characters long).
 //! The page-title bug before them was the same class and was fixed alone.

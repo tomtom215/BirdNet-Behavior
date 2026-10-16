@@ -313,7 +313,7 @@ fn render_page(
     // verbatim, which keeps a typo visible in the output instead of dropping
     // the surrounding text.
     let mut out = String::with_capacity(ONBOARDING_HTML.len() + 2048);
-    let mut rest = ONBOARDING_HTML;
+    let mut rest = ONBOARDING_HTML.as_str();
     while let Some(open) = rest.find("{{") {
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
@@ -732,7 +732,8 @@ fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, Str
     Ok(admin_id)
 }
 
-const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
+static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
+    r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1355,7 +1356,8 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 })();
 </script>
 </body>
-</html>"##;
+</html>"##,
+);
 
 #[cfg(test)]
 mod tests {

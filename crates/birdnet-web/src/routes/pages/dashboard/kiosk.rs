@@ -10,7 +10,8 @@ use super::conf_class;
 use crate::routes::pages::{escape_html, group_thousands, today_date_string};
 use crate::state::AppState;
 
-const KIOSK_HTML: &str = r#"<!DOCTYPE html>
+static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
+    r#"<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
@@ -68,10 +69,13 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
   });
 </script>
 </body>
-</html>"#;
+</html>"#,
+);
 
 pub(super) async fn kiosk_page() -> Html<String> {
-    Html(crate::routes::pages::with_asset_version(KIOSK_HTML))
+    Html(crate::routes::pages::with_asset_version(
+        KIOSK_HTML.as_str(),
+    ))
 }
 
 pub(super) async fn kiosk_content_partial(

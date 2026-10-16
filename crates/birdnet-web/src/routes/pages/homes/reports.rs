@@ -76,7 +76,8 @@ async fn reports_page(
 /// handler is an inline `<script>` — the security layer stamps it with the
 /// per-request CSP nonce, like every other inline script. `data-print-hide`
 /// keeps the button itself out of the printed output.
-const PRINT_BAR: &str = r#"<div class="rp-meta">
+static PRINT_BAR: crate::seal::Sealed = crate::seal::Sealed::new(
+    r#"<div class="rp-meta">
   <span class="rp-print bnb-meta">Make a keepsake — print this recap or save it as a PDF.</span>
   <button type="button" class="bnb-btn ghost rp-pdf" data-print data-print-hide>⎙ Save as PDF</button>
 </div>
@@ -84,7 +85,8 @@ const PRINT_BAR: &str = r#"<div class="rp-meta">
 document.addEventListener('click', function (e) {
   if (e.target.closest('[data-print]')) { e.preventDefault(); window.print(); }
 });
-</script>"#;
+</script>"#,
+);
 
 #[cfg(test)]
 mod tests {

@@ -1110,6 +1110,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The CSP nonce now goes only onto the `<script>` and `<style>` tags this server
+  wrote, and any other `<script` in a response is turned into text.** The nonce
+  used to be stamped by a pass over the finished body that rewrote every
+  `<script ` and `<script>` it found, a visitor's included, so any one unescaped
+  reflection in any page was script execution that the strict CSP existed to stop
+  (the two fixed below were that class). Authored markup is now sealed with a
+  per-process 128-bit token where it is defined (`static X: Sealed` for the 21 page
+  templates and 20 inline blocks, `seal::seal` for a literal built in place), and the response
+  pass (`src/seal.rs`) redeems exactly those tags for the nonce and strips the token,
+  so it never leaves the process. Measured in Chromium against a page that reflects
+  its input unescaped, behind the real middleware: a full document no longer runs
+  the reflected script (CSP `script-src-elem` violation, no dialog). A second
+  probe found that sealing alone was **not enough**: in a fragment that htmx swaps
+  in, htmx re-creates the script and `'strict-dynamic'` admits it without a nonce, so
+  the reflected script ran (`window.__theirs`, an `alert`). So the pass also rewrites
+  every `<script` that is not sealed to `&lt;script`, in any letter case; the same
+  probe then shows no execution while the server's own fragment script still runs.
+  Gates, each seen failing: with a blind stamping pass put back after `redeem`,
+  `security::tests::a_script_reflected_into_a_page_does_not_come_out_as_a_script`
+  and the `<style>` counterpart fail; `tests/every_script_on_every_page_carries_the_nonce.rs`
+  rendered the 114 pages and partials of the visual-QA route list and, with the page
+  templates sealed but not yet the inline blocks, reported 21 tags without a nonce on
+  14 routes; it is green once those were sealed, with every page byte-identical to the previous build apart from clock and
+  system metrics (diffed, 107 of 114 identical, the other 7 differing only in
+  CPU, uptime, time-of-day and chart geometry);
+  `tests/authored_markup_is_sealed.rs` reads the source, so it also covers pages the
+  crawl does not reach, and was seen failing on a bare `<script>` added to
+  `share.rs`. **Not closed by this:** an unescaped reflection can still inject
+  markup, including an `hx-post` attribute that htmx would fire on load (the CSRF
+  origin check passes, the request being same-origin); escaping stays the primary
+  defence and `a_query_value_is_never_echoed_as_markup.rs` still sweeps it, for GET
+  parameters only, not POST bodies or stored values.
 - **Two pages put a URL value into their HTML unescaped, and the nonce stamper
   turned that into script execution.** `/quarantine?filter=` wrote the raw value
   into an `hx-get="…"` attribute, and `/pages/weekly-content?week=` accepted any

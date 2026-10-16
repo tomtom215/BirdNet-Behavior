@@ -30,6 +30,79 @@ pub fn router() -> Router<AppState> {
 // GET /admin/system
 // ---------------------------------------------------------------------------
 
+static SYSTEM_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem;
+               padding:1.5rem; margin-bottom:1.5rem; }
+      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink);
+                        margin-bottom:.75rem; }
+      .stat-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+                    gap:1rem; }
+      .stat-card { background:var(--bg); border:1px solid var(--surface); border-radius:.5rem;
+                    padding:1rem; }
+      .stat-label { font-size:.75rem; color:var(--fg-4); text-transform:uppercase; }
+      .stat-value { font-size:1.4rem; font-weight:700; margin-top:.25rem; }
+      .btn { padding:.5rem 1.5rem; border-radius:.375rem; border:none; cursor:pointer;
+               font-weight:600; font-size:.875rem; }
+      .btn-secondary { background:var(--surface); color:var(--fg); border:1px solid var(--border); }
+      .btn-secondary:hover { border-color:var(--moss-ink); color:var(--moss-ink); }
+      .btn-danger { background:var(--rare-soft); color:var(--rare); border:1px solid var(--rare-soft); }
+      /* `--dawn` is an amber *fill*, not a text colour: in light mode it
+         measures 2.85:1 on --bg and 2.97:1 on --surface, below even the 3:1
+         large-text floor, and axe flags it the moment the station actually has
+         something to warn about. `--warning` exists for this — it resolves to
+         --dawn-ink (8.4:1) in light and --dawn (10.5:1) in dark. */
+      .badge-ok { color:var(--moss); } .badge-warn { color:var(--warning); }
+      .badge-crit { color:var(--rare); }
+      /* O-25 sweep: shapes promoted out of inline style= attributes. */
+      h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
+      .lead { color:var(--fg-3); font-size:.85rem; margin-bottom:1rem; }
+      .btn-row { display:flex; gap:1rem; flex-wrap:wrap; }
+      .btn-row.center { align-items:center; }
+      .result-slot { margin-top:1rem; }
+      .result-slot.sm { font-size:.85rem; }
+      .result-slot.muted { color:var(--fg-3); }
+      .btn-link { padding:.5rem 1.5rem; border-radius:.375rem; border:1px solid var(--border);
+                   color:var(--fg-3); font-size:.875rem; text-decoration:none; font-weight:600; }
+      code.inline { background:var(--bg); padding:.1rem .4rem; border-radius:.25rem; }
+      code.sm { font-size:.8rem; }
+      .card.danger { border-color:var(--rare-soft); }
+      .section-title.danger { color:var(--rare); }
+      /* Resource meters: enumerable tone classes; only the bar width stays inline. */
+      .meter-row { display:flex; justify-content:space-between; margin-bottom:.25rem; }
+      .meter-row.tight { margin-bottom:.5rem; }
+      .meter-label { font-size:.875rem; }
+      .meter-label.sm { font-size:.8rem; }
+      .meter-val { font-weight:600; }
+      .meter-val.sm { font-weight:600; font-size:.8rem; }
+      .meter-val.ok { color:var(--moss); }
+      .meter-val.warn { color:var(--warning); }
+      .meter-val.crit { color:var(--rare); }
+      .meter-track { background:var(--bg); border-radius:9999px; height:8px; overflow:hidden; }
+      .meter-track.sm { height:6px; margin-bottom:.75rem; }
+      .meter-track.sm.last { margin-bottom:.5rem; }
+      .meter-fill { height:100%; }
+      .meter-fill.ok { background:var(--moss); }
+      .meter-fill.warn { background:var(--dawn); }
+      .meter-fill.crit { background:var(--rare); }
+      .meter-note { color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }
+      .status-grid { margin-bottom:1.5rem; }
+      .res-head { font-size:.8rem; color:var(--fg-4); margin-bottom:.5rem; }
+      .res-line { font-size:.875rem; }
+      .res-sub { font-size:.75rem; color:var(--fg-4); margin:0; }
+      .temp-line { font-size:.8rem; margin:.25rem 0; }
+      .temp-val { font-weight:600; }
+      .temp-val.ok { color:var(--moss); }
+      .temp-val.warn { color:var(--warning); }
+      .temp-val.crit { color:var(--rare); }
+      .muted-note { color:var(--fg-4); }
+      .err-note { color:var(--rare); }
+      .logs-row { text-align:right; margin-top:.5rem; }
+      .logs-link { color:var(--fg-4); font-size:.8rem; text-decoration:none; }
+      .ok-note { color:var(--moss); }
+    </style>",
+);
+
 #[allow(clippy::too_many_lines)]
 async fn system_page(State(state): State<AppState>) -> Html<String> {
     let status_html = render_status_partial(&state).await;
@@ -39,76 +112,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
     // and bare `nav` rules are dropped because the shell owns both now (a bare
     // `nav` selector would otherwise re-style the shell's `.admin-nav`).
     let body = format!(
-        r##"<style>
-      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:.75rem;
-               padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink);
-                        margin-bottom:.75rem; }}
-      .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
-                    gap:1rem; }}
-      .stat-card {{ background:var(--bg); border:1px solid var(--surface); border-radius:.5rem;
-                    padding:1rem; }}
-      .stat-label {{ font-size:.75rem; color:var(--fg-4); text-transform:uppercase; }}
-      .stat-value {{ font-size:1.4rem; font-weight:700; margin-top:.25rem; }}
-      .btn {{ padding:.5rem 1.5rem; border-radius:.375rem; border:none; cursor:pointer;
-               font-weight:600; font-size:.875rem; }}
-      .btn-secondary {{ background:var(--surface); color:var(--fg); border:1px solid var(--border); }}
-      .btn-secondary:hover {{ border-color:var(--moss-ink); color:var(--moss-ink); }}
-      .btn-danger {{ background:var(--rare-soft); color:var(--rare); border:1px solid var(--rare-soft); }}
-      /* `--dawn` is an amber *fill*, not a text colour: in light mode it
-         measures 2.85:1 on --bg and 2.97:1 on --surface, below even the 3:1
-         large-text floor, and axe flags it the moment the station actually has
-         something to warn about. `--warning` exists for this — it resolves to
-         --dawn-ink (8.4:1) in light and --dawn (10.5:1) in dark. */
-      .badge-ok {{ color:var(--moss); }} .badge-warn {{ color:var(--warning); }}
-      .badge-crit {{ color:var(--rare); }}
-      /* O-25 sweep: shapes promoted out of inline style= attributes. */
-      h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
-      .lead {{ color:var(--fg-3); font-size:.85rem; margin-bottom:1rem; }}
-      .btn-row {{ display:flex; gap:1rem; flex-wrap:wrap; }}
-      .btn-row.center {{ align-items:center; }}
-      .result-slot {{ margin-top:1rem; }}
-      .result-slot.sm {{ font-size:.85rem; }}
-      .result-slot.muted {{ color:var(--fg-3); }}
-      .btn-link {{ padding:.5rem 1.5rem; border-radius:.375rem; border:1px solid var(--border);
-                   color:var(--fg-3); font-size:.875rem; text-decoration:none; font-weight:600; }}
-      code.inline {{ background:var(--bg); padding:.1rem .4rem; border-radius:.25rem; }}
-      code.sm {{ font-size:.8rem; }}
-      .card.danger {{ border-color:var(--rare-soft); }}
-      .section-title.danger {{ color:var(--rare); }}
-      /* Resource meters: enumerable tone classes; only the bar width stays inline. */
-      .meter-row {{ display:flex; justify-content:space-between; margin-bottom:.25rem; }}
-      .meter-row.tight {{ margin-bottom:.5rem; }}
-      .meter-label {{ font-size:.875rem; }}
-      .meter-label.sm {{ font-size:.8rem; }}
-      .meter-val {{ font-weight:600; }}
-      .meter-val.sm {{ font-weight:600; font-size:.8rem; }}
-      .meter-val.ok {{ color:var(--moss); }}
-      .meter-val.warn {{ color:var(--warning); }}
-      .meter-val.crit {{ color:var(--rare); }}
-      .meter-track {{ background:var(--bg); border-radius:9999px; height:8px; overflow:hidden; }}
-      .meter-track.sm {{ height:6px; margin-bottom:.75rem; }}
-      .meter-track.sm.last {{ margin-bottom:.5rem; }}
-      .meter-fill {{ height:100%; }}
-      .meter-fill.ok {{ background:var(--moss); }}
-      .meter-fill.warn {{ background:var(--dawn); }}
-      .meter-fill.crit {{ background:var(--rare); }}
-      .meter-note {{ color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }}
-      .status-grid {{ margin-bottom:1.5rem; }}
-      .res-head {{ font-size:.8rem; color:var(--fg-4); margin-bottom:.5rem; }}
-      .res-line {{ font-size:.875rem; }}
-      .res-sub {{ font-size:.75rem; color:var(--fg-4); margin:0; }}
-      .temp-line {{ font-size:.8rem; margin:.25rem 0; }}
-      .temp-val {{ font-weight:600; }}
-      .temp-val.ok {{ color:var(--moss); }}
-      .temp-val.warn {{ color:var(--warning); }}
-      .temp-val.crit {{ color:var(--rare); }}
-      .muted-note {{ color:var(--fg-4); }}
-      .err-note {{ color:var(--rare); }}
-      .logs-row {{ text-align:right; margin-top:.5rem; }}
-      .logs-link {{ color:var(--fg-4); font-size:.8rem; text-decoration:none; }}
-      .ok-note {{ color:var(--moss); }}
-    </style>
+        r##"{SYSTEM_STYLE}
 
   <h1>System Status</h1>
 

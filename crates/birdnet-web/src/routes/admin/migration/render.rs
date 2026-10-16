@@ -7,6 +7,98 @@ use birdnet_migrate::traits::ValidationReport;
 
 use crate::routes::pages::escape_html;
 
+static MIGRATION_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
+             padding:1.5rem; margin-bottom:1.5rem; }
+    :where(.mig-scope) label { display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }
+    :where(.mig-scope) input[type=text], :where(.mig-scope) input[type=file] { width:100%; background:var(--bg); border:1px solid var(--border);
+             border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg);
+             font-size:0.875rem; box-sizing:border-box; }
+    :where(.mig-scope) input[type=file] { padding:0.35rem 0.5rem; cursor:pointer; }
+    .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none;
+            cursor:pointer; font-weight:600; font-size:0.875rem; }
+    .btn-primary { background:var(--moss); color:var(--on-moss); }
+    .btn-primary:hover { background:var(--moss-ink); }
+    .btn-secondary { background:var(--border); color:var(--fg); }
+    .btn-secondary:hover { background:var(--border-2); }
+    .hint { font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }
+    :where(.mig-scope) code { background:var(--bg); border:1px solid var(--border); padding:0.1em 0.4em;
+            border-radius:0.2rem; font-family:monospace; font-size:0.875rem; }
+    .tabs { display:flex; gap:0.5rem; margin-bottom:1rem; }
+    .tab { padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid var(--border);
+            cursor:pointer; font-size:0.85rem; background:var(--bg); color:var(--fg-3); }
+    .tab.active { background:var(--moss); color:var(--on-moss); border-color:var(--moss); }
+    .tab-panel { display:none; }
+    .tab-panel.active { display:block; }
+    /* O-25 sweep: shapes promoted out of inline style= attributes. */
+    .lede { color:var(--fg-3); margin-bottom:1.5rem; }
+    .fg { color:var(--fg); }
+    .card-head { font-weight:600; color:var(--moss-ink); margin-bottom:0.75rem; }
+    .steps { padding-left:1.25rem; line-height:1.8; color:var(--fg-2); }
+    .note { color:var(--fg-4); font-size:0.85rem; margin-top:0.5rem; }
+    .mb-sm { margin-bottom:0.75rem; }
+    .mt-sm { margin-top:0.75rem; }
+    .mt { margin-top:1rem; }
+    .actions { margin-top:1rem; display:flex; gap:0.75rem; }
+    .actions.center { align-items:center; }
+    .actions.wrap { flex-wrap:wrap; }
+    .spinner-note { color:var(--fg-3); font-size:0.85rem; }
+    .info-text { color:var(--fg-3); }
+    .check-ok { color:var(--moss); }
+    .check-err { color:var(--rare); }
+    .check-warn { color:var(--warning); }
+    .check-list { list-style:none; padding:0; margin:0.75rem 0; }
+    .check-item { margin-bottom:0.4rem; }
+    .result-card.ok { border-color:var(--moss); }
+    .result-card.warn { border-color:var(--dawn); }
+    .result-card.err { border-color:var(--rare); }
+    .result-title { font-weight:600; margin-bottom:0.75rem; }
+    .result-title.sm { margin-bottom:0.5rem; }
+    .result-title.ok { color:var(--moss); }
+    .result-title.warn { color:var(--warning); }
+    .result-title.err { color:var(--rare); }
+    .more-note { color:var(--fg-4); font-size:.8rem; margin-top:.5rem; }
+    .preview-details { margin:1rem 0; }
+    .preview-summary { cursor:pointer; color:var(--fg-3); font-size:.875rem; }
+    .preview-table { width:100%; border-collapse:collapse; font-size:.8rem; margin-top:.75rem; }
+    .preview-table td, .preview-table th { padding:.35rem .5rem; }
+    .preview-table thead tr { border-bottom:1px solid var(--border); }
+    .preview-table th { text-align:left; color:var(--fg-4); font-weight:600; }
+    .preview-table th.num, .preview-table td.num { text-align:right; }
+    .preview-table .sci { color:var(--fg-4); font-style:italic; font-size:.8rem; }
+    .preview-table .muted { color:var(--fg-4); }
+    .progress-track { background:var(--surface); border-radius:9999px; height:8px; overflow:hidden; }
+    .progress-fill { height:100%; width:0; transition:width 0.3s; }
+    .progress-fill.ok { background:var(--moss); }
+    .progress-fill.err { background:var(--rare); }
+    .progress-fill.warn { background:var(--dawn); }
+    .progress-fill.run { background:var(--moss-ink); }
+    .bar-msg { margin-bottom:0.5rem; }
+    .bar-msg.ok { color:var(--moss); }
+    .bar-msg.err { color:var(--rare); }
+    .bar-msg.warn { color:var(--warning); }
+    .bar-msg.run { color:var(--moss-ink); }
+    .bar-note { color:var(--fg-4); font-size:0.8rem; margin-top:0.25rem; }
+  </style>",
+);
+
+static MIGRATION_TABS_SCRIPT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r#"<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  var trigger = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (trigger) trigger.classList.add('active');
+}
+document.getElementById('migrate-tabs').addEventListener('click', function(e) {
+  var btn = e.target.closest('button[data-tab]');
+  if (btn) switchTab(btn.dataset.tab);
+});
+</script>"#,
+);
+
 /// Render the BirdNET-Pi import body (no document shell).
 ///
 /// Shared with the Station **Data** tab
@@ -15,79 +107,7 @@ use crate::routes::pages::escape_html;
 #[allow(clippy::too_many_lines)]
 pub fn migration_body(dest_db_path: &str) -> String {
     format!(
-        r##"<div class="mig-scope"><style>
-    .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
-             padding:1.5rem; margin-bottom:1.5rem; }}
-    :where(.mig-scope) label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
-    :where(.mig-scope) input[type=text], :where(.mig-scope) input[type=file] {{ width:100%; background:var(--bg); border:1px solid var(--border);
-             border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg);
-             font-size:0.875rem; box-sizing:border-box; }}
-    :where(.mig-scope) input[type=file] {{ padding:0.35rem 0.5rem; cursor:pointer; }}
-    .btn {{ padding:0.5rem 1.5rem; border-radius:0.375rem; border:none;
-            cursor:pointer; font-weight:600; font-size:0.875rem; }}
-    .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
-    .btn-primary:hover {{ background:var(--moss-ink); }}
-    .btn-secondary {{ background:var(--border); color:var(--fg); }}
-    .btn-secondary:hover {{ background:var(--border-2); }}
-    .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }}
-    :where(.mig-scope) code {{ background:var(--bg); border:1px solid var(--border); padding:0.1em 0.4em;
-            border-radius:0.2rem; font-family:monospace; font-size:0.875rem; }}
-    .tabs {{ display:flex; gap:0.5rem; margin-bottom:1rem; }}
-    .tab {{ padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid var(--border);
-            cursor:pointer; font-size:0.85rem; background:var(--bg); color:var(--fg-3); }}
-    .tab.active {{ background:var(--moss); color:var(--on-moss); border-color:var(--moss); }}
-    .tab-panel {{ display:none; }}
-    .tab-panel.active {{ display:block; }}
-    /* O-25 sweep: shapes promoted out of inline style= attributes. */
-    .lede {{ color:var(--fg-3); margin-bottom:1.5rem; }}
-    .fg {{ color:var(--fg); }}
-    .card-head {{ font-weight:600; color:var(--moss-ink); margin-bottom:0.75rem; }}
-    .steps {{ padding-left:1.25rem; line-height:1.8; color:var(--fg-2); }}
-    .note {{ color:var(--fg-4); font-size:0.85rem; margin-top:0.5rem; }}
-    .mb-sm {{ margin-bottom:0.75rem; }}
-    .mt-sm {{ margin-top:0.75rem; }}
-    .mt {{ margin-top:1rem; }}
-    .actions {{ margin-top:1rem; display:flex; gap:0.75rem; }}
-    .actions.center {{ align-items:center; }}
-    .actions.wrap {{ flex-wrap:wrap; }}
-    .spinner-note {{ color:var(--fg-3); font-size:0.85rem; }}
-    .info-text {{ color:var(--fg-3); }}
-    .check-ok {{ color:var(--moss); }}
-    .check-err {{ color:var(--rare); }}
-    .check-warn {{ color:var(--warning); }}
-    .check-list {{ list-style:none; padding:0; margin:0.75rem 0; }}
-    .check-item {{ margin-bottom:0.4rem; }}
-    .result-card.ok {{ border-color:var(--moss); }}
-    .result-card.warn {{ border-color:var(--dawn); }}
-    .result-card.err {{ border-color:var(--rare); }}
-    .result-title {{ font-weight:600; margin-bottom:0.75rem; }}
-    .result-title.sm {{ margin-bottom:0.5rem; }}
-    .result-title.ok {{ color:var(--moss); }}
-    .result-title.warn {{ color:var(--warning); }}
-    .result-title.err {{ color:var(--rare); }}
-    .more-note {{ color:var(--fg-4); font-size:.8rem; margin-top:.5rem; }}
-    .preview-details {{ margin:1rem 0; }}
-    .preview-summary {{ cursor:pointer; color:var(--fg-3); font-size:.875rem; }}
-    .preview-table {{ width:100%; border-collapse:collapse; font-size:.8rem; margin-top:.75rem; }}
-    .preview-table td, .preview-table th {{ padding:.35rem .5rem; }}
-    .preview-table thead tr {{ border-bottom:1px solid var(--border); }}
-    .preview-table th {{ text-align:left; color:var(--fg-4); font-weight:600; }}
-    .preview-table th.num, .preview-table td.num {{ text-align:right; }}
-    .preview-table .sci {{ color:var(--fg-4); font-style:italic; font-size:.8rem; }}
-    .preview-table .muted {{ color:var(--fg-4); }}
-    .progress-track {{ background:var(--surface); border-radius:9999px; height:8px; overflow:hidden; }}
-    .progress-fill {{ height:100%; width:0; transition:width 0.3s; }}
-    .progress-fill.ok {{ background:var(--moss); }}
-    .progress-fill.err {{ background:var(--rare); }}
-    .progress-fill.warn {{ background:var(--dawn); }}
-    .progress-fill.run {{ background:var(--moss-ink); }}
-    .bar-msg {{ margin-bottom:0.5rem; }}
-    .bar-msg.ok {{ color:var(--moss); }}
-    .bar-msg.err {{ color:var(--rare); }}
-    .bar-msg.warn {{ color:var(--warning); }}
-    .bar-msg.run {{ color:var(--moss-ink); }}
-    .bar-note {{ color:var(--fg-4); font-size:0.8rem; margin-top:0.25rem; }}
-  </style>
+        r##"<div class="mig-scope">{MIGRATION_STYLE}
 
   <p class="lede">
     Safely import your existing BirdNET-Pi detection history.
@@ -250,19 +270,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
          hx-trigger="load, importsChanged from:body" hx-swap="innerHTML"></div>
   </div>
 
-<script>
-function switchTab(name) {{
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  var trigger = document.querySelector('.tab[data-tab="' + name + '"]');
-  if (trigger) trigger.classList.add('active');
-}}
-document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
-  var btn = e.target.closest('button[data-tab]');
-  if (btn) switchTab(btn.dataset.tab);
-}});
-</script></div>"##,
+{MIGRATION_TABS_SCRIPT}</div>"##,
         utc_options = utc_offset_options(),
     )
 }

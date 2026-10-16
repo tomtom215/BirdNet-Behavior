@@ -156,15 +156,17 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     } else {
         layout
     };
-    let arranged = layout.apply(TODAY_PAGE_HTML).unwrap_or_else(|missing| {
-        tracing::error!(
-            missing,
-            "today: the template lost a layout marker; rendering the default"
-        );
-        super::today_layout::Layout::default()
-            .apply(TODAY_PAGE_HTML)
-            .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
-    });
+    let arranged = layout
+        .apply(TODAY_PAGE_HTML.as_str())
+        .unwrap_or_else(|missing| {
+            tracing::error!(
+                missing,
+                "today: the template lost a layout marker; rendering the default"
+            );
+            super::today_layout::Layout::default()
+                .apply(TODAY_PAGE_HTML.as_str())
+                .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
+        });
     let body = arranged
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())

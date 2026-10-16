@@ -287,6 +287,18 @@ queueing. The gate bounds readers, not time: a single scan is as slow as its
 query. `heavy_reads_leave_readers_for_the_cheap_requests` is the gate on the
 width.
 
+**Why the CSP nonce goes onto sealed tags, not onto every `<script`:** the nonce
+used to be stamped onto every `<script ` and `<script>` in the finished body, which
+cannot tell the server's script from a visitor's text that reached the page
+unescaped. `seal.rs` marks the tags the server wrote (a per-process random token,
+put there where the authored text is defined, never on a string that holds visitor
+text) and `security_headers_middleware` redeems exactly those for the request's nonce.
+Every other `<script` becomes `&lt;script`, because a script htmx re-creates from a
+swapped fragment is admitted by `'strict-dynamic'` without a nonce, so a bare tag is
+not a harmless one. `authored_markup_is_sealed.rs` reads the source and
+`every_script_on_every_page_carries_the_nonce.rs` renders the pages: a new script
+that is not sealed fails one of them, and in the browser would not run.
+
 **Why `spawn_blocking` for DB:** SQLite operations block the calling thread.
 Running them on tokio's blocking thread pool keeps the async runtime responsive
 for WebSocket and HTTP handling.
