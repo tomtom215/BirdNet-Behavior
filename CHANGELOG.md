@@ -584,6 +584,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three small workflow defects, from a read of the workflows; none was observed
+  failing, because a workflow cannot run here.** `coverage.yml`'s Codecov step tested
+  `env.CODECOV_TOKEN` in its own `if` while setting that variable in its own `env:`,
+  and a step's `if` is evaluated before the step's `env` exists (GitHub's documented
+  context availability), so the upload could never run; the variable is now job-level.
+  The sticky pull-request comments in `coverage.yml` and `mutation.yml` ran on a
+  fork's pull request, whose token is read-only, which fails the comment step and the
+  job; they now skip forks (the summary stays in the Step Summary). The release notes'
+  download table listed the two Linux archives and not the macOS one the release
+  attaches. The YAML parses and `scripts/check-ci-config.py` passes.
 - **Names on the co-occurrence chart no longer run into each other, and the life-list
   total is no longer written across its own curve.** The Who-sings-together chord
   diagram wrote each name at the middle of its arc, so two species heard with few
@@ -1296,9 +1306,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin "Check for updates" text told operators to pipe `main/install.sh` through
   `sudo bash`; it, the can't-replace-the-binary message and the release notes now
   give the `install.sh` attached to the release (built from the tagged commit and
-  attested by the release workflow). **Not changed:** the first-install one-liners in
-  the README and the installation page still fetch `main`; pointing them at
-  `releases/latest/download/install.sh` is the maintainer's call. `ffmpeg` command
+  attested by the release workflow). (The first-install one-liners in the README and
+  the installation page were switched to `releases/latest/download/install.sh` later;
+  see *Security*, *The install one-liner no longer runs the development branch as
+  root*.) `ffmpeg` command
   lines are unchanged: RTSP credentials appear in them (see below).
 - **RTSP credentials are visible in `ffmpeg`'s command line, and the audio guide now
   says so instead of implying otherwise.** Not fixed, because it cannot be with the

@@ -39,6 +39,12 @@ jobs:
     name: cargo-llvm-cov
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 9m43s
+    env:
+      # At job level, not on the upload step: a step's `if` is evaluated before
+      # that step's own `env` exists, so `if: env.CODECOV_TOKEN != ''` beside a
+      # step-level `env:` was always false and the upload never ran. Without the
+      # secret (a fork's pull request) this is empty and the step is skipped.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -139,7 +145,10 @@ jobs:
           retention-days: 14
 
       - name: Comment summary on PR
-        if: github.event_name == 'pull_request'
+        # Not on a fork's pull request: its token is read-only, the comment step
+        # fails with "Resource not accessible by integration", and the job with it.
+        # The summary is in the job's Step Summary either way.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: coverage
@@ -154,8 +163,6 @@ jobs:
 
       - name: Upload to Codecov (opt-in)
         if: env.CODECOV_TOKEN != ''
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov.info

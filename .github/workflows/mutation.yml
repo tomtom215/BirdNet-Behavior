@@ -758,8 +758,9 @@ jobs:
         # Only unsharded rows comment: a sharded file would otherwise post one
         # comment per shard (e.g. 6 for src/daemon/*.rs), burying the PR. Each
         # shard's counts still land in the job's Step Summary (above) and its
-        # artifact, and its pass/fail shows as its own check.
-        if: github.event_name == 'pull_request' && always() && ! matrix.shard
+        # artifact, and its pass/fail shows as its own check. Not on a fork's pull
+        # request either: its token is read-only and the comment step would fail.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && always() && ! matrix.shard
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: mutants-${{ matrix.slug }}

@@ -970,6 +970,7 @@ jobs:
             echo '|-------------------------------------|---------------------------------------|'
             echo "| \`aarch64-unknown-linux-gnu\`       | Raspberry Pi 4 / 5, ARM64 Linux       |"
             echo "| \`x86_64-unknown-linux-gnu\`        | Standard 64-bit Linux                 |"
+            echo "| \`aarch64-apple-darwin\`            | Apple Silicon Mac (no sudo)           |"
             echo ""
             echo "Archives are gzipped tarballs containing the stripped binary,"
             echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`, `NOTICE`,'
