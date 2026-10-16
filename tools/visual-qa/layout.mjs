@@ -8,7 +8,7 @@
 // of those shipped, in both themes, with every other gate green, and was found
 // by looking at a rendered page. This reads the same facts from the DOM.
 //
-// Four checks, per route x theme x viewport:
+// Five checks, per route x theme x viewport:
 //
 //   overlap   two text boxes (not nested, not in a closed <details>, not under
 //             the fixed tab bar) that intersect by more than 3px horizontally
@@ -23,6 +23,14 @@
 //             not itself scroll sideways.
 //   tiny      a visible text node set below 9px (the floor the legibility gate
 //             holds SVG labels to; HTML text had none).
+//   svgtext   two SVG <text> labels whose turned boxes overlap by more than a
+//             quarter of the shorter one's height (and 2px). The first four checks walk HTML text and skip every
+//             <svg>, so a chart label written over its neighbour (the chord
+//             diagram's Red-winged Blackbird across Black-capped Chickadee, on
+//             the documentation's own picture) passed all of them. The boxes are
+//             the labels' real ones: getBBox through the screen transform, so a
+//             name written along a tilted arc is a tilted rectangle, not the
+//             larger upright box that would flag every pair of neighbours.
 //
 // Env:
 //   BASE      base url                       (default http://127.0.0.1:8502)
@@ -49,9 +57,9 @@ const ONLY = process.env.ONLY || '';
 const MIN_ROUTES = Number(process.env.MIN_ROUTES || 30);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Runs in the page. Returns { overlap, squeeze, escape, tiny } arrays of strings.
+// Runs in the page. Returns { overlap, squeeze, escape, tiny, svgtext } arrays of strings.
 function inPage() {
-  const res = { overlap: [], squeeze: [], escape: [], tiny: [] };
+  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [] };
   const sel = (el) =>
     el.tagName.toLowerCase() +
     (el.id ? '#' + el.id : '') +
@@ -162,6 +170,70 @@ function inPage() {
       res.escape.push(`${sel(el)} "${(el.textContent || el.value || '').trim().slice(0, 24)}" ends ${Math.round(r.right - h.right)}px past ${sel(holder)}`);
     }
   }
+
+  // svgtext: labels inside charts, as turned rectangles.
+  const corners = (t) => {
+    const m = t.getScreenCTM();
+    const b = t.getBBox();
+    if (!m || !(b.width > 1 && b.height > 1)) return null;
+    return [
+      [b.x, b.y],
+      [b.x + b.width, b.y],
+      [b.x + b.width, b.y + b.height],
+      [b.x, b.y + b.height],
+    ].map(([x, y]) => [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f]);
+  };
+  // Smallest overlap, over the polygons' edge normals, of two convex quads; 0 if apart.
+  const penetration = (pa, pb) => {
+    let least = Infinity;
+    for (const poly of [pa, pb]) {
+      for (let i = 0; i < 4; i++) {
+        const [x1, y1] = poly[i];
+        const [x2, y2] = poly[(i + 1) % 4];
+        const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+        const nx = -(y2 - y1) / len;
+        const ny = (x2 - x1) / len;
+        const span = (q) => {
+          const d = q.map(([x, y]) => x * nx + y * ny);
+          return [Math.min(...d), Math.max(...d)];
+        };
+        const [a0, a1] = span(pa);
+        const [b0, b1] = span(pb);
+        const o = Math.min(a1, b1) - Math.max(a0, b0);
+        if (o <= 0) return 0;
+        least = Math.min(least, o);
+      }
+    }
+    return least;
+  };
+  for (const svg of document.querySelectorAll('svg')) {
+    if (res.svgtext.length >= 10) break;
+    if (!shown(svg) || svg.closest('[aria-hidden="true"], [hidden], details:not([open]), template, [class*="tabbar"]')) continue;
+    const labels = [];
+    for (const t of svg.querySelectorAll('text')) {
+      if (t.closest('defs, symbol, clipPath, mask') || !(t.textContent || '').trim()) continue;
+      const cs = getComputedStyle(t);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+      const q = corners(t);
+      if (q) labels.push({ t, q, txt: t.textContent.trim().slice(0, 28) });
+    }
+    for (let i = 0; i < labels.length && res.svgtext.length < 10; i++) {
+      for (let j = i + 1; j < labels.length; j++) {
+        const a = labels[i];
+        const b = labels[j];
+        if (a.t.contains(b.t) || b.t.contains(a.t)) continue;
+        // A label's box is its font's full ascent and descent, so two lines of
+        // one caption overlap by a few pixels at ordinary leading. What reads as
+        // a collision is a quarter of the shorter label's height, as in `overlap`.
+        const height = (q) => Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]);
+        const o = penetration(a.q, b.q);
+        if (o > Math.max(2, 0.25 * Math.min(height(a.q), height(b.q)))) {
+          res.svgtext.push(`${sel(svg)} "${a.txt}" x "${b.txt}" (${Math.round(o)}px)`);
+        }
+      }
+    }
+  }
+
   for (const k of Object.keys(res)) res[k] = [...new Set(res[k])].slice(0, 10);
   return res;
 }
@@ -217,7 +289,7 @@ async function main() {
     for (const p of problems) console.error('  ' + p);
     process.exitCode = 1;
   } else {
-    console.log('layout: no overlaps, squeezed columns, escaping controls or sub-9px text.');
+    console.log('layout: no overlaps, squeezed columns, escaping controls, sub-9px text or colliding chart labels.');
   }
 }
 

@@ -1,9 +1,9 @@
 # install.sh — BirdNet-Behavior installer for Raspberry Pi and x86_64 Linux
 #
 # Usage (Linux / Raspberry Pi — installs a systemd service, so it needs root):
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 #   # pin a specific version (the `-s --` passes the args through to the script):
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.1
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.5.1
 #   # from a saved copy:
 #   sudo bash install.sh [--version 0.5.1]
 #

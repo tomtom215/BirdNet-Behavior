@@ -38,6 +38,7 @@ CI_TESTS=(
     downloads-are-https-only.sh
     geomodel-fallback-quiet.sh
     geomodel-resume.sh
+    install-one-liner-is-a-release-asset.sh
     location-notice.sh
     model-resume.sh
     pipefail-sigpipe.sh

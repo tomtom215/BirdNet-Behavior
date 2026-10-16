@@ -60,19 +60,20 @@ since 2026-08-09 and not looked at.
 - **Release signing.** Tags and `SHA256SUMS` are unsigned; the in-app updater
   trusts the GitHub release. A signing key and a verifier in the updater would
   close that, and the key is yours to create.
-- **Where the installer one-liner points.** README, the book and the installer's
-  own usage text all say `curl … raw.githubusercontent.com/…/main/install.sh | sudo bash`,
-  and the admin "Check for updates" text does too. `main` can be ahead of the last
-  release, and the release's own `install.sh` is the one the release workflow attests
-  (`releases/latest/download/install.sh`). Switching is twelve places and a decision
-  about what an install should track; nothing here consumes the attestation yet.
-- **The local TLS certificate authority has no Name Constraints.** The CA that
-  `--tls-mode self-signed` makes (`crates/birdnet-web/src/tls.rs`, `ca_params`) is
-  valid for ten years and may sign for any name; its key is `0600` under the service
-  user. Anything running as that user can mint a certificate for any site that every
-  device which imported the CA will trust. A name constraint limited to the station's
-  own names would close it, and would mean regenerating the CA when the names change.
-  Not done: it changes what operators must re-import.
+- **Where the Docker quickstart and the maintainers' harness point.** The bare-metal
+  one-liner (README, the book, the installer's usage text and error messages) names
+  `releases/latest/download/install.sh`, the file each release checksums and
+  attests, and the admin "Check for updates" text names the new version's own
+  `releases/download/vX.Y.Z/install.sh`;
+  `installer/test/install-one-liner-is-a-release-asset.sh` fails on a branch-pinned
+  form. Still fetched from `main`: the Docker one-liner (`quickstart.sh`) and the
+  three compose files that script downloads, `scripts/hardware-test.sh` (a
+  maintainer's harness that fetches `main`'s installer and test recording on
+  purpose) and `packaging/macos/verify-macos.sh`. Moving the quickstart means
+  making `quickstart.sh` and the compose files release assets and having the script
+  fetch the compose files from the same release: a `release.yml` change this
+  session could not run, and one whose one-liner must not change until a release
+  carries the assets (v0.17.1, the latest, has none, so it would 404).
 
 ## 3. What the last session changed, and how far it was checked
 

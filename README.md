@@ -106,7 +106,7 @@ The same design system, with all six homes on a bottom tab-bar — iPhone 13 cap
 **On a Raspberry Pi (OS Trixie) or modern x86_64 Linux, install the native binary — it's the shortest path: one command, nothing else to set up.** It downloads and sha256-verifies the binary *and* the model (both from GitHub), auto-detects your USB mic, asks for your location, and starts a hardened systemd service:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 ```
 
 > Run it exactly as shown — pipe into `sudo bash`, **not** `sudo bash <(curl …)` (the process-substitution form breaks under `sudo`). On a fresh 64-bit Raspberry Pi OS **Trixie** image the prebuilt binary runs as-is (glibc 2.39); the installer refuses early, with guidance, on anything older.
@@ -120,7 +120,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 **macOS (Apple Silicon)** — the same installer detects macOS and sets up a per-user launchd LaunchAgent instead of systemd (**no `sudo`**):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | bash
 ```
 
 > On macOS it installs the `aarch64-apple-darwin` build that the release workflow publishes for each version; if that asset is missing for the version it resolved, it offers to `brew install` the dependencies and prints the one-time source-build steps. A Homebrew formula is planned. (See [docs/book/field/macos.md](docs/book/field/macos.md).)

@@ -183,7 +183,8 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let h = 200.0_f64;
     let pad_l = 6.0;
     let pad_b = 22.0;
-    let pad_t = 12.0;
+    // Headroom for the total, written above the curve's end (see the test).
+    let pad_t = 26.0;
     let plot_h = h - pad_b - pad_t;
     let n = points.len();
     let max = points.last().map_or(1, |(_, v)| *v).max(1) as f64;
@@ -229,7 +230,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
         svg,
         r#"<circle cx="{lx:.1}" cy="{ly:.1}" r="2.6" fill="var(--moss)"/><text class="mono" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="11" fill="var(--moss-ink)">{total} species</text>"#,
         tx = lx - 4.0,
-        ty = (ly - 6.0).max(pad_t + 8.0),
+        ty = ly - 8.0,
         total = points[n - 1].1,
     );
     let stride = (n / 6).max(1);
@@ -501,6 +502,49 @@ mod tests {
         assert!(svg.contains("<title>Species accumulation over time</title>"));
         assert!(svg.contains("<desc>A rising line"));
         assert!(!svg.contains("aria-label"));
+    }
+
+    /// The total is written at the point where the curve ends, and that point is
+    /// always the chart's highest, so the label was clamped to the top of the
+    /// drawing — *below* the point, with the curve's last stretch running through
+    /// "15 species". The plot now leaves headroom and the label sits above the point;
+    /// the curve never rises to the left of its end, so nothing can cross it there.
+    ///
+    /// Observed failing before the fix: the label's baseline was 8 units below the
+    /// end point.
+    #[test]
+    fn the_total_sits_above_the_curve_it_labels() {
+        let pts = vec![
+            ("24-03".to_string(), 3),
+            ("24-04".to_string(), 14),
+            ("24-05".to_string(), 15),
+        ];
+        let svg = accumulation_curve(&pts);
+        let number_after = |s: &str, key: &str| -> f64 {
+            let rest = s.split_once(key).expect(key).1;
+            rest.split('"')
+                .next()
+                .expect("a value")
+                .parse()
+                .expect("a number")
+        };
+        let circle = svg.split("<circle").nth(1).expect("the end point");
+        let end_y = number_after(circle, r#"cy=""#);
+        let label = svg
+            .split("<text")
+            .find(|t| t.contains("15 species"))
+            .expect("the total's label");
+        let baseline = number_after(label, r#" y=""#);
+        assert!(
+            baseline <= end_y - 6.0,
+            "the label's baseline ({baseline}) is not above the end point ({end_y})"
+        );
+        // Room for the glyphs above that baseline (the label-fitting script can
+        // enlarge them to about 16 units), or the top of the drawing cuts them.
+        assert!(
+            baseline >= 16.0,
+            "the label's baseline ({baseline}) leaves no room above it"
+        );
     }
 
     #[test]

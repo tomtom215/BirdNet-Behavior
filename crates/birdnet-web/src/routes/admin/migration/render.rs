@@ -24,7 +24,7 @@ static MIGRATION_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
     .btn-secondary:hover { background:var(--border-2); }
     .hint { font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }
     :where(.mig-scope) code { background:var(--bg); border:1px solid var(--border); padding:0.1em 0.4em;
-            border-radius:0.2rem; font-family:monospace; font-size:0.875rem; }
+            border-radius:0.2rem; font-family:monospace; font-size:0.875rem; overflow-wrap:anywhere; }
     .tabs { display:flex; gap:0.5rem; margin-bottom:1rem; }
     .tab { padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid var(--border);
             cursor:pointer; font-size:0.85rem; background:var(--bg); color:var(--fg-3); }

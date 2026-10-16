@@ -56,6 +56,61 @@ fn arc_band_path(cx: f64, cy: f64, r_in: f64, r_out: f64, a0: f64, a1: f64) -> S
     )
 }
 
+/// Width of one character of a ring label, in SVG units: the 12-unit face
+/// measures about 6.4 on a name's average, and a label must not be drawn narrower
+/// than it really is, so this is a little over.
+const LABEL_CHAR_WIDTH: f64 = 6.8;
+
+/// Clear space kept between two neighbouring names along the ring.
+const LABEL_GAP: f64 = 8.0;
+
+/// Passes `spread_labels` makes at most. Pushing apart in pairs settles a crowded
+/// stretch gradually, like heat spreading along a rod: the test's ten names, with
+/// four of them jammed together, settle in 66 passes. A pass is a handful of
+/// additions, so the bound is generous; it is there to end the loop when the names
+/// are longer than the ring, where no arrangement leaves every pair its room.
+const MAX_SPREAD_PASSES: usize = 1_000;
+
+/// Where each name goes on the ring: its arc's middle, moved only as far as it
+/// takes for neighbouring names not to overlap.
+///
+/// A species heard with few others has a short arc, and a name written along a
+/// short arc reaches into the next one's. `mids` are the arc middles in ring order
+/// and `half_widths` the half-length of each name along the ring. `radius` is how
+/// far from the centre the name's inner edge is: a name is a straight run of text
+/// standing on the ring's tangent, so what limits it is where its inner corners
+/// are, `atan(half / radius)` either side of its middle rather than
+/// `half / radius`, and the line under the name makes that edge the nearer one.
+///
+/// Each pair that is too close is pushed apart by half the shortfall each, repeated
+/// until none is, so a crowded stretch spreads out around its own middle instead of
+/// marching round the ring. When the names together are longer than the ring there
+/// is no answer, and the bound on the passes ends the loop with the names spread as
+/// evenly as the passes got them.
+fn spread_labels(mids: &[f64], half_widths: &[f64], radius: f64) -> Vec<f64> {
+    let n = mids.len();
+    let mut at = mids.to_vec();
+    let gap = LABEL_GAP / radius;
+    for _ in 0..MAX_SPREAD_PASSES {
+        let mut moved = false;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let want = (half_widths[i] / radius).atan() + (half_widths[j] / radius).atan() + gap;
+            let have = at[j] - at[i] + if j == 0 { std::f64::consts::TAU } else { 0.0 };
+            if have < want - 1e-9 {
+                let push = (want - have) / 2.0;
+                at[i] -= push;
+                at[j] += push;
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    at
+}
+
 /// Acoustic-network chord diagram — the co-occurrence matrix drawn as ribbons.
 ///
 /// Each species gets an outer arc proportional to its total connectedness;
@@ -165,8 +220,17 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
         );
     }
 
-    // Labels ride the arc (tangent), flipped on the left half.
-    for (i, &(_, _, mid, _)) in arcs.iter().enumerate() {
+    // Labels ride the arc (tangent), flipped on the left half, each moved along
+    // the ring only as far as its neighbours' names need (see `spread_labels`).
+    let half_widths: Vec<f64> = labels
+        .iter()
+        .map(|l| l.chars().count() as f64 * LABEL_CHAR_WIDTH / 2.0)
+        .collect();
+    let mids: Vec<f64> = arcs.iter().map(|a| a.2).collect();
+    // The inner edge of a name: its anchor is at `r_outer + 22`, and the line under
+    // it reaches 14 units further in.
+    let label_angles = spread_labels(&mids, &half_widths, r_outer + 22.0 - 14.0);
+    for (i, &mid) in label_angles.iter().enumerate() {
         let label_r = r_outer + 22.0;
         let deg = mid.to_degrees() + 90.0;
         // `deg` is the arc's tangent, which reads upright only in the upper half of
@@ -267,5 +331,129 @@ mod tests {
             checked, n,
             "one rotate() per species, or the gate is vacuous"
         );
+    }
+
+    /// One drawn label: where it sits, how it is turned, and what it says.
+    struct Placed {
+        x: f64,
+        y: f64,
+        deg: f64,
+        name: String,
+    }
+
+    /// The ring's labels, read back out of the SVG.
+    fn placed_labels(svg: &str) -> Vec<Placed> {
+        svg.split(r#"<g transform="translate("#)
+            .skip(1)
+            .map(|chunk| {
+                let (xy, rest) = chunk
+                    .split_once(") rotate(")
+                    .expect("translate then rotate");
+                let (x, y) = xy.split_once(',').expect("x,y");
+                let (deg, rest) = rest.split_once(")\">").expect("rotate then the text");
+                let name = rest
+                    .split_once(r#"fill="var(--fg)">"#)
+                    .and_then(|(_, t)| t.split_once("</text>"))
+                    .expect("the name")
+                    .0;
+                Placed {
+                    x: x.parse().expect("x"),
+                    y: y.parse().expect("y"),
+                    deg: deg.parse().expect("deg"),
+                    name: name.to_owned(),
+                }
+            })
+            .collect()
+    }
+
+    /// Whether two labels, each a turned rectangle, share any area. The width is
+    /// the text's width at 12 px (a generous 6.8 px a character, wider than the
+    /// face really is) and the height covers the name and the line under it.
+    fn labels_overlap(a: &Placed, b: &Placed) -> bool {
+        let rect = |l: &Placed| {
+            let t = l.deg.to_radians();
+            let (u, v) = ((t.cos(), t.sin()), (-t.sin(), t.cos()));
+            // Local (0, 2) is the middle of the name line and the one beneath it.
+            let c = (l.x + 2.0 * v.0, l.y + 2.0 * v.1);
+            (c, u, v, l.name.chars().count() as f64 * 6.8 / 2.0, 12.0)
+        };
+        let (ra, rb) = (rect(a), rect(b));
+        let gap = (rb.0.0 - ra.0.0, rb.0.1 - ra.0.1);
+        [ra.1, ra.2, rb.1, rb.2].iter().all(|axis| {
+            let along = |r: &((f64, f64), (f64, f64), (f64, f64), f64, f64)| {
+                (r.1.0 * axis.0 + r.1.1 * axis.1).abs() * r.3
+                    + (r.2.0 * axis.0 + r.2.1 * axis.1).abs() * r.4
+            };
+            (gap.0 * axis.0 + gap.1 * axis.1).abs() < along(&ra) + along(&rb)
+        })
+    }
+
+    /// Species that are heard with few others have short arcs, and a name
+    /// written along a short arc ran into its neighbour's: Red-winged Blackbird
+    /// into Black-capped Chickadee, Downy Woodpecker into White-breasted
+    /// Nuthatch, on the documentation's own co-occurrence picture.
+    ///
+    /// Observed failing before the labels were spread apart: three pairs of the
+    /// ten overlapped.
+    #[test]
+    fn chord_labels_do_not_run_into_each_other() {
+        let names = [
+            "Red-winged Blackbird",
+            "Black-capped Chickadee",
+            "White-breasted Nuthatch",
+            "Downy Woodpecker",
+            "Blue Jay",
+            "Mourning Dove",
+            "Northern Cardinal",
+            "American Robin",
+            "Song Sparrow",
+            "American Goldfinch",
+        ];
+        // Connectedness: a few busy species and several heard with little else.
+        let weight = [0.14, 0.11, 0.15, 0.09, 0.19, 0.31, 0.29, 0.37, 0.32, 0.20];
+        let labels: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
+        let m: Vec<Vec<f64>> = (0..names.len())
+            .map(|i| {
+                (0..names.len())
+                    .map(|j| {
+                        if i == j {
+                            0.0
+                        } else {
+                            weight[i] * weight[j] * 9.0
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let placed = placed_labels(&chord_diagram(&labels, &m));
+        assert_eq!(placed.len(), names.len());
+        let mut hits = Vec::new();
+        for i in 0..placed.len() {
+            for j in i + 1..placed.len() {
+                if labels_overlap(&placed[i], &placed[j]) {
+                    hits.push(format!("{} / {}", placed[i].name, placed[j].name));
+                }
+            }
+        }
+        assert!(hits.is_empty(), "labels overlap: {hits:?}");
+    }
+
+    /// The counterpart: where nothing needs moving, nothing moves. Six equal
+    /// arcs put every name at the middle of its own arc.
+    #[test]
+    fn chord_labels_stay_on_their_arcs_when_there_is_room() {
+        let labels: Vec<String> = (0..6).map(|i| format!("Species {i}")).collect();
+        let m: Vec<Vec<f64>> = (0..6)
+            .map(|i| (0..6).map(|j| if i == j { 0.0 } else { 0.5 }).collect())
+            .collect();
+        let placed = placed_labels(&chord_diagram(&labels, &m));
+        for (k, p) in placed.iter().enumerate() {
+            let want =
+                -std::f64::consts::FRAC_PI_2 + (k as f64 + 0.5) * std::f64::consts::TAU / 6.0;
+            let got = (p.y - 360.0).atan2(p.x - 360.0);
+            let off = (got - want + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            assert!(off.abs() < 1e-3, "label {k} sits {off} rad from its arc");
+        }
     }
 }

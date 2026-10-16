@@ -584,6 +584,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Names on the co-occurrence chart no longer run into each other, and the life-list
+  total is no longer written across its own curve.** The Who-sings-together chord
+  diagram wrote each name at the middle of its arc, so two species heard with few
+  others (short neighbouring arcs) had their names drawn across one another:
+  Red-winged Blackbird over Black-capped Chickadee, Downy Woodpecker over
+  White-breasted Nuthatch, on the manual's own picture. Names are now pushed apart
+  along the ring only as far as it takes, and stay on their arcs when there is room.
+  The life-list chart ends at its highest point by construction, so its "15 species"
+  label was always clamped to the top edge, *below* that point, with the curve's last
+  stretch through it; the plot now leaves headroom and the label sits above. (A first
+  attempt gave the label a halo, a test that checked for the halo, and a picture in
+  which the line still showed between the letters: the test asserted the remedy, not
+  the geometry, and was replaced.) A phone could also be pushed 84 px sideways by the
+  Data tab, which printed the database's full path unwrapped, found because the
+  screenshot fixture now lives in a deep directory, as a macOS home folder is. Each is
+  a test that failed first (`chord_labels_do_not_run_into_each_other`: three pairs
+  overlapped; `the_total_sits_above_the_curve_it_labels`: baseline 20 against an end
+  point at 12; the strict sweep: 474 px on a 390 px screen, both themes). The layout
+  gate could not have seen the first two: it skipped every `<svg>`, and passed with the
+  overlap on screen. It now grades chart labels as the turned rectangles they are (a
+  quarter of the shorter label's height of overlap fails); on the fixture before the
+  fix it reported exactly the two chord pairs, and across all 152 page states nothing
+  else. It does not see a line crossing a label, which is what the life-list defect
+  was; that one was found by looking at the picture.
+- **The manual's images and its directions follow the interface.** Every image in
+  `docs/book/images/` (24 desktop, 24 phone, the share page and the wizard's
+  Accuracy step) was regenerated from a fixture built from this tree and the renders
+  looked at; they had been taken on v0.8.0, and `detection-detail.png` was the
+  "Detection not found" page, for a time the fixture never seeded. The fixture now
+  publishes the capture gauge the pills read, so the header badge no longer says
+  "Not recording" over a healthy feed, and `book-onboarding.mjs` is the producer
+  `onboarding-accuracy.png` never had. Rendering them showed the text still saying
+  **Station → Capture** where the navigation says Settings, and sending readers to
+  places that were never there: *Settings → Accounts* (the tab is Access),
+  *Settings → Location has a detect button* (that button is the setup wizard's),
+  *Admin → Settings → MQTT* (MQTT has no settings page: it is `MQTT_HOST` and its
+  neighbours in the configuration file), *Normalise Clip Loudness* (the control is
+  "Even out clip volume"). The manual, the wizard, the dashboard's checklist, the
+  doctor, the station-health alert and the installer's config comment are corrected,
+  and the screen-reader heading on every Settings tab reads "Settings — Capture"
+  like the navigation (it said "Station —"). `the_text_names_the_screens_the_ui_has`
+  builds each heading from the nav's own labels and checks every Settings breadcrumb
+  in the manual, the README, the Rust sources and the installer against the tabs the
+  page renders; it failed on 6 of 6 headings and 42 breadcrumbs before the fix.
+  What it does not check: the step after the tab (several are loaded on demand), and
+  prose that names a screen without an arrow. Not changed, found while checking:
+  the Today Page Layout editor is only on the full `/admin/settings` page, which the
+  Settings tabs link to in one conditional hint, so it is hard to find from the
+  navigation; the manual now says where it is.
+
 - **Only writes take the writer connection now, and the analytics store has readers.**
   `with_db` is the one SQLite connection the capture daemon's inserts share, and 223
   `with_db(` lines in 56 files of `birdnet-web/src` took it, so any page that read
@@ -1161,6 +1211,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The install one-liner no longer runs the development branch as root.** README, the
+  manual, the architecture notes, the installer's usage text and its sudo error messages
+  told readers to pipe `raw.githubusercontent.com/…/main/install.sh` into `sudo bash`:
+  whatever `main` held that second, with no release, checksum or provenance between.
+  They now name `https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh`,
+  the file each release lists in `SHA256SUMS` and attests, with `--proto '=https'
+  --tlsv1.2` (the admin "Check for updates" text already names the release's own copy).
+  Read on 2026-10-16: v0.17.1, the latest release, has an `install.sh` asset, so the
+  address resolves today. `installer/test/install-one-liner-is-a-release-asset.sh`
+  fails on a branch-pinned form (21 hits before, none after) and on a scan that has
+  stopped seeing the files; the installer suite passes. Not done: the one-liner was
+  not run end to end, and the Docker `quickstart.sh` (and the compose files it
+  downloads) and `scripts/hardware-test.sh` still come from `main`: see `docs/HANDOFF.md`
+  for why the quickstart cannot move before a release carries it.
 - **The CSP nonce now goes only onto the `<script>` and `<style>` tags this server
   wrote, and any other `<script` in a response is turned into text.** The nonce
   used to be stamped by a pass over the finished body that rewrote every

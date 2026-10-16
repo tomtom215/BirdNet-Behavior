@@ -698,8 +698,19 @@ async fn main() {
     // Where the fixture keeps its files, and where it listens. Both default to
     // what they always were; set them to run a second instance beside the
     // first — the base-path gate serves one under a prefix (`BIRDNET_BASE_PATH`).
-    let dir = std::env::var_os("BNB_FIXTURE_DIR")
-        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+    // The default is deliberately deep. The Data tab prints the database's full
+    // path, and a path as long as a macOS home folder's pushed that page 84 px past
+    // a phone's edge while the fixture, which lived directly in `/tmp`, never
+    // showed it. A fixture whose paths are short cannot grade a page that prints
+    // them.
+    let dir = std::env::var_os("BNB_FIXTURE_DIR").map_or_else(
+        || {
+            std::env::temp_dir().join(
+                "birdnet-behavior-fixture-whose-data-directory-path-is-as-long-as-a-macos-home-one",
+            )
+        },
+        std::path::PathBuf::from,
+    );
     std::fs::create_dir_all(&dir).expect("fixture dir");
     let addr = std::env::var("BNB_FIXTURE_ADDR").unwrap_or_else(|_| "127.0.0.1:8502".to_owned());
     let path = dir.join("bnb_screenshots.db");

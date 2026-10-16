@@ -11,9 +11,9 @@
 # install.sh — BirdNet-Behavior installer for Raspberry Pi and x86_64 Linux
 #
 # Usage (Linux / Raspberry Pi — installs a systemd service, so it needs root):
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 #   # pin a specific version (the `-s --` passes the args through to the script):
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.1
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.5.1
 #   # from a saved copy:
 #   sudo bash install.sh [--version 0.5.1]
 #
@@ -400,11 +400,11 @@ require_root() {
 
 Re-run it by piping into sudo:
 
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
+    curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
 
 To pin a version, pass it as an argument after a literal --:
 
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
+    curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
 
 Already saved the script?   sudo bash install.sh [--version ${VERSION:-X.Y.Z}]
 
@@ -418,7 +418,7 @@ EOF
     # is the original (non-root) user.  Refuse to run as root directly so the
     # service doesn't end up owned by root.
     if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
-        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
+        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
     derive_home_paths
@@ -3314,8 +3314,8 @@ usage() {
 BirdNet-Behavior installer
 
 Linux / Raspberry Pi (installs a systemd service, so it needs root):
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version X.Y.Z
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version X.Y.Z
 
 From a saved copy of this script:
   sudo bash install.sh [--version X.Y.Z]
