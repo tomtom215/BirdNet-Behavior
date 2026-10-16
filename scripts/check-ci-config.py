@@ -121,6 +121,7 @@ import yaml
 
 MUTATION_WORKFLOW = ".github/workflows/mutation.yml"
 CI_WORKFLOW = ".github/workflows/ci.yml"
+RELEASE_WORKFLOW = ".github/workflows/release.yml"
 
 # Matrix rows may omit `package`; the workflow falls back to this.
 DEFAULT_PACKAGE = "birdnet-core"
@@ -644,6 +645,58 @@ def check_embed_precedes_tests() -> None:
           f"both extensions are embedded (found {len(embeds)}: {embeds})")
     check(len(tests) >= 3,
           f"the job runs its several test steps (found {len(tests)}: {tests})")
+
+
+def check_release_gate_runs_the_toolchain_it_names(release_path: str = RELEASE_WORKFLOW) -> None:
+    """release.yml's `ci` matrix must put the toolchain it names in charge.
+
+    Incident 6 again, in the copy of the gate that blocks a release. The `ci` job
+    installs `matrix.toolchain` with `dtolnay/rust-toolchain`, which only sets
+    rustup's *default*; `rust-toolchain.toml` (`channel = "stable"`) outranks a
+    default, so the `msrv` entry (toolchain "1.95") ran `cargo check` on stable and
+    the release's MSRV gate was green while testing nothing it promised.
+    `check_msrv_runs_the_msrv` reads `ci.yml` only and could not see this.
+
+    Structural, as there: a step exports `RUSTUP_TOOLCHAIN` from `matrix.toolchain`
+    through `$GITHUB_ENV`, a later step reads `rustc --version` back against it, and
+    both come before the step that runs the matrix command.
+    """
+    print("\nThe release gate runs the toolchain each entry names (incident 6)")
+    spec = yaml.safe_load(open(release_path))
+    steps = spec["jobs"]["ci"]["steps"]
+    run = lambda st: str(st.get("run", ""))  # noqa: E731
+
+    def index_of(pred: "callable[[dict], bool]") -> int | None:
+        for i, st in enumerate(steps):
+            if pred(st):
+                return i
+        return None
+
+    export = index_of(
+        lambda st: "RUSTUP_TOOLCHAIN=" in run(st)
+        and "GITHUB_ENV" in run(st)
+        and "matrix.toolchain" in run(st)
+    )
+    prove = index_of(lambda st: "rustc --version" in run(st) and "RUSTUP_TOOLCHAIN" in run(st))
+    matrix_cmd = index_of(lambda st: "matrix.command" in run(st))
+    check(export is not None,
+          "a step exports RUSTUP_TOOLCHAIN=matrix.toolchain through $GITHUB_ENV")
+    check(prove is not None, "a step asserts `rustc --version` against RUSTUP_TOOLCHAIN")
+    check(matrix_cmd is not None, "the job still runs the matrix command")
+    if None not in (export, prove, matrix_cmd):
+        check(export < prove < matrix_cmd,
+              f"export (#{export + 1}) precedes the proof (#{prove + 1}), which "
+              f"precedes the matrix command (#{matrix_cmd + 1})")
+    msrv = [m for m in spec["jobs"]["ci"]["strategy"]["matrix"]["include"] if m["name"] == "msrv"]
+    declared = None
+    for line in open("Cargo.toml"):
+        m = re.match(r'\s*rust-version\s*=\s*"([^"]+)"', line)
+        if m:
+            declared = m.group(1)
+            break
+    check(len(msrv) == 1 and str(msrv[0]["toolchain"]) == declared,
+          f"the msrv entry names the declared rust-version ({declared}); "
+          f"found {[m['toolchain'] for m in msrv]}")
 
 
 def check_msrv_runs_the_msrv(
@@ -1171,6 +1224,7 @@ def main(argv: list[str] | None = None) -> int:
     check_mutation_matrix()
     check_embed_precedes_tests()
     check_msrv_runs_the_msrv()
+    check_release_gate_runs_the_toolchain_it_names()
     check_actions_are_pinned()
     check_tools_are_pinned()
     check_named_lockfiles_are_tracked()

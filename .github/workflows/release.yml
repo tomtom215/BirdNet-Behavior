@@ -5,9 +5,10 @@
 #   git push origin v0.2.0
 #
 # Or rehearsed without a tag via the "Run workflow" button (workflow_dispatch):
-# every job up to and including `package` runs exactly as on a real release
-# (build, SBOM, SLSA attestation), but `github-release` is skipped so nothing
-# is published. See RELEASING.md → "Rehearsing a release (dry run)".
+# every job up to and including `package` runs as on a real release (build,
+# SBOM, checksums), except the SLSA attestation, which is a published claim and
+# is skipped; `github-release` is skipped too, so nothing is published. See
+# RELEASING.md → "Rehearsing a release (dry run)".
 #
 # The release binaries are built with `--features analytics`, so a single
 # binary per target ships the DuckDB behavioral-analytics code statically
@@ -366,6 +367,28 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           components: ${{ matrix.components || '' }}
+
+      # `dtolnay/rust-toolchain` only sets rustup's *default*, and a
+      # `rust-toolchain.toml` in the working directory outranks the default:
+      # ours says `channel = "stable"`, so without these two steps the `msrv`
+      # entry ran `cargo check` on whatever stable is today and the release's
+      # MSRV gate was green while testing nothing it promised (ci.yml carries the
+      # same fix; `scripts/check-ci-config.py` holds both). `RUSTUP_TOOLCHAIN`
+      # outranks the file, and the proof reads the compiler back from a fresh step.
+      - name: Use the toolchain this entry names
+        shell: bash
+        run: echo "RUSTUP_TOOLCHAIN=${{ matrix.toolchain }}" >> "$GITHUB_ENV"
+
+      - name: Prove the compiler is the toolchain this entry names
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(rustc --version)
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-<unset>}; compiler: ${actual}"
+          if [[ "${RUSTUP_TOOLCHAIN}" != "stable" && "${actual}" != "rustc ${RUSTUP_TOOLCHAIN}."* ]]; then
+            echo "::error::The ${{ matrix.name }} entry is running '${actual}', not ${RUSTUP_TOOLCHAIN}."
+            exit 1
+          fi
 
       - name: Install native build dependencies
         # cmake + a host C++ compiler build the bundled libduckdb that the
@@ -776,7 +799,12 @@ jobs:
       # same workflow run as the binaries, and so are the two scripts operators
       # pipe into `sudo bash` and the checksum manifest that names every other
       # asset: before, a verified archive sat beside an unverifiable script.
+      # Only for a real release. A dry run (`workflow_dispatch`) is documented to
+      # publish nothing, and a signed provenance statement for archives that are
+      # never released is a published claim about them (Sigstore records it in a
+      # public log). The rehearsal still builds, packages and checksums them.
       - name: Attest build provenance (SLSA)
+        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
