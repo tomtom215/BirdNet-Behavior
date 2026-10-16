@@ -370,22 +370,39 @@ mod tests {
     /// the text's width at 12 px (a generous 6.8 px a character, wider than the
     /// face really is) and the height covers the name and the line under it.
     fn labels_overlap(a: &Placed, b: &Placed) -> bool {
-        let rect = |l: &Placed| {
+        /// A label's box: its middle, the two unit directions of its sides, and
+        /// the half-length along the first and the half-height along the second.
+        struct Turned {
+            middle: (f64, f64),
+            along: (f64, f64),
+            across: (f64, f64),
+            half_len: f64,
+            half_height: f64,
+        }
+        let turned = |l: &Placed| {
             let t = l.deg.to_radians();
-            let (u, v) = ((t.cos(), t.sin()), (-t.sin(), t.cos()));
-            // Local (0, 2) is the middle of the name line and the one beneath it.
-            let c = (l.x + 2.0 * v.0, l.y + 2.0 * v.1);
-            (c, u, v, l.name.chars().count() as f64 * 6.8 / 2.0, 12.0)
+            let (along, across) = ((t.cos(), t.sin()), (-t.sin(), t.cos()));
+            Turned {
+                // Local (0, 2) is the middle of the name line and the one beneath it.
+                middle: (l.x + 2.0 * across.0, l.y + 2.0 * across.1),
+                along,
+                across,
+                half_len: l.name.chars().count() as f64 * 6.8 / 2.0,
+                half_height: 12.0,
+            }
         };
-        let (ra, rb) = (rect(a), rect(b));
-        let gap = (rb.0.0 - ra.0.0, rb.0.1 - ra.0.1);
-        [ra.1, ra.2, rb.1, rb.2].iter().all(|axis| {
-            let along = |r: &((f64, f64), (f64, f64), (f64, f64), f64, f64)| {
-                (r.1.0 * axis.0 + r.1.1 * axis.1).abs() * r.3
-                    + (r.2.0 * axis.0 + r.2.1 * axis.1).abs() * r.4
-            };
-            (gap.0 * axis.0 + gap.1 * axis.1).abs() < along(&ra) + along(&rb)
-        })
+        let (ra, rb) = (turned(a), turned(b));
+        let gap = (rb.middle.0 - ra.middle.0, rb.middle.1 - ra.middle.1);
+        [ra.along, ra.across, rb.along, rb.across]
+            .iter()
+            .all(|axis| {
+                // How far the box reaches along `axis` from its middle.
+                let reach = |r: &Turned| {
+                    (r.along.0 * axis.0 + r.along.1 * axis.1).abs() * r.half_len
+                        + (r.across.0 * axis.0 + r.across.1 * axis.1).abs() * r.half_height
+                };
+                (gap.0 * axis.0 + gap.1 * axis.1).abs() < reach(&ra) + reach(&rb)
+            })
     }
 
     /// Species that are heard with few others have short arcs, and a name
