@@ -47,7 +47,7 @@ struct FeedQuery {
 // Feeds are public and each scans the detection history: the rare-bird query
 // took 5.2 s on a 300 000-detection station, measured against the real binary.
 // They used to take the single writer lock (`with_db`), which the detection
-// processor and 245 other call sites also take, so sixteen concurrent requests
+// processor and every other writer also take, so sixteen concurrent requests
 // held every one of them for 81 s and a plain `/api/v2/detections?limit=1`
 // waited 38.9 s. They read through the pooled readers now, inside the shared
 // heavy-read gate ([`AppState::try_heavy_read_permit`]), so a flood cannot take
@@ -104,6 +104,11 @@ fn rare_detections_sql(gap_days: u32) -> String {
                 LIMIT ?1"
             .to_owned();
     }
+    // The window is written out twice: as a range on `Date` (which the
+    // `(Com_Name, Date)` index can seek to) and as the day count the rule is
+    // stated in. For a valid date they say the same thing; the day count stays
+    // so a malformed `Date` is excluded exactly as it always was. Without the
+    // range the planner walked each species from its first day.
     format!(
         "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
          FROM detections_analytic d \
@@ -111,6 +116,7 @@ fn rare_detections_sql(gap_days: u32) -> String {
            AND NOT EXISTS ( \
                  SELECT 1 FROM detections_analytic p \
                  WHERE p.Com_Name = d.Com_Name \
+                   AND p.Date >= date(d.Date, '-{gap_days} days') \
                    AND p.Date < d.Date \
                    AND julianday(d.Date) - julianday(p.Date) <= {gap_days} \
                ) \
@@ -876,6 +882,147 @@ mod rare_threshold_tests {
                 "at gap={gap} a daily resident may only appear for its first day"
             );
         }
+    }
+
+    /// The query as it was before the window was written into it: the
+    /// definition the current form must agree with.
+    fn reference_sql(gap_days: u32) -> String {
+        if gap_days == 0 {
+            return "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
+                    FROM detections_analytic d \
+                    WHERE d.Confidence > 0.85 \
+                      AND (SELECT MIN(Date) FROM detections_analytic d2 \
+                           WHERE d2.Com_Name = d.Com_Name) = d.Date \
+                    ORDER BY d.Date DESC, d.Time DESC \
+                    LIMIT ?1"
+                .to_owned();
+        }
+        format!(
+            "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
+             FROM detections_analytic d \
+             WHERE d.Confidence > 0.85 \
+               AND NOT EXISTS ( \
+                     SELECT 1 FROM detections_analytic p \
+                     WHERE p.Com_Name = d.Com_Name \
+                       AND p.Date < d.Date \
+                       AND julianday(d.Date) - julianday(p.Date) <= {gap_days} \
+                   ) \
+             ORDER BY d.Date DESC, d.Time DESC \
+             LIMIT ?1"
+        )
+    }
+
+    /// Same rows, over data built to sit on the rule's edges: gaps of exactly
+    /// the threshold, one day under and over, sightings on the same day, month
+    /// and year ends, a leap day, species of every rhythm from daily to once.
+    #[test]
+    fn the_windowed_query_returns_what_the_unwindowed_one_did() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE detections_analytic (
+                 Com_Name TEXT, Sci_Name TEXT, Date TEXT, Time TEXT, Confidence REAL);
+             CREATE INDEX idx_species_date ON detections_analytic(Com_Name, Date);",
+        )
+        .unwrap();
+        // Days since 2023-12-01, spanning a leap day and two year ends.
+        let day = |n: u32| -> String {
+            let (y, m, d) = birdnet_core::civil::civil_from_days(
+                birdnet_core::civil::days_from_civil(2023, 12, 1) + i64::from(n),
+            );
+            format!("{y:04}-{m:02}-{d:02}")
+        };
+        let mut x: u64 = 0x5EED;
+        let mut next = move |m: u64| {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (x >> 33) % m
+        };
+        for sp in 0..30_u32 {
+            // Rhythm: sighted on a day with probability 1/period.
+            let period = 1 + u64::from(sp % 10) * 4;
+            for n in 0..800_u32 {
+                if next(period) == 0 {
+                    // Sometimes twice in a day, sometimes below the confidence cut.
+                    for _ in 0..=next(2) {
+                        let conf = 0.80 + (next(25) as f64) / 100.0;
+                        conn.execute(
+                            "INSERT INTO detections_analytic VALUES (?1, ?2, ?3, '06:00', ?4)",
+                            rusqlite::params![
+                                format!("Bird {sp:02}"),
+                                format!("Genus {sp:02}"),
+                                day(n),
+                                conf
+                            ],
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+        let rows = |sql: &str| -> Vec<(String, String, String, String, i64)> {
+            let mut stmt = conn.prepare(sql).unwrap();
+            let mut v: Vec<_> = stmt
+                .query_map([100_000], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        (r.get::<_, f64>(4)? * 1000.0).round() as i64,
+                    ))
+                })
+                .unwrap()
+                .flatten()
+                .collect();
+            v.sort();
+            v
+        };
+        let mut compared = 0;
+        for gap in [0, 1, 2, 3, 7, 14, 30, 31, 90, 365, 366] {
+            let (now, then) = (rows(&rare_detections_sql(gap)), rows(&reference_sql(gap)));
+            assert_eq!(
+                now, then,
+                "gap={gap}: the windowed query disagrees with the reference"
+            );
+            compared += now.len();
+        }
+        assert!(
+            compared > 500,
+            "only {compared} rare rows compared; the data is too tame to test the edges"
+        );
+    }
+
+    /// The point of the window: the probe for an earlier sighting is an index
+    /// seek on the species and the days it covers, not a walk over every earlier
+    /// row of the species. Measured on 300 000 rows: 3.25 s with only the old
+    /// indexes, 17 s with the new index and the old predicate (the planner then
+    /// walks the species from its first day), 0.94 s with both. The `gap = 0`
+    /// form (`MIN(Date)` per row) took 300 s before and 0.96 s after.
+    #[test]
+    fn the_rare_query_seeks_by_species_and_date_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let plan = |gap: u32| -> String {
+            let mut stmt = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {}", rare_detections_sql(gap)))
+                .unwrap();
+            stmt.query_map([1], |r| r.get::<_, String>(3))
+                .unwrap()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let windowed = plan(30);
+        assert!(
+            windowed.contains("idx_detections_species_date (Com_Name=? AND Date>? AND Date<?)"),
+            "the earlier-sighting probe is not a species-and-window seek:\n{windowed}"
+        );
+        let first = plan(0);
+        assert!(
+            first.contains("idx_detections_species_date"),
+            "the first-ever probe does not use the species/date index:\n{first}"
+        );
     }
 
     /// Both SQL forms must actually parse — a `format!`-built query that
