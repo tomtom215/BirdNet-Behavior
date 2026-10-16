@@ -70,7 +70,7 @@ Every imported detection is tagged with the batch that brought it in. Each batch
 
 - **The model.** BirdNET-Pi runs BirdNET V2.4; this project's default is BirdNET+ V3.0, which gives different detections. To keep V2.4, install it and set `CONFIDENCE=0.7`: [Same audio, same detections](./parity.md) has the commands and says what was measured.
 - **`PRIVACY_THRESHOLD`.** BirdNET-Pi's is a percentage of the species list; here it is the model's confidence for a human sound. A BirdNET-Pi `1` masks almost nothing here (`--doctor` warns above 0.5); use about `0.02`.
-- **The species lists.** BirdNET-Pi keeps `include_species_list.txt`, `exclude_species_list.txt` and `whitelist_species_list.txt` as files and this does not read them: enter the same species under **Station → Capture → Species**, in the Allow, Exclusion and *Always allowed* lists. The whitelist has BirdNET-Pi's meaning (exempt from the occurrence filter only; exclude and allow still apply). Entries are matched by common or scientific name.
+- **The species lists.** BirdNET-Pi keeps `include_species_list.txt`, `exclude_species_list.txt` and `whitelist_species_list.txt` as files and this does not read them: enter the same species under **Settings → Capture → Species**, in the Allow, Exclusion and *Always allowed* lists. The whitelist has BirdNET-Pi's meaning (exempt from the occurrence filter only; exclude and allow still apply). Entries are matched by common or scientific name.
 
 **Does not carry over: the audio.** The importer copies rows, not files. Imported detections keep their original `File_Name`, but the WAV is not brought across, so the clip player on an imported detection's page has nothing behind it. Your counts, species lists and every analytic are unaffected — only playback is.
 

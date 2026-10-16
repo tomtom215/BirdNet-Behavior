@@ -26,7 +26,7 @@ Retention is disk-based by default — the oldest clips are purged once the disk
 
 ## Is the dashboard exposed on my network? Do I need a login?
 
-By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; the `/admin*` panel, the Station management tabs and every action that changes something are password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
+By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; the `/admin*` panel, the Settings management tabs and every action that changes something are password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
 
 ## How do I find or reset the admin password?
 

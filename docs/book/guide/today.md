@@ -49,8 +49,8 @@ detection. The list auto-refreshes, so a page left open stays current.
 ## Arranging the page
 
 A station on a kitchen tablet or a visitor-centre wall rarely needs everything
-an operator debugging a microphone does. **Settings → Today Page Layout**
-(at the foot of the settings page) lists the page's parts in their current
+an operator debugging a microphone does. The **Today Page Layout** section at the foot of the full settings page
+(`/admin/settings`, the **Settings** entry of the admin menu) lists the page's parts in their current
 order, each with **Move up**, **Move down** and **Show/Hide**. Every press is
 saved at once.
 

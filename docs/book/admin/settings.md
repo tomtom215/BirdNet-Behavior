@@ -44,7 +44,7 @@ Rare-bird **quarantine** rules decide which detections are held for manual revie
 
 ### Allow and exclude lists
 
-The lists under **Station → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
+The lists under **Settings → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
 
 - **Exclude** — these species are never recorded. Nothing is written to the
   database, no notification is sent, and nothing is uploaded to BirdWeather.
@@ -71,7 +71,7 @@ warning is logged, rather than being taken literally and suppressing everything.
 
 ### Species storage
 
-**Station → Capture → Species → Species storage** (`/admin/species/manage`) is one row per species this station has ever recorded, with its detection count, how many still have audio on disk, how many you have locked, and when it was last heard. It exists for one recurring situation: a squeaky gate has produced four thousand Eurasian Wrens and you want them gone.
+**Settings → Capture → Species → Species storage** (`/admin/species/manage`) is one row per species this station has ever recorded, with its detection count, how many still have audio on disk, how many you have locked, and when it was last heard. It exists for one recurring situation: a squeaky gate has produced four thousand Eurasian Wrens and you want them gone.
 
 Three actions per row, each confirmed:
 
@@ -151,4 +151,4 @@ The Settings sidebar also covers **Location**, **Audio** (see [Audio & Microphon
 
 ## Data quality
 
-The **Quality** dashboard (**Station → Data**, `/station/data#quality`; the old `/admin/quality` redirects there) summarizes the health of your detection database — the confidence distribution, a 30-day confidence trend, an hourly quality profile, and a ranked list of low-confidence species that are good candidates for a stricter per-species threshold.
+The **Quality** dashboard (**Settings → Data**, `/station/data#quality`; the old `/admin/quality` redirects there) summarizes the health of your detection database — the confidence distribution, a 30-day confidence trend, an hourly quality profile, and a ranked list of low-confidence species that are good candidates for a stricter per-species threshold.

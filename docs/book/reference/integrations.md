@@ -79,7 +79,7 @@ Two places, both of them corroboration rather than filtering:
 
 - **A detection's detail page** gains a *Reported nearby* card when somebody
   reported that species in the station's neighbourhood recently.
-- **The suspect-species report** (Station → Data) marks a flagged species that
+- **The suspect-species report** (Settings → Data) marks a flagged species that
   somebody reported nearby, and its *Exclude* confirmation says so — because
   that is a strong reason not to exclude it.
 
@@ -361,7 +361,7 @@ in-flight retries is parked in the local database and replayed **oldest-first**
 when the network returns (bounded so a months-long outage can't fill the disk).
 Detection never blocks on the network. Watch the
 `birdnet_outbound_queue_depth{kind="birdweather"}` gauge and the "Queued
-Uploads" figure on [Station → Health](../admin/system.md); full mechanics are in the
+Uploads" figure on [Settings → Health](../admin/system.md); full mechanics are in the
 [Field Deployment Runbook](../field/deployment.md#9-remote-diagnostics-and-monitoring).
 
 ### Self-hosted ingest (sensitive species)

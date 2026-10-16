@@ -1,6 +1,6 @@
 # Audio & Microphones
 
-Microphone setup is the single most common support topic, so it gets its own tab (**Station → Capture**, `/station/capture`; the old `/admin/audio` redirects there) designed to be bulletproof.
+Microphone setup is the single most common support topic, so it gets its own tab (**Settings → Capture**, `/station/capture`; the old `/admin/audio` redirects there) designed to be bulletproof.
 
 ![The audio settings page](../images/admin-audio.png)
 
@@ -360,7 +360,7 @@ For **saved clips** the equivalent is `--freq-shift-hz` (config key
 Clips are written at whatever level the microphone delivered, and a gallery of
 them recorded across a season is not level: the listener rides the volume
 control between every one, and a quiet clip at the end of a playlist gets
-missed. **Settings → Audio Capture → Normalise Clip Loudness** fixes that. It
+missed. **Settings → Capture → Audio Capture → Even out clip volume** fixes that. It
 measures each saved clip's integrated loudness (ITU-R BS.1770, the measurement
 behind EBU R128) and applies a single gain.
 

@@ -131,7 +131,7 @@ shadow and switches the ring to a faint light edge.
 ## Spacing & density
 
 Padding is derived from a single `--density` multiplier, so the operator's
-density preference (Settings → display) rescales the whole UI by changing one
+density preference (**Settings → General → Display**) rescales the whole UI by changing one
 value rather than re-spacing every component.
 
 | Token | Value | Use |

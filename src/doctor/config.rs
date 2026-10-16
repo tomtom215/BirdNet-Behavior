@@ -54,9 +54,10 @@ pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Chec
         "Station location",
         "no latitude/longitude set — every species in the model stays a candidate",
         "the occurrence filter cannot run without coordinates, so detections will \
-         include birds that do not occur near you. Set it on the dashboard \
-         (Settings → Location has a detect button), or put LATITUDE / LONGITUDE \
-         in the config and restart",
+         include birds that do not occur near you. Set it in the setup \
+         wizard (its Location step has a button that looks it up) or under \
+         Settings → Capture → Location & Recording Schedule, or put LATITUDE / \
+         LONGITUDE in the config and restart",
     )
 }
 
@@ -133,7 +134,7 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
                 "{} is present but the station has no coordinates, so the model cannot run and filtering is off",
                 model.display()
             ),
-            "the model takes latitude and longitude as two of its three inputs: set them on the dashboard (Settings → Location has a detect button) or put LATITUDE / LONGITUDE in the config and restart",
+            "the model takes latitude and longitude as two of its three inputs: set them in the setup wizard (its Location step has a button that looks it up) or under Settings → Capture → Location & Recording Schedule, or put LATITUDE / LONGITUDE in the config and restart",
         );
     }
 

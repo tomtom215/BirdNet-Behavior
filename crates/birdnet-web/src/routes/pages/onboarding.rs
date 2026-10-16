@@ -256,7 +256,7 @@ fn render_password_step(step: PasswordStep) -> String {
             {error}
             <div class="ob-field"><label for="ob-password-1">Password (at least {MIN_PASSWORD_LEN} characters)</label><input id="ob-password-1" name="password" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
             <div class="ob-field"><label for="ob-password-2">Password again</label><input id="ob-password-2" name="password_confirm" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
-            <p class="bnb-meta" id="ob-password-hint">Change it any time under Settings → Accounts.</p>
+            <p class="bnb-meta" id="ob-password-hint">Change it any time under Settings → Access.</p>
           </div>"#
     )
 }

@@ -8,7 +8,7 @@ http://<your-ip>:8502
 
 > Not sure of your Pi's IP? Run `hostname -I` on the Pi, or check your router's device list.
 
-The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; the **Admin** panel, the Station management tabs and every action that changes something do. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `admin`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
+The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; the **Admin** panel, the Settings management tabs and every action that changes something do. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `admin`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
 
 If you set your latitude/longitude and an audio source, detections start appearing within a minute or two of the first bird call — no further configuration required.
 
@@ -29,9 +29,9 @@ If you'd like a guided setup, open **`/onboarding`** for a six-step wizard — l
 
 ![The first-run onboarding wizard](../images/onboarding.png)
 
-The **Microphone** step reports the capture source your station is actually configured with, read from its own settings — it does not change it (Settings → Audio owns that, with the full ALSA/RTSP handling). If nothing is configured, it says so plainly, because a station with no source detects nothing.
+The **Microphone** step reports the capture source your station is actually configured with, read from its own settings — it does not change it (**Settings → Capture** owns that, with the full ALSA/RTSP handling). If nothing is configured, it says so plainly, because a station with no source detects nothing.
 
-The **Accuracy** step sets the minimum confidence a detection needs before it is recorded. It defaults to **0.75**, deliberately a little above BirdNET-Pi's 0.70: high enough that the log reads as realistic rather than padded with marginal IDs, low enough that quiet and distant birds still get recorded. Change it there, or later under **Settings → Detection** (where per-species thresholds also live).
+The **Accuracy** step sets the minimum confidence a detection needs before it is recorded. It defaults to **0.75**, deliberately a little above BirdNET-Pi's 0.70: high enough that the log reads as realistic rather than padded with marginal IDs, low enough that quiet and distant birds still get recorded. Change it there, or later under **Settings → Capture → Detection Settings** (where per-species thresholds also live).
 
 ![The wizard's detection-accuracy step](../images/onboarding-accuracy.png)
 

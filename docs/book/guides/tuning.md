@@ -251,7 +251,7 @@ indistinguishable, to this filter, from an artefact.
 Two places on the web UI turn your own review history into advice. Both only
 ever suggest; nothing changes until you press the button.
 
-**Suggested thresholds** (Station → Capture → Species). For each species you have both
+**Suggested thresholds** (Settings → Capture → Species). For each species you have both
 confirmed and rejected detections of, the station works out the threshold that
 best separates the two, and shows what it would have cost (confirmations lost)
 and caught (rejections stopped) against the reviews it came from. Suggestions
@@ -263,7 +263,7 @@ and bad detections for one species is worth far more than reviewing many of
 either alone: with only confirmations the best answer is "admit everything",
 which is not a threshold.
 
-**Species that may not be birds** (Station → Data). Flags species by the
+**Species that may not be birds** (Settings → Data). Flags species by the
 *shape* of their detections rather than by name: every review rejected, never
 detected confidently, confidence that never varies, many detections on very few
 days. Two of those signals have to agree before a species is listed, and it
@@ -288,6 +288,6 @@ birdwatchers. An unmarked row is not a row eBird disagrees with.
 4. If false positives dominate: nudge the **confidence threshold** up by 0.05, and use the **noise filter** if a particular non-bird sound (a dog, a siren) is the cause.
 5. Add **per-species overrides** for the one or two species generating the most noise.
 6. Turn on **quarantine** for rare birds so you can keep recall high without losing trust in the log.
-7. Review a mixture of good and bad detections for a week, then check the **suggested thresholds** on the Species page and the **suspect species** list under Station → Data — by then both have something to say.
+7. Review a mixture of good and bad detections for a week, then check the **suggested thresholds** on the Species page and the **suspect species** list under **Settings → Data** — by then both have something to say.
 
 > Everything here is reversible and stored in the database, so experiment freely — and remember to change just one knob at a time.

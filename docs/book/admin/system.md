@@ -1,6 +1,6 @@
 # Station Health
 
-The Station **Health** tab (`/station`) is the station's vital-signs monitor — the operator's "is it working?" screen, and the public, login-free heir to the old `/system` page (which now permanently redirects here).
+The Settings **Health** tab (`/station`) is the station's vital-signs monitor — the operator's "is it working?" screen, and the public, login-free heir to the old `/system` page (which now permanently redirects here).
 
 ![The Station Health tab](../images/system-health.png)
 

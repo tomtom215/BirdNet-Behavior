@@ -165,6 +165,6 @@ These are stored in the SQLite settings table and have no environment variable o
 
 > **Retention is off by default.** Nothing is deleted by age unless you ask for it: set **Keep Clip Audio (days)** in the UI (`CLIP_RETENTION_DAYS`) to reclaim the audio of older detections. Independently of that, the disk manager purges the oldest recordings once the disk hits `DISK_PURGE_THRESHOLD` (default 95%) and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species. Pin clips you want to keep with the **lock** action on any detection — locked clips are never purged by either limit.
 >
-> All three limits, plus the temporary streaming folder's retention and size ceiling, can be set from **Settings → System** in the web UI; you never have to edit a config file to change them. A value given on the command line or as a `BIRDNET_*` variable wins over the UI, which in turn wins over the config file.
+> All three limits, plus the temporary streaming folder's retention and size ceiling, can be set from **Settings → General → System & Display** in the web UI; you never have to edit a config file to change them. A value given on the command line or as a `BIRDNET_*` variable wins over the UI, which in turn wins over the config file.
 >
 > When a clip is purged the detection itself is kept — its filename and the date the audio was reclaimed stay on the record, so counts, species lists, trends and exports are unaffected. Only the audio goes.

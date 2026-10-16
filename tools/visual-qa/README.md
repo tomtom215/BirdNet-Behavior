@@ -65,9 +65,16 @@ When adding a control that starts slow work, add a case here.
 ```bash
 BASE=http://127.0.0.1:8502 node book.mjs         # -> docs/book/images/*.png (desktop)
 BASE=http://127.0.0.1:8502 node book-mobile.mjs  # -> docs/book/images/mobile/*.png
-BASE=http://127.0.0.1:8502 node share.mjs        # share-page__light__desktop.png (needs BNB_SHARE_SECRET)
+BASE=http://127.0.0.1:8502 node book-onboarding.mjs   # -> docs/book/images/onboarding-accuracy.png
+BASE=http://127.0.0.1:8502 node share.mjs        # share-page__light__desktop.png
 cp shots/share-page__light__desktop.png ../../docs/book/images/share-page.png
 ```
+
+`DETAIL_NAME`, `DETAIL_DATE` and `DETAIL_TIME` pick the detection that `book.mjs`,
+`book-mobile.mjs` and `share.mjs` open. It has to be one the fixture holds *and*
+one whose clip exists (the fixture writes audio for its newest 20): the old
+`detection-detail.png` was the "Detection not found" page for a time the
+fixture never seeded, and nothing said so.
 
 ## Full QA sweep
 

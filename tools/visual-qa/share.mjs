@@ -1,7 +1,7 @@
 // Capture the share-link flow: a real /r/{token} page (issued from the
 // detection-detail "Share clip" button), the tampered-token "gone" page, and
 // the branded 404 — in light + dark. Set BNB_SHARE_SECRET on the server so the
-// token is stable. Requires a detection at the date/time/species below.
+// token is stable. Needs a detection with a clip: DETAIL_NAME/DATE/TIME.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,11 +11,18 @@ const OUT = process.env.OUT || 'shots';
 const enc = encodeURIComponent;
 const T = new Date();
 const TODAY = `${T.getUTCFullYear()}-${String(T.getUTCMonth() + 1).padStart(2, '0')}-${String(T.getUTCDate()).padStart(2, '0')}`;
-const DETAIL = `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`;
+// A detection the fixture really holds, and one whose clip exists: the share
+// page renders the spectrogram from the file, so a row with no clip on disk
+// gives a page with an empty player. book.mjs reads the same three knobs.
+const DETAIL_NAME = process.env.DETAIL_NAME || 'Northern Cardinal';
+const DETAIL_DATE = process.env.DETAIL_DATE || TODAY;
+const DETAIL_TIME = process.env.DETAIL_TIME || '14:26:54';
+const DETAIL = `/detections/detail?date=${DETAIL_DATE}&time=${DETAIL_TIME}&name=${enc(DETAIL_NAME)}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 fs.mkdirSync(OUT, { recursive: true });
-const browser = await chromium.launch();
+// Same knob as book.mjs / qa.mjs: sandboxes ship their own Chromium.
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 
 for (const theme of ['light', 'dark']) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: theme });

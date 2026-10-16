@@ -19,7 +19,7 @@ By default the station listens **all day**. To record only during chosen windows
 BIRDNET_RECORDING_SCHEDULE=all-day      # default
 ```
 
-The same choice is on **Settings → Location & Recording Schedule**. Set the
+The same choice is on **Settings → Capture → Location & Recording Schedule**. Set the
 variable only to pin it: an environment variable wins over the settings page,
 which then shows your choice while the station runs this one.
 

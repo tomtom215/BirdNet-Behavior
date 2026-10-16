@@ -803,6 +803,19 @@ async fn main() {
     // Labels match the seeded detection sources so "detections today" merges.
     let state = state.with_capture_status(seed_capture_status());
 
+    // The per-source `audio_source_up` gauge is what the dashboard pill, the
+    // header badge and the Today rail grade the station on, and the shipped
+    // binary publishes it from the supervisor. Without it the fixture read as
+    // "Not recording" on every page, and the documentation screenshots taken
+    // from it showed a warning pill over a healthy-looking feed. The values
+    // match the three seeded cards: the local mic is up, both cameras are not.
+    for (source, up) in [("local", true), ("RTSP_1", false), ("RTSP_2", false)] {
+        state.metrics().set_source_up(source, up);
+    }
+    state
+        .detection_status_flag()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
     // Drop synthetic bird-call WAVs at the newest clips' paths so the
     // Recordings grid shows real spectrogram thumbnails (the route renders from
     // these and caches the PNGs under the data dir's `spectrograms/`).
