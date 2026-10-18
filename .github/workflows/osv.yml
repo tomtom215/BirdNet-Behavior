@@ -37,7 +37,7 @@ jobs:
   scan:
     name: OSV-Scanner (lockfiles)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 20  # observed 26s
     permissions:
       actions: read
       contents: read

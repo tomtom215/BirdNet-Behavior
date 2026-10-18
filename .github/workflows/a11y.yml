@@ -104,6 +104,15 @@ jobs:
         # 1440 and 390 px. Labels authored at 8 px rendered at 2.7-5 px on a
         # phone while axe, the sweep and every screenshot called the pages clean.
         run: node legibility.mjs
+      - name: Layout gate self-test (clipped text is not overlap; painted overlap is)
+        working-directory: tools/visual-qa
+        # The gate measured a species name cut off by `overflow: hidden` and an
+        # ellipsis as running under the play button beside it, because a text
+        # run's box includes what is not painted. It failed this job on the first
+        # CI run of the gate, on a day whose seeded feed held a long name. This
+        # holds both directions: the clipped name is not reported, two painted
+        # lines over each other are.
+        run: node layout-selftest.mjs
       - name: Layout gate (nothing overlaps, squeezes or escapes its card)
         working-directory: tools/visual-qa
         # What axe cannot see: text drawn over text or over a form control, a

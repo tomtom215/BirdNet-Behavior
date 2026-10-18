@@ -584,6 +584,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The layout gate no longer reports text that is cut off and not drawn.** On the first
+  CI run of the gate (this branch added it) the A11y job failed: on a phone, the Today
+  feed's "Ruby-throated Hummingbird" overlapped the play button beside it. The name is
+  `overflow: hidden` with an ellipsis, so nothing is painted past its box; the gate
+  measured the text run, which `Range.getClientRects` reports in full. It never showed
+  locally because the fixture's feed is seeded from the date and the name was not in view
+  until that day. The gate now clips each text rect to every ancestor that clips its
+  overflow. `layout-selftest.mjs` (a new step of the A11y job) holds both directions
+  against the fixture: it failed first (the clipped name was reported, 9x6 px, as in CI)
+  and passes, and a painted overlap of the same row's two lines is still reported. The
+  full gate then graded all 152 page states clean on the day's data.
+- **Six stale `# observed` job durations.** `scripts/check-ci-config.py` compares them
+  with the default branch's recent runs and failed the *Mutation testing* workflow's
+  "CI config" job on `ci.yml` (`fmt`), `supply-chain.yml` (`cargo-machete`) and four jobs
+  that had none (`osv.yml`, `scorecard.yml`, `third-party-notices`, `publishable`). Written
+  by the script's own updater from the values that job printed, not by hand: it needs a
+  token this machine does not have, so the durations are the CI log's, not re-read.
 - **Three small workflow defects, from a read of the workflows; none was observed
   failing, because a workflow cannot run here.** `coverage.yml`'s Codecov step tested
   `env.CODECOV_TOKEN` in its own `if` while setting that variable in its own `env:`,

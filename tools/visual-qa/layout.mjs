@@ -42,6 +42,7 @@
 //
 // Exits non-zero on any finding. Run from this directory:
 //   BASE=http://127.0.0.1:8502 node layout.mjs
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { ROUTES } from './qa.mjs';
 
@@ -72,6 +73,29 @@ function inPage() {
   const SKIP =
     'script,style,noscript,svg,option,[aria-hidden="true"],.bnb-skel,.sr-only,[hidden],dialog:not([open]),template,[class*="tabbar"]';
 
+  // What of a text run is painted. `Range.getClientRects` reports the whole run
+  // even where an `overflow: hidden` box cuts it off, so a species name too long
+  // for its phone column (ellipsised, and nothing drawn past the box) measured as
+  // running under the play button beside it. Clip each rect to every ancestor,
+  // the text's own element included, that clips its overflow.
+  const visible = (el, rects) => {
+    let out = rects.map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom }));
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+      const c = n.getBoundingClientRect();
+      out = out.map((r) => ({
+        left: Math.max(r.left, cs.overflowX === 'visible' ? -Infinity : c.left),
+        right: Math.min(r.right, cs.overflowX === 'visible' ? Infinity : c.right),
+        top: Math.max(r.top, cs.overflowY === 'visible' ? -Infinity : c.top),
+        bottom: Math.min(r.bottom, cs.overflowY === 'visible' ? Infinity : c.bottom),
+      }));
+    }
+    return out
+      .map((r) => ({ ...r, width: r.right - r.left, height: r.bottom - r.top }))
+      .filter((r) => r.width > 0 && r.height > 0);
+  };
+
   const items = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -81,7 +105,7 @@ function inPage() {
     if (el.closest('details:not([open])') && !el.closest('summary')) continue;
     const rg = document.createRange();
     rg.selectNodeContents(n);
-    const rects = [...rg.getClientRects()].filter((r) => r.width > 1 && r.height > 1);
+    const rects = visible(el, [...rg.getClientRects()]).filter((r) => r.width > 1 && r.height > 1);
     if (!rects.length) continue;
     items.push({ el, rects, txt: n.nodeValue.trim().slice(0, 36), size: parseFloat(getComputedStyle(el).fontSize) });
   }
@@ -293,7 +317,12 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+export { inPage };
+
+// Imported by layout-selftest.mjs for `inPage`; only a direct run grades routes.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

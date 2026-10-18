@@ -42,7 +42,7 @@ jobs:
   fmt:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 18s
+    timeout-minutes: 10  # observed 10s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + rustfmt)

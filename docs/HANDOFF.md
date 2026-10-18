@@ -123,7 +123,10 @@ What the commits are, each with its red/green evidence in its message:
 
 How far each was checked is in [`CHANGELOG.md`](../CHANGELOG.md) under
 *Unreleased*, entry by entry. What follows is the last session's own run, on `df086a9`
-(the commit after it only removes a scratch file from `docs/book/images/mobile/`).
+and, for the whole of the gate below, again on `b81c3b3` (same counts) after the
+lockfile update in the CHANGELOG's *Security* section. The commits after those change
+documentation, workflow YAML, the shellcheck and spelling configuration and
+`tools/visual-qa` only.
 
 - **Static:** `cargo fmt --check --all`; `cargo clippy --workspace --all-targets -- -D warnings`
   with default features and with `--all-features`; `RUSTDOCFLAGS="-D warnings" cargo doc
