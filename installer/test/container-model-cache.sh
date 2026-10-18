@@ -269,7 +269,11 @@ run_acquire() {
         }
         mkdir() { :; }
         unset BIRDNET_SKIP_MODEL_DOWNLOAD
-        BIRDNET_MODEL="$1"; BIRDNET_LABELS="$2"
+        # shellcheck disable=SC2034  # read by the sourced function
+        {
+            BIRDNET_MODEL="$1"
+            BIRDNET_LABELS="$2"
+        }
         acquire_default_models
     ) 2>&1
 }

@@ -29,6 +29,11 @@ extend-exclude = [
     # Bird names in 35 languages, byte for byte from BirdNET-Pi's tables; the
     # README beside them is made of the same names.
     "crates/birdnet-core/data/l18n/**",
+    # Reference outputs of BirdNET-Pi's own code and of the ONNX and TFLite
+    # models, written by tools/parity byte for byte and pinned by
+    # arrays.sha256: scientific names (afer, americanus, mexicanus, varius) and
+    # hashes. Editing one to please a spell-checker would change what it proves.
+    "tools/parity/golden/**",
     # Vendored / minified JS (htmx, etc.) — too dense for spell-check and
     # not our code to fix.
     "**/static/htmx.min.js",
@@ -113,6 +118,16 @@ extend-ignore-re = [
     # Same shape as `confidence_treshold`: the misspelling is the fixture, and
     # it is matched as the whole token so "lattitude" stays caught elsewhere.
     'LATTITUDE',
+    # `soundscape_ba_12s` is the parity harness's id for BirdNET-Analyzer's
+    # example soundscape (`ba` = BirdNET-Analyzer), in its fixtures, README and
+    # reference file names. Whole token, so a real "ba" for "by" stays caught.
+    'soundscape_ba_[0-9]+s',
+    # A bare run of 16 or more hex digits is a hash, never prose. typos splits
+    # one at its first digit and reads a leading `ba`/`ede`/`ded` as a word; the
+    # existing rule covers only backticked hashes of 7 to 40 digits.
+    '\b[0-9a-f]{16,64}\b',
+    # A hash cited by its first eight digits and an ellipsis: `5c64ba3f...`.
+    '\b[0-9a-f]{8}\.\.\.',
     # `BIRDNET_PUBLIC_ACCESS` refuses a carve-out name that does not exist,
     # because a misspelt `live_audo` silently dropping the one carve-out the
     # operator meant is the failure private mode exists to prevent. The

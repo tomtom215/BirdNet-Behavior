@@ -140,11 +140,14 @@ if [ -z "${block}" ]; then
 else
     scratch="$(mktemp -d)"
     (
-        cd "${scratch}"
+        cd "${scratch}" || exit 1
         umask 022
         hdr() { :; }; ok() { :; }; fail() { echo "writer failed: $*" >&2; exit 1; }
-        LAT=51.5; LON=-0.1; STATION_TZ=UTC; AUDIO_KIND=rtsp
-        AUDIO_VALUE='rtsp://u:p@cam.lan/s'; IMAGE_TAG=latest
+        # shellcheck disable=SC2034  # read by the eval'd writer block
+        {
+            LAT=51.5; LON=-0.1; STATION_TZ=UTC; AUDIO_KIND=rtsp
+            AUDIO_VALUE='rtsp://u:p@cam.lan/s'; IMAGE_TAG=latest
+        }
         eval "${block}"
         touch after-the-writer && stat -c %a after-the-writer > mode-after
     )

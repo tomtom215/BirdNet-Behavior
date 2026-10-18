@@ -192,9 +192,9 @@ mod tests {
     fn a_sealed_tag_is_redeemed_for_the_nonce_and_a_reflected_one_is_not() {
         let authored = seal("<script>ours()</script><script src=\"/a.js\" defer></script>");
         let page = format!("{authored}<p><script>theirs()</script></p>");
-        let out = redeem(&page, "N0NCE");
-        assert!(out.contains("<script nonce=\"N0NCE\">ours()"));
-        assert!(out.contains("<script nonce=\"N0NCE\" src=\"/a.js\" defer>"));
+        let out = redeem(&page, "test-nonce");
+        assert!(out.contains("<script nonce=\"test-nonce\">ours()"));
+        assert!(out.contains("<script nonce=\"test-nonce\" src=\"/a.js\" defer>"));
         assert!(
             out.contains("<p>&lt;script>theirs()"),
             "a tag nobody sealed must be defanged, not merely left bare: {out}"
