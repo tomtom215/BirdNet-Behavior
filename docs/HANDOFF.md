@@ -29,6 +29,15 @@ since 2026-08-09 and not looked at.
 
 ## 2. Decisions that are the maintainer's
 
+- **Fifteen CodeQL alerts on pull request #262** ("hard-coded cryptographic value",
+  alerts 139–153, reported critical). All fifteen sit on literals in test code: five
+  passwords in `#[cfg(test)]` tests in `crates/birdnet-db/src/accounts/users.rs`, one
+  password in an integration test under `crates/birdnet-web/tests/`, and nine fixed
+  nonces handed to `seal::redeem` in tests (production mints a random one per request,
+  `security.rs`). Nothing was changed for them and each thread has a reply saying so.
+  Dismissing them as "used in tests" in the Security tab, or restructuring the tests,
+  is yours; until then the `CodeQL` check on that pull request stays red. Whether `main`
+  already carries open alerts of the same kind was not readable from here.
 - **The default classifier.** It is BirdNET+ V3.0 preview: a different network from
   the one BirdNET-Pi and birdnet-go run (V2.4), with different windows, calibrated
   probabilities and 11 560 species. The same audio does **not** give BirdNET-Pi's
@@ -183,16 +192,25 @@ documentation, workflow YAML, the shellcheck and spelling configuration and
 - **cargo-mutants**, partly: 28 of the 281 mutants the workflow's six shards divide
   (everything in `crates/birdnet-core/src/audio/extraction/convert.rs`), run on a copy
   of the tree with `--lib` as the workflow does, in 11 minutes: 24 caught, 4
-  unviable, 0 missed. The workflow itself has not run.
+  unviable, 0 missed. The workflow has since run on GitHub on pull request #262 (head
+  `d713ec8`): its `CI config` job and all 32 matrix jobs finished success. A pull
+  request runs with `--in-diff`, so each job mutated only lines this branch changed,
+  and the two unsharded rows' sticky comments read "Total mutants 0" with blank cells,
+  which is consistent with the `Summarise mutants` step's path for an absent
+  `mutants.out/outcomes.json` (it sets `total` only); that was read from the workflow
+  file, not confirmed in a log. What those jobs mutated was not read from their
+  logs, so a green row there says the gate did not fail, not that mutants were caught.
 
 **Not run, anywhere:** the release workflow (read against a real toolchain and fixed;
-not executed); building or pushing the Docker image (no daemon on this machine);
-`cargo-mutants` over the other 253 mutants; the BirdNET-Pi FP16 model on a Raspberry Pi
+not executed); pushing the Docker image (`docker.yml` built the amd64 and arm64
+images on pull request #262, head `d713ec8`, and skipped the manifest merge and push,
+as it does for a pull request; there is no daemon on this machine); `cargo-mutants`
+over the other 253 mutants; the BirdNET-Pi FP16 model on a Raspberry Pi
 (the parity numbers are against its FP16 TFLite model on an x86 machine); a verifying
 `cargo package` of any crate (it was packaged with `--no-verify`, so the bundled
 DuckDB build of a packaged crate was not run); anything on Raspberry Pi hardware;
-the OIDC attestation, `ubuntu-24.04-arm` and macOS jobs; the install one-liner end to
-end; `cargo publish`.
+the OIDC attestation and the macOS jobs (the `ubuntu-24.04-arm` test job did run on
+pull request #262 and passed); the install one-liner end to end; `cargo publish`.
 
 **Observed while rendering the manual's pictures, not changed:**
 
@@ -276,9 +294,10 @@ Not done, in the order they seem to matter:
 - **The browser sweeps grade a populated station.** axe, `qa.mjs` and `layout.mjs`
   run against a fixture that has detections, so a page's empty state is only reached
   where a fixture happens to be empty.
-- **Workflows that have not run as a whole:** `release.yml`, `docker.yml` and
-  `mutation.yml` were read and their non-publishing parts run (section 3), not
-  executed as workflows. The others have run on GitHub: `codeql.yml` (two runs on
+- **Workflows that have not run as a whole:** `release.yml` was read and its
+  non-publishing parts run (section 3), not executed as a workflow. `docker.yml`
+  (build jobs) and `mutation.yml` have run on pull request #262, without the parts that
+  need a push to `main` or a tag (section 3). The others have run on GitHub: `codeql.yml` (two runs on
   `main`, both success), `scorecard.yml` (two, both success), `osv.yml` (thirteen on
   `main`; the scheduled runs of 2026-10-17 and 2026-10-18 failed, and the log of the
   second names RUSTSEC-2026-0367, -0368 and -0369 on `zip 6.0.0`, which this
