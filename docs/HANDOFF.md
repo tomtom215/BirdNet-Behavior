@@ -276,10 +276,15 @@ Not done, in the order they seem to matter:
 - **The browser sweeps grade a populated station.** axe, `qa.mjs` and `layout.mjs`
   run against a fixture that has detections, so a page's empty state is only reached
   where a fixture happens to be empty.
-- **Workflows that have never run on GitHub:** `codeql.yml`, `osv.yml`,
-  `scorecard.yml` and `fuzz.yml` were adapted or written without a first run;
-  `release.yml`, `docker.yml` and `mutation.yml` were read and their non-publishing
-  parts run (section 3), not executed as workflows. Left unchanged from that read:
+- **Workflows that have not run as a whole:** `release.yml`, `docker.yml` and
+  `mutation.yml` were read and their non-publishing parts run (section 3), not
+  executed as workflows. The others have run on GitHub: `codeql.yml` (two runs on
+  `main`, both success), `scorecard.yml` (two, both success), `osv.yml` (thirteen on
+  `main`; the scheduled runs of 2026-10-17 and 2026-10-18 failed, and the log of the
+  second names RUSTSEC-2026-0367, -0368 and -0369 on `zip 6.0.0`, which this
+  branch's `duckdb` bump clears; the first's log was not read) and `fuzz.yml` (green on
+  this pull request's heads, no run on `main`). Read from the Actions run lists on
+  2026-10-18, not from the logs of each. Left unchanged from that read:
   the release SemVer check accepts build metadata (`+…`), which a Docker tag cannot
   carry, so a tag like `v1.2.3+x` would pass validation and then fail to publish the
   image (read from the regular expression in `release.yml`, not run).
