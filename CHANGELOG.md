@@ -1221,6 +1221,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`duckdb` / `libduckdb-sys` 1.10506.0 → 1.10506.1, which takes the build-time `zip`
+  from 6.0.0 to 9.0.5.** Three RustSec advisories against `zip` 6.0.0
+  (RUSTSEC-2026-0367, -0368, -0369: `ZipArchive::extract` and
+  `ZipStreamReader::extract` creating symlinks and applying permissions outside the
+  destination, fixed in 9.0.0) failed `cargo deny`, `cargo audit` and OSV-Scanner on
+  this branch's first pull request; `main` carries the same lockfile entry, so its
+  next scheduled run would have failed too. `zip` is a build-dependency of
+  `libduckdb-sys` only, and the call that extracts an archive sits in the build
+  script's `not(feature = "bundled")` module, which this project's builds never
+  compile (`duckdb` is built with `bundled`); so nothing here was exploitable, and
+  the binary never contained the crate. The DuckDB engine is unchanged (the `10506`
+  component is 1.5.6, so the extension pins hold), and the lockfile diff is exactly
+  `zip`, the two bindings, `nix` and `typed-path` added and `arbitrary` /
+  `derive_arbitrary` dropped (all MIT or MIT/Apache). `birdnet-behavioral` and
+  `birdnet-timeseries` pass against the new binding.
 - **The install one-liner no longer runs the development branch as root.** README, the
   manual, the architecture notes, the installer's usage text and its sudo error messages
   told readers to pipe `raw.githubusercontent.com/…/main/install.sh` into `sudo bash`:
