@@ -1459,9 +1459,9 @@ pub const MIGRATIONS: &[Migration] = &[
         // A row per (date, hour, source, band) is 30 rows an hour per source
         // rather than one — about 260 000 rows a year for a single-microphone
         // station. That is still small, and it is the shape that survives the
-        // band set changing: a station running at 22.05 kHz measures 27 bands
+        // band set changing: a station running at 22.05 kHz measures 26 bands
         // and one at 48 kHz measures 30, so a fixed 30-column table would carry
-        // three columns that are NULL for some stations and not others, and a
+        // four columns that are NULL for some stations and not others, and a
         // 32 kHz station added later would need a migration to widen it.
         //
         // Accumulated the same way `audio_levels` is — running sums plus a
@@ -2282,6 +2282,29 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE audio_sources
                      ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'full'
                      CHECK (media_mode IN ('full','audio'));",
+    },
+    Migration {
+        version: 54,
+        description: "Index detections by species and date, so \"has this species been heard before\" is a seek",
+        // The question behind the rare-bird feeds, the first-detection badge and
+        // the species pages is "was this species heard before this date?", and
+        // every index that could answer it led with `Date` (`idx_detections_date_species`)
+        // or with the species alone (`idx_detections_species`). So each probe
+        // walked every row of the species, once per candidate row: the
+        // rare-bird feed took 3.25 s on a 300 000-detection station, and its
+        // `rare_species_days = 0` form (a `MIN(Date)` per row) 300 s. With this
+        // index and the date window written into the query
+        // (`routes/feeds.rs`), 0.94 s and 0.96 s, identical rows. The index
+        // alone made the old predicate slower (17 s): the planner then walked
+        // each species from its first day, which is why the two travel together.
+        //
+        // **Cost**, on that station: 0.30 s to build (about a second per million
+        // rows, once, at the first start after this release), 8.2 MB on a 147 MB
+        // database (5.6 %), and no measurable change to inserts (2 000 rows in
+        // 77 ms with it, 82 ms without). Measured with SQLite 3.45.1 on a desktop
+        // SSD; an SD card builds slower and then never again.
+        up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_species_date
+                     ON detections(Com_Name, Date);",
     },
 ];
 

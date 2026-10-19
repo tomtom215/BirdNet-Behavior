@@ -7,8 +7,8 @@ usage() {
 BirdNet-Behavior installer
 
 Linux / Raspberry Pi (installs a systemd service, so it needs root):
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version X.Y.Z
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version X.Y.Z
 
 From a saved copy of this script:
   sudo bash install.sh [--version X.Y.Z]

@@ -122,7 +122,7 @@ async fn top_species(
 
     let result: Result<Result<Vec<SpeciesCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| birdnet_db::sqlite::top_species(conn, limit))
+            state.with_read_db(|conn| birdnet_db::sqlite::top_species(conn, limit))
         })
         .await;
 
@@ -186,7 +186,7 @@ async fn search_species(
 
     let result: Result<Result<Vec<SpeciesCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| birdnet_db::sqlite::search_species(conn, &search, limit))
+            state.with_read_db(|conn| birdnet_db::sqlite::search_species(conn, &search, limit))
         })
         .await;
 
@@ -233,7 +233,7 @@ async fn species_detail(
     let name = query.name;
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let summary = birdnet_db::sqlite::species_summary(conn, &name)?;
             let hourly = birdnet_db::sqlite::species_hourly_activity(conn, &name)?;
             Ok::<_, DbError>((summary, hourly))
@@ -300,7 +300,7 @@ async fn hourly_activity(
 
     let result: Result<Result<Vec<HourlyCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &date))
+            state.with_read_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &date))
         })
         .await;
 

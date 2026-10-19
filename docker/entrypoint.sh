@@ -155,8 +155,10 @@ GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d951605915
 GEOMODEL_UPSTREAM_BASE="${BIRDNET_GEOMODEL_BASE:-https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}}"
 
 # Respect explicit overrides; otherwise use the default paths under MODEL_DIR.
-: "${BIRDNET_MODEL:=${MODEL_DIR}/${MODEL_FILE}}"
-: "${BIRDNET_LABELS:=${MODEL_DIR}/${LABELS_FILE}}"
+MODEL_DEFAULT="${MODEL_DIR}/${MODEL_FILE}"
+LABELS_DEFAULT="${MODEL_DIR}/${LABELS_FILE}"
+: "${BIRDNET_MODEL:=${MODEL_DEFAULT}}"
+: "${BIRDNET_LABELS:=${LABELS_DEFAULT}}"
 export BIRDNET_MODEL BIRDNET_LABELS
 
 # Deliberately NOT defaulted here. An operator who set these keeps them; one who
@@ -377,11 +379,21 @@ ensure_model_file() {
 # ---------------------------------------------------------------------------
 # Model auto-download driver
 # ---------------------------------------------------------------------------
-if [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
-    log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping model download."
-    [ -f "${BIRDNET_MODEL}"  ] || warn "Model not found at ${BIRDNET_MODEL}"
-    [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
-else
+# Fetch and verify the bundled V3.0 classifier and its labels, but only the files
+# this script manages: those at the default paths. A file the operator pointed
+# BIRDNET_MODEL / BIRDNET_LABELS at (a BirdNET V2.4 ONNX, Perch) is theirs. It
+# used to be checked against the V3.0 digest like any other, failed, was deleted
+# by `ensure_model_file`, and V3.0 bytes were then downloaded under the name of
+# the model the operator had chosen: their model gone, and a different one
+# running under its name with labels that do not match it.
+acquire_default_models() {
+    if [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
+        log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping model download."
+        [ -f "${BIRDNET_MODEL}"  ] || warn "Model not found at ${BIRDNET_MODEL}"
+        [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
+        return 0
+    fi
+
     mkdir -p "${MODEL_DIR}"
 
     # Announce the model source once, up front, so users know what's happening
@@ -389,22 +401,34 @@ else
     log "BirdNET+ V3.0 model directory: ${MODEL_DIR}"
     log "Source: GitHub models release ${MODEL_RELEASE_TAG} (sha256-verified), Zenodo fallback."
 
-    ensure_model_file \
-        "${BIRDNET_MODEL}" \
-        "${GH_BASE}/${MODEL_FILE}" \
-        "${ZENODO_BASE}/${MODEL_FILE}/content" \
-        "${MODEL_SHA256}" \
-        "BirdNET+ V3.0 model (ONNX)"
+    if [ "${BIRDNET_MODEL}" = "${MODEL_DEFAULT}" ]; then
+        ensure_model_file \
+            "${BIRDNET_MODEL}" \
+            "${GH_BASE}/${MODEL_FILE}" \
+            "${ZENODO_BASE}/${MODEL_FILE}/content" \
+            "${MODEL_SHA256}" \
+            "BirdNET+ V3.0 model (ONNX)"
+    else
+        log "BIRDNET_MODEL=${BIRDNET_MODEL} is not the bundled V3.0 model — using it as supplied (not verified, never replaced)."
+        [ -f "${BIRDNET_MODEL}" ] || warn "Model not found at ${BIRDNET_MODEL}"
+    fi
 
-    ensure_model_file \
-        "${BIRDNET_LABELS}" \
-        "${GH_BASE}/${LABELS_FILE}" \
-        "${ZENODO_BASE}/${LABELS_FILE}/content" \
-        "${LABELS_SHA256}" \
-        "species labels CSV"
+    if [ "${BIRDNET_LABELS}" = "${LABELS_DEFAULT}" ]; then
+        ensure_model_file \
+            "${BIRDNET_LABELS}" \
+            "${GH_BASE}/${LABELS_FILE}" \
+            "${ZENODO_BASE}/${LABELS_FILE}/content" \
+            "${LABELS_SHA256}" \
+            "species labels CSV"
+    else
+        log "BIRDNET_LABELS=${BIRDNET_LABELS} is not the bundled V3.0 labels — using it as supplied (not verified, never replaced)."
+        [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
+    fi
 
     log "Model ready."
-fi
+}
+
+acquire_default_models
 
 # ---------------------------------------------------------------------------
 # Geomodel auto-download driver (non-fatal)

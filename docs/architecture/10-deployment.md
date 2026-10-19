@@ -109,7 +109,7 @@ The recommended path on a Raspberry Pi or bare-metal Linux host is the
 installer script bundled with each release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 ```
 
 The installer detects the host architecture, downloads the matching

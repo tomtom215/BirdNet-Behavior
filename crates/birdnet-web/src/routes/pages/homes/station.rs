@@ -78,11 +78,20 @@ pub(crate) fn station_subtabs(active: &str) -> String {
     // announcing the page had nothing to announce it as, and the heading order
     // started at level 2. Emitted here rather than per tab so it cannot be
     // forgotten by the next one added.
-    let label = TABS
+    //
+    // Named as the navigation names the section ("Settings"), read from the
+    // nav table so a rename cannot leave this heading behind: it said
+    // "Station — Health" for a section whose nav entry, page title and
+    // breadcrumbs all said "Settings".
+    let section = crate::routes::pages::nav::PRIMARY
         .iter()
-        .find(|t| t.key == active)
-        .map_or("Station", |t| t.label);
-    let _ = write!(out, r#"<h1 class="sr-only">Station — {label}</h1>"#);
+        .find(|p| p.key == "station")
+        .map_or("Settings", |p| p.label);
+    let heading = TABS.iter().find(|t| t.key == active).map_or_else(
+        || section.to_owned(),
+        |t| format!("{section} — {}", t.label),
+    );
+    let _ = write!(out, r#"<h1 class="sr-only">{heading}</h1>"#);
     out.push_str(r#"<nav class="bnb-subtabs" aria-label="Views" data-screen-label="Sub-tabs">"#);
     for t in TABS {
         let href = if t.key == "health" {

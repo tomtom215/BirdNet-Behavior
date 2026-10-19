@@ -191,7 +191,10 @@
   }
 
   /* ── Hyperlinks resolved inline ──────────────────────────────────── */
-  a[href]:not(.bnb-eyebrow):not(.action):not(.species-link):not([data-print-no-href])::after {
+  /* Absolute links only. A site-relative href ("/species/detail?name=Blue%20Jay")
+     means nothing on paper, and it was printed after every species name in the
+     Companions table and every footer link. */
+  a[href^="http"]:not(.bnb-eyebrow):not(.action):not(.species-link):not([data-print-no-href])::after {
     content: " (" attr(href) ")";
     color: var(--fg-3);
     font-size: 80%;

@@ -120,7 +120,7 @@ async fn gather(state: &AppState) -> Snapshot {
             .ok()
             .filter(|s| disk.as_ref().is_none_or(|d| d.total_bytes != s.total_bytes));
 
-        let read = state.with_db(|conn| {
+        let read = state.with_read_db(|conn| {
             let listed = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
             let sources = listed.iter().filter(|x| x.disabled_at.is_none()).count();
             let names: std::collections::HashMap<String, String> = listed
@@ -198,7 +198,7 @@ async fn gather(state: &AppState) -> Snapshot {
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_critical),
             service_uptime: system_info::process_uptime_secs(),
-            acoustic: state.with_db(|conn| {
+            acoustic: state.with_read_db(|conn| {
                 birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
             }),
             occurrence: state.metrics().occurrence_filter(),

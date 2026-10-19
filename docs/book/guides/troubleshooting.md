@@ -39,7 +39,7 @@ ss -tlnp | grep 8502
 sudo ufw allow 8502/tcp   # if you use the Ubuntu firewall
 ```
 
-No row from `ss` means the daemon never finished starting — see [Service won't start](#service-wont-start) above. If you deliberately restricted access, `BIRDNET_LISTEN` will be `127.0.0.1:8502` (reachable only from the Pi); set it back to `0.0.0.0:8502` for LAN access. Viewing the dashboard needs no login; `/admin*`, the Station management tabs and every action that changes something do — use the auto-generated password from the install summary (see [the admin password FAQ](./faq.md#how-do-i-find-or-reset-the-admin-password)).
+No row from `ss` means the daemon never finished starting — see [Service won't start](#service-wont-start) above. If you deliberately restricted access, `BIRDNET_LISTEN` will be `127.0.0.1:8502` (reachable only from the Pi); set it back to `0.0.0.0:8502` for LAN access. Viewing the dashboard needs no login; `/admin*`, the Settings management tabs and every action that changes something do — use the auto-generated password from the install summary (see [the admin password FAQ](./faq.md#how-do-i-find-or-reset-the-admin-password)).
 
 ## No detections appearing (bare metal)
 

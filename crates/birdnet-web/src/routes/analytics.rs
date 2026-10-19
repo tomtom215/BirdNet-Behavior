@@ -157,7 +157,7 @@ async fn sessions(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.sessionize(&params))
+            .with_analytics_read(|adb| adb.sessionize(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -227,7 +227,7 @@ async fn retention(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.retention(&params))
+            .with_analytics_read(|adb| adb.retention(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -286,7 +286,7 @@ async fn funnel(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.funnel(&params))
+            .with_analytics_read(|adb| adb.funnel(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -345,7 +345,7 @@ async fn funnel_events(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.funnel_events(&params))
+            .with_analytics_read(|adb| adb.funnel_events(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -412,7 +412,7 @@ async fn patterns(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.sequence_match(&params))
+            .with_analytics_read(|adb| adb.sequence_match(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -474,7 +474,7 @@ async fn sequence_count(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.sequence_count(&params))
+            .with_analytics_read(|adb| adb.sequence_count(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -543,7 +543,7 @@ async fn sequence_match_events(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.sequence_match_events(&params))
+            .with_analytics_read(|adb| adb.sequence_match_events(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -629,7 +629,7 @@ async fn next_species(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.next_species(&trigger, window, limit))
+            .with_analytics_read(|adb| adb.next_species(&trigger, window, limit))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -692,7 +692,7 @@ async fn previous_species(
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.previous_species(&trigger, window, limit))
+            .with_analytics_read(|adb| adb.previous_species(&trigger, window, limit))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -812,7 +812,7 @@ async fn run_phenology_query(
 ) -> (StatusCode, Json<Value>) {
     let (state, sql, label) = (state.clone(), sql.to_owned(), label.to_owned());
     let rows = tokio::task::spawn_blocking(move || {
-        state.with_analytics(|adb| {
+        state.with_analytics_read(|adb| {
             let mut stmt = adb.conn().prepare(&sql)?;
             let names: Vec<String> = stmt
                 .column_names()
@@ -902,7 +902,7 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
     // with every analytics query, so waiting for it here held a runtime worker
     // for the length of whatever query was running.
     let store = tokio::task::spawn_blocking(move || {
-        state.with_analytics(|db| {
+        state.with_analytics_read(|db| {
             // `null` when a count cannot be read: a defaulted 0 here reads as
             // "the sync has not run", the wrong diagnosis for a failing store.
             let detections = db.detection_count().ok();
@@ -1163,9 +1163,13 @@ mod json_value_tests {
         let holder = {
             let state = state.clone();
             std::thread::spawn(move || {
-                state.with_analytics(|_| {
-                    held_tx.send(()).unwrap();
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                // Reads run on the analytics readers, so the check holds all of
+                // them (there are two): a request now waits only for a reader.
+                state.with_analytics_read(|_| {
+                    state.with_analytics_read(|_| {
+                        held_tx.send(()).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    });
                 });
             })
         };

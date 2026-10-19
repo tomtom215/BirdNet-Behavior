@@ -74,7 +74,34 @@ const FREE_SPACE_MARGIN: u64 = 512 * 1024 * 1024;
 /// Bytes read from the network at a time.
 const CHUNK: usize = 1024 * 1024;
 
-/// One classifier a station can install.
+/// What an installed file is for, which decides what the operator is told to
+/// configure it with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Use {
+    /// A classifier that can run beside the primary, if it wants the same
+    /// sample rate (`MODEL_2_PATH`, ...).
+    Classifier,
+    /// A classifier that replaces the primary (`MODEL_PATH`, `LABELS_PATH`). It
+    /// cannot run beside one that wants a different sample rate: a recording is
+    /// resampled once, for every classifier.
+    PrimaryReplacement,
+    /// A species-occurrence ("range") filter, for `METADATA_MODEL_PATH`.
+    RangeFilter,
+}
+
+impl Use {
+    /// The stable name the API reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Classifier => "classifier",
+            Self::PrimaryReplacement => "primary_classifier",
+            Self::RangeFilter => "range_filter",
+        }
+    }
+}
+
+/// One model file a station can install.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogEntry {
     /// Stable id, used as the installed filename and as a routing target.
@@ -97,6 +124,8 @@ pub struct CatalogEntry {
     /// `[-1, 160_000]` is 5 s at 32 kHz and equally 3⅓ s at 48 kHz. See
     /// `G-10` Stage 4.
     pub sample_rate: u32,
+    /// What it is for.
+    pub usage: Use,
     /// Anything an operator needs to know before installing it.
     pub notes: &'static str,
 }
@@ -121,13 +150,15 @@ pub const CATALOG: &[CatalogEntry] = &[
         ),
         labels_sha256: Some("8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"),
         sample_rate: 32_000,
+        usage: Use::Classifier,
         notes: "The station's default classifier. Reports a dynamic input shape, \
                 which resolves to 4.5 s windows at 32 kHz.",
     },
     CatalogEntry {
         id: "perch-v2",
         name: "Google Perch v2 (14 795 classes)",
-        model_url: "https://huggingface.co/justinchuby/Perch-onnx/resolve/main/perch_v2.onnx",
+        model_url: "https://huggingface.co/justinchuby/Perch-onnx/resolve/\
+                    da88bf8c37c0b3068fc706fe509f633b9fbd28c1/perch_v2.onnx",
         model_sha256: "bf0c8467a924cb074663970ca4a0ab1e143602121930209657d0dff5d5cefa1f",
         model_bytes: 409_148_616,
         // No labels file accompanies the ONNX conversion; an operator supplies
@@ -136,12 +167,61 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_url: None,
         labels_sha256: None,
         sample_rate: 32_000,
+        usage: Use::Classifier,
         notes: "Materially better than BirdNET in the tropics. Wants 5 s windows \
                 at 32 kHz where BirdNET wants 4.5 s; the two run together, the chunk \
                 cut to the longer window and stepped by the shorter. Set \
                 MODEL_n_SAMPLE_RATE=32000 — its tensor shape alone cannot say. No \
                 labels file ships with the ONNX conversion; supply one with 14 795 \
                 rows.",
+    },
+    CatalogEntry {
+        id: "birdnet-v24",
+        name: "BirdNET V2.4 (global, 6 522 species)",
+        // birdnet-go's published ONNX build of the network BirdNET-Pi and
+        // birdnet-go run, at a fixed revision of the repository rather than
+        // `main`, so the bytes behind the URL cannot change under the digest.
+        model_url: "https://huggingface.co/tphakala/BirdNET-v2.4/resolve/\
+                    acd49768d227c726ac94550c94f0effb3e1dd04c/BirdNET_v2.4_fp32_dfttrunc.onnx",
+        model_sha256: "3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d",
+        model_bytes: 54_068_648,
+        labels_url: Some(
+            "https://huggingface.co/tphakala/BirdNET-v2.4/resolve/\
+             acd49768d227c726ac94550c94f0effb3e1dd04c/labels.txt",
+        ),
+        labels_sha256: Some("487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d"),
+        sample_rate: 48_000,
+        usage: Use::PrimaryReplacement,
+        notes: "The classifier BirdNET-Pi and birdnet-go run. Its scores are \
+                BirdNET-Pi's to within a few thousandths (it is the FP32 build; \
+                BirdNET-Pi runs FP16 weights) once CONFIDENCE and SENSITIVITY are \
+                set as BirdNET-Pi sets them. 48 kHz, 3 s windows, no calibration: \
+                its scores are raw logits put through SENSITIVITY. Replaces the \
+                BirdNET+ V3.0 classifier rather than running beside it, because the \
+                two want different sample rates. Pair it with birdnet-v24-range-v2.",
+    },
+    CatalogEntry {
+        id: "birdnet-v24-range-v2",
+        name: "BirdNET V2.4 species-occurrence (range) filter, v2",
+        // The same file birdnet-go ships for the V2.4 filter ("latest"),
+        // converted from the MData V2 FP16 model BirdNET-Pi also ships. Fixed
+        // to a commit of that repository for the same reason as above.
+        model_url: "https://raw.githubusercontent.com/tphakala/birdnet-go/\
+                    f4f019a3d79cb547b432bd8729fb4cf9c71aa2e7/internal/classifier/data/\
+                    BirdNET_MData_V2.onnx",
+        model_sha256: "b1810073d16c6c39df95a7419f9a11a02f98dbea562c96d4993c6af52b54b271",
+        model_bytes: 29_524_170,
+        labels_url: None,
+        labels_sha256: None,
+        sample_rate: 0,
+        usage: Use::RangeFilter,
+        notes: "Takes latitude, longitude and the week and returns, for each V2.4 \
+                species, how likely it is to occur there. Indexed like the V2.4 \
+                labels, so it needs no labels of its own. Not the filter BirdNET-Pi \
+                uses by default (its DATA_MODEL_VERSION=1 is the older v1, which \
+                this catalogue does not carry): v2 lets about a quarter more species \
+                through at the same SF_THRESH. Do not pair it with the V3.0 \
+                classifier; that has its own geomodel.",
     },
 ];
 
@@ -240,8 +320,10 @@ pub struct Installed {
     pub model_path: PathBuf,
     /// The installed labels file, when the catalogue shipped one.
     pub labels_path: Option<PathBuf>,
-    /// The sample rate this classifier needs.
+    /// The sample rate this classifier needs (0 for a range filter).
     pub sample_rate: u32,
+    /// What it is for.
+    pub usage: Use,
 }
 
 /// Check a catalogue digest is a usable sha256.
@@ -418,7 +500,12 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
 
     let labels_path = match (entry.labels_url, entry.labels_sha256) {
         (Some(url), Some(sha)) => {
-            let path = dest_dir.join(format!("{}_labels.csv", entry.id));
+            let ext = url
+                .rsplit('.')
+                .next()
+                .filter(|e| e.len() <= 4)
+                .unwrap_or("csv");
+            let path = dest_dir.join(format!("{}_labels.{ext}", entry.id));
             fetch_verified(&client, url, sha, &path)?;
             Some(path)
         }
@@ -430,14 +517,15 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
         model_path,
         labels_path,
         sample_rate: entry.sample_rate,
+        usage: entry.usage,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CATALOG, FREE_SPACE_MARGIN, InstallError, fetch_verified, find, fits, free_space_bytes,
-        install, require_digest,
+        CATALOG, FREE_SPACE_MARGIN, InstallError, Use, fetch_verified, find, fits,
+        free_space_bytes, install, require_digest,
     };
 
     /// Every digest in the catalogue must be a well-formed sha256.
@@ -514,7 +602,18 @@ mod tests {
                 "{}: size drives the space check",
                 entry.id
             );
-            assert!(entry.sample_rate > 0, "{}", entry.id);
+            // A classifier must say what rate it wants; a range filter hears
+            // no audio and must say none, so a rate on one would be read as a
+            // classifier's by anything that lists the catalogue.
+            if entry.usage == Use::RangeFilter {
+                assert_eq!(
+                    entry.sample_rate, 0,
+                    "{}: a filter hears no audio",
+                    entry.id
+                );
+            } else {
+                assert!(entry.sample_rate > 0, "{}", entry.id);
+            }
         }
     }
 
@@ -797,6 +896,64 @@ mod tests {
              rather than shipping a URL that 404s in the field"
         );
         assert!(perch.notes.contains("14 795"), "{}", perch.notes);
+
+        let v24 = find("birdnet-v24").expect("birdnet-v2.4 is in the catalogue");
+        assert_eq!(
+            v24.model_sha256,
+            "3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d"
+        );
+        assert_eq!(v24.model_bytes, 54_068_648);
+        assert_eq!(v24.sample_rate, 48_000);
+        assert_eq!(v24.usage, Use::PrimaryReplacement);
+        assert_eq!(
+            v24.labels_sha256,
+            Some("487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d")
+        );
+        assert!(
+            v24.model_url
+                .contains("acd49768d227c726ac94550c94f0effb3e1dd04c"),
+            "pinned to a revision, never `main`: {}",
+            v24.model_url
+        );
+
+        let range =
+            find("birdnet-v24-range-v2").expect("the V2.4 range filter is in the catalogue");
+        assert_eq!(
+            range.model_sha256,
+            "b1810073d16c6c39df95a7419f9a11a02f98dbea562c96d4993c6af52b54b271"
+        );
+        assert_eq!(range.model_bytes, 29_524_170);
+        assert_eq!(range.usage, Use::RangeFilter);
+        assert!(range.labels_url.is_none());
+        assert!(
+            range
+                .model_url
+                .contains("f4f019a3d79cb547b432bd8729fb4cf9c71aa2e7"),
+            "pinned to a commit, never a branch: {}",
+            range.model_url
+        );
+    }
+
+    /// No URL in the catalogue may name a moving ref. A digest pins the bytes,
+    /// but a moving ref turns an upstream edit into an install that fails
+    /// verification for every station at once, with no change here to point at.
+    #[test]
+    fn no_catalogue_url_follows_a_branch() {
+        for e in CATALOG {
+            for url in std::iter::once(e.model_url).chain(e.labels_url) {
+                if url.contains("huggingface.co") {
+                    assert!(!url.contains("/resolve/main/"), "{}: {url}", e.id);
+                }
+                if url.contains("raw.githubusercontent.com") {
+                    let rev = url.split('/').nth(5).unwrap_or("");
+                    assert!(
+                        rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+                        "{}: not pinned to a commit: {url}",
+                        e.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]

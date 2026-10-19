@@ -3,11 +3,12 @@
 //! The layout filled `<title>{{title}}</title>` with the title as given, and
 //! `/species/detail` passes the `?name=` query straight through as the title.
 //! So `?name=</title><script>…</script>` closed the title and opened a script
-//! — on a public route, no sign-in needed — and the CSP did not stop it:
-//! `inject_script_nonce` stamps the per-request nonce onto *every* opening
-//! `<script>` in the response, the injected one included. An admin who
-//! followed such a link ran the attacker's script same-origin, where the CSRF
-//! check passes: a password change is one `fetch` away.
+//! — on a public route, no sign-in needed — and the CSP did not stop it: the
+//! nonce pass of the day stamped the per-request nonce onto *every* opening
+//! `<script>` in the response, the injected one included. (It now stamps only
+//! the tags the server sealed, `src/seal.rs`; the title is still text.) An
+//! admin who followed such a link ran the attacker's script same-origin, where
+//! the CSRF check passes: a password change is one `fetch` away.
 //!
 //! The counterpart holds the other side of the fix: titles are escaped once,
 //! at the layout, so a caller that used to pre-escape (the detection detail

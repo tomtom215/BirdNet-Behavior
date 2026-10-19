@@ -322,6 +322,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         Wiring::OwnedBy("crate::daemon::config"),
         SettingsCategory::Species,
     ),
+    (
+        "species_whitelist",
+        Wiring::OwnedBy("crate::daemon::config"),
+        SettingsCategory::Species,
+    ),
     // ── System / disk management ───────────────────────────────────────────
     (
         "image_cache_dir",

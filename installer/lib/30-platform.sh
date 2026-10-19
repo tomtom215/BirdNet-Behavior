@@ -115,11 +115,11 @@ require_root() {
 
 Re-run it by piping into sudo:
 
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
+    curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
 
 To pin a version, pass it as an argument after a literal --:
 
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
+    curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
 
 Already saved the script?   sudo bash install.sh [--version ${VERSION:-X.Y.Z}]
 
@@ -133,7 +133,7 @@ EOF
     # is the original (non-root) user.  Refuse to run as root directly so the
     # service doesn't end up owned by root.
     if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
-        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
+        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
     derive_home_paths

@@ -1,0 +1,9 @@
+{
+ "schema": "birdnet-parity/pi-ref/1",
+ "expected": [0.912,0.9316,0.8857],
+ "backend": "ai-edge-litert 2.3.0 (aliased as tflite_runtime.interpreter)",
+ "variants": {
+  "pi_unit_test_settings": {"config":{"CONFIDENCE":0.7,"DATABASE_LANG":"en","DATA_MODEL_VERSION":1,"EXTRACTION_LENGTH":6,"LATITUDE":50.0,"LONGITUDE":5.0,"MODEL":"BirdNET_GLOBAL_6K_V2.4_Model_FP16","OVERLAP":0.0,"PRIVACY_THRESHOLD":0,"SENSITIVITY":1.25,"SF_THRESH":0.003},"got":[0.912,0.9316,0.8857],"species":["Pica pica","Pica pica","Pica pica"],"starts":[3.0,12.0,21.0],"exact_match_as_in___main__":true,"max_abs_delta":0.0,"within_1e-4_as_in_unit_test":true,"mdata_count":186,"error":null},
+  "install_config_defaults": {"config":{"CONFIDENCE":0.7,"DATABASE_LANG":"en","DATA_MODEL_VERSION":1,"EXTRACTION_LENGTH":"","LATITUDE":0.0,"LONGITUDE":0.0,"MODEL":"BirdNET_GLOBAL_6K_V2.4_Model_FP16","OVERLAP":0.0,"PRIVACY_THRESHOLD":0,"SENSITIVITY":1.25,"SF_THRESH":0.03},"got":[],"species":[],"starts":[],"exact_match_as_in___main__":false,"max_abs_delta":null,"within_1e-4_as_in_unit_test":false,"mdata_count":468,"error":null}
+ }
+}

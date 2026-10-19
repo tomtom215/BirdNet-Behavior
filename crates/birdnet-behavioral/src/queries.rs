@@ -302,6 +302,11 @@ pub fn retention_sql(params: &RetentionParams) -> String {
     let rate_exprs: Vec<String> = (0..params.intervals.len())
         .map(|i| format!("AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END)", i + 2))
         .collect();
+    // No condition looks past the longest interval, so a day further on than
+    // that can change no result. Joining every pair of a species' active days
+    // instead made the cost quadratic in them: 300 000 detections over 700 days
+    // took 79 s, and the station answered nothing else meanwhile.
+    let reach = params.intervals.iter().copied().max().unwrap_or(0);
     format!(
         "WITH sd AS (
             SELECT DISTINCT Com_Name, detection_date AS d FROM detections_ts
@@ -310,6 +315,7 @@ pub fn retention_sql(params: &RetentionParams) -> String {
             SELECT a.Com_Name AS species, a.d AS anchor,
                    retention({conditions}) AS r
             FROM sd a JOIN sd b ON a.Com_Name = b.Com_Name
+                 AND b.d >= a.d AND b.d <= a.d + INTERVAL '{reach} day'
             GROUP BY a.Com_Name, a.d
         ),
         detections AS (

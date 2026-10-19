@@ -59,7 +59,7 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
             // server takes a counter that fell to nothing exactly as seriously
             // as it should — which is to say it fires, for the wrong reason,
             // and the real fault is invisible behind it.
-            state.with_db(|conn| {
+            state.with_read_db(|conn| {
                 let det: i64 = conn
                     .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
                     .map_err(|e| e.to_string())?;
@@ -106,7 +106,7 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     let acoustic = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
-            state.with_db(|conn| {
+            state.with_read_db(|conn| {
                 birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
             })
         }
@@ -161,7 +161,7 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     let maintenance = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
-            state.with_db(|conn| {
+            state.with_read_db(|conn| {
                 [
                     birdnet_db::sqlite::JOB_BACKUP_VACUUM,
                     birdnet_db::sqlite::JOB_INTEGRITY_CHECK,

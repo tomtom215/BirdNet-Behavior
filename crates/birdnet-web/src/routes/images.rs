@@ -228,7 +228,7 @@ async fn species_image_file(
         let (name, url) = (scientific_name.clone(), image.url.clone());
         state
             .run_blocking(move |s| {
-                s.with_db(|conn| {
+                s.with_read_db(|conn| {
                     birdnet_db::sqlite::is_image_blacklisted(conn, &name, &url).unwrap_or(false)
                 })
             })

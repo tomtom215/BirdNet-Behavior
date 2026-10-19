@@ -10,8 +10,8 @@ The **Notifications** page (`/notifications`) shows your channels and a log of r
 
 ## Channels
 
-- **Direct push** — paste one or more notification URLs under Settings →
-  Notifications ("Notification URLs"), or set `BIRDNET_NOTIFY_URLS`. The syntax
+- **Direct push** — paste one or more notification URLs under **Settings → Alerts →
+  Notifications** ("Notification URLs"), or set `BIRDNET_NOTIFY_URLS`. The syntax
   is Apprise's, so anything you already have written down works, but the station
   sends it itself: no Python, no `apprise` binary, no subprocess per detection.
   Handled natively: `discord://`, `slack://`, `tgram://`, `ntfy://`/`ntfys://`,
@@ -22,23 +22,23 @@ The **Notifications** page (`/notifications`) shows your channels and a log of r
   `BIRDNET_APPRISE_CONFIG` at an `apprise` config file. If every URL in that
   file is one of the schemes above, the `apprise` CLI is never invoked and you
   do not need it installed.
-- **Email** — direct SMTP/STARTTLS with a per-species cooldown, configured under Settings → Notifications.
-- **BirdWeather** — upload detections to your BirdWeather station. Set the token under Settings → Notifications, or with `BIRDNET_BIRDWEATHER_TOKEN`.
+- **Email** — direct SMTP/STARTTLS with a per-species cooldown, configured under **Settings → Alerts → Email Alerts**.
+- **BirdWeather** — upload detections to your BirdWeather station. Set the token under **Settings → Alerts → Notifications**, or with `BIRDNET_BIRDWEATHER_TOKEN`.
 
 Either surface works for all three: the environment variable wins if you set it,
-otherwise the value you save under Settings → Notifications is the one that
+otherwise the value you save under **Settings → Alerts → Notifications** is the one that
 sends. The same applies to the minimum notification confidence
 (`BIRDNET_NOTIFY_CONFIDENCE`, default `0.8`), the trigger mode, the cooldown,
 the species allow/exclude lists, and the message templates. Changes take effect
 on the next restart.
 
-The **Send Test Push Notification** button under **Station → Alerts** (`/station/alerts`) uses the values saved on the
+The **Send Test Push Notification** button under **Settings → Alerts** (`/station/alerts`) uses the values saved on the
 Settings page, so a successful test means live detections will notify too.
 
 ### Message templates
 
 The title and body of a push notification are templates, set under
-Settings → Notifications (or `APPRISE_TITLE_TEMPLATE` / `APPRISE_BODY_TEMPLATE`
+**Settings → Alerts → Notifications** (or `APPRISE_TITLE_TEMPLATE` / `APPRISE_BODY_TEMPLATE`
 in the config file). They use BirdNET-Pi's `$variable` names, so a template
 moved over from a BirdNET-Pi station keeps working:
 
@@ -164,7 +164,7 @@ With `--mqtt-ha-discovery`, the station registers itself in Home Assistant autom
 ## Alerts on the station itself
 
 The rules below watch **detections**. A second kind, on the same page
-(**Station → Alerts**), watches the **station**: a measurement it already takes,
+(**Settings → Alerts**), watches the **station**: a measurement it already takes,
 compared against a threshold you choose.
 
 The station alerts on a fixed set of conditions already — disk over 85 %, a
@@ -206,7 +206,7 @@ alert.
 
 ## Alert rules
 
-The **Rules** engine (**Station → Alerts**, `/station/alerts#rules`; the old `/admin/rules` redirects there) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
+The **Rules** engine (**Settings → Alerts**, `/station/alerts#rules`; the old `/admin/rules` redirects there) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
 
 A webhook rule can authenticate, so it can target endpoints that need a key
 rather than only ones that authenticate by URL alone:

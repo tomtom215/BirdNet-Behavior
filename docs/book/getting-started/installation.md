@@ -45,10 +45,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL.
 5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ip-api.com).
 6. (DuckDB behavioral analytics is built into every image and on by default — nothing to choose.)
-7. Writes a short `.env` with only your chosen values.
+7. Writes a short `.env` with only your chosen values and a generated admin password (the file is readable by you alone).
 8. Starts the container with the matching compose overlay.
 9. Streams logs so you can watch the one-time 541 MB model download.
-10. Stops tailing as soon as the web server reports healthy, then prints the dashboard URL and your LAN IP.
+10. Stops tailing as soon as the web server reports healthy, then prints the dashboard URL, your LAN IP and the admin login (user `admin`; the password is also in `~/birdnet-behavior/.env`, as `CADDY_PWD`).
 
 </details>
 
@@ -57,8 +57,10 @@ See [Running with Docker](./docker.md) for the manual path, `docker run`, and au
 ## Option 2 — Bare-metal installer (no Docker)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 ```
+
+That address always serves the newest published release's `install.sh`, the same file that release lists in `SHA256SUMS` and attests with build provenance — not whatever the development branch holds that minute. (Fetching it from the branch, as earlier versions of this page said, ran unreleased code as root.) `--proto '=https' --tlsv1.2` refuses a downgrade on the way.
 
 The installer runs pre-flight checks (required tools, free disk, glibc version), detects your architecture, downloads the pre-built binary and the BirdNET+ model, creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately. When it finishes it runs post-install validation — the binary runs, `systemd-analyze verify` passes, directory ownership and config are correct, the doctor preflight is clean, and the port is listening.
 
@@ -67,7 +69,7 @@ The dashboard binds to all interfaces (`0.0.0.0:8502`) so it is reachable across
 ```bash
 # Install a specific version (defaults to latest). The `-s --` passes the
 # argument through to the installer.
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.7.2
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.7.2
 ```
 
 > **Don't run the installer with `sudo bash <(curl ...)`.** Process substitution
@@ -77,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 > rather inspect the script first, download it and run it directly:
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh -o install.sh
+> curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh -o install.sh
 > sudo bash install.sh --version 0.7.2
 > ```
 

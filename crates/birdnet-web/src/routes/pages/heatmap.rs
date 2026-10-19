@@ -52,7 +52,8 @@ pub(super) fn content() -> String {
     )
 }
 
-const HEATMAP_CONTENT: &str = r#"<div class="page-head">
+static HEATMAP_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r#"<div class="page-head">
   <div>
     <div class="bnb-eyebrow hm-eyebrow"><span>Behavioral analytics</span>{{help_link}}</div>
     <h1 class="display hm-h1">When the yard is alive</h1>
@@ -110,7 +111,8 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
   const btn = e.target.closest('button[data-days]');
   if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
 });
-</script>"#;
+</script>"#,
+);
 
 // ---------------------------------------------------------------------------
 // GET /pages/heatmap-grid — SVG heatmap partial
@@ -119,7 +121,7 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 /// Compute the hour × day-of-week heatmap SVG, or `None` on a query error.
 fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
     state
-        .with_db(|conn| weekly_heatmap(conn, days))
+        .with_read_db(|conn| weekly_heatmap(conn, days))
         .ok()
         .map(|cells| render_heatmap_svg(&cells))
 }
@@ -146,7 +148,7 @@ async fn heatmap_grid_partial(
 /// Compute the by-hour bar chart, or `None` on a query error.
 fn compute_hourly_totals(state: &AppState, days: u32) -> Option<String> {
     state
-        .with_db(|conn| hourly_totals(conn, days))
+        .with_read_db(|conn| hourly_totals(conn, days))
         .ok()
         .map(|totals| render_hourly_bars(&totals))
 }
@@ -172,7 +174,9 @@ async fn hourly_totals_partial(
 
 /// Compute the per-species activity streamgraph (top 8), or `None` on error.
 fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
-    let map = state.with_db(|conn| species_sparklines(conn, days)).ok()?;
+    let map = state
+        .with_read_db(|conn| species_sparklines(conn, days))
+        .ok()?;
     let mut series: Vec<(String, Vec<i64>)> = map.into_iter().collect();
     // Most active species first → stable, readable stacking order.
     series.sort_by(|a, b| {
@@ -189,7 +193,7 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
         .collect();
     // The sparkline series ends at today (local), which is what labels the
     // axis. Without it the chart showed no period at all.
-    let today = state.with_db(|conn| {
+    let today = state.with_read_db(|conn| {
         conn.query_row("SELECT date('now','localtime')", [], |r| {
             r.get::<_, String>(0)
         })
@@ -266,7 +270,9 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     let label_w = 36;
     let label_h = 20;
     let svg_w = label_w + 24 * cell_w + 20;
-    let svg_h = label_h + 7 * cell_h + 40;
+    // 26, not 40: the legend ends 16px under the last row, and the extra 14 drew
+    // a blank band under it (about 28px once the SVG is scaled to its card).
+    let svg_h = label_h + 7 * cell_h + 26;
 
     let mut svg = format!(
         r#"<div class="hm-scroll" tabindex="0" role="group" aria-label="Hour by day-of-week activity grid, scrolls sideways">

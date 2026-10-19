@@ -53,7 +53,7 @@ pub(super) async fn analytics_sessions_partial(
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.sessionize(&params))
+            .with_analytics_read(|adb| adb.sessionize(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -156,7 +156,7 @@ pub(super) async fn analytics_retention_partial(
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.retention(&params))
+            .with_analytics_read(|adb| adb.retention(&params))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -229,7 +229,7 @@ pub(super) async fn analytics_next_partial(
     let trigger_result = tokio::task::spawn_blocking({
         let s = state.clone();
         move || {
-            s.with_db(|conn| {
+            s.with_read_db(|conn| {
                 // The most recent detection. Not `ORDER BY rowid`: this is a
                 // view, and the bundled SQLite (3.53) has no rowid on a view —
                 // "no such column: rowid". The error was swallowed by `.ok()`
@@ -270,7 +270,7 @@ pub(super) async fn analytics_next_partial(
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| {
+            .with_analytics_read(|adb| {
                 let before = adb.previous_species(&trigger, 60, 5)?;
                 let after = adb.next_species(&trigger, 60, 5)?;
                 Ok((before, after))
@@ -409,7 +409,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
     let result = tokio::task::spawn_blocking(move || {
         // A failed read is an error on the card, not "not enough dawn
         // activity yet" — that sentence is a claim about the station's data.
-        let sequence = state.with_db(derive_dawn_sequence).map_err(|e| {
+        let sequence = state.with_read_db(derive_dawn_sequence).map_err(|e| {
             birdnet_behavioral::connection::AnalyticsError::InvalidData(format!(
                 "reading the dawn detections: {e}"
             ))
@@ -432,7 +432,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
             hour_end: DAWN_HOUR_END,
         };
         state
-            .with_analytics(|adb| {
+            .with_analytics_read(|adb| {
                 // Both run the same NFA pattern over the same params: how *often*
                 // the ordered run completed (sequence_count) and the per-step
                 // timestamps (sequence_match_events). Sharing the pattern means a
@@ -669,7 +669,7 @@ async fn analytics_config_partial(
     let ext_status: Option<(bool, Option<String>, Option<String>)> = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
-            state.with_analytics(|db| {
+            state.with_analytics_read(|db| {
                 (
                     db.extension_loaded(),
                     db.duckdb_version(),
@@ -816,9 +816,13 @@ mod tests {
         let holder = {
             let state = state.clone();
             std::thread::spawn(move || {
-                state.with_analytics(|_| {
-                    held_tx.send(()).unwrap();
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                // Reads run on the analytics readers, so the check holds all of
+                // them (there are two): a request now waits only for a reader.
+                state.with_analytics_read(|_| {
+                    state.with_analytics_read(|_| {
+                        held_tx.send(()).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    });
                 });
             })
         };

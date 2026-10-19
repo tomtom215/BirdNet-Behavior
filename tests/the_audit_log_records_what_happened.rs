@@ -305,6 +305,8 @@ const ACTIONS: &[&str] = &[
     "species.include.remove",
     "species.threshold.delete",
     "species.threshold.set",
+    "species.whitelist.add",
+    "species.whitelist.remove",
     "system.restart",
     "system.update.apply",
     "today.layout.change",

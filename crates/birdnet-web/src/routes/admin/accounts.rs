@@ -34,7 +34,8 @@ use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
-const ACCOUNTS_TEMPLATE: &str = include_str!("../../../templates/admin_accounts.html");
+static ACCOUNTS_TEMPLATE: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/admin_accounts.html"));
 const AUDIT_PREVIEW_LIMIT: usize = 6;
 
 /// Mount the accounts and sessions admin routes.
@@ -76,7 +77,7 @@ async fn accounts_page() -> axum::response::Redirect {
 pub(crate) fn accounts_body(state: &AppState, request_user: &RequestUser) -> String {
     let current_session_id = request_user.session_id.clone();
     let user_id = request_user.user.id;
-    let body = state.with_db(|conn| -> Result<String, AccountsError> {
+    let body = state.with_read_db(|conn| -> Result<String, AccountsError> {
         let current_user = conn.find_user(user_id)?;
         let users = conn.list_users()?;
         let sessions = conn.list_sessions(current_user.id)?;
@@ -354,7 +355,9 @@ async fn create_user(
                         None,
                     );
                     // Re-render the full user list so the new row appears.
-                    let users = state.with_db(UserStore::list_users).unwrap_or_default();
+                    let users = state
+                        .with_read_db(UserStore::list_users)
+                        .unwrap_or_default();
                     let body = Html(render_user_rows(&users));
                     toast::with(
                         body,
@@ -404,7 +407,9 @@ async fn remove_user(
                         Some(&format!("user:{id}")),
                         None,
                     );
-                    let users = state.with_db(UserStore::list_users).unwrap_or_default();
+                    let users = state
+                        .with_read_db(UserStore::list_users)
+                        .unwrap_or_default();
                     let body = Html(render_user_rows(&users));
                     toast::with(body, Toast::success("User removed.")).into_response()
                 }
@@ -566,7 +571,7 @@ async fn revoke_session_handler(
             );
             let current_session_id = request_user.session_id.clone();
             let body = state
-                .with_db(|conn| -> Result<String, AccountsError> {
+                .with_read_db(|conn| -> Result<String, AccountsError> {
                     let sessions = conn.list_sessions(request_user.user.id)?;
                     Ok(render_session_rows(&sessions, &current_session_id))
                 })
@@ -609,7 +614,7 @@ async fn revoke_others_handler(
                 Some(&format!("revoked={n}")),
             );
             let body = state
-                .with_db(|conn| -> Result<String, AccountsError> {
+                .with_read_db(|conn| -> Result<String, AccountsError> {
                     let sessions = conn.list_sessions(user_id)?;
                     Ok(render_session_rows(&sessions, &current_session_id))
                 })
@@ -664,7 +669,7 @@ async fn audit_full_page(
                 format!("%{action_filter}%")
             };
 
-            let body = state.with_db(|conn| -> Result<String, AccountsError> {
+            let body = state.with_read_db(|conn| -> Result<String, AccountsError> {
                 let entries = conn.query(&from, &to, &action_like, AUDIT_PAGE_LIMIT)?;
                 let users = conn.list_users()?;
                 Ok(render_audit_page(

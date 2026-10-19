@@ -135,7 +135,7 @@ so your counts, species lists and analytics are unaffected:
 
 - `MAX_FILES_SPECIES` — keep the newest N clips per species.
 - `CLIP_RETENTION_DAYS` — reclaim audio older than N days. **Off by default**
-  (`0` = keep forever); set it in **Settings → System** ("Keep Clip Audio") or
+  (`0` = keep forever); set it in **Settings → General → System & Display** ("Keep Clip Audio") or
   the config file if you want a rolling window.
 
 Locked clips are exempt from both. A reclaimed clip keeps its filename and
@@ -310,7 +310,7 @@ journalctl -u birdnet-behavior -f
 
 ### Per-source gain and quiet window (manual hardware checks)
 
-Each audio source (**Station → Capture**, `/station/capture`; the old
+Each audio source (**Settings → Capture**, `/station/capture`; the old
 `/admin/audio` redirects there) carries an optional **quiet window** and, in the
 `audio_sources` table, a software **gain** (`gain_db`). Like every other
 per-source setting (device, sample rate, RTSP transport), these are read when
@@ -366,7 +366,7 @@ does, so a bogus boot-time date can never silence a source.
 ### Multi-source resilience (USB + several RTSP at once)
 
 You can run one or more local microphones (USB/ALSA or PipeWire) **and** any
-number of RTSP streams simultaneously — set them up in **Station → Capture**, or
+number of RTSP streams simultaneously — set them up in **Settings → Capture**, or
 seed them from the config file with `ALSA_CARDS` (`;`-separated) and
 `RTSP_URLS` (`,`-separated). Each source is captured by its own subprocess and
 recordings carry a per-source tag (`local`/`MIC_n` and `RTSP_n`, or the source
@@ -462,7 +462,7 @@ sudo systemctl start birdnet-behavior
 > in place restored correctly, so it fails *intermittently*, which is worse than
 > failing every time. Deleting both sidecars removes the ambiguity.
 >
-> Restoring from the web UI (**Station → Backups**) removes them for you and runs
+> Restoring from the web UI (**Settings → Data → Backups & recovery**) removes them for you and runs
 > the integrity check itself; this is the manual equivalent.
 
 ## 9. Remote diagnostics and monitoring
@@ -502,7 +502,7 @@ Once the unit is sealed and shipped, the loop is:
    and shows up only as fewer detections, which is what autumn looks like too.
    The background does not stop when the birds do, so a sustained drop in one
    source's noise floor against its own history points at the equipment. The
-   same figures are on the Station **Health** tab. No threshold ships with them
+   same figures are on the Settings **Health** tab. No threshold ships with them
    on purpose — set one from what your own site does over a few weeks.
 
    Worth an alert of its own: **`birdnet_detection_write_failures_total`**
@@ -516,7 +516,7 @@ Once the unit is sealed and shipped, the loop is:
    check that no per-component gauge can answer. The station measures
    how long ago the last detection landed and exports it as
    `birdnet_detection_silence_seconds` (also `detection_silence_secs`
-   on `/api/v2/health`, and the "last detection" figure on **Station →
+   on `/api/v2/health`, and the "last detection" figure on **Settings →
    Health**, `/station` — the old `/system` redirects there).
    After `DEADMAN_HOURS` of silence (default 24; `0` disables; also
    `--deadman-hours` / `BIRDNET_DEADMAN_HOURS`) it logs a loud warning
@@ -531,7 +531,7 @@ Once the unit is sealed and shipped, the loop is:
    batches, exponential backoff up to 1 h, bounded queue). Watch
    `birdnet_outbound_queue_depth{kind="birdweather"}` — a depth that
    only grows means the uplink (or token) has been broken for a while.
-   **Station → Health** (`/station`) shows a queued-uploads figure whenever the queue
+   **Settings → Health** (`/station`) shows a queued-uploads figure whenever the queue
    is non-empty. MQTT and Apprise/email are deliberately NOT queued:
    they are live telemetry and look-now alerts, and replaying them
    hours later is worse than dropping them — the local database is

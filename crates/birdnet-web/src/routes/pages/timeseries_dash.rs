@@ -60,7 +60,7 @@ fn compute_ts_heatmap(state: &AppState) -> Option<String> {
         lookback_days: 90,
         species: None,
     };
-    match state.with_timeseries(|ts| ts.hourly_heatmap(&params)) {
+    match state.with_timeseries_read(|ts| ts.hourly_heatmap(&params)) {
         Some(Ok(rows)) => Some(render_heatmap_table(&rows)),
         _ => None,
     }
@@ -98,7 +98,7 @@ fn compute_ts_daily(state: &AppState) -> Option<String> {
         to_date: None,
         species: None,
     };
-    match state.with_timeseries(|ts| ts.moving_average(&params)) {
+    match state.with_timeseries_read(|ts| ts.moving_average(&params)) {
         Some(Ok(rows)) => Some(render_trend_table(&rows)),
         _ => None,
     }
@@ -134,7 +134,7 @@ fn compute_ts_diversity(state: &AppState) -> Option<String> {
         lookback_days: 30,
         include_shannon: true,
     };
-    match state.with_timeseries(|ts| ts.daily_richness(&params)) {
+    match state.with_timeseries_read(|ts| ts.daily_richness(&params)) {
         Some(Ok(rows)) => Some(render_diversity_table(&rows)),
         _ => None,
     }
@@ -172,7 +172,7 @@ fn compute_ts_sessions(state: &AppState) -> Option<String> {
         lookback_days: 3,
         limit: 50,
     };
-    match state.with_timeseries(|ts| ts.activity_sessions(&params)) {
+    match state.with_timeseries_read(|ts| ts.activity_sessions(&params)) {
         Some(Ok(rows)) => Some(render_sessions_table(&rows)),
         _ => None,
     }
@@ -209,7 +209,7 @@ fn compute_ts_anomaly(state: &AppState) -> Option<String> {
         window_days: 30,
         lookback_days: 90,
     };
-    match state.with_timeseries(|ts| ts.anomalies(&params)) {
+    match state.with_timeseries_read(|ts| ts.anomalies(&params)) {
         Some(Ok(rows)) => Some(render_anomaly_table(&rows)),
         _ => None,
     }
@@ -247,7 +247,7 @@ fn compute_ts_peak(state: &AppState) -> Option<String> {
         lookback_days: 1,
         limit: 5,
     };
-    match state.with_timeseries(|ts| ts.peak_windows(&params)) {
+    match state.with_timeseries_read(|ts| ts.peak_windows(&params)) {
         Some(Ok(rows)) => Some(render_peak_table(&rows)),
         _ => None,
     }

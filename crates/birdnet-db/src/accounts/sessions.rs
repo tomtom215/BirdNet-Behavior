@@ -37,6 +37,18 @@ pub trait SessionStore {
     /// Returns [`AccountsError::NotFound`] if the session id is unknown.
     fn touch_session(&self, id: &str) -> Result<(), AccountsError>;
 
+    /// Whether the session's `last_seen` is at least `min_idle_secs` old, so
+    /// that a [`touch_session`](Self::touch_session) would say something new.
+    ///
+    /// A read, so the cookie middleware can decide on a pooled reader and take
+    /// the writer only when the answer is yes. A session that does not exist
+    /// is not due.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountsError::Sqlite`] on database failure.
+    fn session_touch_due(&self, id: &str, min_idle_secs: u32) -> Result<bool, AccountsError>;
+
     /// Look up an unexpired session by id. Used by the cookie middleware
     /// on every request to bind the cookie to a session row.
     ///
@@ -119,6 +131,19 @@ impl SessionStore for Connection {
         Ok(())
     }
 
+    fn session_touch_due(&self, id: &str, min_idle_secs: u32) -> Result<bool, AccountsError> {
+        // `last_seen` is written as `datetime('now')`, so it compares as text
+        // with `datetime('now', '-N seconds')`. NULL (never seen) is due.
+        let due: Option<Option<bool>> = self
+            .query_row(
+                "SELECT last_seen <= datetime('now', ?2) FROM sessions WHERE id = ?1",
+                params![id, format!("-{min_idle_secs} seconds")],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(due.is_some_and(|v| v.unwrap_or(true)))
+    }
+
     fn find_active_session(&self, id: &str) -> Result<Session, AccountsError> {
         self.query_row(
             "SELECT id, user_id, issued_at, last_seen, expires_at, user_agent, ip_hash
@@ -198,6 +223,36 @@ mod tests {
         assert_eq!(active.len(), 1);
         conn.revoke_session("sess-aaa").unwrap();
         assert!(conn.list_sessions(admin.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_session_is_due_a_touch_only_once_it_has_been_quiet_long_enough() {
+        let conn = open_db();
+        let admin = conn.find_user_by_name("admin").unwrap();
+        conn.create_session("s", admin.id, "2099-01-01 00:00:00", None, None)
+            .unwrap();
+        let age = |secs: i64| {
+            conn.execute(
+                "UPDATE sessions SET last_seen = datetime('now', ?1) WHERE id = 's'",
+                params![format!("-{secs} seconds")],
+            )
+            .unwrap();
+        };
+        age(5);
+        assert!(!conn.session_touch_due("s", 60).unwrap(), "seen 5 s ago");
+        age(59);
+        assert!(!conn.session_touch_due("s", 60).unwrap(), "seen 59 s ago");
+        age(61);
+        assert!(conn.session_touch_due("s", 60).unwrap(), "seen 61 s ago");
+        age(3600);
+        assert!(conn.session_touch_due("s", 60).unwrap(), "seen an hour ago");
+        // The counterparts: touching resets it, and an unknown id is not due.
+        conn.touch_session("s").unwrap();
+        assert!(!conn.session_touch_due("s", 60).unwrap(), "just touched");
+        assert!(
+            !conn.session_touch_due("nope", 60).unwrap(),
+            "no such session"
+        );
     }
 
     #[test]

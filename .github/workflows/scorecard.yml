@@ -32,7 +32,7 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 20  # observed 41s
     permissions:
       security-events: write
       id-token: write

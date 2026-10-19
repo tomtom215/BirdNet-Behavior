@@ -71,7 +71,7 @@ async fn list_detections(
     };
     let result: Result<Result<(Vec<DetectionRow>, i64), DbError>, _> =
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| {
+            state.with_read_db(|conn| {
                 let rows = birdnet_db::sqlite::search_detections(conn, &filter, limit, offset)?;
                 let total = birdnet_db::sqlite::search_detection_count(conn, &filter)?;
                 Ok((rows, total))
@@ -120,7 +120,7 @@ async fn recent_detections(
 
     let result: Result<Result<Vec<DetectionRow>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| birdnet_db::sqlite::recent_detections(conn, limit))
+            state.with_read_db(|conn| birdnet_db::sqlite::recent_detections(conn, limit))
         })
         .await;
 
@@ -160,7 +160,7 @@ async fn daily_detections(
 
     let result: Result<Result<Vec<DailyCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| birdnet_db::sqlite::daily_counts(conn, days))
+            state.with_read_db(|conn| birdnet_db::sqlite::daily_counts(conn, days))
         })
         .await;
 

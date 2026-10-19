@@ -131,7 +131,7 @@ async fn detection_reviews_queue_partial(
     let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let pending = birdnet_db::sqlite::unreviewed_recent_detections(conn, QUEUE_LIMIT)?;
             let recent =
                 birdnet_db::sqlite::detection_reviews_page(conn, status, RECENT_LIMIT, offset)?;

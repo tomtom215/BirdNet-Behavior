@@ -93,7 +93,7 @@ async fn provenance_note_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let html = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let batches = birdnet_db::sqlite::list_import_batches(conn).unwrap_or_default();
             let rows = birdnet_db::sqlite::imported_detection_count(conn).unwrap_or(0);
             render_note(&batches, rows)

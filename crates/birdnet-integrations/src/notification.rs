@@ -38,7 +38,7 @@ pub struct NotificationContext {
     pub date: String,
     /// Detection time (HH:MM:SS).
     pub time: String,
-    /// ISO week number.
+    /// BirdNET week number, 1-48 (four per month; not the ISO week).
     pub week: u32,
     /// Station latitude, when the station has one.
     pub latitude: Option<f64>,

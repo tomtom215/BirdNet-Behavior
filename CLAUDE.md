@@ -341,6 +341,22 @@ Corollaries, each learned the same way:
   where `bnbtest.target` is `DefaultDependencies=no` +
   `Wants=systemd-journald.socket systemd-journald.service`. Keep test files
   out of `/tmp`.
+- **A test that asserts the remedy is not a test of the defect.** The life-list
+  chart's total was written across its own curve; the first fix gave the label a
+  halo and a test that looked for the halo, which passed while the next render still
+  showed the line between the letters. The cause was a clamp that put the label
+  *below* the end of the curve, and only a test of the geometry (baseline above the
+  point) failed on the old code. Assert what the reader sees, then watch it fail.
+- **A gate that skips a kind of element grades nothing about it.** `layout.mjs`
+  walked HTML text and skipped every `<svg>`, so the co-occurrence chart's names
+  could be drawn across one another with the gate green. Regenerating the manual's
+  pictures found it, by looking. Reading a rendered picture is a check in its own
+  right; the sweep that reports "0 findings" is a statement about what it can see.
+- **A fixture with short paths and tidy data cannot grade a page that prints paths
+  or lays out unequal data.** The Data tab overflowed a phone only for a database path
+  as long as a macOS home folder's (the fixture lived in `/tmp`, and now lives deeper on
+  purpose), and the chord labels collided only once the arcs differed in length, which
+  the old pictures, with every ρ at 1.00, could not show.
 - **Every feature set is its own copy of the target dir.** Default,
   `--all-features` and per-crate `--features analytics` each built bundled
   libduckdb (482 MB an rlib) and filled the disk twice in one session. Pick one
@@ -361,6 +377,22 @@ Corollaries, each learned the same way:
   siblings finds 45 of the 170 blocking calls, because the rest went through
   a sync helper. `tests/database_work_stays_off_the_async_runtime.rs` follows
   calls.
+- **`rust/hard-coded-cryptographic-value` is a taint query keyed on parameter
+  *names*, and it does not skip tests.** A literal (a `const` too, `""` too) that
+  reaches an argument of any function whose parameter is called `password`,
+  `nonce`, `iv` or `salt` is an alert, including this repo's own
+  `verify_password(hash, password)` and `seal::redeem(html, nonce)`, with no
+  crypto crate involved. Fifteen alerts on one pull request were first answered
+  from reading the tests; the query is at the `github/codeql` tag matching the
+  pinned `codeql-action`'s `src/defaults.json`, and its CLI bundle runs here. A
+  probe crate with one function per construction showed that `format!` over a
+  runtime value, `String::new()`, `env::var` and `fs::read_to_string` are accepted
+  and a literal, a `const`, `""` and `include_str!` are not. A test that needs one
+  fixed password (a pinned hash) keeps it in a data file
+  (`crates/birdnet-db/tests/data/`). Move `target/` aside before building the
+  database: its build-script output holds generated tables of literals, and the
+  query had not finished after 40 minutes on a database that included it (a
+  `--build-mode=none` database without it took 18 minutes to build).
 
 ### Key Dependencies
 

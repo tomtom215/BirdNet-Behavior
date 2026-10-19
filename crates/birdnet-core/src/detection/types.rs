@@ -23,7 +23,8 @@ pub struct Detection {
     pub start: f32,
     /// End time in seconds within the recording.
     pub stop: f32,
-    /// ISO 8601 week number.
+    /// BirdNET week number, 1-48 (four per month; not the ISO week, which
+    /// runs to 53). The value the occurrence filter is asked about.
     pub week: u32,
     /// Path to the extracted audio clip (set after extraction).
     pub file_name_extr: Option<String>,

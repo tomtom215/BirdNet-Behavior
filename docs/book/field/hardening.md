@@ -68,7 +68,7 @@ puts the dashboard itself behind that sign-in.
 
 ## 2. Authentication
 
-Authentication gates **the `/admin*` panel, the Station management tabs
+Authentication gates **the `/admin*` panel, the Settings management tabs
 (`/station/capture|alerts|data|settings|access`) and every page action that
 changes something** — viewing the dashboard, the read-only `/api/v2/*`
 endpoints, the WebSockets, and the health check are open to anyone who can
@@ -281,7 +281,7 @@ and the start goes ahead; `/admin/doctor` shows the same report.
 
 ## 6. Data & backups
 
-- **Database backups.** Take a hot backup from **Station → Data** (`/station/data#backups`) or
+- **Database backups.** Take a hot backup from **Settings → Data** (`/station/data#backups`) or
   `birdnet-behavior --backup-db`; the periodic maintenance task also rotates
   backups beside the database. Those are on the same card as the database, so
   they cover a corrupt page and not a dead card.

@@ -118,7 +118,7 @@ async fn player_page(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{species_safe} — {site_name}</title>
   <link rel="stylesheet" href="/static/css/app.css?v={css_v}">
-  <style>{PLAYER_CSS}</style>
+  {player_style}
 </head>
 <body>
 <div class="container ap-page">
@@ -127,10 +127,12 @@ async fn player_page(
   </nav>
   {content}
 </div>
-<script>{PLAYER_JS}</script>
+{player_script}
 </body>
 </html>"#,
         site_name = escape_html(site_name),
+        player_style = crate::seal::seal(&format!("<style>{PLAYER_CSS}</style>")),
+        player_script = crate::seal::seal(&format!("<script>{PLAYER_JS}</script>")),
     );
     Html(html)
 }

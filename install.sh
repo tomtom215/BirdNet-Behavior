@@ -11,9 +11,9 @@
 # install.sh — BirdNet-Behavior installer for Raspberry Pi and x86_64 Linux
 #
 # Usage (Linux / Raspberry Pi — installs a systemd service, so it needs root):
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 #   # pin a specific version (the `-s --` passes the args through to the script):
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.1
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.5.1
 #   # from a saved copy:
 #   sudo bash install.sh [--version 0.5.1]
 #
@@ -133,8 +133,10 @@ REQUIRED_FREE_MB=900
 # so we know to restart it afterwards rather than leave it down.
 SERVICE_WAS_RUNNING=0
 
-# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB): the same model BirdNET-Pi
-# uses, arch-independent and working on every platform.
+# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB), arch-independent and working
+# on every platform. This is the successor to BirdNET V2.4, the network
+# BirdNET-Pi and birdnet-go run, not the same model: its detections differ by
+# design. To run V2.4 instead, see docs/book/guides/parity.md.
 #
 # Primary origin is a stable, arch-independent GitHub release shared by all app
 # releases (uploaded once, never re-pushed per patch), so a fresh install pulls
@@ -398,11 +400,11 @@ require_root() {
 
 Re-run it by piping into sudo:
 
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
+    curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
 
 To pin a version, pass it as an argument after a literal --:
 
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
+    curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
 
 Already saved the script?   sudo bash install.sh [--version ${VERSION:-X.Y.Z}]
 
@@ -416,7 +418,7 @@ EOF
     # is the original (non-root) user.  Refuse to run as root directly so the
     # service doesn't end up owned by root.
     if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
-        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
+        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
     derive_home_paths
@@ -558,13 +560,20 @@ EOT
 # Download helpers (curl or wget) and release-version resolution
 # ---------------------------------------------------------------------------
 
+# Every origin this installer talks to is https (GitHub, and the model hosts it
+# falls back to). Say so to curl and wget, so that a redirect cannot move a
+# download onto plain http or an older TLS, where the SHA256SUMS that the
+# archive is checked against would be read over a channel anyone on the path
+# can rewrite.
+CURL_HTTPS_ONLY=(--proto '=https' --proto-redir '=https' --tlsv1.2)
+
 download() {
     local url="$1"
     local dest="$2"
     if command -v curl &>/dev/null; then
-        curl -fsSL -L --retry 3 --retry-delay 2 -o "${dest}" "${url}"
+        curl "${CURL_HTTPS_ONLY[@]}" -fsSL -L --retry 3 --retry-delay 2 -o "${dest}" "${url}"
     elif command -v wget &>/dev/null; then
-        wget -q --tries=3 -O "${dest}" "${url}"
+        wget --https-only -q --tries=3 -O "${dest}" "${url}"
     else
         fatal "Neither curl nor wget is available. Please install one and retry."
     fi
@@ -588,7 +597,7 @@ download_or_absent() {
     fi
     # No -f: an HTTP error is read from the status code instead of printed.
     # -S still reports transport failures (DNS, TLS, timeouts).
-    if ! code="$(curl -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
+    if ! code="$(curl "${CURL_HTTPS_ONLY[@]}" -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
         rm -f "${dest}"
         return 1
     fi
@@ -627,13 +636,13 @@ download_large() {
     info "  Fetching ${name}…"
     if command -v curl &>/dev/null; then
         # -C - : resume; -# : progress bar.
-        curl -fL -C - -# \
+        curl "${CURL_HTTPS_ONLY[@]}" -fL -C - -# \
             --retry 5 --retry-delay 2 --retry-connrefused --retry-max-time 600 \
             --connect-timeout 30 \
             -o "${dest}" "${url}"
     elif command -v wget &>/dev/null; then
         # -c : resume; --show-progress to stderr; tolerate transient failures.
-        wget -c --tries=5 --waitretry=2 --timeout=30 --show-progress -O "${dest}" "${url}"
+        wget --https-only -c --tries=5 --waitretry=2 --timeout=30 --show-progress -O "${dest}" "${url}"
     else
         fatal "Neither curl nor wget is available. Please install one and retry."
     fi
@@ -1652,7 +1661,7 @@ ${lon_line}
 #                              # solar records sunrise-to-sunset and needs the
 #                              # coordinates above. Fixed hours are evaluated in
 #                              # UTC, not local time. Also settable in the web UI
-#                              # under Settings -> Location & Recording Schedule.
+#                              # under Settings -> Capture -> Location & Recording Schedule.
 
 # --- Detection ---
 # CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).
@@ -3305,8 +3314,8 @@ usage() {
 BirdNet-Behavior installer
 
 Linux / Raspberry Pi (installs a systemd service, so it needs root):
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version X.Y.Z
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version X.Y.Z
 
 From a saved copy of this script:
   sudo bash install.sh [--version X.Y.Z]

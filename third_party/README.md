@@ -10,7 +10,7 @@ belongs to, and the script fails if the build links a different one.
 |---|---|---|
 | `onnxruntime-1.31.0/` | ONNX Runtime, statically linked through `ort-sys` | the version in `ort-sys`'s `build/download/dist.tsv`; the static library carries `rel-1.31.0` in its build info |
 | `duckdb-1.5.6/` | the libraries DuckDB bundles, and ICU (the embedded `icu` extension) | `libduckdb-sys` 1.10506 bundles DuckDB 1.5.6 |
-| `htmx-2.0.4/` | htmx, served as `/static/htmx.min.js` | the `version` in the file; its bytes equal the npm `htmx.org@2.0.4` package's `dist/htmx.min.js` |
+| `htmx-2.0.11/` | htmx, served as `/static/htmx.min.js` | the `version` in the file; its bytes equal the npm `htmx.org@2.0.11` package's `dist/htmx.min.js` |
 
 The fonts' licences are beside the fonts, in
 `crates/birdnet-web/static/fonts/LICENSES.txt`.
@@ -62,4 +62,4 @@ Downloaded 2026-10-14. SHA-256 of each file as vendored:
 | `duckdb-1.5.6/vergesort.LICENSE` | https://raw.githubusercontent.com/duckdb/duckdb/v1.5.6/third_party/vergesort/LICENSE | `12dd392860ea2a3633bce5f33d7eebd4308a7e3386b4372260e5e72be7a64033` |
 | `duckdb-1.5.6/yyjson.LICENSE` | https://raw.githubusercontent.com/duckdb/duckdb/v1.5.6/third_party/yyjson/LICENSE | `734d7fb3eb56f0a04e6b7ab0c5d3634624a8bfaa2acc87a2c03a029b20868cf8` |
 | `duckdb-1.5.6/zstd.LICENSE` | https://raw.githubusercontent.com/duckdb/duckdb/v1.5.6/third_party/zstd/LICENSE | `8b7bc50ec3ecee27224e17d4d316a939fa2ddda9c88e0ddc2f059ce432edbfb9` |
-| `htmx-2.0.4/LICENSE` | npm: htmx.org@2.0.4, package/LICENSE | `d3d2456f76414f2456104660ebd65aff1c04cd7966b942bdabd63f3cdb316a38` |
+| `htmx-2.0.11/LICENSE` | npm: htmx.org@2.0.11, package/LICENSE | `d3d2456f76414f2456104660ebd65aff1c04cd7966b942bdabd63f3cdb316a38` |

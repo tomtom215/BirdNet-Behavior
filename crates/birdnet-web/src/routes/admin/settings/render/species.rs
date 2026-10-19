@@ -8,6 +8,7 @@ use super::get_setting;
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let excl = get_setting(s, "species_exclude");
     let incl = get_setting(s, "species_include");
+    let white = get_setting(s, "species_whitelist");
     write!(
         out,
         r#"
@@ -33,6 +34,18 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <p class="hint">While this list has anything in it, every other bird is
       ignored. Leave it empty unless you are deliberately watching for a few
       species.</p>
+    </div>
+    <div>
+      <label for="species_whitelist">Always allow these, even where they are unlikely (common names, separated by commas)</label>
+      <textarea id="species_whitelist" name="species_whitelist" rows="3"
+                placeholder="e.g. Snowy Owl">{white}</textarea>
+      <p class="hint">Birds the species-occurrence filter would hold back
+      because they are rare for your location and week are let through anyway
+      (BirdNET-Pi's whitelist). It changes nothing else: a bird on the
+      &ldquo;never record&rdquo; list stays out, and so does one that is not on a
+      &ldquo;record only&rdquo; list. It only matters once the station has a
+      location. Try lowering the occurrence threshold first; this is for the
+      one or two birds you know visit anyway.</p>
     </div>
   </section>"#
     )

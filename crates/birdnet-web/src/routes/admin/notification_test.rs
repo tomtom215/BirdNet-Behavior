@@ -32,7 +32,6 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use std::fmt::Write as _;
 
-use birdnet_db::settings::ensure_settings_table;
 use birdnet_db::settings::get as get_setting;
 use birdnet_integrations::apprise::NotifyType;
 
@@ -146,10 +145,7 @@ fn render_test_page_for(state: &AppState) -> String {
 /// Still a settings read, and correctly so: `ping_birdweather` reads the token
 /// at request time, so the settings row *is* what that test uses.
 fn birdweather_configured(state: &AppState) -> bool {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        get_setting(conn, "birdweather_token").is_ok_and(|v| !v.is_empty())
-    })
+    state.with_read_db(|conn| get_setting(conn, "birdweather_token").is_ok_and(|v| !v.is_empty()))
 }
 
 /// Render the channels Send-test body (no document shell).
@@ -175,6 +171,22 @@ fn render_test_page(push: &PushChannel, bw_ok: bool) -> String {
         ),
     )
 }
+
+static NOTIFICATION_TEST_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
+      .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.875rem; }
+      .btn-primary { background:var(--moss); color:var(--on-moss); }
+      .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
+      .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
+      .hint a { color:var(--moss-ink); }
+      .result-banner { border:1px solid; border-radius:0.375rem; padding:0.75rem; margin-top:0.75rem; }
+      .result-banner.ok { background:var(--moss-soft); border-color:var(--moss-soft); color:var(--moss-ink); }
+      .result-banner.err { background:var(--rare-soft); border-color:var(--rare-soft); color:var(--rare); }
+      .nt-title { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
+    </style>",
+);
 
 /// Page-specific body (scoped `<style>` + cards). The shared shell supplies the
 /// chrome, the nav (with the Notifications tab active), and the
@@ -240,21 +252,8 @@ fn test_notifications_body(push: &PushChannel, bw_ok: bool) -> String {
     };
 
     let mut html = String::with_capacity(4096);
-    html.push_str(r"<style>
-      .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
-      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
-      .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.875rem; }
-      .btn-primary { background:var(--moss); color:var(--on-moss); }
-      .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
-      .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
-      .hint a { color:var(--moss-ink); }
-      .result-banner { border:1px solid; border-radius:0.375rem; padding:0.75rem; margin-top:0.75rem; }
-      .result-banner.ok { background:var(--moss-soft); border-color:var(--moss-soft); color:var(--moss-ink); }
-      .result-banner.err { background:var(--rare-soft); border-color:var(--rare-soft); color:var(--rare); }
-      .nt-title { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
-    </style>
-
-");
+    html.push_str(&NOTIFICATION_TEST_STYLE);
+    html.push_str("\n\n");
 
     // Push card
     write!(
@@ -358,8 +357,7 @@ async fn test_push(State(state): State<AppState>) -> (StatusCode, Html<String>) 
 
 /// The stored BirdWeather token, if one is set. Blocks on the database.
 fn birdweather_token(state: &AppState) -> Option<String> {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
+    state.with_read_db(|conn| {
         get_setting(conn, "birdweather_token")
             .ok()
             .filter(|v| !v.is_empty())

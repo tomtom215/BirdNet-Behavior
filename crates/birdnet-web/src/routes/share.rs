@@ -43,7 +43,8 @@ use sha2::Sha256;
 use crate::routes::pages::{escape_html, simple_url_encode};
 use crate::state::AppState;
 
-const TEMPLATE: &str = include_str!("../../templates/share_rare.html");
+static TEMPLATE: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../templates/share_rare.html"));
 const DEFAULT_TTL_SECS: u64 = 30 * 86_400; // 30 days
 const TRUNCATED_HMAC_LEN: usize = 16; // 128 bits — ample against forgery
 const FIELD_SEP: char = '\u{1f}'; // ASCII unit separator — never appears in our fields
@@ -234,9 +235,10 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
 
     let station_label = state.site_name().to_string();
     let db = state.clone();
-    let result =
-        tokio::task::spawn_blocking(move || db.with_db(|conn| lookup(conn, &date, &time, &com)))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        db.with_read_db(|conn| lookup(conn, &date, &time, &com))
+    })
+    .await;
 
     let Ok(Some(det)) = result else {
         return gone_page();
@@ -262,7 +264,7 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
         // O-18: toast live region for the share page's "Copy permalink" UX.
         .replace(
             "{{toast_region}}",
-            crate::routes::pages::TOAST_REGION_HTML,
+            crate::routes::pages::TOAST_REGION_HTML.as_str(),
         )
         // The page is read by a visitor, so the name is in the station's language;
         // the token, the audio links and `species_encoded` carry the stored one.
@@ -331,7 +333,7 @@ async fn share_spectrogram(State(state): State<AppState>, Path(token): Path<Stri
 async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> Option<String> {
     let (d, t, c) = (date.to_string(), time.to_string(), com.to_string());
     tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             conn.query_row(
                 // Same rule as `lookup`: a rejected detection's audio must
                 // stop being served too, or the clip outlives the claim it was

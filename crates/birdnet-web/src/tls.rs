@@ -339,6 +339,10 @@ struct SelfSignedMeta {
     ca_not_after: i64,
     /// The SAN list the leaf was minted for, in the order given.
     hostnames: Vec<String>,
+    /// The names the CA was constrained to when it was made (see
+    /// [`ca_params`]). A leaf for a name outside these, and outside the LAN
+    /// ranges every CA permits, needs a new CA.
+    ca_hostnames: Vec<String>,
 }
 
 impl SelfSignedMeta {
@@ -349,10 +353,11 @@ impl SelfSignedMeta {
     /// already prefers a line to a serialiser where a line will do.
     fn encode(&self) -> String {
         format!(
-            "not_after={}\nca_not_after={}\nhostnames={}\n",
+            "not_after={}\nca_not_after={}\nhostnames={}\nca_hostnames={}\n",
             self.not_after,
             self.ca_not_after,
-            self.hostnames.join(",")
+            self.hostnames.join(","),
+            self.ca_hostnames.join(",")
         )
     }
 
@@ -362,6 +367,7 @@ impl SelfSignedMeta {
         let mut not_after = None;
         let mut ca_not_after = None;
         let mut hostnames = None;
+        let mut ca_hostnames = None;
         for line in raw.lines() {
             let (k, v) = line.split_once('=')?;
             match k.trim() {
@@ -376,13 +382,26 @@ impl SelfSignedMeta {
                             .collect::<Vec<_>>(),
                     );
                 }
+                "ca_hostnames" => {
+                    ca_hostnames = Some(
+                        v.trim()
+                            .split(',')
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>(),
+                    );
+                }
                 _ => return None,
             }
         }
+        // A sidecar without `ca_hostnames` was written by a release whose CA
+        // carried no name constraint, so it is not decoded: the caller
+        // regenerates, and the CA that could vouch for any name is replaced.
         Some(Self {
             not_after: not_after?,
             ca_not_after: ca_not_after?,
             hostnames: hostnames?,
+            ca_hostnames: ca_hostnames?,
         })
     }
 
@@ -396,9 +415,10 @@ impl SelfSignedMeta {
         before_renewal(self.not_after, now) && self.hostnames == wanted
     }
 
-    /// Whether the CA is still far enough from expiry to keep signing with.
-    fn ca_usable(&self, now: i64) -> bool {
-        before_renewal(self.ca_not_after, now)
+    /// Whether the CA is still far enough from expiry to keep signing with, and
+    /// permitted to vouch for every name in `wanted`.
+    fn ca_usable_for(&self, wanted: &[String], now: i64) -> bool {
+        before_renewal(self.ca_not_after, now) && ca_covers(&self.ca_hostnames, wanted)
     }
 }
 
@@ -426,11 +446,47 @@ fn unix_now() -> i64 {
 /// The mode is applied to the temporary file *before* the rename, so a private
 /// key is never briefly world-readable at its final name.
 fn write_private(path: &Path, contents: &str, mode: u32) -> Result<(), TlsError> {
+    use std::io::Write as _;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents).map_err(|e| TlsError::Io(tmp.clone(), e))?;
+    let mut file = create_private(&tmp, mode)?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| TlsError::Io(tmp.clone(), e))?;
+    drop(file);
+    // The umask can only have removed bits; this restores any it removed (the
+    // CA certificate is meant to be world-readable under a 077 umask too).
     set_mode(&tmp, mode)?;
     std::fs::rename(&tmp, path).map_err(|e| TlsError::Io(path.into(), e))?;
     Ok(())
+}
+
+/// A new file at `path`, created with `mode` from the first instant.
+///
+/// `std::fs::write` creates the file with the process umask's idea of a
+/// default (0644 under the usual 022) and a `chmod` follows, so a private key
+/// sat world-readable under its temporary name for the length of that gap. A
+/// stale temporary left by a crash is removed first, and `create_new` then
+/// refuses to open anything that appeared at the name in between, so a symlink
+/// planted there in a shared state directory is not written through.
+#[cfg(unix)]
+fn create_private(path: &Path, mode: u32) -> Result<std::fs::File, TlsError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(TlsError::Io(path.into(), e)),
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)
+        .map_err(|e| TlsError::Io(path.into(), e))
+}
+
+/// A new file at `path`. Platforms without Unix modes have none to set.
+#[cfg(not(unix))]
+fn create_private(path: &Path, _mode: u32) -> Result<std::fs::File, TlsError> {
+    std::fs::File::create(path).map_err(|e| TlsError::Io(path.into(), e))
 }
 
 /// Apply a Unix permission bitmask. A no-op on platforms without them.
@@ -519,7 +575,9 @@ pub fn ensure_self_signed_at(
         .as_deref()
         .and_then(SelfSignedMeta::decode);
 
-    let ca_ok = meta.as_ref().is_some_and(|m| m.ca_usable(now))
+    let ca_ok = meta
+        .as_ref()
+        .is_some_and(|m| m.ca_usable_for(hostnames, now))
         && ca_cert_path.exists()
         && ca_key_path.exists();
     let leaf_ok = meta
@@ -541,15 +599,26 @@ pub fn ensure_self_signed_at(
 
     // Reuse the CA whenever it is still good, so a leaf rotation does not
     // invalidate a trust-store import the operator already did.
-    let (ca_key_pem, ca_cert_pem, ca_not_after) = if ca_ok {
+    let (ca_key_pem, ca_cert_pem, ca_not_after, ca_hostnames) = if ca_ok {
         let key = std::fs::read_to_string(&ca_key_path)
             .map_err(|e| TlsError::Io(ca_key_path.clone(), e))?;
         let cert = std::fs::read_to_string(&ca_cert_path)
             .map_err(|e| TlsError::Io(ca_cert_path.clone(), e))?;
-        let expiry = meta.as_ref().map_or(0, |m| m.ca_not_after);
-        (key, cert, expiry)
+        let (expiry, names) = meta.as_ref().map_or((0, Vec::new()), |m| {
+            (m.ca_not_after, m.ca_hostnames.clone())
+        });
+        (key, cert, expiry, names)
     } else {
-        generate_ca(now)?
+        if ca_cert_path.exists() {
+            tracing::warn!(
+                ca = %ca_cert_path.display(),
+                "replacing the local CA: it is past its renewal date, was made before CAs were \
+                 limited to this station's own names, or cannot vouch for a requested name; \
+                 import the new CA file on the devices that trusted the old one"
+            );
+        }
+        let (key, cert, expiry) = generate_ca(now, hostnames)?;
+        (key, cert, expiry, hostnames.to_vec())
     };
 
     let (leaf_cert_pem, leaf_key_pem, not_after) =
@@ -573,6 +642,7 @@ pub fn ensure_self_signed_at(
             not_after,
             ca_not_after,
             hostnames: hostnames.to_vec(),
+            ca_hostnames,
         }
         .encode(),
         0o644,
@@ -588,13 +658,106 @@ pub fn ensure_self_signed_at(
     load_pair(&leaf_cert_path, &leaf_key_path)
 }
 
-/// The local CA's parameters.
+/// What the local CA may vouch for, whatever the operator named the station.
 ///
-/// Deterministic, and it has to be: [`ensure_self_signed`] rebuilds these from
-/// scratch when it reuses a CA off disk, and the reconstructed distinguished
-/// name has to match the stored certificate's subject exactly or the leaf it
-/// signs will chain to nothing.
-fn ca_params() -> rcgen::CertificateParams {
+/// The CA's private key lives beside the service, readable by the service's
+/// user, and the operator imports its certificate into browsers and phones. A
+/// CA with no name constraint turns "something running as the service user"
+/// into "a certificate for any website, trusted by every device that imported
+/// it". These are the names a LAN device legitimately has: `localhost`, the
+/// mDNS `.local` domain, and the loopback, private and link-local address
+/// ranges. They are constant on purpose, so that a DHCP lease changing or a
+/// phone joining the network never costs the operator a re-import.
+const LAN_DNS_SUFFIXES: [&str; 2] = ["localhost", "local"];
+
+const fn is_lan_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Whether a CA made for `ca_names` may vouch for every name in `wanted`.
+fn ca_covers(ca_names: &[String], wanted: &[String]) -> bool {
+    wanted.iter().all(|name| {
+        let name = name.trim().to_ascii_lowercase();
+        if let Ok(ip) = name.parse::<std::net::IpAddr>() {
+            return is_lan_ip(ip) || ca_names.iter().any(|c| c.trim() == name);
+        }
+        LAN_DNS_SUFFIXES
+            .iter()
+            .copied()
+            .chain(ca_names.iter().map(String::as_str))
+            .any(|suffix| {
+                let suffix = suffix.trim().to_ascii_lowercase();
+                !suffix.is_empty()
+                    && suffix.parse::<std::net::IpAddr>().is_err()
+                    && (name == suffix || name.ends_with(&format!(".{suffix}")))
+            })
+    })
+}
+
+/// The `nameConstraints` extension for a CA made for `ca_names`: the LAN
+/// ranges above plus exactly the names given.
+fn name_constraints(ca_names: &[String]) -> rcgen::NameConstraints {
+    use rcgen::{CidrSubnet, GeneralSubtree};
+    let mut permitted = Vec::new();
+    for suffix in LAN_DNS_SUFFIXES {
+        permitted.push(GeneralSubtree::DnsName(suffix.to_owned()));
+    }
+    for (addr, prefix) in [
+        ([127, 0, 0, 0], 8),
+        ([10, 0, 0, 0], 8),
+        ([172, 16, 0, 0], 12),
+        ([192, 168, 0, 0], 16),
+        ([169, 254, 0, 0], 16),
+    ] {
+        permitted.push(GeneralSubtree::IpAddress(CidrSubnet::from_v4_prefix(
+            addr, prefix,
+        )));
+    }
+    for (addr, prefix) in [
+        (std::net::Ipv6Addr::LOCALHOST, 128),
+        (std::net::Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+        (std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
+    ] {
+        permitted.push(GeneralSubtree::IpAddress(CidrSubnet::from_v6_prefix(
+            addr.octets(),
+            prefix,
+        )));
+    }
+    for name in ca_names {
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        match name.parse::<std::net::IpAddr>() {
+            Ok(ip) if is_lan_ip(ip) => {}
+            Ok(ip) => permitted.push(GeneralSubtree::IpAddress(CidrSubnet::from_addr_prefix(
+                ip,
+                if ip.is_ipv4() { 32 } else { 128 },
+            ))),
+            Err(_) => permitted.push(GeneralSubtree::DnsName(name)),
+        }
+    }
+    rcgen::NameConstraints {
+        permitted_subtrees: permitted,
+        excluded_subtrees: Vec::new(),
+    }
+}
+
+/// The local CA's parameters, constrained to this station's names.
+///
+/// The distinguished name is deterministic, and it has to be:
+/// [`ensure_self_signed`] rebuilds these from scratch when it reuses a CA off
+/// disk, and the reconstructed distinguished name has to match the stored
+/// certificate's subject exactly or the leaf it signs will chain to nothing.
+/// (The constraints only matter when the CA certificate is made; the issuer
+/// built from these parameters to sign a leaf uses the name and the key.)
+fn ca_params(ca_names: &[String]) -> rcgen::CertificateParams {
     let mut params = rcgen::CertificateParams::default();
     let mut dn = rcgen::DistinguishedName::new();
     dn.push(rcgen::DnType::CommonName, "BirdNet-Behavior local CA");
@@ -605,12 +768,13 @@ fn ca_params() -> rcgen::CertificateParams {
         rcgen::KeyUsagePurpose::KeyCertSign,
         rcgen::KeyUsagePurpose::CrlSign,
     ];
+    params.name_constraints = Some(name_constraints(ca_names));
     params
 }
 
-/// Mint the local CA. Returns `(key PEM, certificate PEM, notAfter)`.
-fn generate_ca(now: i64) -> Result<(String, String, i64), TlsError> {
-    let mut params = ca_params();
+/// Mint the local CA for `ca_names`. Returns `(key PEM, certificate PEM, notAfter)`.
+fn generate_ca(now: i64, ca_names: &[String]) -> Result<(String, String, i64), TlsError> {
+    let mut params = ca_params(ca_names);
     let (not_before, not_after) = validity_window(now, CA_VALIDITY_DAYS);
     let (y, m, d) = civil_ymd(not_before);
     params.not_before = rcgen::date_time_ymd(y, m, d);
@@ -654,8 +818,7 @@ fn generate_leaf(
 
     let ca_key =
         rcgen::KeyPair::from_pem(ca_key_pem).map_err(|e| TlsError::Generate(e.to_string()))?;
-    let ca_params = ca_params();
-    let issuer = rcgen::Issuer::new(ca_params, ca_key);
+    let issuer = rcgen::Issuer::new(ca_params(hostnames), ca_key);
 
     let leaf_key = rcgen::KeyPair::generate().map_err(|e| TlsError::Generate(e.to_string()))?;
     let cert = params
@@ -1289,6 +1452,7 @@ mod tests {
             not_after: 1_800_000_000,
             ca_not_after: 2_100_000_000,
             hostnames: names(&["localhost", "pi.local"]),
+            ca_hostnames: names(&["localhost"]),
         };
         assert_eq!(SelfSignedMeta::decode(&m.encode()).unwrap(), m);
     }
@@ -1315,6 +1479,7 @@ mod tests {
             not_after: now + renew + 60,
             ca_not_after: far,
             hostnames: hosts.clone(),
+            ca_hostnames: names(&["localhost"]),
         };
         assert!(
             fresh.leaf_usable_for(&hosts, now),
@@ -1325,6 +1490,7 @@ mod tests {
             not_after: now + renew - 60,
             ca_not_after: far,
             hostnames: hosts.clone(),
+            ca_hostnames: names(&["localhost"]),
         };
         assert!(
             !due.leaf_usable_for(&hosts, now),
@@ -1335,16 +1501,20 @@ mod tests {
             not_after: now - 1,
             ca_not_after: far,
             hostnames: hosts.clone(),
+            ca_hostnames: names(&["localhost"]),
         };
         assert!(!expired.leaf_usable_for(&hosts, now));
 
         // The CA gets the same margin, on its own clock.
-        assert!(due.ca_usable(now), "a far-off CA is still signable with");
+        assert!(
+            due.ca_usable_for(&names(&["localhost"]), now),
+            "a far-off CA is still signable with"
+        );
         let ca_due = SelfSignedMeta {
             ca_not_after: now + renew - 60,
             ..fresh
         };
-        assert!(!ca_due.ca_usable(now));
+        assert!(!ca_due.ca_usable_for(&names(&["localhost"]), now));
     }
 
     #[test]
@@ -1354,6 +1524,7 @@ mod tests {
             not_after: now + 10 * 365 * 24 * 60 * 60,
             ca_not_after: now + 20 * 365 * 24 * 60 * 60,
             hostnames: names(&["localhost"]),
+            ca_hostnames: names(&["localhost"]),
         };
         assert!(m.leaf_usable_for(&names(&["localhost"]), now));
         assert!(
@@ -1513,6 +1684,7 @@ mod tests {
                 not_after: unix_now() + 24 * 60 * 60,
                 ca_not_after: unix_now() + 3600 * 24 * 3650,
                 hostnames: hosts.clone(),
+                ca_hostnames: names(&["localhost"]),
             }
             .encode(),
         )
@@ -1579,6 +1751,7 @@ mod tests {
                 not_after: unix_now() + 24 * 60 * 60,
                 ca_not_after: unix_now() + 3600 * 24 * 3650,
                 hostnames: hosts,
+                ca_hostnames: names(&["localhost"]),
             }
             .encode(),
         )
@@ -1754,5 +1927,191 @@ mod tests {
             matches!(&err, TlsError::Empty(p, "certificate") if p == &blank),
             "{err:?}"
         );
+    }
+
+    // ---- the local CA may only vouch for this station's own names (V4) ----
+
+    /// Verify the first certificate of `chain_pem` for `name` against the CA in
+    /// `ca_pem`, with rustls's own `WebPki` verifier: the code a browser-less
+    /// client (and `--doctor`) would run, and the one that enforces name
+    /// constraints.
+    fn verify_for(chain_pem: &str, ca_pem: &str, name: &str) -> Result<(), rustls::Error> {
+        use rustls::client::WebPkiServerVerifier;
+        use rustls::client::danger::ServerCertVerifier as _;
+        use rustls_pki_types::{ServerName, UnixTime};
+        let leaf = CertificateDer::pem_slice_iter(chain_pem.as_bytes())
+            .next()
+            .expect("a certificate")
+            .expect("parses");
+        let mut roots = rustls::RootCertStore::empty();
+        for ca in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+            roots.add(ca.expect("parses")).expect("a usable root");
+        }
+        let verifier = WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()
+        .expect("verifier");
+        let server_name = ServerName::try_from(name).expect("a valid name").to_owned();
+        verifier
+            .verify_server_cert(&leaf, &[], &server_name, &[], UnixTime::now())
+            .map(|_| ())
+    }
+
+    fn station_material() -> (tempfile::TempDir, String, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let hosts = names(&[
+            "localhost",
+            "birdpi",
+            "birdpi.local",
+            "192.168.1.40",
+            "127.0.0.1",
+        ]);
+        ensure_self_signed(dir.path(), &hosts, 30).expect("generate");
+        let ca_pem = std::fs::read_to_string(dir.path().join(CA_CERT)).unwrap();
+        let ca_key = std::fs::read_to_string(dir.path().join(CA_KEY)).unwrap();
+        let chain = std::fs::read_to_string(dir.path().join(LEAF_CERT)).unwrap();
+        (dir, ca_pem, ca_key, chain)
+    }
+
+    #[test]
+    fn the_stations_own_names_verify_against_its_ca() {
+        let (_dir, ca, _key, chain) = station_material();
+        for name in [
+            "localhost",
+            "birdpi",
+            "birdpi.local",
+            "192.168.1.40",
+            "127.0.0.1",
+        ] {
+            verify_for(&chain, &ca, name)
+                .unwrap_or_else(|e| panic!("{name} should verify against the station's CA: {e}"));
+        }
+    }
+
+    /// The point of the constraint: whoever can read `local-ca.key` (anything
+    /// running as the service user) can sign a certificate for any name, and
+    /// every device that imported the CA would believe it. With the constraint
+    /// the signature is valid and the name is refused.
+    #[test]
+    fn the_ca_cannot_vouch_for_a_public_name() {
+        let (_dir, ca, ca_key, _chain) = station_material();
+        let now = unix_now();
+        for hostile in [
+            "bank.example.com",
+            "accounts.google.com",
+            "8.8.8.8",
+            "203.0.113.7",
+        ] {
+            let (forged, _key, _na) = generate_leaf(&ca_key, &names(&[hostile]), 30, now)
+                .expect("the CA's key can sign anything; only the verifier can refuse");
+            let result = verify_for(&forged, &ca, hostile);
+            assert!(
+                result.is_err(),
+                "a certificate for {hostile} signed by the station's CA must not verify"
+            );
+        }
+    }
+
+    /// The counterpart: a constraint that rejects everything would pass the test
+    /// above. Names a LAN really uses, which the CA was not told about at
+    /// creation, must still verify, or every DHCP change would need a re-import.
+    #[test]
+    fn the_ca_still_vouches_for_the_lan_it_lives_on() {
+        let (_dir, ca, ca_key, _chain) = station_material();
+        let now = unix_now();
+        for lan in [
+            "10.9.8.7",
+            "172.20.1.2",
+            "192.168.50.60",
+            "other-pi.local",
+            "::1",
+        ] {
+            let (cert, _key, _na) = generate_leaf(&ca_key, &names(&[lan]), 30, now).expect("sign");
+            verify_for(&cert, &ca, lan)
+                .unwrap_or_else(|e| panic!("{lan} is a LAN name and should verify: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_new_public_hostname_needs_a_new_ca_and_a_lan_name_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_self_signed(dir.path(), &names(&["localhost", "birdpi.local"]), 365).unwrap();
+        let ca_first = std::fs::read(dir.path().join(CA_CERT)).unwrap();
+        // A new LAN name and a new LAN address: same CA, so no re-import.
+        ensure_self_signed(
+            dir.path(),
+            &names(&["localhost", "birdpi.local", "nest.local", "192.168.7.7"]),
+            365,
+        )
+        .unwrap();
+        assert_eq!(
+            ca_first,
+            std::fs::read(dir.path().join(CA_CERT)).unwrap(),
+            "a name the CA already permits must not cost the operator a re-import"
+        );
+        // A name outside what the CA permits cannot be added to it.
+        ensure_self_signed(dir.path(), &names(&["localhost", "birds.example.org"]), 365).unwrap();
+        let ca_second = std::fs::read_to_string(dir.path().join(CA_CERT)).unwrap();
+        let chain = std::fs::read_to_string(dir.path().join(LEAF_CERT)).unwrap();
+        assert_ne!(
+            ca_first,
+            ca_second.as_bytes(),
+            "a new CA constrained to the new name"
+        );
+        verify_for(&chain, &ca_second, "birds.example.org")
+            .expect("the name the operator asked for must verify");
+    }
+
+    #[test]
+    fn a_ca_from_before_the_constraint_is_replaced_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_self_signed(dir.path(), &names(&["localhost"]), 365).unwrap();
+        // The sidecar an earlier release wrote: no record of what the CA permits.
+        let meta = std::fs::read_to_string(dir.path().join(META)).unwrap();
+        let legacy = meta
+            .lines()
+            .filter(|l| !l.starts_with("ca_hostnames="))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(dir.path().join(META), legacy).unwrap();
+        let before = std::fs::read(dir.path().join(CA_CERT)).unwrap();
+        ensure_self_signed(dir.path(), &names(&["localhost"]), 365).unwrap();
+        assert_ne!(
+            before,
+            std::fs::read(dir.path().join(CA_CERT)).unwrap(),
+            "an unconstrained CA that can sign for any name must not be kept"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_file_is_created_with_its_final_mode_not_widened_then_narrowed() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("k.tmp");
+        // The mode as created, before any chmod: a process umask can only
+        // remove bits, so a file that is 0600 here was never wider.
+        let mut f = create_private(&path, 0o600).unwrap();
+        f.write_all(b"secret").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // A leftover from a crash is replaced, not appended to or followed.
+        drop(f);
+        let mut again = create_private(&path, 0o600).unwrap();
+        again.write_all(b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        // A planted symlink at the temporary name is not written through.
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let link = dir.path().join("l.tmp");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        create_private(&link, 0o600).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
     }
 }

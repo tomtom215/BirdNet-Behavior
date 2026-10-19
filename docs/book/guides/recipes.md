@@ -25,7 +25,7 @@ On the [Today](../guide/today.md) page, use **re-label** on the row to correct t
 
 ## Cut down on false positives
 
-Enable the quality pre-filter and nudge the confidence threshold up — see the full [Tuning guide](./tuning.md). For a single noisy species, add a per-species threshold instead of raising the global bar.
+Nudge the confidence threshold up — see the full [Tuning guide](./tuning.md). For a single noisy species, add a per-species threshold instead of raising the global bar.
 
 ## Listen to last night's owl
 

@@ -163,6 +163,9 @@ pub(super) fn render_settings_page(
     crate::routes::admin::admin_shell("Settings", "settings", &settings_body(settings, names))
 }
 
+static SETTINGS_FILTER_SCRIPT: crate::seal::Sealed =
+    crate::seal::Sealed::new(r#"<script src="/static/settings-filter.js" defer></script>"#);
+
 /// The page-specific body: a scoped `<style>` block plus the settings form.
 ///
 /// Kept separate from [`render_settings_page`] so the inline-style guard can
@@ -197,7 +200,7 @@ fn settings_body(settings: &HashMap<String, String>, names: &NameLocalizer) -> S
   </div>
   </div>
 </div>
-  <script src="/static/settings-filter.js" defer></script>"#
+  {SETTINGS_FILTER_SCRIPT}"#
     )
 }
 
@@ -208,7 +211,8 @@ fn settings_body(settings: &HashMap<String, String>, names: &NameLocalizer) -> S
 /// page and is the single home for the legacy `.card`/`.grid-2`/`.hint` form
 /// classes (a `<style>` block carries no CSP nonce burden — the inline-style
 /// guard only forbids `style="` attributes).
-pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
+pub(crate) static SETTINGS_FORM_CSS: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
       .card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem;
                padding: 1.5rem; margin-bottom: 1.5rem; }
       /* `.card h2` in app.css is the card *eyebrow*: 11px, uppercase, muted.
@@ -305,7 +309,8 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       .save-row { display: flex; align-items: center; gap: 1rem; }
       .save-note { color: var(--fg-3); font-size: 0.875rem; }
       .save-note.dim { color: var(--fg-4); font-size: 0.8rem; }
-    </style>";
+    </style>",
+);
 
 /// One settings section, for rendering a task-scoped subset on a Station tab.
 #[derive(Clone, Copy)]

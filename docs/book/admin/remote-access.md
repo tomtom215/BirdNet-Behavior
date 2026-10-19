@@ -1,6 +1,6 @@
 # Remote Access & Security
 
-By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Station management tabs and every action that changes something** — with a password a fresh install sets for you. For a station reachable from beyond the LAN, [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in) puts the dashboard itself behind that sign-in. This page covers reaching the station from your network and from elsewhere, safely.
+By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Settings management tabs and every action that changes something** — with a password a fresh install sets for you. For a station reachable from beyond the LAN, [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in) puts the dashboard itself behind that sign-in. This page covers reaching the station from your network and from elsewhere, safely.
 
 ## On your local network
 
@@ -49,6 +49,17 @@ clock has not been set yet (no battery-backed clock, NTP not yet reached) no
 certificate is minted: the station serves plain HTTP on the same address,
 says so in the journal and in `--doctor`, and restarts itself to mint one as
 soon as the clock is set.
+
+The CA is **limited to this station's own names**: `localhost`, `.local`
+names, the loopback, private and link-local address ranges, and any extra name
+you gave with `--tls-hostnames`. Anything that can read the CA's private key
+(it is `local-ca.key`, mode 0600, owned by the service user) can therefore not
+mint a certificate for a public website that your devices would trust. A phone
+joining the network, a new DHCP lease or a new `.local` name needs nothing from
+you. A new *public* name added to `--tls-hostnames` does: the station makes a
+new CA for it, logs a warning saying so, and you import the new `local-ca.crt`
+on the devices that trusted the old one. The same happens once, when you
+upgrade from a release before CAs were limited this way.
 
 To serve **only** HTTPS on the usual port, point both at the same address:
 
@@ -201,7 +212,7 @@ sends, and every request would 404 with nothing to explain why.
 
 ## Built-in admin sign-in
 
-The binary gates the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention for the password. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open. Signing in is required for the `/admin*` panel, the Station management tabs (`/station/capture`, `/station/alerts`, `/station/data`, `/station/settings`, `/station/access`) and every action that changes something — deleting, relabelling, reviewing or locking a detection, approving or deleting a quarantined record, bulk review from Search, and saving the onboarding wizard.**
+The binary gates the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention for the password. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open. Signing in is required for the `/admin*` panel, the Settings management tabs (`/station/capture`, `/station/alerts`, `/station/data`, `/station/settings`, `/station/access`) and every action that changes something — deleting, relabelling, reviewing or locking a detection, approving or deleting a quarantined record, bulk review from Search, and saving the onboarding wizard.**
 
 Requesting `/admin*` without a session redirects (303) to a sign-in form at `/login`, which issues a session cookie. It is **not** HTTP Basic Auth, so `curl -u user:pass` will not work — post the form, or sign in through the browser.
 
@@ -217,7 +228,7 @@ After editing the config, restart the service (`sudo systemctl restart birdnet-b
 
 ### Admins and viewers {#roles}
 
-Each account on **Station → Access** is an **admin** or a **viewer**.
+Each account on **Settings → Access** is an **admin** or a **viewer**.
 
 - An **admin** can do everything the sign-in protects.
 - A **viewer** can open every page behind the sign-in, the settings forms included, but can change nothing: every save, delete, lock, review or other change is refused (`403`). The settings forms show a viewer every stored password, token and key masked.

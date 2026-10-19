@@ -48,7 +48,10 @@ impl std::error::Error for InferenceError {}
 /// Configuration for the `BirdNET` model.
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
-    /// Sensitivity adjustment for sigmoid (higher = more sensitive, range 0.5-1.5).
+    /// BirdNET's `SENSITIVITY` (0.5–1.5), applied to logit-output (V2.4) models
+    /// as a sigmoid slope of `clamp(2 − sensitivity, 0.5, 1.5)` (see
+    /// [`logit_slope`]); a higher value is a *lower* slope. Ignored by models
+    /// that already emit probabilities.
     pub sensitivity: f32,
     /// Minimum confidence to include in results.
     pub confidence_threshold: f32,
@@ -354,10 +357,12 @@ impl BirdNetModel {
         // Output-to-confidence mapping depends on the model family:
         //
         //   * V2.4 (input shape [1, 144_000]) emits raw logits in roughly
-        //     [-5, 5]; the canonical BirdNET-Analyzer pipeline applies a
-        //     sensitivity-scaled sigmoid to map them into [0, 1]. On the
-        //     bundled Pica WAV this gives 0.93–0.97 confidence for the
-        //     target species, matching BirdNET-Pi numbers.
+        //     [-5, 5]; BirdNET-Analyzer and BirdNET-Pi apply a
+        //     sensitivity-scaled sigmoid to map them into [0, 1] (slope
+        //     `clamp(2 − SENSITIVITY, 0.5, 1.5)`, see `logit_slope`). On the
+        //     bundled Pica WAV at the default 1.25 that gives 0.912 / 0.932 /
+        //     0.886 for its three magpie windows: BirdNET-Pi's own expected
+        //     values for the same recording.
         //
         //   * V3.0 preview models (dynamic input shape) emit values that
         //     are *already* probabilities in [0, 1] — the official
@@ -1096,18 +1101,21 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 ///   it to an already-calibrated probability is meaningless and was the
 ///   cause of the 52 % → 93 % Magpie fix in this session.
 ///
-/// * `is_probability == false` (V2.4): apply `sigmoid(sensitivity * raw)`.
-///   The setting *is* the slope, so raising it steepens the curve, and at any
-///   confidence threshold above 0.5 more detections pass (a logit clears the
-///   bar when `raw > logit(threshold) / sensitivity`).
+/// * `is_probability == false` (V2.4): apply `sigmoid(slope * raw)` with
+///   `slope = logit_slope(sensitivity)`, which is `clamp(2 − sensitivity, 0.5, 1.5)`.
 ///
-///   This is not the upstream mapping. BirdNET-Pi uses a slope of
-///   `clamp(2 − SENSITIVITY, 0.5, 1.5)` (`Nachtzuster/BirdNET-Pi`,
-///   `scripts/utils/models.py`), so the same number moves the other way — its
-///   default 1.25 is a slope of 0.75 there and 1.25 here. BirdNET-Analyzer's
-///   `flat_sigmoid` treats sensitivity as a bias shift instead. A
-///   `SENSITIVITY` carried over from BirdNET-Pi is read as written, and
-///   therefore does not reproduce that station's behaviour.
+///   That is BirdNET-Pi's mapping, line for line (`Nachtzuster/BirdNET-Pi`,
+///   `scripts/utils/models.py`: `max(0.5, min(1.0 - (sens - 1.0), 1.5))`), and
+///   BirdNET-Analyzer's before it, so the same `SENSITIVITY` and the same
+///   audio give the same stored confidence here as there: the default 1.25 is
+///   a slope of 0.75 (a logit of 3.12 is 0.912, not 0.980). It is **not**
+///   birdnet-go's, which uses the setting itself as the slope (its default
+///   1.0); to carry a birdnet-go value across, enter `2 − value`.
+///
+///   The direction is the counter-intuitive part: a *higher* value is a
+///   *lower* slope, which pulls every score toward 0.5, so at any confidence
+///   threshold above 0.5 (all of the usual ones) a higher value means
+///   *fewer* detections, and below 0.5 it means more.
 ///
 /// A non-finite `raw` is **0.0**, never a detection. A model that overflows
 /// emits `inf`, and both mappings send `+inf` to exactly 1.0 — a confident
@@ -1121,8 +1129,18 @@ pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f
     if is_probability {
         raw.clamp(0.0, 1.0)
     } else {
-        sigmoid(sensitivity * raw)
+        sigmoid(logit_slope(sensitivity) * raw)
     }
+}
+
+/// The sigmoid slope a logit-output (V2.4) model's `SENSITIVITY` setting
+/// stands for: `clamp(2 − sensitivity, 0.5, 1.5)`, BirdNET-Pi's mapping.
+///
+/// Public so the settings form and the documentation can state the same
+/// arithmetic the model applies.
+#[must_use]
+pub const fn logit_slope(sensitivity: f32) -> f32 {
+    (2.0 - sensitivity).clamp(0.5, 1.5)
 }
 
 /// [`compute_confidence`] for a human class, failing towards privacy: a
@@ -2074,14 +2092,40 @@ mod tests {
     }
 
     #[test]
-    fn compute_confidence_v24_logits_sensitivity_matters() {
-        // sensitivity > 1 makes the same logit more confident.
-        let conf_default = compute_confidence(1.0, 1.0, false);
-        let conf_sensitive = compute_confidence(1.0, 2.0, false);
-        assert!(conf_sensitive > conf_default);
-        // sensitivity < 1 makes it less confident.
-        let conf_dampened = compute_confidence(1.0, 0.5, false);
-        assert!(conf_dampened < conf_default);
+    fn compute_confidence_v24_sensitivity_is_birdnet_pis_inverted_slope() {
+        // A higher SENSITIVITY is a LOWER slope (BirdNET-Pi: clamp(2 - S, 0.5, 1.5)),
+        // which pulls a positive logit toward 0.5 ...
+        let strict = compute_confidence(2.0, 1.5, false);
+        let default = compute_confidence(2.0, 1.0, false);
+        let lax = compute_confidence(2.0, 0.5, false);
+        assert!(
+            strict < default && default < lax,
+            "{strict} {default} {lax}"
+        );
+        // ... and a negative one toward 0.5 from below, i.e. upward.
+        assert!(compute_confidence(-2.0, 1.5, false) > compute_confidence(-2.0, 0.5, false));
+        // The slope itself, including the clamp at both ends.
+        assert!((logit_slope(1.25) - 0.75).abs() < 1e-6);
+        assert!((logit_slope(1.0) - 1.0).abs() < 1e-6);
+        assert!((logit_slope(0.0) - 1.5).abs() < 1e-6, "clamped to 1.5");
+        assert!((logit_slope(9.0) - 0.5).abs() < 1e-6, "clamped to 0.5");
+    }
+
+    /// The numbers BirdNET-Pi itself asserts for this recording
+    /// (`scripts/utils/analysis.py`, `__main__`: 0.912, 0.9316, 0.8857 for the
+    /// three Pica pica windows of its test file, model V2.4 FP16, defaults
+    /// SENSITIVITY=1.25), reproduced from the raw V2.4 logits our pipeline
+    /// reads from `tests/testdata/Pica_pica_30s.wav` (windows at 3, 12 and 21 s).
+    /// With the old `sigmoid(1.25 * raw)` these came out 0.980 / 0.987 / 0.968.
+    #[test]
+    fn v24_confidence_reproduces_birdnet_pis_expected_values() {
+        for (raw, expected) in [(3.123_f32, 0.912_f32), (3.486, 0.9316), (2.739, 0.8857)] {
+            let got = compute_confidence(raw, 1.25, false);
+            assert!(
+                (got - expected).abs() < 1.5e-3,
+                "raw {raw}: got {got}, BirdNET-Pi expects {expected}"
+            );
+        }
     }
 
     /// Regression for the V3.0 sigmoid-on-probabilities bug.

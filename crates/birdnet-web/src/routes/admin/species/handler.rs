@@ -29,8 +29,13 @@ pub async fn species_page() -> axum::response::Redirect {
 pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
     state
         .run_blocking(move |state| {
-            let (exclude, include) = load_lists(state);
-            Html(render_species_partial(&exclude, &include, state.names()))
+            let (exclude, include, whitelist) = load_lists(state);
+            Html(render_species_partial(
+                &exclude,
+                &include,
+                &whitelist,
+                state.names(),
+            ))
         })
         .await
 }
@@ -40,9 +45,10 @@ pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
 pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
     state
         .run_blocking(move |state| {
-            let (exclude, include) = load_lists(state);
-            let species = state
-                .with_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default());
+            let (exclude, include, _) = load_lists(state);
+            let species = state.with_read_db(|conn| {
+                birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default()
+            });
             #[allow(clippy::cast_sign_loss)]
             let rows: Vec<(String, String, u64)> = species
                 .into_iter()
@@ -92,10 +98,11 @@ pub async fn add_exclude(
                 Some(&form.name),
                 None,
             );
-            let (exclude, include) = load_lists(state);
+            let (exclude, include, whitelist) = load_lists(state);
             Ok(Html(render_species_partial(
                 &exclude,
                 &include,
+                &whitelist,
                 state.names(),
             )))
         })
@@ -125,10 +132,11 @@ pub async fn remove_exclude(
                 Some(&form.name),
                 None,
             );
-            let (exclude, include) = load_lists(state);
+            let (exclude, include, whitelist) = load_lists(state);
             Ok(Html(render_species_partial(
                 &exclude,
                 &include,
+                &whitelist,
                 state.names(),
             )))
         })
@@ -158,10 +166,11 @@ pub async fn add_include(
                 Some(&form.name),
                 None,
             );
-            let (exclude, include) = load_lists(state);
+            let (exclude, include, whitelist) = load_lists(state);
             Ok(Html(render_species_partial(
                 &exclude,
                 &include,
+                &whitelist,
                 state.names(),
             )))
         })
@@ -191,10 +200,76 @@ pub async fn remove_include(
                 Some(&form.name),
                 None,
             );
-            let (exclude, include) = load_lists(state);
+            let (exclude, include, whitelist) = load_lists(state);
             Ok(Html(render_species_partial(
                 &exclude,
                 &include,
+                &whitelist,
+                state.names(),
+            )))
+        })
+        .await
+}
+
+/// Add a species to the whitelist and return the updated partial.
+///
+/// The whitelist exempts a species from the occurrence threshold and from
+/// nothing else; see `SpeciesFilterConfig::whitelist`.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`.
+pub async fn add_whitelist(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Form(form): Form<SpeciesNameForm>,
+) -> Result<Html<String>, StatusCode> {
+    state
+        .run_blocking(move |state| {
+            modify_list(state, "species_whitelist", &form.name, &ListAction::Add);
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.whitelist.add",
+                Some(&form.name),
+                None,
+            );
+            let (exclude, include, whitelist) = load_lists(state);
+            Ok(Html(render_species_partial(
+                &exclude,
+                &include,
+                &whitelist,
+                state.names(),
+            )))
+        })
+        .await
+}
+
+/// Remove a species from the whitelist and return the updated partial.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`.
+pub async fn remove_whitelist(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Form(form): Form<SpeciesNameForm>,
+) -> Result<Html<String>, StatusCode> {
+    state
+        .run_blocking(move |state| {
+            modify_list(state, "species_whitelist", &form.name, &ListAction::Remove);
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.whitelist.remove",
+                Some(&form.name),
+                None,
+            );
+            let (exclude, include, whitelist) = load_lists(state);
+            Ok(Html(render_species_partial(
+                &exclude,
+                &include,
+                &whitelist,
                 state.names(),
             )))
         })
@@ -216,7 +291,7 @@ fn load_thresholds_and_suggestions(
     Vec<birdnet_db::sqlite::SpeciesThreshold>,
     Vec<SuggestedThreshold>,
 ) {
-    state.with_db(|conn| {
+    state.with_read_db(|conn| {
         let thresholds = birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default();
         let configured: std::collections::HashMap<&str, f64> = thresholds
             .iter()
@@ -375,12 +450,13 @@ enum ListAction {
     Remove,
 }
 
-fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>) {
+fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>, Vec<String>) {
     let lists = configured_species_lists(state);
-    (lists.exclude, lists.include)
+    (lists.exclude, lists.include, lists.whitelist)
 }
 
-/// The operator's species include/exclude lists as stored by this page.
+/// The operator's species include, exclude and whitelist lists as stored by
+/// this page and the Settings form.
 ///
 /// Public because the detection daemon has to apply exactly these lists, and
 /// two parsers for one stored value is how the two surfaces drift apart. The
@@ -391,13 +467,13 @@ fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>) {
 pub fn configured_species_lists(
     state: &AppState,
 ) -> birdnet_core::inference::species_filter::SpeciesLists {
-    state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        birdnet_core::inference::species_filter::SpeciesLists {
+    state.with_read_db(
+        |conn| birdnet_core::inference::species_filter::SpeciesLists {
             include: parse_list(get(conn, "species_include").ok().as_deref()),
             exclude: parse_list(get(conn, "species_exclude").ok().as_deref()),
-        }
-    })
+            whitelist: parse_list(get(conn, "species_whitelist").ok().as_deref()),
+        },
+    )
 }
 
 /// Render the species-list management body (no document shell).
@@ -406,8 +482,8 @@ pub fn configured_species_lists(
 /// (`crate::routes::pages::homes::station_tabs`), which renders the same
 /// include/exclude UI in the main shell.
 pub(crate) fn species_body(state: &AppState) -> String {
-    let (exclude, include) = load_lists(state);
-    super::render::species_lists_body(&exclude, &include, state.names())
+    let (exclude, include, whitelist) = load_lists(state);
+    super::render::species_lists_body(&exclude, &include, &whitelist, state.names())
 }
 
 fn parse_list(val: Option<&str>) -> Vec<String> {

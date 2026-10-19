@@ -342,7 +342,7 @@ fn list_view(
     // their filter matched nothing when the database is what failed. The
     // sparklines are decoration and keep their fallback: a missing sparkline
     // costs a picture, not a fact.
-    let loaded = state.with_db(|conn| {
+    let loaded = state.with_read_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 500),
             |q| super::name_search::search_species(conn, state.names(), q, 500),
@@ -413,7 +413,7 @@ fn photos_view(
     // browse surface telling its reader their filter matched nothing when the
     // database is what failed. The sparklines stay defaulted: a missing
     // sparkline costs a picture, not a fact.
-    let loaded = state.with_db(|conn| {
+    let loaded = state.with_read_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 200),
             |q| super::name_search::search_species(conn, state.names(), q, 200),
@@ -472,7 +472,7 @@ fn lifelist_view(state: &AppState) -> String {
     // The three big counters are this page's whole point, and a life list that
     // reads "0 species · 0 detections · 0 active days" is not an empty life
     // list — it is a lost one, shown to the person least able to shrug it off.
-    let loaded = state.with_db(|conn| {
+    let loaded = state.with_read_db(|conn| {
         let species_total = birdnet_db::sqlite::species_count(conn)?;
         let det_total = birdnet_db::sqlite::detection_count(conn)?;
         let active_days = birdnet_db::sqlite::distinct_detection_dates(conn)?.len();
@@ -629,7 +629,7 @@ async fn species_detail_page(
     let com_name = name.clone();
     let names = state.names_handle();
     let sci_name = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             // Raw `detections` on purpose. This resolves a display name, not a
             // number: a species whose every detection has been rejected is gone
             // from the species list and every aggregate, but a link to its page
@@ -676,7 +676,7 @@ async fn species_summary_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
+        state.with_read_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
     })
     .await;
 
@@ -732,7 +732,7 @@ async fn species_hourly_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::species_hourly_activity(conn, &name))
+        state.with_read_db(|conn| birdnet_db::sqlite::species_hourly_activity(conn, &name))
     })
     .await;
     match result {
@@ -772,7 +772,7 @@ async fn species_daily_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::species_daily_counts(conn, &name, 14))
+        state.with_read_db(|conn| birdnet_db::sqlite::species_daily_counts(conn, &name, 14))
     })
     .await;
     match result {
@@ -812,7 +812,7 @@ async fn species_detections_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::detections_by_species(conn, &name, 20))
+        state.with_read_db(|conn| birdnet_db::sqlite::detections_by_species(conn, &name, 20))
     })
     .await;
 
@@ -874,7 +874,7 @@ async fn species_info_partial(
     let com_name = name.clone();
     let state_clone = state.clone();
     let sci_name = tokio::task::spawn_blocking(move || {
-        state_clone.with_db(|conn| {
+        state_clone.with_read_db(|conn| {
             conn.query_row(
                 "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
                 [&com_name],
@@ -1057,7 +1057,7 @@ async fn species_status_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
+        state.with_read_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
     })
     .await;
 
@@ -1097,7 +1097,7 @@ async fn species_hero_partial(
     let lookup_name = name.clone();
     let state_clone = state.clone();
     let best = tokio::task::spawn_blocking(move || {
-        state_clone.with_db(|conn| {
+        state_clone.with_read_db(|conn| {
             // Shares `CLIP_AVAILABLE` with every other play-button surface, so
             // this page cannot end up offering audio the Recordings browser
             // knows has been reclaimed.
@@ -1189,7 +1189,7 @@ async fn species_companions_partial(
 
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::companion_species(conn, &name, 30, 10))
+        state.with_read_db(|conn| birdnet_db::sqlite::companion_species(conn, &name, 30, 10))
     })
     .await;
 

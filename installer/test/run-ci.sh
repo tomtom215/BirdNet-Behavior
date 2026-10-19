@@ -35,12 +35,15 @@ CI_TESTS=(
     container-model-cache.sh
     coord-parse.sh
     dockerfile-extension-target.sh
+    downloads-are-https-only.sh
     geomodel-fallback-quiet.sh
     geomodel-resume.sh
+    install-one-liner-is-a-release-asset.sh
     location-notice.sh
     model-resume.sh
     pipefail-sigpipe.sh
     quickstart-env.sh
+    release-tag-gate.sh
     rollback-geomodel.sh
     service-owner-preserved.sh
     service-unit.sh

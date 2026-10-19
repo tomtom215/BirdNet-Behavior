@@ -156,15 +156,17 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     } else {
         layout
     };
-    let arranged = layout.apply(TODAY_PAGE_HTML).unwrap_or_else(|missing| {
-        tracing::error!(
-            missing,
-            "today: the template lost a layout marker; rendering the default"
-        );
-        super::today_layout::Layout::default()
-            .apply(TODAY_PAGE_HTML)
-            .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
-    });
+    let arranged = layout
+        .apply(TODAY_PAGE_HTML.as_str())
+        .unwrap_or_else(|missing| {
+            tracing::error!(
+                missing,
+                "today: the template lost a layout marker; rendering the default"
+            );
+            super::today_layout::Layout::default()
+                .apply(TODAY_PAGE_HTML.as_str())
+                .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
+        });
     let body = arranged
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())
@@ -297,7 +299,7 @@ fn firstrun_checklist(
     let password_row = if password_set {
         r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Admin password</div><div class="d">settings are yours to change</div></div><span class="v">set</span></div>"#.to_string()
     } else {
-        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">No admin password</div><div class="d">anyone on the network can change settings — set one in the <a href="/onboarding">setup wizard</a> or <a href="/admin/accounts">Settings → Accounts</a></div></div><span class="v">open</span></div>"#.to_string()
+        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">No admin password</div><div class="d">anyone on the network can change settings — set one in the <a href="/onboarding">setup wizard</a> or <a href="/station/access">Settings → Access</a></div></div><span class="v">open</span></div>"#.to_string()
     };
     let (mic_mark, mic_title, mic_detail, mic_value) = enabled.first().map_or_else(
         || {

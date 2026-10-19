@@ -47,6 +47,13 @@ const DEFAULT_BROADCAST_CAPACITY: usize = 256;
 /// shallow ring is both correct and bounds worst-case retention to a few MB.
 const SPECTROGRAM_BROADCAST_CAPACITY: usize = 16;
 
+/// How many extra connections the analytics store opens for reads. Two: a heavy
+/// query on one leaves the other for the cheap requests. They share the
+/// instance's memory limit and thread count, so each costs a few hundred KB, not
+/// a second copy of anything.
+#[cfg(feature = "analytics")]
+const ANALYTICS_READERS: usize = 2;
+
 /// Shared application state.
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -80,6 +87,15 @@ impl Taxon {
     }
 }
 
+/// How many reads that scan the whole history may hold a pooled reader at once:
+/// half the pool, at least one, so what remains is always free for the health
+/// probe and the page partials. A station with no pool (an in-memory test
+/// database) reads through the writer and gets one slot.
+fn heavy_gate(readers: Option<&ReaderPool>) -> Arc<tokio::sync::Semaphore> {
+    let slots = readers.map_or(1, |pool| (pool.len() / 2).max(1));
+    Arc::new(tokio::sync::Semaphore::new(slots))
+}
+
 /// Inner state (wrapped in Arc for sharing).
 #[derive(Debug)]
 struct AppStateInner {
@@ -96,6 +112,9 @@ struct AppStateInner {
     /// what most tests use — and reads then take the writer, exactly as they did
     /// before this existed. See [`crate::db_pool`].
     readers: Option<ReaderPool>,
+    /// Admission for reads that scan the whole history. See
+    /// [`AppState::heavy_read_permit`].
+    heavy_reads: Arc<tokio::sync::Semaphore>,
     /// Path to the `SQLite` database file (for diagnostics).
     db_path: PathBuf,
     /// Directory containing extracted audio recording clips.
@@ -103,6 +122,12 @@ struct AppStateInner {
     /// `DuckDB` analytics database (file-backed, for behavioral queries).
     #[cfg(feature = "analytics")]
     analytics_db: Option<Mutex<AnalyticsDb>>,
+    /// Further connections to the same `DuckDB` database, for reads. The writer
+    /// above serialises everything that takes it; these let a cheap analytics
+    /// request run while a heavy one is in progress. `None` when the clone
+    /// failed (reads then share the writer, as they always did).
+    #[cfg(feature = "analytics")]
+    analytics_readers: Option<crate::db_pool::Pool<AnalyticsDb>>,
     /// Species image cache (Wikipedia/Wikimedia Commons).
     image_cache: Option<Arc<ImageCache>>,
     /// Broadcast channel for live detection WebSocket streaming.
@@ -289,14 +314,18 @@ impl AppState {
             .unwrap_or_else(|| Path::new("."))
             .join("recordings");
 
+        let readers = ReaderPool::open(&db_path);
         Ok(Self {
             inner: Arc::new(AppStateInner {
-                readers: ReaderPool::open(&db_path),
+                heavy_reads: heavy_gate(readers.as_ref()),
+                readers,
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
+                #[cfg(feature = "analytics")]
+                analytics_readers: None,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
@@ -368,6 +397,7 @@ impl AppState {
         // every analytics page silently empty on every subsequent start, with
         // nothing but one warning line to say why — a state an unattended
         // station never recovers from on its own.
+        let mut analytics_readers = None;
         let analytics_db = match AnalyticsDb::open_or_quarantine(analytics_path) {
             Ok((mut adb, outcome)) => {
                 match &outcome {
@@ -513,6 +543,20 @@ impl AppState {
                     );
                 }
 
+                // After the extension is loaded: the clones see what is registered
+                // on the instance, and they are taken last so a failure here leaves
+                // a working single-connection store behind it.
+                match (0..ANALYTICS_READERS)
+                    .map(|_| adb.try_clone_reader())
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(readers) => analytics_readers = Some(crate::db_pool::Pool::new(readers)),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "could not open the analytics read connections; analytics reads share one connection"
+                    ),
+                }
+
                 Some(Mutex::new(adb))
             }
             Err(e @ birdnet_behavioral::connection::AnalyticsError::Locked(_)) => {
@@ -533,13 +577,17 @@ impl AppState {
             }
         };
 
+        let readers = ReaderPool::open(&db_path);
         Ok(Self {
             inner: Arc::new(AppStateInner {
-                readers: ReaderPool::open(&db_path),
+                heavy_reads: heavy_gate(readers.as_ref()),
+                readers,
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
                 analytics_db,
+                #[cfg(feature = "analytics")]
+                analytics_readers,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
@@ -588,14 +636,18 @@ impl AppState {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("recordings");
+        let readers = ReaderPool::open(&db_path);
         Self {
             inner: Arc::new(AppStateInner {
-                readers: ReaderPool::open(&db_path),
+                heavy_reads: heavy_gate(readers.as_ref()),
+                readers,
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
+                #[cfg(feature = "analytics")]
+                analytics_readers: None,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
@@ -950,6 +1002,22 @@ impl AppState {
         }
     }
 
+    /// As [`Self::run_blocking`], for a closure that scans the whole history:
+    /// waits for a heavy-read slot first ([`Self::heavy_read_permit`]) and holds
+    /// it until the closure ends.
+    pub async fn run_blocking_heavy<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&Self) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = self.heavy_read_permit().await;
+        self.run_blocking(move |state| {
+            let _slot = permit;
+            f(state)
+        })
+        .await
+    }
+
     /// Execute a **read-only** closure against a pooled reader.
     ///
     /// # When to use this instead of [`Self::with_db`]
@@ -982,6 +1050,43 @@ impl AppState {
         }
     }
 
+    /// Wait for permission to run a read that scans the whole history (an export,
+    /// a feed, a multi-year insight), and hold the returned permit until the
+    /// query ends: move it into the blocking task, not the handler, so a client
+    /// that hangs up does not free the slot while the query runs on.
+    ///
+    /// Without this, enough of them take every pooled reader at once and the
+    /// cheap requests that share the pool wait behind them: against the real
+    /// binary with 300 000 detections, sixteen concurrent heavy reads kept
+    /// `/api/v2/health`, which the container `HEALTHCHECK` polls, waiting 22 s.
+    /// The wait here is a future, not a thread, so a queue of them costs memory
+    /// and no blocking-pool thread.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: it panics only if the gate has been closed, and
+    /// nothing closes it.
+    pub async fn heavy_read_permit(&self) -> tokio::sync::OwnedSemaphorePermit {
+        Arc::clone(&self.inner.heavy_reads)
+            .acquire_owned()
+            .await
+            .expect("the heavy-read gate is never closed")
+    }
+
+    /// As [`Self::heavy_read_permit`], but `None` instead of waiting when every
+    /// slot is taken: for the public, unauthenticated surfaces (the feeds) where
+    /// turning a request away with a `503` is the right answer to a flood.
+    #[must_use]
+    pub fn try_heavy_read_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.inner.heavy_reads).try_acquire_owned().ok()
+    }
+
+    /// How many heavy-read slots are free right now. Diagnostics and tests.
+    #[must_use]
+    pub fn heavy_read_slots_free(&self) -> usize {
+        self.inner.heavy_reads.available_permits()
+    }
+
     /// How many pooled readers this state holds. `0` when reads share the
     /// writer. Diagnostics and tests.
     #[must_use]
@@ -1000,6 +1105,44 @@ impl AppState {
         self.inner.analytics_db.as_ref().map(|db| {
             let db = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             f(&db)
+        })
+    }
+
+    /// Execute a read-only closure against the analytics database on one of its
+    /// read connections, so that it does not queue behind the writer connection
+    /// or behind another read.
+    ///
+    /// Returns `None` when analytics is not enabled. Use [`Self::with_analytics`]
+    /// for anything that writes: the mirror of a detection, a delete, the
+    /// import-exclusion setting. A reader sees what the writer has committed, so
+    /// a request that writes through `with_analytics` and then reads here reads
+    /// its own write.
+    #[cfg(feature = "analytics")]
+    pub fn with_analytics_read<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&AnalyticsDb) -> T,
+    {
+        self.inner.analytics_db.as_ref()?;
+        match &self.inner.analytics_readers {
+            Some(pool) => Some(pool.with(f)),
+            None => self.with_analytics(f),
+        }
+    }
+
+    /// [`Self::with_timeseries`] on a read connection; see
+    /// [`Self::with_analytics_read`].
+    #[cfg(feature = "analytics")]
+    pub fn with_timeseries_read<F, T>(
+        &self,
+        f: F,
+    ) -> Option<Result<T, birdnet_timeseries::TimeSeriesError>>
+    where
+        F: FnOnce(
+            birdnet_timeseries::executor::TimeSeriesDb<'_>,
+        ) -> Result<T, birdnet_timeseries::TimeSeriesError>,
+    {
+        self.with_analytics_read(|adb| {
+            birdnet_timeseries::executor::TimeSeriesDb::new(adb.conn()).and_then(f)
         })
     }
 
@@ -1155,7 +1298,7 @@ impl AppState {
     /// clip of a neighbour's conversation, and it was still public. A clip
     /// that another detection shares (two species in one segment) stays.
     fn remove_orphaned_clip(&self, file_name: &str) {
-        let still_named = self.with_db(|conn| {
+        let still_named = self.with_read_db(|conn| {
             conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM detections WHERE File_Name = ?1)",
                 [file_name],
@@ -1288,14 +1431,14 @@ impl AppState {
     pub fn approve_quarantine(&self, id: i64) -> Result<bool, birdnet_db::sqlite::DbError> {
         // Read the row *before* approving: `approve_quarantine` reports only
         // whether a row moved, and the analytics insert needs its values.
-        let row = self.with_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
+        let row = self.with_read_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
         let admitted = self.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))?;
         // Read back what migration 32's trigger stamped on the SQLite side, so
         // the mirror carries the same instant rather than a second computation
         // of it.
         #[cfg(feature = "analytics")]
         let instant = row.as_ref().and_then(|r| {
-            self.with_db(|conn| {
+            self.with_read_db(|conn| {
                 birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name)
             })
             .ok()

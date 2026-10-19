@@ -50,7 +50,7 @@ async fn list_runs(
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let runs = birdnet_db::sqlite::list_analysis_runs(conn, limit)?;
             let counts = birdnet_db::sqlite::detection_counts_by_run(conn)?;
             Ok::<_, birdnet_db::sqlite::DbError>((runs, counts))
@@ -73,7 +73,7 @@ async fn list_runs(
 /// `GET /api/v2/analysis-runs/{id}`.
 async fn get_run(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let Some(run) = birdnet_db::sqlite::analysis_run(conn, id)? else {
                 return Ok(None);
             };

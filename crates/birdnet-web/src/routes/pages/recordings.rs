@@ -41,7 +41,8 @@ use crate::state::AppState;
 
 /// The page shell + behaviour scripts; `{{content}}` is the server-rendered
 /// view (page-head + sub-tabs + body).
-const PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
+static PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/recordings.html"));
 
 /// The two Recordings views, in tab order.
 const VIEWS: &[SubTab] = &[
@@ -224,7 +225,7 @@ async fn fetch_clips(
     // The typed search also covers the station's own language.
     let also = super::name_search::also_species(state.names(), search.as_deref());
     tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let clips = birdnet_db::sqlite::recent_clips(
                 conn,
                 filter,
@@ -524,7 +525,7 @@ pub(super) fn base_name(file: &str) -> String {
 async fn live_view(state: &AppState, source: Option<&str>) -> String {
     let state_q = state.clone();
     let sources = tokio::task::spawn_blocking(move || {
-        state_q.with_db(|conn| AudioSourceStore::list(conn).unwrap_or_default())
+        state_q.with_read_db(|conn| AudioSourceStore::list(conn).unwrap_or_default())
     })
     .await
     .unwrap_or_default();

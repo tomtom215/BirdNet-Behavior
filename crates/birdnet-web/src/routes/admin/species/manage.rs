@@ -83,7 +83,7 @@ async fn manage_partial(State(state): State<AppState>) -> Html<String> {
 async fn load(state: AppState) -> Vec<SpeciesUsage> {
     let names = state.names_handle();
     let mut rows = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::species_disk_usage(conn).unwrap_or_default())
+        state.with_read_db(|conn| birdnet_db::sqlite::species_disk_usage(conn).unwrap_or_default())
     })
     .await
     .unwrap_or_default();
@@ -182,7 +182,7 @@ async fn delete_clips(
         // without the mark offers a player for audio that is gone. Being
         // wrong in the first direction is cheaper.
         let files = s
-            .with_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
+            .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
             .unwrap_or_default();
         let now = crate::routes::admin::species::manage::now_unix();
         let outcome = s
@@ -247,7 +247,7 @@ async fn measure(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -
     let dir = state.recording_dir();
     let (bytes, counted) = tokio::task::spawn_blocking(move || {
         let files = s
-            .with_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
+            .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
             .unwrap_or_default();
         let mut bytes = 0u64;
         let mut counted = 0usize;

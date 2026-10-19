@@ -33,8 +33,10 @@ runs on boot). Warm species photos with
 | `qa.mjs` | Capture every route × `THEMES` × `VPS`; writes `report.json` flagging overflow, console errors, broken images, stuck "loading…". |
 | `interactions.mjs` | **Behavioural gate.** Drives controls the way an impatient operator does — clicking twice while the first action is still in flight — and asserts they do not undo or duplicate their own work. Exits non-zero on regression; runs in CI after `axe.mjs`. |
 | `legibility.mjs` | **Measured gate.** The on-screen size of every SVG chart label on every route at 1440 and 390 px (computed font size × the SVG's screen scale), failing below 8.5 px. Charts are fixed-canvas SVGs scaled to their card, so labels authored at 8 px rendered at 2.7–5 px on a phone while every other gate was green; `static/chart-text.js` is what keeps them readable. Fails when it grades fewer than 200 labels, so a run that found no charts cannot pass. Runs in CI after `interactions.mjs`. |
+| `layout.mjs` | **Measured gate.** The defects a screenshot shows and neither axe nor `qa.mjs` can: text boxes that overlap other text (a hint struck through by the input above it, a heading drawn on its eyebrow), a block of 4+ lines squeezed into a column under 130px inside a wide card, a control that ends past the card holding it, HTML text under 9px, and two chart labels (SVG `<text>`) whose turned boxes overlap — the first four checks skip every `<svg>`, so the chord diagram's names ran into each other on the manual's own picture with the gate green. Per route x theme x viewport (1440 and 390). Fails when it grades fewer than 30 routes per leg, so a run that could not reach the fixture cannot pass. Not yet wired into `a11y.yml`. |
 | `base-path.mjs` | **Behavioural gate.** Against a fixture served under `BIRDNET_BASE_PATH=/bn` (`BNB_FIXTURE_ADDR`, `BNB_FIXTURE_DIR` run it beside the first), drives the pages and their scripted controls and fails on any same-origin request or socket outside the prefix. Runs in CI after `interactions.mjs`. |
 | `share.mjs` | Capture the `/r/{token}` share page, the tampered "gone" page, and the 404. |
+| `layout-selftest.mjs` | Holds `layout.mjs` to what a reader sees, in both directions, against the running fixture: a species name cut off by `overflow: hidden` is not reported as overlapping the play button beside it, and two painted lines over each other are. |
 | `book.mjs` | Regenerate `docs/book/images/*.png` at a consistent 1440 width, height-clipped for docs. |
 | `book-mobile.mjs` | Regenerate `docs/book/images/mobile/*.png` (iPhone-13 class — 390 CSS px @ DPR 3 → 1170×1992). |
 | `seed.py` | Deterministic demo-data generator (the community used in the screenshots). |
@@ -64,9 +66,16 @@ When adding a control that starts slow work, add a case here.
 ```bash
 BASE=http://127.0.0.1:8502 node book.mjs         # -> docs/book/images/*.png (desktop)
 BASE=http://127.0.0.1:8502 node book-mobile.mjs  # -> docs/book/images/mobile/*.png
-BASE=http://127.0.0.1:8502 node share.mjs        # share-page__light__desktop.png (needs BNB_SHARE_SECRET)
+BASE=http://127.0.0.1:8502 node book-onboarding.mjs   # -> docs/book/images/onboarding-accuracy.png
+BASE=http://127.0.0.1:8502 node share.mjs        # share-page__light__desktop.png
 cp shots/share-page__light__desktop.png ../../docs/book/images/share-page.png
 ```
+
+`DETAIL_NAME`, `DETAIL_DATE` and `DETAIL_TIME` pick the detection that `book.mjs`,
+`book-mobile.mjs` and `share.mjs` open. It has to be one the fixture holds *and*
+one whose clip exists (the fixture writes audio for its newest 20): the old
+`detection-detail.png` was the "Detection not found" page for a time the
+fixture never seeded, and nothing said so.
 
 ## Full QA sweep
 

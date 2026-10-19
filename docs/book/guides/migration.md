@@ -1,6 +1,6 @@
 # Migrating from BirdNET-Pi
 
-BirdNet-Behavior imports an existing BirdNET-Pi history safely and **non-destructively** — the source database is opened read-only and never modified. It can import *your own* station's history, which is the common case and needs almost no thought, or *another* station's, which needs two answers from you before it will be right.
+BirdNet-Behavior imports an existing BirdNET-Pi history safely and **non-destructively** — the source database is opened read-only and no row of it is ever changed. (If it is in WAL mode, SQLite may create `-shm` and `-wal` bookkeeping files beside it while it is read; that is the other reason to stop BirdNET-Pi first. An uploaded file is held in `migration-staging`, next to this station's own database, and removed together with those files once it is imported or replaced.) It can import *your own* station's history, which is the common case and needs almost no thought, or *another* station's, which needs two answers from you before it will be right.
 
 ## The common case: your own station's history
 
@@ -65,6 +65,12 @@ Every imported detection is tagged with the batch that brought it in. Each batch
 ## What carries over, and what does not
 
 **Carries over:** every detection row — date, time, scientific and common name, confidence, coordinates, and the BirdNET parameters (cutoff, week, sensitivity, overlap). BirdNET-Pi config keys (`ALSA_CARD`, `LATITUDE`/`LONGITUDE`, `OVERLAP`, `SF_THRESH`, `BIRDWEATHER_TOKEN`, …) are also understood when reading a `birdnet.conf`; see the mapping table in [Configuration](../getting-started/configuration.md).
+
+**Check these after moving a `birdnet.conf` across.** Most keys mean the same here. Three do not, or depend on what you run:
+
+- **The model.** BirdNET-Pi runs BirdNET V2.4; this project's default is BirdNET+ V3.0, which gives different detections. To keep V2.4, install it and set `CONFIDENCE=0.7`: [Same audio, same detections](./parity.md) has the commands and says what was measured.
+- **`PRIVACY_THRESHOLD`.** BirdNET-Pi's is a percentage of the species list; here it is the model's confidence for a human sound. A BirdNET-Pi `1` masks almost nothing here (`--doctor` warns above 0.5); use about `0.02`.
+- **The species lists.** BirdNET-Pi keeps `include_species_list.txt`, `exclude_species_list.txt` and `whitelist_species_list.txt` as files and this does not read them: enter the same species under **Settings → Capture → Species**, in the Allow, Exclusion and *Always allowed* lists. The whitelist has BirdNET-Pi's meaning (exempt from the occurrence filter only; exclude and allow still apply). Entries are matched by common or scientific name.
 
 **Does not carry over: the audio.** The importer copies rows, not files. Imported detections keep their original `File_Name`, but the WAV is not brought across, so the clip player on an imported detection's page has nothing behind it. Your counts, species lists and every analytic are unaffected — only playback is.
 

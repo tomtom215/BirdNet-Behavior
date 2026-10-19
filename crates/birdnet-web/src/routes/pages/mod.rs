@@ -68,29 +68,40 @@ use axum::routing::get;
 use crate::state::AppState;
 
 // Embedded HTML templates (compiled into the binary).
-pub(crate) const LAYOUT_HTML: &str = include_str!("../../../templates/layout.html");
-pub(crate) const ANALYTICS_PAGE_HTML: &str = include_str!("../../../templates/analytics.html");
-pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/species_detail.html");
-pub(crate) const TIMESERIES_PAGE_HTML: &str = include_str!("../../../templates/timeseries.html");
-pub(crate) const TODAY_PAGE_HTML: &str = include_str!("../../../templates/today.html");
+pub(crate) static LAYOUT_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/layout.html"));
+pub(crate) static ANALYTICS_PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/analytics.html"));
+pub(crate) static SPECIES_DETAIL_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/species_detail.html"));
+pub(crate) static TIMESERIES_PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/timeseries.html"));
+pub(crate) static TODAY_PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/today.html"));
 /// Themed confirmation modal (O-17), injected into every full-page shell.
-pub(crate) const CONFIRM_MODAL_HTML: &str =
-    include_str!("../../../templates/_partial_confirm_modal.html");
+pub(crate) static CONFIRM_MODAL_HTML: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
+    "../../../templates/_partial_confirm_modal.html"
+));
 /// Toast / snackbar live region (O-18), injected into every full-page shell.
-pub(crate) const TOAST_REGION_HTML: &str =
-    include_str!("../../../templates/_partial_toast_region.html");
+pub(crate) static TOAST_REGION_HTML: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
+    "../../../templates/_partial_toast_region.html"
+));
 /// Real footer (O-26) — site-meta only, destinations live in the topnav.
-pub(crate) const FOOTER_HTML: &str = include_str!("../../../templates/_partial_footer.html");
+pub(crate) static FOOTER_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/_partial_footer.html"));
 /// Command palette overlay (O-19), injected into every full-page shell.
-pub(crate) const CMDK_HTML: &str = include_str!("../../../templates/_partial_cmdk.html");
+pub(crate) static CMDK_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/_partial_cmdk.html"));
 /// Help-drawer dialog (O-20), injected into every full-page shell.
-pub(crate) const HELP_DRAWER_HTML: &str =
-    include_str!("../../../templates/_partial_help_drawer.html");
+pub(crate) static HELP_DRAWER_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/_partial_help_drawer.html"));
 /// Post-upgrade banner mount (O-21), injected at the top of `<main>`.
-pub(crate) const UPDATE_BANNER_HTML: &str =
-    include_str!("../../../templates/_partial_update_banner.html");
+pub(crate) static UPDATE_BANNER_HTML: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
+    "../../../templates/_partial_update_banner.html"
+));
 /// Phone-only bottom tab bar (O-24), injected before `</body>`.
-pub(crate) const TABBAR_HTML: &str = include_str!("../../../templates/_partial_tabbar.html");
+pub(crate) static TABBAR_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/_partial_tabbar.html"));
 
 /// Pre-compute and cache the heaviest analytics fragments at their default
 /// parameters.
@@ -225,8 +236,8 @@ fn render_page_inner(
         .replace("{{title}}", &escape_html(title))
         .replace("{{active_nav}}", active_nav)
         .replace("{{topnav_links}}", &topnav_links)
-        .replace("{{footer}}", FOOTER_HTML)
-        .replace("{{tabbar}}", TABBAR_HTML)
+        .replace("{{footer}}", FOOTER_HTML.as_str())
+        .replace("{{tabbar}}", TABBAR_HTML.as_str())
         .replace("{{tabbar_slots}}", &tabbar_slots)
         .replace("{{sign_out_link}}", sign_out_link)
         .replace("{{version}}", version)
@@ -236,11 +247,11 @@ fn render_page_inner(
         // resolves. Previously this happened after the version pass, which
         // left the banner with the literal placeholder + the dismissal-
         // localStorage key disabled by an empty `currentVersion`.
-        .replace("{{update_banner}}", UPDATE_BANNER_HTML)
-        .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
-        .replace("{{toast_region}}", TOAST_REGION_HTML)
-        .replace("{{cmdk_partial}}", CMDK_HTML)
-        .replace("{{help_drawer}}", HELP_DRAWER_HTML)
+        .replace("{{update_banner}}", UPDATE_BANNER_HTML.as_str())
+        .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML.as_str())
+        .replace("{{toast_region}}", TOAST_REGION_HTML.as_str())
+        .replace("{{cmdk_partial}}", CMDK_HTML.as_str())
+        .replace("{{help_drawer}}", HELP_DRAWER_HTML.as_str())
         // Second `{{version}}` substitution pass — picks up any `{{version}}`
         // tokens that landed via the partials inlined above (currently the
         // update banner's `data-current-version`).
@@ -657,13 +668,21 @@ mod tests {
     #[test]
     fn every_page_loads_the_chart_text_fitter() {
         use axum::http::HeaderMap;
-        let html = render_page_for_request("Test", "", "today", &HeaderMap::new()).0;
+        // As the middleware ships it: a script the layout did not seal would
+        // come out without the nonce. The nonce is minted per run, not written
+        // down: code scanning reads a literal reaching `redeem`'s `nonce` as a
+        // hard-coded cryptographic value.
+        let nonce = format!("nonce-{}", std::process::id());
+        let html = crate::seal::redeem(
+            &render_page_for_request("Test", "", "today", &HeaderMap::new()).0,
+            &nonce,
+        );
         let version = env!("CARGO_PKG_VERSION");
         assert!(
             html.contains(&format!(
-                r#"<script src="/static/chart-text.js?v={version}" defer></script>"#
+                r#"<script nonce="{nonce}" src="/static/chart-text.js?v={version}" defer></script>"#
             )),
-            "the layout must load chart-text.js, versioned and deferred"
+            "the layout must load chart-text.js, versioned, deferred and nonced"
         );
     }
 

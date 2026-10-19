@@ -48,9 +48,16 @@ fn write_wav_to(samples: &[f32], sample_rate: u32, path: &Path) -> Result<(), Ex
         hound::WavWriter::create(path, spec).map_err(|e| ExtractionError::Write(e.to_string()))?;
 
     for &sample in samples {
-        // Clamp to [-1.0, 1.0] then scale to i16 range.
-        let clamped = sample.clamp(-1.0, 1.0);
-        let scaled = (clamped * f32::from(i16::MAX)) as i16;
+        // Scale by 32768, ROUND, and saturate to the i16 range. 32768 because
+        // that is what the decoder divided by (`i16 / 32768`), so a 16-bit
+        // recording comes back exactly: scaling by 32767 changed about half of
+        // all values by one step and could not write -32768. Rounding because
+        // a bare `as` cast truncates toward zero, which doubles the
+        // quantisation noise (0.58 LSB RMS against 0.29) in every clip a person
+        // listens to. Full scale +1.0 saturates at 32767.
+        let scaled = (sample * 32_768.0)
+            .round()
+            .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
         writer
             .write_sample(scaled)
             .map_err(|e| ExtractionError::Write(e.to_string()))?;
@@ -93,6 +100,92 @@ pub fn generate_spectrogram(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clip's samples are rounded to the nearest 16-bit value, not cut toward
+    /// zero: 2.6 LSB is stored as 3, and -2.6 LSB as -3. Full scale stays full
+    /// scale, and anything beyond it is clamped.
+    #[test]
+    fn clip_samples_are_rounded_not_truncated() {
+        let lsb = 1.0 / 32_768.0;
+        let samples = [
+            2.6 * lsb,
+            -2.6 * lsb,
+            2.4 * lsb,
+            -2.4 * lsb,
+            1.0,
+            -1.0,
+            1.7,
+            -1.7,
+        ];
+        let dir = std::env::temp_dir().join(format!("bnb-wav-round-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("round.wav");
+        write_wav_to(&samples, 48_000, &path).unwrap();
+        let got: Vec<i16> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<i16>()
+            .map(Result::unwrap)
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            got,
+            vec![3, -3, 2, -2, i16::MAX, i16::MIN, i16::MAX, i16::MIN]
+        );
+    }
+
+    /// A 16-bit recording exported as a clip comes back as the same 16-bit
+    /// samples. The decoder reads `i16 / 32768`; the writer scaled by 32767, so
+    /// every sample past about a quarter of full scale came back one step
+    /// smaller in magnitude, and `-32768` could not be written at all. Every one
+    /// of the 65 536 values goes through the real decoder and the real writer.
+    #[test]
+    fn a_sixteen_bit_recording_exports_bit_for_bit() {
+        let dir = std::env::temp_dir().join(format!("bnb-wav-exact-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.wav");
+        let exported = dir.join("exported.wav");
+
+        let all: Vec<i16> = (i16::MIN..=i16::MAX).collect();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&source, spec).unwrap();
+        for &v in &all {
+            w.write_sample(v).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let decoded = decode_file(&source).unwrap();
+        assert_eq!(decoded.sample_rate, 48_000);
+        assert_eq!(
+            decoded.samples.len(),
+            all.len(),
+            "precondition: nothing resampled or dropped"
+        );
+        write_wav_to(&decoded.samples, 48_000, &exported).unwrap();
+        let back: Vec<i16> = hound::WavReader::open(&exported)
+            .unwrap()
+            .samples::<i16>()
+            .map(Result::unwrap)
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let changed: Vec<(i16, i16)> = all
+            .iter()
+            .zip(&back)
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| (*a, *b))
+            .collect();
+        assert!(
+            changed.is_empty(),
+            "{} of 65536 samples changed on export; first: {:?}",
+            changed.len(),
+            changed.first()
+        );
+    }
 
     /// Where the worker below writes: handed over in an environment variable
     /// because a `#[ignore]`d test takes no arguments.

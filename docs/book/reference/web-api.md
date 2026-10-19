@@ -87,10 +87,10 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 
 Sign-in (a session cookie) is required, when an admin password is set — a
 fresh bare-metal install sets one automatically — for the `/admin*` routes, the
-five Station management tabs and every page action that changes something (the
+five Settings management tabs and every page action that changes something (the
 Today delete/relabel/lock posts, detection reviews, recordings lock/unlock/delete,
 quarantine approve/reject/delete, the onboarding save and bulk review from
-Search). The Station home's **Health** tab (`/station`) is public — the
+Search). The Settings home's **Health** tab (`/station`) is public — the
 operator-grade vital-signs surface that replaced the read-only `/system` page,
 which now redirects to it. The management tabs are the gated pages; the old
 `/admin/audio`, `/admin/species`, `/admin/notifications`, `/admin/rules`,

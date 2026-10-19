@@ -83,17 +83,69 @@ pub fn open_source_readonly(path: &Path) -> Result<Connection, MigrateError> {
         return Err(MigrateError::SourceNotFound(path.display().to_string()));
     }
 
+    // Only a regular file is a database: a FIFO would block the request thread
+    // for good and a device node can read forever.
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return Err(MigrateError::SourceNotFound(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+
     // Open the raw path with the READ_ONLY flag rather than building a
     // `file:…?mode=ro` URI. The path is operator-supplied (the admin migration
-    // form), and with `SQLITE_OPEN_URI` set, a path containing `?` is parsed as
-    // URI parameters that can override `mode=ro` (or select a writable VFS),
-    // defeating the "source is never modified" guarantee. Without the URI flag
-    // the `?` is just part of the filename, so READ_ONLY is authoritative.
-    Connection::open_with_flags(
+    // form). The bundled SQLite is compiled with `SQLITE_USE_URI`, so a path that
+    // starts `file:` is still read as a URI (measured: a file literally named
+    // `file:f.db?mode=memory` opens as an empty in-memory database); what keeps
+    // the "source is never modified" guarantee is that READ_ONLY is authoritative:
+    // SQLite refuses a URI `mode` less restrictive than the flags it was given.
+    let conn = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(MigrateError::SourceOpen)
+    .map_err(MigrateError::SourceOpen)?;
+
+    harden_source(&conn)?;
+    Ok(conn)
+}
+
+/// The largest string or blob, or table row, the source may hold. A BirdNET-Pi
+/// row is a few hundred bytes; a megabyte is generous. Without a limit a hostile
+/// file holding `zeroblob(1e8)` makes every read of it allocate that much.
+const SOURCE_MAX_VALUE_BYTES: i32 = 1024 * 1024;
+
+/// Refuse what a BirdNET-Pi database never contains and a hostile one uses to
+/// run its own SQL on every read.
+///
+/// A virtual table (FTS5, for instance) with the twelve column names passes
+/// [`detect_schema`] as a `detections` table, and its `content=` can name a view
+/// that is a recursive query or `hex(zeroblob(N))`: a 16 KB file made the station
+/// validate "100 000 detections" and import 1 000 invented ones, and with a large
+/// N left an uncancellable blocking thread at 90 % CPU until restart. Plain views
+/// are already refused by `detect_schema` and generated columns are invisible to
+/// `table_info`; a virtual table is neither.
+fn harden_source(conn: &Connection) -> Result<(), MigrateError> {
+    conn.set_limit(
+        rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
+        SOURCE_MAX_VALUE_BYTES,
+    )
+    .map_err(MigrateError::SourceOpen)?;
+    let virtual_tables: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master \
+             WHERE sql LIKE 'CREATE VIRTUAL%' COLLATE NOCASE",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(MigrateError::SourceOpen)?;
+    if virtual_tables > 0 {
+        return Err(MigrateError::UnknownSchema(
+            "the file defines virtual tables, which a BirdNET-Pi database never does; \
+             refusing to read it"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// List the tables present in the database.
@@ -235,6 +287,65 @@ pub fn detect_schema(path: &Path) -> Result<DetectedSchema, MigrateError> {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    const TWELVE: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name";
+
+    /// A virtual table with the twelve column names passed for a `detections`
+    /// table, and its `content=` can name a view that runs any query on every
+    /// read: a 16 KB file validated as "100 000 detections" and imported a
+    /// thousand invented rows. A real BirdNET-Pi database has no virtual table.
+    #[test]
+    fn a_virtual_table_posing_as_detections_is_refused() {
+        let tmp = NamedTempFile::new().unwrap();
+        Connection::open(tmp.path())
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE VIRTUAL TABLE detections USING fts5({TWELVE});"
+            ))
+            .unwrap();
+        let err = detect_schema(tmp.path()).expect_err("must refuse");
+        assert!(
+            matches!(err, MigrateError::UnknownSchema(ref m) if m.contains("virtual")),
+            "{err:?}"
+        );
+    }
+
+    /// The counterpart: a plain `detections` table is still recognised.
+    #[test]
+    fn a_plain_detections_table_is_still_recognised() {
+        let tmp = NamedTempFile::new().unwrap();
+        Connection::open(tmp.path())
+            .unwrap()
+            .execute_batch(&format!("CREATE TABLE detections ({TWELVE});"))
+            .unwrap();
+        assert!(matches!(
+            detect_schema(tmp.path()),
+            Ok(DetectedSchema::BirdNetPi { .. })
+        ));
+    }
+
+    /// A value larger than the limit cannot be materialised: `hex(zeroblob(1e8))`
+    /// in a hostile file took the process from 120 MB to 2.4 GB in 51 s.
+    #[test]
+    fn a_value_beyond_the_limit_is_an_error_not_an_allocation() {
+        let tmp = NamedTempFile::new().unwrap();
+        let c = Connection::open(tmp.path()).unwrap();
+        c.execute_batch(&format!("CREATE TABLE detections ({TWELVE});"))
+            .unwrap();
+        c.execute(
+            "INSERT INTO detections (File_Name) VALUES (zeroblob(2000000))",
+            [],
+        )
+        .unwrap();
+        drop(c);
+        let conn = open_source_readonly(tmp.path()).unwrap();
+        let got: Result<String, _> =
+            conn.query_row("SELECT hex(File_Name) FROM detections", [], |r| r.get(0));
+        assert!(
+            got.is_err(),
+            "a 2 MB value must not be readable through the source connection"
+        );
+    }
 
     #[test]
     fn identifier_validation_accepts_normal_names() {

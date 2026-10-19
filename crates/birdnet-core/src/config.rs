@@ -42,15 +42,16 @@ pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
 /// Default detection sensitivity: BirdNET-Pi's default value.
 ///
-/// The value (1.25, BirdNET-Pi's `scripts/install_config.sh`), though not its
-/// meaning: BirdNET-Pi maps it to a sigmoid slope of `2 − value`, this project
-/// uses the value itself (see `inference::model::compute_confidence`).
+/// The value (1.25, BirdNET-Pi's `scripts/install_config.sh`) and its meaning:
+/// on a logit-output (V2.4) model it becomes a sigmoid slope of
+/// `clamp(2 − value, 0.5, 1.5)`, as in BirdNET-Pi (see
+/// `inference::model::logit_slope`).
 ///
 /// Like [`DEFAULT_CONFIDENCE_THRESHOLD`], this is shared by the daemon and the
-/// settings form so they cannot drift. Sensitivity is a pre-sigmoid scale factor
-/// that only affects the V2.4 model path; the bundled BirdNET V3.0 model emits
-/// calibrated probabilities and ignores it, so this default is a no-op there and
-/// exists mainly for familiarity and for operators who swap in a V2.4 model.
+/// settings form so they cannot drift. Sensitivity only affects the V2.4 model
+/// path; the bundled BirdNET V3.0 model emits calibrated probabilities and
+/// ignores it, so this default is a no-op there and matters to operators who run
+/// a V2.4 model.
 pub const DEFAULT_SENSITIVITY: f32 = 1.25;
 
 /// Parsed BirdNET-Pi configuration.

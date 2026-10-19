@@ -78,6 +78,7 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_confidence_floor(config, &mut out);
     check_confidence_ceiling(config, &mut out);
     check_sf_thresh_ceiling(config, &mut out);
+    check_privacy_threshold_scale(config, &mut out);
     check_positive_int(config, "RECORDING_LENGTH", 3, 60, &mut out);
     check_positive_int(config, "SEGMENT_DURATION", 3, 600, &mut out);
     check_schedule(config, &mut out);
@@ -308,6 +309,39 @@ fn check_sf_thresh_ceiling(config: &Config, out: &mut Vec<Finding>) {
         ),
         "unless this is deliberate, set SF_THRESH=0.03 (the default); the filter is meant to \
          remove species that never occur here, not to rank the ones that do",
+    ));
+}
+
+/// `PRIVACY_THRESHOLD` above which the setting is treated as BirdNET-Pi's.
+///
+/// The key is shared and the scale is not. BirdNET-Pi reads it as a percentage
+/// of the species list: a window is "human" if a human class ranks within the
+/// top `max(10, 60 x value)` labels, and its install guidance uses values such
+/// as 1 or 10. Here it is the model's own confidence for a human sound, where a
+/// real voice at a distance scores 0.01-0.1 and typical settings are 0.01-0.03.
+/// A BirdNET-Pi value carried across is in range (`1` is 100 %), validates
+/// clean, and then requires a score of 1.0 before anything is masked: the
+/// privacy filter the owner believes is on never fires.
+const PRIVACY_THRESHOLD_CEILING: f64 = 0.5;
+
+/// Warn about a `PRIVACY_THRESHOLD` that looks like BirdNET-Pi's scale.
+fn check_privacy_threshold_scale(config: &Config, out: &mut Vec<Finding>) {
+    let Some(Ok(v)) = parse_float(config, "PRIVACY_THRESHOLD") else {
+        return;
+    };
+    if v <= PRIVACY_THRESHOLD_CEILING {
+        return;
+    }
+    out.push(Finding::warn(
+        "PRIVACY_THRESHOLD",
+        format!(
+            "PRIVACY_THRESHOLD={v} will almost never mask anything — it is the model's \
+             confidence for a human sound, and a voice scores well below that. If this \
+             value came from BirdNET-Pi, note that BirdNET-Pi reads the same key as a \
+             percentage of the species list instead"
+        ),
+        "for a privacy filter that fires, use a small confidence such as \
+         PRIVACY_THRESHOLD=0.02 (typical range 0.01-0.03; lower masks more); 0 turns it off",
     ));
 }
 
@@ -635,6 +669,33 @@ mod tests {
         );
         // The boundaries themselves are inside the plausible range.
         assert!(validate(&cfg(&[("CONFIDENCE", "0.95"), ("SF_THRESH", "0.3")])).is_empty());
+    }
+
+    /// A BirdNET-Pi `PRIVACY_THRESHOLD` (a percentage of the species list: 1,
+    /// 10) is in range here and means something else: nothing masks until the
+    /// model is 100 % sure of a human sound. It warns, and the settings people
+    /// really use here do not.
+    #[test]
+    fn a_birdnet_pi_privacy_threshold_is_warned_and_ordinary_ones_are_not() {
+        for v in ["1", "1.0", "0.6"] {
+            let findings = validate(&cfg(&[("PRIVACY_THRESHOLD", v)]));
+            let hit = findings
+                .iter()
+                .find(|f| f.key == "PRIVACY_THRESHOLD")
+                .unwrap_or_else(|| panic!("PRIVACY_THRESHOLD={v} must warn, got {findings:?}"));
+            assert_eq!(
+                hit.severity,
+                Severity::Warning,
+                "usable, so a warning: {hit:?}"
+            );
+            assert!(hit.message.contains("BirdNET-Pi"), "{hit:?}");
+        }
+        for v in ["0", "0.01", "0.02", "0.03", "0.05", "0.5"] {
+            assert!(
+                validate(&cfg(&[("PRIVACY_THRESHOLD", v)])).is_empty(),
+                "PRIVACY_THRESHOLD={v} is a normal setting"
+            );
+        }
     }
 
     #[test]

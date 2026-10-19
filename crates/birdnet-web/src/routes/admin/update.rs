@@ -158,7 +158,7 @@ fn cannot_replace(binary: &std::path::Path) -> Option<String> {
         Err(e) => Some(format!(
             "this station cannot replace its own binary: {} is not writable to it ({e}). \
              Nothing was downloaded. Update from a shell instead: \
-             curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- update",
+             curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- update",
             dir.display()
         )),
     }

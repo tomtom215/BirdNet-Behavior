@@ -2,7 +2,7 @@
 
 ## Is it accurate? Which model does it use?
 
-It uses the **BirdNET+ V3.0** model — the same neural network as upstream BirdNET, so identification accuracy matches BirdNET-Pi. The model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, falling back to Zenodo (the upstream source) if that asset is unavailable.
+It uses the **BirdNET+ V3.0** preview model, the successor to the BirdNET V2.4 network that BirdNET-Pi and birdnet-go run. It is a *different* model: it hears 4.5-second windows rather than 3, reports calibrated probabilities rather than raw scores, and covers about 11 500 species rather than 6 500, so its detections are not BirdNET-Pi's and are not meant to be. If you need the same detections BirdNET-Pi gives for the same audio, install V2.4 and set the settings as BirdNET-Pi sets them: see [Same audio, same detections](./parity.md), which also says what was measured. The V3.0 model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, falling back to Zenodo (the upstream source) if that asset is unavailable.
 
 ## Do I need a Raspberry Pi?
 
@@ -26,7 +26,7 @@ Retention is disk-based by default — the oldest clips are purged once the disk
 
 ## Is the dashboard exposed on my network? Do I need a login?
 
-By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; the `/admin*` panel, the Station management tabs and every action that changes something are password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
+By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; the `/admin*` panel, the Settings management tabs and every action that changes something are password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
 
 ## How do I find or reset the admin password?
 
@@ -37,7 +37,7 @@ sudo nano /etc/birdnet/birdnet.conf   # set CADDY_PWD=your-new-password
 sudo systemctl restart birdnet-behavior
 ```
 
-Sign in as `admin` — that is the account the dashboard seeds. `CADDY_USER` is read from the process environment only, so setting it in `birdnet.conf` does not rename it (it does work under Docker). Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
+While `CADDY_PWD` is set, the password it names is applied at every start, so a password changed on the Accounts page is replaced by it at the next restart (the log says so at warning level). Change it in `CADDY_PWD` too, or remove it once you have signed in. Sign in as `admin` — that is the account the dashboard seeds. `CADDY_USER` is read from the process environment only, so setting it in `birdnet.conf` does not rename it (it does work under Docker). Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
 
 ## What happens to my records if the SD card dies?
 

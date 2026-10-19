@@ -490,7 +490,7 @@ async fn bulk_action(
                     // it reviews is a quiet corruption of the curation record.
                     // The lookup doubles as the existence check — a row
                     // somebody else already deleted is a skip, not an error.
-                    let com_name = state.with_db(|conn| {
+                    let com_name = state.with_read_db(|conn| {
                         birdnet_db::sqlite::com_name_for(conn, &k.date, &k.time, &k.sci_name)
                     })?;
                     match com_name {
@@ -567,6 +567,9 @@ fn option(value: &str, label: &str, current: Option<&str>) -> String {
         escape_html(label)
     )
 }
+
+static SEARCH_SELECT_SCRIPT: crate::seal::Sealed =
+    crate::seal::Sealed::new(r#"<script src="/static/search-select.js" defer></script>"#);
 
 /// The filter form plus the results container.
 fn render_page(p: &SearchParams, sources: &[String]) -> String {
@@ -667,7 +670,7 @@ fn render_page(p: &SearchParams, sources: &[String]) -> String {
      hx-trigger=\"load\" hx-swap=\"innerHTML\">\
   <p class=\"sr-loading\">Searching\u{2026}</p>\
 </div>\
-<script src=\"/static/search-select.js\" defer></script>"
+{SEARCH_SELECT_SCRIPT}"
     )
 }
 

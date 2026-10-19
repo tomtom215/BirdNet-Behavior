@@ -202,11 +202,17 @@ where
     if let Some(hit) = state.analytics_cache().get(&key) {
         return hit;
     }
+    // A miss scans history: take a heavy-read slot (waiting as a future, not a
+    // thread) so a burst of them cannot hold every pooled reader.
+    let permit = state.heavy_read_permit().await;
     let state_for_blocking = state.clone();
-    let computed = tokio::task::spawn_blocking(move || compute(&state_for_blocking))
-        .await
-        .ok()
-        .flatten();
+    let computed = tokio::task::spawn_blocking(move || {
+        let _slot = permit;
+        compute(&state_for_blocking)
+    })
+    .await
+    .ok()
+    .flatten();
     computed.map_or_else(
         || fallback.to_string(),
         |html| {

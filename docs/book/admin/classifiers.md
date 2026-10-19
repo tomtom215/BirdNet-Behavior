@@ -28,6 +28,17 @@ To install one:
 birdnet-behavior --install-model perch-v2
 ```
 
+What it can install:
+
+| id | what | it replaces or joins |
+|---|---|---|
+| `birdnet-v3` | BirdNET+ V3.0 preview, the station's default | the primary |
+| `birdnet-v24` | BirdNET V2.4, the network BirdNET-Pi and birdnet-go run (48 kHz, 3 s windows) | **replaces** the primary: it cannot run beside V3.0, because a recording is resampled once and the two want different rates |
+| `birdnet-v24-range-v2` | the V2.4 species-occurrence filter | `METADATA_MODEL_PATH`, with V2.4 only |
+| `perch-v2` | Google Perch v2 | runs **beside** the primary |
+
+To make a station report what BirdNET-Pi would, install `birdnet-v24` and `birdnet-v24-range-v2` and follow [Same audio, same detections](../guides/parity.md).
+
 This runs in the foreground and exits — deliberately. It is a several-hundred-megabyte download that takes hours on the uplink a field station has, and you should be able to watch it, interrupt it, and see it fail. There is no button in the web interface for the same reason: a multi-hour download inside a request handler has nowhere to report progress, and a retry would start a second download beside the first.
 
 Three things it does before and while it downloads:
@@ -131,7 +142,7 @@ One consequence worth knowing when you read detection times: a detection carries
 
 ## Not yet supported
 
-**Bat classification.** `BattyBirdNET` is not a peer classifier — it is a chained second stage that consumes BirdNET **v2.4** embeddings and needs 256 kHz audio fed through *without* resampling. That needs a capture path, a deliberate no-resample route, a real v2.4 model, and the ultrasonic validation filter, none of which ship yet.
+**Bat classification.** `BattyBirdNET` is not a peer classifier — it is a chained second stage that consumes BirdNET **v2.4** embeddings and needs 256 kHz audio fed through *without* resampling. That needs a capture path, a deliberate no-resample route, BirdNET v2.4's 1024-wide *embedding* output (the `birdnet-v24` classifier here emits species scores, not embeddings), and the ultrasonic validation filter, none of which ship yet.
 
 ## See also
 

@@ -164,6 +164,14 @@ digest, then merges to one multi-arch manifest tagged
 The manifest is **signed with keyless cosign** (GitHub OIDC → Fulcio +
 Rekor), with buildx `provenance` and `sbom` attestations attached.
 
+A tag push first passes `scripts/check-release-tag.sh` (an exact `vX.Y.Z` or
+`vX.Y.Z-pre.N`, a `Cargo.toml` that agrees, a commit on the default branch), because
+this workflow runs beside `release.yml`, not after it, and its tag glob also matches
+`v1.2.3foo`. `latest` is never applied to a pre-release tag. A manual run
+(`workflow_dispatch`) **builds only** unless you tick *Push*, because a push from a
+branch is signed with that branch's identity and verifies against the documented
+recipe.
+
 ### `docs.yml` — the versioned manual on GitHub Pages
 
 Rebuilds the whole site from tags with `scripts/build-versioned-docs.sh`: the
@@ -221,9 +229,9 @@ by design:
 
 `release.yml` has a `workflow_dispatch` entry. Triggering it from the
 Actions tab runs `validate → ci → build → package` exactly as a real
-release — including the **DuckDB analytics cross-build**, the SBOM, and
-the SLSA attestation — but **skips `github-release`, so nothing is
-published**. Use it to prove a release will build cleanly before tagging
+release — including the **DuckDB analytics cross-build** and the SBOM —
+but **skips the SLSA attestation (a published claim) and `github-release`,
+so nothing is published**. Use it to prove a release will build cleanly before tagging
 (especially after dependency bumps or toolchain changes).
 
 - Leave the `version` input blank to rehearse the current

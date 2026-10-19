@@ -75,7 +75,7 @@ jobs:
   cargo-machete:
     name: cargo-machete (unused dependencies)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 15s
+    timeout-minutes: 15  # observed 9s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install cargo-machete
@@ -93,7 +93,7 @@ jobs:
   third-party-notices:
     name: third-party licence notices
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 15  # observed 14s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
@@ -116,7 +116,7 @@ jobs:
   publishable:
     name: crates are publishable
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 15  # observed 14s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain

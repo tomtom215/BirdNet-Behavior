@@ -123,7 +123,7 @@ ${lon_line}
 #                              # solar records sunrise-to-sunset and needs the
 #                              # coordinates above. Fixed hours are evaluated in
 #                              # UTC, not local time. Also settable in the web UI
-#                              # under Settings -> Location & Recording Schedule.
+#                              # under Settings -> Capture -> Location & Recording Schedule.
 
 # --- Detection ---
 # CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).

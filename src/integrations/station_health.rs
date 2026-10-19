@@ -530,8 +530,9 @@ fn mqtt_condition(
             "The station has not been able to keep a session with the MQTT broker for \
              {} minutes ({}). Detections are still recorded here; nothing is reaching the \
              broker, and anything built on the station's MQTT presence sees it as offline. \
-             Check the broker, its address and credentials in Admin → Settings → MQTT, and \
-             the network between them.",
+             Check the broker, its address and credentials (the MQTT_HOST, MQTT_PORT, \
+             MQTT_USERNAME and MQTT_PASSWORD lines of the configuration file, or the \
+             BIRDNET_MQTT_* variables), and the network between them.",
             down_for.as_secs() / 60,
             last_error.unwrap_or("no error detail recorded")
         ),

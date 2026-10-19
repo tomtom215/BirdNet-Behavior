@@ -95,8 +95,10 @@ pub struct ActionForm {
 /// `/quarantine?filter=all` correctly pre-select the active filter and load
 /// the matching list via the initial HTMX trigger.
 async fn quarantine_page(Query(params): Query<ListParams>, headers: HeaderMap) -> Html<String> {
-    let filter = params.filter.as_deref().unwrap_or("pending");
-    let content = build_page_html(filter);
+    // Normalised, never echoed: `build_page_html` writes it into an `hx-get`
+    // attribute, where a raw `"` ended the attribute and `<script>` followed.
+    let filter = filter_str(parse_filter(params.filter.as_deref()));
+    let content = build_page_html(&filter);
     super::render_page_for_request("Quarantine Review", &content, "species", &headers)
 }
 
@@ -159,9 +161,10 @@ fn build_page_html(active_filter: &str) -> String {
 // ---------------------------------------------------------------------------
 
 async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoResponse {
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(birdnet_db::sqlite::quarantine_stats))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_read_db(birdnet_db::sqlite::quarantine_stats)
+    })
+    .await;
 
     match result {
         Ok(Ok(qstats)) => {
@@ -208,7 +211,7 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
 /// Tiny partial used by the nav badge to show pending count.
 async fn quarantine_pending_count_partial(State(state): State<AppState>) -> impl IntoResponse {
     let count = tokio::task::spawn_blocking(move || {
-        state.with_db(birdnet_db::sqlite::quarantine_pending_count)
+        state.with_read_db(birdnet_db::sqlite::quarantine_pending_count)
     })
     .await
     .ok()
@@ -241,7 +244,7 @@ async fn quarantine_list_partial(
     let offset = params.offset.unwrap_or(0);
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let rows = birdnet_db::sqlite::list_quarantine(conn, filter, limit, offset)?;
             let total = birdnet_db::sqlite::count_quarantine(conn, filter)?;
             Ok::<_, birdnet_db::sqlite::DbError>((rows, total))

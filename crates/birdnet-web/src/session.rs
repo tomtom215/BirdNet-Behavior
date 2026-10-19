@@ -92,11 +92,8 @@ fn process_random_secret() -> &'static [u8] {
     static SECRET: OnceLock<[u8; 32]> = OnceLock::new();
     SECRET.get_or_init(|| {
         let mut bytes = [0_u8; 32];
-        {
-            use password_hash::rand_core::{OsRng, RngCore};
-            if OsRng.try_fill_bytes(&mut bytes).is_ok() {
-                return bytes;
-            }
+        if crate::random::fill(&mut bytes).is_ok() {
+            return bytes;
         }
         // The OS has no randomness to give, which on Linux means getrandom
         // itself failed. What follows is a 64-bit seed from the clock and the
@@ -169,12 +166,8 @@ pub fn load_or_create_secret(dir: &std::path::Path) -> std::io::Result<Vec<u8>> 
         Err(e) => return Err(e),
     }
     let mut bytes = [0_u8; 32];
-    {
-        use password_hash::rand_core::{OsRng, RngCore};
-        OsRng
-            .try_fill_bytes(&mut bytes)
-            .map_err(|e| Error::other(format!("CSPRNG unavailable for the session secret: {e}")))?;
-    }
+    crate::random::fill(&mut bytes)
+        .map_err(|e| Error::other(format!("CSPRNG unavailable for the session secret: {e}")))?;
     let hex = bytes.iter().fold(String::with_capacity(64), |mut out, b| {
         use std::fmt::Write as _;
         // Infallible: writing to a String never errors.
@@ -284,16 +277,14 @@ pub fn default_ttl_ms() -> u64 {
 /// Generate a fresh session id.
 ///
 /// 26 lowercase base32 chars carrying 128 bits of randomness, per the
-/// O-15 DIFF. Sources entropy from `password-hash::rand_core::OsRng`
-/// (the same CSPRNG argon2 uses for salts), already in the dep tree via
-/// the argon2 helpers shipped earlier on this branch.
+/// O-15 DIFF. Sources entropy from the operating system's CSPRNG
+/// (`random::fill`, the source argon2 salts come from too).
 #[must_use]
 pub fn generate_session_id() -> String {
-    use password_hash::rand_core::{OsRng, RngCore};
     // 16 bytes = 128 bits → exactly 26 base32 chars (no padding needed
     // since 128/5 = 25.6 → 26 chars covers it).
     let mut bytes = [0_u8; 16];
-    if let Err(e) = OsRng.try_fill_bytes(&mut bytes) {
+    if let Err(e) = crate::random::fill(&mut bytes) {
         // CSPRNG failure on Linux is essentially impossible (getrandom(2)
         // and /dev/urandom both available), so this branch is a defensive
         // belt — log loudly and fall back to a SplitMix64 over startup

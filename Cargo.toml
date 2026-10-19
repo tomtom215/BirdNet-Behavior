@@ -57,7 +57,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tokio = { version = "1.52", features = ["full"] }
 
 # Database
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup", "limits"] }
 # `~` pins the bundled DuckDB version: the `10506` component is DuckDB 1.5.6
 # itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST be a
 # version both extension registries publish builds under, because every embed
@@ -149,7 +149,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Audio
 symphonia = { version = "0.6.0", features = ["wav", "flac", "mp3"] }
-rubato = "4.0.0"
+rubato = "5.0.1"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
@@ -193,14 +193,22 @@ ring = "0.17"
 # until the wire flips; the seed admin row's hash is rotated by a one-shot
 # bootstrap on first start.
 #
-# `password-hash` MUST stay in lock-step with `argon2`: argon2 0.5.x
-# implements password-hash 0.5's PasswordHasher/PasswordVerifier traits,
+# `password-hash` MUST stay in lock-step with `argon2`: argon2 0.6.x
+# implements password-hash 0.6's PasswordHasher/PasswordVerifier traits,
 # and our accounts code passes password-hash types straight into Argon2.
-# Bumping password-hash alone (dependabot #148 proposed 0.6.1) fails to
-# compile — two distinct PasswordHasher traits. Take both together once
-# argon2 0.6 is released.
-argon2 = "0.5"
-password-hash = { version = "0.5", features = ["getrandom"] }
+# Bumping either alone fails to compile (two distinct PasswordHasher traits).
+# Taken together on 2026-10-15, with a hash and an encrypted backup written by
+# the 0.5 line frozen as regression vectors
+# (`accounts::users::a_hash_written_by_argon2_0_5_still_verifies`,
+# `offsite::envelope::an_envelope_written_by_argon2_0_5_still_decrypts`).
+argon2 = "0.6"
+password-hash = { version = "0.6", features = ["getrandom"] }
+
+# Operating-system randomness for the session ids, CSP nonces and share keys
+# the web crate mints. These drew on `password_hash::rand_core::OsRng`, a
+# transitive re-export that password-hash 0.6 no longer has; the crate that
+# provides it is named here instead of borrowed.
+getrandom = "0.4"
 
 # File watching
 notify = "8"
@@ -393,6 +401,9 @@ rusqlite.workspace = true
 [dev-dependencies]
 hound.workspace = true
 tempfile.workspace = true
+# The V2.4 range-filter parity test hashes the species list it gets, as
+# tools/parity does for BirdNET-Pi's.
+sha2.workspace = true
 rusqlite.workspace = true
 tower.workspace = true
 birdnet-web.workspace = true

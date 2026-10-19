@@ -161,7 +161,7 @@ async fn list_comments(
             if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
                 return e;
             }
-            let comments = state.with_db(|conn| {
+            let comments = state.with_read_db(|conn| {
                 birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
             });
             match comments {
@@ -1126,7 +1126,7 @@ async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>)
         // worse than no answer. `routes::admin::doctor` reads the config the
         // same way, for the same reason: it is the only place the truth is.
         let schedule = read_backup_schedule(&state);
-        state.with_db(|conn| birdnet_db::sqlite::job_statuses(conn, now, schedule))
+        state.with_read_db(|conn| birdnet_db::sqlite::job_statuses(conn, now, schedule))
     })
     .await;
     // A read that failed is an error, not an empty catalogue: an empty list
@@ -1374,6 +1374,7 @@ async fn models_catalog() -> (StatusCode, Json<Value>) {
                 "bytes": e.model_bytes,
                 "sample_rate": e.sample_rate,
                 "ships_labels": e.labels_url.is_some(),
+                "use": e.usage.as_str(),
                 "notes": e.notes,
             })
         })

@@ -32,10 +32,10 @@ Two things are deliberately configured elsewhere:
 
 - **Confidence threshold** — the minimum score a detection must clear to be logged. Raise it to cut false positives; lower it to catch faint calls.
 - **Per-species thresholds** — override the global threshold for individual species (useful for a noisy local mimic, or to be stricter about a rare bird).
-- **Sensitivity (0.5–1.5)** — the BirdNET sensitivity parameter (also `SENSITIVITY` in `birdnet.conf`). Higher lets more borderline calls through. It only affects BirdNET V2.4 models; the bundled V3.0 model ignores it. The key has the same name as BirdNET-Pi's but not the same effect: BirdNET-Pi inverts it (at any confidence threshold above 0.5, a higher value means *fewer* detections there), so a value carried over from BirdNET-Pi does not reproduce that station's behaviour.
+- **Sensitivity (0.5–1.5)** — the BirdNET sensitivity parameter (also `SENSITIVITY` in `birdnet.conf`). It only affects BirdNET V2.4 models; the bundled V3.0 model ignores it. It means what it means in BirdNET-Pi and BirdNET-Analyzer, so a value carried over from BirdNET-Pi reproduces that station's confidence scores: the model's raw score is passed through a sigmoid with slope `clamp(2 − value, 0.5, 1.5)`. A higher value therefore flattens the curve, and at any confidence threshold above 0.5 (all the usual ones) it gives *fewer* detections, not more. birdnet-go's `sensitivity` is the slope itself, so to carry a birdnet-go value across, enter `2 − value`.
 - **Species-frequency filter** — uses your location and the week of the year to down-weight birds that shouldn't be present, with a configurable `SF_THRESH`.
-- **Quality pre-filter** — optionally drops segments dominated by rain, wind or other broadband noise before they reach the model.
-- **Analysis overlap (0–2.9 s)** — how far consecutive 3-second analysis windows overlap. Higher catches calls that straddle a window boundary, and costs CPU in proportion: `2.0` triples the inference work per recording.
+- **Noise filter** (`NOISE_THRESHOLD`, `NOISE_CLASSES`) — optionally discards a window in which a watched non-bird class (by default `Dog`) scores at or above the threshold. Off by default; see [Tuning §7](../guides/tuning.md). There is no filter that drops rainy or windy audio before it reaches the model.
+- **Analysis overlap (0–2.9 s)** — how far consecutive analysis windows (3 s for V2.4, 4.5 s for the bundled V3.0) overlap. Higher catches calls that straddle a window boundary, and costs CPU in proportion: `2.0` triples the inference work per recording.
 - **Repeat confirmation** — record a species only when enough of the windows within six seconds heard the same thing. A real bird sings across several windows; a car door or a squeak of the mount usually fires in exactly one. **It needs the overlap above** — with none, there is only one other window to agree with, and each option in the dropdown prints the overlap it needs. Off by default. See [Tuning](../guides/tuning.md#10-asking-for-a-second-opinion).
 
 ## Species & quarantine
@@ -44,13 +44,21 @@ Rare-bird **quarantine** rules decide which detections are held for manual revie
 
 ### Allow and exclude lists
 
-The two lists under **Station → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
+The lists under **Settings → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
 
 - **Exclude** — these species are never recorded. Nothing is written to the
   database, no notification is sent, and nothing is uploaded to BirdWeather.
   Use it for a persistent local false positive, or for a species you would
   rather not log.
 - **Allow** — when non-empty, *only* these species are recorded.
+- **Always allowed (whitelist)** — species the species-occurrence filter would
+  hold back as unlikely for your location and week are recorded anyway. This is
+  BirdNET-Pi's `whitelist_species_list.txt`, with its meaning: it exempts a
+  species from the occurrence threshold and from nothing else. A species on the
+  exclude list stays excluded, one missing from a non-empty allow list stays out,
+  and it does nothing on a station with no location set (nothing is held back
+  there). It is for the one or two birds you know visit; lowering the occurrence
+  threshold under Detection is the broader tool.
 
 Enter either the common name or the scientific name; both work, and case and
 surrounding spaces don't matter. Changes take effect within about half a minute
@@ -63,7 +71,7 @@ warning is logged, rather than being taken literally and suppressing everything.
 
 ### Species storage
 
-**Station → Capture → Species → Species storage** (`/admin/species/manage`) is one row per species this station has ever recorded, with its detection count, how many still have audio on disk, how many you have locked, and when it was last heard. It exists for one recurring situation: a squeaky gate has produced four thousand Eurasian Wrens and you want them gone.
+**Settings → Capture → Species → Species storage** (`/admin/species/manage`) is one row per species this station has ever recorded, with its detection count, how many still have audio on disk, how many you have locked, and when it was last heard. It exists for one recurring situation: a squeaky gate has produced four thousand Eurasian Wrens and you want them gone.
 
 Three actions per row, each confirmed:
 
@@ -143,4 +151,4 @@ The Settings sidebar also covers **Location**, **Audio** (see [Audio & Microphon
 
 ## Data quality
 
-The **Quality** dashboard (**Station → Data**, `/station/data#quality`; the old `/admin/quality` redirects there) summarizes the health of your detection database — the confidence distribution, a 30-day confidence trend, an hourly quality profile, and a ranked list of low-confidence species that are good candidates for a stricter per-species threshold.
+The **Quality** dashboard (**Settings → Data**, `/station/data#quality`; the old `/admin/quality` redirects there) summarizes the health of your detection database — the confidence distribution, a 30-day confidence trend, an hourly quality profile, and a ranked list of low-confidence species that are good candidates for a stricter per-species threshold.

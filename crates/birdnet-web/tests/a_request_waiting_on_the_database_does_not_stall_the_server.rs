@@ -1,16 +1,18 @@
 //! A request waiting on the database does not stall the server.
 //!
 //! `AppState::with_db` blocks the thread it is called on until the writer lock
-//! is free. Called from a handler, that thread is one of the runtime's
-//! workers — four on a Raspberry Pi 4 — and every other request scheduled on
-//! it waits too: a page, a script, a live socket's next frame. The writer
-//! lock is the one the detection processor holds while it writes, so this is
-//! the ordinary case on a busy morning, not a contrived one.
+//! is free, and `with_read_db` until a pooled reader is. Called from a handler,
+//! that thread is one of the runtime's workers — four on a Raspberry Pi 4 — and
+//! every other request scheduled on it waits too: a page, a script, a live
+//! socket's next frame. The writer lock is the one the detection processor holds
+//! while it writes, and the readers are what every page shares, so this is the
+//! ordinary case on a busy morning, not a contrived one.
 //!
 //! The static half of this is `tests/database_work_stays_off_the_async_runtime.rs`
 //! in the root crate, which finds every such call in the source. This is the
-//! dynamic half: one worker, the writer lock held, and a request for a
-//! static script that must still be answered.
+//! dynamic half: one worker, every pooled reader held (`/stream` reads its audio
+//! source through the pool since the writer-lock sweep; it waited for the writer
+//! lock before), and a request for a static script that must still be answered.
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -37,16 +39,36 @@ fn a_static_file_is_served_while_another_request_waits_for_the_database() {
         .build()
         .expect("runtime");
 
-    // The detection processor's part, played by a thread holding the writer.
+    // Every pooled reader held by a thread of its own, the way a morning's page
+    // views would hold them. (The detection processor's writer lock is not what
+    // `/stream` waits for any more: it only reads.)
+    let readers = state.reader_count();
+    assert!(
+        readers > 0,
+        "precondition: a file-backed station has readers"
+    );
     let (held_tx, held_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let holder = std::thread::spawn(move || {
-        state.with_db(|_| {
-            held_tx.send(()).expect("report held");
-            release_rx.recv().ok();
-        });
-    });
-    held_rx.recv_timeout(PATIENCE).expect("writer lock held");
+    let release = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let holders: Vec<_> = (0..readers)
+        .map(|_| {
+            let state = state.clone();
+            let held_tx = held_tx.clone();
+            let release = std::sync::Arc::clone(&release);
+            std::thread::spawn(move || {
+                state.with_read_db(|_| {
+                    held_tx.send(()).expect("report held");
+                    let (flag, cv) = &*release;
+                    let done = cv
+                        .wait_while(flag.lock().unwrap(), |released| !*released)
+                        .unwrap();
+                    drop(done);
+                });
+            })
+        })
+        .collect();
+    for _ in 0..readers {
+        held_rx.recv_timeout(PATIENCE).expect("reader held");
+    }
 
     // Every wait below is on an OS thread, never on the runtime: with the one
     // worker blocked nothing drives tokio's timer, and a `tokio::time::timeout`
@@ -82,9 +104,15 @@ fn a_static_file_is_served_while_another_request_waits_for_the_database() {
 
     // Let go before asserting, so a failure reports instead of leaving the
     // runtime unable to shut down.
-    release_tx.send(()).expect("release");
+    {
+        let (flag, cv) = &*release;
+        *flag.lock().unwrap() = true;
+        cv.notify_all();
+    }
     let answered = stream_rx.recv_timeout(PATIENCE);
-    holder.join().expect("holder");
+    for holder in holders {
+        holder.join().expect("holder");
+    }
     drop(rt);
 
     assert!(
@@ -95,9 +123,9 @@ fn a_static_file_is_served_while_another_request_waits_for_the_database() {
     assert_eq!(
         served,
         Ok(StatusCode::OK),
-        "a static file was not served while another request waited for the database"
+        "a static file was not served while another request waited for a reader"
     );
-    // The waiting request finishes once the writer lets go: a fresh station
+    // The waiting request finishes once the readers are let go: a fresh station
     // has no audio source, which `/stream` answers with 503.
     assert_eq!(answered, Ok(StatusCode::SERVICE_UNAVAILABLE));
 }

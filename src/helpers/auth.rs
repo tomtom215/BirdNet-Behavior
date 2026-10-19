@@ -158,9 +158,16 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
             tracing::info!("admin password hash initialised from CADDY_PWD");
         }
         Ok(BootstrapOutcome::RotatedAfterEnvChange { revoked }) => {
-            tracing::info!(
+            // A warning, not a note: this also undoes a password changed on
+            // the Accounts page while a stale `CADDY_PWD` is still set, which
+            // the person who changed it will not expect and cannot otherwise
+            // see.
+            tracing::warn!(
                 revoked,
-                "admin password hash rotated to match updated CADDY_PWD; existing sessions signed out"
+                "admin password replaced by CADDY_PWD at startup (it did not match the stored \
+                 hash), and existing sessions were signed out. A password changed on the \
+                 Accounts page since the last start is replaced the same way while CADDY_PWD \
+                 is set"
             );
         }
         Ok(BootstrapOutcome::AlreadyConsistent) => {

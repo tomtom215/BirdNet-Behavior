@@ -8,8 +8,8 @@ Out of the box BirdNet-Behavior is tuned to be sensible. But every station is di
 
 | Symptom | What's happening | Turn this way |
 |---|---|---|
-| **Too many wrong birds** (false positives) | The model is logging low-quality guesses | *Raise* confidence / sensitivity *down* / add a per-species threshold |
-| **Missing birds you can hear** (false negatives) | The bar is too high, or the signal is poor | *Lower* confidence / sensitivity *up* / check mic levels first |
+| **Too many wrong birds** (false positives) | The model is logging low-quality guesses | *Raise* confidence / (V2.4 only) sensitivity *up* / add a per-species threshold |
+| **Missing birds you can hear** (false negatives) | The bar is too high, or the signal is poor | *Lower* confidence / (V2.4 only) sensitivity *down* / check mic levels first |
 
 If you're getting both at once, it's almost always an **audio** problem (wind, clipping, a bad mic position) — fix that first on the [Audio page](../admin/audio.md) before touching detection settings.
 
@@ -19,7 +19,7 @@ If you're getting both at once, it's almost always an **audio** problem (wind, c
 
 The minimum score (0–1) a detection must clear to be logged. This is your main dial.
 
-- **Default ~0.7.** Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
+- **Default 0.75** (BirdNET-Pi's is 0.7). Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
 - Lower toward **0.5–0.6** only if you're confident your audio is clean and you want maximum recall.
 - Set it at `/admin/settings → Detection`.
 
@@ -34,13 +34,14 @@ The [Quality dashboard](../admin/settings.md#data-quality) lists your lowest-con
 
 ### 3. Sensitivity
 
-The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.conf`). It reshapes the model's confidence curve:
+The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.conf`), with BirdNET-Pi's meaning. It reshapes the confidence curve of a V2.4 model, whose raw scores are passed through a sigmoid with slope `clamp(2 − sensitivity, 0.5, 1.5)`:
 
-- **Higher (→1.5)** makes the model more eager — more detections, more borderline calls.
-- **Lower (→0.5)** makes it more conservative.
+- **Higher (→1.5)** is a *flatter* curve. Every score moves toward 0.5, so at any confidence threshold above 0.5 fewer calls clear the bar, and the confidence you see for a strong call is lower.
+- **Lower (→0.5)** is a *steeper* curve: strong calls score higher and more of them clear the bar.
+- The default, 1.25, is a slope of 0.75: the same figure BirdNET-Pi gives a station with its defaults. A magpie whose raw score is 3.12 reads 91.2 % here and there.
 - Most stations leave this at the default and tune the confidence threshold instead. Reach for sensitivity only when the threshold alone can't find a good balance.
 - It only affects BirdNET V2.4 models; the bundled V3.0 model reports calibrated probabilities and ignores it.
-- It runs the opposite way to BirdNET-Pi's setting of the same name. If you migrated, don't copy BirdNET-Pi's number across expecting the same result.
+- birdnet-go's setting of the same name is the slope itself (its default, 1.0, is a plain sigmoid). To carry a birdnet-go value across, enter `2 − value`.
 
 ### 4. Species-frequency (SF) filter
 
@@ -108,9 +109,9 @@ Once it is running:
 - Make sure your latitude/longitude are correct first — the filter is only as good as your coordinates.
 - Raise `SF_THRESH` to be stricter about out-of-range species; lower it (or 0) to let everything through (useful if you *want* to catch vagrants).
 
-### 5. Quality pre-filter
+### 5. Rain, wind and other broadband noise
 
-Optionally drops audio segments dominated by **rain, wind, or broadband noise** *before* they ever reach the model — cheaper and more reliable than cleaning up the resulting false positives. Enable it under Detection when your station is exposed to weather.
+Nothing in the station drops rainy or windy audio before it reaches the model. Weather shows up as false positives, and the levers are the ones above: a modestly higher confidence threshold, a per-species threshold for the species it keeps producing, and the noise filter in §7 for a recurring non-bird sound. The cheapest fix is at the microphone: a windshield and shelter from direct rain do more than any setting. The [Quality dashboard](../admin/settings.md#data-quality) lists the species whose confidence is lowest, which is where weather-driven false positives collect.
 
 ### 6. Rare-bird quarantine
 
@@ -250,7 +251,7 @@ indistinguishable, to this filter, from an artefact.
 Two places on the web UI turn your own review history into advice. Both only
 ever suggest; nothing changes until you press the button.
 
-**Suggested thresholds** (Station → Capture → Species). For each species you have both
+**Suggested thresholds** (Settings → Capture → Species). For each species you have both
 confirmed and rejected detections of, the station works out the threshold that
 best separates the two, and shows what it would have cost (confirmations lost)
 and caught (rejections stopped) against the reviews it came from. Suggestions
@@ -262,7 +263,7 @@ and bad detections for one species is worth far more than reviewing many of
 either alone: with only confirmations the best answer is "admit everything",
 which is not a threshold.
 
-**Species that may not be birds** (Station → Data). Flags species by the
+**Species that may not be birds** (Settings → Data). Flags species by the
 *shape* of their detections rather than by name: every review rejected, never
 detected confidently, confidence that never varies, many detections on very few
 days. Two of those signals have to agree before a species is listed, and it
@@ -284,9 +285,9 @@ birdwatchers. An unmarked row is not a row eBird disagrees with.
 1. Set your **location** accurately.
 2. Get mic **levels** right (peaks near −6 dB).
 3. Run the defaults for a few days and read the [Quality dashboard](../admin/settings.md#data-quality).
-4. If false positives dominate: enable the **quality pre-filter**, then nudge the **confidence threshold** up by 0.05.
+4. If false positives dominate: nudge the **confidence threshold** up by 0.05, and use the **noise filter** if a particular non-bird sound (a dog, a siren) is the cause.
 5. Add **per-species overrides** for the one or two species generating the most noise.
 6. Turn on **quarantine** for rare birds so you can keep recall high without losing trust in the log.
-7. Review a mixture of good and bad detections for a week, then check the **suggested thresholds** on the Species page and the **suspect species** list under Station → Data — by then both have something to say.
+7. Review a mixture of good and bad detections for a week, then check the **suggested thresholds** on the Species page and the **suspect species** list under **Settings → Data** — by then both have something to say.
 
 > Everything here is reversible and stored in the database, so experiment freely — and remember to change just one knob at a time.

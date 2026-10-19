@@ -4,7 +4,7 @@
 //!
 //! Two facts, both read from what this crate actually ships:
 //!
-//! 1. `static/htmx.min.js` (htmx 2.0.4, unmodified) declares
+//! 1. `static/htmx.min.js` (htmx 2.0.11, unmodified) declares
 //!    `responseHandling:[{code:"204",swap:false},{code:"[23]..",swap:true},
 //!    {code:"[45]..",swap:false,error:true}]` — a 4xx or 5xx body is **never**
 //!    swapped into the DOM, whatever it contains, including an out-of-band

@@ -1,0 +1,8 @@
+# A password hash written by the argon2 0.5 line this project shipped through
+# 0.17.1, and the password it was made from. Captured from that code, not
+# derived from anything this crate computes today. It is data, read at run time
+# by `a_hash_written_by_argon2_0_5_still_verifies` in src/accounts/users.rs: a
+# password written into a test is a hard-coded cryptographic value to code
+# scanning, and this one has to be exactly the string below to match its hash.
+hash=$argon2id$v=19$m=19456,t=2,p=1$C4Sce5Cf93w40GeLlxcKig$D1T4yttgZq2vHHEUiNsHE5yslKjdpwyesxMeWbYo9uU
+password=correct horse battery staple

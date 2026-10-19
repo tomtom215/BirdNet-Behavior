@@ -164,7 +164,7 @@ async fn onboarding_page(State(state): State<AppState>, req: Request) -> Respons
             }
             // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
             let (sources, prefill) = state
-                .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
+                .with_read_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
                 .unwrap_or_else(|err| {
                     tracing::error!(error = %err, "onboarding: audio_sources list failed");
                     (Vec::new(), Prefill::default())
@@ -256,7 +256,7 @@ fn render_password_step(step: PasswordStep) -> String {
             {error}
             <div class="ob-field"><label for="ob-password-1">Password (at least {MIN_PASSWORD_LEN} characters)</label><input id="ob-password-1" name="password" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
             <div class="ob-field"><label for="ob-password-2">Password again</label><input id="ob-password-2" name="password_confirm" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
-            <p class="bnb-meta" id="ob-password-hint">Change it any time under Settings → Accounts.</p>
+            <p class="bnb-meta" id="ob-password-hint">Change it any time under Settings → Access.</p>
           </div>"#
     )
 }
@@ -313,7 +313,7 @@ fn render_page(
     // verbatim, which keeps a typo visible in the output instead of dropping
     // the surrounding text.
     let mut out = String::with_capacity(ONBOARDING_HTML.len() + 2048);
-    let mut rest = ONBOARDING_HTML;
+    let mut rest = ONBOARDING_HTML.as_str();
     while let Some(open) = rest.find("{{") {
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
@@ -732,7 +732,8 @@ fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, Str
     Ok(admin_id)
 }
 
-const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
+static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
+    r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1355,7 +1356,8 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 })();
 </script>
 </body>
-</html>"##;
+</html>"##,
+);
 
 #[cfg(test)]
 mod tests {

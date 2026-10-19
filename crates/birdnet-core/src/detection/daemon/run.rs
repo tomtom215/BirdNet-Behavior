@@ -516,7 +516,7 @@ pub fn run_daemon(
                     && lists_refreshed.elapsed() >= SPECIES_LISTS_TTL
                 {
                     let lists = provider.get();
-                    species_filter.set_lists(lists.include, lists.exclude);
+                    species_filter.set_lists(lists);
                     lists_refreshed = Instant::now();
                 }
 

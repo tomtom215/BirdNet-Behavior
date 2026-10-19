@@ -45,7 +45,8 @@ use crate::state::AppState;
 use super::atoms::{species_code, species_color};
 use super::escape_html;
 
-const PAGE_HTML: &str = include_str!("../../../templates/migration.html");
+static PAGE_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/migration.html"));
 
 /// Empty-state body for a year with no migratory detections yet.
 ///
@@ -189,7 +190,9 @@ fn collect_ridges(
 /// their fallback is an error message.
 fn compute_ridgeline(state: &AppState) -> Option<String> {
     let year = current_year();
-    let ridges = state.with_db(|conn| collect_ridges(conn, year, 12)).ok()?;
+    let ridges = state
+        .with_read_db(|conn| collect_ridges(conn, year, 12))
+        .ok()?;
     if ridges.is_empty() {
         return Some(RIDGELINE_EMPTY.to_string());
     }
@@ -216,7 +219,10 @@ fn render_ridgeline_svg(
     const H: f64 = 360.0;
     const PAD_L: f64 = 172.0; // room for the longest common names (e.g. "Ruby-throated Hummingbird")
     const PAD_R: f64 = 16.0;
-    const PAD_T: f64 = 24.0;
+    // 36, not 24: the two season captions and the "today" pill each need a row of
+    // their own above the plot. At 24 they shared one, the pill covered the fall
+    // caption, and the fall caption's overlap hid the pill's own text.
+    const PAD_T: f64 = 36.0;
     const PAD_B: f64 = 32.0;
     let inner_w = W - PAD_L - PAD_R;
     let inner_h = H - PAD_T - PAD_B;
@@ -260,7 +266,7 @@ fn render_ridgeline_svg(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-band-spring">spring migration</text>"#,
         x = x(14.0),
-        y = PAD_T + 12.0,
+        y = 12.0,
     );
     let _ = write!(
         s,
@@ -274,7 +280,7 @@ fn render_ridgeline_svg(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-band-fall">fall migration</text>"#,
         x = x(39.0),
-        y = PAD_T + 12.0,
+        y = 12.0,
     );
 
     // Ridges.
@@ -387,20 +393,20 @@ fn render_ridgeline_svg(
         s,
         r#"<g><line x1="{x:.2}" y1="{y1}" x2="{x:.2}" y2="{y2:.2}" stroke="var(--fg)" stroke-width="1" stroke-dasharray="3 3"/>"#,
         x = x(today_week as f64),
-        y1 = PAD_T,
+        y1 = PAD_T - 4.0,
         y2 = PAD_T + inner_h,
     );
     let _ = write!(
         s,
         r#"<rect x="{rx:.2}" y="{ry}" width="48" height="14" rx="3" fill="var(--fg)"/>"#,
         rx = x(today_week as f64) - 24.0,
-        ry = PAD_T - 2.0,
+        ry = PAD_T - 18.0,
     );
     let _ = write!(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-today">today</text></g>"#,
         x = x(today_week as f64),
-        y = PAD_T + 8.0,
+        y = PAD_T - 8.0,
     );
 
     s.push_str("</svg>");
@@ -445,7 +451,9 @@ fn weekly_diversity(conn: &rusqlite::Connection, year: i32) -> rusqlite::Result<
 
 fn compute_diversity(state: &AppState) -> Option<String> {
     let year = current_year();
-    let weekly = state.with_db(|conn| weekly_diversity(conn, year)).ok()?;
+    let weekly = state
+        .with_read_db(|conn| weekly_diversity(conn, year))
+        .ok()?;
     // Same contract as `compute_ridgeline`: a year with nothing in it is data,
     // not a failure, and gets its own body rather than the error fallback.
     if weekly.iter().all(|&n| n == 0) {
@@ -510,7 +518,9 @@ fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
     let _ = write!(
         s,
         r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mono mig-sub">species / wk</text>"#,
-        x = PAD_L - 8.0,
+        // 16 left of the first bar's centre, not 8: bars are centred on their week and
+        // the first one reaches 11 units left of PAD_L, so the label ended under it.
+        x = PAD_L - 16.0,
         y = H - 12.0,
     );
     let _ = write!(
@@ -534,7 +544,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
     // saying so after the database recovered.
     let html = cached_fragment(&state, "migration-stats".to_string(), FRAGMENT_ERR, |s| {
         let today = crate::routes::pages::today_date_string();
-        s.with_db(|conn| stats_fragment(conn, &today, s.names()))
+        s.with_read_db(|conn| stats_fragment(conn, &today, s.names()))
             .ok()
     })
     .await;
@@ -671,8 +681,10 @@ async fn card_partial(
     let kind = q.kind;
     let kind_db = kind.clone();
     let names = state.names_handle();
+    let permit = state.heavy_read_permit().await;
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| match kind_db.as_str() {
+        let _slot = permit;
+        state.with_read_db(|conn| match kind_db.as_str() {
             "arrived" => {
                 // most recent species whose first-ever detection is in this year
                 conn.query_row(

@@ -1,7 +1,7 @@
 # Species Names in Your Language
 
 BirdNet-Behavior can show bird names in 35 languages besides English. Choose one
-under **Settings → System & Display → Common-name language**, or set
+under **Settings → General → System & Display → Common-name language**, or set
 `DATABASE_LANG=de` in `birdnet.conf` (`--lang de`, or `BIRDNET_LANG`, work too).
 It takes effect when the station next starts. A `--lang` given on the command
 line wins over the Settings page and `birdnet.conf`, as every flag does, so the

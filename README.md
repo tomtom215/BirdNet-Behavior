@@ -50,6 +50,7 @@ It ships as **one self-contained binary** (~75 MB). The ONNX Runtime inference e
 | Install | `pip` into a venv + system packages | one file, or one `curl` installer |
 | Upgrade | re-resolve pip dependencies | replace one file |
 | Inference | TensorFlow Lite (Python) | ONNX Runtime, linked in-process |
+| Detection model | BirdNET V2.4 | BirdNET+ V3.0 preview by default; V2.4 is one command away, [measured against BirdNET-Pi](docs/book/guides/parity.md) |
 | Analytics | — | DuckDB behavioral engine, built in |
 | HTTPS | reverse proxy (Caddy/nginx) | built in — `--tls-mode self-signed` or your own certificate |
 | Offsite backups | copy them yourself | built in — encrypted on the station, to S3-compatible or SFTP |
@@ -105,7 +106,7 @@ The same design system, with all six homes on a bottom tab-bar — iPhone 13 cap
 **On a Raspberry Pi (OS Trixie) or modern x86_64 Linux, install the native binary — it's the shortest path: one command, nothing else to set up.** It downloads and sha256-verifies the binary *and* the model (both from GitHub), auto-detects your USB mic, asks for your location, and starts a hardened systemd service:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash
 ```
 
 > Run it exactly as shown — pipe into `sudo bash`, **not** `sudo bash <(curl …)` (the process-substitution form breaks under `sudo`). On a fresh 64-bit Raspberry Pi OS **Trixie** image the prebuilt binary runs as-is (glibc 2.39); the installer refuses early, with guidance, on anything older.
@@ -119,7 +120,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 **macOS (Apple Silicon)** — the same installer detects macOS and sets up a per-user launchd LaunchAgent instead of systemd (**no `sudo`**):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | bash
 ```
 
 > On macOS it installs the `aarch64-apple-darwin` build that the release workflow publishes for each version; if that asset is missing for the version it resolved, it offers to `brew install` the dependencies and prints the one-time source-build steps. A Homebrew formula is planned. (See [docs/book/field/macos.md](docs/book/field/macos.md).)
@@ -167,7 +168,7 @@ sudo ./uninstall.sh --purge      # remove everything, including data + model
 - **Offsite backups** — each weekly snapshot encrypted **on the station** (argon2id + ChaCha20-Poly1305) and uploaded to any S3-compatible store or SSH host, with retention and a `--decrypt-backup` restore path. The passphrase never leaves; there is no setting to send a backup in the clear.
 - **Search the whole log** — `/search` filters every detection you have ever recorded by species, date, hour, confidence, source and review verdict, with bulk confirm/reject/delete for signed-in admins. Every filter is in the URL, so a useful search is a bookmark.
 - **Repeat confirmation** — record a species only when enough nearby analysis windows agree, which separates a bird that sings from an artefact that fires once.
-- **Sound-level monitoring** — a real ISO 266 third-octave spectrum (20 Hz–20 kHz) with IEC 61672 A-weighting, recording the minimum, maximum and *energy* mean per band. Turns a station into a noise logger alongside its detections.
+- **Sound-level monitoring** — a real ISO 266 third-octave spectrum (band centres from 25 Hz to 20 kHz; 30 bands at 48 kHz, fewer at lower sample rates) with IEC 61672 A-weighting, recording the minimum, maximum and *energy* mean per band. Turns a station into a noise logger alongside its detections.
 - **A parametric equaliser per source** — replaces the two fixed high-pass toggles with a filter chain (`highpass:120; notch:50:20`) rendered identically for a local microphone and an RTSP camera, with the response curve drawn live as you type it. Mains hum needs a notch, and no high-pass can give you one.
 - **Species tracking** — first of the year, first of the season, and back after a winter away, hemisphere-aware.
 - **Dynamic confidence thresholds** — a species the station has already confirmed becomes easier to hear, with a floor at the model's own threshold.

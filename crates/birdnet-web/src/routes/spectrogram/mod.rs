@@ -236,7 +236,7 @@ async fn serve_spectrogram(
     // surface either way; the only thing to suppress is the text.
     let raw = state
         .run_blocking(|state| {
-            state.with_db(|conn| {
+            state.with_read_db(|conn| {
                 birdnet_db::settings::get_or(conn, "raw_spectrogram", "false")
                     .unwrap_or_else(|_| "false".to_owned())
             })

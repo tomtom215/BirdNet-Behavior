@@ -8,14 +8,44 @@ use crate::routes::pages::escape_html;
 pub fn render_species_page(
     exclude: &[String],
     include: &[String],
+    whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     crate::routes::admin::admin_shell(
         "Species lists",
         "species",
-        &species_lists_body(exclude, include, names),
+        &species_lists_body(exclude, include, whitelist, names),
     )
 }
+
+static SPECIES_LISTS_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
+      :where(.spl-scope) label { display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }
+      :where(.spl-scope) input { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg); font-size:0.875rem; box-sizing:border-box; }
+      :where(.spl-scope) input:focus { outline:none; border-color:var(--moss-ink); }
+      .btn { padding:0.4rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.85rem; }
+      .btn-primary { background:var(--moss); color:var(--on-moss); }
+      .btn-danger { background:var(--rare); color:var(--on-fill); }
+      .pill { display:inline-flex; align-items:center; gap:0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.8rem; margin:0.2rem; }
+      .hint { font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; margin-bottom:1rem; }
+      .pills { margin-bottom:1rem; min-height:2rem; }
+      .pill-x { background:none; border:none; color:var(--rare); cursor:pointer; padding:0; font-size:0.9rem; line-height:1; }
+      .empty-note { color:var(--fg-2); font-size:0.85rem; }
+      .empty-note.mb { margin-bottom:1rem; }
+      .inline-form { display:inline; margin:0; }
+      .add-row { display:flex; gap:0.5rem; align-items:center; }
+      .grow { flex:1; margin:0; }
+      .grow.cap { max-width:140px; }
+      .grow-2 { flex:2; margin:0; }
+      .thr-table { width:100%; margin-bottom:1rem; }
+      .cell-left { text-align:left; }
+      .cell-center { text-align:center; }
+      .cell-right { text-align:right; }
+      .del-btn { padding:0.2rem 0.6rem; font-size:0.75rem; }
+    </style>",
+);
 
 /// Page-specific body (scoped `<style>` + content).
 ///
@@ -26,47 +56,25 @@ pub fn render_species_page(
 pub(crate) fn species_lists_body(
     exclude: &[String],
     include: &[String],
+    whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     format!(
-        r#"<div class="spl-scope"><style>
-      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
-      :where(.spl-scope) label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
-      :where(.spl-scope) input {{ width:100%; background:var(--bg); border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg); font-size:0.875rem; box-sizing:border-box; }}
-      :where(.spl-scope) input:focus {{ outline:none; border-color:var(--moss-ink); }}
-      .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.85rem; }}
-      .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
-      .btn-danger {{ background:var(--rare); color:var(--on-fill); }}
-      .pill {{ display:inline-flex; align-items:center; gap:0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.8rem; margin:0.2rem; }}
-      .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; margin-bottom:1rem; }}
-      .pills {{ margin-bottom:1rem; min-height:2rem; }}
-      .pill-x {{ background:none; border:none; color:var(--rare); cursor:pointer; padding:0; font-size:0.9rem; line-height:1; }}
-      .empty-note {{ color:var(--fg-2); font-size:0.85rem; }}
-      .empty-note.mb {{ margin-bottom:1rem; }}
-      .inline-form {{ display:inline; margin:0; }}
-      .add-row {{ display:flex; gap:0.5rem; align-items:center; }}
-      .grow {{ flex:1; margin:0; }}
-      .grow.cap {{ max-width:140px; }}
-      .grow-2 {{ flex:2; margin:0; }}
-      .thr-table {{ width:100%; margin-bottom:1rem; }}
-      .cell-left {{ text-align:left; }}
-      .cell-center {{ text-align:center; }}
-      .cell-right {{ text-align:right; }}
-      .del-btn {{ padding:0.2rem 0.6rem; font-size:0.75rem; }}
-    </style>
+        r#"<div class="spl-scope">{SPECIES_LISTS_STYLE}
 
   <div id="species-lists">
     {inner}
   </div></div>"#,
-        inner = render_species_partial(exclude, include, names)
+        inner = render_species_partial(exclude, include, whitelist, names)
     )
 }
 
-/// Render the HTMX partial fragment containing both the exclusion and allow-list cards.
+/// Render the HTMX partial fragment containing the exclusion, allow-list and
+/// whitelist cards.
 pub fn render_species_partial(
     exclude: &[String],
     include: &[String],
+    whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let mut out = String::with_capacity(4096);
@@ -86,6 +94,18 @@ pub fn render_species_partial(
         include,
         "When non-empty, <strong>only</strong> these species are saved or notified.",
         "include",
+        names,
+    );
+    render_list_card(
+        &mut out,
+        "Always allowed (whitelist)",
+        "species_whitelist",
+        whitelist,
+        "Species the occurrence filter would hold back as unlikely for your \
+         location and week are saved anyway. <strong>Nothing else changes:</strong> \
+         a species on the exclusion list stays excluded, and one missing from a \
+         non-empty allow-list stays out.",
+        "whitelist",
         names,
     );
     // Per-species thresholds section (loaded via HTMX)
@@ -227,6 +247,33 @@ pub fn render_filter_test_page(
     )
 }
 
+static SPECIES_AUDIT_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<style>
+      h1 { font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
+      table { width:100%; border-collapse:collapse; }
+      th, td { padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); text-align:left; }
+      th { color:var(--fg-3); font-size:0.8rem; font-weight:600; text-transform:uppercase; background:var(--bg); }
+      tr:hover td { background:var(--surface)44; }
+      .stat { display:inline-block; padding:0.4rem 1rem; border-radius:0.5rem; font-weight:700; font-size:0.9rem; margin-right:0.5rem; }
+      .stat.pass { background:var(--moss-soft); color:var(--moss); }
+      .stat.block { background:var(--rare-soft); color:var(--rare); }
+      .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
+      .badge-pass { background:var(--moss); color:var(--on-moss); padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }
+      .badge-block { background:var(--rare); color:#fff; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }
+      .filter-row { margin-bottom:1rem; }
+      .label-muted { color:var(--fg-3); }
+      .edit-link { color:var(--moss-ink); font-size:0.85rem; }
+      .muted { color:var(--fg-4); }
+      .muted-sm { color:var(--fg-4); font-size:0.85rem; }
+      .sci { color:var(--fg-3); font-style:italic; }
+      .reason { color:var(--fg-3); font-size:0.8rem; }
+      .cell-center { text-align:center; }
+      .pill-sm { display:inline-block; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.15rem 0.6rem; font-size:0.8rem; margin:0.15rem; }
+    </style>",
+);
+
 /// Page-specific body for the species filter-test sub-page (scoped `<style>` +
 /// content). The shared shell supplies the chrome, the nav (with the Species tab
 /// active), and the `Admin › Species › Filter test` breadcrumb.
@@ -295,30 +342,7 @@ fn filter_test_body(
     }
 
     format!(
-        r#"<style>
-      h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }}
-      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
-      table {{ width:100%; border-collapse:collapse; }}
-      th, td {{ padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); text-align:left; }}
-      th {{ color:var(--fg-3); font-size:0.8rem; font-weight:600; text-transform:uppercase; background:var(--bg); }}
-      tr:hover td {{ background:var(--surface)44; }}
-      .stat {{ display:inline-block; padding:0.4rem 1rem; border-radius:0.5rem; font-weight:700; font-size:0.9rem; margin-right:0.5rem; }}
-      .stat.pass {{ background:var(--moss-soft); color:var(--moss); }}
-      .stat.block {{ background:var(--rare-soft); color:var(--rare); }}
-      .hint {{ font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }}
-      .badge-pass {{ background:var(--moss); color:var(--on-moss); padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }}
-      .badge-block {{ background:var(--rare); color:#fff; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }}
-      .filter-row {{ margin-bottom:1rem; }}
-      .label-muted {{ color:var(--fg-3); }}
-      .edit-link {{ color:var(--moss-ink); font-size:0.85rem; }}
-      .muted {{ color:var(--fg-4); }}
-      .muted-sm {{ color:var(--fg-4); font-size:0.85rem; }}
-      .sci {{ color:var(--fg-3); font-style:italic; }}
-      .reason {{ color:var(--fg-3); font-size:0.8rem; }}
-      .cell-center {{ text-align:center; }}
-      .pill-sm {{ display:inline-block; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.15rem 0.6rem; font-size:0.8rem; margin:0.15rem; }}
-    </style>
+        r#"{SPECIES_AUDIT_STYLE}
 
   <h1>Species Filter Preview</h1>
   <p class="hint">Shows which species from your detection history pass or are blocked by the current exclude/allow-list filters.</p>
@@ -386,10 +410,12 @@ mod tests {
 
     #[test]
     fn render_empty_lists() {
-        let html = render_species_partial(&[], &[], &birdnet_core::i18n::NameLocalizer::english());
+        let html =
+            render_species_partial(&[], &[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("No species in this list"));
         assert!(html.contains("Exclusion List"));
         assert!(html.contains("Allow-List"));
+        assert!(html.contains("Always allowed (whitelist)"));
     }
 
     #[test]
@@ -397,10 +423,16 @@ mod tests {
         let html = render_species_partial(
             &["House Sparrow".to_string()],
             &["European Robin".to_string()],
+            &["Snowy Owl".to_string()],
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("House Sparrow"));
         assert!(html.contains("European Robin"));
+        assert!(html.contains("Snowy Owl"));
+        // Each card posts to its own list: a whitelist entry's remove button
+        // must not remove from the exclusion list.
+        assert!(html.contains(r#"hx-post="/admin/species/whitelist/remove""#));
+        assert!(html.contains(r#"hx-post="/admin/species/whitelist/add""#));
     }
 
     #[test]
@@ -415,6 +447,7 @@ mod tests {
             !species_lists_body(
                 &["House Sparrow".to_string()],
                 &[],
+                &["Snowy Owl".to_string()],
                 &birdnet_core::i18n::NameLocalizer::english()
             )
             .contains("style=\"")
@@ -423,6 +456,7 @@ mod tests {
             !render_species_partial(
                 &["House Sparrow".to_string()],
                 &[],
+                &["Snowy Owl".to_string()],
                 &birdnet_core::i18n::NameLocalizer::english()
             )
             .contains("style=\"")
@@ -454,7 +488,8 @@ mod tests {
     fn species_pages_render_through_admin_shell() {
         // Both species pages render through the shared shell with the Species
         // tab active; the filter-test sub-page also carries the breadcrumb.
-        let lists = render_species_page(&[], &[], &birdnet_core::i18n::NameLocalizer::english());
+        let lists =
+            render_species_page(&[], &[], &[], &birdnet_core::i18n::NameLocalizer::english());
         assert!(lists.contains(r#"href="/admin/species" class="am-nav-active""#));
         assert!(lists.contains(r#"id="species-lists""#));
         assert!(lists.contains("Exclusion List"));
