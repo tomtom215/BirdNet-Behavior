@@ -669,15 +669,18 @@ mod tests {
     fn every_page_loads_the_chart_text_fitter() {
         use axum::http::HeaderMap;
         // As the middleware ships it: a script the layout did not seal would
-        // come out without the nonce.
+        // come out without the nonce. The nonce is minted per run, not written
+        // down: code scanning reads a literal reaching `redeem`'s `nonce` as a
+        // hard-coded cryptographic value.
+        let nonce = format!("nonce-{}", std::process::id());
         let html = crate::seal::redeem(
             &render_page_for_request("Test", "", "today", &HeaderMap::new()).0,
-            "N",
+            &nonce,
         );
         let version = env!("CARGO_PKG_VERSION");
         assert!(
             html.contains(&format!(
-                r#"<script nonce="N" src="/static/chart-text.js?v={version}" defer></script>"#
+                r#"<script nonce="{nonce}" src="/static/chart-text.js?v={version}" defer></script>"#
             )),
             "the layout must load chart-text.js, versioned, deferred and nonced"
         );

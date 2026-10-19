@@ -29,15 +29,6 @@ since 2026-08-09 and not looked at.
 
 ## 2. Decisions that are the maintainer's
 
-- **Fifteen CodeQL alerts on pull request #262** ("hard-coded cryptographic value",
-  alerts 139–153, reported critical). All fifteen sit on literals in test code: five
-  passwords in `#[cfg(test)]` tests in `crates/birdnet-db/src/accounts/users.rs`, one
-  password in an integration test under `crates/birdnet-web/tests/`, and nine fixed
-  nonces handed to `seal::redeem` in tests (production mints a random one per request,
-  `security.rs`). Nothing was changed for them and each thread has a reply saying so.
-  Dismissing them as "used in tests" in the Security tab, or restructuring the tests,
-  is yours; until then the `CodeQL` check on that pull request stays red. Whether `main`
-  already carries open alerts of the same kind was not readable from here.
 - **The default classifier.** It is BirdNET+ V3.0 preview: a different network from
   the one BirdNET-Pi and birdnet-go run (V2.4), with different windows, calibrated
   probabilities and 11 560 species. The same audio does **not** give BirdNET-Pi's
@@ -200,6 +191,20 @@ documentation, workflow YAML, the shellcheck and spelling configuration and
   `mutants.out/outcomes.json` (it sets `total` only); that was read from the workflow
   file, not confirmed in a log. What those jobs mutated was not read from their
   logs, so a green row there says the gate did not fail, not that mutants were caught.
+- **CodeQL on pull request #262: restructured, not suppressed.** `rust/hard-coded-cryptographic-value`
+  reported 15 alerts (139–153) on literals in tests this branch added: passwords handed
+  to `hash_password`/`verify_password` and fixed nonces handed to `seal::redeem`
+  (production mints a random nonce per request). At your request the tests changed.
+  The argon2 0.5 pinned hash keeps its password beside it in
+  `crates/birdnet-db/tests/data/argon2_0_5_vector.txt`, read at run time; the cost
+  test, the web integration test and the nonce tests make a value per run. The query
+  was run locally as CI runs it (CodeQL 2.27.2, `--build-mode=none`, `target/` moved
+  aside): 0 alerts in the four files; 64 remain in the repository, every one on a line
+  that is verbatim in `main`, so older tests this branch did not touch (left alone).
+  A mutant of `redeem` that ignores its nonce turns the four tests bound to it red, and
+  a corrupted vector file turns the pinned-hash test red. Not run locally: the rest of
+  the `security-extended` suite over the new test code. The pull request's CodeQL
+  check is the result for the pushed head.
 
 **Not run, anywhere:** the release workflow (read against a real toolchain and fixed;
 not executed); pushing the Docker image (`docker.yml` built the amd64 and arm64

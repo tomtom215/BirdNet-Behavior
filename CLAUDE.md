@@ -377,6 +377,22 @@ Corollaries, each learned the same way:
   siblings finds 45 of the 170 blocking calls, because the rest went through
   a sync helper. `tests/database_work_stays_off_the_async_runtime.rs` follows
   calls.
+- **`rust/hard-coded-cryptographic-value` is a taint query keyed on parameter
+  *names*, and it does not skip tests.** A literal (a `const` too, `""` too) that
+  reaches an argument of any function whose parameter is called `password`,
+  `nonce`, `iv` or `salt` is an alert, including this repo's own
+  `verify_password(hash, password)` and `seal::redeem(html, nonce)`, with no
+  crypto crate involved. Fifteen alerts on one pull request were first answered
+  from reading the tests; the query is at the `github/codeql` tag matching the
+  pinned `codeql-action`'s `src/defaults.json`, and its CLI bundle runs here. A
+  probe crate with one function per construction showed that `format!` over a
+  runtime value, `String::new()`, `env::var` and `fs::read_to_string` are accepted
+  and a literal, a `const`, `""` and `include_str!` are not. A test that needs one
+  fixed password (a pinned hash) keeps it in a data file
+  (`crates/birdnet-db/tests/data/`). Move `target/` aside before building the
+  database: its build-script output holds generated tables of literals, and the
+  query had not finished after 40 minutes on a database that included it (a
+  `--build-mode=none` database without it took 18 minutes to build).
 
 ### Key Dependencies
 

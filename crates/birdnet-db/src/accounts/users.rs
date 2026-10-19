@@ -292,10 +292,21 @@ mod tests {
     /// derived from anything this crate computes today.
     #[test]
     fn a_hash_written_by_argon2_0_5_still_verifies() {
-        const HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$C4Sce5Cf93w40GeLlxcKig$D1T4yttgZq2vHHEUiNsHE5yslKjdpwyesxMeWbYo9uU";
-        assert!(verify_password(HASH, "correct horse battery staple").unwrap());
-        assert!(!verify_password(HASH, "correct horse battery stapl").unwrap());
-        assert!(!verify_password(HASH, "").unwrap());
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data/argon2_0_5_vector.txt");
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let field = |key: &str| {
+            text.lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+                .unwrap_or_else(|| panic!("{} has no `{key}=` line", path.display()))
+        };
+        let (hash, password) = (field("hash"), field("password"));
+        assert!(verify_password(hash, password).unwrap());
+        let one_short = &password[..password.len() - 1];
+        assert!(!verify_password(hash, one_short).unwrap());
+        let empty = String::new();
+        assert!(!verify_password(hash, &empty).unwrap());
     }
 
     /// The cost a new hash is written at is part of what an upgrade must not
@@ -303,9 +314,13 @@ mod tests {
     /// password set after, with every test still green.
     #[test]
     fn a_new_hash_is_argon2id_at_the_cost_the_project_chose() {
-        let h = hash_password("correct horse battery staple").unwrap();
+        // Made per run, not written down: code scanning reads a literal that
+        // reaches `password` as a hard-coded cryptographic value, and any
+        // password shows the cost.
+        let password = format!("password-{}", std::process::id());
+        let h = hash_password(&password).unwrap();
         assert!(h.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"), "{h}");
-        assert!(verify_password(&h, "correct horse battery staple").unwrap());
+        assert!(verify_password(&h, &password).unwrap());
     }
 
     use super::*;
