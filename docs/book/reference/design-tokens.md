@@ -177,7 +177,7 @@ shadow and switches the ring to a faint light edge.
 | Token | Value | Use |
 |---|---|---|
 | `--ring` | `0 0 0 2px var(--surface), 0 0 0 4px var(--moss)` | The keyboard focus ring for a field: a `--surface` gap, then `--moss`. One token so a high-contrast theme changes it once. |
-| `--ring-soft` | `0 0 0 3px color-mix(in oklch, var(--moss) 22%, transparent)` | The softer halo a pointer-focused field keeps. |
+| `--ring-soft` | `0 0 0 3px color-mix(in oklab, var(--moss) 22%, transparent)` | The softer halo a pointer-focused field keeps. |
 | `--scrim` | `oklch(0% 0 0 / .32)` | The dimming layer behind a dialog, a drawer or a sheet. Five rules had three different opacities (22, 32 and 38 %) before this existed. |
 
 ## Radii
@@ -384,3 +384,9 @@ element's computed style before, and after, and diff).
 - **A token whose value differs between the themes also goes in `print.css`.**
 - **Never hard-code a colour or pad** in a component — read the token, so a
   future theme or density change stays a one-line edit.
+- **Mix a tint in `oklab`, never `oklch`.** `color-mix(in oklch, var(--moss) 16%, var(--surface))`
+  interpolates *hue*, and a neutral has none (light `--surface` is `oklch(100% 0 0)`, so hue 0;
+  dark is 250): the amber tint came out pink (hue 10), the moss one brown (24), and in dark the
+  warning toast was magenta (344). `in oklab` mixes the colour's coordinates and has no hue to
+  carry. A test refuses a new `in oklch`, and `tools/visual-qa/tokens.mjs` reads the hue of what
+  each tinted surface paints.

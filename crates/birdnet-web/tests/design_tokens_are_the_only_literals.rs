@@ -355,6 +355,70 @@ fn every_colour_token_has_a_value_in_both_themes() {
     assert!(missing.is_empty(), "{}", missing.join("\n"));
 }
 
+// ── A tint keeps its hue ────────────────────────────────────────────────────
+
+/// The lines of `text` that write a mix in OKLCH, comments excluded.
+fn oklch_mixes_in(label: &str, text: &str) -> Vec<String> {
+    let text = text.split("#[cfg(test)]").next().unwrap_or_default();
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            let t = line.trim_start();
+            !(t.starts_with("//") || t.starts_with("/*") || t.starts_with('*'))
+                && line.contains("color-mix(in oklch")
+        })
+        .map(|(n, _)| format!("{label}:{}", n + 1))
+        .collect()
+}
+
+/// Every place a mix is written, by file, that mixes in OKLCH.
+fn oklch_mixes() -> Vec<String> {
+    let mut out = Vec::new();
+    for p in source_files()
+        .into_iter()
+        .chain(std::iter::once(root().join("static/css/app.css")))
+        .chain(std::iter::once(root().join("static/css/print.css")))
+    {
+        let text = std::fs::read_to_string(&p).unwrap_or_default();
+        out.extend(oklch_mixes_in(&p.display().to_string(), &text));
+    }
+    out
+}
+
+/// The counterpart: it finds a mix in OKLCH in code, passes the same in `OKLab`,
+/// and does not mistake a comment that explains the rule for a violation.
+#[test]
+fn the_mix_scanner_finds_oklch_and_only_oklch() {
+    let bad = "a { background: color-mix(in oklch, var(--moss) 16%, var(--surface)); }";
+    assert_eq!(oklch_mixes_in("x.css", bad), ["x.css:1"]);
+    let ok = "a { background: color-mix(in oklab, var(--moss) 16%, var(--surface)); }\n\
+              /* color-mix(in oklch, …) turns a neutral pink */\n\
+              // color-mix(in oklch, …)";
+    assert!(oklch_mixes_in("x.css", ok).is_empty());
+}
+
+/// `color-mix(in oklch, …)` interpolates hue, and a neutral has none: the light
+/// theme's `--surface` is `oklch(100% 0 0)`, so a 16 % tint of amber over it
+/// walked from amber's hue (60) toward zero and landed on 9.6 degrees, which is
+/// pink; a 16 % tint of moss (150) landed on 24, a brown. Every tinted pill,
+/// toast, banner and feed row in light was a little wrong that way, and in dark
+/// (where the surface's hue is 250) the waveform beside each detection mixed
+/// green and grey into teal. `in oklab` interpolates the colour's coordinates
+/// and has no hue to carry: a tint of X over a neutral is X, paler.
+///
+/// Measured in the browser, not argued: `tools/visual-qa/tokens.mjs` reads the
+/// hue of what a tinted element paints.
+#[test]
+fn no_tint_is_mixed_in_oklch() {
+    let found = oklch_mixes();
+    assert!(
+        found.is_empty(),
+        "{} mix(es) in oklch; use `in oklab`:\n  {}",
+        found.len(),
+        found.join("\n  ")
+    );
+}
+
 // ── High contrast has two doors and one room ───────────────────────────────
 
 /// What a rule block declares, by its exact selector context.

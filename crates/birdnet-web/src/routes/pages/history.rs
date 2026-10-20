@@ -308,7 +308,7 @@ fn heat_bg(count: i64, cmax: i64) -> String {
     }
     let span = f64::from(u32::try_from(HEAT_MAX_PCT - 8).unwrap_or(72));
     let pct = ((count as f64 / cmax as f64) * span).round() as i64 + 8;
-    format!("color-mix(in oklch, var(--moss) {pct}%, var(--surface-2))")
+    format!("color-mix(in oklab, var(--moss) {pct}%, var(--surface-2))")
 }
 
 // ---------------------------------------------------------------------------

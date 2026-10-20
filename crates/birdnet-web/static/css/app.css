@@ -234,7 +234,7 @@
   /* Focus: the keyboard ring (a --surface gap, then --moss) and the softer
      halo a pointer-focused field keeps. */
   --ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--moss);
-  --ring-soft: 0 0 0 3px color-mix(in oklch, var(--moss) 22%, transparent);
+  --ring-soft: 0 0 0 3px color-mix(in oklab, var(--moss) 22%, transparent);
 
   /* The dimming layer behind a dialog, a drawer or a sheet. */
   --scrim: oklch(0% 0 0 / .32);
@@ -491,14 +491,14 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   --dot: var(--fg-3);
   width: 6px; height: 6px; border-radius: var(--r-pill);
   background: var(--dot); display: inline-block; flex: 0 0 auto;
-  outline: 1px solid color-mix(in oklch, var(--dot) 55%, var(--fg));
+  outline: 1px solid color-mix(in oklab, var(--dot) 55%, var(--fg));
 }
 .bnb-dot.live { --dot: var(--moss); animation: bnb-pulse 1.6s ease-out infinite; }
 .bnb-dot.dawn { --dot: var(--dawn); }
 .bnb-dot.rare { --dot: var(--rare); }
 .bnb-dot.info { --dot: var(--info); }
 @keyframes bnb-pulse {
-  0%   { box-shadow: 0 0 0 0 color-mix(in oklch, var(--dot, var(--moss)) 60%, transparent); }
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--dot, var(--moss)) 60%, transparent); }
   70%  { box-shadow: 0 0 0 7px transparent; }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
@@ -519,7 +519,7 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--fg); }
 .bnb-btn.ghost:hover { background: var(--surface-2); }
 .bnb-btn.moss { background: var(--moss); color: var(--on-moss); border-color: transparent; }
-.bnb-btn.danger { color: var(--rare); border-color: color-mix(in oklch, var(--rare) 40%, var(--border)); }
+.bnb-btn.danger { color: var(--rare); border-color: color-mix(in oklab, var(--rare) 40%, var(--border)); }
 
 .bnb-photo {
   background: repeating-linear-gradient(45deg, var(--surface-2) 0 8px, var(--bg-2) 8px 16px);
@@ -535,10 +535,10 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 
 /* Time-of-day heat ramp (dawn hue) */
 .bnb-heat-0 { background: var(--surface-2); }
-.bnb-heat-1 { background: color-mix(in oklch, var(--dawn) 14%, var(--surface-2)); }
-.bnb-heat-2 { background: color-mix(in oklch, var(--dawn) 30%, var(--surface-2)); }
-.bnb-heat-3 { background: color-mix(in oklch, var(--dawn) 50%, var(--surface-2)); }
-.bnb-heat-4 { background: color-mix(in oklch, var(--dawn) 72%, var(--surface-2)); }
+.bnb-heat-1 { background: color-mix(in oklab, var(--dawn) 14%, var(--surface-2)); }
+.bnb-heat-2 { background: color-mix(in oklab, var(--dawn) 30%, var(--surface-2)); }
+.bnb-heat-3 { background: color-mix(in oklab, var(--dawn) 50%, var(--surface-2)); }
+.bnb-heat-4 { background: color-mix(in oklab, var(--dawn) 72%, var(--surface-2)); }
 .bnb-heat-5 { background: var(--dawn); }
 
 /* Species avatar: the bird's photograph over a 4-letter code chip in the
@@ -550,10 +550,10 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;
   font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: var(--fw-semibold); letter-spacing: .5px;
-  background: color-mix(in oklch, var(--sp, var(--moss)) 22%, var(--surface));
+  background: color-mix(in oklab, var(--sp, var(--moss)) 22%, var(--surface));
   /* The hue keeps the species' identity; the mix towards --sp-ink is what
      makes it readable on the tint in both themes (DD-29). */
-  color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
+  color: color-mix(in oklab, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
   position: relative; overflow: hidden;
 }
 .bnb-avatar.sm { width: 24px; height: 24px; font-size: var(--fs-2xs); }
@@ -597,7 +597,7 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   position: sticky; top: 0; z-index: var(--z-sticky);
   display: flex; align-items: center; gap: var(--space-14); flex-wrap: wrap;
   padding: 10px 22px;
-  background: color-mix(in oklch, var(--bg) 86%, transparent);
+  background: color-mix(in oklab, var(--bg) 86%, transparent);
   backdrop-filter: saturate(1.4) blur(8px);
   border-bottom: var(--bw) solid var(--hairline);
 }
@@ -682,11 +682,11 @@ main {
 .feed-row .ago { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .feed-row .who .name { font-weight: var(--fw-medium); font-size: var(--fs-base); }
 .feed-row .who .sci  { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feed-row.fresh { background: color-mix(in oklch, var(--moss) 6%, var(--surface)); border-color: color-mix(in oklch, var(--moss) 30%, var(--border)); }
+.feed-row.fresh { background: color-mix(in oklab, var(--moss) 6%, var(--surface)); border-color: color-mix(in oklab, var(--moss) 30%, var(--border)); }
 
 /* Mini bar waveform (deterministic envelope rendered server-side) */
 .waveform { display: inline-flex; align-items: center; gap: 1.5px; height: 22px; }
-.waveform span { width: 2px; border-radius: 1px; background: color-mix(in oklch, var(--moss) 60%, var(--fg-4)); }
+.waveform span { width: 2px; border-radius: 1px; background: color-mix(in oklab, var(--moss) 60%, var(--fg-4)); }
 
 /* Activity heatmap (compact) */
 .miniheat-row { display: flex; gap: var(--space-6); align-items: center; margin-top: 3px; }
@@ -729,7 +729,7 @@ tbody tr:hover { background: var(--surface-2); }
 .conf.mid  { background: var(--dawn-soft); color: var(--dawn-ink); }
 .conf.low  { background: var(--rare-soft); color: var(--rare); }
 
-.live-dot { --dot: var(--moss); display: inline-block; width: 7px; height: 7px; background: var(--dot); border-radius: 50%; margin-right: 4px; outline: 1px solid color-mix(in oklch, var(--dot) 55%, var(--fg)); animation: bnb-pulse 1.6s ease-out infinite; }
+.live-dot { --dot: var(--moss); display: inline-block; width: 7px; height: 7px; background: var(--dot); border-radius: 50%; margin-right: 4px; outline: 1px solid color-mix(in oklab, var(--dot) 55%, var(--fg)); animation: bnb-pulse 1.6s ease-out infinite; }
 
 .species-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: var(--bw) solid var(--hairline); gap: var(--space-10); }
 .species-item:last-child { border-bottom: none; }
@@ -1015,8 +1015,8 @@ footer a:hover { color: var(--moss-ink); }
     linear-gradient(
       90deg,
       var(--surface-2) 0%,
-      color-mix(in oklch, var(--hairline) 65%, var(--surface-2)) 40%,
-      color-mix(in oklch, var(--hairline) 65%, var(--surface-2)) 60%,
+      color-mix(in oklab, var(--hairline) 65%, var(--surface-2)) 40%,
+      color-mix(in oklab, var(--hairline) 65%, var(--surface-2)) 60%,
       var(--surface-2) 100%
     );
   background-size: 200% 100%;
@@ -1123,11 +1123,11 @@ footer a:hover { color: var(--moss-ink); }
 
 /* Danger / warn theming on the dialog frame */
 .bnb-modal[data-style="danger"] .bnb-modal__form {
-  border-color: color-mix(in oklch, var(--rare) 40%, var(--border));
-  box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in oklch, var(--rare) 8%, transparent);
+  border-color: color-mix(in oklab, var(--rare) 40%, var(--border));
+  box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in oklab, var(--rare) 8%, transparent);
 }
 .bnb-modal[data-style="warn"] .bnb-modal__form {
-  border-color: color-mix(in oklch, var(--dawn) 50%, var(--border));
+  border-color: color-mix(in oklab, var(--dawn) 50%, var(--border));
 }
 
 /* Show/hide animation when supported */
@@ -1213,7 +1213,7 @@ footer a:hover { color: var(--moss-ink); }
 .bnb-toast__body a {
   color: var(--moss-ink);
   text-decoration: none;
-  border-bottom: var(--bw) solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+  border-bottom: var(--bw) solid color-mix(in oklab, var(--moss-ink) 30%, transparent);
 }
 .bnb-toast__body a:hover { border-bottom-color: var(--moss-ink); }
 
@@ -1233,21 +1233,21 @@ footer a:hover { color: var(--moss-ink); }
 
 /* Tinted backgrounds — subtle, never fights with the page */
 .bnb-toast[data-kind="success"] {
-  background: color-mix(in oklch, var(--moss-soft) 60%, var(--surface));
-  border-color: color-mix(in oklch, var(--moss) 30%, var(--border));
+  background: color-mix(in oklab, var(--moss-soft) 60%, var(--surface));
+  border-color: color-mix(in oklab, var(--moss) 30%, var(--border));
 }
 .bnb-toast[data-kind="warn"] {
-  background: color-mix(in oklch, var(--dawn-soft) 55%, var(--surface));
-  border-color: color-mix(in oklch, var(--dawn) 35%, var(--border));
+  background: color-mix(in oklab, var(--dawn-soft) 55%, var(--surface));
+  border-color: color-mix(in oklab, var(--dawn) 35%, var(--border));
 }
 .bnb-toast[data-kind="error"] {
-  background: color-mix(in oklch, var(--rare-soft) 55%, var(--surface));
-  border-color: color-mix(in oklch, var(--rare) 35%, var(--border));
+  background: color-mix(in oklab, var(--rare-soft) 55%, var(--surface));
+  border-color: color-mix(in oklab, var(--rare) 35%, var(--border));
   color: var(--fg);
 }
 .bnb-toast[data-kind="info"] {
-  background: color-mix(in oklch, var(--info-soft) 55%, var(--surface));
-  border-color: color-mix(in oklch, var(--info) 30%, var(--border));
+  background: color-mix(in oklab, var(--info-soft) 55%, var(--surface));
+  border-color: color-mix(in oklab, var(--info) 30%, var(--border));
 }
 
 /* Optional action link inside a toast (e.g. "Restart now") */
@@ -1258,7 +1258,7 @@ footer a:hover { color: var(--moss-ink); }
   font-weight: var(--fw-medium);
   color: var(--moss-ink);
   text-decoration: none;
-  border-bottom: var(--bw) solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+  border-bottom: var(--bw) solid color-mix(in oklab, var(--moss-ink) 30%, transparent);
 }
 .bnb-toast__action:hover { border-bottom-color: var(--moss-ink); }
 /* Append to crates/birdnet-web/static/css/app.css — purely additive.
@@ -1402,7 +1402,7 @@ footer a:hover { color: var(--moss-ink); }
 .bnb-dropzone.dragover {
   border-style: solid;
   border-color: var(--moss);
-  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 8%, var(--surface));
   color: var(--moss-ink);
 }
 .bnb-dropzone .display {
@@ -1412,14 +1412,14 @@ footer a:hover { color: var(--moss-ink); }
 
 /* ── Danger zone card (backup-recovery) ───────────────────────────── */
 .bnb-danger-zone {
-  border: var(--bw) solid color-mix(in oklch, var(--rare) 40%, var(--border));
+  border: var(--bw) solid color-mix(in oklab, var(--rare) 40%, var(--border));
   border-radius: var(--r-lg);
   padding: var(--pad-3);
-  background: color-mix(in oklch, var(--rare) 4%, var(--surface));
+  background: color-mix(in oklab, var(--rare) 4%, var(--surface));
 }
 .bnb-danger-zone .bnb-eyebrow { color: var(--rare); }
 .bnb-danger-zone > h3 { color: var(--fg); }
-.bnb-danger-zone .bnb-divider { background: color-mix(in oklch, var(--rare) 18%, var(--hairline)); }
+.bnb-danger-zone .bnb-divider { background: color-mix(in oklab, var(--rare) 18%, var(--hairline)); }
 
 /* ── Logs / mono code block (admin logs viewer, birdnet.conf preview) ── */
 .bnb-logblock {
@@ -1545,10 +1545,10 @@ footer a:hover { color: var(--moss-ink); }
   font: inherit;
 }
 .bnb-more-row:hover {
-  background: color-mix(in oklch, var(--moss) 7%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 7%, var(--surface));
 }
 .bnb-more-row.active {
-  background: color-mix(in oklch, var(--moss) 10%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 10%, var(--surface));
   color: var(--moss-ink);
 }
 .bnb-more-row .glyph {
@@ -1594,7 +1594,7 @@ footer a:hover { color: var(--moss-ink); }
   color: var(--fg-3);
   font-size: var(--fs-sm);
   margin-top: var(--pad-4);
-  background: color-mix(in oklch, var(--bg) 85%, transparent);
+  background: color-mix(in oklab, var(--bg) 85%, transparent);
 }
 .bnb-footer__brand {
   display: inline-flex; align-items: center; gap: var(--space-8);
@@ -1628,7 +1628,7 @@ footer a:hover { color: var(--moss-ink); }
 }
 .bnb-footer__meta a:hover {
   color: var(--moss-ink);
-  border-bottom-color: color-mix(in oklch, var(--moss-ink) 35%, transparent);
+  border-bottom-color: color-mix(in oklab, var(--moss-ink) 35%, transparent);
 }
 
 .bnb-footer__rights {
@@ -1681,7 +1681,7 @@ footer a:hover { color: var(--moss-ink); }
   padding: 10px 12px;
   border-radius: var(--r-md);
   background: var(--rare-soft);
-  border: var(--bw) solid color-mix(in oklch, var(--rare) 35%, transparent);
+  border: var(--bw) solid color-mix(in oklab, var(--rare) 35%, transparent);
   color: var(--rare);
   font-size: var(--fs-md);
   margin-bottom: var(--space-16);
@@ -1965,11 +1965,11 @@ footer a:hover { color: var(--moss-ink); }
   border: var(--bw) solid var(--border);
 }
 .audio-kind-badge.usb {
-  background: color-mix(in oklch, var(--moss) 12%, var(--surface-2));
+  background: color-mix(in oklab, var(--moss) 12%, var(--surface-2));
   color: var(--moss-ink); border-color: transparent;
 }
 .audio-kind-badge.pipe {
-  background: color-mix(in oklch, var(--dawn) 10%, var(--surface-2));
+  background: color-mix(in oklab, var(--dawn) 10%, var(--surface-2));
   color: var(--dawn-ink); border-color: transparent;
 }
 .audio-kind-badge.rtsp { background: var(--surface-2); color: var(--fg); }
@@ -2110,7 +2110,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 .bnb-type-picker label:hover { border-color: var(--fg-3); color: var(--fg); }
 .bnb-type-picker label.is-checked {
   border-color: var(--moss);
-  background: color-mix(in oklch, var(--moss) 12%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 12%, var(--surface));
   color: var(--fg);
   box-shadow: var(--ring-soft);
 }
@@ -2231,7 +2231,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 .bnb-cmdk__results li[data-href]:hover,
 .bnb-cmdk__results li[data-href].is-active {
-  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 8%, var(--surface));
 }
 .bnb-cmdk__results li[data-href] .glyph {
   font-family: var(--font-mono);
@@ -2307,8 +2307,8 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 .bnb-help-link:hover {
   color: var(--moss-ink);
-  background: color-mix(in oklch, var(--moss) 7%, var(--surface));
-  border-color: color-mix(in oklch, var(--moss) 20%, transparent);
+  background: color-mix(in oklab, var(--moss) 7%, var(--surface));
+  border-color: color-mix(in oklab, var(--moss) 20%, transparent);
   text-decoration: none;
 }
 .bnb-help-link__glyph {
@@ -2376,7 +2376,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 .bnb-help-drawer__body h3 { font-size: var(--fs-lg); font-weight: var(--fw-medium); color: var(--fg); margin: 22px 0 6px; }
 .bnb-help-drawer__body p { margin: 8px 0; }
-.bnb-help-drawer__body a { color: var(--moss-ink); text-decoration: none; border-bottom: var(--bw) solid color-mix(in oklch, var(--moss-ink) 30%, transparent); }
+.bnb-help-drawer__body a { color: var(--moss-ink); text-decoration: none; border-bottom: var(--bw) solid color-mix(in oklab, var(--moss-ink) 30%, transparent); }
 .bnb-help-drawer__body a:hover { border-bottom-color: var(--moss-ink); }
 .bnb-help-drawer__body code {
   font-family: var(--font-mono);
@@ -2403,7 +2403,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   padding: 4px 14px;
   margin: 12px 0;
   color: var(--fg-3);
-  background: color-mix(in oklch, var(--moss) 4%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 4%, var(--surface));
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 .bnb-help-drawer__body img {
@@ -2442,8 +2442,8 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   gap: var(--space-14);
   align-items: center;
   padding: 10px 16px;
-  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
-  border: var(--bw) solid color-mix(in oklch, var(--moss) 26%, var(--border));
+  background: color-mix(in oklab, var(--moss) 8%, var(--surface));
+  border: var(--bw) solid color-mix(in oklab, var(--moss) 26%, var(--border));
   border-radius: var(--r-md);
   margin: 0 0 var(--pad-3);
   font-size: var(--fs-md);
@@ -2472,7 +2472,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   padding: 0 4px;
   border-radius: var(--r-xs);
 }
-.bnb-banner__close:hover { color: var(--fg); background: color-mix(in oklch, var(--moss) 4%, var(--surface)); }
+.bnb-banner__close:hover { color: var(--fg); background: color-mix(in oklab, var(--moss) 4%, var(--surface)); }
 
 /* ── Changelog page typography ────────────────────────────────────── */
 .changelog-release { border-top: var(--bw) solid var(--hairline); padding-top: 4px; }
@@ -2526,7 +2526,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 .bnb-verdict-trend > .col > .approved   { background: var(--moss); }
 .bnb-verdict-trend > .col > .relabeled  { background: var(--dawn); }
 .bnb-verdict-trend > .col > .rejected   { background: var(--rare); }
-.bnb-verdict-trend > .col > .unreviewed { background: color-mix(in oklch, var(--fg-4) 28%, var(--surface-2)); }
+.bnb-verdict-trend > .col > .unreviewed { background: color-mix(in oklab, var(--fg-4) 28%, var(--surface-2)); }
 
 .bnb-verdict-legend {
   display: flex; gap: var(--space-14); flex-wrap: wrap;
@@ -2541,7 +2541,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 .bnb-verdict-legend i.approved  { background: var(--moss); }
 .bnb-verdict-legend i.relabeled { background: var(--dawn); }
 .bnb-verdict-legend i.rejected  { background: var(--rare); }
-.bnb-verdict-legend i.unreviewed { background: color-mix(in oklch, var(--fg-4) 28%, var(--surface-2)); }
+.bnb-verdict-legend i.unreviewed { background: color-mix(in oklab, var(--fg-4) 28%, var(--surface-2)); }
 
 /* ── Model vs. human confidence rows ──────────────────────────────── */
 .bnb-mvr {
@@ -2617,7 +2617,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 /* Moon glyphs use the night/dawn tokens. */
 .bnb-signal--moon[data-phase="full-moon"] .bnb-signal__glyph,
 .bnb-signal--moon[data-phase="full"]      .bnb-signal__glyph {
-  background: color-mix(in oklch, var(--dawn) 28%, var(--surface-2));
+  background: color-mix(in oklab, var(--dawn) 28%, var(--surface-2));
   color: var(--dawn-ink);
 }
 .bnb-signal--moon[data-phase="new-moon"] .bnb-signal__glyph,
@@ -2637,7 +2637,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 .bnb-signal--weather .bnb-signal__temp {
   fill: none;
-  stroke: color-mix(in oklch, var(--dawn) 60%, var(--moss));
+  stroke: color-mix(in oklab, var(--dawn) 60%, var(--moss));
   stroke-width: 1.4;
   stroke-linecap: round;
 }
@@ -2651,7 +2651,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 /* ── SPL band ─────────────────────────────────────────────────────── */
 .bnb-signal--spl .bnb-signal__spl {
   fill: none;
-  stroke: color-mix(in oklch, var(--fg-3) 80%, var(--moss));
+  stroke: color-mix(in oklab, var(--fg-3) 80%, var(--moss));
   stroke-width: 1.2;
   stroke-linecap: round;
 }
@@ -2674,7 +2674,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   padding: 6px 10px;
   margin-top: var(--space-6);
   border-top: var(--bw) solid var(--hairline);
-  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  background: color-mix(in oklab, var(--surface) 80%, transparent);
   border-radius: 0 0 var(--r-md) var(--r-md);
 }
 .bnb-overlay-strip .bnb-signal { font-size: var(--fs-xs); }
@@ -2688,7 +2688,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: var(--z-tabbar);
-  background: color-mix(in oklch, var(--bg) 88%, transparent);
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
   backdrop-filter: saturate(1.4) blur(14px);
   -webkit-backdrop-filter: saturate(1.4) blur(14px);
   border-top: var(--bw) solid var(--border);
@@ -2724,7 +2724,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 .bnb-tabbar__slot:hover { color: var(--fg); }
 .bnb-tabbar__slot.active {
   color: var(--moss-ink);
-  background: color-mix(in oklch, var(--moss) 10%, transparent);
+  background: color-mix(in oklab, var(--moss) 10%, transparent);
 }
 
 /* Make room for the bar so content doesn't hide beneath it. */
@@ -2804,7 +2804,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
   font-family: var(--font-mono); font-size: var(--fs-lg); color: var(--fg-3); text-align: center;
 }
 .bnb-sheet__row:hover { background: var(--surface-2); }
-.bnb-sheet__row.active { background: color-mix(in oklch, var(--moss) 10%, var(--surface)); color: var(--moss-ink); }
+.bnb-sheet__row.active { background: color-mix(in oklab, var(--moss) 10%, var(--surface)); color: var(--moss-ink); }
 .bnb-sheet__row.active .glyph { color: var(--moss-ink); }
 /* Group sub-headings inside the mobile sheet (manifest-generated), so it reads
    as grouped sections instead of one flat wall. */
@@ -2912,7 +2912,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 /* Danger zone (page-local; mirrors the inline values it replaces) */
 .bkr-danger       { border-color: var(--rare); }
 .bkr-danger .bnb-eyebrow { color: var(--rare); }
-.bkr-danger-row   { display: flex; justify-content: space-between; align-items: center; gap: var(--space-12); padding: 11px 0; border-top: var(--bw) solid color-mix(in oklch, var(--rare) 25%, transparent); }
+.bkr-danger-row   { display: flex; justify-content: space-between; align-items: center; gap: var(--space-12); padding: 11px 0; border-top: var(--bw) solid color-mix(in oklab, var(--rare) 25%, transparent); }
 .bkr-mb-xs        { margin-bottom: var(--space-4); }
 
 /* Right rail */
@@ -3651,8 +3651,8 @@ a.login-about    { color: var(--fg-3); }
 .mig-legend      { display: flex; gap: var(--space-14); align-items: center; }
 .mig-legend-item { display: inline-flex; align-items: center; gap: var(--space-6); }
 .mig-swatch      { width: 10px; height: 6px; border-radius: 2px; }
-.mig-swatch.spring { background: color-mix(in oklch, var(--moss) 60%, transparent); }
-.mig-swatch.fall   { background: color-mix(in oklch, var(--dawn) 60%, transparent); }
+.mig-swatch.spring { background: color-mix(in oklab, var(--moss) 60%, transparent); }
+.mig-swatch.fall   { background: color-mix(in oklab, var(--dawn) 60%, transparent); }
 .mig-ridge       { min-height: 360px; }
 .mig-divider     { margin-top: var(--space-14); padding-top: 14px; border-top: var(--bw) solid var(--hairline); }
 .mig-divider-head { display: flex; justify-content: space-between; margin-bottom: var(--space-6); }
@@ -4182,7 +4182,7 @@ a.sr-about       { color: var(--fg-3); }
 .ga-card       { padding: 0; overflow: hidden; transition: transform var(--dur-base), box-shadow var(--dur-base); cursor: pointer; }
 .ga-thumb      { height: 120px; overflow: hidden; position: relative; }
 .ga-thumb-bg   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.ga-code       { font-size: 1.7rem; letter-spacing: 0.04em; color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); }
+.ga-code       { font-size: 1.7rem; letter-spacing: 0.04em; color: color-mix(in oklab, var(--sp, var(--moss)) 62%, var(--sp-ink)); }
 .ga-img        { position: relative; width: 100%; height: 100%; object-fit: cover; }
 .ga-body       { padding: 0.75rem; }
 .ga-name       { font-weight: var(--fw-semibold); font-size: var(--fs-base); margin-bottom: 0.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -4377,9 +4377,9 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: var(--bw) solid var(--hairlin
 
 /* Review nudge / outage banner — surfaces only when something needs an eye */
 .x-nudge { display: flex; align-items: center; gap: var(--space-14); padding: 13px 18px; border-radius: var(--r-lg);
-  border: var(--bw) solid color-mix(in oklch, var(--rare) 30%, var(--border)); background: var(--rare-soft); }
+  border: var(--bw) solid color-mix(in oklab, var(--rare) 30%, var(--border)); background: var(--rare-soft); }
 .x-nudge .ico { width: 34px; height: 34px; border-radius: var(--r-pill); flex: none; display: grid; place-items: center;
-  background: color-mix(in oklch, var(--rare) 16%, var(--surface)); color: var(--rare); font-size: var(--fs-lg); }
+  background: color-mix(in oklab, var(--rare) 16%, var(--surface)); color: var(--rare); font-size: var(--fs-lg); }
 .x-nudge .txt { flex: 1; min-width: 0; font-size: var(--fs-md); }
 .x-nudge .txt b { color: var(--fg); }
 
@@ -4549,7 +4549,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: var(--bw) solid var(--hairlin
 .rc-selbar.show { display: flex; }
 .rc-selbar .n { font-weight: var(--fw-semibold); }
 .rc-selbar .sp { margin-left: auto; display: flex; gap: var(--space-8); }
-.rc-selbar button { border: var(--bw) solid color-mix(in oklch, var(--bg) 40%, transparent); background: transparent; color: var(--bg); border-radius: var(--r-sm); padding: 5px 11px; font-size: var(--fs-sm); cursor: pointer; }
+.rc-selbar button { border: var(--bw) solid color-mix(in oklab, var(--bg) 40%, transparent); background: transparent; color: var(--bg); border-radius: var(--r-sm); padding: 5px 11px; font-size: var(--fs-sm); cursor: pointer; }
 
 /* Clip list + rows */
 .rc-list { padding: 6px 10px; }
@@ -4567,7 +4567,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: var(--bw) solid var(--hairlin
   .rc-row { grid-template-columns: 22px 66px minmax(0, 1fr) 92px auto; }
   .rc-spectro { display: none; }
 }
-.rc-row.playing, .rc-row.sel { background: color-mix(in oklch, var(--moss) 6%, var(--surface)); border: var(--bw) solid color-mix(in oklch, var(--moss) 28%, var(--border)); border-radius: 10px; }
+.rc-row.playing, .rc-row.sel { background: color-mix(in oklab, var(--moss) 6%, var(--surface)); border: var(--bw) solid color-mix(in oklab, var(--moss) 28%, var(--border)); border-radius: 10px; }
 .rc-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--border-2); cursor: pointer; visibility: hidden; }
 #rc-clips.rc-selecting .rc-check { visibility: visible; }
 .rc-row.sel .rc-check { background: var(--moss); border-color: var(--moss); }
@@ -4653,10 +4653,10 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: var(--bw) solid var(--hairlin
 .st-h3 { font-family: var(--font-display); font-size: var(--fs-title); font-weight: var(--fw-regular); margin: 26px 0 12px; }
 
 /* overall status banner */
-.st-status { display: flex; align-items: center; gap: var(--space-14); padding: 16px 20px; border-radius: var(--r-lg); border: var(--bw) solid color-mix(in oklch, var(--moss) 24%, var(--border)); background: var(--moss-soft); margin-bottom: var(--space-18); }
-.st-status.warn { border-color: color-mix(in oklch, var(--dawn) 34%, var(--border)); background: var(--dawn-soft); }
-.st-status .ico { width: 40px; height: 40px; border-radius: var(--r-pill); flex: none; display: grid; place-items: center; font-size: 18px; background: color-mix(in oklch, var(--moss) 16%, var(--surface)); color: var(--moss-ink); }
-.st-status.warn .ico { background: color-mix(in oklch, var(--dawn) 16%, var(--surface)); color: var(--dawn-ink); }
+.st-status { display: flex; align-items: center; gap: var(--space-14); padding: 16px 20px; border-radius: var(--r-lg); border: var(--bw) solid color-mix(in oklab, var(--moss) 24%, var(--border)); background: var(--moss-soft); margin-bottom: var(--space-18); }
+.st-status.warn { border-color: color-mix(in oklab, var(--dawn) 34%, var(--border)); background: var(--dawn-soft); }
+.st-status .ico { width: 40px; height: 40px; border-radius: var(--r-pill); flex: none; display: grid; place-items: center; font-size: 18px; background: color-mix(in oklab, var(--moss) 16%, var(--surface)); color: var(--moss-ink); }
+.st-status.warn .ico { background: color-mix(in oklab, var(--dawn) 16%, var(--surface)); color: var(--dawn-ink); }
 .st-status .t { font-family: var(--font-display); font-size: var(--fs-title); line-height: 1.1; }
 .st-status .s { font-size: var(--fs-md); color: var(--fg-2); margin-top: var(--space-2); }
 
@@ -4732,9 +4732,9 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: var(--bw) solid var(--hairlin
 .st-list-row:first-child { border-top: 0; }
 .st-list-row .lr-main { flex: 1; min-width: 0; }
 .st-list-row .lr-sub { font-size: var(--fs-sm); color: var(--fg-3); font-family: var(--font-mono); margin-top: 1px; }
-.st-danger { border-color: color-mix(in oklch, var(--rare) 30%, var(--border)); }
+.st-danger { border-color: color-mix(in oklab, var(--rare) 30%, var(--border)); }
 .st-danger .bnb-eyebrow { color: var(--rare); }
-.st-warn { font-size: var(--fs-sm); color: var(--rare); background: var(--rare-soft); border: var(--bw) solid color-mix(in oklch, var(--rare) 28%, transparent); border-radius: var(--r-sm); padding: 11px 13px; margin-top: var(--space-10); line-height: 1.5; }
+.st-warn { font-size: var(--fs-sm); color: var(--rare); background: var(--rare-soft); border: var(--bw) solid color-mix(in oklab, var(--rare) 28%, transparent); border-radius: var(--r-sm); padding: 11px 13px; margin-top: var(--space-10); line-height: 1.5; }
 .st-warn b { color: var(--rare); font-weight: var(--fw-semibold); }
 /* Span a card across the full grid (the mock's inline grid-column:1/-1). */
 .st-span { grid-column: 1 / -1; }
@@ -5108,8 +5108,8 @@ main fieldset > legend { padding: 0 6px; font-size: var(--fs-md); font-weight: v
 /* Destructive buttons: a filled --rare slab beside a green primary reads as
    the call to action. The soft pair is what system.rs and the rules table
    already use for the same job. */
-main .btn-danger { background: var(--rare-soft); color: var(--rare); border: var(--bw) solid color-mix(in oklch, var(--rare) 30%, transparent); }
-main .btn-danger:hover { background: color-mix(in oklch, var(--rare) 14%, var(--rare-soft)); }
+main .btn-danger { background: var(--rare-soft); color: var(--rare); border: var(--bw) solid color-mix(in oklab, var(--rare) 30%, transparent); }
+main .btn-danger:hover { background: color-mix(in oklab, var(--rare) 14%, var(--rare-soft)); }
 
 /* ── Station section headings ────────────────────────────────────────────
    A heading directly in <main> already has main's 18px flex gap beneath it, on

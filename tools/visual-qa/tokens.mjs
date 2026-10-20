@@ -22,6 +22,19 @@ const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
 const MUTATE = process.env.MUTATE || '';
 
 const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
+// CSS_OVERRIDE=old.css grades an earlier stylesheet on the running fixture (the
+// same trick as style-snapshot.mjs), to see a new check fail against the code it
+// was written for without rebuilding anything.
+if (process.env.CSS_OVERRIDE) {
+  const { readFileSync } = await import('node:fs');
+  const body = readFileSync(process.env.CSS_OVERRIDE, 'utf8');
+  const original = browser.newContext.bind(browser);
+  browser.newContext = async (opts) => {
+    const c = await original(opts);
+    await c.route(/\/static\/css\/app\.css(\?.*)?$/, (r) => r.fulfill({ status: 200, contentType: 'text/css', body }));
+    return c;
+  };
+}
 const failures = [];
 const rows = [];
 
@@ -149,6 +162,64 @@ for (const theme of ['light', 'dark']) {
     rows.push(`${d >= 60 ? 'PASS' : 'FAIL'}  ${`${theme} conf-${t} is not the alert colour`.padEnd(58)} sRGB distance ${d.toFixed(0)} (>= 60)`);
     if (d < 60) failures.push(`${theme}: conf-${t} is within ${d.toFixed(0)} of --rare`);
   }
+  // A tint of a colour over a neutral is that colour, paler. `color-mix(in
+  // oklch, …)` interpolated hue, and a neutral's is 0 (light) or 250 (dark), so
+  // a 16 % tint of amber over white came out at hue 9.6 (pink) and a 16 % tint of
+  // moss at 24 (a brown). Read from what the browser paints: the hue of each
+  // tinted surface against the hue of the token it is a tint of.
+  {
+    const tints = await page.evaluate(() => {
+      const make = (html) => {
+        const host = document.createElement('div');
+        host.innerHTML = html;
+        document.body.appendChild(host);
+        return host.firstElementChild;
+      };
+      const css = (el, p) => getComputedStyle(el)[p];
+      const out = [];
+      for (const [kind, token] of [['success', '--moss'], ['warn', '--dawn'], ['error', '--rare'], ['info', '--info']]) {
+        const t = make(`<div class="bnb-toast" data-kind="${kind}"><span class="bnb-toast__dot"></span></div>`);
+        out.push({ what: `${kind} toast fill`, color: css(t, 'backgroundColor'), token });
+        out.push({ what: `${kind} toast edge`, color: css(t, 'borderTopColor'), token });
+      }
+      const st = make('<div class="st-status warn"><span class="ico">!</span></div>');
+      out.push({ what: 'status icon disc (warn)', color: css(st.querySelector('.ico'), 'backgroundColor'), token: '--dawn' });
+      const ok = make('<div class="st-status"><span class="ico">&#10003;</span></div>');
+      out.push({ what: 'status icon disc (ok)', color: css(ok.querySelector('.ico'), 'backgroundColor'), token: '--moss' });
+      const feed = make('<div class="feed-row fresh"></div>');
+      out.push({ what: 'a fresh feed row', color: css(feed, 'backgroundColor'), token: '--moss' });
+      const wf = make('<div class="waveform"><span></span></div>');
+      out.push({ what: 'the waveform beside a detection', color: css(wf.firstElementChild, 'backgroundColor'), token: '--moss' });
+      const tok = {};
+      for (const t of ['--moss', '--dawn', '--rare', '--info']) tok[t] = getComputedStyle(document.documentElement).getPropertyValue(t);
+      return { tints: out, tok };
+    });
+    const toOklchHue = ([r, g, b]) => {
+      const f = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+      const [R, G, B] = [f(r), f(g), f(b)];
+      const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+      const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+      const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+      const a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+      const bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+      return { h: ((Math.atan2(bb, a) * 180) / Math.PI + 360) % 360, c: Math.hypot(a, bb) };
+    };
+    const tokenHue = {};
+    for (const [k, v] of Object.entries(tints.tok)) tokenHue[k] = toOklchHue(await rgb(v)).h;
+    for (const t of tints.tints) {
+      const under = await rgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--surface')));
+      const px = await over(t.color, under, page);
+      const { h, c } = toOklchHue(px);
+      // Below this chroma the surface it was mixed over (itself faintly blue in
+      // dark) is most of the colour and a hue says nothing about the tint; a 6 %
+      // wash such as the fresh feed row is that case.
+      if (c < 0.015) continue;
+      const d = Math.abs(((h - tokenHue[t.token] + 540) % 360) - 180);
+      rows.push(`${d <= 25 ? 'PASS' : 'FAIL'}  ${`${theme} ${t.what} keeps the hue of ${t.token}`.padEnd(58)} hue ${h.toFixed(0)} vs ${tokenHue[t.token].toFixed(0)} (off by ${d.toFixed(0)}, <= 25)`);
+      if (d > 25) failures.push(`${theme}: ${t.what} is hue ${h.toFixed(0)}, a tint of ${t.token} (${tokenHue[t.token].toFixed(0)}) should be within 25`);
+    }
+  }
+
   // The browser's own bar (<meta name="theme-color">) is --bg of the theme the
   // page is in. It was a warm brown in dark for as long as the dark theme has
   // been near-black, so on a phone the bar and the page were two different

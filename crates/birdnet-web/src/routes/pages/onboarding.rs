@@ -744,7 +744,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 <style>
   body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
   .ob-root { max-width:980px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:0 24px; }
-  .ob-stepper { display:flex; align-items:center; gap:8px; padding:22px 0 8px; margin:0; list-style:none; position:sticky; top:0; background:color-mix(in oklch, var(--bg) 92%, transparent); backdrop-filter:saturate(1.4) blur(10px); z-index:5; }
+  .ob-stepper { display:flex; align-items:center; gap:8px; padding:22px 0 8px; margin:0; list-style:none; position:sticky; top:0; background:color-mix(in oklab, var(--bg) 92%, transparent); backdrop-filter:saturate(1.4) blur(10px); z-index:5; }
   .ob-pip { display:flex; align-items:center; gap:8px; }
   .ob-pip .dot { width:22px; height:22px; border-radius:999px; border:0.5px solid var(--border-2); display:flex; align-items:center; justify-content:center; font-size:11px; font-family:var(--font-mono); color:var(--fg-3); background:var(--surface); }
   .ob-pip .nm { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--fg-3); }
