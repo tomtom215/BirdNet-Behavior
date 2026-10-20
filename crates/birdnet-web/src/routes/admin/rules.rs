@@ -29,8 +29,9 @@ use axum::{Form, Router, routing::get};
 use serde::Deserialize;
 
 use birdnet_db::alert_rules::{
-    AlertAction, EXPORT_VERSION, Imported, NewAlertRule, RuleSet, WebhookAuth, delete_rule,
-    from_export, insert_rule, list_rules, to_export, toggle_rule,
+    AlertAction, DEFAULT_COOLDOWN_SECS, EXPORT_VERSION, Imported, MAX_COOLDOWN_SECS, NewAlertRule,
+    RuleSet, WebhookAuth, delete_rule, from_export, insert_rule, list_rules, to_export,
+    toggle_rule,
 };
 
 use crate::auth_middleware::RequestUser;
@@ -384,6 +385,81 @@ struct RuleForm {
     action_webhook_auth_value: Option<String>,
     /// Header name, for `action_webhook_auth_kind = "header"`.
     action_webhook_header_name: Option<String>,
+    /// How long a webhook rule stays quiet for a species after it has posted
+    /// for it, in whole minutes. See [`cooldown_secs_from_form`].
+    cooldown_minutes: Option<String>,
+}
+
+/// The seconds in a minute, which is the unit the form asks in. The database
+/// layer's two limits are whole numbers of minutes, so nothing is rounded on
+/// the way in or out.
+const SECS_PER_MINUTE: u32 = 60;
+
+const _: () = assert!(
+    DEFAULT_COOLDOWN_SECS.is_multiple_of(SECS_PER_MINUTE)
+        && MAX_COOLDOWN_SECS.is_multiple_of(SECS_PER_MINUTE),
+    "the form asks in whole minutes; a limit that is not one cannot be shown or typed"
+);
+
+/// The form's default, in minutes (what the field is pre-filled with).
+const DEFAULT_COOLDOWN_MINUTES: u32 = DEFAULT_COOLDOWN_SECS / SECS_PER_MINUTE;
+
+/// The form's longest cooldown, in minutes.
+const MAX_COOLDOWN_MINUTES: u32 = MAX_COOLDOWN_SECS / SECS_PER_MINUTE;
+
+/// The cooldown, in seconds, a webhook rule is created with, from what the
+/// form said.
+///
+/// # Why this is strict
+///
+/// The database layer clamps (`insert_rule` caps at [`MAX_COOLDOWN_SECS`]),
+/// which is right for an import and wrong for a person: someone who types
+/// `100000` meaning a hundred minutes and is silently given a week has been
+/// told their rule is in force when it is not the rule they wrote. A value that
+/// is not a whole number of minutes from `0` to [`MAX_COOLDOWN_MINUTES`] is
+/// refused, with the range in the message, and nothing is created.
+///
+/// * **Absent** — the request has no such field (a script, or a tab opened
+///   before this field existed): [`DEFAULT_COOLDOWN_SECS`], the protective
+///   default the form itself pre-fills, not `0`.
+/// * **Blank** — the field was cleared: refused. "Nothing" has two readings
+///   (the default, or none), and choosing one for the person is the silent
+///   guess this exists to avoid.
+/// * **`0`** — a real answer: every matching detection posts.
+fn cooldown_secs_from_form(raw: Option<&str>) -> Result<u32, String> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_COOLDOWN_SECS);
+    };
+    let raw = raw.trim();
+    let refusal = || {
+        format!(
+            "The cooldown must be a whole number of minutes from 0 to {MAX_COOLDOWN_MINUTES} \
+             (0 posts for every matching detection; {MAX_COOLDOWN_MINUTES} is seven days). \
+             You entered \u{201c}{raw}\u{201d}."
+        )
+    };
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(refusal());
+    }
+    match raw.parse::<u32>() {
+        Ok(minutes) if minutes <= MAX_COOLDOWN_MINUTES => Ok(minutes * SECS_PER_MINUTE),
+        _ => Err(refusal()),
+    }
+}
+
+/// A cooldown in the unit that reads best: `90 s`, `5 min`, `2 h`.
+///
+/// Whole units only, so what is shown is exactly what is stored; a value that
+/// is not a whole minute (an imported `90`) is shown in seconds rather than
+/// rounded.
+fn format_cooldown(secs: u32) -> String {
+    if secs != 0 && secs.is_multiple_of(3600) {
+        format!("{} h", secs / 3600)
+    } else if secs != 0 && secs.is_multiple_of(60) {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs} s")
+    }
 }
 
 /// Build the optional credential from the three form fields.
@@ -612,12 +688,26 @@ async fn create_rule(
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string());
 
+    // Only a webhook rule has a cooldown to give: the daemon ignores it on a
+    // `log` or `suppress` rule (a suppress rule that stopped suppressing after
+    // its first match would let every later notification through). The field is
+    // inside the webhook-only part of the form, so a browser still submits it
+    // for the other two, hidden — it is not read, and so not validated, there.
+    let mut cooldown_secs = 0;
     let action = match form.action_type.as_str() {
         "webhook" => {
             let Some(url) = form.action_webhook_url.filter(|s| !s.trim().is_empty()) else {
                 return crate::routes::pages::toast::not_applied(&Toast::error(
                     "A webhook rule needs a URL to send to. The rule was not created.",
                 ));
+            };
+            cooldown_secs = match cooldown_secs_from_form(form.cooldown_minutes.as_deref()) {
+                Ok(secs) => secs,
+                Err(why) => {
+                    return crate::routes::pages::toast::not_applied(&Toast::error(format!(
+                        "{why} The rule was not created."
+                    )));
+                }
             };
             AlertAction::Webhook {
                 url: url.trim().to_string(),
@@ -647,10 +737,7 @@ async fn create_rule(
         hour_start: form.hour_start,
         hour_end: form.hour_end,
         days_of_week,
-        // The form has no cooldown field yet: 0 is "fire on every match", what a
-        // rule created here did before the column existed. Replace with the
-        // parsed field (default `DEFAULT_COOLDOWN_SECS`) when the form gets one.
-        cooldown_secs: 0,
+        cooldown_secs,
         action,
     };
 
@@ -1193,6 +1280,12 @@ pub(crate) fn rules_body() -> String {
           <input id="action_webhook_header_name" name="action_webhook_header_name" type="text"
                  placeholder="X-API-Key">
         </div>
+
+        <label for="cooldown_minutes">Cooldown (minutes, 0 = every match)</label>
+        <input id="cooldown_minutes" name="cooldown_minutes" type="text"
+               inputmode="numeric" pattern="[0-9]*" value="{COOLDOWN_DEFAULT_MINUTES}"
+               placeholder="{COOLDOWN_DEFAULT_MINUTES}" class="bnb-w-num">
+        <div class="hint">After this rule posts about a species it stays quiet about that species for this many minutes. A calling owl is heard every few seconds, and without a cooldown the rule posts every time. 0 posts for every matching detection. Up to {COOLDOWN_MAX_MINUTES} (seven days). Applies to webhooks only: Log and Suppress rules act on every match.</div>
       </div>
 
       <div class="form-actions">
@@ -1246,6 +1339,8 @@ pub(crate) fn rules_body() -> String {
     "</div>"]
     .concat()
     .replace("{METRIC_RULES_CARD}", &metric_rules_card())
+    .replace("{COOLDOWN_DEFAULT_MINUTES}", &DEFAULT_COOLDOWN_MINUTES.to_string())
+    .replace("{COOLDOWN_MAX_MINUTES}", &MAX_COOLDOWN_MINUTES.to_string())
 }
 
 /// The card for rules on the station's own measurements.
@@ -1425,8 +1520,16 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
         let action_badge = match &rule.action {
             AlertAction::Webhook { url, method, .. } => {
                 let url_short = webhook_display(url);
+                // Only a webhook has a cooldown to describe. "no cooldown" is
+                // said in words, not left as a blank: it is the setting that
+                // posts for every match.
+                let cooldown = if rule.cooldown_secs == 0 {
+                    "no cooldown".to_owned()
+                } else {
+                    format!("cooldown {}", format_cooldown(rule.cooldown_secs))
+                };
                 format!(
-                    r#"<span class="badge badge-blue">{method}</span> <span class="url-frag">{}</span>"#,
+                    r#"<span class="badge badge-blue">{method}</span> <span class="url-frag">{}</span><div class="url-frag">{cooldown}</div>"#,
                     escape_html(&url_short)
                 )
             }
@@ -1485,6 +1588,61 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The form asks in whole minutes and the database stores seconds; what
+    /// reaches the table is the number typed times sixty, or a refusal.
+    #[test]
+    fn a_cooldown_is_whole_minutes_in_range_or_refused() {
+        assert_eq!(cooldown_secs_from_form(Some("0")), Ok(0));
+        assert_eq!(cooldown_secs_from_form(Some("5")), Ok(300));
+        assert_eq!(cooldown_secs_from_form(Some(" 90 ")), Ok(5400));
+        assert_eq!(
+            cooldown_secs_from_form(Some(&MAX_COOLDOWN_MINUTES.to_string())),
+            Ok(MAX_COOLDOWN_SECS)
+        );
+        // Absent is the protective default; it is not 0.
+        assert_eq!(cooldown_secs_from_form(None), Ok(DEFAULT_COOLDOWN_SECS));
+        assert_eq!(
+            DEFAULT_COOLDOWN_MINUTES * SECS_PER_MINUTE,
+            DEFAULT_COOLDOWN_SECS
+        );
+
+        let past = (MAX_COOLDOWN_MINUTES + 1).to_string();
+        for bad in [
+            "",
+            "  ",
+            "-1",
+            "+5",
+            "1.5",
+            "1,5",
+            "5m",
+            "five",
+            past.as_str(),
+            "4294967296",
+            "99999999999999999999",
+        ] {
+            let why = cooldown_secs_from_form(Some(bad)).expect_err(&format!(
+                "{bad:?} must be refused, not clamped or defaulted"
+            ));
+            assert!(
+                why.contains(&format!("0 to {MAX_COOLDOWN_MINUTES}")),
+                "{bad:?}: the refusal must name the range: {why}"
+            );
+        }
+    }
+
+    /// What the list prints is what the table holds, in whole units.
+    #[test]
+    fn a_cooldown_is_shown_in_the_unit_that_loses_nothing() {
+        assert_eq!(format_cooldown(300), "5 min");
+        assert_eq!(format_cooldown(60), "1 min");
+        assert_eq!(format_cooldown(3600), "1 h");
+        assert_eq!(format_cooldown(7200), "2 h");
+        // Not a whole minute (an imported value): seconds, not a rounded minute.
+        assert_eq!(format_cooldown(90), "90 s");
+        assert_eq!(format_cooldown(MAX_COOLDOWN_SECS), "168 h");
+        assert_eq!(format_cooldown(0), "0 s");
+    }
 
     #[test]
     fn a_webhook_is_shown_by_its_host_and_never_its_credentials() {
