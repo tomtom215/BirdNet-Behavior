@@ -209,7 +209,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 27] = [
+const CHECK_FAMILIES: [(&str, Family); 28] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -275,6 +275,9 @@ const CHECK_FAMILIES: [(&str, Family); 27] = [
         environment::check_optional_tools,
     ),
     ("disk::check_disk_space", disk::check_disk_space),
+    ("disk::check_data_volume", |_, cfg| {
+        vec![disk::check_data_volume(cfg)]
+    }),
     ("watchdog::check_systemd_watchdog", |_, _| {
         vec![watchdog::check_systemd_watchdog()]
     }),
@@ -421,6 +424,29 @@ mod tests {
             "two rows name the same family"
         );
         assert!(in_source.len() >= 20, "the scan found only {in_source:?}");
+    }
+
+    /// The report itself, not only the table, names the data-volume check, and
+    /// prints it straight after the disk-space check it belongs beside. A row
+    /// whose function returned nothing would also satisfy the table gate above.
+    #[test]
+    fn the_data_volume_check_is_in_the_report_beside_disk_space() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let names: Vec<String> = super::collect(&cli, None)
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        let disk = names
+            .iter()
+            .position(|n| n == "Disk space")
+            .expect("the report has a disk-space check");
+        let volume = names
+            .iter()
+            .position(|n| n == "Data volume")
+            .unwrap_or_else(|| panic!("the report has no data-volume check: {names:?}"));
+        assert!(volume > disk, "{names:?}");
     }
 
     /// The module doc lists the submodules; the `mod` declarations are the

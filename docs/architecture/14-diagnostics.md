@@ -46,7 +46,7 @@ invariant for arbitrary string input.
 ### 2. Preflight subcommand (`birdnet-behavior --doctor` / `--doctor-json` / `--fix`)
 
 Runs every check family in the `CHECK_FAMILIES` table of `src/doctor.rs`
-(21 rows) against the live environment and prints a one-screen report.
+(28 rows) against the live environment and prints a one-screen report.
 `collect` iterates that table and nothing else; two gates
 (`every_check_entry_point_is_in_the_table`,
 `the_module_doc_names_every_submodule`) fail when a `check_*` function or a
@@ -63,7 +63,7 @@ remediation? }`. The CLI exits with the worst-severity-derived code:
 | 1    | At least one warning — system will run, features degraded |
 | 2    | At least one error — system will not work until fixed |
 
-The 21 rows of `CHECK_FAMILIES`, by submodule:
+The 28 rows of `CHECK_FAMILIES`, by submodule:
 
 | Submodule     | Check families (`CHECK_FAMILIES` rows)                                |
 | ------------- | --------------------------------------------------------------------- |
@@ -77,7 +77,7 @@ The 21 rows of `CHECK_FAMILIES`, by submodule:
 | `audio`       | `check_audio_source` (exactly one source configured, ALSA card present via `arecord -l`, PulseAudio source listed via `pactl list short sources`, RTSP host TCP-reachable on port 554 with a 3 s timeout) |
 | `model`       | `check_model` (file exists and ≥ 1 MB; labels file exists when configured) |
 | `analytics`   | `check_analytics` (will the behavioral-analytics dashboards work — without opening DuckDB) |
-| `disk`        | `check_disk_space` (free GiB, via the shared `disk_usage` helper)     |
+| `disk`        | `check_disk_space` (free GiB, via the shared `disk_usage` helper); `check_data_volume` (warns when the data directory is on the container's own writable layer, so its contents are deleted with the container — the same `birdnet_web::data_volume::on_container_layer` the Station Health banner reads) |
 | `watchdog`    | `check_systemd_watchdog` (is the supervisor honouring the `sd_notify` watchdog the daemon advertises) |
 
 ### 3. Browser (`/admin/doctor`, `/admin/doctor.json`, `/admin/support-bundle`)

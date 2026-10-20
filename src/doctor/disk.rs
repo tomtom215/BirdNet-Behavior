@@ -7,6 +7,9 @@ use birdnet_core::config::Config;
 use super::Check;
 use crate::cli::Cli;
 
+/// The name the data-volume check reports under.
+const DATA_VOLUME: &str = "Data volume";
+
 pub(super) fn check_disk_space(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     // The data partition first (PS-8): this used to read `--watch-dir`, which
     // the shipped unit always sets to the RAM-backed stream directory, so the
@@ -36,6 +39,75 @@ pub(super) fn check_disk_space(cli: &Cli, config: Option<&Config>) -> Vec<Check>
         out.push(check);
     }
     out
+}
+
+/// Whether the data directory is somewhere its contents outlive the container.
+///
+/// `docker run` with nothing mounted at the data directory leaves the database,
+/// the recordings and the settings on the container's own writable layer. The
+/// station runs, records and answers; the directory is writable, has space and
+/// was never a mount, so nothing else here (the disk-space check above, the
+/// runtime probes in `birdnet_web::data_volume`) has anything to say — and all
+/// of it is deleted with the container the next time it is recreated, which an
+/// image upgrade is enough to do. The Station Health banner and header badge
+/// already say so; this is the same question asked of `--doctor`, by the same
+/// function ([`birdnet_web::data_volume::on_container_layer`]), so the two
+/// cannot disagree about it.
+///
+/// The directory is the one holding the database, as the station resolves it
+/// (`DB_PATH`, else `$HOME/BirdNet-Behavior/birds.db`) and as the banner reads
+/// it. A warning and never an error: the station works, and the unit's
+/// `ExecStartPre` gate only stops on exit 2.
+pub(super) fn check_data_volume(config: Option<&Config>) -> Check {
+    let dir = data_directory(config);
+    grade_data_volume(
+        birdnet_web::data_volume::in_container(),
+        birdnet_web::data_volume::on_container_layer(&dir),
+        &dir,
+    )
+}
+
+/// The directory holding the station's database: what the Station Health
+/// banner reads ([`birdnet_web::data_volume::data_dir_of`] of the database path
+/// the station resolves), so the two cannot name different directories.
+fn data_directory(config: Option<&Config>) -> PathBuf {
+    birdnet_web::data_volume::data_dir_of(&crate::helpers::db_path_from_config(config))
+}
+
+/// Grade the two facts [`check_data_volume`] reads from the host, so every
+/// branch is testable with a mount-table fixture instead of the machine the
+/// tests happen to run on.
+fn grade_data_volume(in_container: bool, on_container_layer: bool, dir: &Path) -> Check {
+    if on_container_layer {
+        Check::warn(
+            DATA_VOLUME,
+            format!(
+                "{} is on this container's own writable layer, not on a volume: the database, \
+                 the recordings and the settings are deleted when the container is removed or \
+                 recreated, and an image upgrade recreates it",
+                dir.display()
+            ),
+            "mount a volume at the data directory: `-v birdnet-data:/data` on `docker run`, or \
+             `birdnet-data:/data` under `volumes:` in compose (the shipped docker-compose.yml \
+             has it). Copy what is there out first with `docker cp <container>:/data .`",
+        )
+    } else if in_container {
+        // "Not on the layer" is what the mount table says; it is also what an
+        // unreadable table says (`on_container_layer` answers false when it
+        // cannot tell), so the message claims no more than the table showed.
+        Check::pass(
+            DATA_VOLUME,
+            format!(
+                "the mount table does not put {} on the container's own layer",
+                dir.display()
+            ),
+        )
+    } else {
+        Check::skip(
+            DATA_VOLUME,
+            "not running in a container; nothing here is lost with one",
+        )
+    }
 }
 
 /// Whether two directories are on the same filesystem, by `df` totals — the
@@ -124,8 +196,12 @@ fn disk_free_bytes(path: &Path) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_disk_space, disk_free_bytes, grade_free_space};
+    use super::{
+        check_data_volume, check_disk_space, data_directory, disk_free_bytes, grade_data_volume,
+        grade_free_space,
+    };
     use crate::doctor::Status;
+    use birdnet_web::data_volume::{in_container, is_on_container_layer, parse_mountinfo};
     use std::path::Path;
 
     const GIB: u64 = 1024 * 1024 * 1024;
@@ -190,6 +266,148 @@ mod tests {
                 .is_some_and(|r| r.contains("DISK_PURGE_THRESHOLD") || r.contains("MAX_FILES")),
             "remediation should name the knobs that fix a purge that cannot keep up"
         );
+    }
+
+    // ── the container's own layer ───────────────────────────────────────
+    //
+    // The mount tables are the ones `birdnet_web::data_volume`'s own tests use
+    // (modelled on Docker's documented overlay2 output; this sandbox is not a
+    // container and could not supply a captured one). The doctor's job is to
+    // turn that module's two answers into a verdict, so each case goes through
+    // the real `is_on_container_layer` and then the grader.
+
+    /// A container started with `docker run` and no volume.
+    const DOCKER_NO_VOLUME: &str = "\
+1122 1020 0:63 / / rw,relatime master:416 - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/ABCDEFG:/var/lib/docker/overlay2/l/HIJKLMN,upperdir=/var/lib/docker/overlay2/3f9c/diff,workdir=/var/lib/docker/overlay2/3f9c/work
+1123 1122 0:66 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+1124 1122 0:67 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+1128 1122 254:1 /var/lib/docker/containers/9f3c/resolv.conf /etc/resolv.conf rw,relatime - ext4 /dev/vda1 rw
+";
+
+    /// A Raspberry Pi running from its SD card.
+    const BARE_METAL_PI: &str = "\
+22 1 179:2 / / rw,noatime - ext4 /dev/root rw,discard
+23 22 0:21 / /proc rw,relatime - proc proc rw
+31 22 0:27 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw,size=1966080k
+40 22 179:1 / /boot/firmware rw,relatime - vfat /dev/mmcblk0p1 rw,fmask=0022,dmask=0022
+";
+
+    /// What `check_data_volume` would conclude on a host with this mount table.
+    fn verdict(table: &str, dir: &str, in_container: bool) -> crate::doctor::Check {
+        let on_layer = is_on_container_layer(&parse_mountinfo(table), Path::new(dir), in_container);
+        grade_data_volume(in_container, on_layer, Path::new(dir))
+    }
+
+    /// **The case this exists for.** The Dockerfile declares `VOLUME ["/data"]`
+    /// and the station keeps its database in `/data/BirdNet-Behavior`; with the
+    /// volume absent from the mount table that directory is on the overlay
+    /// root, and goes when the container does.
+    #[test]
+    fn a_data_directory_on_the_containers_own_layer_warns_and_names_the_remedy() {
+        let check = verdict(DOCKER_NO_VOLUME, "/data/BirdNet-Behavior", true);
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert_eq!(check.name, "Data volume");
+        assert!(
+            check.message.contains("/data/BirdNet-Behavior")
+                && check.message.contains("deleted when the container"),
+            "the message names the directory and what is lost: {}",
+            check.message
+        );
+        let fix = check.remediation.as_deref().unwrap_or_default();
+        assert!(
+            fix.contains("-v birdnet-data:/data") && fix.contains("docker cp"),
+            "the remedy is a volume at the data directory, and not losing what is there: {fix}"
+        );
+    }
+
+    /// A finding that can be fixed by restarting must never stop the station
+    /// starting: the unit's gate is `--doctor ... || [ $? -le 1 ]`, so exit 2
+    /// would park a recording station in `failed` for a storage choice.
+    #[test]
+    fn the_container_layer_finding_is_a_warning_and_never_an_error() {
+        let check = verdict(DOCKER_NO_VOLUME, "/data", true);
+        assert_eq!(check.status, Status::Warn);
+        assert_ne!(check.status, Status::Fail);
+    }
+
+    /// The counterparts: every station whose data survives must stay quiet, or
+    /// the doctor's warning becomes the noise the banner was careful not to be.
+    #[test]
+    fn a_volume_a_bind_mount_a_tmpfs_and_a_host_are_not_warned_about() {
+        let with = |root: &str| {
+            format!(
+                "{DOCKER_NO_VOLUME}1131 1122 254:1 {root} /data rw,relatime master:1 - ext4 /dev/vda1 rw\n"
+            )
+        };
+        // A named volume, an anonymous one (what a bare `docker run` of this
+        // image gets from the Dockerfile's VOLUME line) and a bind mount are all
+        // a mount of the host's filesystem at /data.
+        for (what, root) in [
+            ("named volume", "/var/lib/docker/volumes/birdnet-data/_data"),
+            (
+                "anonymous volume",
+                "/var/lib/docker/volumes/9d1cbb0cc1d5e7a6c5a5f1c6e7d2c8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5/_data",
+            ),
+            ("bind mount", "/home/pi/birdnet"),
+        ] {
+            let check = verdict(&with(root), "/data/BirdNet-Behavior", true);
+            assert_eq!(check.status, Status::Pass, "{what}: {check:?}");
+        }
+        // ...while the same container's other directories are still on the layer.
+        assert_eq!(
+            verdict(&with("/home/pi/birdnet"), "/srv/recordings", true).status,
+            Status::Warn
+        );
+        // A tmpfs at the data directory is a mount of its own: lost on restart,
+        // but not the layer, and not what this reports.
+        let tmpfs = format!("{DOCKER_NO_VOLUME}1140 1122 0:90 / /data rw - tmpfs tmpfs rw\n");
+        assert_eq!(
+            verdict(&tmpfs, "/data/BirdNet-Behavior", true).status,
+            Status::Pass
+        );
+        // Bare metal: nothing to say, and said as a skip, not a pass.
+        let host = verdict(BARE_METAL_PI, "/home/pi/BirdNet-Behavior", false);
+        assert_eq!(host.status, Status::Skip, "{host:?}");
+        // An overlay root with no container marker is a Pi with a read-only
+        // overlay root, not a container.
+        let ro_root = verdict(DOCKER_NO_VOLUME, "/data", false);
+        assert_eq!(ro_root.status, Status::Skip, "{ro_root:?}");
+    }
+
+    /// The whole check against this machine's real `/proc` and marker files:
+    /// a development VM or CI runner is not a container without a volume, and
+    /// the doctor must not say it is. (Asserted only where the marker files
+    /// are absent, as in `birdnet_web::data_volume`'s own copy of this test.)
+    #[test]
+    fn this_machine_is_not_warned_about_when_it_is_not_a_container() {
+        if in_container() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = birdnet_core::config::Config::parse(&format!(
+            "DB_PATH={}/BirdNet-Behavior/birds.db",
+            dir.path().display()
+        ))
+        .unwrap();
+        let check = check_data_volume(Some(&cfg));
+        assert_eq!(check.status, Status::Skip, "{check:?}");
+    }
+
+    /// The check reads the directory the station keeps its database in, as the
+    /// station resolves it, and says which one it read.
+    #[test]
+    fn the_directory_checked_is_the_one_holding_the_database() {
+        let cfg = birdnet_core::config::Config::parse("DB_PATH=/srv/birds/birds.db").unwrap();
+        assert_eq!(data_directory(Some(&cfg)), Path::new("/srv/birds"));
+        // No DB_PATH: the station's own default, under $HOME.
+        let default = data_directory(None);
+        assert!(
+            default.ends_with("BirdNet-Behavior"),
+            "the default database directory is $HOME/BirdNet-Behavior: {}",
+            default.display()
+        );
+        let check = grade_data_volume(true, true, &data_directory(Some(&cfg)));
+        assert!(check.message.contains("/srv/birds"), "{}", check.message);
     }
 
     #[test]

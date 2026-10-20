@@ -29,7 +29,7 @@ for the monitoring playbook.
 
 ## The built-in doctor
 
-For a deeper, scriptable check, run the diagnostic from the CLI. It prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk space, tool dependencies and network — each problem with a concrete suggested fix.
+For a deeper, scriptable check, run the diagnostic from the CLI. It prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk space, whether a container's data would survive the container, tool dependencies and network — each problem with a concrete suggested fix.
 
 ```bash
 sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --doctor   # bare metal

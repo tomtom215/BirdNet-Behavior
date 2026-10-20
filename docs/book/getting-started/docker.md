@@ -128,7 +128,11 @@ Published for `linux/amd64` and `linux/arm64`, and signed with [cosign](https://
 
 ## Data layout & compose reference
 
-All persistent data lives in one Docker volume at `/data`:
+All persistent data lives in one Docker volume at `/data`. Name it (`-v birdnet-data:/data`, as the compose file does): the image declares `/data` a volume, so a `docker run` with no `-v` still gets one there, but an anonymous volume with a random name that nothing reattaches to the next container, and that `docker rm -v` or `docker run --rm` deletes.
+
+The data is lost with the container only when the data directory is *not* on a mount at all: `DB_PATH` in a mounted `birdnet.conf` pointing outside `/data`, or an image built without the `VOLUME` line. The station says so in three places: the Station Health banner, the badge in the page header, and **Data volume** in `--doctor` (a warning, not an error, because the station works) with the fix. The check reads the container's mount table, not the volume's name, so a volume of any kind (an anonymous one too) or a bind mount counts as somewhere the data outlives the container.
+
+The layout inside it:
 
 ```text
 /data/
