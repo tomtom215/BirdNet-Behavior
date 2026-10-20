@@ -413,7 +413,7 @@ pub fn install_from_catalogue(id: &str, dest: &std::path::Path) -> i32 {
             if entry.usage != Use::RangeFilter {
                 println!(
                     "    labels: {}",
-                    if entry.labels_url.is_some() {
+                    if entry.ships_labels() {
                         "installed alongside, verified"
                     } else {
                         "not shipped — supply your own"
