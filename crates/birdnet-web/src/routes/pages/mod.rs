@@ -52,6 +52,7 @@ pub mod search;
 pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod station_health;
+pub(crate) mod station_issues;
 pub mod timeseries_dash;
 pub(crate) mod toast;
 pub mod today;
