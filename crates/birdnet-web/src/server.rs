@@ -145,6 +145,13 @@ fn trusted_proxies_from_env() -> crate::client_ip::TrustedProxies {
 /// default, with no `429`. Real clients are nowhere near the limit, so the
 /// production numbers stay exactly as they were.
 pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig) -> Router {
+    build_router_with(state, rate_limit, build_cors_layer())
+}
+
+/// [`build_router_with_rate_limit`] with the CORS policy given, rather than read
+/// from the environment: the environment is process-wide, so a test cannot set
+/// `BIRDNET_CORS_ALLOWED_ORIGINS` without every other test in the binary seeing it.
+fn build_router_with(state: AppState, rate_limit: RateLimitConfig, cors: CorsLayer) -> Router {
     // Read once, here, for the same reason `trusted_proxies_from_env` is read
     // here: every entry point that builds a router — the daemon, `start`, the
     // screenshot fixture, the test harnesses — then agrees on the prefix
@@ -196,7 +203,7 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
             crate::rate_limit::rate_limit_middleware(limiter, req, next)
         }))
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
-        .layer(build_cors_layer())
+        .layer(cors)
         .layer(axum::middleware::from_fn(
             crate::security::security_headers_middleware,
         ))
@@ -342,7 +349,7 @@ pub fn should_compress(
     COMPRESSIBLE_PREFIXES.iter().any(|p| ctype.starts_with(p))
 }
 
-/// Build the CORS policy.
+/// Build the CORS policy from `BIRDNET_CORS_ALLOWED_ORIGINS`.
 ///
 /// Secure by default: a station's own web UI is served from the same origin it
 /// calls, so no cross-origin access is needed. Echoing the previous
@@ -352,29 +359,67 @@ pub fn should_compress(
 /// comma-separated origin list, e.g. `https://dash.example.com`) only when
 /// fronting the API from a different origin.
 fn build_cors_layer() -> CorsLayer {
+    cors_layer_for(
+        std::env::var("BIRDNET_CORS_ALLOWED_ORIGINS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// The CORS policy for a `BIRDNET_CORS_ALLOWED_ORIGINS` value.
+///
+/// # `*` is refused, not passed on
+///
+/// `tower-http` panics when a wildcard reaches `AllowOrigin::list`, and this
+/// workspace builds with `panic = "abort"`: `BIRDNET_CORS_ALLOWED_ORIGINS=*`
+/// took the process down while the router was being built, so the service
+/// restarted, panicked and restarted, with the reason in a log line nobody
+/// reads between two restarts. A wildcard is also exactly what the paragraph
+/// above removed — any website could read the station's API over the LAN — so
+/// it is not quietly turned into `AllowOrigin::any()` either. The entry is
+/// dropped with an `error`; the other entries, if any, are kept; and with
+/// nothing left the policy is the default (same-origin only).
+///
+/// An entry that is not a valid header value is dropped with a `warn` for the
+/// same reason: a typo that quietly allows less than was asked for should at
+/// least be in the log.
+fn cors_layer_for(raw: Option<&str>) -> CorsLayer {
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
-    match std::env::var("BIRDNET_CORS_ALLOWED_ORIGINS") {
-        Ok(raw) if !raw.trim().is_empty() => {
-            let origins: Vec<HeaderValue> = raw
-                .split(',')
-                .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
-                .collect();
-            if origins.is_empty() {
-                cors
-            } else {
-                tracing::info!(
-                    count = origins.len(),
-                    "CORS: allowing configured cross-origin origins"
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else {
+        // No configured origins → same-origin only (no ACAO header emitted).
+        return cors;
+    };
+    let mut origins: Vec<HeaderValue> = Vec::new();
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        if entry == "*" {
+            tracing::error!(
+                "BIRDNET_CORS_ALLOWED_ORIGINS contains `*`, which is not supported: it would let \
+                 any website read this station's API. Ignoring that entry; list the origins \
+                 you mean, e.g. https://dash.example.com"
+            );
+            continue;
+        }
+        match entry.parse::<HeaderValue>() {
+            Ok(origin) => origins.push(origin),
+            Err(_) => {
+                tracing::warn!(
+                    entry,
+                    "BIRDNET_CORS_ALLOWED_ORIGINS: ignoring an invalid origin"
                 );
-                cors.allow_origin(origins)
             }
         }
-        // No configured origins → same-origin only (no ACAO header emitted).
-        _ => cors,
     }
+    if origins.is_empty() {
+        return cors;
+    }
+    tracing::info!(
+        count = origins.len(),
+        "CORS: allowing configured cross-origin origins"
+    );
+    cors.allow_origin(origins)
 }
 
 /// Start the web server.
@@ -467,6 +512,76 @@ mod tests {
             burst_hits_429(build_router(test_state()), 400).await,
             "build_router must apply the default limiter (30 req/s, 60 burst)"
         );
+    }
+
+    /// Ask the whole router for a page from a given `Origin`; returns the status
+    /// and the `Access-Control-Allow-Origin` it answered with.
+    async fn acao(app: &axum::Router, origin: &str) -> (StatusCode, Option<String>) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/css/app.css")
+                    .header("origin", origin)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let allowed = resp
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        (resp.status(), allowed)
+    }
+
+    fn router_with_cors(raw: Option<&str>) -> axum::Router {
+        super::build_router_with(
+            test_state(),
+            crate::rate_limit::RateLimitConfig::default(),
+            super::cors_layer_for(raw),
+        )
+    }
+
+    /// `BIRDNET_CORS_ALLOWED_ORIGINS=*` used to abort the process while the router
+    /// was built (`tower-http` panics on a wildcard in `AllowOrigin::list`, and the
+    /// workspace builds with `panic = "abort"`). Now the router boots, serves, and
+    /// allows no cross-origin read for the wildcard.
+    #[tokio::test]
+    async fn a_wildcard_origin_does_not_take_the_router_down() {
+        for raw in ["*", " * ", "*,*", "\t*\n"] {
+            let app = router_with_cors(Some(raw));
+            let (status, allowed) = acao(&app, "https://evil.example").await;
+            assert_eq!(status, StatusCode::OK, "{raw:?}");
+            assert_eq!(
+                allowed, None,
+                "{raw:?}: a wildcard must not turn into permission for every website"
+            );
+        }
+    }
+
+    /// The counterparts: the listed origins are still allowed — and only they —
+    /// including when a wildcard sits among them, and with nothing configured
+    /// nobody is.
+    #[tokio::test]
+    async fn the_listed_origins_are_still_the_ones_allowed() {
+        let listed = "https://dash.example.com";
+        for raw in [
+            listed,
+            "https://dash.example.com , https://lab.example.com",
+            "*,https://dash.example.com",
+        ] {
+            let app = router_with_cors(Some(raw));
+            let (_, allowed) = acao(&app, listed).await;
+            assert_eq!(allowed.as_deref(), Some(listed), "{raw:?}");
+            let (_, allowed) = acao(&app, "https://evil.example").await;
+            assert_eq!(allowed, None, "{raw:?}: an unlisted origin was allowed");
+        }
+        for raw in [None, Some(""), Some("   ")] {
+            let (_, allowed) = acao(&router_with_cors(raw), listed).await;
+            assert_eq!(allowed, None, "{raw:?}: the default is same-origin only");
+        }
     }
 
     /// And the opt-out actually opts out — otherwise the fixture change is
