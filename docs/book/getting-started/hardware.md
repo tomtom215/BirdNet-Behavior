@@ -8,10 +8,10 @@ You don't need much — a Raspberry Pi (or any Linux box) and something to liste
 |---|---|
 | **Raspberry Pi 5** | Recommended. Comfortable headroom for behavioral analytics and the live spectrogram. |
 | **Raspberry Pi 4B / 400** | Fully supported and very capable for everyday use. |
-| **Raspberry Pi 3B+** | Works on the 64-bit Pi OS. Tight on RAM — consider disabling analytics (remove `--analytics-db`) to keep memory low. |
+| **Older 64-bit-capable Pis (3B+, Zero 2 W)** | **Not a supported target.** [STABILITY](https://github.com/tomtom215/BirdNet-Behavior/blob/main/STABILITY.md) lists the Pi 4, 5 and 400, and this repository records no test on a 3B+ or a Zero 2 W. The aarch64 binary needs the **64-bit** Pi OS (a 32-bit OS cannot run it at all), and these boards have 1 GB and 512 MB of RAM, which is tight. If you try one anyway, turn analytics off to save memory: pass an *empty* value, `--analytics-db ""` (removing `--analytics-db` only falls back to `<database>.duckdb`, which leaves it on), as [Troubleshooting](../guides/troubleshooting.md#memory-and-cpu-pressure-on-small-hardware) shows. |
 | **Any x86_64 Linux** | Fully supported — an old laptop or mini-PC is a great always-on host. |
 
-BirdNet-Behavior is undemanding — there's no Python interpreter or virtualenv resident around the model — so the limiting factor is usually storage for recordings, not compute. Budget **~1.5 GB free** to start (541 MB of that is the model).
+BirdNet-Behavior is undemanding — there's no Python interpreter or virtualenv resident around the model — so the limiting factor is usually storage for recordings, not compute. Budget **about 1.5 GB free** to start, most of it for recordings and the database (the default BirdNET V2.4 files are about 85 MB; the V3.0 preview's are 541 MB).
 
 ## Which microphone?
 

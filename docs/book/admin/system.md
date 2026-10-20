@@ -32,9 +32,11 @@ for the monitoring playbook.
 For a deeper, scriptable check, run the diagnostic from the CLI. It prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk space, tool dependencies and network — each problem with a concrete suggested fix.
 
 ```bash
-sudo -u birdnet birdnet-behavior --doctor          # bare metal
-docker compose exec birdnet birdnet-behavior --doctor   # Docker
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --doctor   # bare metal
+docker compose exec birdnet birdnet-behavior --doctor                                     # Docker
 ```
+
+(On bare metal the service runs as the account that ran the installer; there is no `birdnet` user, and the `systemctl show` call prints that account.)
 
 Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
 
@@ -43,6 +45,10 @@ For monitoring (Nagios / Zabbix / a Home Assistant command sensor / a Prometheus
 ```bash
 birdnet-behavior --doctor-json | jq .
 ```
+
+### The support bundle
+
+`birdnet-behavior --support-bundle [PATH]` (or **Download a support bundle** at `/admin/support-bundle`, behind the admin login) writes one `.tar.gz` holding the diagnostic report (JSON and text), the station's version, a **redacted** copy of the configuration and the last 2000 journal lines: what a maintainer asks for in the first three replies to a bug report. Passwords, tokens and URL credentials are masked. **The station's `LATITUDE` and `LONGITUDE` are shown to one decimal place (about 11 km)** in the configuration section, and wherever the journal printed them (BirdWeather's start-up line, a settings change) the exact values are replaced by the same coarse form; a value that is not a number is masked. One decimal says which hemisphere, which season's daylight and which region's species, which is all a diagnosis needs; four decimals are a house. The bundle is written to be pasted into a public issue, but read it before you post it all the same. (Earlier builds printed the coordinates exactly.)
 
 ## How much memory the analytics engine gets
 

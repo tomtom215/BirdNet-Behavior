@@ -35,8 +35,10 @@ prints one path:
 
 ```
 self-signed HTTPS: import this CA file once to stop the browser warning
-  ca=/var/lib/birdnet/tls/local-ca.crt
+  ca=/home/pi/BirdNet-Behavior/tls/local-ca.crt
 ```
+
+(The folder is `tls` beside the database, or `--tls-dir`: `~/BirdNet-Behavior/tls` for the account the bare-metal service runs as — `pi` here — and `/data/BirdNet-Behavior/tls` in Docker.)
 
 That file is a small certificate authority the station generated for itself,
 and the server certificate is signed by it. Import the CA once — into your
@@ -95,7 +97,7 @@ next handshake — **no restart, no cron hook.**
 ```console
 $ birdnet-behavior --doctor
 [ PASS ] HTTPS — self-signed on 0.0.0.0:8503, covering localhost, pi, pi.local, 127.0.0.1 (valid 397 days)
-[ PASS ] HTTPS — import /var/lib/birdnet/tls/local-ca.crt to stop the browser warning
+[ PASS ] HTTPS — import /home/pi/BirdNet-Behavior/tls/local-ca.crt to stop the browser warning
 ```
 
 A mistyped path or a key that does not match its certificate is a `[ FAIL ]`
