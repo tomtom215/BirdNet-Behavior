@@ -17,7 +17,7 @@ Two principles govern them:
   format is `oklch(L C H)` — lightness %, chroma, hue degrees — with an optional
   `/ alpha`. The one family written as hex is the categorical chart palette,
   because a colour-blind-safety check can only be run on the exact values that
-  ship (see [Charts](#colour--charts)).
+  ship (see [Chart colours](#chart-colours)).
 - **The token set is closed.** New UI is built by composing existing tokens into
   new *classes*, **not** by adding tokens. Adding a token is a deliberate,
   reviewed design decision (see [Adding or changing a token](#adding-or-changing-a-token)).
