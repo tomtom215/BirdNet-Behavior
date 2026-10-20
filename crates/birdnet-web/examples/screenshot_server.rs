@@ -282,6 +282,66 @@ fn species_table() -> Vec<Species> {
 /// Build a realistic capture-status snapshot for the Station Health screenshot:
 /// a healthy local mic, a backing-off RTSP camera, and a stalled one. The
 /// shipped binary fills this from the live supervisor; here it's seeded.
+/// A made-up range-filter reading for the fixture's station (see the call
+/// site): the names are real birds, the probabilities are not the model's.
+fn seed_occurrence() -> birdnet_web::occurrence::OccurrenceReport {
+    use birdnet_core::inference::species_filter::OccurrenceScore;
+    let score = |sci: &str, com: &str, probability: f32, admitted: bool| OccurrenceScore {
+        scientific_name: sci.to_owned(),
+        common_name: com.to_owned(),
+        probability,
+        admitted,
+    };
+    // The birds the fixture's station hears are all admitted, at plausible odds.
+    let mut species = vec![
+        score("Turdus migratorius", "American Robin", 0.91, true),
+        score("Cyanocitta cristata", "Blue Jay", 0.84, true),
+        score("Poecile atricapillus", "Black-capped Chickadee", 0.8, true),
+        score("Spinus tristis", "American Goldfinch", 0.62, true),
+        score("Dryobates pubescens", "Downy Woodpecker", 0.55, true),
+        score("Cardinalis cardinalis", "Northern Cardinal", 0.88, true),
+        score("Zenaida macroura", "Mourning Dove", 0.7, true),
+        score("Melospiza melodia", "Song Sparrow", 0.66, true),
+        score("Bubo virginianus", "Great Horned Owl", 0.4, true),
+        // Heard at the fixture's station, and held back this week: a species
+        // page for either shows the link to why.
+        score("Passerina ciris", "Painted Bunting", 0.008, false),
+        score(
+            "Archilochus colubris",
+            "Ruby-throated Hummingbird",
+            0.021,
+            false,
+        ),
+        // Over the threshold and kept out by the operator's exclude list.
+        score("Sturnus vulgaris", "European Starling", 0.5, false),
+        // Under it, and let in by the Always allowed list.
+        score("Bubo scandiacus", "Snowy Owl", 0.011, true),
+        // Under it: held back by the range model.
+        score("Pica pica", "Eurasian Magpie", 0.004, false),
+        score("Spiza americana", "Dickcissel", 0.0004, false),
+        score("Erithacus rubecula", "European Robin", 0.00003, false),
+    ];
+    // Enough more admitted birds to need a second page of the list, so the
+    // page's paging link and its long-list layout are exercised.
+    for n in 1..=130_u16 {
+        let probability = 0.5 - f32::from(n) * 0.0035;
+        species.push(score(
+            &format!("Fixturus avis{n:03}"),
+            &format!("Fixture warbler {n:03}"),
+            probability,
+            true,
+        ));
+    }
+    species.sort_by(|a, b| b.probability.total_cmp(&a.probability));
+    birdnet_web::occurrence::OccurrenceReport {
+        latitude: 51.48,
+        longitude: -0.13,
+        week: 1,
+        threshold: 0.03,
+        species,
+    }
+}
+
 fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
     use birdnet_core::audio::capture::{
         CaptureStatus, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment,
@@ -813,6 +873,15 @@ async fn main() {
     // operator-grade per-source cards (this server runs no real supervisor).
     // Labels match the seeded detection sources so "detections today" merges.
     let state = state.with_capture_status(seed_capture_status());
+
+    // The range filter, so the "Why isn't a bird heard here?" page has data to
+    // show. The fixture runs no detection daemon and loads no range model; this
+    // answers from a table. The numbers are made up, the shape is the real one:
+    // every cell of (over or under the threshold) x (admitted or not), a long
+    // admitted list to page through, and a name the lookup can be asked about.
+    state.set_occurrence_source(std::sync::Arc::new(
+        birdnet_web::occurrence::FixedOccurrence::answering(seed_occurrence()),
+    ));
 
     // The per-source `audio_source_up` gauge is what the dashboard pill, the
     // header badge and the Today rail grade the station on, and the shipped

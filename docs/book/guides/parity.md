@@ -148,6 +148,10 @@ waiting, the CPU passes 80 °C, or a Pi reports throttling, every other segment 
 skipped and counted; and a file that is not named
 `YYYY-MM-DD-birdnet[-ID]-HH:MM:SS.wav` is refused. BirdNET-Pi does none of these.
 
+## Seeing what the range filter does
+
+BirdNET-Pi has no page that says why a bird is missing; this station does. **Species → Why isn't a bird heard here?** (`/species/occurrence`, and `GET /api/v2/species/occurrence` for scripts) asks the same range filter the detection loop uses, for the station's location and any week of the model's 48-week year, and says for each species whether it is admitted and why. It is the quickest way to see the December effect above: ask about the same bird in week 47 and in week 48. See [Why isn't a bird heard here?](../guide/species.md#why-isnt-a-bird-heard-here).
+
 ## Checking it yourself
 
 ```bash

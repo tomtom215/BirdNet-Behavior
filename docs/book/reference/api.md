@@ -187,12 +187,36 @@ The rest of the export family (`detections/export/raven`, the per-clip Raven and
 | `GET /api/v2/species/search` | `q`, `limit` | Search by name |
 | `GET /api/v2/species/detail` | `name` | Per-species stats |
 | `GET /api/v2/species/activity` | `date` | Hourly activity (all species) on a given day |
+| `GET /api/v2/species/occurrence` | `week` (1–48), `q`, `admitted` (`true`/`false`), `limit` (default 100, at most 1000), `offset` | What the station's range (occurrence) filter says about each species for its place and a week: the model's probability, the threshold, whether the station admits the species and why. See [Why isn't a bird heard here?](#why-isnt-a-bird-heard-here) |
 | `GET /api/v2/species/export` | `format` (`csv` or `json`), `limit` | Per-species totals as a download (`species.csv`) |
 | `GET /api/v2/species/image/{scientific_name}` | — | The image's metadata (URL, cache status, description) as JSON, or `404`; it does not download the picture. Only species the station has detected are looked up |
 | `GET /api/v2/species/image/{scientific_name}/file` | — | The cached picture itself (a custom image first, then the provider's), with a five-minute `private` cache header on the picture and on the `404` |
 | `GET /api/v2/recordings` | `species` (matched against the file name), `limit` (default 50, at most 500), `offset` | List the files in the recordings directory: `filename`, `size_bytes`, `modified_secs`, `content_type` |
 | `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip, honouring `Range` requests (`206`); the type follows the extension (WAV, MP3, FLAC, Ogg, AAC) |
 | `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached; with the `raw_spectrogram` setting on, never labelled |
+
+
+### Why isn't a bird heard here?
+
+`GET /api/v2/species/occurrence` answers it with the number behind it. The station asks a range model which species occur around its location in a week of the model's 48-week year (four weeks to a month) and admits a species when the model scores it at or above the threshold (`SF_THRESH`, default 0.03), or you put it on the Always allowed list, and your include and exclude lists allow it. The response is every species the model scores, most likely first, each with that decision:
+
+```json
+{
+  "location": { "latitude": 52.5, "longitude": 13.4 },
+  "week": 22, "week_is_current": false, "threshold": 0.03,
+  "scored": 6522, "admitted_total": 412, "matched": 1, "limit": 100, "offset": 0,
+  "species": [{
+    "scientific_name": "Spiza americana", "common_name": "Dickcissel",
+    "display_name": "Dickcissel", "probability": 0.0004, "admitted": false,
+    "verdict": "held-back-by-range",
+    "explanation": "Held back: the range model gives it <0.01 % here in week 22; this station admits species at 3 % and above."
+  }]
+}
+```
+
+`verdict` is `admitted`, `admitted-by-whitelist` (under the threshold, allowed by the Always allowed list), `held-back-by-range` (under the threshold) or `held-back-by-lists` (over it, kept out by your include or exclude list). `week` defaults to the current week; `q` matches either name, or the name in the station's language; `admitted=false` is the held-back species. A `week` outside 1–48, an `admitted` that is not `true` or `false`, and a `limit` outside 1–1000 are a `400` that names the range and does not run the model (the model reads a week it does not know as "no seasonal information" and answers with a year-round list, so the value is refused rather than clamped).
+
+A station that cannot say answers **`503`** with a `reason` and no `species` key, because an empty list would read as "nothing occurs here": `no-location` (the station has no coordinates), `no-range-model` (no range model is loaded: the filter is off and every species the classifier knows is a candidate), `range-model-failed` (the model is there and would not run; the log has the reason), or `no-detection-daemon` (this process does not run the detection daemon). The coordinates are rounded to one decimal place (about 11 km) because the endpoint is as open as the rest of the read API. The same answer is the page at `/species/occurrence`, linked from the Species page.
 
 ## Time-series & analytics
 

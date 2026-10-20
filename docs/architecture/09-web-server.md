@@ -150,6 +150,7 @@ entry fails by name.
 | `GET /api/v2/species/top` | `limit?` (default 20) | `{ species: [{ name, count, avg_confidence }] }` |
 | `GET /api/v2/species/activity` | `date` (required) | `{ activity: [{ hour, count }], date }` |
 | `GET /api/v2/species/image/{scientific_name}` | — | Image metadata JSON or 404; the `/file` suffix serves the cached image |
+| `GET /api/v2/species/occurrence` | `week?`, `q?`, `admitted?`, `limit?`, `offset?` | What the range filter says about each species for the station's place and a week of the model's 48-week year: each species' probability, the threshold in force and the station's decision, with the reason. `503` with a `reason` when the station cannot say (no location, no range model, a model that failed, no detection daemon). Served by `routes/species.rs` from an `OccurrenceSource` the detection daemon installs (`src/daemon/occurrence.rs`) |
 
 ### Recordings & Logs
 

@@ -44,6 +44,7 @@ pub mod migration;
 pub(crate) mod name_search;
 pub(crate) mod nav;
 pub mod notification_center;
+pub(crate) mod occurrence_page;
 pub mod onboarding;
 pub(crate) mod overlays;
 pub mod provenance;
@@ -131,6 +132,7 @@ pub fn router() -> Router<AppState> {
         .merge(detection_reviews::router())
         .merge(detection_comments::router())
         .merge(species_pages::router())
+        .merge(occurrence_page::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())
         .merge(heatmap::router())

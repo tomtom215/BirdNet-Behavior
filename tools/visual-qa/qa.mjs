@@ -109,6 +109,14 @@ export const ROUTES = [
   ['species', '/species'],
   ['species-lifelist', '/species?view=lifelist'],
   ['species-photos', '/species?view=photos'],
+  // The range-filter lookup (P-3): its landing state, an answer for a bird the
+  // fixture's range filter holds back, one for a name nothing matches, and the
+  // species page that links to it. The fixture answers from a table
+  // (`seed_occurrence` in examples/screenshot_server.rs).
+  ['species-occurrence', '/species/occurrence?week=22'],
+  ['species-occurrence-answer', `/species/occurrence?week=22&q=${enc('painted bunting')}`],
+  ['species-occurrence-none', '/species/occurrence?week=22&q=zzzz'],
+  ['species-detail-held-back', `/species/detail?name=${enc('Painted Bunting')}`],
   ['patterns', '/patterns'],
   ['patterns-dawn', '/patterns?tab=dawn'],
   ['patterns-migration', '/patterns?tab=migration'],

@@ -26,6 +26,18 @@ Click any species for its detail page (`/species/detail?name=…`): a full-bleed
 
 ![A species detail page](../images/species-detail.png)
 
+## Why isn't a bird heard here?
+
+A bird you can hear and the station never logs is, sometimes, a bird the station's **range filter** drops. The station asks a range model which species occur around where it is in each week of the year and holds back any it scores below the *Species Frequency Threshold* (default 3 %); see [the settings](../admin/settings.md#detection). Until now nothing said which birds that was.
+
+The link **Why isn't a bird heard here?** at the top of the Species page (`/species/occurrence`) is the answer. Type a bird's name, in English, in the scientific form or in the station's own language, and it says in a sentence whether the station admits that bird this week, with the numbers: *"Held back: the range model gives it 0.4 % here in week 22; this station admits species at 3 % and above."* A bird the model scores well but that your own include or exclude list keeps out is said to be held back by *your lists*, not by the model, and a bird under the threshold that you put on the Always allowed list is said to be allowed by it. The week defaults to the current one; the selector goes through the model's 48-week year, four weeks to a month, so you can ask what the station would admit in May. Below the answer is the list of the birds the station does admit that week, a hundred at a time.
+
+When a species page is for a bird the filter would hold back this week, a line under its headline says so and links to the answer for that bird.
+
+If there is nothing to show, the page says why instead of showing an empty list, which would read as "nothing occurs here": the station has no location, no range model is loaded (so the filter is off and every bird the classifier knows is a candidate, wherever the station is), or the model would not run. The same answer is available to scripts as [`GET /api/v2/species/occurrence`](../reference/api.md#why-isnt-a-bird-heard-here). The numbers are the filter's own: the species the page marks admitted are exactly those the detection daemon lets through for that place and week, and a test holds that against the real V2.4 range filter.
+
+The station's location is shown to one decimal place (about 11 km): enough to say which region's birds the question is about.
+
 ## Life list
 
 The **Life List** (`/species?view=lifelist` — the old `/life-list` still redirects in) is your birding journal — every species, once. It leads with three tallies (species, total detections, active days) and a smooth **accumulation curve** showing the list growing over the year, then a per-month "new species" chart and the full ranked table with average-confidence pills.

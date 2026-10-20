@@ -3450,6 +3450,34 @@ a.spp-inherit    { color: inherit; }
 .sp-count { margin: 2px 0 18px; font-size: var(--fs-base); color: var(--fg-3); display: flex; align-items: baseline; gap: var(--space-10); flex-wrap: wrap; }
 .sp-count b { font-family: var(--font-display); font-size: 38px; line-height: 1; color: var(--fg); font-weight: var(--fw-regular); letter-spacing: var(--track-tight); }
 
+/* Species · "Why isn't a bird heard here?" — the range-filter lookup (P-3).
+   Tokens only: the form, the answer cards and the admitted list. */
+.occ-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-12); }
+.occ-field { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.occ-grow { flex: 1 1 220px; }
+.occ-field label { font-size: var(--fs-sm); color: var(--fg-2); }
+.occ-field input,
+.occ-field select { background: var(--surface); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm); padding: 7px 10px; font: inherit; font-size: var(--fs-md); color: var(--fg); min-height: 40px; max-width: 100%; }
+.occ-h { font-family: var(--font-display); font-size: var(--fs-title); font-weight: var(--fw-regular); margin: 0 0 var(--space-10); }
+.occ-note { margin: 0; }
+.occ-basis { margin: 0; max-width: 72ch; }
+.occ-answer, .occ-admitted { display: flex; flex-direction: column; gap: var(--space-10); }
+.occ-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); flex-wrap: wrap; }
+.occ-name { font-size: var(--fs-lg); margin: 0; overflow-wrap: anywhere; }
+.occ-sci { margin: var(--space-2) 0 0; }
+.occ-why { margin: var(--space-8) 0 0; max-width: 72ch; }
+.occ-facts { display: flex; flex-wrap: wrap; gap: var(--space-24); margin: var(--space-10) 0 0; }
+.occ-facts div { display: flex; flex-direction: column; gap: var(--space-2); }
+.occ-facts dt { font-size: var(--fs-xs); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg-3); }
+.occ-facts dd { margin: 0; font-variant-numeric: tabular-nums; font-size: var(--fs-lg); }
+.occ-count { margin: 0; }
+/* Name and number a column apart read as two lists; columns keep each pair
+   together and use the width a desktop has. */
+.occ-list { list-style: none; margin: 0; padding: 0; column-width: 22rem; column-gap: var(--space-32); }
+.occ-list li { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-12); padding: var(--space-8) 0; border-bottom: var(--bw) solid var(--hairline); break-inside: avoid; }
+.occ-li-name { min-width: 0; overflow-wrap: anywhere; }
+.occ-li-pct { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 /* list */
 .sp-table { width: 100%; border-collapse: collapse; }
 .sp-table th { text-align: left; font-size: var(--fs-2xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3); font-weight: var(--fw-medium); padding: 8px 10px; border-bottom: var(--bw) solid var(--border); }

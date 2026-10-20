@@ -188,6 +188,7 @@ async fn species_page(
     <h1 class="display sp-h1">Who you've heard</h1>
     <p class="bnb-meta sp-lede">Every bird your station has identified — browse the list, the photos, or your growing life list.</p>
   </div>
+  <a class="bnb-btn" href="/species/occurrence">Why isn't a bird heard here?</a>
 </div>"#
     );
     let content = format!(
@@ -1054,25 +1055,37 @@ async fn species_status_partial(
             String::new(),
         );
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
-    })
-    .await;
+    // The summary and the range filter's verdict in one blocking call: the
+    // second may run the range model, and neither belongs on the async runtime.
+    let result = state
+        .run_blocking(move |state| {
+            let summary =
+                state.with_read_db(|conn| birdnet_db::sqlite::species_summary(conn, &name));
+            // Only for a species the station has heard, and only when the filter
+            // would hold it back this week: the way from "why is this bird not
+            // heard more" to the answer.
+            let held_back = match &summary {
+                Ok(Some(_)) => super::occurrence_page::held_back_pill(state, &name),
+                _ => String::new(),
+            };
+            (summary, held_back)
+        })
+        .await;
 
     let html = match result {
-        Ok(Ok(Some(s))) => {
+        (Ok(Some(s)), held_back) => {
             let conf_pct = s.avg_confidence * 100.0;
             format!(
                 r#"<span class="bnb-pill moss"><span class="bnb-dot"></span> {count} detections</span>
 <span class="bnb-pill">First heard {first}</span>
 <span class="bnb-pill">Last heard {last}</span>
-<span class="bnb-pill">avg {conf_pct:.0}% confidence</span>"#,
+<span class="bnb-pill">avg {conf_pct:.0}% confidence</span>{held_back}"#,
                 count = super::group_thousands(s.count),
                 first = escape_html(&s.first_seen),
                 last = escape_html(&s.last_seen),
             )
         }
-        Ok(Ok(None)) => r#"<span class="bnb-pill">No detections yet</span>"#.to_string(),
+        (Ok(None), _) => r#"<span class="bnb-pill">No detections yet</span>"#.to_string(),
         _ => String::new(),
     };
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)

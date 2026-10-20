@@ -52,6 +52,7 @@ mod daylight;
 pub mod disposition;
 mod duplicate;
 mod local_offset;
+mod occurrence;
 mod processor;
 mod run;
 
@@ -427,6 +428,25 @@ pub fn start_detection_daemon(
             .with_rank_cutoff(privacy_rank)
             .is_enabled();
     let privacy_clip_reach = extraction_config.clip_reach();
+
+    // The web crate cannot reach the daemon's own occurrence filter: it lives on
+    // the detection thread, behind an ONNX session that needs `&mut` to run. It
+    // is given a source that builds the same filter, lazily, from the same
+    // files, threshold and lists, so the Species page and the API can say why a
+    // bird is or is not admitted. Nothing is loaded until somebody asks.
+    state.set_occurrence_source(std::sync::Arc::new(occurrence::DaemonOccurrence::new(
+        latitude.zip(longitude),
+        metadata_model_path
+            .clone()
+            .map(|model| occurrence::RangeModelFiles {
+                model,
+                labels: metadata_labels_path.clone(),
+                aliases: species_aliases_path.clone(),
+            }),
+        labels_path.clone(),
+        build_species_filter_config(sf_thresh, species_lists.clone()),
+        species_lists_provider.clone(),
+    )));
 
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),

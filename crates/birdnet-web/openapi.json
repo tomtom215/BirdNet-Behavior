@@ -2365,6 +2365,235 @@
         }
       }
     },
+    "/species/occurrence": {
+      "get": {
+        "tags": [
+          "species"
+        ],
+        "summary": "Which species the occurrence filter admits",
+        "description": "Answers \"why is this bird never heard here?\" with the number behind it. The station asks a range model which species occur around its location in a given week of the model's 48-week year (four weeks to a month) and admits a species when the model scores it at or above the threshold (`SF_THRESH`), or the operator put it on the Always allowed list, and the operator's include and exclude lists allow it. This lists every species the model scores, most likely first, each with that decision, and `verdict` says which of four ways it came about: `admitted`, `admitted-by-whitelist` (under the threshold, allowed by the list), `held-back-by-range` (under the threshold) or `held-back-by-lists` (over the threshold, kept out by the include or exclude list). `explanation` is the sentence the station's Species page shows. The decision is the filter's own, restated: the species marked admitted are exactly those the detection daemon lets through for that place and week.\n\nThe station's coordinates are returned to one decimal place (about 11 km) because the endpoint is as open as the rest of the read API. A station that cannot answer says so with `503` and a `reason`, and no `species` key: an empty list would read as an empty region.",
+        "operationId": "speciesOccurrence",
+        "parameters": [
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "description": "The model's week, 1 to 48. Defaults to the current week at the station. Anything else is refused, not clamped: the model reads other values as 'no seasonal information' and answers with a year-round list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 48
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Only species whose common name, scientific name or name in the station's language contains this text (any case).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "admitted",
+            "in": "query",
+            "required": false,
+            "description": "`true` for only the species the station admits, `false` for only those it holds back.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Most species to return.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Species to skip, for paging.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The place, the week, the threshold and the species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "location",
+                    "week",
+                    "week_is_current",
+                    "threshold",
+                    "scored",
+                    "admitted_total",
+                    "matched",
+                    "limit",
+                    "offset",
+                    "species"
+                  ],
+                  "properties": {
+                    "location": {
+                      "type": "object",
+                      "required": [
+                        "latitude",
+                        "longitude"
+                      ],
+                      "description": "The station's coordinates, to one decimal place.",
+                      "properties": {
+                        "latitude": {
+                          "type": "number"
+                        },
+                        "longitude": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "week": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 48
+                    },
+                    "week_is_current": {
+                      "type": "boolean",
+                      "description": "True when `week` was not asked for and is the current one."
+                    },
+                    "threshold": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1,
+                      "description": "The probability at or above which the model admits a species (`SF_THRESH`)."
+                    },
+                    "scored": {
+                      "type": "integer",
+                      "description": "Species the model scores, whatever the selection."
+                    },
+                    "admitted_total": {
+                      "type": "integer",
+                      "description": "Of those, how many the station admits, whatever the selection."
+                    },
+                    "matched": {
+                      "type": "integer",
+                      "description": "How many the selection (`q`, `admitted`) picked, before paging."
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "scientific_name",
+                          "common_name",
+                          "display_name",
+                          "probability",
+                          "admitted",
+                          "verdict",
+                          "explanation"
+                        ],
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string",
+                            "description": "The classifier's name, as stored: the key to match on."
+                          },
+                          "display_name": {
+                            "type": "string",
+                            "description": "`common_name` in the station's language, or itself when it has none."
+                          },
+                          "probability": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "The range model's probability that the species occurs here that week."
+                          },
+                          "admitted": {
+                            "type": "boolean"
+                          },
+                          "verdict": {
+                            "type": "string",
+                            "enum": [
+                              "admitted",
+                              "admitted-by-whitelist",
+                              "held-back-by-range",
+                              "held-back-by-lists"
+                            ]
+                          },
+                          "explanation": {
+                            "type": "string",
+                            "description": "One sentence with the real numbers."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`week`, `admitted`, `limit` or `offset` is not in its range; the message names the range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The station cannot say what its occurrence filter does.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "reason"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence for a person. Never an empty list: the absence of an answer is not 'nothing occurs here'."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "no-location",
+                        "no-range-model",
+                        "range-model-failed",
+                        "no-detection-daemon"
+                      ],
+                      "description": "`no-location`: the station has no coordinates. `no-range-model`: no range model is loaded, so the filter is off and every species the classifier knows is a candidate. `range-model-failed`: the model is configured and would not run (the station's log has the reason). `no-detection-daemon`: this process is not running the detection daemon."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/species/activity": {
       "get": {
         "tags": [
