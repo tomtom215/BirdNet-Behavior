@@ -41,9 +41,10 @@ its step *Fail if too many mutants survived*. The scheduled run on the commit
 before it failed too. The surviving mutant is `extractor.rs:223`, `!=` to `==` in
 `Extractor::extract_detection_clip`. This branch carries a test written for it
 (`3b5185cb`: a WAV clip with a frequency shift must come out shifted), which its
-author saw fail against the mutant applied by hand; whether the `cargo-mutants`
-shard now passes is **not known** until the workflow runs on the branch (the
-frequency-shift rewrite touched the same function, so the line may have moved). The scheduled OSV scan failed on 2026-10-17
+author saw fail against the mutant applied by hand. On PR #264 the shard passes,
+but not by catching that mutant: the bot's comment on `c1fbea97` read one mutant,
+none caught, none missed, one unviable, so the frequency-shift rewrite changed the
+function until that mutant no longer compiles. The scheduled OSV scan failed on 2026-10-17
 to 19 and passed on 2026-10-20, after the `duckdb` bump cleared the `zip`
 advisories it named.
 
@@ -218,23 +219,51 @@ only adds this file), by commands the session ran:**
   window that ends before it starts, which the scheduler ignores, is now a
   `--doctor` warning for a station that has one in `birdnet.conf`.
 
+**In GitHub Actions, on draft PR #264:** at `47558b97` all 71 check runs had
+finished, 69 `success` and 2 `skipped` (`deploy` and `Merge multi-arch manifest`,
+which do not run on a pull request), none failed. That was tallied by a script from
+the check-runs API, not read off the list. It includes the four new `a11y.yml`
+steps, `cargo-deny`, `cargo-audit`, every `cargo-mutants` shard, the three upgrade
+jobs (from v0.15.0, v0.16.1 and v0.17.0), the real-model inference job and CodeQL.
+The first run, on `c1fbea97`, was not green. Three things were red, each in this
+PR's own code, each fixed with the evidence in its commit message:
+
+- Mutation testing, `validate.rs` shard 2/2: `h < 24` to `h <= 24` in `parse_hhmm`
+  survived, because no test refused an hour of 24 on its own (`e641bb13`).
+- CodeQL: 17 alerts, 15 at failure level (14 hard-coded cryptographic value, 1
+  cleartext logging) and 2 warnings (section 5). Nine were on lines the PR added,
+  among them the `pw(tag)` test helper, which carried its literal through `format!`
+  so that every call site was an alert; six were on lines identical to main's
+  (`26ff8f74`). The check passes at `47558b97`; its annotations went from 17 to 2.
+- Mutation testing, `src/daemon/*.rs` shards 4/6, 5/6 and 6/6: five survivors in
+  `alert_cooldown.rs` (the prune threshold) and `occurrence.rs` (cache expiry,
+  `Debug`), which the model-gated tests cannot reach in a job that has no models
+  (`47558b97`).
+
+A full run takes about 45 minutes (Tests (x86_64) 45, the accessibility sweep 36),
+and every push cancels the run in progress. A PR's CodeQL alerts can be listed
+without a token from the check run's annotations,
+`GET /repos/{owner}/{repo}/check-runs/{id}/annotations`; the code-scanning API
+answers 403 without one, so what `main`'s Security tab lists is **not known**.
+
 **Not run, anywhere:** Firefox and Safari; a screen reader; a Raspberry Pi (the
 parity numbers are an x86 ONNX build against BirdNET-Pi's FP16 TFLite; the memory a
 second copy of the range model takes on a Pi 4B was not measured); Docker (no
 daemon here, so the mount-table fixtures are modelled on Docker's output, not
 captured); systemd (`installer/test/upgrade-e2e.sh` needs a real systemd host);
-the new steps in `a11y.yml` in GitHub Actions (the YAML was parsed, not run); the
-release workflow as a whole; `redocly lint` (not installed here and not in CI); a
-verifying `cargo package` of any crate (it needs a full second build, including the
-bundled DuckDB); `cargo-mutants` (not installed here); `cargo publish`; the V3.0
-geomodel variant of the new range-filter tests.
+the release workflow as a whole; `redocly lint` (not installed here and not in CI);
+a verifying `cargo package` of any crate (it needs a full second build, including
+the bundled DuckDB); `cargo publish`; the V3.0 geomodel variant of the new
+range-filter tests.
 
 ## 4. Where to start
 
-1. **Open a draft pull request** from `claude/practical-dijkstra-flz0c8` and read
-   what CI says. Expect the jobs that only run on a pull request, and the four
-   new `a11y.yml` steps, to be the first to run something new. `cargo-mutants`
-   runs in pull-request mode (`--in-diff`), which mutates only changed lines.
+1. **Draft pull request #264 is open from `claude/practical-dijkstra-flz0c8`, and
+   CI is green at `47558b97`** (section 3). It is a draft on purpose; marking it
+   ready is the maintainer's call. `cargo-mutants` runs in pull-request mode
+   (`--in-diff`), which mutates the lines the whole PR changes against `main`
+   (`git diff origin/main...HEAD`), so code a fix adds is mutated too: the
+   `is_fresh` helper that fixed one survivor brought mutants of its own.
 2. Do the settings in section 1; close #228, #200, #199 and #263 when it merges.
 3. Decide the defaults in section 2, in this order: the V2.4 default (the only
    one that changes what a new user sees), wiring the model mirror, the
@@ -323,7 +352,31 @@ Not done, in the order they seem to matter:
   `row.get::<String>` refuse it, which separates two reads of the same table in a
   failure test (`DROP COLUMN` is blocked by an index: drop the index first); an
   equality test between a form's bounds and a validator's holds for any grammar, so
-  pin a table of answers too.
+  pin a table of answers too. From the CI run on #264: a test helper that takes a
+  literal and returns a string made from it (`pw("tag")` into `format!("{tag}-…")`)
+  hands the literal to every caller, so a CodeQL taint query alerts at each call
+  site; CodeQL's cleartext-logging query alerts on a variable *named* `secret` that
+  an assertion message prints, whatever it holds; the mutation job runs unit tests
+  only and has no model files, so a mutant in code whose tests need `BIRDNET_TEST_*`
+  models survives unless a model-free test reaches it; and a real clock never
+  equals a `Duration`, so put a time comparison in a function of its two durations
+  to test the boundary.
+- **Two CodeQL warnings, on lines identical to main's, not changed:** both are
+  `warning` level and neither fails the check. `crates/birdnet-web/static/sw.js:80` is
+  a `message` handler with no origin check; it acts only on `SKIP_WAITING`, and a
+  service worker's clients are same-origin, so it looks like a false positive, but a
+  one-line `event.origin` comparison would silence it and `sw_harness.mjs` could
+  test it. `tools/visual-qa/qa.mjs:354` writes the sweep's report, which holds
+  fixture data read over HTTP, to a file. Whether `main` lists either is unknown.
+- **The literal-password pattern is still in 13 test files this PR does not touch**
+  (`crates/birdnet-db/src/accounts/users.rs` is the densest), and in
+  `crates/birdnet-web/src/routes/admin/accounts.rs`, which it does touch, at
+  `hash_password("a-real-password-here")`. That count is a lower bound: a grep for
+  `hash_password("`, `const PASSWORD` and `verify_password(… "…"`, not the query.
+  CodeQL annotated none of them on this PR, and flagged six unchanged lines in
+  files that were touched, so the files a PR touches do not predict where it
+  annotates. Fix them as `src/helpers/auth.rs` was: build the value with `format!`
+  over `std::process::id()`, and let no helper take the literal as an argument.
 - **Smaller findings, not fixed:** `/pages/quarantine-pending-count` is routed but
   nothing links to it; the invite form posts a blank label as `""`; the occurrence
   page lists 100 species before "Show the next 100", about 4,900 px on a phone;
