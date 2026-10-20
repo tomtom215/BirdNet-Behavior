@@ -155,7 +155,7 @@ jobs:
         # is the default for new installs, is held without systemd by
         # installer/test/classifier-kept.sh; this job does not assert it (the
         # station's config is kept either way), and does not install V2.4 at all.
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/upgrade-models
           key: upgrade-models-v3.0-preview3-geo-3.0.2
