@@ -4,7 +4,7 @@
 > the current `0.15.0` tree (`Cargo.toml` `workspace.package.version`). Its branch model
 > (`claude/gallant-feynman-bJs95`) is dead — that branch does not exist on the remote, and
 > all work merges to `main`, which is CI-gated and green.
-> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-08) succeeded this file and
+> [`docs/RELEASE_PLAN.md`](../RELEASE_PLAN.md) (audited 2026-08-08) succeeded this file and
 > is itself now a completed record of the `v0.10.x`/`0.11.0` cycle; the live picture is in
 > the later audits, starting with `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`. Of the gaps this
 > file left open: **G-11** (DuckDB analytics resilience) is **closed** —
