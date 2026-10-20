@@ -61,6 +61,82 @@ pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Chec
     )
 }
 
+/// Warn when `BirdWeather` uploads are configured but cannot happen because
+/// the station has no position to publish them at.
+///
+/// A station with a token and no usable `LATITUDE` / `LONGITUDE` used to build
+/// its client at 0°, 0° and post every detection there, onto a public map in
+/// the Gulf of Guinea. The client is now not built (see
+/// [`crate::integrations::create_birdweather_client`], which warns once at
+/// startup), so the station is quiet on `BirdWeather` instead of wrong — and
+/// quiet is what a healthy station that is not configured for it also looks
+/// like. This is where an operator who set a token finds out why nothing
+/// arrives.
+///
+/// Said only for a station that has a token (from the flag, the config, or —
+/// since `--doctor` runs before the settings overlay — the dashboard's
+/// settings table); one that never set it up has nothing to be told. The
+/// position is judged by [`crate::integrations::birdweather_location`], the
+/// rule the client builder uses, with the same settings-table fallback
+/// [`check_station_location`] has for a position typed on the dashboard.
+pub(super) fn check_birdweather_location(cli: &Cli, config: Option<&Config>) -> Option<Check> {
+    const NAME: &str = "BirdWeather location";
+
+    let has_token = |t: &str| !t.trim().is_empty();
+    let configured = cli.birdweather_token.as_deref().is_some_and(has_token)
+        || config
+            .and_then(|c| c.get("BIRDWEATHER_TOKEN"))
+            .is_some_and(has_token)
+        || setting_from_settings(config, "birdweather_token")
+            .as_deref()
+            .is_some_and(has_token);
+    if !configured {
+        return None;
+    }
+
+    let from_settings = || {
+        location_from_settings(config).and_then(|(lat, lon)| {
+            birdnet_integrations::birdweather::check_location(Some(lat), Some(lon)).ok()
+        })
+    };
+    Some(
+        match crate::integrations::birdweather_location(cli, config) {
+            Ok((lat, lon)) => Check::pass(NAME, format!("uploads at {lat:.4}, {lon:.4}")),
+            Err(why) => match from_settings() {
+                Some((lat, lon)) => Check::pass(
+                    NAME,
+                    format!("uploads at {lat:.4}, {lon:.4} (from the dashboard settings)"),
+                ),
+                None => Check::warn(
+                    NAME,
+                    format!(
+                        "a station token is set but uploads are off: the station's position is not \
+                     usable — {why}"
+                    ),
+                    crate::integrations::LOCATION_FIX,
+                ),
+            },
+        },
+    )
+}
+
+/// One value from the dashboard's settings table, read directly from SQLite.
+///
+/// `None` on any failure, like [`location_from_settings`]: a diagnostic must
+/// not turn a database problem into a finding of its own.
+fn setting_from_settings(config: Option<&Config>, key: &str) -> Option<String> {
+    let db_path = crate::helpers::db_path_from_config(config);
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+    birdnet_db::settings::get(&conn, key).ok()
+}
+
 /// Report whether species occurrence filtering will actually run.
 ///
 /// Two things are needed and the diagnostic used to check only one. The
@@ -1096,6 +1172,104 @@ mod tests {
             check.message
         );
         assert!(check.message.contains("51.5074"));
+    }
+
+    // ── BirdWeather needs a position to publish at ──────────────────────
+
+    #[test]
+    fn birdweather_without_a_position_warns_that_uploads_are_off() {
+        let cfg = config_from(&[("BIRDWEATHER_TOKEN", "tok")]);
+        let check = check_birdweather_location(&cli(), Some(&cfg)).expect("a token is set");
+        assert_eq!(check.status, Status::Warn);
+        assert!(
+            check.message.contains("uploads are off") && check.message.contains("not set"),
+            "must say what stopped and why: {}",
+            check.message
+        );
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("LATITUDE") && r.contains("LONGITUDE")),
+            "must name the keys: {:?}",
+            check.remediation
+        );
+
+        // The Null Island default is its own finding, not "unset".
+        let zero = config_from(&[
+            ("BIRDWEATHER_TOKEN", "tok"),
+            ("LATITUDE", "0"),
+            ("LONGITUDE", "0"),
+        ]);
+        let check = check_birdweather_location(&cli(), Some(&zero)).expect("a token is set");
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.message.contains("both 0"), "{}", check.message);
+    }
+
+    #[test]
+    fn birdweather_with_a_real_position_passes() {
+        let cfg = config_from(&[
+            ("BIRDWEATHER_TOKEN", "tok"),
+            ("LATITUDE", "42.3601"),
+            ("LONGITUDE", "-71.0589"),
+        ]);
+        let check = check_birdweather_location(&cli(), Some(&cfg)).expect("a token is set");
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("42.3601"), "{}", check.message);
+    }
+
+    #[test]
+    fn a_station_that_never_set_birdweather_up_is_told_nothing() {
+        // Counterpart: no token, no finding, whatever the position is. A
+        // warning on every station that does not use BirdWeather would be the
+        // noise this diagnostic exists to avoid.
+        let cfg = config_from(&[("ALSA_CARD", "hw:1")]);
+        assert!(check_birdweather_location(&cli(), Some(&cfg)).is_none());
+        assert!(check_birdweather_location(&cli(), None).is_none());
+        let blank = config_from(&[("BIRDWEATHER_TOKEN", "   ")]);
+        assert!(check_birdweather_location(&cli(), Some(&blank)).is_none());
+    }
+
+    /// A token and a position typed on the dashboard live only in the settings
+    /// table when `--doctor` runs from `ExecStartPre`.
+    #[test]
+    fn birdweather_configured_on_the_dashboard_is_judged_from_the_settings_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        let write = |lat: &str, lon: &str| {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::settings::ensure_settings_table(&conn).unwrap();
+            for (key, value, cat) in [
+                (
+                    "birdweather_token",
+                    "tok",
+                    birdnet_db::settings::SettingsCategory::Notifications,
+                ),
+                (
+                    "latitude",
+                    lat,
+                    birdnet_db::settings::SettingsCategory::Location,
+                ),
+                (
+                    "longitude",
+                    lon,
+                    birdnet_db::settings::SettingsCategory::Location,
+                ),
+            ] {
+                birdnet_db::settings::set(&conn, key, value, cat).unwrap();
+            }
+        };
+        let cfg = config_from(&[("DB_PATH", db_path.to_str().unwrap())]);
+
+        write("51.5074", "-0.1278");
+        let check = check_birdweather_location(&cli(), Some(&cfg)).expect("token is in settings");
+        assert_eq!(check.status, Status::Pass, "{}", check.message);
+        assert!(check.message.contains("51.5074"), "{}", check.message);
+
+        write("0", "0");
+        let check = check_birdweather_location(&cli(), Some(&cfg)).expect("token is in settings");
+        assert_eq!(check.status, Status::Warn, "{}", check.message);
     }
 
     #[test]
