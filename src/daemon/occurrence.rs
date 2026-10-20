@@ -55,6 +55,13 @@ use birdnet_web::occurrence::{OccurrenceReport, OccurrenceSource, Unavailable};
 /// otherwise.)
 pub(super) const KEEP_FOR: Duration = Duration::from_secs(60);
 
+/// Whether an answer `age` old is still reused: only while it is younger than
+/// `keep_for`. A function of its own because the boundary can be tested exactly
+/// here, and cannot against a real clock.
+fn is_fresh(age: Duration, keep_for: Duration) -> bool {
+    age < keep_for
+}
+
 /// The files the range model is built from.
 #[derive(Debug, Clone)]
 pub(super) struct RangeModelFiles {
@@ -184,7 +191,7 @@ impl OccurrenceSource for DaemonOccurrence {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&week)
-            && at.elapsed() < self.keep_for
+            && is_fresh(at.elapsed(), self.keep_for)
         {
             return Ok(Arc::clone(report));
         }
@@ -663,5 +670,75 @@ mod tests {
         let first = failing.report(22).unwrap_err();
         assert!(matches!(first, Unavailable::Failed(_)), "{first:?}");
         assert_eq!(failing.report(23).unwrap_err(), first);
+    }
+
+    // ── what is kept, without a model ───────────────────────────────────
+    //
+    // The tests above that reuse an answer need the real V2.4 range model and
+    // skip without it, so a build with no model files could change the cache
+    // and see every test pass. These need none.
+
+    #[test]
+    fn an_answer_is_fresh_only_while_it_is_younger_than_the_keep_time() {
+        let keep = Duration::from_secs(60);
+        assert!(is_fresh(Duration::ZERO, keep));
+        assert!(is_fresh(Duration::from_nanos(59_999_999_999), keep));
+        assert!(
+            !is_fresh(keep, keep),
+            "an answer exactly as old as the keep time has expired"
+        );
+        assert!(!is_fresh(keep + Duration::from_nanos(1), keep));
+        assert!(
+            !is_fresh(Duration::ZERO, Duration::ZERO),
+            "keeping for nothing keeps nothing"
+        );
+    }
+
+    /// The cache is consulted before the model is: a fresh kept answer comes
+    /// back without the files being read (they do not exist here), and an
+    /// expired one sends the ask on to the load, which fails.
+    #[test]
+    fn a_kept_answer_is_served_while_fresh_and_asked_for_afresh_once_it_is_not() {
+        let kept = Arc::new(OccurrenceReport {
+            latitude: 52.5,
+            longitude: 13.4,
+            week: 22,
+            threshold: 0.03,
+            species: Vec::new(),
+        });
+        let seeded = |keep_for: Duration| {
+            let s =
+                source(Some((52.5, 13.4)), Some("/nonexistent/range.onnx")).keeping_for(keep_for);
+            s.kept
+                .lock()
+                .unwrap()
+                .insert(22, (Instant::now(), Arc::clone(&kept)));
+            s
+        };
+
+        let fresh = seeded(Duration::from_secs(3_600));
+        let served = fresh.report(22).expect("a fresh kept answer is served");
+        assert!(Arc::ptr_eq(&served, &kept));
+
+        let expired = seeded(Duration::ZERO);
+        let err = expired.report(22).unwrap_err();
+        assert!(
+            matches!(err, Unavailable::Failed(_)),
+            "an expired answer was served from the cache: {err:?}"
+        );
+    }
+
+    /// `Debug` is how the source appears in a log line: what is configured, and
+    /// not where the station is.
+    #[test]
+    fn the_debug_form_says_what_is_configured_and_not_where_the_station_is() {
+        assert_eq!(
+            format!("{:?}", source(Some((52.52, 13.405)), None)),
+            "DaemonOccurrence { has_location: true, has_model: false, .. }"
+        );
+        assert_eq!(
+            format!("{:?}", source(None, Some("/nonexistent/range.onnx"))),
+            "DaemonOccurrence { has_location: false, has_model: true, .. }"
+        );
     }
 }

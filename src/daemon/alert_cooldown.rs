@@ -341,6 +341,33 @@ mod tests {
     }
 
     #[test]
+    fn expired_entries_are_kept_until_the_map_reaches_the_threshold() {
+        // The prune is a backstop, not a sweep: below `PRUNE_ABOVE` an expired
+        // window is left where it is, and the claim that finds the map AT the
+        // threshold drops every one. The bound test above cannot tell this from
+        // a prune on every claim, which also keeps the map small.
+        let g = AlertCooldowns::default();
+        let start = t("00:00:00").unwrap();
+        let at_threshold = i64::try_from(PRUNE_ABOVE).unwrap();
+        // One species an hour, each with a one-minute window: every earlier
+        // entry has expired by the time the next arrives.
+        for i in 0..at_threshold {
+            assert!(g.should_fire(1, &format!("Species {i}"), 60, Some(start + i * 3_600)));
+        }
+        assert_eq!(
+            g.len(),
+            PRUNE_ABOVE,
+            "an expired entry was dropped below the threshold"
+        );
+        assert!(g.should_fire(1, "One more", 60, Some(start + at_threshold * 3_600)));
+        assert_eq!(
+            g.len(),
+            1,
+            "the claim that found the map at the threshold did not drop the expired entries"
+        );
+    }
+
+    #[test]
     fn pruning_keeps_every_window_that_is_still_running() {
         // Counterpart: the prune must drop only what could no longer suppress.
         // Filling past the threshold with live entries and then asking about
