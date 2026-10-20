@@ -247,7 +247,7 @@ prompt_station_settings() {
     #
     # This loops, like the audio-source prompt above it. It used to warn once
     # and fall through, which meant unreadable input was discarded into a
-    # single [WARN] line that scrolled away behind the 541 MB model download —
+    # single [WARN] line that scrolled away behind the model download —
     # the operator answered the question, the station recorded no location, and
     # nothing said so again until the species filter silently stayed off.
     printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty

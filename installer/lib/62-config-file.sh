@@ -13,6 +13,16 @@
 # leave it.
 enable_geomodel_in_kept_config() {
     [ "${GEOMODEL_INSTALLED:-0}" = "1" ] || return 0
+    # The geomodel belongs to the V3.0 classifier. A config that names the V2.4
+    # file this installer manages is paired with the range filter instead
+    # (enable_range_filter_in_kept_config); writing the geomodel into it would
+    # hand one network the other's occurrence filter. Nothing in the install
+    # flow gets here with both, so this is the file-level backstop for the
+    # invariant rather than a path anyone takes.
+    if [ "$(config_value MODEL_PATH "${CONFIG_FILE}")" = "${MODEL_DIR}/${V24_MODEL_FILE}" ]; then
+        warn "${CONFIG_FILE} runs BirdNET V2.4, whose occurrence filter is the range filter, not the geomodel — leaving METADATA_* alone."
+        return 0
+    fi
     local model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
     local labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
     if ! grep -q 'METADATA_MODEL_PATH' "${CONFIG_FILE}"; then
@@ -44,10 +54,41 @@ enable_geomodel_in_kept_config() {
     fi
 }
 
+# The V2.4 twin of the function above, for a config that names the V2.4 file.
+# Narrower on purpose: it fills in the template's own empty placeholders (the
+# state a fresh install's failed range-filter download leaves behind) and
+# nothing else. A config with no METADATA_MODEL_PATH line at all was written by
+# hand — the installer has never written one without — and switching occurrence
+# filtering on in it is the operator's decision, not an update's. The V3.0
+# geomodel retrofit adds one because it was introduced as on-by-default in the
+# same release; there is no such release to honour here.
+enable_range_filter_in_kept_config() {
+    [ "${RANGE_FILTER_INSTALLED:-0}" = "1" ] || return 0
+    # Only the V2.4 file pairs with the V2.4 range filter. This guard is the
+    # other half of the one above: a V3.0 (or any other) config is never given
+    # a filter that is indexed like a different network's labels.
+    if [ "$(config_value MODEL_PATH "${CONFIG_FILE}")" != "${MODEL_DIR}/${V24_MODEL_FILE}" ]; then
+        warn "${CONFIG_FILE} does not run BirdNET V2.4, so the V2.4 range filter was not written into it."
+        return 0
+    fi
+    local model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${V24_RANGE_FILE}"
+    if grep -qE '^# METADATA_MODEL_PATH=$' "${CONFIG_FILE}"; then
+        sed -i -e "s|^# METADATA_MODEL_PATH=\$|${model_line}|" "${CONFIG_FILE}"
+        success "Species occurrence filtering is ON: filled in the range filter in ${CONFIG_FILE}."
+    elif grep -qE '^[[:space:]]*METADATA_MODEL_PATH=' "${CONFIG_FILE}"; then
+        success "Species occurrence filtering is configured in ${CONFIG_FILE}."
+    else
+        warn "The range filter is installed, but ${CONFIG_FILE} does not name it, so species"
+        warn "occurrence filtering stays OFF. Add this line (and LATITUDE/LONGITUDE) to use it:"
+        warn "  ${model_line}"
+    fi
+}
+
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
         enable_geomodel_in_kept_config
+        enable_range_filter_in_kept_config
         # Upgrade from a version that left the config world-readable: tighten it
         # without touching the user's settings.
         chown "root:${SERVICE_USER}" "${CONFIG_FILE}" 2>/dev/null || true
@@ -78,11 +119,65 @@ write_config() {
     # them unconditionally would point a fresh station at paths that do not
     # exist, and `--doctor` would then report FAIL on an install that had merely
     # declined an optional download.
+    #
+    # Which filter belongs to the station is decided by its classifier, never by
+    # what happens to be on disk: V2.4 gets the range filter (and no labels
+    # line — it is indexed like the V2.4 labels), everything else the geomodel
+    # and its labels. The two are not interchangeable (see 10-config.sh).
     local geo_model_line="# METADATA_MODEL_PATH="
     local geo_labels_line="# METADATA_LABELS_PATH="
-    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
-        geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
-        geo_labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+    local filter_lines occurrence_prose detection_prose
+    if [ "${CLASSIFIER:-}" = "${CLASSIFIER_V24}" ]; then
+        if [ "${RANGE_FILTER_INSTALLED:-0}" = "1" ]; then
+            geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${V24_RANGE_FILE}"
+        fi
+        filter_lines="${geo_model_line}"
+        occurrence_prose=$'# Drops species that do not occur near this station at this time of year. Needs
+# both of the following; the installer fetches the second for you, and the
+# setting below is live when it succeeded, commented out when it did not.
+#   1. station coordinates (set above, or on the dashboard)
+#   2. METADATA_MODEL_PATH   — the BirdNET V2.4 range filter v2 (ONNX)
+# The range filter is indexed like the V2.4 labels, so it needs no
+# METADATA_LABELS_PATH of its own; and it means nothing to any other network,
+# so do not point another classifier at it, or this one at the V3.0 geomodel.
+# Run `birdnet-behavior --doctor` to see which of the two is missing.'
+        detection_prose=$'# BirdNET-Pi\'s defaults, which BirdNET V2.4 shares with it and which mean here what
+# they mean there. They are shown commented because they are what you get when
+# you set nothing.
+# CONFIDENCE=0.70          # 0.0–1.0 (detections below this are discarded).
+#                          # The setup wizard asks for this on first login; note
+#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
+#                          # it records every window as a detection.
+# SENSITIVITY=1.25         # 0.5–1.5; the same number, with the same meaning, as BirdNET-Pi\'s
+# OVERLAP=0.0              # seconds of overlap between analysis windows (0.0 = none)
+# PRIVACY_RANK=10          # BirdNET-Pi\'s human-sound rule: drop a window (and its neighbours) when a human sound ranks in the model\'s top 10 classes; 0 = off
+# DATABASE_LANG=en'
+    else
+        if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+            geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
+            geo_labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+        fi
+        filter_lines="${geo_model_line}"$'\n'"${geo_labels_line}"
+        occurrence_prose=$'# Drops species that do not occur near this station at this time of year. Needs
+# all three of the following; the installer fetches the last two for you, and
+# the two settings below are live when it succeeded, commented out when it did
+# not.
+#   1. station coordinates (set above, or on the dashboard)
+#   2. METADATA_MODEL_PATH   — the BirdNET geomodel (ONNX)
+#   3. METADATA_LABELS_PATH  — that model\'s own label file
+# The geomodel scores a different species list from the classifier (12 012
+# against 11 560), so the label file is what maps one onto the other; omit it
+# only for a metadata model indexed identically to the classifier, which the
+# station verifies at startup and refuses if it does not hold.
+# Run `birdnet-behavior --doctor` to see which of the three is missing.'
+        detection_prose=$'# CONFIDENCE=0.70          # 0.0–1.0, default 0.70 (detections below this are discarded).
+#                          # The setup wizard asks for this on first login; note
+#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
+#                          # it records every window as a detection.
+# SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
+# OVERLAP=0.0              # seconds of overlap between analysis windows
+# PRIVACY_RANK=10          # BirdNET-Pi\'s human-sound rule: drop a window (and its neighbours) when a human sound ranks in the model\'s top 10 classes; 0 = off
+# DATABASE_LANG=en'
     fi
 
     info "Writing default config to ${CONFIG_FILE}…"
@@ -104,7 +199,7 @@ DB_PATH=${DB_PATH}
 RECS_DIR=${RECS_DIR}
 IMAGE_CACHE_DIR=${IMAGE_CACHE_DIR}
 
-# --- Model (BirdNET+ V3.0, downloaded automatically by installer) ---
+# --- Model (${CLASSIFIER_NAME:-the classifier}, downloaded automatically by installer) ---
 MODEL_PATH=${MODEL_DIR}/${MODEL_FILE}
 LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
@@ -126,13 +221,7 @@ ${lon_line}
 #                              # under Settings -> Capture -> Location & Recording Schedule.
 
 # --- Detection ---
-# CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).
-#                          # The setup wizard asks for this on first login; note
-#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
-#                          # it records every window as a detection.
-# SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
-# OVERLAP=0.0              # seconds of 3 s analysis window overlap
-# DATABASE_LANG=en
+${detection_prose}
 
 # EXTRACTION_LENGTH=6      # seconds of audio saved around each detection
 # RARE_SPECIES_THRESHOLD   # set on /admin/settings (days since last heard)
@@ -143,20 +232,8 @@ ${lon_line}
 #                          # names: audio detection web db integrations analytics
 
 # --- Species occurrence filtering ---
-# Drops species that do not occur near this station at this time of year. Needs
-# all three of the following; the installer fetches the last two for you, and
-# the two settings below are live when it succeeded, commented out when it did
-# not.
-#   1. station coordinates (set above, or on the dashboard)
-#   2. METADATA_MODEL_PATH   — the BirdNET geomodel (ONNX)
-#   3. METADATA_LABELS_PATH  — that model's own label file
-# The geomodel scores a different species list from the classifier (12 012
-# against 11 560), so the label file is what maps one onto the other; omit it
-# only for a metadata model indexed identically to the classifier, which the
-# station verifies at startup and refuses if it does not hold.
-# Run \`birdnet-behavior --doctor\` to see which of the three is missing.
-${geo_model_line}
-${geo_labels_line}
+${occurrence_prose}
+${filter_lines}
 # SF_THRESH=0.03           # occurrence threshold; no effect while the filter is off
 
 # --- Disk management ---

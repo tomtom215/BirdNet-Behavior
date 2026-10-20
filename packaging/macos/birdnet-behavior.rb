@@ -47,7 +47,13 @@ class BirdnetBehavior < Formula
       cannot obtain that consent, so run it as a per-user LaunchAgent (see the
       plist in #{doc}/.. or the repo's packaging/macos/) rather than `brew services`.
 
-      First run downloads the BirdNET+ V3.0 model (~541 MB) from Zenodo.
+      The binary does not download a model on its own. install.sh does it for you
+      (BirdNET V2.4 by default, ~85 MB, the network BirdNET-Pi and birdnet-go
+      run); by hand, with a directory you own:
+        BIRDNET_MODEL_DIR=~/models birdnet-behavior --install-model birdnet-v24
+        BIRDNET_MODEL_DIR=~/models birdnet-behavior --install-model birdnet-v24-range-v2
+      then set MODEL_PATH, LABELS_PATH and METADATA_MODEL_PATH in birdnet.conf to
+      the files it prints.
 
       Configure your station before first run:
         cp #{etc}/birdnet-behavior/birdnet.conf.example #{etc}/birdnet-behavior/birdnet.conf

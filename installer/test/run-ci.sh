@@ -30,7 +30,10 @@ CI_TESTS=(
     binary-swap-atomicity.sh
     blank-env-opt-outs.sh
     checksum-refusals.sh
+    classifier-default.sh
     classifier-docker.sh
+    classifier-kept.sh
+    classifier-never-mixed.sh
     config-dir-permissions.sh
     config-template.sh
     container-model-cache.sh
@@ -41,6 +44,8 @@ CI_TESTS=(
     geomodel-resume.sh
     install-one-liner-is-a-release-asset.sh
     location-notice.sh
+    macos-config.sh
+    model-pins-match-catalogue.sh
     model-resume.sh
     pipefail-sigpipe.sh
     quickstart-env.sh
