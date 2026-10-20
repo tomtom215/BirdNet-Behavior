@@ -480,6 +480,51 @@ fn fetch_verified(
     Ok(())
 }
 
+/// Lowercase hex SHA-256 of a file's contents, or `None` if it cannot be read.
+fn sha256_of_file(path: &Path) -> Option<String> {
+    use std::fmt::Write as _;
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in &hasher.finalize() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
+}
+
+/// Whether `dest` already holds exactly the bytes `expected` names.
+///
+/// What lets `--install-model` be run again, by an installer on every start or
+/// by an operator who is not sure it finished, without fetching a 541 MB file it
+/// already has. The file is hashed, not trusted for being there: a truncated or
+/// substituted file under the right name is fetched again.
+fn already_installed(dest: &Path, expected: &str) -> bool {
+    sha256_of_file(dest).is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+}
+
+/// [`fetch_verified`], unless `dest` already verifies. `Ok(true)` when bytes
+/// were fetched, `Ok(false)` when the file was already there and intact.
+fn fetch_unless_installed(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    expected: &'static str,
+    dest: &Path,
+) -> Result<bool, InstallError> {
+    if already_installed(dest, expected) {
+        return Ok(false);
+    }
+    fetch_verified(client, url, expected, dest)?;
+    Ok(true)
+}
+
 /// Write bytes the binary carries to `dest`, only if they hash to `expected`.
 ///
 /// The same discipline as [`fetch_verified`] for a file that needs no network:
@@ -530,7 +575,11 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
 
     fs::create_dir_all(dest_dir)?;
 
-    fits(entry.model_bytes, free_space_bytes(dest_dir))?;
+    let model_path = dest_dir.join(format!("{}.onnx", entry.id));
+    // A file that already verifies needs neither the room nor the download.
+    if !already_installed(&model_path, entry.model_sha256) {
+        fits(entry.model_bytes, free_space_bytes(dest_dir))?;
+    }
 
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
@@ -540,14 +589,17 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
         .build()
         .map_err(|e| InstallError::Network(e.to_string()))?;
 
-    let model_path = dest_dir.join(format!("{}.onnx", entry.id));
-    tracing::info!(
-        id = entry.id,
-        url = entry.model_url,
-        "downloading classifier"
-    );
-    fetch_verified(&client, entry.model_url, entry.model_sha256, &model_path)?;
-    tracing::info!(id = entry.id, path = %model_path.display(), "classifier verified and installed");
+    if already_installed(&model_path, entry.model_sha256) {
+        tracing::info!(id = entry.id, path = %model_path.display(), "classifier already installed and verified; not downloading it again");
+    } else {
+        tracing::info!(
+            id = entry.id,
+            url = entry.model_url,
+            "downloading classifier"
+        );
+        fetch_verified(&client, entry.model_url, entry.model_sha256, &model_path)?;
+        tracing::info!(id = entry.id, path = %model_path.display(), "classifier verified and installed");
+    }
 
     let labels_path = match (entry.labels_url, entry.labels_embedded, entry.labels_sha256) {
         (Some(url), None, Some(sha)) => {
@@ -557,7 +609,7 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
                 .filter(|e| e.len() <= 4)
                 .unwrap_or("csv");
             let path = dest_dir.join(format!("{}_labels.{ext}", entry.id));
-            fetch_verified(&client, url, sha, &path)?;
+            fetch_unless_installed(&client, url, sha, &path)?;
             Some(path)
         }
         (None, Some(text), Some(sha)) => {
@@ -939,6 +991,48 @@ mod tests {
             !dest.with_extension("part").exists(),
             "the staging file must be renamed away, not left beside the real one"
         );
+    }
+
+    /// Installing again is cheap and safe: a file that already hashes to the
+    /// pinned digest is not fetched (the URL here is unreachable, so a fetch
+    /// would fail), and one that does not is fetched again rather than trusted
+    /// for having the right name.
+    #[test]
+    fn a_file_that_already_verifies_is_not_downloaded_again_and_a_damaged_one_is() {
+        const BODY: &[u8] = b"already on the disk";
+        let expected: &'static str = {
+            use sha2::{Digest as _, Sha256};
+            use std::fmt::Write as _;
+            let mut hex = String::new();
+            for b in &Sha256::digest(BODY) {
+                let _ = write!(hex, "{b:02x}");
+            }
+            Box::leak(hex.into_boxed_str())
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        std::fs::write(&dest, BODY).expect("seed");
+
+        let fetched = super::fetch_unless_installed(
+            &test_client(),
+            "https://example.invalid/model.onnx",
+            expected,
+            &dest,
+        )
+        .expect("an intact file needs no network");
+        assert!(!fetched, "an intact file must not be fetched again");
+        assert_eq!(std::fs::read(&dest).expect("read"), BODY);
+
+        // The counterpart: the same name holding other bytes is not trusted.
+        std::fs::write(&dest, b"truncated").expect("damage");
+        let err = super::fetch_unless_installed(
+            &test_client(),
+            "https://example.invalid/model.onnx",
+            expected,
+            &dest,
+        )
+        .expect_err("a damaged file must be fetched, and here the fetch fails");
+        assert!(matches!(err, InstallError::Network(_)), "{err:?}");
     }
 
     /// A network failure leaves nothing behind either.
