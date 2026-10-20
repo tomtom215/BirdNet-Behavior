@@ -159,7 +159,7 @@ rubato = "5.0.1"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
-ort = { version = "2.0.0-rc.14", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs"] }
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs"] }
 # Pulled in transitively through ort's `ndarray` feature; tracked here so the
 # declared version matches what the lockfile resolves.
 ndarray = "0.17"
