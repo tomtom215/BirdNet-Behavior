@@ -992,8 +992,9 @@ pub struct Cli {
 
     /// Frequency shift applied to extracted audio clips in Hz (0 = disabled).
     ///
-    /// Shifts the pitch of saved detection clips by the given number of Hz.
-    /// Positive raises the pitch, negative lowers it.
+    /// Shifts every frequency in a saved detection clip by the given number of
+    /// Hz (a shift, not a ratio: an 8 kHz song at -3000 is heard at 5 kHz), and
+    /// leaves the clip's length alone. Positive raises, negative lowers.
     ///
     /// For age-related high-frequency hearing loss the useful direction is
     /// **negative**: it brings warbler and kinglet song, which lives above
@@ -1001,8 +1002,9 @@ pub struct Cli {
     /// (Earlier releases documented this backwards — see
     /// `birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ`.)
     ///
-    /// Requires ffmpeg or sox. `BirdNET-Pi` equivalent: `FREQ_SHIFT` +
-    /// `FREQ_SHIFT_AMOUNT` config options.
+    /// Requires ffmpeg 4.3 or newer (its `afreqshift` filter); without one the
+    /// clip is saved unshifted and a warning says so. `BirdNET-Pi` equivalent:
+    /// its `FREQSHIFT_*` options, which scale by a ratio instead.
     #[arg(long, default_value = "0", env = "BIRDNET_FREQ_SHIFT_HZ")]
     pub freq_shift_hz: i32,
 

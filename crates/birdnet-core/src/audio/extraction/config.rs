@@ -41,9 +41,13 @@ pub struct ExtractionConfig {
     /// hearing loss the useful direction is negative — see
     /// [`super::ACCESSIBILITY_SHIFT_HZ`], which records why, and what this
     /// comment used to claim.
-    /// Implemented via ffmpeg `asetrate`+`aresample` filter or sox `pitch` effect.
+    /// A shift in hertz: every component moves by this many Hz, so `-3000`
+    /// brings an 8 kHz song to 5 kHz. Implemented with ffmpeg's `afreqshift`
+    /// (ffmpeg 4.3 or newer); with no working ffmpeg the clip is kept unshifted
+    /// and a warning says so.
     ///
-    /// BirdNET-Pi equivalent: `FREQ_SHIFT` config option with sox/rubberband.
+    /// BirdNET-Pi equivalent: its `FREQSHIFT_*` options, which scale pitch by a
+    /// ratio (ffmpeg `rubberband`) or a number of cents (sox).
     pub freq_shift_hz: i32,
     /// Extra seconds of audio before the detection, on top of the symmetric
     /// lead-in that [`Self::extraction_length`] already implies.

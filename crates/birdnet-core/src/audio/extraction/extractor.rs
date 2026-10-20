@@ -231,12 +231,8 @@ impl Extractor {
                     "_shifted_{}",
                     wav_path.file_name().unwrap_or_default().to_string_lossy()
                 ));
-                let shift_ok = apply_freq_shift(
-                    &wav_path,
-                    &shifted_path,
-                    audio.sample_rate,
-                    self.config.freq_shift_hz,
-                );
+                let shift_ok =
+                    apply_freq_shift(&wav_path, &shifted_path, self.config.freq_shift_hz);
                 if shift_ok {
                     let _ = std::fs::remove_file(&wav_path);
                     if self.config.target_format.needs_conversion() {
@@ -1531,8 +1527,8 @@ mod tests {
     /// applied.
     ///
     /// The clip is read back as audio, because pitch is what the setting is for. The
-    /// source is a 1 kHz tone; a shift of -3000 Hz at 48 kHz resamples by
-    /// 45000/48000, which brings it to 937.5 Hz. The baseline is the same extraction
+    /// source is a 1 kHz tone; a shift of -500 Hz brings it to 500 Hz (a shift in
+    /// hertz, not a ratio: see `convert::freq_shift_filter`). The baseline is the same extraction
     /// with no shift, so a tone the measurement misjudges cannot pass, and the
     /// directory is listed so a temporary file left beside the clip (the unshifted
     /// WAV, `_shifted_*`) cannot go unseen on either path.
@@ -1563,7 +1559,7 @@ mod tests {
             (clip, out_dir)
         };
         let (plain, plain_dir) = extract("plain", 0);
-        let (shifted, shifted_dir) = extract("shifted", -3_000);
+        let (shifted, shifted_dir) = extract("shifted", -500);
 
         for (clip, dir) in [(&plain, &plain_dir), (&shifted, &shifted_dir)] {
             assert_eq!(clip.format, AudioFormat::Wav, "{clip:?}");
@@ -1584,6 +1580,18 @@ mod tests {
             );
         }
 
+        // A shifted clip is tagged like any other: ffmpeg used to name itself in
+        // an INFO chunk of its own, which made the tag writer leave the file
+        // alone, so a shifted WAV came out with no species, confidence or date.
+        for (name, clip) in [("plain", &plain), ("shifted", &shifted)] {
+            let bytes = std::fs::read(&clip.path).expect("read clip");
+            let needle = b"Pica pica";
+            assert!(
+                bytes.windows(needle.len()).any(|w| w == needle),
+                "the {name} clip carries no species tag in its INFO chunk"
+            );
+        }
+
         let plain_hz = tone_hz(&plain.path);
         let shifted_hz = tone_hz(&shifted.path);
         assert!(
@@ -1591,8 +1599,8 @@ mod tests {
             "the unshifted clip should keep the 1 kHz source tone, measured {plain_hz:.1} Hz"
         );
         assert!(
-            (shifted_hz - 937.5).abs() < 20.0,
-            "a -3000 Hz shift at 48 kHz should bring 1 kHz to ~937.5 Hz, measured \
+            (shifted_hz - 500.0).abs() < 20.0,
+            "a -500 Hz shift should bring 1 kHz to ~500 Hz, measured \
              {shifted_hz:.1} Hz (unshifted: {plain_hz:.1} Hz)"
         );
     }

@@ -1,7 +1,7 @@
 //! Audio format conversion and frequency shifting.
 //!
 //! Handles conversion from WAV to MP3, FLAC, and OGG using ffmpeg or sox,
-//! and frequency shifting for accessibility.
+//! and frequency shifting for accessibility (ffmpeg's `afreqshift`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,44 +36,29 @@ const fn ffmpeg_codec_args(format: AudioFormat) -> Option<&'static [&'static str
     }
 }
 
-/// The resampling rate that shifts every frequency component by `shift_hz`.
+/// The ffmpeg filter that shifts every frequency component by `shift_hz`.
 ///
-/// ffmpeg's `asetrate` filter reinterprets the sample rate (speeding up or
-/// slowing down the audio), which shifts pitch; `aresample` then restores
-/// the original rate. A positive `shift_hz` raises pitch and a negative one
-/// lowers it.
+/// `afreqshift` is a true shift in hertz (single-sideband: every component
+/// moves by the same number of Hz, so an 8 kHz song at `-3000` is heard at
+/// 5 kHz) and leaves the clip's length and tempo alone. A positive shift raises
+/// every component and a negative one lowers it.
 ///
 /// **For hearing loss, the useful direction is *down*.** See
-/// [`ACCESSIBILITY_SHIFT_HZ`]; this comment used to say the opposite.
+/// [`ACCESSIBILITY_SHIFT_HZ`].
 ///
-/// Pulled out of [`apply_freq_shift`] so the arithmetic (the `*`, `+`, `/`
-/// that cargo-mutants flips) is observable in a unit test rather than only
-/// reachable through a live ffmpeg run.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless
-)]
-fn freq_shift_resample_rate(sample_rate: u32, shift_hz: i32) -> u32 {
-    (f64::from(sample_rate) * (1.0 + f64::from(shift_hz) / f64::from(sample_rate))) as u32
-}
-
-/// The sox `pitch` shift, in cents, equivalent to [`freq_shift_resample_rate`].
+/// This used to be `asetrate=<rate + shift>,aresample=<rate>`, which the
+/// comments called a shift in Hz that preserves duration. It is neither: it
+/// scales every frequency by `(rate + shift) / rate` (so `-3000` at 48 kHz moved
+/// 8 kHz to 7.5 kHz, still out of reach of the listener it was written for) and
+/// it plays the clip back slower by the same ratio (measured with ffmpeg 6.1.1
+/// on an 8 kHz tone: 7 500 Hz and 3.2 s out of 3.0 s in).
 ///
-/// 1200 cents = one octave, so a doubling of frequency is `+1200`. Same
-/// extraction rationale as [`freq_shift_resample_rate`]: the `1200.0 * log2`
-/// arithmetic is unit-tested directly.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless
-)]
-fn freq_shift_cents(sample_rate: u32, shift_hz: i32) -> i32 {
-    (1200.0_f64 * (1.0 + f64::from(shift_hz) / f64::from(sample_rate)).log2()) as i32
+/// Pulled out of [`apply_freq_shift`] so the string is observable in a unit test
+/// rather than only reachable through a live ffmpeg run. Needs ffmpeg 4.3 or
+/// newer, which is where `afreqshift` appeared; with an older one the filter is
+/// unknown, ffmpeg exits non-zero and [`apply_freq_shift`] reports failure.
+fn freq_shift_filter(shift_hz: i32) -> String {
+    format!("afreqshift=shift={shift_hz}")
 }
 
 /// Convert a WAV file to the target format using ffmpeg (preferred) or sox,
@@ -221,10 +206,13 @@ fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), Extractio
 /// settings.
 ///
 /// −3000 Hz rather than upstream's halving because this project's shift is
-/// linear (`asetrate`) rather than a ratio: it moves an 8 kHz song to 5 kHz
+/// linear (`afreqshift`, see [`freq_shift_filter`]) rather than a ratio: it
+/// moves an 8 kHz song to 5 kHz — measured, on an 8 kHz tone, in
+/// `apply_freq_shift_moves_the_pitch_by_that_many_hertz_and_keeps_the_length` —
 /// while leaving a 2 kHz blackbird at a strange but still recognisable pitch.
-/// It is a starting point offered in the UI, not a limit — any value is
-/// accepted.
+/// (The implementation this replaced was documented in these words and moved
+/// 8 kHz to 7.5 kHz: it was a ratio all along.) It is a starting point offered
+/// in the UI, not a limit — any value is accepted.
 pub const ACCESSIBILITY_SHIFT_HZ: i32 = -3000;
 
 /// The sign of [`ACCESSIBILITY_SHIFT_HZ`], enforced at compile time.
@@ -241,40 +229,37 @@ const _: () = assert!(
 
 /// Hard cap (in seconds) on freq-shift output length.
 ///
-/// An `asetrate`/`aresample` pitch shift is duration-preserving, so a shift of
-/// an extracted clip (bounded by the ~6 s `extraction_length`) is never longer
+/// A frequency shift does not change a clip's length, so the shift of an
+/// extracted clip (bounded by the ~6 s `extraction_length`) is never longer
 /// than its input. Passing ffmpeg `-t` with this cap is **field-hardening**: a
-/// degenerate resample rate — whether from a misconfiguration in the field or,
-/// in CI, a cargo-mutants body mutant that forces `asetrate=1` — would
-/// otherwise make ffmpeg reinterpret the clip at ~1 Hz and expand it ~48000x
-/// into a runaway, disk-filling file. 30 s is generous headroom over any real
-/// clip while keeping even the pathological case a sub-second ffmpeg run.
+/// degenerate filter — whether from a misconfiguration in the field or, in CI, a
+/// cargo-mutants body mutant — could otherwise stretch the clip into a runaway,
+/// disk-filling file. 30 s is generous headroom over any real clip while keeping
+/// even the pathological case a sub-second ffmpeg run.
 const MAX_FREQ_SHIFT_OUTPUT_SECS: u32 = 30;
 
-/// Apply frequency shifting to a WAV file using ffmpeg (preferred) or sox.
+/// Apply frequency shifting to a WAV file using ffmpeg.
 ///
-/// Uses the `asetrate` + `aresample` ffmpeg filter to shift pitch by the given
-/// number of Hz, or the sox `pitch` effect as a fallback. The ffmpeg output is
-/// capped at [`MAX_FREQ_SHIFT_OUTPUT_SECS`] so a bad rate can never produce a
-/// runaway file.
+/// Shifts every component by `shift_hz` ([`freq_shift_filter`]). The output is
+/// capped at [`MAX_FREQ_SHIFT_OUTPUT_SECS`] so a bad filter can never produce a
+/// runaway file, and carries no metadata of its own: ffmpeg otherwise writes a
+/// `LIST`/`INFO` chunk naming its encoder, and a WAV that already has one is a
+/// WAV [`super::metadata::embed_wav_metadata`] leaves alone, so a shifted clip
+/// came out with no species, confidence or date inside it.
 ///
-/// Returns `true` on success, `false` if both tools fail or are unavailable.
-/// BirdNET-Pi equivalent: `FREQ_SHIFT` config applied via sox/rubberband.
-pub(super) fn apply_freq_shift(
-    input_path: &Path,
-    output_path: &Path,
-    sample_rate: u32,
-    shift_hz: i32,
-) -> bool {
-    // ffmpeg approach: use asetrate to shift the sample rate, then resample back.
-    // This is equivalent to speeding up/slowing down, shifting all frequencies.
-    // shift_hz > 0 shifts up, < 0 shifts down; down is the accessibility
-    // direction (see `ACCESSIBILITY_SHIFT_HZ`).
-    let new_rate = freq_shift_resample_rate(sample_rate, shift_hz);
-    let filter = format!("asetrate={new_rate},aresample={sample_rate}");
+/// There is no sox fallback. sox's `pitch` effect scales frequencies by a ratio
+/// and cannot shift by an amount of hertz, so it would have written a different
+/// clip from the one the setting describes; a failed shift is reported and the
+/// caller keeps the unshifted clip, and says so.
+///
+/// Returns `true` on success, `false` if ffmpeg is unavailable or fails.
+/// BirdNET-Pi equivalent: `FREQSHIFT_*` applied through ffmpeg's `rubberband`
+/// (a ratio) or sox's `pitch`; this project's shift is in hertz.
+pub(super) fn apply_freq_shift(input_path: &Path, output_path: &Path, shift_hz: i32) -> bool {
+    let filter = freq_shift_filter(shift_hz);
     let max_secs = MAX_FREQ_SHIFT_OUTPUT_SECS.to_string();
 
-    let ffmpeg_ok = run_with_timeout(
+    run_with_timeout(
         Command::new("ffmpeg").args([
             "-y",
             "-i",
@@ -283,27 +268,16 @@ pub(super) fn apply_freq_shift(
             &filter,
             "-t",
             &max_secs,
+            "-map_metadata",
+            "-1",
+            "-fflags",
+            "+bitexact",
+            "-flags:a",
+            "+bitexact",
             "-loglevel",
             "error",
             &output_path.to_string_lossy(),
         ]),
-        CONVERTER_TIMEOUT,
-    )
-    .is_ok_and(|out| out.status.success());
-
-    if ffmpeg_ok {
-        return true;
-    }
-
-    // sox fallback: use pitch effect (shift in cents, ~100 cents = 1 semitone).
-    // 1 Hz shift ~ 100 * log2(1 + shift_hz / sample_rate) * 100 cents (approximation).
-    let cents = freq_shift_cents(sample_rate, shift_hz);
-
-    run_with_timeout(
-        Command::new("sox")
-            .arg(input_path)
-            .arg(output_path)
-            .args(["pitch", &cents.to_string()]),
         CONVERTER_TIMEOUT,
     )
     .is_ok_and(|out| out.status.success())
@@ -313,7 +287,7 @@ pub(super) fn apply_freq_shift(
 mod tests {
     use super::{
         AudioFormat, ExtractionError, apply_freq_shift, convert_audio_format, convert_with_sox,
-        ffmpeg_codec_args, freq_shift_cents, freq_shift_resample_rate,
+        ffmpeg_codec_args, freq_shift_filter,
     };
     use hound::{SampleFormat, WavSpec, WavWriter};
     use std::path::Path;
@@ -386,47 +360,20 @@ mod tests {
         assert_eq!(ffmpeg_codec_args(AudioFormat::Wav), None);
     }
 
-    // ── freq_shift_resample_rate ─────────────────────────────────────────
+    // ── freq_shift_filter ────────────────────────────────────────────────
 
+    /// The filter is a shift in hertz, not a sample-rate reinterpretation.
+    ///
+    /// The string alone cannot show that (the next tests measure the audio), but
+    /// it pins the two things that were wrong together: the sign carries
+    /// through, and no `asetrate` is in it, because `asetrate` followed by
+    /// `aresample` scales frequencies by a ratio and slows the clip.
     #[test]
-    fn freq_shift_resample_rate_zero_is_identity() {
-        assert_eq!(freq_shift_resample_rate(48_000, 0), 48_000);
+    fn freq_shift_filter_is_a_shift_in_hertz() {
+        assert_eq!(freq_shift_filter(-3_000), "afreqshift=shift=-3000");
+        assert_eq!(freq_shift_filter(500), "afreqshift=shift=500");
+        assert!(!freq_shift_filter(-3_000).contains("asetrate"));
     }
-
-    #[test]
-    fn freq_shift_resample_rate_positive_raises() {
-        // 48000 * (1 + 500/48000) = 48000 + 500 = 48500. Catches `*`→`/`,
-        // `+`→`-`, and the `1.0`→`0.0`/`2.0` literal mutants.
-        assert_eq!(freq_shift_resample_rate(48_000, 500), 48_500);
-    }
-
-    #[test]
-    fn freq_shift_resample_rate_negative_lowers() {
-        assert_eq!(freq_shift_resample_rate(48_000, -500), 47_500);
-    }
-
-    // ── freq_shift_cents ─────────────────────────────────────────────────
-
-    #[test]
-    fn freq_shift_cents_zero_is_zero() {
-        assert_eq!(freq_shift_cents(48_000, 0), 0);
-    }
-
-    #[test]
-    fn freq_shift_cents_octave_up_is_1200() {
-        // shift == sample_rate doubles the rate → log2(2) = 1 → 1200 cents.
-        // Catches the `1200.0`→`0.0`/`2400.0` literal mutants.
-        assert_eq!(freq_shift_cents(48_000, 48_000), 1_200);
-    }
-
-    #[test]
-    fn freq_shift_cents_fifth_distinguishes_mul_from_div() {
-        // 1200 * log2(1.5) ≈ 701. `*`→`/` gives ≈ 2051, `*`→`+` gives ≈ 1201;
-        // both differ from 701, so this single value pins the operator.
-        assert_eq!(freq_shift_cents(48_000, 24_000), 701);
-    }
-
-    // ── convert_audio_format ─────────────────────────────────────────────
 
     #[test]
     fn convert_audio_format_flac_succeeds_and_removes_wav() {
@@ -519,6 +466,54 @@ mod tests {
 
     // ── apply_freq_shift ─────────────────────────────────────────────────
 
+    /// Write a mono 16-bit tone, loud enough that zero crossings are clean.
+    fn write_tone_wav(path: &Path, secs: u32, sample_rate: u32, hz: f64) {
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(path, spec).expect("create wav");
+        for i in 0..secs * sample_rate {
+            let t = f64::from(i) / f64::from(sample_rate);
+            #[allow(clippy::cast_possible_truncation)]
+            let sample = (12_000.0 * (2.0 * std::f64::consts::PI * hz * t).sin()) as i16;
+            writer.write_sample(sample).expect("write");
+        }
+        writer.finalize().expect("finalize");
+    }
+
+    /// The pitch of a mono 16-bit WAV in Hz, from its zero crossings.
+    #[allow(clippy::cast_precision_loss)]
+    fn tone_hz(path: &Path) -> f64 {
+        let mut reader = hound::WavReader::open(path).expect("open wav");
+        let rate = f64::from(reader.spec().sample_rate);
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .map(|s| s.expect("sample"))
+            .collect();
+        let crossings = samples
+            .windows(2)
+            .filter(|w| (w[0] < 0) != (w[1] < 0))
+            .count();
+        crossings as f64 / 2.0 / (samples.len() as f64 / rate)
+    }
+
+    /// The ids of the RIFF chunks in a WAV file, in order.
+    fn riff_chunk_ids(path: &Path) -> Vec<String> {
+        let bytes = std::fs::read(path).expect("read wav");
+        let mut ids = Vec::new();
+        let mut at = 12;
+        while at + 8 <= bytes.len() {
+            ids.push(String::from_utf8_lossy(&bytes[at..at + 4]).into_owned());
+            let size =
+                u32::from_le_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]]);
+            at += 8 + size as usize + (size as usize & 1);
+        }
+        ids
+    }
+
     #[test]
     fn apply_freq_shift_succeeds_and_preserves_duration() {
         if !ffmpeg_available() {
@@ -528,40 +523,93 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let input = tmp.path().join("in.wav");
         let output = tmp.path().join("out.wav");
-        // 2 s input: a pitch shift is duration-preserving, so the output must
-        // come back ~2 s. Asserting that pins MAX_FREQ_SHIFT_OUTPUT_SECS — a
-        // mutant shrinking the cap to 1 s truncates the output and fails the
-        // duration check. The cap also keeps this test (and the extractor's
-        // freq-shift test, which calls the same function) bounded under a
-        // `freq_shift_resample_rate -> 1` mutant: ffmpeg stops at the 30 s
-        // cap (~1 s of work) instead of expanding the clip into gigabytes.
+        // 2 s input: a frequency shift leaves the length alone, so the output
+        // must come back 2 s, to within a frame or two. Asserting that pins
+        // MAX_FREQ_SHIFT_OUTPUT_SECS (a mutant shrinking the cap to 1 s
+        // truncates the output) and rules out the sample-rate trick this used
+        // to be, which returned 2.13 s for a 500 Hz shift at 48 kHz.
         write_silent_wav(&input, 2.0, 48_000);
 
         assert!(
-            apply_freq_shift(&input, &output, 48_000, 500),
-            "freq shift must succeed via ffmpeg's early-return path"
+            apply_freq_shift(&input, &output, 500),
+            "freq shift must succeed through ffmpeg"
         );
         assert!(output.exists(), "the shifted output should be written");
         let dur = wav_duration_secs(&output);
         assert!(
-            (dur - 2.0).abs() < 0.5,
-            "a duration-preserving shift should yield ~2 s of audio, got {dur} s"
+            (dur - 2.0).abs() < 0.02,
+            "a frequency shift keeps the clip's length: ~2 s expected, got {dur} s"
+        );
+    }
+
+    /// The setting does what its name says: every component moves by that many
+    /// hertz, in the stated direction, and nothing else about the clip moves.
+    ///
+    /// Measured on audio, not read off the filter string. An 8 kHz song shifted
+    /// by -3000 Hz (the accessibility preset) has to be heard at 5 kHz; the
+    /// `asetrate`/`aresample` pair this replaced gave 7.5 kHz and a clip 6.7 %
+    /// longer, which is a pitch change a listener with high-frequency hearing
+    /// loss cannot use. The counterpart shifts up, so a filter that only ever
+    /// lowers cannot pass.
+    #[test]
+    fn apply_freq_shift_moves_the_pitch_by_that_many_hertz_and_keeps_the_length() {
+        if !ffmpeg_available() {
+            eprintln!("SKIP: ffmpeg not available");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        for (tone, shift, want) in [(8_000.0, -3_000, 5_000.0), (4_000.0, 1_000, 5_000.0)] {
+            let input = tmp.path().join(format!("in_{tone}.wav"));
+            let output = tmp.path().join(format!("out_{tone}.wav"));
+            write_tone_wav(&input, 2, 48_000, tone);
+            assert!(apply_freq_shift(&input, &output, shift), "shift {shift}");
+            let heard = tone_hz(&output);
+            assert!(
+                (heard - want).abs() < 100.0,
+                "{tone} Hz shifted by {shift} Hz should be heard at {want} Hz, got {heard:.0} Hz"
+            );
+            let dur = wav_duration_secs(&output);
+            assert!(
+                (dur - 2.0).abs() < 0.02,
+                "{tone} Hz shifted by {shift} Hz changed the length: {dur} s"
+            );
+        }
+    }
+
+    /// ffmpeg names itself in a `LIST`/`INFO` chunk unless told not to, and a
+    /// WAV that has one is left alone by the tag writer, so a shifted clip lost
+    /// its species, confidence and date. The shifted file is the audio and nothing
+    /// else; the extractor adds the tags afterwards.
+    #[test]
+    fn a_shifted_wav_carries_no_chunk_of_ffmpegs_own() {
+        if !ffmpeg_available() {
+            eprintln!("SKIP: ffmpeg not available");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("in.wav");
+        let output = tmp.path().join("out.wav");
+        write_tone_wav(&input, 1, 48_000, 8_000.0);
+        assert!(apply_freq_shift(&input, &output, -3_000));
+        assert_eq!(
+            riff_chunk_ids(&output),
+            ["fmt ", "data"],
+            "only the format and the samples: no LIST chunk written by the encoder"
         );
     }
 
     #[test]
-    fn apply_freq_shift_returns_false_when_no_tool_can_process_input() {
+    fn apply_freq_shift_returns_false_when_ffmpeg_cannot_process_input() {
         // A non-existent input makes ffmpeg exit non-zero (or fail to spawn);
-        // with sox unavailable the function returns false rather than
-        // panicking. Covers the sox-fallback branch and the final
-        // `is_ok_and(success)` returning false. Runs unconditionally.
+        // the function returns false rather than panicking, and the caller
+        // keeps the unshifted clip. Runs unconditionally.
         let tmp = tempfile::tempdir().unwrap();
         let input = tmp.path().join("does-not-exist.wav");
         let output = tmp.path().join("out.wav");
 
         assert!(
-            !apply_freq_shift(&input, &output, 48_000, 500),
-            "freq shift must report failure when no tool can process the input"
+            !apply_freq_shift(&input, &output, 500),
+            "freq shift must report failure when ffmpeg cannot process the input"
         );
     }
 }
