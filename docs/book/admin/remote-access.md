@@ -143,6 +143,7 @@ server {
         proxy_pass http://127.0.0.1:8502;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;          # WebSocket (live feed,
         proxy_set_header Connection "upgrade";           # spectrogram, kiosk)
     }
@@ -162,6 +163,14 @@ server {
 > `X-Real-IP` itself, have it clear one a visitor sends (nginx:
 > `proxy_set_header X-Real-IP "";`), so nobody can spend the proxy's own
 > sign-in throttle by forging it.
+
+> **Keep the `X-Forwarded-Proto` line too.** The station marks its sign-in
+> cookie `Secure` when the request reached it over HTTPS: on its own TLS
+> listener, when a trusted proxy says so with `X-Forwarded-Proto` (or
+> `Forwarded: proto=`), or when `BNB_PUBLIC_URL` is an `https://` address and
+> the request was addressed to that host. A proxy that sends none of these, with
+> no `BNB_PUBLIC_URL` set, gets a cookie without `Secure`, which a browser will
+> also send over plain HTTP.
 
 > **WebSocket matters here.** The live dashboard feed, the spectrogram, and kiosk mode all use WebSockets (`/api/v2/ws/detections` and `/api/v2/ws/spectrogram`). Make sure your proxy forwards the `Upgrade`/`Connection` headers (shown above) or those features will silently stall.
 
@@ -197,6 +206,7 @@ location /birdnet/ {
     proxy_pass http://127.0.0.1:8502;   # no trailing path: adding one makes
     proxy_set_header Host $host;        # nginx strip the prefix
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
 }
@@ -244,7 +254,7 @@ By default the API allows **no** cross-origin reads — a website you happen to 
 BIRDNET_CORS_ALLOWED_ORIGINS=https://dashboard.example.com
 ```
 
-State-changing requests are protected by a CSRF guard regardless of this setting.
+List origins by name; `*` is not supported. The station logs an error, ignores that entry and keeps the others, because a wildcard would let any website read the API. State-changing requests are protected by a CSRF guard regardless of this setting.
 
 ## A safer alternative: a private tunnel
 

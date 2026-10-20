@@ -180,9 +180,15 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 | `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `whitelist.add`, `whitelist.remove`, `threshold.set`, `threshold.delete`, `detections.delete`, `clips.delete` |
 | `audio.` | `source.create`, `source.update`, `source.delete`, `source.restart`, `source.listen_default` |
 | `rule.` | `create`, `delete`, `toggle`, `import` |
-| `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run` |
+| `detection.` | `delete`, `lock`, `unlock`, `review`, `relabel`, `comment.add`, `comment.delete` |
+| `quarantine.` | `approve`, `reject`, `delete` |
+| `image.` | `blacklist.add`, `blacklist.remove` |
+| `notification.` | `prune` |
+| `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run`, `backup.delete` |
 | `system.` | `restart`, `update.apply` |
 | `today.` | `layout.change` (the block and the move, e.g. `nudge hide`) |
+
+The `detection.` rows are written for the same change whichever way it was made, and say which way: `via=api` for the write API, otherwise `via=` the page (`today`, `recordings`, `search`, `review`, `detection`). Search's bulk bar records one row per detection it changed. A change that did not happen (a row already gone, a write the database refused) records nothing; a refused write is in the log at `warn`.
 
 `species.detections.delete` and `species.clips.delete` are the bulk actions on
 [Species storage](settings.md#species-storage). Each records how many rows it

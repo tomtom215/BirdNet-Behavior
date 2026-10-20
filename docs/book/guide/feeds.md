@@ -31,7 +31,7 @@ BNB_BASE_URL=http://birdnet.local        # mDNS on the LAN
 BNB_BASE_URL=https://birds.example.com    # behind a reverse proxy
 ```
 
-If unset it defaults to `http://localhost:8502` (the server's own port). You can also override per-request with `?base=…`, and cap item counts with `?limit=…`.
+If unset it defaults to `http://localhost:8502` (the server's own port). A request can name its own base with `?base=…`, which is how a reverse proxy gets the scheme and path prefix right, but only for an address the station already knows: the host the request was addressed to, or the host of `BNB_PUBLIC_URL` or `BNB_BASE_URL`. Any other `?base=` is ignored and the default is used, so a feed address cannot be made to point at someone else's site. If a proxy rewrites `Host` and your readers pass `?base=`, set `BNB_BASE_URL`. Cap item counts with `?limit=…`.
 
 ## Caching
 

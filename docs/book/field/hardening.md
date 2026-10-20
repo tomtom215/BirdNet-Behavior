@@ -208,6 +208,10 @@ allow it explicitly:
 BIRDNET_CORS_ALLOWED_ORIGINS=https://dashboard.example.com,https://lab.example.com
 ```
 
+`*` is not supported: the station logs an error and ignores that entry (it
+would let any website read the API), and with no valid origin left the policy is
+the default, same-origin only.
+
 State-changing requests are additionally protected by a stateless CSRF guard
 regardless of this setting.
 

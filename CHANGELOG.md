@@ -335,6 +335,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin form has no field for it yet. Observed failing: with the gate made to always
   fire, 12 of its 13 tests fail and the processor posts seven times where three are
   expected.
+- **Station Health says when the data lives on the container's own layer.** A
+  `docker run` with nothing mounted at the data directory keeps the database and
+  recordings on the container's writable layer, where recreating the container
+  (an image upgrade is enough) deletes them, and no existing probe had anything to say
+  about a directory that is writable, has space and was never a mount. The banner now
+  names it when the process is in a container and the mount holding the data
+  directory is the image-layer root (overlay, aufs, fuse-overlayfs); a volume, a bind
+  mount, a tmpfs or a Pi with an overlay root is not flagged. Tested against
+  `mountinfo` fixtures modelled on Docker's output, not in a real container, and not
+  yet wired into `--doctor`.
 
 ### Changed
 
@@ -1317,6 +1327,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client. `--doctor` gains a "BirdWeather location" check for the same condition, and
   uploads an earlier version had parked at 0, 0 are dropped with a warning instead
   of replayed once the station gets a position.
+- **A failed read is no longer published as "nothing" on the API and the admin pages.**
+  `/api/v2/species/tracking` answered 200 with no species and `/api/v2/soundlevel`
+  "no observations yet" (both now 500); the data-quality panels drew "No detections in
+  database" and "Database quality looks good!"; Species storage drew "0 B across 0
+  clips"; the filter-test page, both rule lists, the notification history, the image
+  blacklist and the import history drew empty states. They show the could-not-load
+  state instead, each panel on its own.
+- **A refused bulk species action no longer reports "0 removed" and deletes the audio.**
+  The clips handler marked rows reclaimed, defaulted a failure to zero, and went on
+  to unlink every file of the species. It now stops at the first refusal, answers 200
+  with a toast (htmx discards a 5xx body) saying only what is certain, and writes no
+  audit row for a change that did not happen.
+- **An unreadable species list is no longer replaced by the one name just added.**
+  The include, exclude and whitelist handlers read the stored list with `.ok()`, so a
+  read error looked like "never written" and forty excluded species became one. Only
+  a list that was never written is empty now; the six handlers, Species storage and
+  the suspect-species report say so when a list cannot be read or written. The
+  daemon still treats an unreadable list as empty (logged at `warn`).
+- **`BIRDNET_CORS_ALLOWED_ORIGINS=*` no longer aborts the service at boot.**
+  tower-http panics on a wildcard and the workspace builds with `panic = "abort"`, so
+  the service restarted into the same panic. The entry is dropped with an `error`
+  log, valid entries are kept, and with none left the policy is same-origin only. A
+  wildcard is not turned into "any origin": that is what the setting's default
+  exists to prevent.
+- **Camera passwords stay out of the live-stream log.** `livestream.rs` logged
+  ffmpeg's stderr and the source's device at `warn`/`info` verbatim, and ffmpeg
+  names its RTSP input in its errors; both sites now redact as the capture path does.
+- **The audit log records the page-side mutations the API's already recorded.**
+  Deleting, locking, unlocking and relabelling from the Today list, the Clips page and
+  the Search bulk bar, review verdicts, quarantine approve/reject/delete, image
+  blacklist add/remove, notification prune, backup delete and the suspect-species
+  exclude each leave a row with the signed-in user as actor, only when the write took
+  effect. New action names: `detection.relabel`, `quarantine.*`, `image.blacklist.*`,
+  `notification.prune`, `data.backup.delete`.
 
 ### Security
 
@@ -1553,6 +1597,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password now logs one `warn` naming what is open, to whom, and how to close it. A
   station whose owner has chosen a password says nothing. The first-run flow itself
   is unchanged.
+- **The session cookie's `Secure` flag follows the request, not `BNB_PUBLIC_URL`.**
+  It came from the scheme of that variable alone, so `--tls-mode` without it issued
+  a cookie without `Secure` on an encrypted connection (and cookies are not
+  port-scoped, so it also travelled to the plain-HTTP listener), while an `https://`
+  public URL made every sign-in `Secure`, including one from `http://192.168.1.5:8502`
+  where the browser drops the cookie and the sign-in loops. A request is HTTPS now
+  when it arrived on the station's own TLS listener, when a trusted proxy says so
+  (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or when `BNB_PUBLIC_URL`
+  is `https://` and the request's `Host` is that address. A reverse proxy should send
+  `X-Forwarded-Proto`; the nginx examples now do.
+- **A signed-out browser is no longer handed the private dashboard from cache.** The
+  service worker answers dashboard pages from cache first, and on a private station
+  that copy was the private page, returned before the server could say `303 /login`;
+  a sign-in form reached through a redirect was also cached under the page's own
+  address. The private-mode gate now marks what it serves, and its refusals,
+  `Cache-Control: no-store` (a handler's own value wins; an open station is
+  unchanged), and the worker refuses a redirected response.
+- **A feed address can no longer choose where its links lead.** `?base=` on
+  `/feeds/*` set the host of every item link, so a link on the station's own domain
+  could point at a phishing page. It is honoured only for the host the request was
+  addressed to or the host of `BNB_PUBLIC_URL`/`BNB_BASE_URL`; anything else falls back
+  to the default. A deployment whose proxy rewrites `Host` and whose readers pass
+  `?base=` must set `BNB_BASE_URL`. A lone carriage return in a species name no longer
+  starts a new iCalendar property.
 
 ## [0.17.1] - 2026-10-04
 
