@@ -18,7 +18,10 @@
 #   docker compose up -d
 #   open http://localhost:8502
 #
-# The BirdNET+ V3.0 model (~541 MB) is downloaded automatically on first run.
+# The classifier is installed automatically on first run: BirdNET V2.4 (~85 MB
+# with its range filter) for a new volume, the network BirdNET-Pi and birdnet-go
+# run; BIRDNET_CLASSIFIER=birdnet-v3 in .env selects the BirdNET+ V3.0 preview
+# (~560 MB) instead, and a volume that already runs it keeps it.
 # Set BIRDNET_SKIP_MODEL_DOWNLOAD=1 and mount your own model to skip this.
 # =============================================================================
 
@@ -95,6 +98,9 @@ services:
       BIRDNET_OVERLAP: ${BIRDNET_OVERLAP:-0.0}
       BIRDNET_SF_THRESH: ${BIRDNET_SF_THRESH:-0.03}
       BIRDNET_PRIVACY_THRESHOLD: ${BIRDNET_PRIVACY_THRESHOLD:-0.0}
+      # Not given a default here (an environment variable wins over the build's
+      # default, which is BirdNET-Pi's 10): set it in .env only to pin it.
+      # BIRDNET_PRIVACY_RANK
       BIRDNET_LANG: ${BIRDNET_LANG:-en}
       # Not given defaults here: an environment variable wins over
       # /admin/settings, so a default here made the page's choice of schedule
@@ -112,7 +118,10 @@ services:
       # BIRDNET_HEARTBEAT_URL
       # BIRDNET_SITENAME
 
-      # Model — entrypoint downloads automatically; override to bring your own
+      # Model — the entrypoint installs the classifier automatically; override
+      # to bring your own. BIRDNET_CLASSIFIER (birdnet-v24, the default for a new
+      # volume, or birdnet-v3) picks which; see .env.example.
+      # BIRDNET_CLASSIFIER
       # BIRDNET_SKIP_MODEL_DOWNLOAD
       # BIRDNET_MODEL
       # BIRDNET_LABELS
@@ -140,8 +149,11 @@ services:
     # -------------------------------------------------------------------------
     # Resource limits — the same ceiling as the systemd unit's MemoryMax. The
     # model is loaded into anonymous memory, which a limit cannot reclaim:
-    # measured with the V3.0 FP32 model and analytics on, ~575 MB at idle and
-    # ~650 MB while analysing. 512M killed the container as the model loaded.
+    # measured with the BirdNET+ V3.0 FP32 model (541 MB) and analytics on, ~575
+    # MB at idle and ~650 MB while analysing. 512M killed the container as the
+    # model loaded. The default BirdNET V2.4 model is a tenth of that size and
+    # has not been measured here; the ceiling stays sized for the V3.0 preview,
+    # which can be selected with BIRDNET_CLASSIFIER=birdnet-v3.
     # -------------------------------------------------------------------------
     deploy:
       resources:
@@ -153,10 +165,12 @@ services:
     # -------------------------------------------------------------------------
     # Health check — verifies the web UI is responding.
     #
-    # start_period is intentionally long: the BirdNET+ V3.0 model is ~541 MB
-    # and is downloaded from Zenodo the first time the container starts.
-    # On fibre that finishes in ~1 min; on slower connections it can take
-    # 10–15 min. During start_period, failing health checks are not counted
+    # start_period is intentionally long: the BirdNET+ V3.0 preview model is
+    # ~541 MB and is downloaded the first time a V3.0 container starts. On fibre
+    # that finishes in ~1 min; on slower connections it can take 10–15 min. The
+    # default BirdNET V2.4 (~85 MB with its range filter) takes a fraction of
+    # that, but one start_period serves both. During start_period, failing
+    # health checks are not counted
     # against the retry budget, so a slow first-run download won't cause the
     # container to be marked unhealthy or restarted mid-download. Subsequent
     # starts reuse the cached model in the named volume and come up almost

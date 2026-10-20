@@ -3,15 +3,30 @@
 # BirdNet-Behavior container entrypoint
 #
 # Responsibilities:
-#   1. Auto-download the BirdNET+ V3.0 model on first run only, with resume
-#      support, progress logging every 15 s, sha256 verification, and clear
-#      failure diagnostics. The model is pulled from the project's stable GitHub
-#      models release (sha256-verified), falling back to Zenodo (the upstream
-#      source) when that asset is absent or unreachable.
-#   2. Set container-appropriate defaults (listen on all interfaces).
-#   3. Exec the birdnet-behavior binary, forwarding any extra arguments.
+#   1. Choose the classifier (BirdNET V2.4 by default, the BirdNET+ V3.0 preview
+#      on request; an existing V3.0 volume stays on V3.0) and say which.
+#   2. Install its files on first run only. BirdNET V2.4 and its range filter
+#      are installed by the binary itself (`birdnet-behavior --install-model`,
+#      which checks every file's sha256 and size and renames it into place
+#      atomically); nothing in this script knows what they must hash to. The
+#      BirdNET+ V3.0 preview is downloaded here, with resume support, progress
+#      logging every 15 s and sha256 verification, from the project's stable
+#      GitHub models release, falling back to Zenodo (the upstream source) when
+#      that asset is absent or unreachable.
+#   3. Point the daemon at the species-occurrence filter that pairs with the
+#      classifier (the V2.4 range filter v2, or the V3.0 geomodel).
+#   4. Set container-appropriate defaults (listen on all interfaces).
+#   5. Exec the birdnet-behavior binary, forwarding any extra arguments.
 #
 # Environment variables:
+#   BIRDNET_CLASSIFIER          birdnet-v24 (BirdNET V2.4 + range filter v2) or
+#                               birdnet-v3 (BirdNET+ V3.0 preview + geomodel).
+#                               Unset: a new volume gets birdnet-v24; a volume
+#                               that already holds the V3.0 model keeps running
+#                               it, because an upgrade must never switch a
+#                               station's model under its history. This script
+#                               reads it and removes it before starting the
+#                               daemon, which does not.
 #   BIRDNET_MODEL_DIR           Model directory (default: /data/model)
 #   BIRDNET_SKIP_MODEL_DOWNLOAD Set to "1" to skip auto-download (both models)
 #   BIRDNET_METADATA_MODEL      Geomodel path; set it to opt out of the fetch
@@ -35,6 +50,9 @@ set -eu
 # exits 2 during argument parsing rather than meaning "no latitude". See
 # docker/strip-blank-env.sh for the full reasoning and the two exceptions.
 BNB_STRIP_LIB="${BNB_STRIP_LIB:-/usr/local/bin/strip-blank-env.sh}"
+# The daemon, which is also what installs BirdNET V2.4 (`--install-model`). A
+# variable so a test can put a stub there; nothing sets it in an image.
+BNB_BINARY="${BNB_BINARY:-/usr/local/bin/birdnet-behavior}"
 if [ ! -r "$BNB_STRIP_LIB" ]; then
     printf '[birdnet] ERROR: %s is missing from the image\n' "$BNB_STRIP_LIB" >&2
     exit 1
@@ -115,23 +133,129 @@ remote_status() {
 }
 
 # ---------------------------------------------------------------------------
-# Model paths
+# Model paths, the classifier choice, and the V3.0 pins
 # ---------------------------------------------------------------------------
 MODEL_DIR="${BIRDNET_MODEL_DIR:-/data/model}"
-MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
 
-# Primary origin: the stable, arch-independent GitHub models release (shared by
-# every app release). Fallback: Zenodo, the upstream source. Each file is
-# verified against the pinned sha256 below before it is accepted, regardless of
-# which origin served it — these hashes match installer/lib/10-config.sh and the
-# models release's SHA256SUMS. (Override the origins for an air-gapped mirror via
-# BIRDNET_MODEL_BASE / BIRDNET_ZENODO_BASE.)
-MODEL_RELEASE_TAG="models-v3.0-preview3"
-GH_BASE="${BIRDNET_MODEL_BASE:-https://github.com/tomtom215/BirdNet-Behavior/releases/download/${MODEL_RELEASE_TAG}}"
+# BirdNET V2.4 + range filter v2 (the default). The NAMES `birdnet-behavior
+# --install-model` gives the files, so the daemon can be pointed at them.
+# Nothing else about them is here — no digest, no URL, no size: the binary
+# installs them and owns what they must hash to (model_catalog.rs). The labels
+# are a file the binary itself carries (BirdNET-Pi's English names on V2.4's
+# class order); the file birdnet-go publishes names 460 of 6 522 classes
+# differently, which would split a species in two the day a BirdNET-Pi history
+# is imported. installer/test/model-pins-match-catalogue.sh fails if a V2.4
+# digest or URL ever appears in this file.
+V24_MODEL_ID="birdnet-v24"
+V24_RANGE_ID="birdnet-v24-range-v2"
+V24_MODEL_FILE="birdnet-v24.onnx"
+V24_LABELS_FILE="birdnet-v24_labels.txt"
+V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
+
+# BirdNET+ V3.0 preview (opt-in; what every volume created before V2.4 became
+# the default is running). Primary origin: the stable, arch-independent GitHub
+# models release (shared by every app release). Fallback: Zenodo, the upstream
+# source. Each file is verified against the pinned sha256 below before it is
+# accepted, regardless of which origin served it — these hashes match
+# installer/lib/10-config.sh, the Rust catalogue and the models release's
+# SHA256SUMS. (Override the origins for an air-gapped mirror via
+# BIRDNET_MODEL_BASE / BIRDNET_ZENODO_BASE; they apply to V3.0 only.)
+V3_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+V3_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+V3_MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+V3_LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
+V3_MODEL_RELEASE_TAG="models-v3.0-preview3"
 ZENODO_BASE="${BIRDNET_ZENODO_BASE:-https://zenodo.org/api/records/18247420/files}"
-MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
-LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
+
+# ---------------------------------------------------------------------------
+# Which classifier does this container run?
+# ---------------------------------------------------------------------------
+# In order:
+#   1. BIRDNET_CLASSIFIER, when set. An unknown value stops the container with
+#      the two valid ones; a typo must not quietly run the other network.
+#   2. BIRDNET_MODEL, when set: pointing it at the V2.4 file this script
+#      manages is V2.4; pointing it at anything else is a model of the
+#      operator's own, which keeps the V3.0 defaults it always had for labels
+#      and the geomodel (they are matched by name, so they suit any classifier)
+#      rather than losing them on upgrade.
+#   3. A volume that already holds the V3.0 model file keeps running V3.0. An
+#      upgrade must never switch the model under a running station: its history
+#      would be rows two different networks scored. One log line says so and
+#      says how to change it.
+#   4. Otherwise a new volume gets BirdNET V2.4, the network BirdNET-Pi and
+#      birdnet-go run.
+#
+# Sets CLASSIFIER and what the rest of the script reads for it (the unprefixed
+# MODEL_FILE ... names), and logs one "Classifier:" line. Needs MODEL_DIR; must
+# run before BIRDNET_MODEL is defaulted below, which would hide whether the
+# operator set it.
+select_classifier() {
+    requested="${BIRDNET_CLASSIFIER:-}"
+    case "$requested" in
+        "" | birdnet-v24 | birdnet-v3) ;;
+        *) die "BIRDNET_CLASSIFIER=${requested} is not a classifier this image knows. Use birdnet-v24 (the default) or birdnet-v3." ;;
+    esac
+
+    if [ -n "$requested" ]; then
+        CLASSIFIER="$requested"
+        how="explicit"
+    elif [ -n "${BIRDNET_MODEL:-}" ]; then
+        if [ "${BIRDNET_MODEL}" = "${MODEL_DIR}/${V24_MODEL_FILE}" ]; then
+            CLASSIFIER="birdnet-v24"
+            how="model-v24"
+        elif [ "${BIRDNET_MODEL}" = "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+            CLASSIFIER="birdnet-v3"
+            how="model-v3"
+        else
+            CLASSIFIER="birdnet-v3"
+            how="model-own"
+        fi
+    elif [ -f "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+        CLASSIFIER="birdnet-v3"
+        how="volume-v3"
+    else
+        CLASSIFIER="birdnet-v24"
+        how="default"
+    fi
+
+    case "$CLASSIFIER" in
+        birdnet-v24)
+            CLASSIFIER_NAME="BirdNET V2.4"
+            MODEL_FILE="${V24_MODEL_FILE}"
+            LABELS_FILE="${V24_LABELS_FILE}"
+            ;;
+        *)
+            CLASSIFIER_NAME="BirdNET+ V3.0"
+            MODEL_FILE="${V3_MODEL_FILE}"
+            LABELS_FILE="${V3_LABELS_FILE}"
+            MODEL_SHA256="${V3_MODEL_SHA256}"
+            LABELS_SHA256="${V3_LABELS_SHA256}"
+            MODEL_RELEASE_TAG="${V3_MODEL_RELEASE_TAG}"
+            GH_BASE="${BIRDNET_MODEL_BASE:-https://github.com/tomtom215/BirdNet-Behavior/releases/download/${MODEL_RELEASE_TAG}}"
+            ;;
+    esac
+
+    case "$how" in
+        explicit)
+            log "Classifier: ${CLASSIFIER_NAME} (BIRDNET_CLASSIFIER=${CLASSIFIER}). Set it to birdnet-v24 or birdnet-v3 to change it." ;;
+        model-v24)
+            log "Classifier: BirdNET V2.4 (BIRDNET_MODEL is the V2.4 file). Set BIRDNET_CLASSIFIER to be explicit." ;;
+        model-v3)
+            log "Classifier: BirdNET+ V3.0 preview (BIRDNET_MODEL is the V3.0 file). Set BIRDNET_CLASSIFIER to be explicit." ;;
+        model-own)
+            log "Classifier: your own model (BIRDNET_MODEL=${BIRDNET_MODEL}); labels and the occurrence filter default to the BirdNET+ V3.0 ones, as before. Set BIRDNET_CLASSIFIER=birdnet-v24 to use V2.4's instead." ;;
+        volume-v3)
+            log "Classifier: BirdNET+ V3.0 preview — this volume already holds its model, so it keeps running it (an upgrade never switches a station's model). New volumes default to BirdNET V2.4; set BIRDNET_CLASSIFIER=birdnet-v24 to move this one, or birdnet-v3 to keep V3.0 and silence this." ;;
+        *)
+            log "Classifier: BirdNET V2.4 (the default; the network BirdNET-Pi and birdnet-go run). Set BIRDNET_CLASSIFIER=birdnet-v3 on a new volume for the BirdNET+ V3.0 preview." ;;
+    esac
+}
+select_classifier
+# Read once, here. The daemon does not read BIRDNET_CLASSIFIER, and the binary
+# reports every BIRDNET_* variable it does not read — including in the
+# `--install-model` runs below, which would open the first start's log with
+# "BIRDNET_CLASSIFIER is not a variable this station reads".
+unset BIRDNET_CLASSIFIER
 
 # ---------------------------------------------------------------------------
 # Geomodel (species occurrence filter) — optional
@@ -428,7 +552,85 @@ acquire_default_models() {
     log "Model ready."
 }
 
-acquire_default_models
+# Run `birdnet-behavior --install-model ID` into ${MODEL_DIR}. The binary checks
+# every file's sha256 and size and renames it into place only when it matches;
+# its output goes to the container log as it comes.
+install_with_binary() {
+    BIRDNET_MODEL_DIR="${MODEL_DIR}" "${BNB_BINARY}" --config /dev/null --install-model "$1"
+}
+
+# BirdNET V2.4's model and labels, installed by the binary — the counterpart of
+# acquire_default_models, which downloads the V3.0 pair itself.
+#
+# Only the files at the default paths are this script's, as above; a file the
+# operator pointed BIRDNET_MODEL / BIRDNET_LABELS at is theirs and is neither
+# checked nor replaced. A managed file that is present and non-empty is trusted:
+# the binary's install is atomic, so a file under its final name was verified
+# when it was written (the V3.0 code re-hashes because it writes with a plain
+# download that can leave a truncated file at the final name). A missing one
+# is installed. Damage done after that — a bad card, a truncated restore — is
+# not found here; `docker exec <container> birdnet-behavior --install-model
+# birdnet-v24` replaces the files.
+acquire_v24_models() {
+    if [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
+        log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping model download."
+        [ -f "${BIRDNET_MODEL}"  ] || warn "Model not found at ${BIRDNET_MODEL}"
+        [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
+        return 0
+    fi
+
+    mkdir -p "${MODEL_DIR}"
+    log "BirdNET V2.4 model directory: ${MODEL_DIR}"
+
+    need=0
+    if [ "${BIRDNET_MODEL}" = "${MODEL_DEFAULT}" ]; then
+        [ -s "${BIRDNET_MODEL}" ] || need=1
+    else
+        log "BIRDNET_MODEL=${BIRDNET_MODEL} is not the BirdNET V2.4 model this image manages — using it as supplied (not verified, never replaced)."
+        [ -f "${BIRDNET_MODEL}" ] || warn "Model not found at ${BIRDNET_MODEL}"
+    fi
+    if [ "${BIRDNET_LABELS}" = "${LABELS_DEFAULT}" ]; then
+        [ -s "${BIRDNET_LABELS}" ] || need=1
+    else
+        log "BIRDNET_LABELS=${BIRDNET_LABELS} is not the BirdNET V2.4 labels this image manages — using it as supplied (not verified, never replaced)."
+        [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
+    fi
+
+    if [ "$need" = 1 ]; then
+        rule
+        log "Installing BirdNET V2.4 (model ~54 MB + labels) with birdnet-behavior --install-model."
+        log "  Every file is sha256-verified before it is kept. This runs only on first start;"
+        log "  the files are cached in the Docker volume, so later starts are instant."
+        rule
+        if ! install_with_binary "${V24_MODEL_ID}"; then
+            warn "Common causes:"
+            warn "  • no internet in the container (check the host's DNS/firewall)"
+            warn "  • huggingface.co temporarily unreachable (retry shortly)"
+            warn "  • the volume has less than ~600 MB free (df -h on the host's docker root)"
+            die "Failed to install BirdNET V2.4. To run the BirdNET+ V3.0 preview instead, set BIRDNET_CLASSIFIER=birdnet-v3."
+        fi
+        if [ "${BIRDNET_MODEL}" = "${MODEL_DEFAULT}" ] && [ ! -s "${BIRDNET_MODEL}" ]; then
+            die "birdnet-behavior --install-model reported success but ${BIRDNET_MODEL} is missing; this image's entrypoint and binary disagree about the file names."
+        fi
+        if [ "${BIRDNET_LABELS}" = "${LABELS_DEFAULT}" ] && [ ! -s "${BIRDNET_LABELS}" ]; then
+            die "birdnet-behavior --install-model reported success but ${BIRDNET_LABELS} is missing; this image's entrypoint and binary disagree about the file names."
+        fi
+    else
+        log "BirdNET V2.4 model and labels already installed — skipping."
+    fi
+    log "Model ready."
+}
+
+# What to run at start: the binary's installer for V2.4, the download code above
+# for V3.0 (and for a model of the operator's own, as before).
+acquire_classifier_models() {
+    if [ "${CLASSIFIER}" = "birdnet-v24" ]; then
+        acquire_v24_models
+    else
+        acquire_default_models
+    fi
+}
+acquire_classifier_models
 
 # ---------------------------------------------------------------------------
 # Geomodel auto-download driver (non-fatal)
@@ -532,7 +734,54 @@ setup_geomodel() {
         fi
     fi
 }
-setup_geomodel
+
+# The V2.4 range filter, installed by the binary and pointed at exactly as the
+# geomodel is, but one file with no labels of its own. Non-fatal for the same
+# reason. A function so installer/test/classifier-docker.sh can drive it.
+setup_range_filter() {
+    if [ "${GEOMODEL_USER_SET}" = "1" ]; then
+        log "BIRDNET_METADATA_MODEL is set explicitly — leaving the occurrence filter alone."
+    elif [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
+        log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping the range filter install too."
+    else
+        mkdir -p "${MODEL_DIR}"
+        range_path="${MODEL_DIR}/${V24_RANGE_FILE}"
+
+        if [ -s "${range_path}" ]; then
+            log "BirdNET V2.4 range filter: already installed — skipping."
+        else
+            log "Installing the BirdNET V2.4 range filter v2 (~30 MB) with birdnet-behavior --install-model."
+            if ! install_with_binary "${V24_RANGE_ID}"; then
+                rm -f "${range_path}"
+            fi
+        fi
+
+        if [ -s "${range_path}" ]; then
+            BIRDNET_METADATA_MODEL="${range_path}"
+            export BIRDNET_METADATA_MODEL
+            if [ -n "${BIRDNET_METADATA_LABELS:-}" ]; then
+                warn "BIRDNET_METADATA_LABELS is set, but the V2.4 range filter is indexed like the V2.4 labels and needs none. Unset it unless you mean to override the label file."
+            fi
+            log "Species occurrence filtering: ON (BirdNET V2.4 range filter v2; set BIRDNET_SF_THRESH to tune; default 0.03)."
+        else
+            warn "Range filter unavailable — species occurrence filtering is OFF."
+            warn "Every species the classifier knows stays a candidate wherever this"
+            warn "station is. Restart the container to retry, then check with:"
+            warn "  docker exec <container> birdnet-behavior --doctor"
+        fi
+    fi
+}
+
+# The filter that belongs to the classifier, and only that one: the V2.4 range
+# filter for V2.4, the geomodel for everything else.
+setup_occurrence_filter() {
+    if [ "${CLASSIFIER}" = "birdnet-v24" ]; then
+        setup_range_filter
+    else
+        setup_geomodel
+    fi
+}
+setup_occurrence_filter
 
 # ---------------------------------------------------------------------------
 # Container defaults
@@ -563,4 +812,6 @@ fi
 rule
 log "Starting birdnet-behavior  (listen: ${BIRDNET_LISTEN})"
 rule
-exec /usr/local/bin/birdnet-behavior "$@"
+# (BIRDNET_CLASSIFIER was removed from the environment right after it was read,
+# so neither the installs above nor this daemon report it as an unknown variable.)
+exec "${BNB_BINARY}" "$@"

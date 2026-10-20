@@ -166,8 +166,11 @@ WatchdogSec=120
 # Resource ceilings — cap a runaway process without starving the workload.
 # The bundled DuckDB analytics engine is on by default and its queries can be
 # memory-hungry under load. The FP32 model is NOT mmap'd: ONNX Runtime loads
-# its weights into anonymous memory, measured at ~575 MB idle and ~650 MB
-# while analysing with analytics on, so 1 GiB is headroom, not slack. On a
+# its weights into anonymous memory, measured with the 541 MB BirdNET+ V3.0
+# model at ~575 MB idle and ~650 MB while analysing with analytics on, so 1 GiB
+# is headroom, not slack for that classifier. (The default, BirdNET V2.4, is a
+# 54 MB model and has not been measured here; the ceiling stays sized for the
+# larger opt-in.) On a
 # multi-GB Pi this is the binding limit; on a 512 MB board physical RAM + zram
 # bind first, so raising the cgroup ceiling here is harmless there.
 MemoryHigh=768M

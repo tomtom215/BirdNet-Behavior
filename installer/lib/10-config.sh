@@ -61,19 +61,86 @@ SUBCOMMAND=""
 # BIRDNET_SKIP_GLIBC_CHECK=1 to bypass (e.g. you built from source).
 REQUIRED_GLIBC="2.39"
 
-# Rough free-space floor for a fresh install: ~541 MB model + binary + DB
+# Rough free-space floor for a fresh install: the model download + binary + DB
 # headroom. Below this we warn (model download would otherwise fail mid-way
-# with a less obvious error).
+# with a less obvious error). It depends on the classifier, so
+# select_classifier (52-classifier.sh) sets it: 600 for BirdNET V2.4 and 900
+# for the BirdNET+ V3.0 preview (~541 MB). V2.4's is not about its ~85 MB of
+# files: the binary that installs them refuses unless the model's size PLUS a
+# 512 MiB margin is free (FREE_SPACE_MARGIN in model_catalog.rs), 564 MiB for
+# the 54 MB model.
 REQUIRED_FREE_MB=900
 
 # Set to 1 by main() when an already-running service is stopped for an upgrade,
 # so we know to restart it afterwards rather than leave it down.
 SERVICE_WAS_RUNNING=0
 
-# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB), arch-independent and working
-# on every platform. This is the successor to BirdNET V2.4, the network
-# BirdNET-Pi and birdnet-go run, not the same model: its detections differ by
-# design. To run V2.4 instead, see docs/book/guides/parity.md.
+# ---------------------------------------------------------------------------
+# Classifiers
+#
+# Two are supported. `--classifier` (or BIRDNET_CLASSIFIER) picks one for a new
+# install; select_classifier in 52-classifier.sh copies the chosen one's names
+# (and, for V3.0, its pins) into the unprefixed MODEL_FILE / LABELS_FILE /
+# MODEL_SHA256 / LABELS_SHA256 / MODEL_RELEASE_TAG that the rest of the
+# installer reads.
+#
+#   birdnet-v24  BirdNET V2.4 + its range (occurrence) filter v2. THE DEFAULT.
+#                The network BirdNET-Pi and birdnet-go run, so a station that
+#                installs with no customisation agrees with them about what it
+#                heard (docs/book/guides/parity.md says what was measured).
+#   birdnet-v3   BirdNET+ V3.0 preview + the BirdNET geomodel. Opt-in. A
+#                different network (4.5 s windows at 32 kHz, calibrated
+#                probabilities, ~11 500 species): its detections differ from
+#                BirdNET-Pi's by design.
+#
+# A classifier and its occurrence filter are a pair and are never mixed: the
+# V2.4 range filter is indexed like the V2.4 labels (by position) and means
+# nothing to another network; the geomodel is matched by name through its own
+# label file. The V3.0 pins below are also in the Rust catalogue and in the
+# container's entrypoint; installer/test/model-pins-match-catalogue.sh fails
+# when they disagree.
+# ---------------------------------------------------------------------------
+CLASSIFIER_V24="birdnet-v24"
+CLASSIFIER_V3="birdnet-v3"
+DEFAULT_CLASSIFIER="${CLASSIFIER_V24}"
+
+# What the operator asked for (--classifier, else BIRDNET_CLASSIFIER); empty
+# means "no preference". resolve_classifier turns it, together with whatever
+# is already installed, into CLASSIFIER.
+CLASSIFIER_REQUEST="${BIRDNET_CLASSIFIER:-}"
+
+# ---------------------------------------------------------------------------
+# BirdNET V2.4 (the default). FP32 ONNX (~54 MB) + labels (~0.3 MB) + range
+# filter v2 (~30 MB), arch-independent.
+#
+# Installed by the binary, not by this script: `birdnet-behavior --install-model
+# birdnet-v24` and `... birdnet-v24-range-v2`. Nothing about those files is
+# pinned here — no digest, no URL, no size. The digests, the origins and the
+# size check live in crates/birdnet-integrations/src/model_catalog.rs, and the
+# binary verifies each file against them and renames it into place only when it
+# matches. That is deliberate and it is not only tidiness: the V2.4 labels are a
+# file the binary itself carries (BirdNET-Pi's English names on V2.4's class
+# order — the file birdnet-go publishes names 460 of 6 522 classes differently,
+# which would split a species in two the day a BirdNET-Pi history is imported),
+# so there is nothing for this script to download, and a second copy of the
+# other two pins would be a second place for them to go stale.
+#
+# What IS here is the names the binary gives the files, so the config can point
+# at them. installer/test/model-pins-match-catalogue.sh holds them to the
+# catalogue's ids, and fails if a digest or a URL for V2.4 ever appears in this
+# file or in the container's entrypoint.
+# ---------------------------------------------------------------------------
+V24_MODEL_ID="birdnet-v24"
+V24_RANGE_ID="birdnet-v24-range-v2"
+V24_MODEL_FILE="birdnet-v24.onnx"
+V24_LABELS_FILE="birdnet-v24_labels.txt"
+V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
+
+# ---------------------------------------------------------------------------
+# BirdNET+ V3.0 model files (opt-in: --classifier birdnet-v3). FP32 ONNX
+# (~541 MB), arch-independent and working on every platform. This is the
+# successor to BirdNET V2.4, the network BirdNET-Pi and birdnet-go run, not the
+# same model: its detections differ by design. See docs/book/guides/parity.md.
 #
 # Primary origin is a stable, arch-independent GitHub release shared by all app
 # releases (uploaded once, never re-pushed per patch), so a fresh install pulls
@@ -87,19 +154,34 @@ SERVICE_WAS_RUNNING=0
 # download from either host is rejected. The same hashes are published as the
 # `SHA256SUMS` asset of the models release; publish-model.yml cross-checks the
 # Zenodo bytes against these values before it uploads, so the two never drift.
-MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
-LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
+# ---------------------------------------------------------------------------
+V3_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+V3_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+V3_MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+V3_LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
 
 # Primary origin: the stable GitHub models release (one per model version).
-MODEL_RELEASE_TAG="models-v3.0-preview3"
-MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}"
+V3_MODEL_RELEASE_TAG="models-v3.0-preview3"
 
 # Fallback origin: Zenodo. The API /content endpoint handles the + in the
 # filenames correctly and needs no login.
-ZENODO_RECORD="18247420"
-ZENODO_API="https://zenodo.org/api/records/${ZENODO_RECORD}/files"
+V3_ZENODO_RECORD="18247420"
+ZENODO_API="https://zenodo.org/api/records/${V3_ZENODO_RECORD}/files"
+
+# What the rest of the installer reads: the SELECTED classifier's files. Empty
+# until select_classifier runs (52-classifier.sh runs it with the default as
+# soon as it is loaded, and main re-runs it once it knows better).
+CLASSIFIER=""
+CLASSIFIER_NAME=""
+MODEL_FILE=""
+LABELS_FILE=""
+MODEL_SHA256=""
+LABELS_SHA256=""
+MODEL_RELEASE_TAG=""
+MODEL_GH_BASE=""
+MODEL_SIZE_HINT=""
+# One line the final summary prints under "Classifier:", set by resolve_classifier.
+CLASSIFIER_SUMMARY=""
 
 # ---------------------------------------------------------------------------
 # BirdNET Geomodel v3.0.2 — the species occurrence ("range") filter.
@@ -136,9 +218,9 @@ GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
 GEOMODEL_SHA256="b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea"
 GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784"
 
-# Primary origin: our models release (the same one the classifier comes from,
-# so a fresh install still contacts a single host).
-GEOMODEL_GH_BASE="${MODEL_GH_BASE}"
+# Primary origin: our models release (the same one the V3.0 classifier comes
+# from, so a fresh install still contacts a single host).
+GEOMODEL_GH_BASE="https://github.com/${REPO}/releases/download/${V3_MODEL_RELEASE_TAG}"
 # Fallback origin: the upstream release the mirror is taken from.
 GEOMODEL_UPSTREAM_BASE="https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}"
 

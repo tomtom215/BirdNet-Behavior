@@ -6,6 +6,8 @@
 #   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.5.1
 #   # from a saved copy:
 #   sudo bash install.sh [--version 0.5.1]
+#   # choose the classifier of a NEW install (default: BirdNET V2.4):
+#   sudo bash install.sh --classifier birdnet-v3
 #
 # When an existing install is detected the script offers update / repair /
 # reinstall / uninstall. You can also pick one explicitly:
@@ -35,11 +37,14 @@
 #     BIRDNET_SKIP_MODEL=1 sudo -E bash install.sh
 #   Installs the binary from a tarball you already downloaded (skips the GitHub
 #   fetch + checksum round-trip — you vouch for the local file), and skips the
-#   ~541 MB model pull. Place the model in <data>/models and restart afterwards.
+#   model pull (~85 MB for BirdNET V2.4, ~555 MB for the V3.0 preview). Place the
+#   model files in <data>/models and restart afterwards.
 #
 # Environment overrides (all optional):
 #   BIRDNET_BINARY_TARBALL=PATH  install the binary from a local tarball (offline)
 #   BIRDNET_SKIP_MODEL=1         do not download the model (stage it out-of-band)
+#   BIRDNET_CLASSIFIER=ID        birdnet-v24 (default) or birdnet-v3, as --classifier
+#                                (the flag wins; an existing station keeps its own)
 #   BIRDNET_NONINTERACTIVE=1     never prompt; take env/config/defaults
 #   BIRDNET_LISTEN=HOST:PORT     dashboard bind address (default 0.0.0.0:8502)
 #   BIRDNET_SKIP_GLIBC_CHECK=1   bypass the glibc floor check (built from source)

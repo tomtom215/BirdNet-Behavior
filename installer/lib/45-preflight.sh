@@ -2,7 +2,7 @@
 # Pre-install checks and installation-state detection
 #
 # These run before any download or filesystem change so a doomed install fails
-# fast with an actionable message instead of half-way through a 541 MB pull.
+# fast with an actionable message instead of half-way through a model pull.
 # ---------------------------------------------------------------------------
 
 # Verify the tools the installer itself depends on are present. A hard-missing
@@ -83,7 +83,7 @@ check_disk_space() {
     fi
     if [ "${free_mb}" -lt "${REQUIRED_FREE_MB}" ]; then
         warn "Only ${free_mb} MB free on the data filesystem (${DATA_DIR})."
-        warn "The BirdNET model alone is ~541 MB; free up space or the download may fail."
+        warn "The BirdNET model alone is ${MODEL_SIZE_HINT:-large}; free up space or the download may fail."
     else
         success "Disk space OK (${free_mb} MB free for ${DATA_DIR})."
     fi

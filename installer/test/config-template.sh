@@ -60,8 +60,11 @@ render() {
     (
         set -uo pipefail
         # shellcheck disable=SC1090
-        source <(sed -n '/^enable_geomodel_in_kept_config()/,/^}/p;/^write_config()/,/^}/p' \
+        source <(sed -n '/^enable_geomodel_in_kept_config()/,/^}/p;/^enable_range_filter_in_kept_config()/,/^}/p;/^write_config()/,/^}/p' \
             "${REPO_ROOT}/installer/lib/62-config-file.sh")
+        # The kept-config guards read the config's MODEL_PATH.
+        # shellcheck disable=SC1090
+        source <(sed -n '/^config_value()/,/^}/p' "${REPO_ROOT}/installer/lib/52-classifier.sh")
 
         info()    { :; }
         success() { :; }
@@ -75,6 +78,15 @@ render() {
 
         CONFIG_FILE="${dest}"
         GEOMODEL_INSTALLED="${geo_installed}"
+
+        # This test holds the BirdNET+ V3.0 template (the geomodel's), which is
+        # what --classifier birdnet-v3 writes; classifier-default.sh holds the
+        # V2.4 one.
+        CLASSIFIER_V24="birdnet-v24"
+        V24_MODEL_FILE="birdnet-v24.onnx"
+        V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
+        CLASSIFIER="birdnet-v3"
+        CLASSIFIER_NAME="BirdNET+ V3.0"
 
         MODEL_DIR="/var/lib/birdnet/models"
         MODEL_FILE="Classifier.onnx"

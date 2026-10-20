@@ -41,12 +41,15 @@ run_update() {
         set -euo pipefail
         # shellcheck disable=SC1090
         source <(sed -n '/^enable_geomodel_in_kept_config()/,/^}/p' "${REPO_ROOT}/installer/lib/62-config-file.sh")
+        # shellcheck disable=SC1090
+        source <(sed -n '/^config_value()/,/^}/p' "${REPO_ROOT}/installer/lib/52-classifier.sh")
         info()    { printf '%s\n' "$*"; }
         success() { printf '%s\n' "$*"; }
         warn()    { printf '%s\n' "$*"; }
         # shellcheck disable=SC2034  # all read by the sourced function
         {
             GEOMODEL_INSTALLED=1
+            V24_MODEL_FILE="birdnet-v24.onnx"
             MODEL_DIR="/home/pi/BirdNet-Behavior/models"
             GEOMODEL_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
             GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"

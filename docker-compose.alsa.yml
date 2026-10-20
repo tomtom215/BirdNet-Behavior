@@ -59,7 +59,8 @@ services:
       - audio
 
     # The base file's limit, restated so an edit to one is seen in both. The
-    # model alone needs ~575 MB of memory a limit cannot reclaim.
+    # BirdNET+ V3.0 preview's model alone needs ~575 MB of memory a limit cannot
+    # reclaim (BirdNET V2.4's, a tenth of the file size, has not been measured).
     deploy:
       resources:
         limits:

@@ -39,7 +39,16 @@ RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 COMPOSE_FILES="docker-compose.yml docker-compose.alsa.yml docker-compose.pulse.yml"
 DEFAULT_DIR="${HOME}/birdnet-behavior"
 WEB_PORT=8502
-MODEL_SIZE_HINT="541 MB"
+# Which classifier the container runs. Unset (the usual case) means the
+# entrypoint decides: BirdNET V2.4 for a new data volume, and the BirdNET+ V3.0
+# preview for a volume that already runs it (an upgrade never swaps a running
+# station's model). `BIRDNET_CLASSIFIER=birdnet-v3 bash quickstart.sh` writes the
+# choice into .env.
+CLASSIFIER_CHOICE="${BIRDNET_CLASSIFIER:-}"
+case "${CLASSIFIER_CHOICE}" in
+    birdnet-v3) MODEL_SIZE_HINT="about 560 MB"; CLASSIFIER_LABEL="the BirdNET+ V3.0 preview" ;;
+    *)          MODEL_SIZE_HINT="about 85 MB";  CLASSIFIER_LABEL="BirdNET V2.4" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Presentation helpers
@@ -57,6 +66,11 @@ ok()    { printf '%s[OK]%s %s\n' "$GRN" "$RST" "$*"; }
 warn()  { printf '%s[!]%s %s\n'  "$YEL" "$RST" "$*" >&2; }
 fail()  { printf '%s[x]%s %s\n'  "$RED" "$RST" "$*" >&2; exit 1; }
 hdr()   { printf '\n%s=== %s ===%s\n\n' "$BLD" "$*" "$RST"; }
+
+case "${CLASSIFIER_CHOICE}" in
+    "" | birdnet-v24 | birdnet-v3) ;;
+    *) fail "BIRDNET_CLASSIFIER=${CLASSIFIER_CHOICE} is not a classifier. Use birdnet-v24 (the default) or birdnet-v3." ;;
+esac
 
 # Prompt for a value with a default. Reads from /dev/tty so it works when
 # the script is piped through `bash <(curl ...)`.
@@ -242,11 +256,12 @@ COMPOSE_VER=$(docker compose version --short 2>/dev/null || echo unknown)
 ok "Docker Engine: ${DOCKER_VER}"
 ok "Docker Compose: ${COMPOSE_VER}"
 
-# Disk space — we need ~1 GB (541 MB model + headroom for recordings).
+# Disk space — we want ~1 GB free: the image, the model (see MODEL_SIZE_HINT) and
+# headroom for recordings.
 AVAIL_MB=$(df -BM --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9' || echo 0)
 if [ "${AVAIL_MB:-0}" -lt 1000 ]; then
     warn "Less than 1 GB free in your home directory (have: ${AVAIL_MB} MB)."
-    warn "The BirdNET+ model alone is ${MODEL_SIZE_HINT}."
+    warn "The classifier's model download is ${MODEL_SIZE_HINT}, and the image is more."
     yesno "Continue anyway?" n || exit 1
 else
     ok "Disk space: $(( AVAIL_MB / 1024 )) GB free in \$HOME"
@@ -495,6 +510,11 @@ umask 077
     printf '\n'
     printf '# --- Image tag (e.g. latest, 0.2.0) — analytics is built in ---\n'
     printf 'BIRDNET_IMAGE_TAG=%s\n' "$IMAGE_TAG"
+    if [ -n "${CLASSIFIER_CHOICE:-}" ]; then
+        printf '\n'
+        printf '# --- Classifier: birdnet-v24 (BirdNET V2.4, the BirdNET-Pi network) or birdnet-v3 (BirdNET+ V3.0 preview) ---\n'
+        printf 'BIRDNET_CLASSIFIER=%s\n' "$CLASSIFIER_CHOICE"
+    fi
 } > .env
 chmod 600 .env
 umask "$OLD_UMASK"
@@ -529,10 +549,10 @@ ok "Container started"
 # Wait for health, streaming the container logs in the meantime
 # ---------------------------------------------------------------------------
 hdr "Waiting for the web server to come up"
-say "On first run, the container downloads the BirdNET+ V3.0 model"
-say "(${MODEL_SIZE_HINT}), sha256-verified, from GitHub (Zenodo fallback). That takes:"
-say "    • fibre:           ~1 min"
-say "    • home broadband:  5-15 min"
+say "On first run, the container installs its classifier (${CLASSIFIER_LABEL};"
+say "${MODEL_SIZE_HINT}, sha256-verified). That takes:"
+say "    • fibre:           under a minute for BirdNET V2.4, ~1-3 min for the V3.0 preview"
+say "    • home broadband:  a few minutes for BirdNET V2.4, 5-15 min for the V3.0 preview"
 say ""
 say "Streaming the container logs below — press Ctrl+C at any time to detach."
 say "(The container keeps running in the background either way.)"
@@ -615,6 +635,10 @@ say "  ${BLD}Logs:${RST}     cd $(pwd) && docker compose logs -f birdnet"
 say "  ${BLD}Doctor:${RST}   cd $(pwd) && docker compose exec birdnet birdnet-behavior --doctor"
 say "  ${BLD}Stop:${RST}     cd $(pwd) && docker compose ${COMPOSE_ARGS[*]} down"
 say "  ${BLD}Update:${RST}   cd $(pwd) && docker compose ${COMPOSE_ARGS[*]} pull && docker compose ${COMPOSE_ARGS[*]} up -d"
+say ""
+say "  ${BLD}Classifier:${RST}  ${CLASSIFIER_LABEL}$([ -z "${CLASSIFIER_CHOICE}" ] && printf ' on a new data volume; a volume that already runs the V3.0 preview keeps it')."
+say "               Switch with BIRDNET_CLASSIFIER=birdnet-v24 or birdnet-v3 in $(pwd)/.env, then:"
+say "               docker compose ${COMPOSE_ARGS[*]} up -d    (the container log says which it chose)"
 say ""
 say "Open the URL in a browser — detections appear as soon as the first bird"
 say "call is heard after the model finishes loading."

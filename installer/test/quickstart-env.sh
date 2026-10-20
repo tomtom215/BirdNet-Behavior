@@ -200,6 +200,44 @@ else
     fail "the .env writer does not write TZ"
 fi
 
+echo "=== the classifier choice reaches .env only when the operator made one ==="
+# An unset choice must leave .env without a BIRDNET_CLASSIFIER line: the
+# container decides (V2.4 for a new volume, V3.0 for one that already runs it),
+# and a line written here would pin that decision for volumes it should not.
+write_env() { # $1 = CLASSIFIER_CHOICE ("" for unset) -> prints the .env
+    local scratch
+    scratch="$(mktemp -d)"
+    (
+        cd "${scratch}" || exit 1
+        hdr() { :; }; ok() { :; }; fail() { echo "writer failed: $*" >&2; exit 1; }
+        # shellcheck disable=SC2034  # read by the eval'd writer block
+        {
+            LAT=51.5; LON=-0.1; STATION_TZ=UTC; AUDIO_KIND=none
+            AUDIO_VALUE=''; IMAGE_TAG=latest
+        }
+        # shellcheck disable=SC2034  # read by the eval'd writer block
+        if [ -n "$1" ]; then CLASSIFIER_CHOICE="$1"; else unset CLASSIFIER_CHOICE; fi
+        eval "${block}"
+    ) >/dev/null 2>&1
+    cat "${scratch}/.env" 2>/dev/null
+    rm -rf "${scratch}"
+}
+if [ -z "$(write_env '' | grep '^BIRDNET_CLASSIFIER=' || true)" ] && [ -n "$(write_env '' | grep '^BIRDNET_IMAGE_TAG=' || true)" ]; then
+    pass "no choice: no BIRDNET_CLASSIFIER line (and the rest of .env is written)"
+else
+    fail "an unset choice wrote a BIRDNET_CLASSIFIER line, or no .env"
+fi
+check "$(write_env birdnet-v3 | grep '^BIRDNET_CLASSIFIER=' || true)" "BIRDNET_CLASSIFIER=birdnet-v3" "BIRDNET_CLASSIFIER=birdnet-v3 is written"
+check "$(write_env birdnet-v24 | grep '^BIRDNET_CLASSIFIER=' || true)" "BIRDNET_CLASSIFIER=birdnet-v24" "BIRDNET_CLASSIFIER=birdnet-v24 is written"
+# A typo must stop the script before anything is started, not be written for the
+# entrypoint to refuse on every restart.
+if grep -qE 'BIRDNET_CLASSIFIER=\$\{CLASSIFIER_CHOICE\} is not a classifier' "${QS}" \
+    && grep -qE '"" \| birdnet-v24 \| birdnet-v3\) ;;' "${QS}"; then
+    pass "an unknown BIRDNET_CLASSIFIER is refused by name before any prompt"
+else
+    fail "quickstart.sh does not validate BIRDNET_CLASSIFIER"
+fi
+
 if [ "${FAILED}" -ne 0 ]; then
     echo "quickstart-env: FAILED"
     exit 1
