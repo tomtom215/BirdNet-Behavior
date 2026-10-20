@@ -111,7 +111,7 @@ pub fn gated_router() -> Router<AppState> {
 /// answers. For the two hidden fields it was worse: because they are never
 /// empty, they slip past `onboarding_save`'s skip-if-blank guard and are
 /// written on every completion. An operator who had set `CONFIDENCE=0.6` and
-/// then clicked through the wizard had it silently reset to 0.75.
+/// then clicked through the wizard had it silently reset to the default.
 #[derive(Default)]
 struct Prefill {
     latitude: String,
@@ -132,7 +132,9 @@ impl Prefill {
             longitude: get("longitude", ""),
             confidence: get(
                 "confidence_threshold",
-                &format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
+                // `Display`, not `{:.2}`: the cards carry `0.9`, `0.6`, `0.7`, and the
+                // card that matches the stored value is chosen by comparing them.
+                &birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD.to_string(),
             ),
             notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER),
         }
@@ -494,7 +496,7 @@ struct OnboardingForm {
 
 /// Whether `raw` is a confidence threshold the daemon will accept.
 ///
-/// The wizard's cards can only emit `0.4`/`0.6`/`0.75`/`0.9`, so this exists
+/// The wizard's cards can only emit `0.4`/`0.6`/`0.7`/`0.9`, so this exists
 /// for the hand-crafted POST: `birdnet_core::config::validate` treats a
 /// `CONFIDENCE` outside 0–1 as an *error*, and `--doctor` runs from the unit's
 /// `ExecStartPre` where exit 2 is fatal. An unvalidated write here would let a
@@ -668,7 +670,7 @@ async fn onboarding_save(
             items.push(("notify_trigger", mode, SettingsCategory::Notifications));
         }
         // Only persisted when it parses inside 0–1. The wizard's own cards can
-        // only produce 0.4/0.6/0.75/0.9, but the field is a plain form value:
+        // only produce 0.4/0.6/0.7/0.9, but the field is a plain form value:
         // a hand-crafted POST must not be able to seed a threshold the daemon
         // would reject at startup (`--doctor` exits 2 on out-of-range
         // CONFIDENCE, which `ExecStartPre` treats as fatal) — that would turn
@@ -996,7 +998,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
       <div class="ob-cards cols2" role="radiogroup" aria-labelledby="ob-conf-h">
         <label class="ob-card" data-radio="conf" data-value="0.9"><input class="ob-pick" type="radio" name="conf_card" value="0.9" aria-labelledby="ob-conf-strict-t" aria-describedby="ob-conf-strict-s"><div class="ob-grow"><div class="t" id="ob-conf-strict-t">Strict</div><div class="s" id="ob-conf-strict-s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></label>
-        <label class="ob-card" data-radio="conf" data-value="0.75"><input class="ob-pick" type="radio" name="conf_card" value="0.75" aria-labelledby="ob-conf-balanced-t" aria-describedby="ob-conf-balanced-s"><div class="ob-grow"><div class="t" id="ob-conf-balanced-t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-conf-balanced-s">0.75 — realistic results without over-filtering. Start here.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.7"><input class="ob-pick" type="radio" name="conf_card" value="0.7" aria-labelledby="ob-conf-balanced-t" aria-describedby="ob-conf-balanced-s"><div class="ob-grow"><div class="t" id="ob-conf-balanced-t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-conf-balanced-s">0.70 — realistic results without over-filtering. Start here.</div></div></label>
         <label class="ob-card" data-radio="conf" data-value="0.6"><input class="ob-pick" type="radio" name="conf_card" value="0.6" aria-labelledby="ob-conf-sensitive-t" aria-describedby="ob-conf-sensitive-s"><div class="ob-grow"><div class="t" id="ob-conf-sensitive-t">Sensitive</div><div class="s" id="ob-conf-sensitive-s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></label>
         <label class="ob-card" data-radio="conf" data-value="0.4"><input class="ob-pick" type="radio" name="conf_card" value="0.4" aria-labelledby="ob-conf-everything-t" aria-describedby="ob-conf-everything-s"><div class="ob-grow"><div class="t" id="ob-conf-everything-t">Everything</div><div class="s" id="ob-conf-everything-s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></label>
       </div>
@@ -1028,7 +1030,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
-            <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.75 · Balanced</span></div>
+            <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.70 · Balanced</span></div>
             <div class="summary-row"><span class="k">Alerts</span><span id="ob-sum-notify">Rare birds only</span></div>
             <div class="summary-row"><span class="k">Dashboard</span><span class="mono" id="ob-sum-url">—</span></div>
           </div>
@@ -1234,7 +1236,9 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     var input = document.getElementById(mirrors[group]);
     if (!input) { return; }
     document.querySelectorAll('[data-radio="' + group + '"]').forEach(function (c) {
-      if (c.dataset.value === input.value) {
+      // Numbers compare as numbers (`0.7` and `0.70` are one setting); the
+      // notification group's words only ever match as strings.
+      if (c.dataset.value === input.value || (c.dataset.value !== '' && input.value !== '' && Number(c.dataset.value) === Number(input.value))) {
         c.classList.add('sel');
         var pick = c.querySelector('.ob-pick');
         if (pick) { pick.checked = true; }

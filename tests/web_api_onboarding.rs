@@ -189,9 +189,14 @@ async fn wizard_prompts_for_the_confidence_threshold() {
         "the pre-selected default must be DEFAULT_CONFIDENCE_THRESHOLD ({expected_default}) \
          — the same value the daemon enforces and Settings → Detection advertises"
     );
+    let default_card = format!(
+        r#"data-value="{}""#,
+        birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD
+    );
     assert!(
-        html.contains(r#"data-value="0.75""#),
-        "the recommended card must carry the shared default"
+        html.contains(&default_card),
+        "the recommended card must carry the shared default ({default_card}): a station on the \
+         default would otherwise open the wizard with no card selected"
     );
     for preset in ["0.9", "0.6", "0.4"] {
         assert!(

@@ -114,7 +114,7 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl axum::respo
         pill: "rare",
         dot: "rare",
         label: "Error",
-        token: "err",
+        health: "err",
         title: "the health check itself failed".to_owned(),
     });
 

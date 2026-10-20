@@ -994,7 +994,9 @@ mod tests {
     fn a_negative_shift_goes_down_and_a_positive_one_goes_up() {
         let hz_of = |shift| {
             let f = freq_shift_filter(shift).expect("non-zero shift returns filter");
-            let start = f.find("shift=").expect("shift present") + "shift=".len();
+            // The last `shift=`: the filter is `afreqshift=shift=-3000`, whose
+            // first one is the end of the filter's own name.
+            let start = f.rfind("shift=").expect("shift present") + "shift=".len();
             f[start..].parse::<i32>().expect("a number")
         };
         assert!(

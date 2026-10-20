@@ -282,7 +282,7 @@ pub(super) struct Badge {
     pub(super) dot: &'static str,
     pub(super) label: &'static str,
     /// The stable `data-health` vocabulary: `ok`, `warn` or `err`.
-    pub(super) token: &'static str,
+    pub(super) health: &'static str,
     /// Unescaped; the same sentences the Health page banner prints.
     pub(super) title: String,
 }
@@ -298,7 +298,7 @@ pub(super) fn badge(issues: &[Issue], integrity: Option<bool>) -> Badge {
             pill: "rare",
             dot: "rare",
             label: fault.label,
-            token: "err",
+            health: "err",
             title: sentences(issues),
         };
     }
@@ -307,7 +307,7 @@ pub(super) fn badge(issues: &[Issue], integrity: Option<bool>) -> Badge {
             pill: "moss",
             dot: "live",
             label: "Healthy",
-            token: "ok",
+            health: "ok",
             title: if integrity.is_none() {
                 // Everything this badge *can* see is fine, but the database has
                 // not been verified yet. Say so rather than claiming a check
@@ -321,14 +321,14 @@ pub(super) fn badge(issues: &[Issue], integrity: Option<bool>) -> Badge {
             pill: "dawn",
             dot: "dawn",
             label: one.label,
-            token: "warn",
+            health: "warn",
             title: sentences(issues),
         },
         _ => Badge {
             pill: "dawn",
             dot: "dawn",
             label: "Needs attention",
-            token: "warn",
+            health: "warn",
             title: sentences(issues),
         },
     }
@@ -338,9 +338,9 @@ pub(super) fn badge(issues: &[Issue], integrity: Option<bool>) -> Badge {
 pub(super) fn badge_html(b: &Badge) -> String {
     let title = escape_html(&b.title);
     format!(
-        r#"<a href="/station" class="bnb-pill {pill}" data-health="{token}" title="{title}" aria-label="Station health — {label}: {title}"><span class="bnb-dot {dot}"></span> {label}</a>"#,
+        r#"<a href="/station" class="bnb-pill {pill}" data-health="{health}" title="{title}" aria-label="Station health — {label}: {title}"><span class="bnb-dot {dot}"></span> {label}</a>"#,
         pill = b.pill,
-        token = b.token,
+        health = b.health,
         label = b.label,
         dot = b.dot,
     )
@@ -573,7 +573,7 @@ mod tests {
     fn label_of(f: &Facts<'_>) -> (&'static str, &'static str) {
         let i = issues(f);
         let b = badge(&i, f.integrity);
-        (b.label, b.token)
+        (b.label, b.health)
     }
 
     #[test]
@@ -607,7 +607,7 @@ mod tests {
             ..ok(&n, &none)
         };
         let b = badge(&issues(&f), f.integrity);
-        assert_eq!((b.label, b.token), ("Healthy", "ok"));
+        assert_eq!((b.label, b.health), ("Healthy", "ok"));
         assert!(
             b.title.contains("not been checked"),
             "the title must not claim the database was checked; got {:?}",
@@ -626,7 +626,7 @@ mod tests {
         };
         let i = issues(&f);
         let b = badge(&i, f.integrity);
-        assert_eq!((b.label, b.token, b.pill), ("Error", "err", "rare"));
+        assert_eq!((b.label, b.health, b.pill), ("Error", "err", "rare"));
         assert!(
             b.title.to_lowercase().contains("storage is critically low"),
             "the fault must not hide the other problems: {}",
@@ -708,7 +708,7 @@ mod tests {
         };
         let i = issues(&f);
         let b = badge(&i, f.integrity);
-        assert_eq!((b.label, b.token), ("Source stopped", "warn"));
+        assert_eq!((b.label, b.health), ("Source stopped", "warn"));
         assert!(
             b.title
                 .contains("Front-yard RTSP and RTSP_2 stopped sending audio"),
@@ -764,7 +764,7 @@ mod tests {
         let i = issues(&f);
         assert_eq!(i.len(), 1, "{i:?}");
         let b = badge(&i, None);
-        assert_eq!((b.label, b.token), ("Records unreadable", "err"));
+        assert_eq!((b.label, b.health), ("Records unreadable", "err"));
     }
 
     fn migrated() -> rusqlite::Connection {
