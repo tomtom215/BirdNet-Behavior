@@ -9,7 +9,7 @@ request.
 | File | Runs on | What it is for |
 |---|---|---|
 | `ci.yml` | every push and pull request | formatting, clippy (pedantic + nursery), tests on x86_64 and native aarch64, the real-model inference test, rustdoc, a debug build with all features, the MSRV check, the aarch64 cross-check |
-| `supply-chain.yml` | every push and pull request, and Mondays | cargo-deny, cargo-audit, unused dependencies, third-party licence notices, that every crate packages for crates.io, spelling, shellcheck, the hermetic installer tests |
+| `supply-chain.yml` | every push and pull request, and Mondays | cargo-deny, cargo-audit, unused dependencies, third-party licence notices, that every crate packages for crates.io with `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE` in the tarball, spelling, shellcheck, the hermetic installer tests |
 | `coverage.yml` | every push and pull request | line coverage with cargo-llvm-cov; informational |
 | `codeql.yml` | every push and pull request, and Tuesdays | CodeQL (`security-extended`) over Rust, the workflows themselves, the JavaScript the UI serves, and the Python gate scripts; results in the Security tab |
 | `fuzz.yml` | pull requests touching the audio decoder, the label parser or `fuzz/**`; Wednesdays | libFuzzer on the two parsers of untrusted input (the audio decoder and the label-file parser), with production arithmetic; 60 seconds a target on a pull request, 10 minutes a week |

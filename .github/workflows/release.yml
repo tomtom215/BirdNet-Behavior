@@ -145,6 +145,17 @@ jobs:
         # that.
         run: cargo package --workspace --locked --no-verify
 
+      - name: Every crate tarball carries the licence files
+        shell: bash
+        # LICENSE, LICENSE-UPSTREAM and NOTICE, byte for byte, in each of the
+        # nine tarballs `cargo publish` would upload. Eight of them carried none
+        # until each crate got a symlink to the root file; a checkout that did not
+        # keep the symlinks would package a 13-byte text file instead, which is
+        # why this reads the tarballs rather than the tree.
+        run: |
+          python3 scripts/check-crate-licences.py --self-test
+          python3 scripts/check-crate-licences.py target/package
+
       - name: Third-party notices match this release
         shell: bash
         env:
