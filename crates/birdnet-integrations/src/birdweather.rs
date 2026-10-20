@@ -227,7 +227,14 @@ pub struct SoundscapeRef {
 /// anything else is left out rather than mislabelled.
 #[must_use]
 pub fn algorithm_for_model(model_name: &str) -> Option<&'static str> {
-    model_name.contains("V2.4").then_some("2p4")
+    // Two spellings name the V2.4 network: BirdNET's own file name
+    // (`BirdNET_GLOBAL_6K_V2.4_Model_FP16`) and the catalogue id the installers
+    // write (`birdnet-v24`, the default since the V2.4 default landed). Only the
+    // first was recognised, so a station on the default model posted no
+    // algorithm at all.
+    let name = model_name.to_ascii_lowercase();
+    (name.contains("v2.4") || name.contains("birdnet-v24") || name.contains("birdnet_v24"))
+        .then_some("2p4")
 }
 
 /// Response from `BirdWeather` API.
@@ -584,6 +591,19 @@ mod tests {
             None
         );
         assert_eq!(algorithm_for_model("demo-model"), None);
+    }
+
+    /// The name the installers give the V2.4 file is the catalogue id, which has
+    /// no dot in it: the default install must be labelled like any other V2.4.
+    #[test]
+    fn the_installed_v24_files_name_is_recognised_too() {
+        for name in ["birdnet-v24", "BirdNET_v24_fp32", "birdnet_V2.4_custom"] {
+            assert_eq!(algorithm_for_model(name), Some("2p4"), "{name}");
+        }
+        // The counterparts: the other catalogue ids and near misses are not it.
+        for name in ["birdnet-v3", "perch-v2", "model-v2", "demo-v240"] {
+            assert_eq!(algorithm_for_model(name), None, "{name}");
+        }
     }
 
     #[test]
