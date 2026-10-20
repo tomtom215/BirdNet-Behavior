@@ -1570,7 +1570,7 @@ Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
   and with only the preflight reverted, at the rollback (preflight); the
   preflight fix without the syscall line at the rollback (SIGSYS).
 
-## [0.17.0] - 2026-09-25
+## [0.17.0] - 2026-10-03
 
 Where an entry names a test, that test was seen failing against the code
 before the fix. Each commit message says how, and names any part of its fix
@@ -8656,7 +8656,7 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
 ### Added
 
 - **`scripts/hardware-test.sh`** — an on-device acceptance harness, documented in
-  [`docs/book/field/hardware-test.md`](docs/book/field/hardware-test.md). It
+  [`docs/book/field/hardware-test.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/book/field/hardware-test.md). It
   installs from the
   published release, measures mean inference latency per 3 s chunk and peak SoC
   temperature under load, and then deliberately breaks the station — watchdog
@@ -10935,7 +10935,7 @@ only its reported version differs from 0.5.1.
   rather than 19 percentage points below it. Investigation, evidence
   and the comparison against BirdNET V2.4 (which BirdNET-Pi used and
   which still hits 93–97 % on the same WAV) live in the new ADR
-  [`docs/architecture/15-model-chunking.md`](docs/architecture/15-model-chunking.md).
+  [`docs/architecture/15-model-chunking.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/architecture/15-model-chunking.md).
 - `BirdNetModel::recommended_chunk_samples()` and
   `recommended_chunk_secs()` expose the per-model chunk size so the
   daemon can pick the right value without hard-coding model knowledge
@@ -11183,16 +11183,16 @@ x86_64 Linux.
 [0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
+[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.11.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
+[0.7.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.3.0
-[0.2.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.1.0...v0.2.0
+[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v.0.3.0...v0.4.0
+[0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v.0.3.0
 [0.1.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.1.0
