@@ -1,9 +1,7 @@
 # Releasing BirdNet-Behavior
 
-This document is the release runbook. Follow it to cut a new version.
-
-`v0.1.0` shipped on 2026-04-12; everything below applies to `v0.2.0`
-and later.
+This document is the release runbook. Follow it to cut a new version. Nothing
+reads it mechanically, so when a workflow changes, read the section that names it.
 
 ## TL;DR — what a maintainer does
 
@@ -18,6 +16,14 @@ and later.
 #    "0 packages" only when the workspace versions have not moved; run right
 #    after a version bump it relocks each member, which is step 1's job, not
 #    this one. Observed with cargo 1.98.1.)
+#    Read what it moved, and re-run the whole gate on the result, not just the
+#    advisories: on 2026-10-20 `cargo update --dry-run` moved `ort` and `ort-sys`
+#    from 2.0.0-rc.14 to 2.0.0-rc.15 (the inference engine itself, a release
+#    candidate whose requirement is `^2.0.0-rc.14`, so every refresh takes the
+#    newest candidate) and `tokio` from 1.53.3 to 1.54.0. The CI job `Inference
+#    against the real model` is the one that tells you the new ort still runs the
+#    model, and a refresh like this is easier to bisect on a pull request of its
+#    own than inside the version bump.
 cargo update
 cargo deny check advisories        # or: cargo audit
 cargo test --workspace --all-features
@@ -52,8 +58,17 @@ published; the nine names (`birdnet-behavior` and the eight `birdnet-*` library
 crates) were unclaimed on 2026-10-15. What is ready: every crate packages
 (`cargo package --workspace`, run by the `crates are publishable` job and by
 `validate`), every package is under 2.1 MB, the internal dependencies carry
-versions, and `cargo package --workspace --no-default-features` also *builds* all
-nine from their tarballs (it was run once; the bundled-DuckDB build was not).
+versions, every tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE` and the
+workspace `homepage` (`scripts/check-crate-licences.py` reads the tarballs in both
+of those places), and `cargo package --workspace --no-default-features` also
+*builds* all nine from their tarballs (it was run once; the bundled-DuckDB build
+was not).
+
+The licence files in the eight library crates are symlinks to the ones at the
+repository root, so there is one copy to edit; `cargo package` archives the file a
+link points at. A checkout that drops symlinks (`core.symlinks=false`, a zip
+download) would package a 13-byte text file instead, which is why the check reads
+the tarballs and not the tree.
 
 To publish, after the tag is pushed and the release is verified, from the tagged
 commit, with a crates.io token in `CARGO_REGISTRY_TOKEN`:
@@ -61,6 +76,28 @@ commit, with a crates.io token in `CARGO_REGISTRY_TOKEN`:
 ```bash
 cargo publish --workspace --locked   # dependency order is worked out by cargo
 ```
+
+**Not in one go: crates.io rate-limits *new* crates** to a burst of five and then
+one more every ten minutes (`PublishNew` in `rust-lang/crates.io`'s
+`src/rate_limiter.rs`: burst 5, refill 10 minutes; read there on 2026-10-20), and
+these are nine new names. The sixth upload of a single `--workspace` run is
+therefore refused (HTTP 429; not tried here, since nothing has been published).
+Publish in two batches along the dependency layers, which `cargo metadata` gives as
+five crates that depend on no other workspace crate and four that depend on them:
+
+```bash
+# batch 1: uses the whole burst
+cargo publish --locked -p birdnet-core -p birdnet-db -p birdnet-behavioral \
+    -p birdnet-timeseries -p birdnet-scheduler
+# batch 2: wait until four tokens have refilled (about 40 minutes after batch 1)
+cargo publish --locked -p birdnet-integrations -p birdnet-migrate -p birdnet-web \
+    -p birdnet-behavior
+```
+
+Within a batch `cargo` publishes in dependency order. A crate that is refused is
+simply not on the registry: name the missing ones with `-p` and run again once the
+limit has refilled, rather than re-running a command that names crates already
+uploaded (a published version cannot be uploaded twice).
 
 Publishing cannot be undone (a version can only be yanked), so look first at what
 it would do (`cargo publish --workspace --dry-run`) and at these:
@@ -70,6 +107,14 @@ it would do (`cargo publish --workspace --dry-run`) and at these:
   registry that most consumers read as open source is yours to decide.
 - **The library crates are internal.** Their READMEs say so and `STABILITY.md`
   promises nothing about their API; they are published only so the binary can be.
+- **`cargo install birdnet-behavior --locked`, say so wherever it is documented.**
+  `cargo install` ignores the `Cargo.lock` shipped in a crate unless `--locked` is
+  passed, and `ort = "2.0.0-rc.14"` is the requirement `^2.0.0-rc.14`: a release candidate
+  that accepts every later candidate (and 2.0.0 itself). Without `--locked` an
+  install resolves to the newest `ort` of the day, which this project has not run,
+  while the tarball's `Cargo.lock` names the one it has. The same is true of every
+  other dependency, but `ort` is the one whose requirement reaches across
+  pre-releases of the inference engine.
 - **`cargo install birdnet-behavior` builds the bundled DuckDB** (minutes of C++)
   and downloads ONNX Runtime. A package build does not render the in-app manual
   (`build.rs` skips it: a build script may not write into the registry source), so
@@ -77,7 +122,13 @@ it would do (`cargo publish --workspace --dry-run`) and at these:
   rendered copy such as a release archive's `help/`.
 - **docs.rs** builds the two crates whose default features pull in the bundled
   engine without it (`no-default-features` in their `[package.metadata.docs.rs]`);
-  that was reasoned from docs.rs's offline builds, not tried.
+  that was reasoned from docs.rs's offline builds, not tried. Each library crate's
+  `documentation` is `https://docs.rs/<name>`, the binary's is the operator manual,
+  and all nine share the manual as `homepage`.
+- **`birdnet-core`'s tarball contains the bird-name table** (`data/l18n/`:
+  `species_names.tsv`, `SOURCES.tsv` and a README; no other tarball does, the binary
+  gets it through the `birdnet-core` dependency). Its provenance and the open
+  question about some of the names are in that README and in `docs/HANDOFF.md`.
 
 ## When ONNX Runtime, DuckDB or htmx moves
 
@@ -122,18 +173,33 @@ pre-release tag: `docs.yml` builds stable tags only):
 ### `release.yml` — binaries, SBOM, attestation, GitHub Release
 
 ```
-validate ──► ci ──► build (matrix) ──► package ──► github-release ──► verify-release
-                                                    (tag push only)    (tag push only)
+validate ─┬─► ci ──► build (matrix) ─┬─► package ───────────────┐
+          │                          │                          ├─► github-release ─► verify-release
+          └─► upgrade-sources ───────┴─► upgrade (one per row) ─┘   (tag push only)   (tag push only)
 ```
+
+`github-release` needs `package` **and every `upgrade` row**, so a release that
+cannot be updated to is not published.
 
 | Job | Emits |
 |-----|-------|
-| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md` (the heading must carry its date). On a tag push it also requires the tag to be **annotated** (`git tag -a`; a lightweight tag is refused) and its commit to be in the default branch's history. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
+| `validate` | Confirms the tag is valid semver (see "Tag form" below the table) and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md` (the heading must carry its date). On a tag push it also requires the tag to be **annotated** (`git tag -a`; a lightweight tag is refused) and its commit to be in the default branch's history. Detects `-pre` suffixes and marks the release as a pre-release. It also checks, before any build starts, that `Cargo.lock` is in step with the manifests (`cargo update --workspace --locked`), that every crate packages for crates.io (`cargo package --workspace --locked --no-verify`) with `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE` in each tarball, and that `THIRD_PARTY_LICENSES.txt` is current. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in and on by default, in `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns it off). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
 | `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives, the SBOMs, `install.sh`, `uninstall.sh` and `SHA256SUMS`, signed via GitHub OIDC. |
-| `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install, Docker, verify and (for a stable release) documentation notes, the last linking that version's own manual at `/vX.Y.Z/`. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
+| `upgrade-sources` | Picks the four newest published releases older than this one (`scripts/upgrade-sources.sh`: not drafts, not pre-releases, and only those that carry `install.sh`, `SHA256SUMS` and an x86_64 archive) as the rows of `upgrade`. Fails if there is none. |
+| `upgrade` | One row per release picked (`Upgrade from vA.B.C`, `fail-fast: false` so every row reports): installs that published release under real systemd, records detections, updates in place to **this build's** x86_64 archive, then rolls back with the command the update printed (`installer/test/upgrade-e2e.sh`). 0.17.0 was published without this check and broke stations that updated in place. |
+| `github-release` | Needs `package` and every `upgrade` row. Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install, Docker, verify and (for a stable release) documentation notes, the last linking that version's own manual at `/vX.Y.Z/`. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
 | `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum, and each of them (and `SHA256SUMS`) carrying a valid build-provenance attestation from this repository (`gh attestation verify`). Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
+
+**Tag form.** A release tag is `vX.Y.Z`, or `vX.Y.Z-<suffix>` for a pre-release.
+`validate`'s regex also accepts SemVer *build metadata* (`1.2.3-rc.1+b5`), but the
+image workflow's gate (`scripts/check-release-tag.sh`) does not, and a Docker tag
+cannot contain `+`: such a tag would publish a GitHub Release with archives and no
+image. (Read from the two regular expressions, which accept and refuse it as
+described, and from the tag filters, which as GitHub defines them let a `+` reach
+`release.yml` only after a `-suffix`; no such tag was pushed.) Do not put build
+metadata in a release tag.
 
 **Build targets** (three — there is no armv7 and no musl):
 
@@ -256,10 +322,12 @@ by design:
 
 `release.yml` has a `workflow_dispatch` entry. Triggering it from the
 Actions tab runs `validate → ci → build → package` exactly as a real
-release — including the **DuckDB analytics cross-build** and the SBOM —
-but **skips the SLSA attestation (a published claim) and `github-release`,
-so nothing is published**. Use it to prove a release will build cleanly before tagging
-(especially after dependency bumps or toolchain changes).
+release — including the **DuckDB analytics cross-build** and the SBOM — and the
+`upgrade-sources` and `upgrade` jobs too, so every `Upgrade from vA.B.C` row runs
+against the build it just made. It **skips the SLSA attestation (a published claim),
+`github-release` and `verify-release`, so nothing is published**. Use it to prove a
+release will build cleanly, and can be updated to, before tagging (especially after
+dependency bumps or toolchain changes).
 
 - Leave the `version` input blank to rehearse the current
   `Cargo.toml` version, or set it (e.g. `0.2.0`) to rehearse a specific
@@ -351,8 +419,10 @@ isn't half-done:
   it, so it needs no versioning. What this does and does not guarantee is listed
   under `docs.yml` above — chiefly that it runs whether or not the release
   succeeds.
-- **Crates.io publishing.** Not published to crates.io (this is an
-  application, not a library).
+- **Crates.io publishing.** No workflow publishes to crates.io; it is the
+  maintainer's manual step, in two batches, described under "Publishing to
+  crates.io" above. `validate` and `crates are publishable` only prove that the
+  nine crates would package, with their licence files.
 - **The shared model release.** `publish-model.yml` is a manual, one-shot
   workflow run per *model* version, not per app release — see "The shared model
   release" above. A normal app release never touches it.

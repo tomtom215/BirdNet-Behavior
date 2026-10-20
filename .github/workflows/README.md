@@ -48,7 +48,15 @@ on **every** pull request, with their names exactly as GitHub shows them.
 - `installer unit tests`
 
 `codeql.yml` and `osv.yml` also run on every pull request and could join the
-list once they have run clean on `main`; they are new and have not been run.
+list. Both have run: the Actions run lists of 2026-10-20 hold 20 completed CodeQL
+runs and 24 OSV-Scanner runs, and the push to `main` of 2026-10-19 passed both.
+Neither has been green throughout, which is the thing to weigh before requiring
+them: a pull request's CodeQL check was red on 15 alerts on 2026-10-18
+(`rust/hard-coded-cryptographic-value` on test literals) until the literals were
+removed, and OSV-Scanner's scheduled runs on `main` failed on 2026-10-17, 18 and 19
+(`docs/HANDOFF.md` records the advisory behind the 18th; the log of the 19th was not
+read). A finding fails an OSV job by design (`osv.yml` says so), so it reddens
+every open pull request until it is fixed or waived.
 
 Two things about this list:
 
