@@ -85,6 +85,14 @@ jobs:
         # code is never linted; lint both cfg branches so an analytics-only
         # type/signature error can't slip through (as it did before v0.5.0).
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy — no default features (the analytics store compiled out)
+        # `analytics` is a default feature, so the two steps above both build it.
+        # The build without it (install-smoke builds the binary that way, and
+        # nothing lints or compiles its tests) had a web-crate test that called
+        # analytics methods the feature removes, so `cargo test --no-default-features`
+        # did not compile and nobody could have known. No libduckdb to build here,
+        # so it is the cheap leg.
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
 
   # ── test ───────────────────────────────────────────────────────────────────
   test:
