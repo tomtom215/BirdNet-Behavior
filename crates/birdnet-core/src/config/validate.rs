@@ -439,6 +439,29 @@ fn check_schedule(config: &Config, out: &mut Vec<Finding>) {
         return;
     };
     if is_recording_schedule(raw) {
+        // The grammar allows a window that ends at or before its start, which
+        // the scheduler cannot express (`RecordingWindow::fixed`): it ignores
+        // the schedule and the station records all day. Said here because
+        // nothing else would: the daemon logs one line and the doctor, which
+        // reads this, is where an owner who asked for a night-time window looks.
+        if let Some((start, end)) = raw
+            .trim()
+            .strip_prefix("fixed:")
+            .and_then(fixed_window_minutes)
+            && start >= end
+        {
+            out.push(Finding::warn(
+                "RECORDING_SCHEDULE",
+                format!(
+                    "RECORDING_SCHEDULE={:?} does not end after it starts: the scheduler cannot \
+                     express a window that crosses midnight and ignores it, so the station \
+                     records all day",
+                    raw.trim()
+                ),
+                r#"use a window inside one day (fixed:06:00-20:00; the times are UTC), "solar", or "all-day""#
+                    .to_string(),
+            ));
+        }
         return;
     }
     out.push(Finding::error(
@@ -668,6 +691,37 @@ mod tests {
     fn fixed_window_schedule_accepted() {
         let c = cfg(&[("RECORDING_SCHEDULE", "fixed:06:00-20:00")]);
         assert!(is_clean(&validate(&c)));
+    }
+
+    /// The grammar accepts a window that ends before it starts, and the
+    /// scheduler (`RecordingWindow::fixed`) refuses it and records all day, which
+    /// is the opposite of what someone asking for a night-time window wanted. A
+    /// warning, not an error: an `Error` makes the file unusable and reverts the
+    /// station to its last-good configuration, which is a worse answer than
+    /// recording all day with the reason in `--doctor`.
+    #[test]
+    fn a_fixed_window_that_does_not_end_after_it_starts_is_a_warning() {
+        for raw in ["fixed:20:00-06:00", "fixed:06:00-06:00"] {
+            let findings = validate(&cfg(&[("RECORDING_SCHEDULE", raw)]));
+            assert_eq!(findings.len(), 1, "{raw}: {findings:?}");
+            assert_eq!(findings[0].severity, Severity::Warning, "{raw}");
+            assert_eq!(findings[0].key, "RECORDING_SCHEDULE");
+            assert!(
+                findings[0].message.contains("all day"),
+                "the message says what will happen: {}",
+                findings[0].message
+            );
+            assert!(
+                is_usable(&findings),
+                "{raw} must not make the file unusable"
+            );
+        }
+        // Counterparts: a window that ends after it starts, and the other
+        // schedules, are clean.
+        for raw in ["fixed:06:00-20:00", "fixed:00:00-23:59", "solar", "all-day"] {
+            let findings = validate(&cfg(&[("RECORDING_SCHEDULE", raw)]));
+            assert!(findings.is_empty(), "{raw}: {findings:?}");
+        }
     }
 
     #[test]
@@ -1227,7 +1281,9 @@ mod tests {
             );
         }
 
-        /// Any well-formed "fixed:HH:MM-HH:MM" schedule is accepted.
+        /// Any well-formed "fixed:HH:MM-HH:MM" schedule is accepted: it is never
+        /// an `Error`, and it carries a `Warning` exactly when the window does not
+        /// end after it starts (the scheduler ignores such a window).
         #[test]
         fn well_formed_fixed_schedule_is_accepted(
             sh in 0_u8..24,
@@ -1238,9 +1294,22 @@ mod tests {
             let raw = format!("fixed:{sh:02}:{sm:02}-{eh:02}:{em:02}");
             let c = cfg(&[("RECORDING_SCHEDULE", &raw)]);
             let findings = validate(&c);
+            let about_it: Vec<_> = findings
+                .iter()
+                .filter(|f| f.key == "RECORDING_SCHEDULE")
+                .collect();
             prop_assert!(
-                !findings.iter().any(|f| f.key == "RECORDING_SCHEDULE"),
+                about_it.iter().all(|f| f.severity == Severity::Warning),
                 "{raw} unexpectedly rejected: {findings:?}"
+            );
+            let start = u32::from(sh) * 60 + u32::from(sm);
+            let end = u32::from(eh) * 60 + u32::from(em);
+            prop_assert_eq!(
+                !about_it.is_empty(),
+                start >= end,
+                "{}: a warning exactly when the window does not end after it starts: {:?}",
+                raw,
+                findings
             );
         }
 

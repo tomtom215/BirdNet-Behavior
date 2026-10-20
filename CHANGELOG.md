@@ -1452,6 +1452,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panic into "analytics database not configured". Both routes now answer, a failed
   query task is a 500 and no longer a claim about configuration, and a test calls
   both through a real DuckDB and holds each row to the keys `openapi.json` documents.
+- **More places no longer present a failed read as an empty or healthy one.**
+  Today's recording pill and review strip, the Recordings grid, the live feed's
+  "first ever" badge, Station Health's microphone panel, the merged-history note and
+  the account and session lists now say they could not read. A user or session
+  change that went through is reported as done even if the list cannot be redrawn,
+  a panicked Station tab says so instead of rendering blank, and a failed approval no
+  longer quotes the database's error.
+- **Inviting a viewer on Station → Access no longer shows the existing users twice.**
+- **Settings holds more values to what the daemon accepts.** Segment Duration (and
+  `PUT /api/v2/settings`) refuses a length outside 3 to 600 seconds, a fraction or a
+  unit, and its input allowed 5 to 60, which blocked saving the form on a station
+  whose valid value was 120. The API runs the same checks as the page (language,
+  BirdWeather token, recording window, clip format, info site). A fixed recording
+  window that does not end after it starts is refused, since the scheduler ignores
+  it and records all day; `--doctor` warns about one in `birdnet.conf`.
 
 ### Security
 
