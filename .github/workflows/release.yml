@@ -1033,7 +1033,7 @@ jobs:
               echo "The operator manual for exactly this version, built from this tag:"
               echo "<${DOCS_URL}>"
               echo ""
-              echo 'The binary serves the same manual offline at `/help`.'
+              echo "The binary serves the same manual offline at \`/help\`."
               echo ""
             fi
             echo "## Verification"
