@@ -50,8 +50,20 @@ pub struct BlacklistForm {
 /// Render the image blacklist admin page.
 async fn images_page(State(state): State<AppState>) -> Html<String> {
     state.run_blocking(move |state| {
-    let entries =
-        state.with_read_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
+    // An unreadable blacklist is not an empty one: "0 entries blacklisted"
+    // invites adding again the entry that is already there.
+    let entries = match state.with_read_db(birdnet_db::sqlite::list_image_blacklist) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(error = %e, "image blacklist could not be read");
+            return Html(crate::routes::admin::admin_subpage_shell(
+                "Species images",
+                "species",
+                "Images",
+                &crate::routes::pages::error_states::could_not_load("the image blacklist"),
+            ));
+        }
+    };
 
     let mut rows = String::new();
     for entry in &entries {
@@ -132,6 +144,7 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
 /// Add a URL to the image blacklist.
 async fn add_blacklist(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<BlacklistForm>,
 ) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
@@ -151,6 +164,18 @@ async fn add_blacklist(
             && let Some(cache) = state.image_cache()
         {
             cache.remove(&form.sci_name);
+        }
+        // Which species' picture was blocked, not the URL: an image URL can
+        // carry a signed token, and the species is what a reader of the log
+        // is asking about.
+        if added.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "image.blacklist.add",
+                Some(&form.sci_name),
+                None,
+            );
         }
         added
     })
@@ -192,13 +217,27 @@ async fn add_blacklist(
 }
 
 /// Remove a URL from the image blacklist.
-async fn remove_blacklist(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn remove_blacklist(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
     // The result used to be discarded with `let _`, so a delete that failed
     // reloaded the table and left the row in place with nothing said. The
     // reader sees the row still there and cannot tell whether the click missed
     // or the delete did.
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::remove_image_blacklist(conn, id))
+        let result = state.with_db(|conn| birdnet_db::sqlite::remove_image_blacklist(conn, id));
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "image.blacklist.remove",
+                Some(&format!("blacklist:{id}")),
+                None,
+            );
+        }
+        result
     })
     .await;
 

@@ -494,6 +494,7 @@ fn row_audio_player(file_name: Option<&str>) -> String {
 
 async fn quarantine_approve(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
@@ -506,7 +507,23 @@ async fn quarantine_approve(
     // back-dated by construction, so the incremental analytics sync would skip
     // it on every future start. Without the paired write an approved detection
     // never reached the analytics dashboards at all.
-    let result = tokio::task::spawn_blocking(move || state.approve_quarantine(id)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.approve_quarantine(id);
+        // Approving admits a record the station held back as too unlikely to
+        // believe into every count and share link: that is the decision the
+        // log is for.
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "quarantine.approve",
+                Some(&format!("quarantine:{id}")),
+                None,
+            );
+        }
+        result
+    })
+    .await;
 
     // O-18: outcome toast.
     let toast = match &result {
@@ -529,6 +546,7 @@ async fn quarantine_approve(
 
 async fn quarantine_reject(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
@@ -538,7 +556,17 @@ async fn quarantine_reject(
     let offset = form.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::reject_quarantine(conn, id))
+        let result = state.with_db(|conn| birdnet_db::sqlite::reject_quarantine(conn, id));
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "quarantine.reject",
+                Some(&format!("quarantine:{id}")),
+                None,
+            );
+        }
+        result
     })
     .await;
 
@@ -562,6 +590,7 @@ async fn quarantine_reject(
 
 async fn quarantine_delete(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
@@ -571,7 +600,17 @@ async fn quarantine_delete(
     let offset = form.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id))
+        let result = state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id));
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "quarantine.delete",
+                Some(&format!("quarantine:{id}")),
+                None,
+            );
+        }
+        result
     })
     .await;
 

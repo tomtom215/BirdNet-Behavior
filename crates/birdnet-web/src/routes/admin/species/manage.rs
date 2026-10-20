@@ -33,10 +33,12 @@
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::response::Html;
+use axum::response::{Html, IntoResponse as _, Response};
 use axum::{Form, Router, routing::get, routing::post};
 use serde::Deserialize;
 
+use crate::auth_middleware::RequestUser;
+use crate::routes::pages::toast::{Toast, not_applied};
 use crate::state::AppState;
 use birdnet_db::sqlite::{BulkOutcome, SpeciesUsage};
 
@@ -66,90 +68,149 @@ struct SpeciesForm {
 }
 
 async fn manage_page(State(state): State<AppState>) -> Html<String> {
-    let rows = load(state).await;
+    let table = rendered(state, None).await.0;
     Html(admin_subpage_shell(
         "Species storage",
         "species",
         "Species storage",
-        &body(&rows, None),
+        &format!(r#"<div id="species-storage">{table}</div>"#),
     ))
 }
 
 async fn manage_partial(State(state): State<AppState>) -> Html<String> {
-    let rows = load(state).await;
-    Html(table(&rows, None))
+    rendered(state, None).await
 }
 
-async fn load(state: AppState) -> Vec<SpeciesUsage> {
+/// Every species with what it costs, or the error that stopped it being read.
+///
+/// An unreadable table is not an empty one: [`table`] says "No detections yet."
+/// for no rows, which is a statement about the station and the wrong thing to
+/// tell an operator who is here to delete things.
+async fn load(state: AppState) -> Result<Vec<SpeciesUsage>, birdnet_db::sqlite::DbError> {
     let names = state.names_handle();
-    let mut rows = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::species_disk_usage(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
+    let mut rows = state
+        .run_blocking(|s| s.with_read_db(birdnet_db::sqlite::species_disk_usage))
+        .await?;
     // `com_name` is only drawn here — every action posts `sci_name` — so it is
     // the one field to put in the station's language.
     for r in &mut rows {
         r.com_name = names.name(&r.sci_name, &r.com_name).to_owned();
     }
-    rows
+    Ok(rows)
+}
+
+/// The table, re-read and rendered under `note`, or `note` over the failure
+/// note when it could not be read.
+///
+/// The note is kept either way: it reports an action that did happen, and a
+/// table that cannot be redrawn afterwards does not un-happen it.
+async fn rendered(state: AppState, note: Option<&str>) -> Html<String> {
+    match load(state).await {
+        Ok(rows) => Html(table(&rows, note)),
+        Err(e) => {
+            tracing::warn!(error = %e, "species storage table could not be read");
+            let mut out = String::new();
+            if let Some(note) = note {
+                let _ = write!(out, r#"<p class="empty-note mb">{note}</p>"#);
+            }
+            out.push_str(&crate::routes::pages::error_states::inline(
+                "the species storage table",
+            ));
+            Html(out)
+        }
+    }
 }
 
 /// `POST /admin/species/manage/exclude` — stop recording this species.
 ///
 /// Adds to the exclusion list the operator already has rather than inventing a
 /// second mechanism, the same reasoning the suspect-species report gives.
-async fn exclude(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Html<String> {
+///
+/// "Will no longer be recorded" is only said once the list was written. A list
+/// the database could not read or write is answered with a toast and the table
+/// left as it was, and is not audited.
+async fn exclude(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Form(form): Form<SpeciesForm>,
+) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return rendered(state, None).await.into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        super::handler::add_to_exclude_list(&s, &name);
-        crate::audit::audit(
-            &s,
-            None,
-            "species.exclude.add",
-            Some(&name),
-            Some("via=species-storage"),
-        );
-    })
-    .await;
+    let result = state
+        .run_blocking(move |s| {
+            let result = super::handler::add_to_exclude_list(s, &name);
+            if result.is_ok() {
+                crate::audit::audit(
+                    s,
+                    Some(&request_user),
+                    "species.exclude.add",
+                    Some(&name),
+                    Some("via=species-storage"),
+                );
+            }
+            result
+        })
+        .await;
+    if let Err(e) = result {
+        tracing::warn!(error = %e, species = %sci_name, "species not excluded");
+        return not_applied(&Toast::error(
+            e.toast(&sci_name, "added to the exclusion list"),
+        ));
+    }
     let note = format!("{} will no longer be recorded.", escape_html(&sci_name));
-    Html(table(&load(state).await, Some(&note)))
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// `POST /admin/species/manage/detections` — remove this species' detections.
+///
+/// A delete the database refused is answered with a toast and the table left
+/// as it was ([`not_applied`]), not with "0 detections removed": that sentence
+/// is a claim about the station's data, and "the write failed" is a different
+/// claim. Nor is it audited as a delete of nothing: the audit log records what
+/// changed, and a refused write changed nothing.
 async fn delete_detections(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Form(form): Form<SpeciesForm>,
-) -> Html<String> {
+) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return rendered(state, None).await.into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        let outcome = s
-            .with_db(|conn| birdnet_db::sqlite::delete_species_detections(conn, &name))
-            .unwrap_or_default();
-        crate::audit::audit(
-            &s,
-            None,
-            "species.detections.delete",
-            Some(&name),
-            Some(&format!(
-                "deleted={} locked_kept={}",
-                outcome.affected, outcome.locked_skipped
-            )),
-        );
-        outcome
-    })
-    .await
-    .unwrap_or_default();
+    let result = state
+        .run_blocking(move |s| {
+            let result =
+                s.with_db(|conn| birdnet_db::sqlite::delete_species_detections(conn, &name));
+            match &result {
+                Ok(outcome) => crate::audit::audit(
+                    s,
+                    Some(&request_user),
+                    "species.detections.delete",
+                    Some(&name),
+                    Some(&format!(
+                        "deleted={} locked_kept={}",
+                        outcome.affected, outcome.locked_skipped
+                    )),
+                ),
+                // Nothing was deleted, so nothing is audited as a delete: the
+                // log records what changed, and `warn` (which is persisted)
+                // records that it was tried.
+                Err(e) => {
+                    tracing::warn!(error = %e, species = %name, "species detections not removed");
+                }
+            }
+            result
+        })
+        .await;
+    let Ok(outcome) = result else {
+        return not_applied(&Toast::error(format!(
+            "The detections of {sci_name} were not deleted: the database refused the change."
+        )));
+    };
     tracing::info!(
         species = %sci_name,
         deleted = outcome.affected,
@@ -157,63 +218,97 @@ async fn delete_detections(
         "species detections removed"
     );
     let note = outcome_note(&sci_name, outcome, "detections removed");
-    Html(table(&load(state).await, Some(&note)))
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// `POST /admin/species/manage/clips` — reclaim this species' audio.
 ///
 /// The rows stay. Only the files go, and the rows are marked reclaimed — see
 /// `prune_species_clips` and migration 22 for why the filename is kept.
+///
+/// # The files are only ever removed after the mark succeeded
+///
+/// The order is list, mark, unlink — chosen so that being wrong costs disk
+/// space rather than a player for audio that is gone
+/// (`prune_species_clips`). That reasoning only holds if a failed mark stops
+/// the sequence: this handler used to default a refused mark to "0 marked" and
+/// go on to unlink every file anyway, which is the order it exists to avoid
+/// and cannot be taken back. A failed list is the same: it used to default to
+/// "no files", mark the rows, and report success having removed nothing.
 async fn delete_clips(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Form(form): Form<SpeciesForm>,
-) -> Html<String> {
+) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return rendered(state, None).await.into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
     let dir = state.recording_dir();
 
-    let (outcome, removed, failed) = tokio::task::spawn_blocking(move || {
-        // The list first, then the mark, then the files: a row marked
-        // reclaimed whose file survives wastes disk, while a file removed
-        // without the mark offers a player for audio that is gone. Being
-        // wrong in the first direction is cheaper.
-        let files = s
-            .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
-            .unwrap_or_default();
-        let now = crate::routes::admin::species::manage::now_unix();
-        let outcome = s
-            .with_db(|conn| birdnet_db::sqlite::prune_species_clips(conn, &name, now))
-            .unwrap_or_default();
-
-        let mut removed = 0usize;
-        let mut failed = 0usize;
-        for file in &files {
-            match remove_clip(&dir, file) {
-                Ok(()) => removed += 1,
+    let result = state
+        .run_blocking(move |s| {
+            let files = match s
+                .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
+            {
+                Ok(files) => files,
                 Err(e) => {
-                    failed += 1;
-                    tracing::warn!(file = %file, error = %e, "clip could not be removed");
+                    tracing::warn!(error = %e, species = %name, "clip list not read; nothing was changed");
+                    return Err(ClipsRefused::List);
+                }
+            };
+            let now = now_unix();
+            let outcome = match s
+                .with_db(|conn| birdnet_db::sqlite::prune_species_clips(conn, &name, now))
+            {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    // No file is touched: see the handler's doc comment.
+                    tracing::warn!(error = %e, species = %name, "clips not marked; no file was removed");
+                    return Err(ClipsRefused::Mark);
+                }
+            };
+
+            let mut removed = 0usize;
+            let mut failed = 0usize;
+            for file in &files {
+                match remove_clip(&dir, file) {
+                    Ok(()) => removed += 1,
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!(file = %file, error = %e, "clip could not be removed");
+                    }
                 }
             }
+            crate::audit::audit(
+                s,
+                Some(&request_user),
+                "species.clips.delete",
+                Some(&name),
+                Some(&format!(
+                    "marked={} files_removed={} failed={} locked_kept={}",
+                    outcome.affected, removed, failed, outcome.locked_skipped
+                )),
+            );
+            Ok((outcome, removed, failed))
+        })
+        .await;
+    let (outcome, removed, failed) = match result {
+        Ok(done) => done,
+        Err(refused) => {
+            return not_applied(&Toast::error(match refused {
+                ClipsRefused::List => format!(
+                    "The clips of {sci_name} were not deleted: the list of them could not be \
+                     read from the database. Nothing was changed."
+                ),
+                ClipsRefused::Mark => format!(
+                    "The clips of {sci_name} were not deleted: the database refused the \
+                     change. No audio file was removed."
+                ),
+            }));
         }
-        crate::audit::audit(
-            &s,
-            None,
-            "species.clips.delete",
-            Some(&name),
-            Some(&format!(
-                "marked={} files_removed={} failed={} locked_kept={}",
-                outcome.affected, removed, failed, outcome.locked_skipped
-            )),
-        );
-        (outcome, removed, failed)
-    })
-    .await
-    .unwrap_or_default();
+    };
     tracing::info!(
         species = %sci_name,
         marked = outcome.affected,
@@ -229,7 +324,15 @@ async fn delete_clips(
             " {failed} file(s) could not be removed — see the log."
         );
     }
-    Html(table(&load(state).await, Some(&note)))
+    rendered(state, Some(&note)).await.into_response()
+}
+
+/// Which step of reclaiming clips the database refused.
+enum ClipsRefused {
+    /// The query for the species' clip files.
+    List,
+    /// Marking the rows reclaimed.
+    Mark,
 }
 
 /// `POST /admin/species/manage/measure` — add up this species' clips on disk.
@@ -237,39 +340,48 @@ async fn delete_clips(
 /// A separate action because it is `stat` per clip: for the species this page
 /// exists for that is thousands of syscalls, and doing it for every species on
 /// every page load would make the page unusable on the SD card it runs on.
-async fn measure(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Html<String> {
+async fn measure(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return rendered(state, None).await.into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
     let dir = state.recording_dir();
-    let (bytes, counted) = tokio::task::spawn_blocking(move || {
-        let files = s
-            .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
-            .unwrap_or_default();
-        let mut bytes = 0u64;
-        let mut counted = 0usize;
-        for file in &files {
-            if let Some(path) = safe_clip_path(&dir, file)
-                && let Ok(meta) = std::fs::metadata(&path)
-            {
-                bytes += meta.len();
-                counted += 1;
+    let measured = state
+        .run_blocking(move |s| {
+            let files =
+                s.with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))?;
+            let mut bytes = 0u64;
+            let mut counted = 0usize;
+            for file in &files {
+                if let Some(path) = safe_clip_path(&dir, file)
+                    && let Ok(meta) = std::fs::metadata(&path)
+                {
+                    bytes += meta.len();
+                    counted += 1;
+                }
             }
+            Ok::<_, birdnet_db::sqlite::DbError>((bytes, counted))
+        })
+        .await;
+    // "Using 0 B across 0 clips" is a measurement; a list that could not be
+    // read is not one.
+    let (bytes, counted) = match measured {
+        Ok(measured) => measured,
+        Err(e) => {
+            tracing::warn!(error = %e, species = %sci_name, "species clips not listed");
+            return not_applied(&Toast::error(format!(
+                "{sci_name} could not be measured: its clips could not be listed from the database."
+            )));
         }
-        (bytes, counted)
-    })
-    .await
-    .unwrap_or((0, 0));
+    };
 
     let note = format!(
         "{} is using {} across {counted} clip(s) on disk.",
         escape_html(&sci_name),
         human_bytes(bytes)
     );
-    Html(table(&load(state).await, Some(&note)))
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// Seconds since the Unix epoch, saturating rather than wrapping.
@@ -340,10 +452,6 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn body(rows: &[SpeciesUsage], note: Option<&str>) -> String {
-    format!(r#"<div id="species-storage">{}</div>"#, table(rows, note))
 }
 
 /// The table itself, re-rendered by every action.

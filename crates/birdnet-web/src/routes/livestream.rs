@@ -516,13 +516,7 @@ pub(super) async fn start_encoder(
     // an unread stderr eventually blocks the encoder.
     if let Some(stderr) = child.stderr.take() {
         let failing_source = source_id.clone();
-        tokio::spawn(async move {
-            use tokio::io::AsyncBufReadExt as _;
-            let mut lines = tokio::io::BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                tracing::warn!(source = %failing_source, "ffmpeg: {line}");
-            }
-        });
+        tokio::spawn(async move { drain_ffmpeg_stderr(stderr, &failing_source).await });
     }
 
     let from_capture_tap = live.is_some();
@@ -539,7 +533,7 @@ pub(super) async fn start_encoder(
 
     tracing::info!(
         source = %source_id,
-        device = %source,
+        device = %loggable(&source),
         freq_shift_hz,
         from_capture_tap,
         "starting live audio stream"
@@ -549,6 +543,35 @@ pub(super) async fn start_encoder(
         permit,
         source_id,
     })
+}
+
+/// Text as it may be logged: with the password of any URL in it replaced.
+///
+/// A source's device string is its RTSP URL, and an RTSP URL's userinfo is the
+/// camera's password. ffmpeg names its input in its own errors
+/// (`Error opening input file rtsp://admin:hunter2@cam/stream.`), and this
+/// module logs both ffmpeg's stderr and the device it was started on. The
+/// capture path redacts the same way (`capture_log_line` in `birdnet-core`);
+/// this is the same call, because the same line reaches the same journal and
+/// the support bundle read from it.
+fn loggable(text: &str) -> String {
+    birdnet_core::config::redact::redact_credentials_in_text(text)
+}
+
+/// Drain ffmpeg's stderr into the log, one `warn` per line, redacted.
+///
+/// With `-loglevel error` this is silent on a healthy stream, so anything here
+/// is a real fault. Draining is mandatory regardless: an unread stderr
+/// eventually blocks the encoder.
+async fn drain_ffmpeg_stderr<R>(stderr: R, source_id: &str)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt as _;
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        tracing::warn!(source = %source_id, "ffmpeg: {}", loggable(&line));
+    }
 }
 
 /// Decide whether this source is served from capture's in-process tap.
@@ -1505,5 +1528,59 @@ mod tests {
     #[test]
     fn pick_first_enabled_returns_none_for_empty_table() {
         assert!(pick_first_enabled(&[]).is_none());
+    }
+
+    // ── what reaches the log ────────────────────────────────────────────
+
+    /// A writer that keeps everything the subscriber prints.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// What ffmpeg 6.1 wrote, verbatim, for a camera URL with credentials that
+    /// it could not reach. It went to the journal at `warn` with the camera's
+    /// password in it, and from the journal into the support bundle.
+    #[tokio::test]
+    async fn ffmpegs_stderr_reaches_the_log_without_the_camera_password() {
+        let captured = Captured::default();
+        let sink = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let stderr: &[u8] = b"Error opening input file rtsp://admin:hunter2@127.0.0.1:9/stream.\n\
+            [rtsp @ 0x1] method DESCRIBE failed: 401 Unauthorized\n";
+        drain_ffmpeg_stderr(stderr, "src_rtsp_1").await;
+
+        let log = String::from_utf8_lossy(&captured.0.lock().expect("lock")).into_owned();
+        assert!(!log.contains("hunter2"), "the password was logged: {log}");
+        // The counterpart: the capture works, and what helps is still there.
+        assert!(log.contains("127.0.0.1:9/stream"), "{log}");
+        assert!(log.contains("401 Unauthorized"), "{log}");
+        assert!(log.contains("src_rtsp_1"), "{log}");
+    }
+
+    /// The device string the encoder is started on is the URL itself.
+    #[test]
+    fn a_device_is_logged_without_its_password() {
+        assert_eq!(
+            loggable("rtsp://admin:hunter2@cam.local:554/h264"),
+            "rtsp://admin:***REDACTED***@cam.local:554/h264"
+        );
+        // Nothing to redact: untouched.
+        assert_eq!(loggable("plughw:CARD=Mic,DEV=0"), "plughw:CARD=Mic,DEV=0");
+        assert_eq!(loggable("rtsp://cam.local/h264"), "rtsp://cam.local/h264");
     }
 }

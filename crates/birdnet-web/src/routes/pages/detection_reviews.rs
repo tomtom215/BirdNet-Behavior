@@ -404,6 +404,7 @@ fn render_verdict_row(
 
 async fn detection_review_set(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ReviewForm>,
 ) -> axum::response::Response {
     if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
@@ -412,14 +413,31 @@ async fn detection_review_set(
         // so one that reached only SQLite would change the species totals and
         // leave every behavioural dashboard still counting the reject.
         let result = tokio::task::spawn_blocking(move || {
-            state.set_detection_review(
+            let result = state.set_detection_review(
                 &form.date,
                 &form.time,
                 &form.sci_name,
                 &form.com_name,
                 status,
                 None,
-            )
+            );
+            // A rejection withdraws a detection from every count and every
+            // share link; a verdict nobody can attribute is a detection that
+            // vanished with no one having done it.
+            if result.is_ok() {
+                crate::audit::audit(
+                    &state,
+                    Some(&request_user),
+                    "detection.review",
+                    Some(&crate::audit::detection_target(
+                        &form.date,
+                        &form.time,
+                        &form.sci_name,
+                    )),
+                    Some(&format!("via=review verdict={}", status.as_str())),
+                );
+            }
+            result
         })
         .await;
         if let Some(refused) = refused_review(result, "save that verdict") {
@@ -453,12 +471,27 @@ fn refused_review<T, E: std::fmt::Display>(
 
 async fn detection_review_clear(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ClearForm>,
 ) -> axum::response::Response {
     // Paired write — see `detection_review_set`. Clearing must reach both
     // stores or the exclusion outlives the verdict that justified it.
     let result = tokio::task::spawn_blocking(move || {
-        state.clear_detection_review(&form.date, &form.time, &form.sci_name)
+        let result = state.clear_detection_review(&form.date, &form.time, &form.sci_name);
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.review",
+                Some(&crate::audit::detection_target(
+                    &form.date,
+                    &form.time,
+                    &form.sci_name,
+                )),
+                Some("via=review verdict=cleared"),
+            );
+        }
+        result
     })
     .await;
     if let Some(refused) = refused_review(result, "undo that verdict") {
@@ -471,6 +504,7 @@ async fn detection_review_clear(
 /// and returns the self-replacing review widget reflecting the new state.
 async fn detection_review_inline(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ReviewForm>,
 ) -> axum::response::Response {
     let current = if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
@@ -482,7 +516,17 @@ async fn detection_review_inline(
         );
         // Paired write — see `detection_review_set`.
         let result = tokio::task::spawn_blocking(move || {
-            state.set_detection_review(&date, &time, &sci, &com, status, None)
+            let result = state.set_detection_review(&date, &time, &sci, &com, status, None);
+            if result.is_ok() {
+                crate::audit::audit(
+                    &state,
+                    Some(&request_user),
+                    "detection.review",
+                    Some(&crate::audit::detection_target(&date, &time, &sci)),
+                    Some(&format!("via=detection verdict={}", status.as_str())),
+                );
+            }
+            result
         })
         .await;
         if let Some(refused) = refused_review(result, "save that verdict") {

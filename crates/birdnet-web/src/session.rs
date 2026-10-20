@@ -423,18 +423,16 @@ pub fn validate_token(value: &str) -> Option<ValidatedToken> {
 
 /// Build a `Set-Cookie` header value for a freshly issued session.
 ///
-/// `public_url` is the configured `BNB_PUBLIC_URL` (if any). When it starts
-/// with `https://` the `Secure` attribute is set; on a LAN-only deployment
-/// without HTTPS, `Secure` would prevent the browser from sending the
-/// cookie back over HTTP, so we omit it.
+/// `secure` adds the `Secure` attribute. It is a property of the request being
+/// answered, not of the station's configuration — see
+/// [`crate::request_scheme::cookie_secure`]: a `Secure` cookie handed to a
+/// browser on plain HTTP is dropped and the sign-in loops, and a cookie
+/// without it on an encrypted connection is sent in clear to the station's
+/// plain-HTTP listener (cookies are not scoped to a port).
 #[must_use]
-pub fn build_set_cookie(token: &str, ttl_ms: u64, public_url: Option<&str>) -> String {
+pub fn build_set_cookie(token: &str, ttl_ms: u64, secure: bool) -> String {
     let max_age_secs = ttl_ms / 1000;
-    let secure = if public_url.is_some_and(|u| u.starts_with("https://")) {
-        "; Secure"
-    } else {
-        ""
-    };
+    let secure = if secure { "; Secure" } else { "" };
     format!(
         "{COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path={path}; Max-Age={max_age_secs}{secure}",
         path = crate::base_path::current().cookie_path()
@@ -442,13 +440,11 @@ pub fn build_set_cookie(token: &str, ttl_ms: u64, public_url: Option<&str>) -> S
 }
 
 /// Build a `Set-Cookie` header value that immediately clears the cookie.
+///
+/// `secure` follows the same request as [`build_set_cookie`].
 #[must_use]
-pub fn build_clear_cookie(public_url: Option<&str>) -> String {
-    let secure = if public_url.is_some_and(|u| u.starts_with("https://")) {
-        "; Secure"
-    } else {
-        ""
-    };
+pub fn build_clear_cookie(secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
     format!(
         "{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path={path}; Max-Age=0{secure}",
         path = crate::base_path::current().cookie_path()
@@ -705,23 +701,21 @@ mod tests {
     }
 
     #[test]
-    fn set_cookie_includes_secure_only_on_https() {
-        let v = build_set_cookie("v2.sid.1.x", 60_000, Some("https://birds.example.com"));
-        assert!(v.contains("Secure"));
+    fn set_cookie_includes_secure_only_when_asked() {
+        let v = build_set_cookie("v2.sid.1.x", 60_000, true);
+        assert!(v.ends_with("; Secure"), "{v}");
         assert!(v.contains("Max-Age=60"));
 
-        let v = build_set_cookie("v2.sid.1.x", 60_000, Some("http://birds.local"));
-        assert!(!v.contains("Secure"));
-
-        let v = build_set_cookie("v2.sid.1.x", 60_000, None);
-        assert!(!v.contains("Secure"));
+        let v = build_set_cookie("v2.sid.1.x", 60_000, false);
+        assert!(!v.contains("Secure"), "{v}");
     }
 
     #[test]
     fn clear_cookie_zeros_max_age() {
-        let v = build_clear_cookie(None);
+        let v = build_clear_cookie(false);
         assert!(v.contains("Max-Age=0"));
         assert!(v.contains("bnb-session="));
+        assert!(build_clear_cookie(true).ends_with("; Secure"));
     }
 
     /// The two attributes that carry the defence, on both cookies.
@@ -737,15 +731,12 @@ mod tests {
     #[test]
     fn both_cookies_carry_httponly_and_samesite_lax() {
         for (label, cookie) in [
-            (
-                "issued",
-                build_set_cookie("v2.sid.1.x", 60_000, Some("https://birds.example.com")),
-            ),
+            ("issued", build_set_cookie("v2.sid.1.x", 60_000, true)),
             (
                 "issued (plain http)",
-                build_set_cookie("v2.sid.1.x", 60_000, None),
+                build_set_cookie("v2.sid.1.x", 60_000, false),
             ),
-            ("cleared", build_clear_cookie(None)),
+            ("cleared", build_clear_cookie(false)),
         ] {
             let attrs: Vec<&str> = cookie.split("; ").skip(1).collect();
             assert!(

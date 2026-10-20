@@ -41,7 +41,7 @@ struct TrackingQuery {
 async fn species_tracking(
     State(state): State<AppState>,
     Query(q): Query<TrackingQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     state
         .run_blocking(move |state| {
             let date = q
@@ -50,16 +50,29 @@ async fn species_tracking(
                 .unwrap_or_else(crate::routes::pages::today_date_string);
             let notable_only = q.notable_only.unwrap_or(false);
 
-            let (windows, rows) = state.with_read_db(|conn| {
+            // A read that failed is a 500, not `"species": []`: a consumer of
+            // this endpoint stores what it is told, and an empty list is the
+            // answer for a day on which nothing notable happened.
+            let read = state.with_read_db(|conn| {
                 let windows = crate::tracking::resolve_windows(conn, &date);
                 let rows = birdnet_db::species_tracking::statuses_for_date(
                     conn,
                     &date,
                     windows.as_windows(),
-                )
-                .unwrap_or_default();
-                (windows, rows)
+                )?;
+                Ok::<_, DbError>((windows, rows))
             });
+            let (windows, rows) = match read {
+                Ok(read) => read,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": crate::routes::log_internal("species tracking query failed", &e),
+                        })),
+                    );
+                }
+            };
 
             let species: Vec<Value> = rows
                 .iter()
@@ -78,14 +91,17 @@ async fn species_tracking(
                 })
                 .collect();
 
-            Json(json!({
-                "date": date,
-                "year_start": windows.year_start,
-                "season": windows.season,
-                "season_start": windows.season_start,
-                "absence_days": windows.absence_days,
-                "species": species,
-            }))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "date": date,
+                    "year_start": windows.year_start,
+                    "season": windows.season,
+                    "season_start": windows.season_start,
+                    "absence_days": windows.absence_days,
+                    "species": species,
+                })),
+            )
         })
         .await
 }

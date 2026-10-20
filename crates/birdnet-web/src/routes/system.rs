@@ -40,12 +40,18 @@ struct SoundLevelQuery {
 async fn sound_level(
     State(state): State<AppState>,
     Query(q): Query<SoundLevelQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     state
         .run_blocking(move |state| {
-            let broadband = state
+            // A read that failed is a 500. "No sound level observations yet" is
+            // a statement about the microphone, and a spectrum with no bands and
+            // `samples: 0` is a measurement the station never made.
+            let broadband = match state
                 .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24))
-                .unwrap_or_default();
+            {
+                Ok(rows) => rows,
+                Err(e) => return sound_level_failed(&e),
+            };
 
             // Default to whichever source reported most recently, so a single-
             // microphone station needs no query string and a multi-source one gets a
@@ -54,42 +60,60 @@ async fn sound_level(
                 .source
                 .or_else(|| broadband.first().map(|b| b.source.clone()));
             let Some(source) = source else {
-                return Json(json!({
-                    "source": Value::Null,
-                    "unit": "dBFS",
-                    "bands": [],
-                    "note": "no sound level observations yet",
-                }));
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "source": Value::Null,
+                        "unit": "dBFS",
+                        "bands": [],
+                        "note": "no sound level observations yet",
+                    })),
+                );
             };
 
-            let bands = state
+            let bands = match state
                 .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source))
-                .unwrap_or_default();
+            {
+                Ok(rows) => rows,
+                Err(e) => return sound_level_failed(&e),
+            };
             let latest = broadband.iter().find(|b| b.source == source);
             let calibration_db = latest.map_or(0.0, |b| b.calibration_db);
 
-            Json(json!({
-                "source": source,
-                "date": bands.first().map(|b| b.date.clone()),
-                "hour": bands.first().map(|b| b.hour),
-                "samples": bands.first().map_or(0, |b| b.samples),
-                "unit": if calibration_db == 0.0 { "dBFS" } else { "dB SPL" },
-                "calibration_db": calibration_db,
-                "a_weighted_db": latest.map(|b| b.a_weighted_db),
-                "z_weighted_db": latest.map(|b| b.z_weighted_db),
-                "bands": bands
-                    .iter()
-                    .map(|b| json!({
-                        "band_hz": b.band_hz,
-                        "label": birdnet_core::audio::soundlevel::label_for(b.band_hz),
-                        "mean_db": b.mean_db,
-                        "min_db": b.min_db,
-                        "max_db": b.max_db,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "source": source,
+                    "date": bands.first().map(|b| b.date.clone()),
+                    "hour": bands.first().map(|b| b.hour),
+                    "samples": bands.first().map_or(0, |b| b.samples),
+                    "unit": if calibration_db == 0.0 { "dBFS" } else { "dB SPL" },
+                    "calibration_db": calibration_db,
+                    "a_weighted_db": latest.map(|b| b.a_weighted_db),
+                    "z_weighted_db": latest.map(|b| b.z_weighted_db),
+                    "bands": bands
+                        .iter()
+                        .map(|b| json!({
+                            "band_hz": b.band_hz,
+                            "label": birdnet_core::audio::soundlevel::label_for(b.band_hz),
+                            "mean_db": b.mean_db,
+                            "min_db": b.min_db,
+                            "max_db": b.max_db,
+                        }))
+                        .collect::<Vec<_>>(),
+                })),
+            )
         })
         .await
+}
+
+/// The `500` for a sound-level read that failed. The detail goes to the log,
+/// not over the wire.
+fn sound_level_failed(e: &birdnet_db::sqlite::DbError) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": crate::routes::log_internal("sound level query failed", e) })),
+    )
 }
 
 async fn root() -> Json<Value> {

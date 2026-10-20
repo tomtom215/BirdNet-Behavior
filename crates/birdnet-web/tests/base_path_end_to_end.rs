@@ -237,12 +237,12 @@ fn the_session_cookie_is_scoped_to_the_prefix() {
     let base = birdnet_web::base_path::BasePath::parse(BASE).expect("valid prefix");
     birdnet_web::base_path::init(base);
 
-    let set = birdnet_web::session::build_set_cookie("tok", 3_600_000, None);
+    let set = birdnet_web::session::build_set_cookie("tok", 3_600_000, false);
     assert!(
         set.contains("Path=/birdnet/;"),
         "the session cookie must be scoped to the prefix: {set}"
     );
-    let clear = birdnet_web::session::build_clear_cookie(None);
+    let clear = birdnet_web::session::build_clear_cookie(false);
     assert!(
         clear.contains("Path=/birdnet/;"),
         "and so must the one that clears it, or sign-out leaves the token behind: {clear}"

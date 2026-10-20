@@ -441,6 +441,7 @@ async fn set_password(
     State(state): State<AppState>,
     request_user: RequestUser,
     client: Option<axum::extract::Extension<crate::client_ip::ClientIp>>,
+    scheme: Option<axum::extract::Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<PasswordForm>,
@@ -499,6 +500,7 @@ async fn set_password(
                     state,
                     id,
                     client.as_deref(),
+                    scheme.as_deref(),
                     &headers,
                 ) && let Ok(value) = axum::http::HeaderValue::from_str(&cookie)
                 {
@@ -988,6 +990,7 @@ mod tests {
                     user: admin,
                     session_id: "sess-me".to_owned(),
                 },
+                None,
                 None,
                 axum::http::HeaderMap::new(),
                 Path(id),

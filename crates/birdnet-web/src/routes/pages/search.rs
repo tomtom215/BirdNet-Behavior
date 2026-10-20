@@ -450,6 +450,7 @@ impl BulkAction {
 
 async fn bulk_action(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     axum::extract::RawForm(body): axum::extract::RawForm,
 ) -> axum::response::Response {
     let form = parse_bulk_form(&body);
@@ -516,6 +517,30 @@ async fn bulk_action(
             };
             if ok {
                 done += 1;
+                // One row per detection, as the API's batch endpoint writes
+                // them, so a bulk delete of forty detections is forty rows
+                // `/admin/audit` can be searched for by detection. The action
+                // names are matched inline for the reason given there: the
+                // gate in `tests/the_audit_log_records_what_happened.rs` reads
+                // literals, not helpers. Written as each row lands, so a bulk
+                // action that stops half way (`?` above) still records what it
+                // did before it stopped.
+                crate::audit::audit(
+                    &state,
+                    Some(&request_user),
+                    match action {
+                        BulkAction::Delete => "detection.delete",
+                        BulkAction::Lock => "detection.lock",
+                        BulkAction::Unlock => "detection.unlock",
+                        BulkAction::Confirm | BulkAction::Reject => "detection.review",
+                    },
+                    Some(&crate::audit::detection_target(
+                        &k.date,
+                        &k.time,
+                        &k.sci_name,
+                    )),
+                    Some("via=search"),
+                );
             }
         }
         Ok::<_, birdnet_db::sqlite::DbError>(done)

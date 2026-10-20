@@ -402,7 +402,7 @@ const VIA_API: &str = "via=api";
 
 /// The audit target for a key: the tuple, in the order the schema uses.
 fn target_of(date: &str, time: &str, sci_name: &str) -> String {
-    format!("{date} {time} {sci_name}")
+    crate::audit::detection_target(date, time, sci_name)
 }
 
 async fn review(

@@ -82,6 +82,10 @@ struct Snapshot {
     /// "Disk" tile does not cover.
     scratch_low: bool,
     scratch_critical: bool,
+    /// The database directory is on the container's own writable layer, not on
+    /// a volume: everything stored there goes when the container is recreated.
+    /// See [`crate::data_volume::on_container_layer`].
+    data_on_container_layer: bool,
     service_uptime: Option<u64>,
     /// Per-source acoustic health. Empty until the sampler has run.
     acoustic: Vec<birdnet_db::audio_levels::SourceDrift>,
@@ -197,6 +201,7 @@ async fn gather(state: &AppState) -> Snapshot {
             scratch_critical: scratch
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_critical),
+            data_on_container_layer: crate::data_volume::on_container_layer(&data_dir),
             service_uptime: system_info::process_uptime_secs(),
             acoustic: state.with_read_db(|conn| {
                 birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
@@ -234,6 +239,7 @@ async fn gather(state: &AppState) -> Snapshot {
         disk_critical: false,
         scratch_low: false,
         scratch_critical: false,
+        data_on_container_layer: false,
         service_uptime: None,
         acoustic: Vec::new(),
         occurrence: OccurrenceFilterState {
@@ -407,6 +413,17 @@ fn status_banner(s: &Snapshot) -> String {
     }
     if !s.integrity_ok {
         issues.push("the database integrity check failed".to_owned());
+    }
+    // Not a fault of the moment: the station is running and recording. It is a
+    // fault of the next time the container is recreated — an image upgrade is
+    // enough — and this banner is the only place the operator will be told
+    // before it happens.
+    if s.data_on_container_layer {
+        issues.push(
+            "your data is stored inside the container, not on a volume, so it will be lost \
+             when the container is recreated (mount a volume at the data folder)"
+                .to_owned(),
+        );
     }
     if s.sources_configured == 0 {
         issues.push("no microphone or camera is set up yet".to_owned());
@@ -900,6 +917,7 @@ mod tests {
             disk_critical: false,
             scratch_low: false,
             scratch_critical: false,
+            data_on_container_layer: false,
             service_uptime: Some(3_600),
             acoustic: Vec::new(),
             occurrence: OccurrenceFilterState {
@@ -1081,6 +1099,24 @@ mod tests {
         let mut s = snap(false, true, 2, 0);
         s.capture = vec![once];
         assert!(!status_banner(&s).contains("flapping"));
+    }
+
+    /// A station whose data directory is on the container's writable layer is
+    /// healthy now and will not be after its next recreate. The banner says so;
+    /// the same station on a volume does not.
+    #[test]
+    fn data_on_the_containers_own_layer_is_named_in_the_banner() {
+        let mut s = snap(false, true, 2, 0);
+        assert!(status_banner(&s).contains("All systems healthy"));
+        s.data_on_container_layer = true;
+        let banner = status_banner(&s);
+        assert!(banner.contains("Needs attention"), "{banner}");
+        assert!(
+            banner.contains("stored inside the container, not on a volume"),
+            "{banner}"
+        );
+        assert!(banner.contains("mount a volume"), "{banner}");
+        assert!(!banner.contains("All systems healthy"), "{banner}");
     }
 
     #[test]

@@ -21,6 +21,7 @@ pub mod open_admin_host;
 pub mod private_mode;
 pub mod random;
 pub mod rate_limit;
+pub mod request_scheme;
 pub mod routes;
 mod seal;
 pub mod security;

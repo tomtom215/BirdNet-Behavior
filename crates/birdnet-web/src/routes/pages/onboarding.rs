@@ -583,6 +583,7 @@ pub fn plausible_timezone(raw: &str) -> bool {
 async fn onboarding_save(
     State(state): State<AppState>,
     client: Option<Extension<ClientIp>>,
+    scheme: Option<Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
     Form(form): Form<OnboardingForm>,
 ) -> Response {
@@ -603,6 +604,7 @@ async fn onboarding_save(
                     state,
                     admin_id,
                     client.as_deref(),
+                    scheme.as_deref(),
                     &headers,
                 );
             }

@@ -196,6 +196,17 @@ pub async fn rate_limit_middleware(
     req.extensions_mut().insert(ClientIp(ip));
     req.extensions_mut()
         .insert(crate::client_ip::VouchedBy(resolved.vouched_by));
+    // And how the request arrived, for the same reason: the session cookie's
+    // `Secure` is a fact about this connection, which only this layer can read
+    // beside the peer and the trusted proxies. The extension is overwritten,
+    // never merged, so nothing a client sends can pre-seed it.
+    let scheme = crate::request_scheme::resolve(
+        &limiter.config.trusted_proxies,
+        req.headers(),
+        peer_ip(&req),
+        req.extensions().get::<crate::tls::ViaTls>().is_some(),
+    );
+    req.extensions_mut().insert(scheme);
 
     if !limiter.check(ip) {
         tracing::debug!(ip = %ip, "rate limit exceeded");
@@ -239,11 +250,15 @@ fn extract_ip(req: &Request<Body>, trusted: &TrustedProxies) -> IpAddr {
 }
 
 fn resolve(req: &Request<Body>, trusted: &TrustedProxies) -> crate::client_ip::Resolved {
-    let peer = req
-        .extensions()
+    trusted.resolve(req.headers(), peer_ip(req))
+}
+
+/// The address at the far end of the TCP connection (loopback when the request
+/// carries no `ConnectInfo`; see [`extract_ip`]).
+fn peer_ip(req: &Request<Body>) -> IpAddr {
+    req.extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map_or_else(|| IpAddr::from([127, 0, 0, 1]), |ci| ci.0.ip());
-    trusted.resolve(req.headers(), peer)
+        .map_or_else(|| IpAddr::from([127, 0, 0, 1]), |ci| ci.0.ip())
 }
 
 // ---------------------------------------------------------------------------

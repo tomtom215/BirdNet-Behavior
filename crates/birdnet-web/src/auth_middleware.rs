@@ -43,7 +43,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{FromRequestParts, Request};
 use axum::http::request::Parts;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 
@@ -193,11 +193,34 @@ async fn private_gate_middleware(request: Request<Body>, next: Next, state: &App
         return private_without_password();
     }
     let Some(user) = user else {
-        return refuse_private(&request, &original_path);
+        return no_store(refuse_private(&request, &original_path));
     };
     let mut req = request;
     req.extensions_mut().insert(user);
-    next.run(req).await
+    no_store(next.run(req).await)
+}
+
+/// Mark a private station's response as not to be kept, unless the handler
+/// already said what it wants.
+///
+/// The service worker (`static/sw.js`) answers dashboard pages
+/// stale-while-revalidate, which is right for an open station and wrong for a
+/// private one: the cached copy is the private dashboard, and it is returned
+/// after sign-out before the server has had a chance to say `303 /login`. The
+/// worker already declines to store anything marked `no-store`; the browser's
+/// own cache and back-forward navigation honour it too. A handler that set its
+/// own `Cache-Control` (a clip, a spectrogram, an image) keeps it: those carry
+/// a policy of their own, and they are not what the worker revalidates.
+///
+/// Applied only where the gate is active. An open station's pages are public,
+/// and the worker's offline copy of them is what keeps a wall display up
+/// through an outage.
+fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+    response
 }
 
 /// The refusal a private station gives a request with no session.
