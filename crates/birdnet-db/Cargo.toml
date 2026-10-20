@@ -21,6 +21,9 @@ password-hash.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# The rule export is JSON on the wire; its serde attributes (a defaulted,
+# skipped-when-zero field) are only observable through a JSON round trip.
+serde_json.workspace = true
 tempfile = "3"
 criterion.workspace = true
 rusqlite = { workspace = true, features = ["trace"] }

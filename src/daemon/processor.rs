@@ -514,6 +514,9 @@ pub(super) fn event_processor(
     let apprise_gate = apprise.as_ref().map(|a| a.blocking_lock().gatekeeper());
     let mut dynamic = DynamicThresholdState::new(dynamic, &state);
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
+    // One post per rule and species per cooldown window; shared with the post
+    // tasks so a request that never left can give its window back.
+    let alert_cooldowns = crate::daemon::alert_cooldown::AlertCooldowns::default();
     if daylight.is_enabled() {
         tracing::info!("taxon-aware daylight filter enabled");
     }
@@ -1099,6 +1102,27 @@ pub(super) fn event_processor(
                         body_template,
                         auth,
                     } => {
+                        // At most one post per rule and species per window, on
+                        // the detection's own clock (as the duplicate gate is).
+                        // Without it a calling owl posted once per 3 s chunk.
+                        let at_secs = crate::daemon::duplicate::detection_secs(
+                            &detection.date,
+                            &detection.time,
+                        );
+                        if !alert_cooldowns.should_fire(
+                            rule.id,
+                            &detection.scientific_name,
+                            rule.cooldown_secs,
+                            at_secs,
+                        ) {
+                            tracing::debug!(
+                                rule = %rule.name,
+                                species = %detection.common_name,
+                                cooldown_secs = rule.cooldown_secs,
+                                "alert rule webhook held back by its cooldown"
+                            );
+                            continue;
+                        }
                         let body = body_template.as_deref().map(|tmpl| {
                             birdnet_db::alert_rules::render_webhook_body(
                                 tmpl,
@@ -1113,6 +1137,9 @@ pub(super) fn event_processor(
                         let method = method.clone();
                         let auth = auth.clone();
                         let rule_name = rule.name.clone();
+                        let (rule_id, cooldown_species) =
+                            (rule.id, detection.scientific_name.clone());
+                        let cooldowns = alert_cooldowns.clone();
                         // The path and query of a webhook URL are where its
                         // secret lives, so the log names the host only.
                         let target = birdnet_integrations::webhook::redact_url(&url);
@@ -1126,12 +1153,18 @@ pub(super) fn event_processor(
                                     status,
                                     "webhook dispatched"
                                 ),
-                                Err(e) => tracing::warn!(
-                                    rule = %rule_name,
-                                    target,
-                                    error = %e,
-                                    "webhook dispatch failed"
-                                ),
+                                Err(e) => {
+                                    // It never left: the next call of the bird
+                                    // may try again rather than wait out a
+                                    // window for a post nobody received.
+                                    cooldowns.release(rule_id, &cooldown_species, at_secs);
+                                    tracing::warn!(
+                                        rule = %rule_name,
+                                        target,
+                                        error = %e,
+                                        "webhook dispatch failed"
+                                    );
+                                }
                             }
                         });
                     }
@@ -2624,6 +2657,7 @@ mod tests {
                         hour_start: None,
                         hour_end: None,
                         days_of_week: None,
+                        cooldown_secs: 0,
                         action: birdnet_db::alert_rules::AlertAction::Suppress,
                     },
                 )
@@ -4120,6 +4154,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action,
         };
 
@@ -4158,6 +4193,252 @@ mod tests {
             detections, 1,
             "an accepted detection is stored even when a Suppress alert rule fires"
         );
+    }
+
+    // ── alert-rule webhook cooldown, through the processor ──────────────
+
+    /// Every request path an endpoint on loopback has been sent, in arrival
+    /// order. The endpoint answers each with `200 ok`, or — when `hang_up` —
+    /// closes the connection without a reply, which the sender sees as a
+    /// failed request.
+    type WebhookHits = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    fn spawn_stub_webhook_endpoint(hang_up: bool) -> (u16, WebhookHits) {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
+        let port = listener.local_addr().expect("stub addr").port();
+        let hits: WebhookHits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&hits);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                let mut reader = BufReader::new(stream);
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                let path = request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                let mut content_length = 0_usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0_u8; content_length];
+                let _ = reader.read_exact(&mut body);
+                if let Ok(mut log) = sink.lock() {
+                    log.push(path);
+                }
+                if !hang_up {
+                    let _ = reader.into_inner().write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    );
+                }
+            }
+        });
+        (port, hits)
+    }
+
+    /// How many requests `path` has received.
+    fn hits_on(hits: &WebhookHits, path: &str) -> usize {
+        hits.lock().unwrap().iter().filter(|p| *p == path).count()
+    }
+
+    /// A webhook rule matching every detection, aimed at `path` on `port`.
+    fn webhook_rule_to(
+        name: &str,
+        port: u16,
+        path: &str,
+        cooldown_secs: u32,
+    ) -> birdnet_db::alert_rules::NewAlertRule {
+        birdnet_db::alert_rules::NewAlertRule {
+            name: name.to_owned(),
+            enabled: true,
+            species_pattern: None,
+            confidence_min: 0.0,
+            confidence_max: 1.0,
+            hour_start: None,
+            hour_end: None,
+            days_of_week: None,
+            cooldown_secs,
+            action: birdnet_db::alert_rules::AlertAction::Webhook {
+                url: format!("http://127.0.0.1:{port}{path}"),
+                method: "POST".to_owned(),
+                body_template: None,
+                auth: None,
+            },
+        }
+    }
+
+    /// Wait for `done`, up to `secs`; true if it held.
+    async fn eventually(secs: u64, mut done: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while std::time::Instant::now() < deadline {
+            if done() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        done()
+    }
+
+    /// A calling owl is detected in every three-second chunk, and a webhook rule
+    /// used to post for each of them. With a cooldown it posts once per window,
+    /// per species — and a rule without one still posts every time.
+    ///
+    /// The "every" rule is the counterpart and the barrier at once: it matches
+    /// the same detections with no cooldown, so its seven posts show the
+    /// processor handled every event, and a gate that suppressed everything
+    /// (or never anything) cannot pass both assertions.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_burst_of_matching_detections_posts_once_per_cooldown_window() {
+        use birdnet_db::alert_rules::insert_rule;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let (port, hits) = spawn_stub_webhook_endpoint(false);
+        state.with_db(|c| {
+            insert_rule(c, &webhook_rule_to("cooled", port, "/cooled", 300)).unwrap();
+            insert_rule(c, &webhook_rule_to("every", port, "/every", 0)).unwrap();
+        });
+
+        let events = [
+            ("Strix aluco", "09:00:00"),
+            ("Strix aluco", "09:00:03"),
+            ("Strix aluco", "09:00:06"),
+            ("Strix aluco", "09:00:09"),
+            ("Strix aluco", "09:00:12"),
+            // Another bird, mid-burst: its own window.
+            ("Erithacus rubecula", "09:00:06"),
+            // Exactly one window after the first post: the owl is heard again.
+            ("Strix aluco", "09:05:00"),
+        ]
+        .iter()
+        .map(|(sci, hms)| event_at(sci, hms, tmp.path()))
+        .collect();
+        run_processor(&state, events, HashMap::new(), 0.25).await;
+
+        assert!(
+            eventually(20, || hits_on(&hits, "/every") == 7
+                && hits_on(&hits, "/cooled") >= 3)
+            .await,
+            "the posts never arrived: {:?}",
+            hits.lock().unwrap()
+        );
+        // Anything the gate wrongly let through is on its way by now.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            hits_on(&hits, "/every"),
+            7,
+            "a rule with no cooldown must post for every match"
+        );
+        assert_eq!(
+            hits_on(&hits, "/cooled"),
+            3,
+            "seven detections of two birds over five minutes should post three times \
+             (the owl, the robin, the owl a window later); got {:?}",
+            hits.lock().unwrap()
+        );
+    }
+
+    /// A post that never left must not cost the rule its window. The endpoint
+    /// here hangs up on every request, so every post fails; the owl keeps
+    /// calling, and each failure has to leave the next call free to try again.
+    /// With the window kept, the 300 s cooldown would swallow the 270 s of
+    /// calls that follow the first failed post.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_post_gives_its_cooldown_window_back() {
+        use birdnet_db::alert_rules::insert_rule;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let (port, hits) = spawn_stub_webhook_endpoint(true);
+        state.with_db(|c| {
+            insert_rule(c, &webhook_rule_to("cooled", port, "/cooled", 300)).unwrap();
+        });
+
+        // Feed one owl call every 3 s of recorded time, 100 ms of real time
+        // apart, until the endpoint has been tried twice or we give up. The
+        // calls span less than the window, so only a released claim can let a
+        // second post out.
+        let feeder_hits = std::sync::Arc::clone(&hits);
+        let feeder_dir = tmp.path().to_path_buf();
+        run_processor_fed(&state, move |tx| {
+            for i in 0..90_u32 {
+                let s = i * 3;
+                let hms = format!("09:{:02}:{:02}", s / 60, s % 60);
+                if tx.send(event_at("Strix aluco", &hms, &feeder_dir)).is_err() {
+                    return;
+                }
+                if hits_on(&feeder_hits, "/cooled") >= 2 {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })
+        .await;
+
+        assert!(
+            hits_on(&hits, "/cooled") >= 2,
+            "the first post failed and its window was never given back: {:?}",
+            hits.lock().unwrap()
+        );
+    }
+
+    /// Drive `event_processor` from a channel that a thread keeps feeding while
+    /// it runs, with every integration off. The channel closes when `feed`
+    /// returns. For behaviour that depends on what happens *between* events.
+    async fn run_processor_fed(
+        state: &birdnet_web::state::AppState,
+        feed: impl FnOnce(mpsc::Sender<birdnet_core::detection::daemon::DetectionEvent>)
+        + Send
+        + 'static,
+    ) {
+        let (event_tx, event_rx) = mpsc::channel();
+        let feeder = std::thread::spawn(move || feed(event_tx));
+
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let broadcast = state.detection_broadcast();
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(state);
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                None,
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                DynamicThresholds::new(DynamicThresholdConfig::default()),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+        feeder.join().expect("the feeding thread panicked");
     }
 
     #[tokio::test(flavor = "current_thread")]
