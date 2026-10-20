@@ -286,6 +286,22 @@ impl RowWrite {
 /// and says nothing either. Out-of-band swaps still run under `none`, so the
 /// toast lands. A `fetch` caller reads the same header as "not applied".
 pub fn not_applied(toast: &Toast) -> axum::response::Response {
+    page_left_as_it_is(toast)
+}
+
+/// The write went through, but the fragment that would have shown it could not
+/// be drawn: say it is done, and leave the page as it is.
+///
+/// The alternative is to swap in whatever the follow-up read defaulted to — an
+/// empty roster over a list that had people in it, under a toast reporting
+/// success. A failed redraw is answered like a refused write, with the page
+/// untouched, except that the toast is truthful about the part that worked and
+/// asks for a reload for the part that did not.
+pub fn applied_but_not_redrawn(toast: &Toast) -> axum::response::Response {
+    page_left_as_it_is(toast)
+}
+
+fn page_left_as_it_is(toast: &Toast) -> axum::response::Response {
     use axum::response::IntoResponse as _;
     (
         axum::http::StatusCode::OK,

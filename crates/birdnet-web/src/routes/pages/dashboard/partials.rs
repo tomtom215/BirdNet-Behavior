@@ -35,7 +35,9 @@ pub(super) async fn detections_partial(
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
-            let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
+            // Propagated, not defaulted: without the map the "first ever" badge
+            // is simply absent, which reads as *this was not a first*.
+            let first_seen = birdnet_db::sqlite::species_first_detection(conn)?;
             let floor = crate::routes::pages::confidence::station_floor(conn);
             Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen, floor))
         })
@@ -157,7 +159,8 @@ pub(super) async fn best_detections_partial(
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let best = birdnet_db::sqlite::best_detections_for_date(conn, &today_for_query, 5)?;
-            let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
+            // As in the live feed: a missing map is not a map with no firsts.
+            let first_seen = birdnet_db::sqlite::species_first_detection(conn)?;
             Ok::<_, birdnet_db::sqlite::DbError>((best, first_seen))
         })
     })

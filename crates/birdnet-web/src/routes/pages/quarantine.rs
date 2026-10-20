@@ -215,26 +215,40 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
 }
 
 /// Tiny partial used by the nav badge to show pending count.
+///
+/// Three answers, because there are three facts: nothing waiting (no badge),
+/// `n` waiting (the count), and *could not count* — which is a `?`, not a
+/// missing badge, since a missing badge is how "nothing waits" looks.
 async fn quarantine_pending_count_partial(State(state): State<AppState>) -> impl IntoResponse {
-    let count = tokio::task::spawn_blocking(move || {
+    let counted = tokio::task::spawn_blocking(move || {
         state.with_read_db(birdnet_db::sqlite::quarantine_pending_count)
     })
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .unwrap_or(0);
+    .await;
 
-    let html = if count > 0 {
-        format!(
+    let html = match counted {
+        Ok(Ok(count)) if count > 0 => format!(
             r#"<span class="qz-pending-badge">
                {count}
             </span>"#
-        )
-    } else {
-        String::new()
+        ),
+        Ok(Ok(_)) => String::new(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "quarantine badge: the pending count could not be read");
+            unknown_pending_badge()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "quarantine badge: task failed");
+            unknown_pending_badge()
+        }
     };
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// The badge for a count that could not be read.
+fn unknown_pending_badge() -> String {
+    r#"<span class="qz-pending-badge" role="img" aria-label="The number of sightings waiting for review could not be read" title="The number of sightings waiting for review could not be read">?</span>"#
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -532,9 +546,15 @@ async fn quarantine_approve(
             tracing::info!(id, newly_inserted, "quarantine entry approved");
             Some(Toast::success("Approved."))
         }
+        // Not `{e}`: the database's own words ("sqlite error: no such table…")
+        // are for the log. What is certain is that the approval is one
+        // transaction — the sighting and its record in the review log are
+        // written together or not at all — so nothing was half-done.
         Ok(Err(e)) => {
             tracing::warn!(id, error = %e, "failed to approve quarantine entry");
-            Some(Toast::error(format!("Approve failed: {e}")))
+            Some(Toast::error(
+                "Not approved: the station could not save that.",
+            ))
         }
         Err(e) => {
             tracing::warn!(id, error = %e, "task panic approving quarantine entry");

@@ -45,6 +45,10 @@ async fn station_health_line_partial(
                 r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> capture down</span>"#
                     .to_string()
             }
+            (super::today::CaptureState::Unreadable, _) => {
+                r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the sources</span>"#
+                    .to_string()
+            }
             (_, Some(last)) => {
                 format!(
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> stopped · {last}</span>"#

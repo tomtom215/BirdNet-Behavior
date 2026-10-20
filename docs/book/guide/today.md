@@ -20,12 +20,16 @@ Beside it, the **live signal** card shows the last 30 seconds of audio. It is
 device and falls back to a flat baseline labelled **idle** when nothing has
 been heard recently — never a fake waveform. A row of pills carries the
 recording state, current weather, sunrise/sunset, and your station's name and
-coordinates.
+coordinates. If the station cannot read its list of audio sources, the
+recording pill says the state is **unknown** rather than claiming there is no
+microphone.
 
 **2 · The nudge (only when it matters).** A calm strip appears under the hero
 **only** when something needs your eye: rare detections waiting in the
 [review queue](./reviews.md), or an **outage** warning when capture has gone
-quiet during daylight. When all is well and quiet, it's absent entirely.
+quiet during daylight. When all is well and quiet, it's absent entirely. If the
+station cannot read the review queue, the strip says so instead of staying
+absent, because absent is how "nothing is waiting" looks.
 
 **3 · The shape of the day.** The **day strip** plots the whole day on one
 24-hour timeline — an hourly histogram of how busy each hour was, an amber

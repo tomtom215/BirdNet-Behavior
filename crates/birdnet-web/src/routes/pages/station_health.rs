@@ -92,6 +92,10 @@ struct Snapshot {
     service_uptime: Option<u64>,
     /// Per-source acoustic health. Empty until the sampler has run.
     acoustic: Vec<birdnet_db::audio_levels::SourceDrift>,
+    /// The noise-floor history could not be read. Empty `acoustic` then means
+    /// *unknown*, not *the sampler has not run yet* — and the panel is silent in
+    /// that second case, so the two must not look alike.
+    acoustic_failed: bool,
     /// What the species occurrence filter is doing (ON-12).
     occurrence: OccurrenceFilterState,
     /// Classifiers failing every window (`e853776`), by id.
@@ -164,6 +168,16 @@ async fn gather(state: &AppState) -> Snapshot {
             .map(|handle| read_capture_status(&handle).sources)
             .unwrap_or_default();
 
+        let (acoustic, acoustic_failed) =
+            match state.with_read_db(|conn| birdnet_db::audio_levels::drift_by_source(conn, 7, 30))
+            {
+                Ok(drift) => (drift, false),
+                Err(e) => {
+                    tracing::warn!(error = %e, "station health: the noise-floor history could not be read");
+                    (Vec::new(), true)
+                }
+            };
+
         let vitals = build_vitals(&sys, disk.as_ref(), scratch.as_ref());
         Snapshot {
             vitals,
@@ -196,9 +210,8 @@ async fn gather(state: &AppState) -> Snapshot {
                 &super::station_issues::data_dir_of(state.db_path()),
             ),
             service_uptime: system_info::process_uptime_secs(),
-            acoustic: state.with_read_db(|conn| {
-                birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
-            }),
+            acoustic,
+            acoustic_failed,
             occurrence: state.metrics().occurrence_filter(),
             failing_classifiers: state
                 .metrics()
@@ -236,6 +249,7 @@ async fn gather(state: &AppState) -> Snapshot {
         data_on_container_layer: false,
         service_uptime: None,
         acoustic: Vec::new(),
+        acoustic_failed: true,
         occurrence: OccurrenceFilterState {
             active: false,
             candidates: None,
@@ -704,6 +718,9 @@ fn occurrence_cell(f: OccurrenceFilterState) -> String {
 /// Silent until the sampler has produced something, because a panel of dashes
 /// on a station that has been running an hour teaches people to skip it.
 fn acoustic_panel(s: &Snapshot) -> String {
+    if s.acoustic_failed {
+        return super::error_states::inline("the microphone noise-floor history");
+    }
     if s.acoustic.is_empty() {
         return String::new();
     }
@@ -852,6 +869,7 @@ mod tests {
             data_on_container_layer: false,
             service_uptime: Some(3_600),
             acoustic: Vec::new(),
+            acoustic_failed: false,
             occurrence: OccurrenceFilterState {
                 active: false,
                 candidates: None,

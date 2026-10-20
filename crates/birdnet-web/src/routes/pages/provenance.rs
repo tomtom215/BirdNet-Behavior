@@ -89,18 +89,38 @@ fn render_note(batches: &[birdnet_db::sqlite::ImportBatch], imported_rows: i64) 
     )
 }
 
+/// What the note slot says when it could not find out.
+///
+/// The note's silence is itself a statement — *this history is one place* — so a
+/// read that failed must not produce it. The two reads default separately to
+/// something that renders as nothing: no batches, or no imported rows.
+fn could_not_check() -> String {
+    crate::routes::pages::error_states::inline("whether this history includes imported data")
+}
+
 async fn provenance_note_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let html = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let batches = birdnet_db::sqlite::list_import_batches(conn).unwrap_or_default();
-            let rows = birdnet_db::sqlite::imported_detection_count(conn).unwrap_or(0);
-            render_note(&batches, rows)
+            let batches = birdnet_db::sqlite::list_import_batches(conn);
+            let rows = birdnet_db::sqlite::imported_detection_count(conn);
+            match (batches, rows) {
+                (Ok(batches), Ok(rows)) => render_note(&batches, rows),
+                (batches, rows) => {
+                    for e in [batches.err(), rows.err()].into_iter().flatten() {
+                        tracing::warn!(error = %e, "provenance note: read failed");
+                    }
+                    could_not_check()
+                }
+            }
         })
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "provenance note: task failed");
+        could_not_check()
+    });
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
