@@ -951,10 +951,11 @@ async fn write_settings(
         return bad_request("the body could not be read as a settings payload");
     };
 
-    // The settings page's own range check, on the submission. The API skipped
-    // it, so `{"confidence_threshold": 75}` — the percentage slip the page
-    // exists to catch — stored cleanly and the station stopped recording.
-    let problems = crate::routes::admin::settings::handler::range_problems(&form);
+    // The settings page's own checks, on the submission. The API skipped them,
+    // so `{"confidence_threshold": 75}` — the percentage slip the page exists to
+    // catch — stored cleanly and the station stopped recording. It later ran only
+    // the ranges, and still stored a language or a clip format the page refuses.
+    let problems = crate::routes::admin::settings::handler::submission_problems(&form);
     if !problems.is_empty() {
         return (
             StatusCode::BAD_REQUEST,

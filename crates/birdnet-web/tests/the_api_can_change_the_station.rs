@@ -619,7 +619,7 @@ async fn a_settings_write_is_audited_by_key_and_not_by_value() {
         "PUT",
         "/api/v2/settings",
         Some(TOKEN),
-        r#"{"birdweather_token":"bw-live-abcdef"}"#,
+        r#"{"birdweather_token":"bwliveabcdef"}"#,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -643,7 +643,7 @@ async fn a_settings_write_is_audited_by_key_and_not_by_value() {
         "the entry does not say which key changed: {update:?}"
     );
     assert!(
-        !update.1.contains("bw-live-abcdef"),
+        !update.1.contains("bwliveabcdef"),
         "the audit entry carries the credential itself: {update:?}"
     );
     assert!(

@@ -262,6 +262,83 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
     problems
 }
 
+/// Problems with the fields that take one word out of a short list, phrased for
+/// the person who typed them.
+///
+/// The page offers a `<select>` for the clip format and the species-info site, so
+/// only a hand-made request or `PUT /api/v2/settings` can send anything else;
+/// the recording window is a free-text box with suggestions, so a person can.
+/// Each is held to the predicate `birdnet_core::config::validate` uses for the
+/// same key in the config file, not to a second list, and a blank value clears
+/// the setting as it does everywhere else.
+///
+/// An unknown value is not rejected downstream, it is *reinterpreted*: a window
+/// the scheduler cannot parse becomes "record all day" with a line in the log,
+/// and the page goes on showing the text that was typed.
+fn choice_problems(form: &SettingsForm) -> Vec<String> {
+    use birdnet_core::config::validate as v;
+    let given = |value: &Option<String>| -> Option<String> {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+            .map(str::to_owned)
+    };
+    let mut problems = Vec::new();
+    if let Some(raw) = given(&form.recording_schedule) {
+        if !v::is_recording_schedule(&raw) {
+            problems.push(format!(
+                "Recording window must be all-day, solar, or fixed:HH:MM-HH:MM \
+                 (for example fixed:06:00-20:00). You entered “{raw}”."
+            ));
+        } else if let Some((start, end)) =
+            raw.strip_prefix("fixed:").and_then(v::fixed_window_minutes)
+            && birdnet_scheduler::RecordingWindow::fixed(start, end).is_err()
+        {
+            // `validate()` accepts this grammar; the scheduler does not. A
+            // window that crosses midnight is the likely typo for a night
+            // recorder, and it would be run as all-day.
+            problems.push(format!(
+                "Recording window “{raw}” does not end after it starts. A fixed window \
+                 stays within one day, so the station would ignore it and record all day. \
+                 Use solar, or a window such as fixed:06:00-20:00."
+            ));
+        }
+    }
+    if let Some(raw) = given(&form.audio_format)
+        && !v::is_audio_format(&raw)
+    {
+        problems.push(format!(
+            "Extracted Clip Format must be one of {}. You entered “{raw}”.",
+            v::AUDIO_FORMATS.join(", ")
+        ));
+    }
+    if let Some(raw) = given(&form.info_site)
+        && !v::is_info_site(&raw)
+    {
+        problems.push(format!(
+            "Species Info Links must be one of {}. You entered “{raw}”.",
+            v::INFO_SITES.join(", ")
+        ));
+    }
+    problems
+}
+
+/// Everything wrong with a submission, for the settings page and for
+/// `PUT /api/v2/settings` alike.
+///
+/// The two used to run different sets: the page ran the range, token and
+/// language checks, the API only the ranges, so `{"database_lang": "xx"}` and a
+/// BirdWeather token with a `/` in it were stored by a script and refused from the
+/// page. One list means a check added here reaches both.
+pub(crate) fn submission_problems(form: &SettingsForm) -> Vec<String> {
+    let mut problems = range_problems(form);
+    problems.extend(choice_problems(form));
+    problems.extend(birdweather_token_problem(form));
+    problems.extend(language_problem(form));
+    problems
+}
+
 /// Fields saved with surrounding whitespace removed.
 ///
 /// Opaque identifiers, which a copy from a web page tends to bring a newline
@@ -344,9 +421,7 @@ pub async fn save_settings(
 
     // Reject before writing, and reject the whole submission: a partial save
     // would leave the form showing one thing and the station running another.
-    let mut problems = range_problems(&form);
-    problems.extend(birdweather_token_problem(&form));
-    problems.extend(language_problem(&form));
+    let problems = submission_problems(&form);
     if !problems.is_empty() {
         let list = problems.iter().fold(String::new(), |mut acc, p| {
             use std::fmt::Write as _;
@@ -1081,6 +1156,140 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The three fields that take a word from a short list are held to the
+    /// predicates `validate()` itself uses, so the form refuses exactly what
+    /// `--doctor` refuses in the file. The one exception is the recording
+    /// window, where the form is stricter on purpose (see the next test).
+    #[test]
+    fn the_form_and_the_validator_agree_about_a_choice() {
+        use birdnet_core::config::validate::{Severity, validate};
+        let cases: [(&str, &str, &[&str]); 3] = [
+            (
+                "recording_schedule",
+                "RECORDING_SCHEDULE",
+                &[
+                    "all-day",
+                    "solar",
+                    "fixed:06:00-20:00",
+                    "fixed:00:00-23:59",
+                    " solar ",
+                    "SOLAR",
+                    "Solar",
+                    "allday",
+                    "sunrise-sunset",
+                    "fixed:",
+                    "fixed:06:00",
+                    "fixed:6:0-7:0",
+                    "fixed:24:00-25:00",
+                    "fixed:06:60-07:00",
+                    "fixed: 06:00-20:00",
+                    "fixed:06:00 - 20:00",
+                    "fixed:06:00-20:00 UTC",
+                ],
+            ),
+            (
+                "audio_format",
+                "AUDIOFMT",
+                &[
+                    "wav", "mp3", "flac", "ogg", "WAV", " ogg ", "aiff", "S16_LE", "mp4", "wav,mp3",
+                ],
+            ),
+            (
+                "info_site",
+                "INFO_SITE",
+                &[
+                    "ebird",
+                    "allaboutbirds",
+                    "none",
+                    "eBird",
+                    " none ",
+                    "wikipedia",
+                    "all about birds",
+                ],
+            ),
+        ];
+        for (field, config_key, probes) in cases {
+            for &v in probes {
+                let config = birdnet_core::config::Config::parse(&format!("{config_key}={v}"))
+                    .expect("a key=value line parses");
+                let validator_refuses = validate(&config)
+                    .iter()
+                    .any(|f| f.severity == Severity::Error);
+                let mut form = empty_form();
+                match field {
+                    "recording_schedule" => form.recording_schedule = Some(v.to_owned()),
+                    "audio_format" => form.audio_format = Some(v.to_owned()),
+                    _ => form.info_site = Some(v.to_owned()),
+                }
+                let form_refuses = !choice_problems(&form).is_empty();
+                assert_eq!(
+                    form_refuses,
+                    validator_refuses,
+                    "{field}={v:?}: the form {} it and `--doctor` {} it",
+                    if form_refuses { "refuses" } else { "accepts" },
+                    if validator_refuses {
+                        "refuses"
+                    } else {
+                        "accepts"
+                    },
+                );
+            }
+        }
+    }
+
+    /// `validate()` reads `fixed:20:00-06:00` as a recording window; the
+    /// scheduler (`RecordingWindow::fixed`) refuses it, and the station then
+    /// records all day with a line in the log. The form is stricter than the
+    /// validator here, and says why, because the window that crosses midnight is
+    /// the one a person recording owls types.
+    #[test]
+    fn a_window_the_scheduler_would_ignore_is_refused_and_one_it_runs_is_not() {
+        for bad in [
+            "fixed:20:00-06:00",
+            "fixed:06:00-06:00",
+            "fixed:23:59-00:00",
+        ] {
+            let mut form = empty_form();
+            form.recording_schedule = Some(bad.to_owned());
+            let problems = choice_problems(&form);
+            assert_eq!(problems.len(), 1, "{bad}: {problems:?}");
+            assert!(
+                problems[0].contains("does not end after it starts")
+                    && problems[0].contains("record all day")
+                    && problems[0].contains(bad),
+                "{bad}: {}",
+                problems[0]
+            );
+        }
+        for good in [
+            "fixed:06:00-20:00",
+            "fixed:00:00-23:59",
+            "solar",
+            "all-day",
+            "",
+        ] {
+            let mut form = empty_form();
+            form.recording_schedule = Some(good.to_owned());
+            assert!(
+                choice_problems(&form).is_empty(),
+                "{good:?} is a valid answer"
+            );
+        }
+    }
+
+    /// The page and the API run one list. Before it, the API ran only the
+    /// ranges.
+    #[test]
+    fn the_submission_list_holds_every_check_the_page_runs() {
+        let mut form = empty_form();
+        form.database_lang = Some("xx".to_owned());
+        form.birdweather_token = Some("abc/123".to_owned());
+        form.audio_format = Some("aiff".to_owned());
+        form.confidence_threshold = Some("75".to_owned());
+        let problems = submission_problems(&form);
+        assert_eq!(problems.len(), 4, "{problems:?}");
     }
 
     /// The form and `--doctor` must take the same view of a whole number.

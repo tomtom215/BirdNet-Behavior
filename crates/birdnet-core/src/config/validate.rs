@@ -438,34 +438,52 @@ fn check_schedule(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = config.get("RECORDING_SCHEDULE") else {
         return;
     };
-    let raw = raw.trim();
-    if matches!(raw, "all-day" | "solar" | "") {
-        return;
-    }
-    if let Some(window) = raw.strip_prefix("fixed:")
-        && parse_time_window(window).is_some()
-    {
+    if is_recording_schedule(raw) {
         return;
     }
     out.push(Finding::error(
         "RECORDING_SCHEDULE",
-        format!("RECORDING_SCHEDULE={raw:?} is not a recognised schedule"),
+        format!(
+            "RECORDING_SCHEDULE={:?} is not a recognised schedule",
+            raw.trim()
+        ),
         r#"use "all-day", "solar", or "fixed:HH:MM-HH:MM" (e.g. fixed:06:00-20:00)"#.to_string(),
     ));
 }
 
-fn parse_time_window(window: &str) -> Option<()> {
-    let (start, end) = window.split_once('-')?;
-    parse_hhmm(start)?;
-    parse_hhmm(end)?;
-    Some(())
+/// Whether `raw` is a recording schedule this file accepts: `all-day`,
+/// `solar`, blank (unset), or `fixed:HH:MM-HH:MM`.
+///
+/// Public so that the settings form and `PUT /api/v2/settings` ask the question
+/// [`validate`] asks instead of keeping a second grammar. It is the *grammar*
+/// only: the scheduler additionally refuses a fixed window that does not end
+/// after it starts (`RecordingWindow::fixed`), which this accepts, so the form
+/// checks that too.
+#[must_use]
+pub fn is_recording_schedule(raw: &str) -> bool {
+    let raw = raw.trim();
+    if matches!(raw, "all-day" | "solar" | "") {
+        return true;
+    }
+    raw.strip_prefix("fixed:")
+        .is_some_and(|window| fixed_window_minutes(window).is_some())
 }
 
-fn parse_hhmm(s: &str) -> Option<()> {
+/// `HH:MM-HH:MM` as minutes since midnight, `(start, end)`, or `None` when it
+/// is not two valid clock times.
+///
+/// Does not require `start < end`; see [`is_recording_schedule`].
+#[must_use]
+pub fn fixed_window_minutes(window: &str) -> Option<(u32, u32)> {
+    let (start, end) = window.split_once('-')?;
+    Some((parse_hhmm(start)?, parse_hhmm(end)?))
+}
+
+fn parse_hhmm(s: &str) -> Option<u32> {
     let (h, m) = s.split_once(':')?;
     let h: u8 = h.parse().ok()?;
     let m: u8 = m.parse().ok()?;
-    (h < 24 && m < 60).then_some(())
+    (h < 24 && m < 60).then_some(u32::from(h) * 60 + u32::from(m))
 }
 
 fn check_audio_sources(config: &Config, out: &mut Vec<Finding>) {
@@ -485,31 +503,54 @@ fn check_audio_sources(config: &Config, out: &mut Vec<Finding>) {
     }
 }
 
+/// The clip formats the station can write.
+pub const AUDIO_FORMATS: [&str; 4] = ["wav", "mp3", "flac", "ogg"];
+
+/// Whether `raw` names one of the [`AUDIO_FORMATS`], in any letter case.
+#[must_use]
+pub fn is_audio_format(raw: &str) -> bool {
+    AUDIO_FORMATS.contains(&raw.trim().to_ascii_lowercase().as_str())
+}
+
 fn check_audio_format(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = value_of(config, "AUDIOFMT").or_else(|| value_of(config, "AUDIO_FORMAT"))
     else {
         return;
     };
-    let raw = raw.trim().to_ascii_lowercase();
-    if !["wav", "mp3", "flac", "ogg"].contains(&raw.as_str()) {
+    if !is_audio_format(raw) {
         out.push(Finding::error(
             "AUDIO_FORMAT",
-            format!("AUDIO_FORMAT={raw:?} is not supported"),
+            format!(
+                "AUDIO_FORMAT={:?} is not supported",
+                raw.trim().to_ascii_lowercase()
+            ),
             r#"use "wav", "mp3", "flac", or "ogg" (non-WAV formats need ffmpeg or sox)"#
                 .to_string(),
         ));
     }
 }
 
+/// The external sites a species page can link to, besides `none`.
+pub const INFO_SITES: [&str; 3] = ["ebird", "allaboutbirds", "none"];
+
+/// Whether `raw` is an [`INFO_SITES`] entry, in any letter case, or blank.
+#[must_use]
+pub fn is_info_site(raw: &str) -> bool {
+    let raw = raw.trim().to_ascii_lowercase();
+    raw.is_empty() || INFO_SITES.contains(&raw.as_str())
+}
+
 fn check_info_site(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = config.get("INFO_SITE") else {
         return;
     };
-    let raw = raw.trim().to_ascii_lowercase();
-    if !["ebird", "allaboutbirds", "none", ""].contains(&raw.as_str()) {
+    if !is_info_site(raw) {
         out.push(Finding::error(
             "INFO_SITE",
-            format!("INFO_SITE={raw:?} is not recognised"),
+            format!(
+                "INFO_SITE={:?} is not recognised",
+                raw.trim().to_ascii_lowercase()
+            ),
             r#"use "ebird", "allaboutbirds", or "none""#.to_string(),
         ));
     }
@@ -803,6 +844,92 @@ mod tests {
         // A blank line is unset, as everywhere else in this file.
         assert!(validate(&cfg(&[("SEGMENT_DURATION", "")])).is_empty());
         assert_eq!((SEGMENT_DURATION_MIN, SEGMENT_DURATION_MAX), (3, 600));
+    }
+
+    /// The settings form and the API ask [`is_recording_schedule`],
+    /// [`is_audio_format`] and [`is_info_site`] instead of keeping a grammar of
+    /// their own. `validate()` is built on the same three, so equality with it
+    /// would hold for any grammar at all; what pins *this* grammar is the table
+    /// of answers below, and the equality only shows the three checks still
+    /// route through the predicates.
+    #[test]
+    fn the_shared_choice_predicates_say_what_validate_says() {
+        let refused = |key: &str, v: &str| {
+            validate(&cfg(&[(key, v)]))
+                .iter()
+                .any(|f| f.severity == Severity::Error)
+        };
+        // (value, accepted)
+        let schedules = [
+            ("all-day", true),
+            ("solar", true),
+            (" solar ", true),
+            ("", true),
+            ("fixed:06:00-20:00", true),
+            ("fixed:00:00-23:59", true),
+            // The grammar accepts a window that does not end after it starts;
+            // the scheduler does not, so the settings form checks that too.
+            ("fixed:20:00-06:00", true),
+            ("fixed:6:0-7:0", true),
+            ("SOLAR", false),
+            ("Solar", false),
+            ("allday", false),
+            ("sunrise-sunset", false),
+            ("fixed:", false),
+            ("fixed:06:00", false),
+            ("fixed:24:00-25:00", false),
+            ("fixed:06:60-07:00", false),
+            ("fixed: 06:00-20:00", false),
+            ("fixed:06:00 - 20:00", false),
+            ("fixed:06:00-20:00-21:00", false),
+            ("fixed:06:00-20:00 UTC", false),
+        ];
+        for (v, accepted) in schedules {
+            assert_eq!(
+                is_recording_schedule(v),
+                accepted,
+                "RECORDING_SCHEDULE={v:?}"
+            );
+            assert_eq!(
+                !accepted,
+                refused("RECORDING_SCHEDULE", v),
+                "validate: {v:?}"
+            );
+        }
+        let formats = [
+            ("wav", true),
+            ("mp3", true),
+            ("flac", true),
+            ("ogg", true),
+            ("WAV", true),
+            (" ogg ", true),
+            ("aiff", false),
+            ("S16_LE", false),
+            ("mp4", false),
+            ("wav,mp3", false),
+        ];
+        for (v, accepted) in formats {
+            assert_eq!(is_audio_format(v), accepted, "AUDIOFMT={v:?}");
+            assert_eq!(!accepted, refused("AUDIOFMT", v), "validate: {v:?}");
+        }
+        let sites = [
+            ("ebird", true),
+            ("allaboutbirds", true),
+            ("none", true),
+            ("eBird", true),
+            (" none ", true),
+            ("", true),
+            ("wikipedia", false),
+            ("all about birds", false),
+        ];
+        for (v, accepted) in sites {
+            assert_eq!(is_info_site(v), accepted, "INFO_SITE={v:?}");
+            assert_eq!(!accepted, refused("INFO_SITE", v), "validate: {v:?}");
+        }
+        // A window is its minutes since midnight, and does not have to end later.
+        assert_eq!(fixed_window_minutes("06:30-20:00"), Some((390, 1200)));
+        assert_eq!(fixed_window_minutes("20:00-06:00"), Some((1200, 360)));
+        assert_eq!(fixed_window_minutes("25:00-06:00"), None);
     }
 
     #[test]
