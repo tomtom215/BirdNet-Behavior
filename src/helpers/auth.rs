@@ -119,6 +119,43 @@ pub fn build_api_token(config: Option<&Config>) -> Option<birdnet_web::api_token
     }
 }
 
+/// Name of the file, beside the database, that records which `CADDY_PWD` was
+/// last applied to the admin account.
+///
+/// It holds an Argon2id hash, never the password. Without it a restart cannot
+/// tell "the operator edited `CADDY_PWD`" (apply it) from "the operator changed
+/// the password on the Accounts page and `CADDY_PWD` is just the old value still
+/// sitting in the config file" (keep theirs): both look like a stored hash that
+/// does not verify `CADDY_PWD`. The second used to be undone at every restart,
+/// which quietly put back a password that may be the one that leaked.
+const APPLIED_MARKER_FILE: &str = "admin-password.applied";
+
+fn applied_marker_path(state: &AppState) -> std::path::PathBuf {
+    state.db_path().with_file_name(APPLIED_MARKER_FILE)
+}
+
+/// Whether `CADDY_PWD` is the one this station last applied.
+fn caddy_pwd_is_the_one_last_applied(marker: &std::path::Path, env_pwd: &str) -> bool {
+    std::fs::read_to_string(marker)
+        .is_ok_and(|hash| accounts::verify_password(hash.trim(), env_pwd).unwrap_or(false))
+}
+
+/// Record that `env_pwd` is the `CADDY_PWD` now applied. Best effort: with no
+/// marker a later restart falls back to the old rule (the config value wins),
+/// which is the safe direction for an operator who has locked themselves out.
+fn record_applied(marker: &std::path::Path, env_pwd: &str) {
+    let write = || -> std::io::Result<()> {
+        let hash =
+            accounts::hash_password(env_pwd).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let part = birdnet_core::atomic_file::part_path(marker);
+        std::fs::write(&part, hash)?;
+        birdnet_core::atomic_file::commit(&part, marker)
+    };
+    if let Err(e) = write() {
+        tracing::warn!(error = %e, path = %marker.display(), "could not record which CADDY_PWD was applied");
+    }
+}
+
 /// Run the one-shot admin-row password bootstrap. Idempotent across
 /// restarts.
 pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
@@ -128,6 +165,9 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         );
         return;
     };
+
+    let marker = applied_marker_path(state);
+    let env_unchanged = caddy_pwd_is_the_one_last_applied(&marker, &env_pwd);
 
     let outcome = state.with_db(|conn| -> Result<BootstrapOutcome, AccountsError> {
         let admin = conn.find_user_by_name("admin")?;
@@ -140,6 +180,12 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
             return Ok(BootstrapOutcome::RotatedLegacy);
         }
         let verifies = accounts::verify_password(&admin.pwd_argon2, &env_pwd).unwrap_or(false);
+        if !verifies && env_unchanged {
+            // `CADDY_PWD` is what this station applied last time and the stored
+            // hash is something else: the password was changed since, on the
+            // Accounts page. That change stands.
+            return Ok(BootstrapOutcome::KeptAccountsPagePassword);
+        }
         if !verifies {
             let hash = accounts::hash_password(&env_pwd)?;
             conn.set_password(admin.id, &hash)?;
@@ -153,21 +199,42 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         Ok(BootstrapOutcome::AlreadyConsistent)
     });
 
+    // Whatever was applied (or found to match) is what the marker should name,
+    // except when the Accounts-page password was kept: then it keeps naming the
+    // `CADDY_PWD` that was applied before, so the next restart decides the same.
+    if matches!(
+        outcome,
+        Ok(BootstrapOutcome::RotatedLegacy
+            | BootstrapOutcome::RotatedAfterEnvChange { .. }
+            | BootstrapOutcome::AlreadyConsistent)
+    ) && !env_unchanged
+    {
+        record_applied(&marker, &env_pwd);
+    }
+
     match outcome {
+        Ok(BootstrapOutcome::KeptAccountsPagePassword) => {
+            tracing::warn!(
+                "the admin password was changed on the Accounts page since CADDY_PWD was last \
+                 applied, so that password stands and CADDY_PWD is ignored. Remove CADDY_PWD \
+                 from the configuration, or set it to a new value to replace the admin \
+                 password with it"
+            );
+        }
         Ok(BootstrapOutcome::RotatedLegacy) => {
             tracing::info!("admin password hash initialised from CADDY_PWD");
         }
         Ok(BootstrapOutcome::RotatedAfterEnvChange { revoked }) => {
-            // A warning, not a note: this also undoes a password changed on
-            // the Accounts page while a stale `CADDY_PWD` is still set, which
-            // the person who changed it will not expect and cannot otherwise
-            // see.
+            // A warning, not a note: it replaces the stored password. For a
+            // station with no record of the last applied `CADDY_PWD` (one that
+            // started before this was recorded) it may be replacing a password
+            // changed on the Accounts page, which the person who changed it
+            // will not expect and cannot otherwise see.
             tracing::warn!(
                 revoked,
                 "admin password replaced by CADDY_PWD at startup (it did not match the stored \
-                 hash), and existing sessions were signed out. A password changed on the \
-                 Accounts page since the last start is replaced the same way while CADDY_PWD \
-                 is set"
+                 hash, and CADDY_PWD is not the one last applied), and existing sessions were \
+                 signed out"
             );
         }
         Ok(BootstrapOutcome::AlreadyConsistent) => {
@@ -238,6 +305,10 @@ enum BootstrapOutcome {
     },
     /// Stored hash already verifies cleanly — no write needed.
     AlreadyConsistent,
+    /// The stored hash does not verify `CADDY_PWD`, but `CADDY_PWD` is the one
+    /// this station applied last time: the password was changed on the Accounts
+    /// page since, and stays.
+    KeptAccountsPagePassword,
 }
 
 #[cfg(test)]
@@ -369,6 +440,104 @@ mod tests {
             "the open window's session survived the station acquiring a password"
         );
         assert!(!accounts::is_legacy_password_hash(&admin_hash(&state)));
+    }
+
+    /// A password made per run, because the `CodeQL` query on hard-coded
+    /// cryptographic values follows a literal into any parameter called
+    /// `password` (CLAUDE.md); `format!` over a runtime value is not one.
+    fn pw(tag: &str) -> String {
+        format!("{tag}-{}", std::process::id())
+    }
+
+    fn verifies(state: &AppState, plaintext: &str) -> bool {
+        accounts::verify_password(&admin_hash(state), plaintext).unwrap_or(false)
+    }
+
+    /// Change the admin password the way the Accounts page does.
+    fn change_on_the_accounts_page(state: &AppState, plaintext: &str) {
+        state
+            .with_db(|conn| -> Result<(), AccountsError> {
+                let admin = conn.find_user_by_name("admin")?;
+                let hash = accounts::hash_password(plaintext)?;
+                conn.set_password(admin.id, &hash)
+            })
+            .expect("change the password");
+    }
+
+    /// The reason the applied marker exists. `CADDY_PWD` sits in plaintext in
+    /// the config file; when it leaks, the first thing an owner does is change
+    /// the password on the Accounts page. Restarting must not put the leaked
+    /// one back.
+    #[test]
+    fn a_password_changed_on_the_accounts_page_survives_a_restart() {
+        let (_d, state) = fixture();
+        let from_config = pw("from-the-config");
+        let chosen = pw("chosen-on-the-accounts-page");
+        let cfg = config_with("CADDY_PWD", &from_config);
+
+        bootstrap_admin_password(&state, Some(&cfg));
+        assert!(
+            verifies(&state, &from_config),
+            "first start applies CADDY_PWD"
+        );
+
+        change_on_the_accounts_page(&state, &chosen);
+        bootstrap_admin_password(&state, Some(&cfg));
+
+        assert!(
+            verifies(&state, &chosen),
+            "the Accounts-page password was replaced at restart"
+        );
+        assert!(
+            !verifies(&state, &from_config),
+            "the CADDY_PWD that was set aside works again"
+        );
+    }
+
+    /// The counterpart, and the recovery path: editing `CADDY_PWD` to a new value
+    /// is an instruction, and replaces whatever the Accounts page set, so a
+    /// forgotten password can always be reset from the config file.
+    #[test]
+    fn editing_caddy_pwd_replaces_a_password_set_on_the_accounts_page() {
+        let (_d, state) = fixture();
+        let first = pw("first-config-password");
+        let chosen = pw("chosen-on-the-accounts-page");
+        let second = pw("second-config-password");
+
+        bootstrap_admin_password(&state, Some(&config_with("CADDY_PWD", &first)));
+        change_on_the_accounts_page(&state, &chosen);
+        bootstrap_admin_password(&state, Some(&config_with("CADDY_PWD", &second)));
+
+        assert!(verifies(&state, &second), "a new CADDY_PWD must apply");
+        assert!(!verifies(&state, &chosen));
+        // And it is now the one on record: another restart changes nothing.
+        bootstrap_admin_password(&state, Some(&config_with("CADDY_PWD", &second)));
+        assert!(verifies(&state, &second));
+    }
+
+    /// A station that started before the marker existed has no record of what
+    /// was last applied. It keeps the rule it always had: the config wins, and
+    /// the marker is written so that the next restart can tell the difference.
+    #[test]
+    fn a_station_with_no_record_keeps_the_old_rule_and_starts_one() {
+        let (_d, state) = fixture();
+        let from_config = pw("from-the-config");
+        let stored = pw("stored-before-the-marker");
+        change_on_the_accounts_page(&state, &stored);
+        assert!(!applied_marker_path(&state).exists());
+
+        bootstrap_admin_password(&state, Some(&config_with("CADDY_PWD", &from_config)));
+
+        assert!(verifies(&state, &from_config));
+        assert!(
+            applied_marker_path(&state).exists(),
+            "the marker is written"
+        );
+        let on_disk = std::fs::read_to_string(applied_marker_path(&state)).expect("marker");
+        assert!(
+            !on_disk.contains(&from_config),
+            "the marker must hold a hash, never the password"
+        );
     }
 
     #[test]
