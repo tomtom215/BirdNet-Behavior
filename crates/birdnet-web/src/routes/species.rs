@@ -109,10 +109,9 @@ async fn species_tracking(
 
 /// Whether `s` is a plausible `YYYY-MM-DD`.
 ///
-/// Shape only. The query is parameterised so a malformed date is not a
-/// injection risk; the check is here so a typo returns an empty day rather
-/// than silently answering for today, which would look like a working page
-/// showing the wrong data.
+/// Shape only. The query is parameterised, so a malformed date is not an
+/// injection risk. A value that fails this check is treated as absent, and an
+/// absent date means today (what the OpenAPI document says); it is not a 400.
 fn is_iso_date(s: &str) -> bool {
     s.len() == 10
         && s.as_bytes()[4] == b'-'

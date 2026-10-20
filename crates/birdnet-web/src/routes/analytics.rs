@@ -768,11 +768,15 @@ async fn abundance(
 
 /// Per-species arrival, departure and presence for a calendar year.
 ///
-/// `year_crossing` marks the species for which the calendar-year window is not a
-/// migration window — a resident or overwintering visitor detected in both the
-/// first and last fortnight, whose "arrival" would otherwise read as 1 January.
-/// `detected_days` is returned beside `presence_days` because the latter is a
-/// span, not an occupancy.
+/// One row per species and year: `first_detection`, `last_detection`,
+/// `detection_count`, the day-of-year of each end, `presence_days` and
+/// `detected_days`. `presence_days` is a span (last minus first, inclusive), not
+/// an occupancy, which is why `detected_days` (the distinct days with a
+/// detection) comes beside it.
+///
+/// A resident or overwintering species reads "arrived 1 January, departed
+/// 31 December" in a calendar-year window; the query that flags those
+/// (`year_crossing`) is `migration_window_sql`, which this route does not call.
 #[cfg(feature = "analytics")]
 async fn phenology(
     State(state): State<AppState>,
@@ -814,13 +818,21 @@ async fn run_phenology_query(
     let rows = tokio::task::spawn_blocking(move || {
         state.with_analytics_read(|adb| {
             let mut stmt = adb.conn().prepare(&sql)?;
-            let names: Vec<String> = stmt
-                .column_names()
-                .iter()
-                .map(ToString::to_string)
-                .collect();
-            let mut out = Vec::new();
             let mut rows = stmt.query([])?;
+            // DuckDB knows a statement's columns only once it has run: asking
+            // the prepared statement first panics ("The statement was not
+            // executed yet"), which this handler used to report as "no store".
+            let names: Vec<String> = rows
+                .as_ref()
+                .map(|executed| {
+                    executed
+                        .column_names()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let mut obj = serde_json::Map::new();
                 for (i, name) in names.iter().enumerate() {
@@ -839,10 +851,21 @@ async fn run_phenology_query(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
         ),
-        _ => (
+        Ok(None) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "analytics database not configured" })),
         ),
+        // The query task panicked or was cancelled. That is a fault in this
+        // station, not the absence of an analytics store: it used to share the
+        // arm above, so a panic read as "not configured" on a station that had
+        // one.
+        Err(join) => {
+            tracing::error!(error = %join, "an analytics query task failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the analytics query failed" })),
+            )
+        }
     }
 }
 
