@@ -30,7 +30,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_ANALYTICS_DB` | `--analytics-db` | `ANALYTICS_DB_PATH` | `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns analytics off |
 | `BIRDNET_SKIP_MIGRATION_BACKUP` | — | — | unset. Any value but empty or `0` lets a history-rewriting migration run without the backup it otherwise takes first — for a station whose disk has no room for a copy of the database, accepting that the previous timestamps cannot be recovered |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | `RECORDING_SCHEDULE` | `all-day` |
-| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
+| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `SEGMENT_DURATION` (BirdNET-Pi's `RECORDING_LENGTH` is range-checked but does not set it) | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
 | `BIRDNET_METADATA_MODEL` | `--metadata-model` | `METADATA_MODEL_PATH` | set by the installer / entrypoint |
 | `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
@@ -49,7 +49,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
 | — | — | `NOISE_REMEMBER_SECS` | `0.0` (off; keeps suppressing the species a bark produced for this long after it — see [tuning](../guides/tuning.md#7-barking-dogs-and-other-non-birds)) |
 | `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (needs `OVERLAP`) |
-| `BIRDNET_OFFSITE_BACKUP` | `--offsite-backup` | `OFFSITE_BACKUP` | `off` |
+| `BIRDNET_OFFSITE_BACKUP` | `--offsite-backup` | `OFFSITE_BACKUP` | `off`; also `s3`, `sftp` and `rsync` (the `--help` text lists three) |
 | `BIRDNET_OFFSITE_PASSPHRASE` | — (deliberately no flag) | `OFFSITE_PASSPHRASE` | — |
 | `BIRDNET_OFFSITE_KEEP` | — | `OFFSITE_KEEP` | `8` |
 | `BIRDNET_OFFSITE_S3_ENDPOINT` | — | `OFFSITE_S3_ENDPOINT` | — |

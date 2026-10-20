@@ -16,8 +16,8 @@ Where each kind of question is answered, and how much to trust each answer.
   `https://tomtom215.github.io/BirdNet-Behavior/` and served by the binary itself
   at `/help`. How its versions work is in the next section.
 - [`../README.md`](../README.md) — what it is, quick start, requirements.
-- [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) is the canonical troubleshooting
-  page; [the manual's page](book/guides/troubleshooting.md) is a short entry point
+- [The manual's troubleshooting guide](book/guides/troubleshooting.md) is the one
+  troubleshooting page; [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) only points
   to it. [`../SUPPORT.md`](../SUPPORT.md) says how to ask for help.
 - [`grafana-dashboard.json`](grafana-dashboard.json) — a dashboard for the
   Prometheus series.

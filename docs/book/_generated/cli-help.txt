@@ -461,6 +461,14 @@ Options:
           [env: BIRDNET_PRIVACY_THRESHOLD=]
           [default: 0.0]
 
+      --privacy-rank <PRIVACY_RANK>
+          BirdNET-Pi's privacy rule: suppress an analysis window, and the windows either side of it, when a human class (speech, whistling, other human sounds) is among the model's this-many highest-scoring classes (0 = off).
+
+          Read from the model's output before the detection threshold applies, as BirdNET-Pi reads it. The default, 10, is BirdNET-Pi's own at its own default (`PRIVACY_THRESHOLD=0` gives `human_cutoff = max(10, …)`), so a station nobody has customised does not keep a clip of a conversation near its microphone. For a BirdNET-Pi `PRIVACY_THRESHOLD` of `p`, set this to `max(10, 60 × p)`. It works beside `--privacy-threshold`; either rule suppresses a window. Config key: `PRIVACY_RANK`.
+
+          [env: BIRDNET_PRIVACY_RANK=]
+          [default: 10]
+
       --noise-threshold <NOISE_THRESHOLD>
           Confidence at which a barking dog suppresses its audio chunk (0.0 = disabled).
 
@@ -675,11 +683,11 @@ Options:
       --freq-shift-hz <FREQ_SHIFT_HZ>
           Frequency shift applied to extracted audio clips in Hz (0 = disabled).
 
-          Shifts the pitch of saved detection clips by the given number of Hz. Positive raises the pitch, negative lowers it.
+          Shifts every frequency in a saved detection clip by the given number of Hz (a shift, not a ratio: an 8 kHz song at -3000 is heard at 5 kHz), and leaves the clip's length alone. Positive raises, negative lowers.
 
           For age-related high-frequency hearing loss the useful direction is **negative**: it brings warbler and kinglet song, which lives above 8 kHz, down into a band that is still audible. Typical value: -3000. (Earlier releases documented this backwards — see `birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ`.)
 
-          Requires ffmpeg or sox. `BirdNET-Pi` equivalent: `FREQ_SHIFT` + `FREQ_SHIFT_AMOUNT` config options.
+          Requires ffmpeg 4.3 or newer (its `afreqshift` filter); without one the clip is saved unshifted and a warning says so. `BirdNET-Pi` equivalent: its `FREQSHIFT_*` options, which scale by a ratio instead.
 
           [env: BIRDNET_FREQ_SHIFT_HZ=]
           [default: 0]

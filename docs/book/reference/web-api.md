@@ -1,6 +1,6 @@
 # Web UI & URLs
 
-A map of every page and admin URL the dashboard serves. For the JSON/WebSocket API, see [HTTP & WebSocket API](./api.md).
+A map of the pages and admin URLs the dashboard serves (not the `/pages/*` fragments the pages load into themselves, nor `/static/*`). For the JSON/WebSocket API, see [HTTP & WebSocket API](./api.md).
 
 ## The six homes
 
@@ -82,6 +82,10 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 | `/kiosk` | Kiosk mode — auto-refreshing display for dedicated screens |
 | `/onboarding` | First-run setup wizard |
 | `/detections/detail?date=&time=&name=` | Single-detection detail — spectrogram, audio, correlation id, share |
+| `/detection-reviews` | The review triage queue — confirm or reject detections one by one ([Reviewing Detections](../guide/reviews.md)) |
+| `/reports/day?date=` | One day's look-back, opened from the History calendar's *Open day* link |
+| `/player/{filename}` | A clip in the custom audio player with its spectrogram; `?species=`, `?confidence=`, `?time=` and `?date=` only label it |
+| `/system/changelog` | The release history, rendered from the `CHANGELOG.md` compiled into the binary; `/system/changelog/latest` is the "new in this version" banner it feeds |
 
 ## Admin
 
@@ -110,6 +114,8 @@ JSON/WebSocket API below and the feeds are open. See
 | `/admin/system` | CPU / memory / temperature / disk |
 | `/admin/overview` | Health-detail overview |
 | `/admin/doctor` | The `--doctor` report rendered in the browser; `/admin/doctor.json` and `/admin/support-bundle` beside it |
+| `/admin/species/manage` | Species storage — per species: exclude, delete detections, delete clips ([Settings & Detection](../admin/settings.md#species-storage)) |
+| `/admin/images` | Species photographs — the blacklist of image URLs that are never shown |
 | `/admin/audit` | Audit log (180 days) |
 | `/admin/system/logs/page` | Live log viewer (SSE, level filtering) |
 | `/admin/update/check` | Check GitHub Releases for a newer version (JSON). Applying is a separate `POST /admin/update/apply` with no UI button; the panel's **Check for Updates** button points you at `install.sh` instead |

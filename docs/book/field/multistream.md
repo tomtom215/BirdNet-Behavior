@@ -1,7 +1,22 @@
-# Multi-stream detection handling
+# Multi-stream detection handling (design note)
 
-How BirdNet-Behavior treats detections when several audio streams (RTSP mics /
-cameras + the on-board mic) can hear the same bird at once.
+**This page is a design note, not a feature description.** Two small parts of it
+exist; the rest is a proposal, and nothing in the settings, the flags or the
+database reads the names it proposes (`DEDUP_WINDOW_SECS` and `dup_of` appear in
+no source file). Today, a bird heard by two streams is two detection rows, both
+counted everywhere, and nothing collapses them.
+
+What exists, and what to look at for it:
+
+| Part | State | Where |
+|---|---|---|
+| Each detection records its source (the RTSP stream id, or `local`) | shipped | the `Source` column, migration 18; the `source` parameter on [Search](../reference/web-api.md#searching-the-whole-log) |
+| "Also heard by" card on a detection's page | shipped | the other sources that heard the same species within 30 seconds of the segment start, at most 8, nearest first |
+| Per-source include/exclude of counts | **not built** | section 2 below |
+| Time-window collapse (`DEDUP_WINDOW_SECS`, `dup_of`) | **not built** | section 3 below |
+
+The rest of the page is the reasoning for handling a bird that several audio
+streams (RTSP mics / cameras + the on-board mic) can hear at once.
 
 ## Status
 

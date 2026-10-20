@@ -8,7 +8,7 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 >
 > The **write** endpoints, and the eight token-gated reads, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
-> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: ten routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking`, the three verification exports `/api/v2/detections/export/raven`, `/api/v2/recordings/{clip}/raven.txt` and `/api/v2/recordings/{clip}/labels.txt`, and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` (the live audio is at `/stream`, outside `/api/v2`) — and the test that guards it (`every_documented_path_is_routed`) checks only that every *documented* path is routed, not the reverse.
+> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: ten routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking`, the three verification exports `/api/v2/detections/export/raven`, `/api/v2/recordings/{clip}/raven.txt` and `/api/v2/recordings/{clip}/labels.txt`, and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` (the live audio is at `/stream`, outside `/api/v2`) — and the test that guards it (`every_documented_path_is_routed`) checks that every *documented* path is routed; the reverse is checked only for the eighteen token-gated routes (`every_bearer_route_is_documented_as_bearer_gated`).
 
 ## Health & metrics
 
@@ -165,6 +165,19 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/detections` | `date`, `species` (common or scientific name), `source`, `limit`, `offset` — paginated, newest first; the filters combine, and `total_count` counts every page of the filtered set |
 | `GET /api/v2/detections/recent` | `limit` — most recent first |
 | `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
+| `GET /api/v2/detections/export` | `format` (`csv` or `json`, default `csv`), `from`, `to` (inclusive `YYYY-MM-DD`) — the detection history as a download (`detections.csv`); more than 1 000 000 rows is a `413` that asks you to narrow the range |
+| `GET /api/v2/detections/export/birddb` | `from`, `to` — BirdNET-Pi's semicolon-separated `BirdDB.txt` (`BirdDB.txt`), the twelve BirdNET-Pi columns and nothing more |
+| `GET /api/v2/detections/export/ebird` | `date`, `lat` with `lon`, `location`, `min_confidence`, `protocol`, `observers`, `state`, `country`, `complete` — eBird Record Format (`ebird_export_….csv`) |
+
+The rest of the export family (`detections/export/raven`, the per-clip Raven and Audacity tables) is under [Export](#export), and the exports' columns are described on the [Backups](../admin/backups.md#export) page.
+
+### Analysis runs
+
+`GET /api/v2/analysis-runs?limit=` lists the station's analysis runs, newest first (`limit` defaults to 50, at most 500), as `{"runs": [...]}`, and `GET /api/v2/analysis-runs/{id}` returns one (or `404`). A run is one detection-daemon start: it records the SHA-256 of the model and labels it analysed with and the settings in force, and carries `detections`, the number of rows that name it. A detection row's `run_id` points at one of these; the exports resolve it to the model's name and checksum, and this is where the rest (when the run started, the label count, the geomodel) is read.
+
+### Languages
+
+`GET /api/v2/languages` lists the languages species common names can be shown in, as `{"languages": [{"code", "name", "native_name", "active", "coverage"}], "count", "active"}`. `coverage` is `{"named", "of"}`, how many of the installed classifier's species the language names, and `null` for English and when no classifier label file was available to count against. See [Species Names in Your Language](../admin/species-names.md).
 
 ## Species
 
@@ -174,8 +187,12 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/species/search` | `q`, `limit` | Search by name |
 | `GET /api/v2/species/detail` | `name` | Per-species stats |
 | `GET /api/v2/species/activity` | `date` | Hourly activity (all species) on a given day |
-| `GET /api/v2/species/image/{scientific_name}` | — | Cached Wikipedia image (redirect/bytes) |
-| `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip (WAV) |
+| `GET /api/v2/species/export` | `format` (`csv` or `json`), `limit` | Per-species totals as a download (`species.csv`) |
+| `GET /api/v2/species/image/{scientific_name}` | — | The image's metadata (URL, cache status, description) as JSON, or `404`; it does not download the picture. Only species the station has detected are looked up |
+| `GET /api/v2/species/image/{scientific_name}/file` | — | The cached picture itself (a custom image first, then the provider's), with a five-minute `private` cache header on the picture and on the `404` |
+| `GET /api/v2/recordings` | `species` (matched against the file name), `limit` (default 50, at most 500), `offset` | List the files in the recordings directory: `filename`, `size_bytes`, `modified_secs`, `content_type` |
+| `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip, honouring `Range` requests (`206`); the type follows the extension (WAV, MP3, FLAC, Ogg, AAC) |
+| `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached; with the `raw_spectrogram` setting on, never labelled |
 
 ## Time-series & analytics
 
@@ -191,6 +208,8 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/timeseries/heatmap` · `sessions` | Hour×day heatmap, activity sessions |
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
 | `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `previous-species` · `patterns` | DuckDB behavioral analytics |
+| `GET /api/v2/analytics/funnel-events` | The `window_funnel_events` variant of `funnel`, with the same parameters (`species`, a comma-separated sequence of at most 64 names; `window`; `hour_start`, `hour_end`) |
+| `GET /api/v2/analytics/sequence-count` · `sequence-match-events` | The `sequence_count` and `sequence_match_events` variants of `patterns`, with the same parameters (`species`, `max_gap`, `hour_start`, `hour_end`) |
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
 | `GET /api/v2/insights/dawn-chorus?period_days=&min_days=` | Each species' typical first song of the morning (mean and earliest first detection between 04:00 and 10:00), over species heard on at least `min_days` (default 3) of the last `period_days` (default 30, at most 365) days, earliest first. A value that is not a positive integer is a `400`; one over the limit is clamped, and both values applied are echoed. |
 | `GET /api/v2/insights/migration` | Species first heard in the last 14 days, and species with at least 5 detections and none in the last 14 days, with when and how often. |
