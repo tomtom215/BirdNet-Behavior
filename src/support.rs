@@ -76,6 +76,8 @@ pub fn redacted_config(config: &Config) -> String {
         .map(|(k, v)| {
             let shown = if is_secret_key(k) {
                 REDACTED.to_owned()
+            } else if is_coordinate_key(k) {
+                coarse_coordinate(v).unwrap_or_else(|| REDACTED.to_owned())
             } else {
                 redact_value(v)
             };
@@ -84,6 +86,76 @@ pub fn redacted_config(config: &Config) -> String {
         .collect();
     lines.sort();
     lines.join("\n")
+}
+
+/// The two configuration keys that hold where the station is.
+const fn is_coordinate_key(key: &str) -> bool {
+    key.eq_ignore_ascii_case("LATITUDE") || key.eq_ignore_ascii_case("LONGITUDE")
+}
+
+/// A coordinate as the bundle shows it: one decimal place, about 11 km.
+///
+/// The bundle is written to be pasted into a public issue, and four decimals of
+/// a station's latitude and longitude are a house. One decimal still says which
+/// hemisphere, which season's daylight and which region's species the station
+/// was configured for, which is everything a support question about the
+/// scheduler or the occurrence filter needs. `None` for text that is not a
+/// number: it is shown as [`REDACTED`], because an unparseable coordinate may be
+/// degrees-minutes-seconds with the exact position in it.
+fn coarse_coordinate(raw: &str) -> Option<String> {
+    let value: f64 = raw.trim().parse().ok()?;
+    value.is_finite().then(|| format!("{value:.1}"))
+}
+
+/// Replace the exact coordinates in `text` with their [`coarse_coordinate`]
+/// form, wherever the configured value appears as a whole number.
+///
+/// The journal prints them (BirdWeather's start-up line, a settings change), so
+/// coarsening the configuration section alone would leave the position in the
+/// bundle anyway. Only values with at least two decimal places are hunted: a
+/// coordinate typed to one decimal is already as coarse as the bundle is, and
+/// `52.5` is far too common a number to search a log for. "Whole number" is
+/// checked on both sides, so `52.5233` is not found inside `152.52331`.
+fn coarsen_coordinates_in_text(text: &str, config: &Config) -> String {
+    let mut out = text.to_owned();
+    for key in ["LATITUDE", "LONGITUDE"] {
+        let Some(raw) = config.get(key) else { continue };
+        let raw = raw.trim();
+        let decimals = raw.split_once('.').map_or(0, |(_, frac)| frac.len());
+        let Some(coarse) = coarse_coordinate(raw) else {
+            continue;
+        };
+        if decimals < 2 || coarse == raw {
+            continue;
+        }
+        let mut result = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(raw) {
+            let (before, after) = (&rest[..at], &rest[at + raw.len()..]);
+            let glued_before = before
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_digit() || c == '.');
+            let mut following = after.chars();
+            let glued_after = match following.next() {
+                Some(c) if c.is_ascii_digit() => true,
+                // `52.523431.5` is one malformed number, not a coordinate
+                // followed by a full stop; `52.523431.` ends a sentence.
+                Some('.') => following.next().is_some_and(|c| c.is_ascii_digit()),
+                _ => false,
+            };
+            result.push_str(before);
+            result.push_str(if glued_before || glued_after {
+                raw
+            } else {
+                &coarse
+            });
+            rest = after;
+        }
+        result.push_str(rest);
+        out = result;
+    }
+    out
 }
 
 /// A log scrubbed for the bundle.
@@ -99,6 +171,8 @@ pub fn redacted_config(config: &Config) -> String {
 ///    next step to find. Literals first, while they still read as configured.
 /// 2. The password of every URL left in the text is replaced
 ///    ([`redact_credentials_in_text`]).
+/// 3. The station's exact coordinates become their one-decimal form
+///    ([`coarsen_coordinates_in_text`]).
 ///
 /// Values shorter than four characters are not matched as literals: replacing
 /// every `1` or `on` in a log would leave nothing to read. A secret that short
@@ -128,7 +202,11 @@ fn scrub_log(text: &str, config: Option<&Config>) -> String {
             }
         }
     }
-    redact_credentials_in_text(&out)
+    let out = redact_credentials_in_text(&out);
+    match config {
+        Some(config) => coarsen_coordinates_in_text(&out, config),
+        None => out,
+    }
 }
 
 /// Run a command and capture its output, or a note explaining why not.
@@ -437,10 +515,53 @@ mod tests {
     /// short or ordinary setting value is not hunted through the text.
     #[test]
     fn a_clean_journal_is_unchanged() {
-        let cfg = Config::parse("LATITUDE=52.52\nCADDY_PWD=on\nSF_THRESH=0.03").unwrap();
-        let journal = "detection on 52.52, sf 0.03, capture on\n";
+        let cfg = Config::parse("OVERLAP=1.25\nCADDY_PWD=on\nSF_THRESH=0.03").unwrap();
+        let journal = "detection on 1.25 s overlap, sf 0.03, capture on\n";
         assert_eq!(scrub_log(journal, Some(&cfg)), journal);
         assert_eq!(scrub_log(journal, None), journal);
+    }
+
+    /// The bundle is written to be posted publicly; four decimals of latitude and
+    /// longitude are a house. Coordinates go out to one decimal, in the
+    /// configuration section and wherever the journal printed them.
+    #[test]
+    fn the_stations_coordinates_leave_the_bundle_at_one_decimal() {
+        let cfg =
+            Config::parse("LATITUDE=52.523431\nLONGITUDE=-13.405012\nSF_THRESH=0.03").unwrap();
+        let out = redacted_config(&cfg);
+        assert!(out.contains("LATITUDE=52.5"), "{out}");
+        assert!(out.contains("LONGITUDE=-13.4"), "{out}");
+        assert!(
+            !out.contains("52.523431") && !out.contains("13.405012"),
+            "{out}"
+        );
+
+        let journal = "BirdWeather uploads enabled lat=52.523431 lon=-13.405012\n\
+                       analysed 152.5234312 samples in 52.523431.5 s\n";
+        let scrubbed = scrub_log(journal, Some(&cfg));
+        assert!(
+            scrubbed.contains("lat=52.5 lon=-13.4"),
+            "the journal's exact coordinates are coarsened: {scrubbed}"
+        );
+        // The counterpart: a longer number that merely contains the digits is
+        // not a coordinate, and is left alone.
+        assert!(
+            scrubbed.contains("152.5234312 samples") && scrubbed.contains("52.523431.5 s"),
+            "numbers that only contain the coordinate are untouched: {scrubbed}"
+        );
+    }
+
+    /// A coordinate that cannot be read as a number may be degrees-minutes-
+    /// seconds with the exact position in it: it is masked, not shown. And one
+    /// already at one decimal is not hunted through a log.
+    #[test]
+    fn an_unreadable_coordinate_is_masked_and_a_coarse_one_is_not_hunted() {
+        let cfg = Config::parse("LATITUDE=52°31'24\"N\nLONGITUDE=13.4").unwrap();
+        let out = redacted_config(&cfg);
+        assert!(out.contains(&format!("LATITUDE={REDACTED}")), "{out}");
+        assert!(out.contains("LONGITUDE=13.4"), "{out}");
+        let journal = "capture rate 13.4 MB/s\n";
+        assert_eq!(scrub_log(journal, Some(&cfg)), journal);
     }
 
     #[test]
@@ -451,7 +572,10 @@ mod tests {
         .unwrap();
         let out = redacted_config(&cfg);
 
-        assert!(out.contains("LATITUDE=52.52"));
+        assert!(
+            out.contains("LATITUDE=52.5") && !out.contains("52.52"),
+            "the coordinate is shown to one decimal: {out}"
+        );
         assert!(out.contains("SF_THRESH=0.03"));
         assert!(
             out.contains(&format!("CADDY_PWD={REDACTED}")),
