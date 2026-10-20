@@ -1234,6 +1234,22 @@ mod tests {
         assert_eq!(off.privacy_rank, 0);
         assert!(Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "12001"]).is_err());
         assert!(Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "-1"]).is_err());
+        // The clap range is a literal of its own; the validator's constants are
+        // what the config file and the settings page are held to. All three
+        // must accept the same edges.
+        let max = birdnet_core::config::validate::PRIVACY_RANK_MAX;
+        let min = birdnet_core::config::validate::PRIVACY_RANK_MIN;
+        let at =
+            |n: u64| Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", &n.to_string()]);
+        assert!(
+            at(max).is_ok(),
+            "the flag must accept the validator's maximum"
+        );
+        assert!(at(max + 1).is_err(), "and refuse one past it");
+        assert!(
+            at(min).is_ok(),
+            "the flag must accept the validator's minimum"
+        );
     }
 
     #[test]

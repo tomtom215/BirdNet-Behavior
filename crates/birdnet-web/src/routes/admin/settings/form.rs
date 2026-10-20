@@ -38,6 +38,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "overlap",
     "sf_thresh",
     "privacy_threshold",
+    "privacy_rank",
     "confirmation_level",
     // Notifications
     "apprise_url",
@@ -138,6 +139,10 @@ pub struct SettingsForm {
     /// Human-class confidence at or above which an analysis window and its
     /// neighbours are suppressed (`0` = disabled).
     pub privacy_threshold: Option<String>,
+    /// Human-sound rank rule: a window, and its neighbours, are suppressed
+    /// when a human class ranks within the model's top *N* classes (whole
+    /// number, `0` = off, `10` = BirdNET-Pi's own rule).
+    pub privacy_rank: Option<String>,
     /// How much agreement from neighbouring analysis windows a species needs
     /// before it is recorded: `off`, `lenient`, `moderate`, `balanced` or
     /// `strict`. Only bites when `overlap` is set.

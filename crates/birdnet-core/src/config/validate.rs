@@ -79,7 +79,13 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_confidence_ceiling(config, &mut out);
     check_sf_thresh_ceiling(config, &mut out);
     check_privacy_threshold_scale(config, &mut out);
-    check_positive_int(config, "PRIVACY_RANK", 0, PRIVACY_RANK_MAX, &mut out);
+    check_positive_int(
+        config,
+        "PRIVACY_RANK",
+        PRIVACY_RANK_MIN,
+        PRIVACY_RANK_MAX,
+        &mut out,
+    );
     check_positive_int(config, "RECORDING_LENGTH", 3, 60, &mut out);
     check_positive_int(config, "SEGMENT_DURATION", 3, 600, &mut out);
     check_schedule(config, &mut out);
@@ -325,11 +331,24 @@ fn check_sf_thresh_ceiling(config: &Config, out: &mut Vec<Finding>) {
 /// privacy filter the owner believes is on never fires.
 const PRIVACY_THRESHOLD_CEILING: f64 = 0.5;
 
+/// The smallest `PRIVACY_RANK` the station accepts: `0`, which switches the
+/// rank rule off.
+///
+/// A constant of its own so that the two other places that bound the key — the
+/// admin settings form and `--privacy-rank` — read the same number [`validate`]
+/// does instead of typing a second `0`.
+pub const PRIVACY_RANK_MIN: u64 = 0;
+
 /// The largest `PRIVACY_RANK` the station accepts.
 ///
 /// V2.4 has 6 522 classes and V3.0 has 11 560, so a rank past either masks
 /// every window; BirdNET-Pi's own largest cutoff (`PRIVACY_THRESHOLD=100`)
 /// is 6 000.
+///
+/// Read by [`validate`] for the config file and by the settings form for a
+/// value typed on the page; `--privacy-rank` carries a clap range literal of
+/// its own, which `the_privacy_rank_default_is_birdnet_pis_and_zero_switches_it_off`
+/// holds to this.
 pub const PRIVACY_RANK_MAX: u64 = 12_000;
 
 /// Warn about a `PRIVACY_THRESHOLD` that looks like BirdNET-Pi's scale.
@@ -706,6 +725,35 @@ mod tests {
                 "PRIVACY_THRESHOLD={v} is a normal setting"
             );
         }
+    }
+
+    /// `PRIVACY_RANK` is a count of classes: 0 (off) to [`PRIVACY_RANK_MAX`],
+    /// whole numbers only. The settings form refuses exactly what is refused
+    /// here (`the_form_and_the_validator_agree_about_a_whole_number`), so this
+    /// pins the edges that test compares against.
+    #[test]
+    fn privacy_rank_is_a_whole_number_from_zero_to_its_maximum() {
+        let max = PRIVACY_RANK_MAX.to_string();
+        let past = (PRIVACY_RANK_MAX + 1).to_string();
+        for v in ["0", "10", "75", "600", max.as_str()] {
+            assert!(
+                validate(&cfg(&[("PRIVACY_RANK", v)])).is_empty(),
+                "PRIVACY_RANK={v} is in range and must pass clean"
+            );
+        }
+        for v in [past.as_str(), "-1", "0.5", "0,5", "10%", "abc"] {
+            let findings = validate(&cfg(&[("PRIVACY_RANK", v)]));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.key == "PRIVACY_RANK" && f.severity == Severity::Error),
+                "PRIVACY_RANK={v} must be an error, got {findings:?}"
+            );
+        }
+        // A blank line is unset, as everywhere else in this file.
+        assert!(validate(&cfg(&[("PRIVACY_RANK", "")])).is_empty());
+        // And the documented range is the one the constants carry.
+        assert_eq!((PRIVACY_RANK_MIN, PRIVACY_RANK_MAX), (0, 12_000));
     }
 
     #[test]

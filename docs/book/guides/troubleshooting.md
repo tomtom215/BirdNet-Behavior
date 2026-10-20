@@ -128,7 +128,7 @@ Look for `model failed to load` or `mel spectrogram` errors. The common causes:
 
 **Detections exist but confidence is always low.** Audio quality is almost always the cause. Check the microphone placement (out of the wind, with a foam windscreen), the ALSA gain (`alsamixer -c 1`, F4 for Capture), and a recording in a spectrogram viewer such as Audacity — bird calls should be clearly visible in the 1–8 kHz band. Then see [Tuning Detection Accuracy](./tuning.md).
 
-**Birds are heard but a conversation near the microphone leaves a gap.** That is the human-sound rule, on by default: a window in which a human class ranks in the model's top 10 classes, and the windows either side, are not recorded. `PRIVACY_RANK=0` switches it off; see [Same audio, same detections](./parity.md#moving-an-existing-station-to-birdnet-pis-results).
+**Birds are heard but a conversation near the microphone leaves a gap.** That is the human-sound rule, on by default: a window in which a human class ranks in the model's top 10 classes, and the windows either side, are not recorded. Set *Privacy Rank* to `0` in the Detection section of the Settings page (or `PRIVACY_RANK=0`) to switch it off; see [Same audio, same detections](./parity.md#moving-an-existing-station-to-birdnet-pis-results).
 
 ## Model not found
 

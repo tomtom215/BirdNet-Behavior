@@ -46,7 +46,7 @@ The file keys are the ones `birdnet-behavior --doctor` knows (`crates/birdnet-co
 | `TLS_CERT` | `--tls-cert` · `BIRDNET_TLS_CERT` | — | Certificate chain (PEM) for `TLS_MODE=manual` |
 | `TLS_KEY` | `--tls-key` · `BIRDNET_TLS_KEY` | — | Private key (PEM) for `TLS_MODE=manual` |
 | `TLS_DIR` | `--tls-dir` · `BIRDNET_TLS_DIR` | a `tls` folder beside the database | Where the generated CA and server certificate are kept |
-| `PRIVACY_RANK` | `--privacy-rank` · `BIRDNET_PRIVACY_RANK` | `10` | BirdNET-Pi's human-sound rule; `0` = off, up to 12000. On by default. Not on the Settings page yet |
+| `PRIVACY_RANK` | `--privacy-rank` · `BIRDNET_PRIVACY_RANK` | `10` | BirdNET-Pi's human-sound rule; `0` = off, up to 12000. On by default. A field on the Settings page (*Privacy Rank*) |
 | `WATCHDOG_CHECK_SECS` | `BIRDNET_WATCHDOG_CHECK_SECS` | `2` (1–300) | How often every capture source is checked |
 | `WATCHDOG_STALL_SEGMENTS` | `BIRDNET_WATCHDOG_STALL_SEGMENTS` | `4` (2–60) | Segments of missing output before a running source is called stalled |
 | `WATCHDOG_STALL_FLOOR_SECS` | `BIRDNET_WATCHDOG_STALL_FLOOR_SECS` | `120` (10–3600) | Floor under that stall threshold |

@@ -117,6 +117,7 @@ pub fn form_default(key: &str) -> String {
             format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD)
         }
         "sensitivity" => format!("{:.2}", birdnet_core::config::DEFAULT_SENSITIVITY),
+        "privacy_rank" => birdnet_core::config::DEFAULT_PRIVACY_RANK.to_string(),
         other => fixed_form_default(other).to_owned(),
     }
 }
@@ -532,6 +533,7 @@ mod tests {
         assert!(html.contains("confidence_threshold"));
         assert!(html.contains("sf_thresh"));
         assert!(html.contains("privacy_threshold"));
+        assert!(html.contains("privacy_rank"));
         // Notifications
         assert!(html.contains("apprise_url"));
         assert!(html.contains("apprise_config"));

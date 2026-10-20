@@ -106,6 +106,62 @@ const CONFIG_KEY_OF: &[(&str, &str)] = &[
     ("privacy_threshold", "PRIVACY_THRESHOLD"),
 ];
 
+/// Every settings field the station reads as a count and not a fraction: the
+/// form key, the label the page shows, the range outside which the value
+/// cannot do its job, and what a person typing the wrong thing needs told.
+///
+/// The bounds are `birdnet-core`'s own constants — the ones
+/// [`birdnet_core::config::validate::validate`] enforces on the config file —
+/// read, not copied, so the page cannot accept a number `--doctor` refuses or
+/// refuse one it accepts. `the_form_and_the_validator_agree_about_a_whole_number`
+/// holds the two *behaviours* equal at each edge, which is the claim that
+/// matters if somebody later swaps a constant for a literal.
+///
+/// Kept apart from [`BOUNDED_FIELDS`] because the check is a different one: a
+/// value in that list is parsed as a decimal, and `0.02` in this one would
+/// truncate to `0`, which for `privacy_rank` is the rule switched off.
+const WHOLE_NUMBER_FIELDS: &[(&str, &str, u64, u64, &str)] = &[(
+    "privacy_rank",
+    "Privacy Rank",
+    birdnet_core::config::validate::PRIVACY_RANK_MIN,
+    birdnet_core::config::validate::PRIVACY_RANK_MAX,
+    "It counts classes, it is not a confidence (that is the Privacy Threshold field): \
+     0 turns the rule off and 10 is BirdNET-Pi's own.",
+)];
+
+/// The config key each whole-number field maps to, for
+/// `the_form_and_the_validator_agree_about_a_whole_number`.
+#[cfg(test)]
+const WHOLE_NUMBER_CONFIG_KEY_OF: &[(&str, &str)] = &[("privacy_rank", "PRIVACY_RANK")];
+
+/// What is wrong with one whole-number submission, or `None` when it is fine.
+///
+/// A blank value is fine: it clears the setting, and the station runs on the
+/// default. Nothing is rounded, truncated or reinterpreted — a fraction, a
+/// percent sign, a sign or a thousands separator is refused and quoted back, so
+/// the number stored is always the number typed.
+fn whole_number_problem(
+    label: &str,
+    raw: &str,
+    min: u64,
+    max: u64,
+    advice: &str,
+) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let rule = format!("{label} must be a whole number from {min} to {max}. {advice}");
+    if raw.bytes().all(|b| b.is_ascii_digit()) {
+        // Digits only. One too long for a u64 is out of range, not unreadable.
+        return match raw.parse::<u64>() {
+            Ok(v) if (min..=max).contains(&v) => None,
+            _ => Some(format!("{rule} You entered {raw}.")),
+        };
+    }
+    Some(format!("{rule} You entered “{raw}”."))
+}
+
 /// Problems with the numbers in `form`, phrased for the person who typed them.
 ///
 /// # Why this exists at all
@@ -174,14 +230,29 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
             "{label} must be between {min} and {max}. You entered {raw}{hint}"
         ));
     }
+    // The same rule for the counts: the submission, not the diff, and sized by
+    // the table so a field added there and not here does not compile.
+    let submitted: [(&str, Option<&String>); WHOLE_NUMBER_FIELDS.len()] =
+        [("privacy_rank", form.privacy_rank.as_ref())];
+    for (key, value) in submitted {
+        let Some(value) = value else { continue };
+        let Some(&(_, label, min, max, advice)) =
+            WHOLE_NUMBER_FIELDS.iter().find(|(k, ..)| *k == key)
+        else {
+            continue;
+        };
+        problems.extend(whole_number_problem(label, value, min, max, advice));
+    }
     problems
 }
 
 /// Fields saved with surrounding whitespace removed.
 ///
-/// Opaque identifiers only, which a copy from a web page tends to bring a
-/// newline or a space with. Not passwords: a space can be part of one.
-const TRIMMED_FIELDS: &[&str] = &["birdweather_token"];
+/// Opaque identifiers, which a copy from a web page tends to bring a newline
+/// or a space with, and whole numbers, where a stray space would make the
+/// daemon's `PRIVACY_RANK` read fail and fall back to the default. Not
+/// passwords: a space can be part of one.
+const TRIMMED_FIELDS: &[&str] = &["birdweather_token", "privacy_rank"];
 
 /// A BirdWeather token holding anything but letters and digits, explained.
 ///
@@ -701,6 +772,11 @@ pub(crate) fn build_settings_items(
         SettingsCategory::Detection
     );
     push!(
+        form.privacy_rank,
+        "privacy_rank",
+        SettingsCategory::Detection
+    );
+    push!(
         form.confirmation_level,
         "confirmation_level",
         SettingsCategory::Detection
@@ -935,6 +1011,134 @@ mod tests {
         }
     }
 
+    /// The form and `--doctor` must take the same view of a whole number.
+    ///
+    /// Both read the same two constants, so a drift here would need somebody to
+    /// replace a constant with a literal; this compares what each *does* at the
+    /// edges and at the typed mistakes, which is the claim made in
+    /// `WHOLE_NUMBER_FIELDS`. The form may be stricter than the validator on a
+    /// shape no person types by accident (`+5`, which the validator reads as 5)
+    /// but never looser, so every value here is one they must agree about.
+    #[test]
+    fn the_form_and_the_validator_agree_about_a_whole_number() {
+        use birdnet_core::config::validate::{Severity, validate};
+        for &(field, config_key) in WHOLE_NUMBER_CONFIG_KEY_OF {
+            let &(_, _, min, max, _) = WHOLE_NUMBER_FIELDS
+                .iter()
+                .find(|(k, ..)| *k == field)
+                .unwrap_or_else(|| panic!("{field} is not a whole-number field"));
+            let mut probes: Vec<String> = [
+                (min + 1).to_string(),
+                min.to_string(),
+                max.to_string(),
+                (max - 1).to_string(),
+                (max + 1).to_string(),
+                (max * 5).to_string(),
+            ]
+            .into();
+            probes.extend(
+                [
+                    "10",
+                    "75",
+                    "007",
+                    "-1",
+                    "0.5",
+                    "0,5",
+                    "0.02",
+                    "10%",
+                    "1,000",
+                    "1e3",
+                    "abc",
+                    "99999999999999999999999",
+                ]
+                .map(str::to_owned),
+            );
+            for v in probes {
+                let config = birdnet_core::config::Config::parse(&format!("{config_key}={v}"))
+                    .expect("a key=value line parses");
+                let validator_refuses = validate(&config)
+                    .iter()
+                    .any(|f| f.key == config_key && f.severity == Severity::Error);
+                let mut form = empty_form();
+                form.privacy_rank = Some(v.clone());
+                let form_refuses = !range_problems(&form).is_empty();
+                assert_eq!(
+                    form_refuses,
+                    validator_refuses,
+                    "{field}={v:?}: the form {} it and `--doctor` {} it",
+                    if form_refuses { "refuses" } else { "accepts" },
+                    if validator_refuses {
+                        "refuses"
+                    } else {
+                        "accepts"
+                    },
+                );
+            }
+        }
+    }
+
+    /// The typed mistakes are refused with a message that names the range, and
+    /// a fraction is never truncated into the rule being switched off.
+    #[test]
+    fn a_privacy_rank_that_is_not_a_count_is_refused_and_says_what_a_count_is() {
+        for bad in ["0.02", "0,02", "10%", "-5", "12001", "1,000", "ten"] {
+            let mut form = empty_form();
+            form.privacy_rank = Some(bad.to_owned());
+            let problems = range_problems(&form);
+            assert_eq!(problems.len(), 1, "{bad:?}: {problems:?}");
+            let p = &problems[0];
+            assert!(p.contains("Privacy Rank"), "{bad:?}: names the field: {p}");
+            assert!(
+                p.contains("from 0 to 12000"),
+                "{bad:?}: names the range: {p}"
+            );
+            assert!(
+                p.contains("0 turns the rule off"),
+                "{bad:?}: says what 0 does: {p}"
+            );
+            assert!(p.contains(bad), "{bad:?}: quotes what was typed: {p}");
+        }
+        // Counterpart: counts, blanks and padding are not problems.
+        for good in ["0", "10", "75", "12000", " 25 ", ""] {
+            let mut form = empty_form();
+            form.privacy_rank = Some(good.to_owned());
+            assert!(
+                range_problems(&form).is_empty(),
+                "{good:?} is a valid answer"
+            );
+        }
+    }
+
+    /// Saved trimmed, and not rewritten when it is what is already stored.
+    #[test]
+    fn a_privacy_rank_is_stored_trimmed_and_an_unchanged_one_is_not_rewritten() {
+        let mut form = empty_form();
+        form.privacy_rank = Some(" 25 ".to_owned());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsShownByTheForm);
+        let (key, value, category) = items
+            .iter()
+            .find(|(k, ..)| *k == "privacy_rank")
+            .expect("a changed rank is written");
+        assert_eq!((*key, value.as_str()), ("privacy_rank", "25"));
+        assert_eq!(*category, SettingsCategory::Detection);
+
+        let stored = HashMap::from([("privacy_rank".to_owned(), "25".to_owned())]);
+        let again = build_settings_items(&form, &stored, Unset::AsShownByTheForm);
+        assert!(
+            !again.iter().any(|(k, ..)| *k == "privacy_rank"),
+            "the stored value, padded, is not a change: {again:?}"
+        );
+
+        // The page shows the default for a key with no row; saving it back is
+        // not a change either, or the first press of Save would pin it.
+        form.privacy_rank = Some(super::super::render::form_default("privacy_rank"));
+        let untouched = build_settings_items(&form, &HashMap::new(), Unset::AsShownByTheForm);
+        assert!(
+            !untouched.iter().any(|(k, ..)| *k == "privacy_rank"),
+            "the default shown by the form is not a change: {untouched:?}"
+        );
+    }
+
     /// The counterpart: the two alert thresholds must stay *out* of the
     /// validator's list. Putting them in is the change this whole arrangement
     /// exists to prevent.
@@ -976,6 +1180,7 @@ mod tests {
             overlap: None,
             sf_thresh: None,
             privacy_threshold: None,
+            privacy_rank: None,
             confirmation_level: None,
             apprise_url: None,
             apprise_config: None,

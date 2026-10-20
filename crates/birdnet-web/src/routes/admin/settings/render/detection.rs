@@ -15,6 +15,12 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let over = get_setting(s, "overlap");
     let sf = get_setting(s, "sf_thresh");
     let priv_t = get_setting(s, "privacy_threshold");
+    let priv_rank = get_setting(s, "privacy_rank");
+    let priv_rank_default = super::form_default("privacy_rank");
+    // Read from the validator's own constants, so the label and the hint state
+    // the range the save enforces and cannot drift from it.
+    let rank_min = birdnet_core::config::validate::PRIVACY_RANK_MIN;
+    let rank_max = birdnet_core::config::validate::PRIVACY_RANK_MAX;
     let confirm = get_setting(s, "confirmation_level");
     // The one setting on this page whose effect depends on another setting on
     // the same page: with no overlap the gentler levels ask for agreement from
@@ -93,12 +99,21 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Filter unlikely species by occurrence frequency. Lower = more species. 0 lets through every species the occurrence model scores; one it has no entry for is never let through while the filter is on. With no location or occurrence model the filter is off. (BirdNET-Pi: SF_THRESH)</p>
       </div>
     </div>
-    <div>
-      <label for="privacy_threshold">Privacy Threshold (0 = disabled)</label>
-      <input id="privacy_threshold" name="privacy_threshold" type="text"
-             inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-             value="{priv_t}" placeholder="0.0" class="bnb-w-num">
-      <p class="hint">Suppress an analysis window, and its neighbours, when the model's confidence for a human class reaches this value. Lower = suppresses more. Independent of the confidence threshold above. Typical: 0.01–0.03. 0 = disabled. Same key as BirdNET-Pi's PRIVACY_THRESHOLD but a different scale (there it is a percentage of the species list), so a BirdNET-Pi value does not carry across.</p>
+    <div class="grid-2">
+      <div>
+        <label for="privacy_threshold">Privacy Threshold (0 = disabled)</label>
+        <input id="privacy_threshold" name="privacy_threshold" type="text"
+               inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
+               value="{priv_t}" placeholder="0.0" class="bnb-w-num">
+        <p class="hint">Suppress an analysis window, and its neighbours, when the model's confidence for a human class reaches this value. Lower = suppresses more. Independent of the confidence threshold above. Typical: 0.01–0.03. 0 = disabled. Same key as BirdNET-Pi's PRIVACY_THRESHOLD but a different scale (there it is a percentage of the species list), so a BirdNET-Pi value does not carry across.</p>
+      </div>
+      <div>
+        <label for="privacy_rank">Privacy Rank ({rank_min} = disabled, up to {rank_max})</label>
+        <input id="privacy_rank" name="privacy_rank" type="text"
+               inputmode="numeric" pattern="[0-9]*"
+               value="{priv_rank}" placeholder="{priv_rank_default}" class="bnb-w-num">
+        <p class="hint">Drop an analysis window, and the windows either side of it, when a human-sound class (speech, whistling, other human noises) ranks among the model's top <em>N</em> classes for that window. Whole number: {priv_rank_default} is BirdNET-Pi's own behaviour and the default; a larger number drops more windows; {rank_min} turns this rule off. A count of classes, not a confidence: for that, use Privacy Threshold next to it. Either rule on its own drops a window. (BirdNET-Pi: derived from PRIVACY_THRESHOLD as max(10, 60 × value).)</p>
+      </div>
     </div>
     <div>
       <label for="confirmation_level">Repeat Confirmation</label>
