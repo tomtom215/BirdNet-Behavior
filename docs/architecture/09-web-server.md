@@ -115,14 +115,14 @@ Every path in this section is under `/api/v2` (the routers are nested with
 by the group they belong to; they are not the whole list. The whole list, with
 parameters and response shapes, is the manual's
 [HTTP & WebSocket API](../book/reference/api.md) page, and
-`crates/birdnet-web/openapi.json` is the machine-readable form. A gate
-(`every_documented_path_is_routed`) keeps every path it documents routed. The
-other direction is checked only for the eighteen token-gated routes
-(`every_bearer_route_is_documented_as_bearer_gated`), and ten routed paths were
-absent from it on 2026-10-20 (`/api/v2/`, `/analytics/abundance`, `/analytics/phenology`,
-`/detections/export/raven`, the two per-clip Raven and Audacity tables,
-`/soundlevel`, `/species/tracking`, `/ws/detections` and `/ws/spectrogram`), found
-by diffing the routers' `.route(…)` calls against its `paths`.
+`crates/birdnet-web/openapi.json` is the machine-readable form. Two
+gates hold it to the router in both directions: `every_documented_path_is_routed`
+(every documented path is served) and
+`every_route_the_api_serves_is_in_the_openapi_document` (every served
+`/api/v2` method and path is documented, read from the router's own `Debug`
+output); the same file checks the document's structure (references, path
+parameters, operation ids, response descriptions). A route added without its
+entry fails by name.
 
 ### System
 
