@@ -50,8 +50,20 @@ pub struct BlacklistForm {
 /// Render the image blacklist admin page.
 async fn images_page(State(state): State<AppState>) -> Html<String> {
     state.run_blocking(move |state| {
-    let entries =
-        state.with_read_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
+    // An unreadable blacklist is not an empty one: "0 entries blacklisted"
+    // invites adding again the entry that is already there.
+    let entries = match state.with_read_db(birdnet_db::sqlite::list_image_blacklist) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(error = %e, "image blacklist could not be read");
+            return Html(crate::routes::admin::admin_subpage_shell(
+                "Species images",
+                "species",
+                "Images",
+                &crate::routes::pages::error_states::could_not_load("the image blacklist"),
+            ));
+        }
+    };
 
     let mut rows = String::new();
     for entry in &entries {

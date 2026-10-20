@@ -109,13 +109,23 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
 /// (`crate::routes::pages::homes::station_tabs`), which renders the "recent
 /// alerts sent" surface in the main shell.
 #[allow(clippy::similar_names)]
+///
+/// The log and its 30-day counts are read together and either failing is a
+/// failure of the whole panel: "No notifications yet" beside "Sent 0" is a
+/// statement that nothing was sent, made about a log that was not read.
 pub(crate) fn recent_body(state: &AppState) -> String {
-    let (entries, stats) = state.with_read_db(|conn| {
-        let entries = recent_notifications(conn, 100, 0).unwrap_or_default();
-        let stats = notification_stats(conn, 30).unwrap_or((0, 0, 0));
-        (entries, stats)
+    let read = state.with_read_db(|conn| {
+        let entries = recent_notifications(conn, 100, 0)?;
+        let stats = notification_stats(conn, 30)?;
+        Ok::<_, birdnet_db::notifications::NotifError>((entries, stats))
     });
-    notifications_body(&entries, stats)
+    match read {
+        Ok((entries, stats)) => notifications_body(&entries, stats),
+        Err(e) => {
+            tracing::warn!(error = %e, "notification history could not be read");
+            crate::routes::pages::error_states::could_not_load("the notification history")
+        }
+    }
 }
 
 static NOTIFICATIONS_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(

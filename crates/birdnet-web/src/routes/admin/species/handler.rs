@@ -56,21 +56,26 @@ fn list_partial(state: &AppState) -> Response {
 pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
     state
         .run_blocking(move |state| {
+            let unreadable = |what: &str, e: &dyn std::fmt::Display| {
+                tracing::warn!(error = %e, "{what} could not be read");
+                Html(crate::routes::admin::admin_subpage_shell(
+                    "Filter test",
+                    "species",
+                    "Filter test",
+                    &crate::routes::pages::error_states::could_not_load(what),
+                ))
+            };
             let lists = match try_species_lists(state) {
                 Ok(lists) => lists,
-                Err(e) => {
-                    tracing::warn!(error = %e, "species lists could not be read");
-                    return Html(crate::routes::admin::admin_subpage_shell(
-                        "Filter test",
-                        "species",
-                        "Filter test",
-                        &crate::routes::pages::error_states::could_not_load("the species lists"),
-                    ));
-                }
+                Err(e) => return unreadable("the species lists", &e),
             };
-            let species = state.with_read_db(|conn| {
-                birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default()
-            });
+            // An empty species table would preview a filter that blocks and
+            // passes nothing, as though the station had heard nothing.
+            let species =
+                match state.with_read_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000)) {
+                    Ok(species) => species,
+                    Err(e) => return unreadable("the species this station has heard", &e),
+                };
             #[allow(clippy::cast_sign_loss)]
             let rows: Vec<(String, String, u64)> = species
                 .into_iter()

@@ -268,63 +268,86 @@ pub(crate) fn quality_body(state: &AppState) -> String {
 }
 
 async fn quality_summary_partial(State(state): State<AppState>) -> Html<String> {
-    let data = tokio::task::spawn_blocking(move || load_quality_data(&state))
-        .await
-        .unwrap_or_else(|_| QualityData::empty());
-    Html(render_summary_cards(data.summary.as_ref()))
+    let data = state.run_blocking(load_quality_data).await;
+    Html(panel(&data.summary, "the summary statistics", |s| {
+        render_summary_cards(s.as_ref())
+    }))
 }
 
 async fn quality_trend_partial(State(state): State<AppState>) -> Html<String> {
-    let data = tokio::task::spawn_blocking(move || load_quality_data(&state))
-        .await
-        .unwrap_or_else(|_| QualityData::empty());
-    Html(render_confidence_trend(&data.trend))
+    let data = state.run_blocking(load_quality_data).await;
+    Html(panel(&data.trend, "the confidence trend", |t| {
+        render_confidence_trend(t)
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Data loading
 // ---------------------------------------------------------------------------
 
+/// One panel's data, or the error that stopped it being read.
+///
+/// Per panel and not for the page, because the queries are independent and a
+/// failure in one says nothing about the others. What they must not do is turn
+/// into the default the panel would have drawn for an empty station: every
+/// field used to be `.ok()` or `.unwrap_or_default()`, so a database that could
+/// not be read drew "No detections in database.", a histogram of six zeros and
+/// "Database quality looks good!".
+type Loaded<T> = Result<T, birdnet_db::sqlite::DbError>;
+
 struct QualityData {
-    summary: Option<QualitySummary>,
-    conf_buckets: [i64; 6],
-    trend: Vec<(String, f64)>,
-    by_hour: Vec<(u8, i64, f64)>,
-    low_conf: Vec<(String, String, i64, f64)>,
-    review_trend: Vec<ReviewVerdictDay>,
-    model_vs_review: Vec<ModelVsReviewRow>,
+    /// `None` is a station with nothing to summarise, not a failed read.
+    summary: Loaded<Option<QualitySummary>>,
+    conf_buckets: Loaded<[i64; 6]>,
+    trend: Loaded<Vec<(String, f64)>>,
+    by_hour: Loaded<Vec<(u8, i64, f64)>>,
+    low_conf: Loaded<Vec<(String, String, i64, f64)>>,
+    review_trend: Loaded<Vec<ReviewVerdictDay>>,
+    model_vs_review: Loaded<Vec<ModelVsReviewRow>>,
 }
 
-impl QualityData {
-    const fn empty() -> Self {
-        Self {
-            summary: None,
-            conf_buckets: [0; 6],
-            trend: Vec::new(),
-            by_hour: Vec::new(),
-            low_conf: Vec::new(),
-            review_trend: Vec::new(),
-            model_vs_review: Vec::new(),
+/// Render one panel from what was loaded for it, or say it could not be.
+fn panel<T>(loaded: &Loaded<T>, what: &str, render: impl FnOnce(&T) -> String) -> String {
+    match loaded {
+        Ok(data) => render(data),
+        Err(e) => {
+            tracing::warn!(error = %e, panel = what, "data quality panel could not be read");
+            crate::routes::pages::error_states::inline(what)
         }
     }
 }
 
+/// The summary, or `None` for a station that has no detections to summarise.
+///
+/// `quality_summary` cannot tell those apart for the caller: over an empty
+/// `detections_analytic` its `SUM` is `NULL`, which does not read as an
+/// integer, so it returns an error on a station that has simply heard nothing.
+/// The old `.ok()` turned that into "No detections in database." — right for
+/// an empty station by accident, and the same sentence for a broken one. A
+/// count settles which it is before the summary is asked for.
+fn load_summary(conn: &rusqlite::Connection) -> Loaded<Option<QualitySummary>> {
+    if birdnet_db::sqlite::analytic_detection_count(conn)? == 0 {
+        return Ok(None);
+    }
+    quality_summary(conn).map(Some)
+}
+
 fn load_quality_data(state: &AppState) -> QualityData {
     state.with_read_db(|conn| QualityData {
-        summary: quality_summary(conn).ok(),
-        conf_buckets: confidence_distribution(conn).unwrap_or([0; 6]),
-        trend: confidence_trend(conn, 30).unwrap_or_default(),
-        by_hour: detection_quality_by_hour(conn).unwrap_or_default(),
+        summary: load_summary(conn),
+        conf_buckets: confidence_distribution(conn),
+        trend: confidence_trend(conn, 30),
+        by_hour: detection_quality_by_hour(conn),
         // Drawn, not matched: the common name is in the station's language.
-        low_conf: low_confidence_species(conn, 0.60, 3)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(com, sci, count, avg)| {
-                (state.names().name(&sci, &com).to_owned(), sci, count, avg)
-            })
-            .collect(),
-        review_trend: review_verdict_trend(conn, 30).unwrap_or_default(),
-        model_vs_review: model_vs_review_by_species(conn, 12).unwrap_or_default(),
+        low_conf: low_confidence_species(conn, 0.60, 3).map(|rows| {
+            rows.into_iter()
+                .map(|(com, sci, count, avg)| {
+                    (state.names().name(&sci, &com).to_owned(), sci, count, avg)
+                })
+                .collect()
+        }),
+        review_trend: review_verdict_trend(conn, 30),
+        model_vs_review: model_vs_review_by_species(conn, 12),
     })
 }
 
@@ -334,13 +357,31 @@ fn load_quality_data(state: &AppState) -> QualityData {
 
 #[allow(clippy::too_many_lines)]
 fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocalizer) -> String {
-    let summary_html = render_summary_cards(data.summary.as_ref());
-    let dist_html = render_confidence_distribution(&data.conf_buckets);
-    let trend_html = render_confidence_trend(&data.trend);
-    let hour_html = render_hourly_quality(&data.by_hour);
-    let low_conf_html = render_low_confidence_species(&data.low_conf);
-    let review_trend_html = render_review_trend(&data.review_trend);
-    let model_vs_review_html = render_model_vs_review(&data.model_vs_review, names);
+    let summary_html = panel(&data.summary, "the summary statistics", |s| {
+        render_summary_cards(s.as_ref())
+    });
+    let dist_html = panel(
+        &data.conf_buckets,
+        "the confidence distribution",
+        render_confidence_distribution,
+    );
+    let trend_html = panel(&data.trend, "the confidence trend", |t| {
+        render_confidence_trend(t)
+    });
+    let hour_html = panel(&data.by_hour, "the hourly profile", |h| {
+        render_hourly_quality(h)
+    });
+    let low_conf_html = panel(&data.low_conf, "the low-confidence species", |l| {
+        render_low_confidence_species(l)
+    });
+    let review_trend_html = panel(&data.review_trend, "the review verdict trend", |r| {
+        render_review_trend(r)
+    });
+    let model_vs_review_html = panel(
+        &data.model_vs_review,
+        "the model-versus-human comparison",
+        |m| render_model_vs_review(m, names),
+    );
     let tuning_link = help_link(Topic::Tuning);
     // Skeletons for the partials that load via hx-trigger="load" (resolves
     // TODO(O-16-followup) for #quality-summary / #quality-trend).

@@ -68,33 +68,57 @@ struct SpeciesForm {
 }
 
 async fn manage_page(State(state): State<AppState>) -> Html<String> {
-    let rows = load(state).await;
+    let table = rendered(state, None).await.0;
     Html(admin_subpage_shell(
         "Species storage",
         "species",
         "Species storage",
-        &body(&rows, None),
+        &format!(r#"<div id="species-storage">{table}</div>"#),
     ))
 }
 
 async fn manage_partial(State(state): State<AppState>) -> Html<String> {
-    let rows = load(state).await;
-    Html(table(&rows, None))
+    rendered(state, None).await
 }
 
-async fn load(state: AppState) -> Vec<SpeciesUsage> {
+/// Every species with what it costs, or the error that stopped it being read.
+///
+/// An unreadable table is not an empty one: [`table`] says "No detections yet."
+/// for no rows, which is a statement about the station and the wrong thing to
+/// tell an operator who is here to delete things.
+async fn load(state: AppState) -> Result<Vec<SpeciesUsage>, birdnet_db::sqlite::DbError> {
     let names = state.names_handle();
-    let mut rows = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::species_disk_usage(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
+    let mut rows = state
+        .run_blocking(|s| s.with_read_db(birdnet_db::sqlite::species_disk_usage))
+        .await?;
     // `com_name` is only drawn here — every action posts `sci_name` — so it is
     // the one field to put in the station's language.
     for r in &mut rows {
         r.com_name = names.name(&r.sci_name, &r.com_name).to_owned();
     }
-    rows
+    Ok(rows)
+}
+
+/// The table, re-read and rendered under `note`, or `note` over the failure
+/// note when it could not be read.
+///
+/// The note is kept either way: it reports an action that did happen, and a
+/// table that cannot be redrawn afterwards does not un-happen it.
+async fn rendered(state: AppState, note: Option<&str>) -> Html<String> {
+    match load(state).await {
+        Ok(rows) => Html(table(&rows, note)),
+        Err(e) => {
+            tracing::warn!(error = %e, "species storage table could not be read");
+            let mut out = String::new();
+            if let Some(note) = note {
+                let _ = write!(out, r#"<p class="empty-note mb">{note}</p>"#);
+            }
+            out.push_str(&crate::routes::pages::error_states::inline(
+                "the species storage table",
+            ));
+            Html(out)
+        }
+    }
 }
 
 /// `POST /admin/species/manage/exclude` — stop recording this species.
@@ -112,7 +136,7 @@ async fn exclude(
 ) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None)).into_response();
+        return rendered(state, None).await.into_response();
     }
     let name = sci_name.clone();
     let result = state
@@ -137,7 +161,7 @@ async fn exclude(
         ));
     }
     let note = format!("{} will no longer be recorded.", escape_html(&sci_name));
-    Html(table(&load(state).await, Some(&note))).into_response()
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// `POST /admin/species/manage/detections` — remove this species' detections.
@@ -154,7 +178,7 @@ async fn delete_detections(
 ) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None)).into_response();
+        return rendered(state, None).await.into_response();
     }
     let name = sci_name.clone();
     let result = state
@@ -194,7 +218,7 @@ async fn delete_detections(
         "species detections removed"
     );
     let note = outcome_note(&sci_name, outcome, "detections removed");
-    Html(table(&load(state).await, Some(&note))).into_response()
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// `POST /admin/species/manage/clips` — reclaim this species' audio.
@@ -218,7 +242,7 @@ async fn delete_clips(
 ) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None)).into_response();
+        return rendered(state, None).await.into_response();
     }
     let name = sci_name.clone();
     let dir = state.recording_dir();
@@ -300,7 +324,7 @@ async fn delete_clips(
             " {failed} file(s) could not be removed — see the log."
         );
     }
-    Html(table(&load(state).await, Some(&note))).into_response()
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// Which step of reclaiming clips the database refused.
@@ -316,39 +340,48 @@ enum ClipsRefused {
 /// A separate action because it is `stat` per clip: for the species this page
 /// exists for that is thousands of syscalls, and doing it for every species on
 /// every page load would make the page unusable on the SD card it runs on.
-async fn measure(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Html<String> {
+async fn measure(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return rendered(state, None).await.into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
     let dir = state.recording_dir();
-    let (bytes, counted) = tokio::task::spawn_blocking(move || {
-        let files = s
-            .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
-            .unwrap_or_default();
-        let mut bytes = 0u64;
-        let mut counted = 0usize;
-        for file in &files {
-            if let Some(path) = safe_clip_path(&dir, file)
-                && let Ok(meta) = std::fs::metadata(&path)
-            {
-                bytes += meta.len();
-                counted += 1;
+    let measured = state
+        .run_blocking(move |s| {
+            let files =
+                s.with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))?;
+            let mut bytes = 0u64;
+            let mut counted = 0usize;
+            for file in &files {
+                if let Some(path) = safe_clip_path(&dir, file)
+                    && let Ok(meta) = std::fs::metadata(&path)
+                {
+                    bytes += meta.len();
+                    counted += 1;
+                }
             }
+            Ok::<_, birdnet_db::sqlite::DbError>((bytes, counted))
+        })
+        .await;
+    // "Using 0 B across 0 clips" is a measurement; a list that could not be
+    // read is not one.
+    let (bytes, counted) = match measured {
+        Ok(measured) => measured,
+        Err(e) => {
+            tracing::warn!(error = %e, species = %sci_name, "species clips not listed");
+            return not_applied(&Toast::error(format!(
+                "{sci_name} could not be measured: its clips could not be listed from the database."
+            )));
         }
-        (bytes, counted)
-    })
-    .await
-    .unwrap_or((0, 0));
+    };
 
     let note = format!(
         "{} is using {} across {counted} clip(s) on disk.",
         escape_html(&sci_name),
         human_bytes(bytes)
     );
-    Html(table(&load(state).await, Some(&note)))
+    rendered(state, Some(&note)).await.into_response()
 }
 
 /// Seconds since the Unix epoch, saturating rather than wrapping.
@@ -419,10 +452,6 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn body(rows: &[SpeciesUsage], note: Option<&str>) -> String {
-    format!(r#"<div id="species-storage">{}</div>"#, table(rows, note))
 }
 
 /// The table itself, re-rendered by every action.

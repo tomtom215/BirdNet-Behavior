@@ -576,14 +576,21 @@ async fn rules_page() -> axum::response::Redirect {
     axum::response::Redirect::permanent("/station/alerts#rules")
 }
 
-async fn rules_list_partial(State(state): State<AppState>) -> Html<String> {
-    let rules = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| list_rules(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
+/// An unreadable rule list is not an empty one: "No alert rules defined. Create
+/// one above." invites the operator to build again the rules that are there.
+async fn rules_list_partial(State(state): State<AppState>) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
 
-    Html(render_rules_table(&rules))
+    match state
+        .run_blocking(|state| state.with_read_db(list_rules))
+        .await
+    {
+        Ok(rules) => Html(render_rules_table(&rules)).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "alert rules could not be read");
+            crate::routes::pages::error_states::failed_partial("your alert rules").into_response()
+        }
+    }
 }
 
 /// A rule that could not be created says so in a toast; see
@@ -786,13 +793,21 @@ struct MetricRuleForm {
     threshold: String,
 }
 
-async fn metric_rules_list_partial(State(state): State<AppState>) -> Html<String> {
-    let rules = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::metric_rules::list(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
-    Html(render_metric_rules_table(&rules))
+/// As [`rules_list_partial`], for the rules on the station's own measurements.
+async fn metric_rules_list_partial(State(state): State<AppState>) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+
+    match state
+        .run_blocking(|state| state.with_read_db(birdnet_db::metric_rules::list))
+        .await
+    {
+        Ok(rules) => Html(render_metric_rules_table(&rules)).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "metric rules could not be read");
+            crate::routes::pages::error_states::failed_partial("your measurement rules")
+                .into_response()
+        }
+    }
 }
 
 async fn create_metric_rule(
