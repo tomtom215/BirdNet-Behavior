@@ -419,6 +419,11 @@ jobs:
             -- --nocapture
           cargo test -p birdnet-core --test the_geomodel_keeps_out_birds_that_do_not_occur_here \
             -- --nocapture
+          # The embedded V2.4 label file names birds as BirdNET-Pi does; its class
+          # order is checked line for line against the file the model ships with,
+          # which this job has just fetched and verified.
+          cargo test -p birdnet-core --test the_v24_labels_name_birds_as_birdnet_pi_does \
+            -- --nocapture
 
   doc:
     name: Rustdoc (no broken links)
