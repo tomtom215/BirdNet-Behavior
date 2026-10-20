@@ -124,3 +124,125 @@ fn counterpart_a_north_american_station_keeps_them_and_keeps_out_the_magpie() {
         "the Eurasian Magpie passes the filter in Kansas"
     );
 }
+
+/// What an operator is shown when they ask why a bird is not being heard is the
+/// decision the station makes, not a second opinion.
+///
+/// `occurrence_scores` and `filter_species` share one model run, and this holds
+/// the two answers equal on the real geomodel: the species marked admitted are
+/// exactly the species the filter passes, the list is ordered by probability,
+/// and the three birds above sit where the filter put them with a number that
+/// agrees with the threshold. The counterpart for a filter with no model is
+/// `None`, not an empty list that reads as "nothing occurs here".
+#[test]
+fn the_scores_an_operator_is_shown_are_the_decision_the_station_makes() {
+    let Some((labels, geo, geo_labels)) = files() else {
+        return;
+    };
+    let classifier = LabelSet::load(&labels).expect("classifier labels load");
+    let meta = LabelSet::load(&geo_labels).expect("geomodel labels load");
+    let config = SpeciesFilterConfig::default();
+    let threshold = config.sf_thresh;
+    let mut filter =
+        SpeciesFilter::load_with_vocabulary(&geo, Some(meta), &classifier, &HashMap::new(), config)
+            .expect("geomodel loads");
+
+    let passed = filter
+        .filter_species(Some(BERLIN), JUNE, &classifier)
+        .expect("filter runs");
+    let scores = filter
+        .occurrence_scores(BERLIN, JUNE, &classifier)
+        .expect("scores run")
+        .expect("a model is loaded");
+
+    let admitted: HashSet<String> = scores
+        .iter()
+        .filter(|s| s.admitted)
+        .map(|s| s.scientific_name.clone())
+        .collect();
+    assert_eq!(
+        admitted, passed,
+        "the explorer and the filter disagree about what Berlin admits in June"
+    );
+    assert!(
+        scores
+            .windows(2)
+            .all(|w| w[0].probability >= w[1].probability),
+        "highest probability first"
+    );
+
+    let find = |sci: &str| {
+        scores
+            .iter()
+            .find(|s| s.scientific_name == sci)
+            .unwrap_or_else(|| panic!("{sci} is not scored"))
+    };
+    let magpie = find(MAGPIE);
+    assert!(
+        magpie.admitted && magpie.probability >= threshold,
+        "{magpie:?}"
+    );
+    assert_eq!(magpie.common_name, "Eurasian Magpie");
+    for bird in [DICKCISSEL, GREAT_HORNED_OWL] {
+        let s = find(bird);
+        assert!(
+            !s.admitted && s.probability < threshold,
+            "{bird} must be below the threshold in Berlin: {s:?}"
+        );
+    }
+
+    // No model: nothing is filtered, so there is nothing to explain.
+    let mut passthrough = SpeciesFilter::new_passthrough(SpeciesFilterConfig::default());
+    assert!(
+        passthrough
+            .occurrence_scores(BERLIN, JUNE, &classifier)
+            .expect("no model is not an error")
+            .is_none()
+    );
+}
+
+/// The same agreement for the filter BirdNET-Pi users have: the V2.4 range
+/// filter, indexed like the V2.4 labels with no label file of its own, so the
+/// explorer takes the other branch (no alignment, index straight to label).
+#[test]
+fn the_v24_range_filter_scores_agree_with_the_filter_it_explains() {
+    let required =
+        std::env::var("BIRDNET_REQUIRE_V24_MODEL").is_ok_and(|v| !v.is_empty() && v != "0");
+    let (Some(labels), Some(mdata)) = (
+        std::env::var_os("BIRDNET_TEST_V24_LABELS").map(PathBuf::from),
+        std::env::var_os("BIRDNET_TEST_V24_MDATA").map(PathBuf::from),
+    ) else {
+        assert!(
+            !required,
+            "BIRDNET_REQUIRE_V24_MODEL is set but BIRDNET_TEST_V24_LABELS / \
+             BIRDNET_TEST_V24_MDATA are not: the V2.4 range filter was NOT checked"
+        );
+        eprintln!("SKIP: set BIRDNET_TEST_V24_LABELS and BIRDNET_TEST_V24_MDATA");
+        return;
+    };
+    let classifier = LabelSet::load(&labels).expect("V2.4 labels load");
+    let mut filter = SpeciesFilter::load_with_vocabulary(
+        &mdata,
+        None,
+        &classifier,
+        &HashMap::new(),
+        SpeciesFilterConfig::default(),
+    )
+    .expect("the V2.4 range filter loads against the V2.4 labels");
+
+    let passed = filter
+        .filter_species(Some(BERLIN), JUNE, &classifier)
+        .expect("filter runs");
+    let scores = filter
+        .occurrence_scores(BERLIN, JUNE, &classifier)
+        .expect("scores run")
+        .expect("a model is loaded");
+    let admitted: HashSet<String> = scores
+        .iter()
+        .filter(|s| s.admitted)
+        .map(|s| s.scientific_name.clone())
+        .collect();
+    assert_eq!(admitted, passed);
+    assert_eq!(scores.len(), classifier.len(), "one score per V2.4 class");
+    assert!(passed.contains(MAGPIE) && !passed.contains(DICKCISSEL));
+}
