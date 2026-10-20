@@ -46,14 +46,3 @@ pub fn router() -> Router<AppState> {
             get(heatmap_widget::activity_heatmap_partial),
         )
 }
-
-/// Confidence class for badge coloring.
-pub(crate) fn conf_class(pct: f64) -> &'static str {
-    if pct >= 80.0 {
-        "high"
-    } else if pct >= 50.0 {
-        "mid"
-    } else {
-        "low"
-    }
-}

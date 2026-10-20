@@ -308,7 +308,7 @@ fn heat_bg(count: i64, cmax: i64) -> String {
     }
     let span = f64::from(u32::try_from(HEAT_MAX_PCT - 8).unwrap_or(72));
     let pct = ((count as f64 / cmax as f64) * span).round() as i64 + 8;
-    format!("color-mix(in oklch, var(--moss) {pct}%, var(--surface-2))")
+    format!("color-mix(in oklab, var(--moss) {pct}%, var(--surface-2))")
 }
 
 // ---------------------------------------------------------------------------
@@ -368,14 +368,15 @@ async fn day_page(
             let total = birdnet_db::sqlite::detection_count_for_date(conn, &date)?;
             let species = birdnet_db::sqlite::species_for_date(conn, &date)?;
             let rows = birdnet_db::sqlite::detections_by_date(conn, &date)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((hours, total, species, rows))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((hours, total, species, rows, floor))
         })
     })
     .await;
 
     let content = match result {
-        Ok(Ok((hours, total, species, rows))) => {
-            render_day_page(&date2, total, &species, &hours, &rows, &names)
+        Ok(Ok((hours, total, species, rows, floor))) => {
+            render_day_page(&date2, total, &species, &hours, &rows, &names, floor)
         }
         _ => format!(
             r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>{}"#,
@@ -464,6 +465,7 @@ fn render_day_page(
     hours: &[birdnet_db::sqlite::HourlyCount],
     rows: &[birdnet_db::sqlite::DetectionRow],
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) -> String {
     let mut html = String::new();
     let _ = write!(
@@ -505,8 +507,9 @@ fn render_day_page(
     html.push_str(
         r#"<div class="bnb-card pad"><div class="rp-h3">Every detection · newest first</div>"#,
     );
+    html.push_str(&super::confidence::legend(floor));
     for d in rows {
-        render_day_log_row(&mut html, d, names);
+        render_day_log_row(&mut html, d, names, floor);
     }
     html.push_str("</div>");
     html
@@ -520,6 +523,7 @@ fn render_day_log_row(
     html: &mut String,
     d: &birdnet_db::sqlite::DetectionRow,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
     let enc_name = simple_url_encode(&d.com_name);
     let shown = names.name(&d.sci_name, &d.com_name);
@@ -536,7 +540,7 @@ fn render_day_log_row(
          <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
          </div></div>",
         av = avatar(&d.com_name, shown, &d.sci_name, ""),
-        conf = conf_bar(d.confidence),
+        conf = conf_bar(d.confidence, floor),
         com = escape_html(shown),
         sci = escape_html(&d.sci_name),
         time = escape_html(&d.time),
@@ -768,6 +772,7 @@ mod tests {
             &hours,
             &rows,
             &birdnet_core::i18n::NameLocalizer::english(),
+            0.70,
         );
         // Back link + header with the day's totals.
         assert!(html.contains(r#"href="/reports?tab=history""#));
@@ -793,6 +798,7 @@ mod tests {
             &[],
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
+            0.70,
         );
         assert!(html.contains("No detections were recorded"));
         assert!(html.contains("Back to history"));

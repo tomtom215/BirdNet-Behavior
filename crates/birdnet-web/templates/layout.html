@@ -21,8 +21,11 @@
     <link rel="alternate" type="application/rss+xml" title="BirdNet · rare detections" href="/feeds/rare.rss">
     <!-- PWA (O-24): manifest, theme-color, apple-touch-icon. -->
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <meta name="theme-color" content="#FCFAF6" media="(prefers-color-scheme: light)">
-    <meta name="theme-color" content="#1F1A14" media="(prefers-color-scheme: dark)">
+    <!-- The browser's own bar takes --bg of each theme (tools/visual-qa/tokens.mjs
+         compares them). The media query follows the OS, so the theme script
+         below re-points both when the operator's choice differs. -->
+    <meta name="theme-color" content="#FBFAF7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#040608" media="(prefers-color-scheme: dark)">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="BirdNet">
@@ -103,9 +106,18 @@
         var html = document.documentElement;
         var btn = document.getElementById('theme-toggle');
         var icon = document.getElementById('theme-icon');
+        var bars = document.querySelectorAll('meta[name="theme-color"]');
+        var barColour = {};
+        for (var i = 0; i < bars.length; i++) {
+            var m = bars[i].getAttribute('media') || '';
+            barColour[m.indexOf('dark') >= 0 ? 'dark' : 'light'] = bars[i].getAttribute('content');
+        }
         function current() { return html.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
         function apply(theme) {
             html.setAttribute('data-theme', theme);
+            if (barColour[theme]) {
+                for (var j = 0; j < bars.length; j++) bars[j].setAttribute('content', barColour[theme]);
+            }
             if (icon) icon.textContent = theme === 'dark' ? LIGHT_ICON : DARK_ICON;
         }
         apply(current());

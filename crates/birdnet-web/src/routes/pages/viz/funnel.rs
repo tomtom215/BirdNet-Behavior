@@ -15,7 +15,6 @@
 use std::fmt::Write as _;
 
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::series_color;
 use crate::routes::pages::escape_html;
 
 /// Render a funnel of `(species, count)` steps in funnel order — the first step
@@ -61,7 +60,10 @@ pub fn sequence_funnel(steps: &[(String, u64)]) -> String {
             (frac * w).max(2.0)
         };
         let pct = *count as f64 / first.max(1) as f64 * 100.0;
-        let color = series_color(i, steps.len());
+        // One colour for every step. Each row is already named at its left and
+        // counted at its right, so a hue per step said nothing the label did not;
+        // the funnel is one quantity narrowing, and one quantity is one colour.
+        let color = "var(--chart-1)";
 
         // Species (left) and "count · pct%" (right) on the surface — readable
         // regardless of the bar colour below them.
@@ -119,11 +121,11 @@ mod tests {
 
     #[test]
     fn bars_narrow_monotonically() {
-        // The coloured bars carry an `oklch` fill (tracks use a token); pull the
+        // The coloured bars carry the chart colour (tracks use a surface token); pull the
         // width attribute immediately preceding each and confirm it never grows.
         let svg = sequence_funnel(&steps());
         let widths: Vec<f64> = svg
-            .match_indices(r#"fill="oklch"#)
+            .match_indices(r#"fill="var(--chart-1)""#)
             .filter_map(|(idx, _)| {
                 let before = &svg[..idx];
                 let wstart = before.rfind(r#"width=""#)? + r#"width=""#.len();

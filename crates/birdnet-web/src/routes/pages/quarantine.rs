@@ -136,7 +136,13 @@ fn build_page_html(active_filter: &str) -> String {
      hx-get=\"/pages/quarantine-stats\" \
      hx-trigger=\"load\" \
      hx-swap=\"innerHTML\">\
-  <p class=\"qz-loading\">Loading stats\u{2026}</p>\
+  <div class=\"stats-grid qz-stats-flush\">\
+    <span class=\"sr-only\">Loading stats\u{2026}</span>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Pending Review</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Approved</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Rejected</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Total</div></div>\
+  </div>\
 </div>\
 <div class=\"card qz-filter-card\">\
   <div class=\"qz-filter-row\">\
@@ -247,13 +253,14 @@ async fn quarantine_list_partial(
         state.with_read_db(|conn| {
             let rows = birdnet_db::sqlite::list_quarantine(conn, filter, limit, offset)?;
             let total = birdnet_db::sqlite::count_quarantine(conn, filter)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, total))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((rows, total))) => {
+        Ok(Ok((rows, total, floor))) => {
             let mut html = String::with_capacity(4096);
 
             if rows.is_empty() && offset == 0 {
@@ -270,7 +277,7 @@ async fn quarantine_list_partial(
                 render_table_header(&mut html);
             }
             for row in &rows {
-                render_quarantine_row(&mut html, row, &filter_str(filter), &names);
+                render_quarantine_row(&mut html, row, &filter_str(filter), &names, floor);
             }
 
             // Pagination
@@ -331,15 +338,9 @@ fn render_quarantine_row(
     row: &birdnet_db::sqlite::QuarantineRow,
     filter_param: &str,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
-    let conf_pct = row.confidence * 100.0;
-    let conf_cls = if conf_pct >= 80.0 {
-        "high"
-    } else if conf_pct >= 50.0 {
-        "mid"
-    } else {
-        "low"
-    };
+    let conf = super::atoms::conf_pill(row.confidence * 100.0, floor);
     // What is read; the link and the share token below carry the stored name.
     let com_name = escape_html(names.name(&row.sci_name, &row.com_name));
     let sci_name = escape_html(&row.sci_name);
@@ -391,7 +392,7 @@ fn render_quarantine_row(
             {sf_info}
             {audio}
           </td>
-          <td><span class="conf {conf_cls}">{conf_pct:.0}%</span></td>
+          <td>{conf}</td>
           <td class="qz-reason">{reason_label}</td>
           <td class="qz-datetime">{date}<br><span class="qz-time">{time}</span></td>
           <td class="qz-status">{status}</td>

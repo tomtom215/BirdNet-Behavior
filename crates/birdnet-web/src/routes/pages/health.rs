@@ -88,39 +88,35 @@ async fn station_health_line_partial(
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
-/// Disk usage at or above which the station is graded degraded, matching the
-/// dashboard checklist's own "nearly full" threshold so the two agree.
-const DISK_DEGRADED_PCT: f64 = 90.0;
-
+/// HTMX partial: the header badge, on every page, refreshed every 30 s.
+///
+/// For a non-technical operator this badge *is* the answer to "is my station
+/// working?". It reads the same issue list as the banner on the Station Health
+/// tab ([`super::station_issues`]), so the header can never say Healthy while
+/// the page it links to says Needs attention. It used to grade three things
+/// of its own, and a station with one microphone up and two cameras stalled
+/// read green.
+///
+/// # What it costs
+///
+/// Every page load and every 30 s per open tab. The facts are a handful of
+/// small indexed reads, two `statvfs` calls and some in-memory gauges; the
+/// integrity verdict is the one the daily maintenance pass recorded, never a
+/// fresh scan (see [`super::station_issues::recorded_integrity`]).
 async fn health_badge_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    // "Healthy" used to mean nothing more than "SQLite is not corrupt". It is
-    // the most prominent status signal in the app — present on every page,
-    // refreshed every 30 s — and a station whose microphone was dead, or whose
-    // disk was 99 % full, displayed it in green all the same. For a
-    // non-technical operator that badge *is* the answer to "is my station
-    // working?", so it now grades the three things that stop a station
-    // producing detections, reusing the dashboard's own signals rather than
-    // measuring them a second way.
-    let grading = tokio::task::spawn_blocking(move || {
-        let db_ok = recorded_db_health(&state);
-        let capture = super::today::live_capture_state(&state);
-        let disk = super::today::disk_used_percent(&state);
-        (db_ok, capture, disk)
+    let graded = tokio::task::spawn_blocking(move || {
+        let (issues, integrity) = super::station_issues::gather_for_badge(&state);
+        super::station_issues::badge(&issues, integrity)
     })
     .await;
 
-    let (pill, dot, label, state_token, title) = grading.map_or_else(
-        |_| {
-            (
-                "rare",
-                "rare",
-                "Error",
-                "err",
-                "the health check itself failed",
-            )
-        },
-        |(db_ok, capture, disk)| grade(db_ok, capture, disk),
-    );
+    let badge = graded.unwrap_or_else(|_| super::station_issues::Badge {
+        pill: "rare",
+        dot: "rare",
+        label: "Error",
+        token: "err",
+        title: "the health check itself failed".to_owned(),
+    });
 
     // A link, not a span. The badge names a problem on every page of the site
     // and, until 0.15.0, that was all it did: the reason lived in a `title`,
@@ -131,121 +127,8 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl axum::respo
     // `aria-label` carries the reason too, because a `title` on a control is
     // not a reliable accessible name and a screen-reader user was hearing the
     // same two words with none of the explanation.
-    let html = format!(
-        r#"<a href="/station" class="bnb-pill {pill}" data-health="{state_token}" title="{title}" aria-label="Station health — {label}: {title}"><span class="bnb-dot {dot}"></span> {label}</a>"#
-    );
+    let html = super::station_issues::badge_html(&badge);
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-/// What the last recorded integrity check says about the database.
-///
-/// `None` means no verdict is on record — either the daily check has not run on
-/// this station yet, or the row predates the column. The caller must keep that
-/// distinct from a recorded failure.
-///
-/// # Why this is a read and not a check
-///
-/// This used to be `birdnet_db::sqlite::quick_check(conn)`, run inline. That
-/// pragma reads **every page of the database file**. On a three-year station
-/// (2.76 M detections, 1.29 GB) it measured 1.5-1.9 s warm on `NVMe`, and the
-/// enclosing partial 3.8 s; a Raspberry Pi reading the same file from an SD
-/// card at ~45 MB/s is looking at roughly 30 s — longer than the badge's own
-/// refresh interval, so the scans would overlap.
-///
-/// The badge is mounted in `layout.html` with `hx-trigger="load, every 30s"`,
-/// which put that read on every page load and then twice a minute for every
-/// open tab, indefinitely, competing with the detection write path for the same
-/// card and steadily wearing it. The daily maintenance pass already runs the
-/// check properly; since migration 28 it records the answer, so the badge can
-/// read one row instead of re-deriving it.
-fn recorded_db_health(state: &AppState) -> Option<bool> {
-    state
-        .with_read_db(|conn| {
-            birdnet_db::sqlite::last_run_result(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK)
-        })
-        .ok()
-        .flatten()
-        .and_then(|(_when, ok)| ok)
-}
-
-/// Grade the station: `(pill, dot, label, data-health token, title)`.
-///
-/// Worst-first, so the badge names the most serious problem rather than an
-/// incidental one. `data-health` keeps its stable `ok`/`warn`/`err` vocabulary
-/// for anything scraping it; `title` carries the reason so hovering explains a
-/// non-green badge without the operator going hunting.
-fn grade(
-    db_ok: Option<bool>,
-    capture: super::today::CaptureState,
-    disk: Option<f64>,
-) -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-) {
-    use super::today::CaptureState;
-    if db_ok == Some(false) {
-        return (
-            "rare",
-            "rare",
-            "Error",
-            "err",
-            "the database failed its integrity check",
-        );
-    }
-    match capture {
-        CaptureState::NoSource => {
-            return (
-                "dawn",
-                "dawn",
-                "No microphone",
-                "warn",
-                "no microphone or camera is set up yet, so there is nothing to listen to",
-            );
-        }
-        CaptureState::Down => {
-            return (
-                "dawn",
-                "dawn",
-                // Not "Mic down": "down" is operations vocabulary, and the
-                // dashboard hero already tells the same reader "not recording".
-                "Not recording",
-                "warn",
-                "a microphone is set up, but no audio is reaching the station",
-            );
-        }
-        CaptureState::Up | CaptureState::Unknown => {}
-    }
-    if disk.is_some_and(|pct| pct >= DISK_DEGRADED_PCT) {
-        return (
-            "dawn",
-            "dawn",
-            "Disk full",
-            "warn",
-            "the disk is nearly full and recording may stop",
-        );
-    }
-    if db_ok.is_none() {
-        // Everything this badge *can* see is fine, but the database has not
-        // been verified yet — the daily integrity check has not run on this
-        // station. Say so rather than claiming a check that never happened.
-        return (
-            "moss",
-            "live",
-            "Healthy",
-            "ok",
-            "capture and disk look fine; the database has not been checked yet",
-        );
-    }
-    (
-        "moss",
-        "live",
-        "Healthy",
-        "ok",
-        "database, capture and disk all look fine",
-    )
 }
 
 async fn disk_status_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
@@ -339,159 +222,4 @@ async fn analytics_status_partial(
 <p class="he-hint">{hint}</p>"#,
     );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{grade, recorded_db_health};
-    use crate::routes::pages::today::CaptureState;
-    use crate::state::AppState;
-
-    fn test_state() -> AppState {
-        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        birdnet_db::migration::migrate(&conn).expect("migrate schema");
-        AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
-    }
-
-    fn record(state: &AppState, ok: Option<bool>) {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::record_run_result(
-                conn,
-                birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
-                1_700_000_000,
-                ok,
-            )
-            .expect("record");
-        });
-    }
-
-    /// The badge must report the *recorded* verdict of the daily integrity
-    /// check, not run one of its own.
-    ///
-    /// The distinction is the whole point. `PRAGMA quick_check` reads every
-    /// page of the database file: 1.5-1.9 s on a three-year station's 1.29 GB
-    /// database on `NVMe`, and roughly 30 s on the SD card a Pi actually runs on.
-    /// The badge lives in `layout.html` with `hx-trigger="load, every 30s"`, so
-    /// running it there meant a full read of the database on every page load
-    /// and twice a minute per open tab thereafter, forever.
-    ///
-    /// This database is healthy — a live check would pass. Recording a failed
-    /// verdict is therefore the one thing that can tell the two implementations
-    /// apart.
-    #[test]
-    fn the_badge_reports_the_recorded_verdict_not_a_fresh_scan() {
-        let state = test_state();
-        record(&state, Some(false));
-        assert_eq!(
-            recorded_db_health(&state),
-            Some(false),
-            "a recorded failure must reach the badge from `maintenance_runs`, \
-             not be overruled by re-checking a database that is in fact intact"
-        );
-        let (_, _, label, token, _) = grade(Some(false), CaptureState::Up, Some(10.0));
-        assert_eq!((label, token), ("Error", "err"));
-    }
-
-    /// The counterpart, so the gate above cannot be satisfied by a badge that
-    /// simply always reports a failure.
-    #[test]
-    fn a_recorded_pass_is_reported_as_healthy() {
-        let state = test_state();
-        record(&state, Some(true));
-        assert_eq!(recorded_db_health(&state), Some(true));
-        let (_, _, label, token, _) = grade(Some(true), CaptureState::Up, Some(10.0));
-        assert_eq!((label, token), ("Healthy", "ok"));
-    }
-
-    /// A third state the badge must not collapse into either of the others: on
-    /// a station whose first daily check has not run yet there is no row at
-    /// all. That is "not checked", not "failed" — a fresh install must not
-    /// display a red Error badge — and not "passed" either, so the title says
-    /// so rather than claiming the database was verified.
-    #[test]
-    fn a_never_run_check_is_unknown_rather_than_pass_or_fail() {
-        let state = test_state();
-        assert_eq!(recorded_db_health(&state), None, "no row means no verdict");
-        let (_, _, label, token, title) = grade(None, CaptureState::Up, Some(10.0));
-        assert_eq!((label, token), ("Healthy", "ok"));
-        assert!(
-            title.contains("not"),
-            "the title must not claim the database was checked; got {title:?}"
-        );
-    }
-
-    /// A job that records no verdict (the session prune) must read back as
-    /// "no verdict", not as a pass.
-    #[test]
-    fn a_recorded_run_without_a_verdict_is_unknown() {
-        let state = test_state();
-        record(&state, None);
-        assert_eq!(recorded_db_health(&state), None);
-    }
-
-    /// The badge is on every page and refreshed every 30 s; for a
-    /// non-technical operator it *is* the answer to "is my station working?".
-    /// It used to mean only "SQLite is not corrupt", so a station with a dead
-    /// microphone and a full disk displayed "Healthy" in green.
-    #[test]
-    fn a_dead_microphone_is_not_healthy() {
-        let (_, _, label, token, _) = grade(Some(true), CaptureState::Down, Some(10.0));
-        assert_eq!(label, "Not recording");
-        assert_eq!(token, "warn");
-    }
-
-    #[test]
-    fn no_configured_source_is_not_healthy() {
-        let (_, _, label, token, _) = grade(Some(true), CaptureState::NoSource, Some(10.0));
-        assert_eq!(label, "No microphone");
-        assert_eq!(token, "warn");
-    }
-
-    #[test]
-    fn a_nearly_full_disk_is_not_healthy() {
-        let (_, _, label, token, _) = grade(Some(true), CaptureState::Up, Some(96.0));
-        assert_eq!(label, "Disk full");
-        assert_eq!(token, "warn");
-    }
-
-    #[test]
-    fn a_working_station_is_healthy() {
-        let (_, _, label, token, _) = grade(Some(true), CaptureState::Up, Some(41.0));
-        assert_eq!(label, "Healthy");
-        assert_eq!(token, "ok");
-    }
-
-    /// No gauge published yet is not an outage — a station that has just
-    /// started must not flash "Not recording" at its operator.
-    #[test]
-    fn an_unreconciled_source_does_not_read_as_down() {
-        let (_, _, label, _, _) = grade(Some(true), CaptureState::Unknown, Some(41.0));
-        assert_eq!(label, "Healthy");
-    }
-
-    /// Database corruption outranks everything else.
-    #[test]
-    fn a_corrupt_database_outranks_a_capture_problem() {
-        let (_, _, label, token, _) = grade(Some(false), CaptureState::Down, Some(99.0));
-        assert_eq!(label, "Error");
-        assert_eq!(token, "err");
-    }
-
-    /// Unknown disk usage must not be graded as full.
-    #[test]
-    fn unmeasurable_disk_is_not_treated_as_full() {
-        let (_, _, label, _, _) = grade(Some(true), CaptureState::Up, None);
-        assert_eq!(label, "Healthy");
-    }
-
-    /// The threshold matches the dashboard checklist's "nearly full" wording,
-    /// so the two surfaces cannot disagree about the same disk.
-    #[test]
-    fn disk_threshold_boundary() {
-        assert_eq!(grade(Some(true), CaptureState::Up, Some(89.9)).2, "Healthy");
-        assert_eq!(
-            grade(Some(true), CaptureState::Up, Some(90.0)).2,
-            "Disk full"
-        );
-    }
 }

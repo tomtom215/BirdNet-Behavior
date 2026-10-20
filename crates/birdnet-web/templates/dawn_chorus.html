@@ -19,8 +19,8 @@
       <b>Who sings, and when.</b> Each ring is one species; its ribbon swells outward
       at the hours it's most active, normalized to its own peak so a quiet wren reads
       as clearly as a loud cardinal. Midnight is at the top; the dashed hand is now.
-      Sunrise <span id="sun-rise" class="mono">—</span>,
-      sunset <span id="sun-set" class="mono">—</span>.
+      <span id="sun-line" hidden>Sunrise <span id="sun-rise" class="mono"></span>,
+      sunset <span id="sun-set" class="mono"></span>.</span>
     </p>
   </div>
   <div class="pill-row dc-pills">
@@ -81,6 +81,10 @@
     var es = document.getElementById('sun-set');
     if (er && r) er.textContent = r;
     if (es && s) es.textContent = s;
+    // The sentence is shown only once it has times to say: a station with no
+    // coordinates used to read "Sunrise —, sunset —." in the middle of the lede.
+    var line = document.getElementById('sun-line');
+    if (line && r && s) line.hidden = false;
   }
   // Run after htmx swaps the partial in.
   document.body.addEventListener('htmx:afterSwap', function (e) {

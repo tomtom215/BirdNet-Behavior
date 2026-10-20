@@ -9,7 +9,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::atoms::{avatar, conf_bar, sparkline, species_code, species_color};
+use super::atoms::{avatar, conf_bar, conf_pill, sparkline, species_code, species_color};
 use super::charts::{render_daily_chart, render_hourly_chart};
 use super::{SPECIES_DETAIL_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
@@ -348,9 +348,10 @@ fn list_view(
             |q| super::name_search::search_species(conn, state.names(), q, 500),
         )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
-        Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
+        let floor = super::confidence::station_floor(conn);
+        Ok::<_, birdnet_db::sqlite::DbError>((species, sparks, floor))
     });
-    let (mut species, sparks) = match loaded {
+    let (mut species, sparks, floor) = match loaded {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "species list: query failed");
@@ -385,7 +386,7 @@ fn list_view(
             name = escape_html(shown),
             sci = escape_html(&s.sci_name),
             count = super::group_thousands(s.count),
-            conf = conf_bar(s.avg_confidence),
+            conf = conf_bar(s.avg_confidence, floor),
         );
     }
 
@@ -394,8 +395,9 @@ fn list_view(
         let narrowed = search.is_some() || filter == "week" || taxon.is_some();
         return format!("{chips}{count_line}{}", empty_note(search, narrowed));
     }
+    let legend = super::confidence::legend(floor);
     format!(
-        r#"{chips}{count_line}<div class="bnb-card pad"><table class="sp-table" data-fits-phone><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
+        r#"{chips}{count_line}<div class="bnb-card pad">{legend}<table class="sp-table" data-fits-phone><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
     )
 }
 
@@ -445,7 +447,7 @@ fn photos_view(
         let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(
             cards,
-            r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
+            r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklab, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
             name = escape_html(shown),
             count = super::group_thousands(s.count),
         );
@@ -812,12 +814,15 @@ async fn species_detections_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::detections_by_species(conn, &name, 20))
+        state.with_read_db(|conn| {
+            let floor = super::confidence::station_floor(conn);
+            birdnet_db::sqlite::detections_by_species(conn, &name, 20).map(|d| (d, floor))
+        })
     })
     .await;
 
     match result {
-        Ok(Ok(detections)) => {
+        Ok(Ok((detections, floor))) => {
             if detections.is_empty() {
                 return (
                     StatusCode::OK,
@@ -829,17 +834,10 @@ async fn species_detections_partial(
                 r"<table><thead><tr><th>Confidence</th><th>Time</th><th>Date</th></tr></thead><tbody>",
             );
             for d in &detections {
-                let conf_pct = d.confidence * 100.0;
-                let cls = if conf_pct >= 80.0 {
-                    "high"
-                } else if conf_pct >= 50.0 {
-                    "mid"
-                } else {
-                    "low"
-                };
                 let _ = write!(
                     html,
-                    r#"<tr><td><span class="conf {cls}">{conf_pct:.0}%</span></td><td>{t}</td><td>{dt}</td></tr>"#,
+                    r"<tr><td>{conf}</td><td>{t}</td><td>{dt}</td></tr>",
+                    conf = conf_pill(d.confidence * 100.0, floor),
                     t = escape_html(&d.time),
                     dt = escape_html(&d.date),
                 );

@@ -90,13 +90,14 @@ async fn detection_detail_page(
                 )
                 .unwrap_or_default()
             });
-            Ok::<_, birdnet_db::sqlite::DbError>(Some((det, verdict, corroboration)))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>(Some((det, verdict, corroboration, floor)))
         })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (det, verdict, corroboration) = match found {
+    let (det, verdict, corroboration, floor) = match found {
         Ok(Some(found)) => found,
         Ok(None) => {
             return Ok((
@@ -123,6 +124,7 @@ async fn detection_detail_page(
         nearby.as_deref(),
         &headers,
         &names,
+        floor,
     )
     .into_response())
 }
@@ -157,6 +159,7 @@ fn render_detail_page(
     nearby: Option<&birdnet_integrations::ebird::Snapshot>,
     headers: &HeaderMap,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
@@ -173,7 +176,7 @@ fn render_detail_page(
     let correlation_section = build_correlation_section(det);
     let corroboration_section = build_corroboration_section(corroboration);
     let nearby_section = build_nearby_section(nearby, &det.sci_name, ebird::now_unix());
-    let conf = conf_bar(det.confidence);
+    let conf = conf_bar(det.confidence, floor);
     let review_widget = super::detection_reviews::render_review_widget(
         &det.date,
         &det.time,

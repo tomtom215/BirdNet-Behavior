@@ -202,7 +202,7 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
         let op = v.mul_add(0.40, 0.45);
         let _ = write!(
             svg,
-            r#"<path class="chord-ribbon" data-species-fill="1" d="{path}" fill="url(#chord-{idx})" fill-opacity="{op:.2}" stroke="{ci}" stroke-opacity="0.5" stroke-width="0.7"><title>{a} × {b} — {pct}%</title></path>"#,
+            r#"<path class="chord-ribbon" d="{path}" fill="url(#chord-{idx})" fill-opacity="{op:.2}" stroke="{ci}" stroke-opacity="0.5" stroke-width="0.7"><title>{a} × {b} — {pct}%</title></path>"#,
             ci = series_color(i, labels.len()),
             a = escape_html(&labels[i]),
             b = escape_html(&labels[j]),
@@ -215,7 +215,7 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
         let path = arc_band_path(cx, cy, r + 3.0, r_outer, a0 + 0.005, a1 - 0.005);
         let _ = write!(
             svg,
-            r#"<path data-species-fill="1" d="{path}" fill="{c}" opacity="0.92"/>"#,
+            r#"<path d="{path}" fill="{c}" stroke="var(--card-top)" stroke-width="1" vector-effect="non-scaling-stroke"/>"#,
             c = series_color(i, labels.len()),
         );
     }

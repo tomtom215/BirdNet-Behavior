@@ -917,13 +917,14 @@ async fn today_partial(
                     .iter()
                     .map(|f| super::recordings::base_name(f))
                     .collect();
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, locked))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, locked, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, total, locked))) => {
+        Ok(Ok((detections, total, locked, floor))) => {
             let mut html = String::with_capacity(4096);
 
             if detections.is_empty() && offset == 0 {
@@ -932,7 +933,7 @@ async fn today_partial(
             }
 
             for d in &detections {
-                render_detection_card(&mut html, d, &locked, names_state.names());
+                render_detection_card(&mut html, d, &locked, names_state.names(), floor);
             }
 
             // "Load more" button if there are more results. It replaces
@@ -1109,6 +1110,7 @@ fn render_detection_card(
     d: &birdnet_db::sqlite::DetectionRow,
     locked: &std::collections::HashSet<String>,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
     // The link and the detail URL carry the stored name; only what is *drawn*
     // is in the station's language.
@@ -1144,7 +1146,7 @@ fn render_detection_card(
         })
         .unwrap_or_default();
     let av = avatar(&d.com_name, shown, &d.sci_name, "");
-    let conf = conf_bar(d.confidence);
+    let conf = conf_bar(d.confidence, floor);
     let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
     let time = escape_html(&d.time);

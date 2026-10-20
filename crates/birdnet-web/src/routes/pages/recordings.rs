@@ -160,7 +160,14 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
 
     let list = render_clips_block(&data, filter, search.as_deref(), 0, state.names());
 
-    format!(r#"{lede}{controls}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
+    // The key to the bars, once, above the first of them.
+    let legend = if data.rows.is_empty() {
+        String::new()
+    } else {
+        super::confidence::legend(data.floor)
+    };
+
+    format!(r#"{lede}{controls}{legend}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
 }
 
 /// HTMX partial: the next page of clip rows (the "Show more" target).
@@ -211,6 +218,8 @@ struct ClipsData {
     /// which on this page reads *"No saved clips yet"*, i.e. exactly what an
     /// operator would see if the auto-purge had deleted their recordings.
     failed: bool,
+    /// The station's confidence cut-off, for the colour of each row's bar.
+    floor: f64,
 }
 
 /// Run the clip query, count, and per-page lookups on the blocking pool.
@@ -257,6 +266,7 @@ async fn fetch_clips(
                 first_seen,
                 present,
                 failed,
+                floor: super::confidence::station_floor(conn),
             }
         })
     })
@@ -369,7 +379,7 @@ fn render_clip_row(
     let meta = escape_html(&meta);
 
     let av = avatar(&d.com_name, shown, &d.sci_name, "");
-    let conf = conf_bar(d.confidence);
+    let conf = conf_bar(d.confidence, page.floor);
     let row = crate::state::RowRef::from(d);
     let lock = lock_button(&row, is_locked);
     let row_vals = row_vals(&row);
@@ -826,6 +836,7 @@ mod tests {
             first_seen,
             present,
             failed: false,
+            floor: 0.70,
         }
     }
 

@@ -75,6 +75,9 @@ struct Snapshot {
     queued_uploads: u64,
     total_detections: i64,
     integrity_ok: bool,
+    /// Sources are configured and none is up, by the same per-source gauge the
+    /// header badge reads. See [`super::station_issues::Facts::capture_down`].
+    capture_down: bool,
     disk_low: bool,
     disk_critical: bool,
     /// `/tmp` (scratch / stream-buffer) pressure, tracked separately from the
@@ -106,23 +109,7 @@ async fn gather(state: &AppState) -> Snapshot {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
         let sys = system_info::sample();
-        let data_dir = state.db_path().parent().map_or_else(
-            || state.db_path().to_path_buf(),
-            std::path::Path::to_path_buf,
-        );
-        let disk = birdnet_core::audio::capture::disk_usage(&data_dir).ok();
-
-        // Scratch space: the service writes its live audio stream segments and
-        // temp files under /tmp, which on a Pi (and any tmpfs /tmp) is a small,
-        // RAM-backed filesystem separate from the data disk. The "Disk" tile
-        // watches the data partition, so a filling /tmp was invisible here — yet
-        // a full /tmp breaks the capture pipeline (and even `apt`). Track it
-        // separately, but only when it is genuinely a different filesystem than
-        // the data disk; when /tmp lives on the data partition the Disk tile
-        // already covers it and a second identical tile would just be noise.
-        let scratch = birdnet_core::audio::capture::disk_usage(&std::env::temp_dir())
-            .ok()
-            .filter(|s| disk.as_ref().is_none_or(|d| d.total_bytes != s.total_bytes));
+        let (disk, scratch) = super::station_issues::disks(state.db_path());
 
         let read = state.with_read_db(|conn| {
             let listed = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
@@ -189,6 +176,10 @@ async fn gather(state: &AppState) -> Snapshot {
             queued_uploads: queued,
             total_detections: total,
             integrity_ok: integrity,
+            capture_down: matches!(
+                super::today::live_capture_state(&state),
+                super::today::CaptureState::Down
+            ),
             disk_low: disk
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_low),
@@ -201,7 +192,9 @@ async fn gather(state: &AppState) -> Snapshot {
             scratch_critical: scratch
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_critical),
-            data_on_container_layer: crate::data_volume::on_container_layer(&data_dir),
+            data_on_container_layer: crate::data_volume::on_container_layer(
+                &super::station_issues::data_dir_of(state.db_path()),
+            ),
             service_uptime: system_info::process_uptime_secs(),
             acoustic: state.with_read_db(|conn| {
                 birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
@@ -235,6 +228,7 @@ async fn gather(state: &AppState) -> Snapshot {
         // inside the closure above is already `unwrap_or(false)` for the same
         // reason, so the two directions no longer contradict each other.
         integrity_ok: false,
+        capture_down: false,
         disk_low: false,
         disk_critical: false,
         scratch_low: false,
@@ -359,31 +353,33 @@ fn render(s: &Snapshot) -> String {
     )
 }
 
-/// What to call a source on this screen: the name its owner gave it, else the
-/// stream id the supervisor publishes.
-fn display_name(s: &Snapshot, label: &str) -> String {
-    s.source_names
-        .get(label)
-        .map_or_else(|| label.to_owned(), Clone::clone)
-}
-
-/// Name the sources in `faulty`, or count them once there are too many to read.
-fn name_sources(s: &Snapshot, faulty: &[&SourceStatus]) -> String {
-    match faulty {
-        [] => String::new(),
-        [one] => display_name(s, &one.label),
-        [a, b] => format!(
-            "{} and {}",
-            display_name(s, &a.label),
-            display_name(s, &b.label)
-        ),
-        many => format!("{} audio sources", many.len()),
+/// The facts the shared issue list reads, from this snapshot.
+fn facts(s: &Snapshot) -> super::station_issues::Facts<'_> {
+    super::station_issues::Facts {
+        records_unreadable: s.db_read_failed,
+        // `quick_check` ran on this page, so there is always a verdict here.
+        integrity: Some(s.integrity_ok),
+        data_on_container_layer: s.data_on_container_layer,
+        disk_low: s.disk_low,
+        disk_critical: s.disk_critical,
+        scratch_low: s.scratch_low,
+        scratch_critical: s.scratch_critical,
+        sources_configured: s.sources_configured,
+        capture_down: s.capture_down,
+        queued_uploads: s.queued_uploads,
+        capture: &s.capture,
+        source_names: &s.source_names,
+        filter_admits_nothing: s.occurrence.admits_nothing(),
+        failing_classifiers: &s.failing_classifiers,
     }
 }
 
 /// The overall status banner — green unless a real problem is present.
+///
+/// The list of problems is [`super::station_issues::issues`], the same one the
+/// header badge on every page reads, so the two cannot disagree.
 fn status_banner(s: &Snapshot) -> String {
-    let mut issues: Vec<String> = Vec::new();
+    let issues = super::station_issues::issues(&facts(s));
     // First, and on its own: every issue below it is derived from the read
     // that failed, so listing them alongside would be reporting a station we
     // could not see. The vitals are measured from the system and still show.
@@ -398,63 +394,6 @@ fn status_banner(s: &Snapshot) -> String {
                  live. Reload; if it persists, check the disk."
             )
         );
-    }
-    if s.disk_critical {
-        issues.push("storage is critically low".to_owned());
-    } else if s.disk_low {
-        issues.push("storage is running low".to_owned());
-    }
-    // "scratch space (RAM /tmp)" named the implementation. What the reader has
-    // is a temporary folder that recordings pass through on their way to disk.
-    if s.scratch_critical {
-        issues.push("the temporary recording folder is critically low on space".to_owned());
-    } else if s.scratch_low {
-        issues.push("the temporary recording folder is running low on space".to_owned());
-    }
-    if !s.integrity_ok {
-        issues.push("the database integrity check failed".to_owned());
-    }
-    // Not a fault of the moment: the station is running and recording. It is a
-    // fault of the next time the container is recreated — an image upgrade is
-    // enough — and this banner is the only place the operator will be told
-    // before it happens.
-    if s.data_on_container_layer {
-        issues.push(
-            "your data is stored inside the container, not on a volume, so it will be lost \
-             when the container is recreated (mount a volume at the data folder)"
-                .to_owned(),
-        );
-    }
-    if s.sources_configured == 0 {
-        issues.push("no microphone or camera is set up yet".to_owned());
-    }
-    if s.queued_uploads > 0 {
-        issues.push("uploads are waiting for the network".to_owned());
-    }
-    // Named, not counted. "An audio source is down" told the owner of two
-    // cameras that one of them had a problem and left them to work out which.
-    let faulted: Vec<&SourceStatus> = s.capture.iter().filter(|c| c.state.is_fault()).collect();
-    if !faulted.is_empty() {
-        issues.push(format!(
-            "{} stopped sending audio",
-            name_sources(s, &faulted)
-        ));
-    }
-    let flapping: Vec<&SourceStatus> = s.capture.iter().filter(|c| c.flapping).collect();
-    if !flapping.is_empty() {
-        issues.push(format!(
-            "{} keeps dropping out and reconnecting",
-            name_sources(s, &flapping)
-        ));
-    }
-    if s.occurrence.admits_nothing() {
-        issues.push("the species filter admits no species, so nothing can be recorded".to_owned());
-    }
-    for id in &s.failing_classifiers {
-        issues.push(format!(
-            "the classifier \u{201c}{id}\u{201d} is failing every window, so nothing it would \
-             detect is recorded"
-        ));
     }
 
     let last = s
@@ -478,7 +417,7 @@ fn status_banner(s: &Snapshot) -> String {
             "<div class=\"st-status warn\"><span class=\"ico\" aria-hidden=\"true\">!</span><div>\
              <div class=\"t\">Needs attention</div>\
              <div class=\"s\">{}</div></div></div>",
-            escape_html(&capitalize_first(&issues.join(" · "))),
+            escape_html(&super::station_issues::sentences(&issues)),
         )
     }
 }
@@ -889,14 +828,6 @@ fn format_freshness(secs: u64) -> String {
     }
 }
 
-/// Upper-case the first character (for the warn banner's joined issue list).
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().collect::<String>() + chars.as_str()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -913,6 +844,7 @@ mod tests {
             queued_uploads: queued,
             total_detections: 100,
             integrity_ok: integrity,
+            capture_down: false,
             disk_low,
             disk_critical: false,
             scratch_low: false,

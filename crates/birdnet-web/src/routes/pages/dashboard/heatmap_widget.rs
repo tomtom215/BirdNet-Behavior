@@ -88,13 +88,17 @@ pub(super) async fn activity_heatmap_partial(
             } else {
                 #[allow(clippy::cast_precision_loss)]
                 let ratio = count as f64 / max_count as f64;
-                let alpha = ratio.mul_add(0.80, 0.12);
+                // The app's one "how much" ramp, the same colour for the same
+                // share of the busiest cell as on /patterns. This was the old
+                // `--accent-rgb` green at 12-92 % alpha: a third scale for the
+                // same idea, and in dark a different hue from the grid beside it.
+                let bg = crate::routes::pages::heatmap::heat_color(ratio.max(0.02));
                 let title = format!("{shown} {h:02}:00 \u{2014} {count}");
                 let safe_title = escape_html(&title);
                 let _ = write!(
                     html,
                     "<div class=\"ah-cell\" \
-                       data-style=\"background:rgba(var(--accent-rgb),{alpha:.2});\" \
+                       data-style=\"background:{bg};\" \
                        title=\"{safe_title}\"></div>",
                 );
             }

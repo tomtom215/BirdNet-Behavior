@@ -6,7 +6,6 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use serde::Deserialize;
 
-use super::conf_class;
 use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, species_color, waveform};
 use crate::routes::pages::charts::{
     render_confidence_chart, render_daily_chart, render_hourly_chart,
@@ -37,13 +36,14 @@ pub(super) async fn detections_partial(
         state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
             let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
-            Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen))
+            let floor = crate::routes::pages::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, first_seen))) => {
+        Ok(Ok((detections, first_seen, floor))) => {
             if detections.is_empty() {
                 return (
                     StatusCode::OK,
@@ -51,9 +51,10 @@ pub(super) async fn detections_partial(
                     crate::routes::pages::empty_states::quiet_yard(),
                 );
             }
-            let mut html = String::new();
+            // The key to the bars below, once, where they first appear.
+            let mut html = crate::routes::pages::confidence::legend(floor);
             for (i, d) in detections.iter().enumerate() {
-                render_feed_row(&mut html, d, &first_seen, &today, i == 0, &names);
+                render_feed_row(&mut html, d, &first_seen, &today, i == 0, &names, floor);
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -77,6 +78,7 @@ fn render_feed_row(
     today: &str,
     fresh: bool,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
     let enc = simple_url_encode(&d.com_name);
     let shown = names.name(&d.sci_name, &d.com_name);
@@ -133,7 +135,7 @@ fn render_feed_row(
         name = escape_html(shown),
         sci = escape_html(&d.sci_name),
         wave = waveform(row_seed(&d.com_name, &d.time), 24),
-        conf = conf_bar(d.confidence),
+        conf = conf_bar(d.confidence, floor),
     );
 }
 
@@ -369,13 +371,14 @@ pub(super) async fn species_list_partial(
                 birdnet_db::sqlite::top_species(conn, 500)?
             };
             let sparklines = birdnet_db::sqlite::species_sparklines(conn, 7).unwrap_or_default();
-            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines))
+            let floor = crate::routes::pages::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((species, sparklines))) => {
+        Ok(Ok((species, sparklines, floor))) => {
             if species.is_empty() {
                 let body = if has_search {
                     r#"<p class="bnb-meta">No matching species found.</p>"#.to_string()
@@ -403,7 +406,7 @@ pub(super) async fn species_list_partial(
                     n = escape_html(shown),
                     sci = escape_html(&s.sci_name),
                     c = s.count,
-                    conf = conf_bar(s.avg_confidence),
+                    conf = conf_bar(s.avg_confidence, floor),
                 );
             }
             html.push_str("</tbody></table>");
@@ -480,14 +483,18 @@ pub(super) async fn confidence_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::confidence_distribution)
+        state.with_read_db(|conn| {
+            let buckets = birdnet_db::sqlite::confidence_distribution(conn)?;
+            let floor = crate::routes::pages::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((buckets, floor))
+        })
     })
     .await;
     match result {
-        Ok(Ok(buckets)) => (
+        Ok(Ok((buckets, floor))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_confidence_chart(&buckets),
+            render_confidence_chart(&buckets, floor),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -510,11 +517,14 @@ pub(super) async fn most_recent_partial(
 ) -> impl axum::response::IntoResponse {
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::latest_detection_full)
+        state.with_read_db(|conn| {
+            let floor = crate::routes::pages::confidence::station_floor(conn);
+            birdnet_db::sqlite::latest_detection_full(conn).map(|d| d.map(|d| (d, floor)))
+        })
     })
     .await;
 
-    let Ok(Ok(Some(det))) = result else {
+    let Ok(Ok(Some((det, floor)))) = result else {
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
@@ -523,7 +533,7 @@ pub(super) async fn most_recent_partial(
     };
 
     let conf_pct = det.confidence * 100.0;
-    let cls = conf_class(conf_pct);
+    let cls = crate::routes::pages::confidence::tier_of_percent(conf_pct, floor).class();
     let com_safe = escape_html(names.name(&det.sci_name, &det.com_name));
     let sci_safe = escape_html(&det.sci_name);
     let date_safe = escape_html(&det.date);

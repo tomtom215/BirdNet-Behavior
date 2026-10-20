@@ -307,15 +307,36 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
     html
 }
 
+/// The table behind a trend chart: the same numbers, one disclosure away, for a
+/// keyboard, a screen reader, or a person who wants to copy a figure.
 #[cfg(feature = "analytics")]
+const TABLE_OPEN: &str = r#"<details class="viz-table"><summary>Show as a table</summary><div class="viz-table-scroll">"#;
+
+#[cfg(feature = "analytics")]
+// Daily counts and richness are tens to thousands: an `f64` holds them exactly.
+#[allow(clippy::cast_precision_loss)]
 fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> String {
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No trend data yet.</p>"#.to_string();
     }
-    let mut html = String::from(
+    let shown: Vec<_> = rows.iter().rev().take(14).rev().collect();
+    let mut html = super::viz::trend_chart(
+        &shown
+            .iter()
+            .map(|r| super::viz::TrendPoint {
+                date: r.date.clone(),
+                value: r.daily_detections as f64,
+                smooth: r.moving_avg_detections,
+            })
+            .collect::<Vec<_>>(),
+        "detections",
+        true,
+    );
+    html.push_str(TABLE_OPEN);
+    html.push_str(
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>7-Day Avg</th></tr></thead><tbody>",
     );
-    for row in rows.iter().rev().take(14).rev() {
+    for row in shown {
         let avg = row
             .moving_avg_detections
             .map_or_else(|| "—".to_string(), |v| format!("{v:.1}"));
@@ -327,7 +348,7 @@ fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> 
             avg
         );
     }
-    html.push_str("</tbody></table>");
+    html.push_str("</tbody></table></div></details>");
     html
 }
 
@@ -343,14 +364,30 @@ fn shannon_cell(h: Option<f64>) -> String {
 }
 
 #[cfg(feature = "analytics")]
+// Daily counts and richness are tens to thousands: an `f64` holds them exactly.
+#[allow(clippy::cast_precision_loss)]
 fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityRow]) -> String {
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No diversity data yet.</p>"#.to_string();
     }
-    let mut html = String::from(
+    let shown: Vec<_> = rows.iter().rev().take(14).rev().collect();
+    let mut html = super::viz::trend_chart(
+        &shown
+            .iter()
+            .map(|r| super::viz::TrendPoint {
+                date: r.date.clone(),
+                value: r.species_richness as f64,
+                smooth: None,
+            })
+            .collect::<Vec<_>>(),
+        "species",
+        false,
+    );
+    html.push_str(TABLE_OPEN);
+    html.push_str(
         r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
     );
-    for row in rows.iter().rev().take(14).rev() {
+    for row in shown {
         let h = shannon_cell(row.shannon_h);
         let ev = row
             .pielou_evenness
@@ -364,7 +401,7 @@ fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityR
             ev
         );
     }
-    html.push_str("</tbody></table>");
+    html.push_str("</tbody></table></div></details>");
     html
 }
 

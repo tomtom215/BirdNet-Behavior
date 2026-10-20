@@ -48,7 +48,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
         let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
         let y = top + chart_h - bar_h;
         let color = if count > 0 {
-            "var(--moss)"
+            "var(--chart-1)"
         } else {
             "var(--surface-2)"
         };
@@ -122,7 +122,7 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
 
         let _ = write!(
             svg,
-            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="var(--moss)"/>"#,
+            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="var(--chart-1)"/>"#,
         );
 
         if day.count > 0 {
@@ -158,7 +158,7 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
     clippy::cast_precision_loss,
     clippy::cast_lossless
 )]
-pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
+pub(crate) fn render_confidence_chart(buckets: &[i64; 6], floor: f64) -> String {
     let total: i64 = buckets.iter().sum();
     if total == 0 {
         return r#"<p class="cht-empty">No detection data yet.</p>"#.to_string();
@@ -166,14 +166,26 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
 
     let max_count = buckets.iter().copied().max().unwrap_or(1).max(1);
     let labels = ["<50%", "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"];
-    let colors = [
-        "var(--fg-4)",
-        "var(--rare)",
-        "var(--dawn-ink)",
-        "var(--dawn)",
-        "var(--moss-ink)",
-        "var(--moss)",
-    ];
+    // Coloured by the one confidence rule (`pages::confidence`), at the middle
+    // of each bucket, and grey below the station's own cut-off. This used to be
+    // a rainbow of UI colours (grey, the alarm red, two ambers, two greens) cut at
+    // 50/60/70/80/90 whatever the station's cut-off was, so "70-80%" was amber
+    // here and a different colour on every other page for the same bird, and the
+    // alarm red was spent on detections the station had accepted.
+    let cut = f64::from(crate::routes::pages::confidence::cutoff_percent(floor));
+    let colors: Vec<String> = [45.0_f64, 55.0, 65.0, 75.0, 85.0, 95.0]
+        .iter()
+        .map(|&mid| {
+            if mid < cut {
+                "var(--fg-4)".to_string()
+            } else {
+                format!(
+                    "var(--conf-{})",
+                    crate::routes::pages::confidence::tier_of_percent(mid, floor).class()
+                )
+            }
+        })
+        .collect();
 
     let bar_h = 18;
     let gap = 6;
@@ -186,7 +198,7 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
         r#"<svg viewBox="0 0 {chart_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
     );
 
-    for (i, (&count, (&label, &color))) in buckets
+    for (i, (&count, (&label, color))) in buckets
         .iter()
         .zip(labels.iter().zip(colors.iter()))
         .enumerate()
@@ -240,15 +252,60 @@ mod tests {
 
     #[test]
     fn confidence_chart_empty() {
-        let r = render_confidence_chart(&[0; 6]);
+        let r = render_confidence_chart(&[0; 6], 0.70);
         assert!(r.contains("No detection data"));
     }
 
     #[test]
     fn confidence_chart_all_labels() {
-        let svg = render_confidence_chart(&[5, 10, 20, 30, 25, 15]);
+        let svg = render_confidence_chart(&[5, 10, 20, 30, 25, 15], 0.70);
         assert!(svg.contains("<50%"));
         assert!(svg.contains("90-100%"));
+    }
+
+    /// The bars are the colours every other surface gives the same score, at
+    /// the station's own cut-off, and grey below it. The chart used to spend
+    /// the alarm red on the 50-60% bucket and paint 70-80% amber whatever the
+    /// station accepted.
+    #[test]
+    fn the_confidence_chart_uses_the_one_confidence_rule() {
+        let fills = |floor: f64| -> Vec<String> {
+            render_confidence_chart(&[5, 10, 20, 30, 25, 15], floor)
+                .split("rx=\"2\" fill=\"")
+                .skip(1)
+                .map(|s| s.split('"').next().unwrap_or("").to_string())
+                .collect()
+        };
+        // Cut-off 70: buckets mid 45/55/65 are below it; 75 is within ten points
+        // of it (borderline); 85 is sure; 95 is very sure.
+        assert_eq!(
+            fills(0.70),
+            [
+                "var(--fg-4)",
+                "var(--fg-4)",
+                "var(--fg-4)",
+                "var(--conf-low)",
+                "var(--conf-mid)",
+                "var(--conf-high)"
+            ]
+        );
+        // Cut-off 50: borderline ends at 60, so 65 is no longer a worry.
+        assert_eq!(
+            fills(0.50),
+            [
+                "var(--fg-4)",
+                "var(--conf-low)",
+                "var(--conf-mid)",
+                "var(--conf-mid)",
+                "var(--conf-mid)",
+                "var(--conf-high)"
+            ]
+        );
+        let svg = render_confidence_chart(&[5, 10, 20, 30, 25, 15], 0.70);
+        assert!(
+            !svg.contains("var(--rare)"),
+            "the alarm colour is not a bucket"
+        );
     }
 
     /// Extract `(x, width)` for every `<rect>` that carries an explicit `x`.

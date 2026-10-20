@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::Html;
 
-use super::conf_class;
+use crate::routes::pages::atoms::conf_pill;
 use crate::routes::pages::{escape_html, group_thousands, today_date_string};
 use crate::state::AppState;
 
@@ -97,13 +97,14 @@ pub(super) async fn kiosk_content_partial(
             )?;
             let species = birdnet_db::sqlite::species_count(conn)?;
             let recent = birdnet_db::sqlite::recent_detections(conn, 15)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((total, today_count, species, recent))
+            let floor = crate::routes::pages::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((total, today_count, species, recent, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((total, today_n, species_n, recent))) => {
+        Ok(Ok((total, today_n, species_n, recent, floor))) => {
             let mut html = String::with_capacity(4096);
             let _ = write!(
                 html,
@@ -118,15 +119,14 @@ pub(super) async fn kiosk_content_partial(
             );
 
             for d in &recent {
-                let conf_pct = d.confidence * 100.0;
-                let cls = conf_class(conf_pct);
                 let _ = write!(
                     html,
                     r#"<div class="detection">
   <div><div class="name">{com}</div><div class="sci">{sci}</div></div>
-  <span class="conf {cls}">{conf_pct:.0}%</span>
+  {conf}
   <span class="time">{time} &middot; {date}</span>
 </div>"#,
+                    conf = conf_pill(d.confidence * 100.0, floor),
                     com = escape_html(names.name(&d.sci_name, &d.com_name)),
                     sci = escape_html(&d.sci_name),
                     time = escape_html(&d.time),

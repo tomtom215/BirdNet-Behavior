@@ -1,19 +1,20 @@
 <!-- Time Series Analytics Dashboard -->
-<div class="bnb-eyebrow">Analytics</div>
-<h1 class="display tsh-h1">Time series</h1>
-{{help_link}}
+<!-- Same head as every other Patterns tab: an eyebrow that names the family and
+     carries the help link, a serif title with one word in the accent, a lede. This
+     one was the odd one out: "Analytics" over "Time series", and the help link on a
+     line of its own. -->
+<div class="bnb-eyebrow tsh-eyebrow"><span>Behavioral analytics · trends</span>{{help_link}}</div>
+<h1 class="display tsh-h1">Is your yard getting <em>busier</em>?</h1>
 <p class="bnb-lede tsh-lede">
-    <b>Is your yard getting busier?</b> Detections per day over the last two
+    <b>Busier, or quieter.</b> Detections per day over the last two
     weeks, and how many different species you've heard over the last month. A rising species count often
     matters more than raw detections — it means more kinds of birds are finding your patch.
 </p>
 
 <!-- The two headline trends this tab leads with: busier? and more varied? -->
 <div class="grid-2 tsh-row">
-    <div class="card">
-        <h2>Detections per day
-            <span class="tsh-badge">last 14 complete days · 7-day moving avg</span>
-        </h2>
+    <div class="bnb-card pad">
+        <div class="section-header"><div><div class="bnb-eyebrow">last 14 complete days · 7-day moving avg</div><h2 class="sh-h">Detections per day</h2></div></div>
         <div hx-get="/pages/ts-daily"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -21,10 +22,8 @@
         </div>
     </div>
 
-    <div class="card">
-        <h2>Species richness
-            <span class="tsh-badge">last 30 days · Shannon H′</span>
-        </h2>
+    <div class="bnb-card pad">
+        <div class="section-header"><div><div class="bnb-eyebrow">last 30 days · Shannon H′</div><h2 class="sh-h">Species richness</h2></div></div>
         <div hx-get="/pages/ts-diversity"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -54,10 +53,8 @@
 
   <!-- Heatmap + Peak Windows -->
   <div class="grid-2 tsh-row">
-      <div class="card">
-          <h2>Hour-of-Day Activity Heatmap
-              <span class="tsh-badge">90-day average</span>
-          </h2>
+      <div class="bnb-card pad">
+          <div class="section-header"><div><div class="bnb-eyebrow">90-day average</div><h2 class="sh-h">Hour-of-day activity heatmap</h2></div></div>
           <div hx-get="/pages/ts-heatmap"
                hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
@@ -65,10 +62,8 @@
           </div>
       </div>
 
-      <div class="card">
-          <h2>Peak 15-Minute Windows
-              <span class="tsh-badge">last 24 h</span>
-          </h2>
+      <div class="bnb-card pad">
+          <div class="section-header"><div><div class="bnb-eyebrow">last 24 h</div><h2 class="sh-h">Peak 15-minute windows</h2></div></div>
           <div hx-get="/pages/ts-peak"
                hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
@@ -79,10 +74,8 @@
 
   <!-- Activity Sessions + Anomaly Detection -->
   <div class="grid-2 tsh-row">
-      <div class="card">
-          <h2>Activity Sessions
-              <span class="tsh-badge">last 3 days · gap ≥ 30 min</span>
-          </h2>
+      <div class="bnb-card pad">
+          <div class="section-header"><div><div class="bnb-eyebrow">last 3 days · gap ≥ 30 min</div><h2 class="sh-h">Activity sessions</h2></div></div>
           <p class="tsh-card-lede">
               Continuous-presence windows separated by inactivity gaps.
           </p>
@@ -93,10 +86,8 @@
           </div>
       </div>
 
-      <div class="card">
-          <h2>Anomaly Detection
-              <span class="tsh-badge">90 days · z &gt; 2.0</span>
-          </h2>
+      <div class="bnb-card pad">
+          <div class="section-header"><div><div class="bnb-eyebrow">90 days · z &gt; 2.0</div><h2 class="sh-h">Anomaly detection</h2></div></div>
           <p class="tsh-card-lede">
               Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
           </p>
@@ -110,10 +101,8 @@
 
   <!-- Polar Activity Clock + Species Accumulation -->
   <div class="grid-2 tsh-row">
-      <div class="card">
-          <h2>Polar Activity Clock
-              <span class="tsh-badge">90-day hourly average</span>
-          </h2>
+      <div class="bnb-card pad">
+          <div class="section-header"><div><div class="bnb-eyebrow">90-day hourly average</div><h2 class="sh-h">Polar activity clock</h2></div></div>
           <p class="tsh-card-lede">
               Radial chart showing bird activity intensity by hour of day. Each spoke = 1 hour (0–23).
           </p>
@@ -126,10 +115,8 @@
           </div>
       </div>
 
-      <div class="card">
-          <h2>Species Accumulation
-              <span class="tsh-badge">cumulative discovery</span>
-          </h2>
+      <div class="bnb-card pad">
+          <div class="section-header"><div><div class="bnb-eyebrow">cumulative discovery</div><h2 class="sh-h">Species accumulation</h2></div></div>
           <p class="tsh-card-lede">
               Cumulative new species discovered over time — species accumulation curve.
           </p>

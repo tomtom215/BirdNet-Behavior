@@ -25,6 +25,8 @@ pub(crate) mod timeline;
 pub(crate) use funnel::sequence_funnel;
 pub(crate) use matrix::cooccurrence_matrix;
 pub(crate) use radial::chord_diagram;
+#[cfg(feature = "analytics")]
+pub(crate) use timeline::{TrendPoint, trend_chart};
 pub(crate) use timeline::{accumulation_curve, day_strip, streamgraph};
 
 use crate::routes::pages::escape_html;

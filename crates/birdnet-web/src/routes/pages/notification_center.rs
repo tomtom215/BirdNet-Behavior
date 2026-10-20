@@ -170,7 +170,11 @@ async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::respon
 const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow nc-eyebrow"><span>Operations</span>{{help_link}}</div><h1 class="display nc-h1">Notifications</h1>
 
 <div class="stats-grid" hx-get="/pages/notif-stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
-    <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>
+    <span class="sr-only">Loading totals&hellip;</span>
+    <div class="stat-card" aria-hidden="true"><div class="value">&ndash;</div><div class="label">Total (30 days)</div></div>
+    <div class="stat-card" aria-hidden="true"><div class="value">&ndash;</div><div class="label">Sent</div></div>
+    <div class="stat-card" aria-hidden="true"><div class="value">&ndash;</div><div class="label">Failed</div></div>
+    <div class="stat-card" aria-hidden="true"><div class="value">&ndash;</div><div class="label">Skipped</div></div>
 </div>
 
 <div class="card">

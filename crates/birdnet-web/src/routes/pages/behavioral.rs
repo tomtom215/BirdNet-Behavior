@@ -180,15 +180,18 @@ pub(super) async fn analytics_retention_partial(
                 r"<table><thead><tr><th>Species</th><th>Classification</th><th>Weeks heard</th><th>Day 1</th><th>Day 7</th><th>Day 30</th></tr></thead><tbody>",
             );
             for r in &retention {
+                // How often a species is here is a description, not a grade, so
+                // none of these is red: this drew a migrant — a normal thing for
+                // a bird to be — in the colour of a fault.
                 let (label, cls) = match r.classification {
-                    birdnet_behavioral::types::ResidencyType::Resident => ("Resident", "high"),
-                    birdnet_behavioral::types::ResidencyType::Regular => ("Regular", "mid"),
-                    birdnet_behavioral::types::ResidencyType::Migrant => ("Migrant", "low"),
-                    birdnet_behavioral::types::ResidencyType::Rarity => ("Rarity", "low"),
+                    birdnet_behavioral::types::ResidencyType::Resident => ("Resident", "moss"),
+                    birdnet_behavioral::types::ResidencyType::Regular => ("Regular", ""),
+                    birdnet_behavioral::types::ResidencyType::Migrant => ("Migrant", "dawn"),
+                    birdnet_behavioral::types::ResidencyType::Rarity => ("Rarity", "dawn"),
                 };
                 let _ = write!(
                     html,
-                    r#"<tr><td>{sp}</td><td><span class="conf {cls}">{label}</span></td><td class="mono">{wk} of {of}</td><td>{d1}</td><td>{d7}</td><td>{d30}</td></tr>"#,
+                    r#"<tr><td>{sp}</td><td><span class="bnb-pill {cls}">{label}</span></td><td class="mono">{wk} of {of}</td><td>{d1}</td><td>{d7}</td><td>{d30}</td></tr>"#,
                     sp = escape_html(names.name_of_stored(&r.species)),
                     // The class is read from this, so it is shown beside it.
                     wk = r.weeks_present,
@@ -350,16 +353,13 @@ fn render_neighbours(
         // detection, so the label only ever appears under "After".
         let self_follow = species == trigger;
         let pct = probability * 100.0;
-        let cls = if pct >= 50.0 {
-            "high"
-        } else if pct >= 20.0 {
-            "mid"
-        } else {
-            "low"
-        };
+        // A follow-on probability is a likelihood, not a verdict: a bird that
+        // turns up next one time in five is not a warning, and this drew those
+        // pills red (`low`). Green for a likely successor, neutral otherwise.
+        let cls = if pct >= 50.0 { "moss" } else { "" };
         let _ = write!(
             html,
-            r#"<tr><td>{sp}{note}</td><td><span class="conf {cls}">{pct:.0}%</span></td><td>{frequency}</td></tr>"#,
+            r#"<tr><td>{sp}{note}</td><td><span class="bnb-pill {cls}">{pct:.0}%</span></td><td>{frequency}</td></tr>"#,
             sp = escape_html(names.name_of_stored(species)),
             note = if self_follow {
                 r#" <span class="bnb-meta">(calls again)</span>"#
