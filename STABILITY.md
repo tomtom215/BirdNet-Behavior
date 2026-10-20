@@ -31,7 +31,7 @@ An operator or an integrator can rely on these, in this order of seriousness:
 |---|---|---|
 | **Station data** — the SQLite database and its migrations | `crates/birdnet-db/src/migration.rs` | N migrations, contiguous from 1; forward-only. N is what `awk '/pub const MIGRATIONS/,/^\];/' crates/birdnet-db/src/migration.rs \| grep -cE '^\s+version: [0-9]+,'` prints: 54 on 2026-10-20 |
 | **Configuration** — `birdnet.conf` keys, `BIRDNET_*` / `BNB_*` environment variables, command-line flags | `crates/birdnet-core/src/config/known_keys.rs`, `src/cli.rs`, `--help` | 148 file keys (the quoted strings in `KNOWN_CONFIG_KEYS`) and 112 option lines in `--help` (`grep -cE '^\s{2,6}(-[a-zA-Z], )?--[a-z0-9-]+' docs/book/_generated/cli-help.txt`), on 2026-10-20 |
-| **HTTP API** — `/api/v2`, bearer-token and public | `crates/birdnet-web/openapi.json`, [`docs/book/reference/api.md`](docs/book/reference/api.md) | 85 paths, 87 operations (the sizes of `paths` and of its method entries in `openapi.json`), on 2026-10-20 |
+| **HTTP API** — `/api/v2`, bearer-token and public | `crates/birdnet-web/openapi.json`, [`docs/book/reference/api.md`](docs/book/reference/api.md) | 95 paths, 97 operations (the sizes of `paths` and of its HTTP-method entries in `openapi.json`), on 2026-10-20 |
 | **Metrics and messages** — Prometheus series, MQTT topics and Home Assistant discovery payloads, webhook bodies | [`docs/book/reference/integrations.md`](docs/book/reference/integrations.md) | `birdnet_*` series |
 | **Release artefacts and installer** — tarball names, `SHA256SUMS`, `install.sh` flags, the container image tags | [RELEASING.md](RELEASING.md) | |
 | **Supported platforms** | [README](README.md#supported-hardware--os) | see §6 |
@@ -134,8 +134,11 @@ Nothing in the list below is promised for a date; each is a measurable condition
 
 - Two consecutive minor releases with no breaking change, by §3.
 - The HTTP API described by `openapi.json` in both directions — every routed path
-  documented, every documented path routed — and that checked in CI against the
-  previous release's file, so a breaking change cannot ship unlabelled.
+  documented, every documented path routed — which
+  `crates/birdnet-web/tests/every_route_the_api_serves_is_in_the_openapi_document.rs`
+  now checks on every test run, and that checked in CI against the previous
+  release's file, so a breaking change cannot ship unlabelled. The second half is
+  not done.
 - The upgrade path exercised from every release in the supported window.
 - Branch protection and a required-checks list on `main` (a repository setting,
   recorded in `docs/HANDOFF.md`).

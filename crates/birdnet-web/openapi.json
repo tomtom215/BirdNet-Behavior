@@ -4,7 +4,7 @@
     "title": "BirdNet-Behavior HTTP API",
     "version": "0.17.1",
     "summary": "JSON API for a BirdNet-Behavior acoustic monitoring station: open read-only endpoints, plus a small token-authenticated write surface.",
-    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the eighteen bearer-token endpoints (ten writes and eight reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** A live detection WebSocket stream at `ws://<host>/api/v2/ws/detections`, the live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not GET-JSON endpoints; see the project docs.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
+    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the eighteen bearer-token endpoints (ten writes and eight reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
     "license": {
       "name": "CC BY-NC-SA 4.0",
       "url": "https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE"
@@ -64,6 +64,60 @@
     }
   ],
   "paths": {
+    "/v2": {
+      "servers": [
+        {
+          "url": "/api",
+          "description": "The API root is exactly `/api/v2`. A path must begin with `/`, so under the `/api/v2` server it could only be spelled `/`, which is `/api/v2/` and is not routed (404). This path item therefore names its own server."
+        }
+      ],
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "API root",
+        "description": "The API's name, version and status. Served at `/api/v2` with no trailing slash; `/api/v2/` is a 404.",
+        "operationId": "apiIndex",
+        "responses": {
+          "200": {
+            "description": "The API is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "version",
+                    "status"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "examples": [
+                        "BirdNet-Behavior API"
+                      ]
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "The station's version.",
+                      "examples": [
+                        "0.17.1"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "examples": [
+                        "running"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/openapi.json": {
       "get": {
         "tags": [
@@ -815,6 +869,141 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/soundlevel": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Newest third-octave sound level",
+        "description": "The band levels of the most recent hour that has any, for one capture source, with the broadband A- and Z-weighted figures beside them and the **unit** they are in. The unit is in the payload because it can be either: an uncalibrated station reports `dBFS` (negative, station-relative, fine for tracking change at one place) and a calibrated one reports `dB SPL`. A station with no observations answers 200 with `source: null`, `bands: []` and a `note`; that is a statement about the microphone, not an error.",
+        "operationId": "soundLevel",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Capture source label. Defaults to the source with the newest reading.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The newest hour's spectrum, or the no-observations marker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "source",
+                    "unit",
+                    "bands"
+                  ],
+                  "properties": {
+                    "source": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The capture source; null when there are no observations."
+                    },
+                    "date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date",
+                      "description": "Local date of the hour reported."
+                    },
+                    "hour": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 23
+                    },
+                    "samples": {
+                      "type": "integer",
+                      "description": "Measurements averaged into the hour; 0 for a source with none."
+                    },
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "dBFS",
+                        "dB SPL"
+                      ]
+                    },
+                    "calibration_db": {
+                      "type": "number",
+                      "description": "The offset applied to reach dB SPL; 0 for an uncalibrated station."
+                    },
+                    "a_weighted_db": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "z_weighted_db": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "note": {
+                      "type": "string",
+                      "description": "Present only when there are no observations."
+                    },
+                    "bands": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "band_hz",
+                          "label",
+                          "mean_db",
+                          "min_db",
+                          "max_db"
+                        ],
+                        "properties": {
+                          "band_hz": {
+                            "type": "number",
+                            "description": "Centre frequency of the third-octave band."
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "mean_db": {
+                            "type": "number"
+                          },
+                          "min_db": {
+                            "type": "number"
+                          },
+                          "max_db": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The sound-level read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2019,6 +2208,163 @@
         }
       }
     },
+    "/species/tracking": {
+      "get": {
+        "tags": [
+          "species"
+        ],
+        "summary": "What is notable about a day's species",
+        "description": "For every species detected on the date: first ever, first of the (tracking) year, first of the season, and returning after an absence. The windows the flags are measured against are returned beside the species, because a bare \"first this season\" is unreadable without knowing which season the station thinks it is in, and that depends on the latitude it was given: a station with no latitude reports `season: null`, and nothing is ever new in a season it does not have. `headline` is the single strongest claim (`first ever`, `returning`, `first this year`, `first this season`), null when nothing is notable.",
+        "operationId": "speciesTracking",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "The day to report, `YYYY-MM-DD`. Defaults to today at the station. A value that is not of that shape is ignored and today is used.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "notable_only",
+            "in": "query",
+            "required": false,
+            "description": "Return only species with something notable about them.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The windows and the species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "date",
+                    "year_start",
+                    "season",
+                    "season_start",
+                    "absence_days",
+                    "species"
+                  ],
+                  "properties": {
+                    "date": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "year_start": {
+                      "type": "string",
+                      "format": "date",
+                      "description": "First date of the tracking year containing `date`."
+                    },
+                    "season": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "spring",
+                        "summer",
+                        "fall",
+                        "winter",
+                        "wet1",
+                        "dry1",
+                        "wet2",
+                        "dry2",
+                        null
+                      ],
+                      "description": "The season containing `date`, by the station's latitude; null when it has none."
+                    },
+                    "season_start": {
+                      "type": "string",
+                      "format": "date",
+                      "description": "First date of that season (the year start when the station has no latitude)."
+                    },
+                    "absence_days": {
+                      "type": "integer",
+                      "description": "Days of silence after which a detection counts as a return."
+                    },
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "sci_name",
+                          "com_name",
+                          "headline",
+                          "new_ever",
+                          "new_this_year",
+                          "new_this_season",
+                          "returning_after_absence",
+                          "days_since_previous"
+                        ],
+                        "properties": {
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string",
+                            "description": "Common name as stored."
+                          },
+                          "headline": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "enum": [
+                              "first ever",
+                              "returning",
+                              "first this year",
+                              "first this season",
+                              null
+                            ]
+                          },
+                          "new_ever": {
+                            "type": "boolean"
+                          },
+                          "new_this_year": {
+                            "type": "boolean"
+                          },
+                          "new_this_season": {
+                            "type": "boolean"
+                          },
+                          "returning_after_absence": {
+                            "type": "boolean"
+                          },
+                          "days_since_previous": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Days since the previous detection; null if there was none."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The tracking read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/species/activity": {
       "get": {
         "tags": [
@@ -2234,6 +2580,136 @@
           },
           "416": {
             "description": "Requested range not satisfiable."
+          }
+        }
+      }
+    },
+    "/recordings/{filename}/raven.txt": {
+      "get": {
+        "tags": [
+          "recordings"
+        ],
+        "summary": "A clip's Raven selection table",
+        "description": "The selections for one clip as a Raven Pro table, in the same format as `/detections/export/raven`.",
+        "operationId": "clipRavenTable",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Filename"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The table, as `<filename>.raven.txt`.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "`attachment`, with the file name.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/tab-separated-values": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a plain file name: path separators and `..` are rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No detection names this clip.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recordings/{filename}/labels.txt": {
+      "get": {
+        "tags": [
+          "recordings"
+        ],
+        "summary": "A clip's Audacity label track",
+        "description": "The same selections as an Audacity label track: `begin<TAB>end<TAB>label` per line, the label the common name and the confidence as a percentage. Import it with File, Import, Labels.",
+        "operationId": "clipAudacityLabels",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Filename"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The label track, as `<filename>.labels.txt`.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "`attachment`, with the file name.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/tab-separated-values": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a plain file name: path separators and `..` are rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No detection names this clip.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2639,6 +3115,284 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EngineStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analytics/abundance": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Effort-corrected abundance",
+        "description": "Detections per hour of listening, per species per ISO week. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's station time is its longest single source, not the sum across sources, so a two-microphone station is not read as half a one-microphone station. Species-weeks with fewer than `min_detections` detections are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "operationId": "analyticsAbundance",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "description": "The ISO year (the year the ISO week belongs to) to report. Defaults to the current year at the station.",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Restrict to one species, by common name as stored.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_detections",
+            "in": "query",
+            "required": false,
+            "description": "Smallest number of detections a species-week needs to be reported.",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0,
+              "default": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One row per species per ISO week.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "abundance"
+                  ],
+                  "properties": {
+                    "abundance": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "species",
+                          "iso_week",
+                          "raw_count",
+                          "effort_count",
+                          "effort_hours",
+                          "detections_per_hour"
+                        ],
+                        "properties": {
+                          "species": {
+                            "type": "string",
+                            "description": "Common name as stored."
+                          },
+                          "iso_week": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 53
+                          },
+                          "raw_count": {
+                            "type": "integer",
+                            "description": "Every detection that week."
+                          },
+                          "effort_count": {
+                            "type": "integer",
+                            "description": "The detections on days with recorded effort: the numerator of the rate."
+                          },
+                          "effort_hours": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Station time recorded on those days, in hours; null when the week has none."
+                          },
+                          "detections_per_hour": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "`effort_count` over `effort_hours`, to four decimals; null when there is no effort to divide by."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The analytics query failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The analytics store is not available, or the query could not be run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analytics/phenology": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species phenology: first and last detection per year",
+        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "operationId": "analyticsPhenology",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "description": "Report only this calendar year. Omit for every year with data.",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Restrict to one species, by common name as stored.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_detections",
+            "in": "query",
+            "required": false,
+            "description": "Smallest number of detections a species-year needs to be reported.",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0,
+              "default": 5
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Most rows to return.",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0,
+              "default": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One row per species per calendar year.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "phenology"
+                  ],
+                  "properties": {
+                    "phenology": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "species",
+                          "year",
+                          "first_detection",
+                          "last_detection",
+                          "detection_count",
+                          "first_doy",
+                          "last_doy",
+                          "presence_days",
+                          "detected_days"
+                        ],
+                        "properties": {
+                          "species": {
+                            "type": "string",
+                            "description": "Common name as stored."
+                          },
+                          "year": {
+                            "type": "integer"
+                          },
+                          "first_detection": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "last_detection": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "detection_count": {
+                            "type": "integer"
+                          },
+                          "first_doy": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `first_detection` falls on."
+                          },
+                          "last_doy": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `last_detection` falls on."
+                          },
+                          "presence_days": {
+                            "type": "integer",
+                            "description": "Days from first to last detection, inclusive: a span, not an occupancy."
+                          },
+                          "detected_days": {
+                            "type": "integer",
+                            "description": "Distinct days it was detected."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The analytics query failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The analytics store is not available, or the query could not be run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4679,6 +5433,67 @@
         }
       }
     },
+    "/detections/export/raven": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export detections (Raven selection table)",
+        "description": "One Raven Pro selection table over every detection that has a clip, in the format BirdNET-Analyzer writes (its `RAVEN_TABLE_HEADER`, with `Begin Path` naming the clip and `File Offset (s)`), so anything that already reads that reads this. Each row is a begin and end in seconds inside its clip; Raven opens a multi-file table against the recordings folder. A row from before the clip window was recorded spans the whole clip. A detection with no clip, or no known clip length, is left out rather than given a made-up window. Rows are ordered clip by clip, in time. Reads the analytic view, so a rejected detection is never exported. `Species Code` is the eBird code where the station has one, else the scientific name.",
+        "operationId": "exportRaven",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The selection table, tab-separated, as `detections.raven.txt`.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "`attachment`, with the file name.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/tab-separated-values": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "More rows than an export may hold (1,000,000); narrow it with `from` and `to`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/languages": {
       "get": {
         "tags": [
@@ -5413,6 +6228,279 @@
           },
           "404": {
             "description": "No running stream has this token, or the file is not one it serves.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ws/detections": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Live detections (WebSocket)",
+        "description": "Upgrades to a WebSocket that carries each detection as it is made, as JSON text frames, to every connected client. The first frame is `connected`. A client that falls behind is sent `{\"event\":\"lagged\",\"missed\":N}` rather than disconnected. Ping frames are answered; anything else the client sends is ignored; the server closes the socket when it shuts down. Open it from a page of the station itself: a cross-site `Origin` is refused. Connections are limited, and a station in private mode requires a session.",
+        "operationId": "liveDetections",
+        "responses": {
+          "101": {
+            "description": "Switching protocols. The messages that follow are the schemas below.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "description": "Sent once, on connect.",
+                      "required": [
+                        "event",
+                        "message",
+                        "version"
+                      ],
+                      "properties": {
+                        "event": {
+                          "const": "connected"
+                        },
+                        "message": {
+                          "type": "string",
+                          "examples": [
+                            "BirdNet-Behavior live detection stream"
+                          ]
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "description": "One detection.",
+                      "required": [
+                        "event",
+                        "common_name",
+                        "display_name",
+                        "scientific_name",
+                        "confidence",
+                        "date",
+                        "time",
+                        "start",
+                        "stop",
+                        "is_new_today"
+                      ],
+                      "properties": {
+                        "event": {
+                          "const": "detection"
+                        },
+                        "common_name": {
+                          "type": "string",
+                          "description": "The classifier's common name, as stored: the key to match on."
+                        },
+                        "display_name": {
+                          "type": "string",
+                          "description": "`common_name` in the station's language, or itself when it has none."
+                        },
+                        "scientific_name": {
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "date": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "time": {
+                          "type": "string",
+                          "description": "`HH:MM:SS`, station local time."
+                        },
+                        "start": {
+                          "type": "number",
+                          "description": "Seconds into the recording."
+                        },
+                        "stop": {
+                          "type": "number",
+                          "description": "Seconds into the recording."
+                        },
+                        "is_new_today": {
+                          "type": "boolean",
+                          "description": "First time this species is heard today."
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "description": "This client missed N events.",
+                      "required": [
+                        "event",
+                        "missed"
+                      ],
+                      "properties": {
+                        "event": {
+                          "const": "lagged"
+                        },
+                        "missed": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a WebSocket upgrade request (no `Upgrade: websocket`, or no `Sec-WebSocket-Key`).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Another website's page opened it (the `Origin` is not this station's). The stream is for the station's own pages.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Every connection slot of this kind is taken; close a tab and retry.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ws/spectrogram": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Live spectrogram (WebSocket)",
+        "description": "Upgrades to a WebSocket that carries a mel-spectrogram frame for each audio file as it is analysed, as JSON text frames, from every capture source. The first frame is `connected`. Each frame names its `source`, so a client choosing one microphone filters on it. Ping frames are answered; anything else the client sends is ignored. Open it from a page of the station itself: a cross-site `Origin` is refused. Connections are limited, and a station in private mode requires a session.",
+        "operationId": "liveSpectrogram",
+        "responses": {
+          "101": {
+            "description": "Switching protocols. The messages that follow are the schemas below.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "description": "Sent once, on connect.",
+                      "required": [
+                        "event",
+                        "message",
+                        "version"
+                      ],
+                      "properties": {
+                        "event": {
+                          "const": "connected"
+                        },
+                        "message": {
+                          "type": "string",
+                          "examples": [
+                            "BirdNet-Behavior live spectrogram stream"
+                          ]
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "description": "One spectrogram.",
+                      "required": [
+                        "event",
+                        "filename",
+                        "source",
+                        "n_mels",
+                        "n_frames",
+                        "data",
+                        "sample_rate"
+                      ],
+                      "properties": {
+                        "event": {
+                          "const": "spectrogram"
+                        },
+                        "filename": {
+                          "type": "string",
+                          "description": "The analysed file."
+                        },
+                        "source": {
+                          "type": "string",
+                          "description": "The capture source that produced it (`local` when the file name carries none)."
+                        },
+                        "n_mels": {
+                          "type": "integer",
+                          "description": "Mel bands: the rows."
+                        },
+                        "n_frames": {
+                          "type": "integer",
+                          "description": "Time frames: the columns."
+                        },
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "description": "`n_mels` x `n_frames` values in row-major order."
+                        },
+                        "sample_rate": {
+                          "type": "integer",
+                          "description": "Sample rate of the source audio, in hertz."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a WebSocket upgrade request (no `Upgrade: websocket`, or no `Sec-WebSocket-Key`).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Another website's page opened it (the `Origin` is not this station's). The stream is for the station's own pages.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Every connection slot of this kind is taken; close a tab and retry.",
             "content": {
               "text/plain": {
                 "schema": {
