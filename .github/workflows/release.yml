@@ -935,6 +935,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.validate.outputs.version }}"
+          IS_PRE="${{ needs.validate.outputs.is_prerelease }}"
+
+          # The manual for exactly this version (docs.yml publishes one per
+          # stable tag at /vX.Y.Z/, from the tag's own sources). Pages hostnames
+          # are lowercase.
+          OWNER="${{ github.repository_owner }}"
+          DOCS_URL="https://${OWNER,,}.github.io/${{ github.event.repository.name }}/v${VERSION}/"
 
           # GitHub rejects a release body over 125,000 characters with HTTP
           # 422. v0.16.0's CHANGELOG section alone was 270,796, the edit
@@ -1004,6 +1011,20 @@ jobs:
             echo "The image includes DuckDB analytics (no separate \`-analytics\` tag)."
             echo "Multi-arch manifests cover \`linux/amd64\` and \`linux/arm64\`."
             echo ""
+            # docs.yml builds a manual for stable tags only (its tag filter has
+            # no pre-release form, and the build script skips them), so a
+            # pre-release has no /vX.Y.Z-rc.N/ to link and gets no section
+            # rather than a link that 404s. Inside the group, so the tail is
+            # still measured whole and the changelog's budget shrinks to fit.
+            if [[ "$IS_PRE" != "true" ]]; then
+              echo "## Documentation"
+              echo ""
+              echo "The operator manual for exactly this version, built from this tag:"
+              echo "<${DOCS_URL}>"
+              echo ""
+              echo 'The binary serves the same manual offline at `/help`.'
+              echo ""
+            fi
             echo "## Verification"
             echo ""
             echo '### Checksums'

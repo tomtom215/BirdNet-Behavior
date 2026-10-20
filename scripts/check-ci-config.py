@@ -122,6 +122,7 @@ import yaml
 MUTATION_WORKFLOW = ".github/workflows/mutation.yml"
 CI_WORKFLOW = ".github/workflows/ci.yml"
 RELEASE_WORKFLOW = ".github/workflows/release.yml"
+DOCS_WORKFLOW = ".github/workflows/docs.yml"
 
 # Matrix rows may omit `package`; the workflow falls back to this.
 DEFAULT_PACKAGE = "birdnet-core"
@@ -1034,6 +1035,99 @@ def check_actions_are_pinned(workflows_glob: str = ".github/workflows/*.yml") ->
           f"{len(files)} workflows, {toolchain_uses} of them dtolnay/rust-toolchain)")
 
 
+def check_docs_publish_main_as_dev(docs_path: str = DOCS_WORKFLOW) -> None:
+    """docs.yml builds `/dev/` from main on a tag push, and from the PR on a PR.
+
+    `scripts/build-versioned-docs.sh` built `/dev/` from HEAD. On a release-tag
+    push HEAD is the tag, so the site's "development" manual was the release's
+    own until the next push to `main`. The script now takes `DOCS_DEV_REF`
+    (default `origin/main`) and the workflow decides per event: a pull request
+    builds its own tree, because that build exists to grade the change and
+    deploys nothing, and everything else builds main.
+
+    Both halves matter and either alone is a silent failure: a workflow that
+    sets nothing is correct only because the script's default is, and one that
+    sets `HEAD` everywhere is the original bug. So the expression is read back
+    for each kind of event rather than checked for being present.
+    """
+    print("\ndocs.yml publishes main as /dev/ and gates a pull request on its own tree")
+    spec = yaml.safe_load(open(docs_path))
+    steps = spec["jobs"]["build"]["steps"]
+    builds = [st for st in steps
+              if re.search(r"(?<!test-)build-versioned-docs\.sh", str(st.get("run", "")))]
+    check(len(builds) == 1, f"{docs_path} has one step that runs build-versioned-docs.sh "
+                            f"(found {len(builds)})")
+    if len(builds) != 1:
+        return
+    expr = str((builds[0].get("env") or {}).get("DOCS_DEV_REF", ""))
+    m = re.fullmatch(
+        r"\$\{\{\s*github\.event_name == 'pull_request' && '([^']+)' \|\| '([^']+)'\s*\}\}", expr)
+    check(m is not None,
+          f"DOCS_DEV_REF is `<pull_request> && 'X' || 'Y'` (found {expr!r})")
+    if m is not None:
+        check(m.group(1) == "HEAD",
+              f"a pull request builds /dev/ from its own checkout (found {m.group(1)!r})")
+        check(m.group(2) == "origin/main",
+              f"every other event builds /dev/ from origin/main (found {m.group(2)!r})")
+    # The counterpart: the self-test must still be wired in front of the build.
+    check(any("test-build-versioned-docs.sh" in str(st.get("run", "")) for st in steps),
+          f"{docs_path} runs the script's self-test before the real build")
+
+
+def check_release_notes_link_the_versions_manual(release_path: str = RELEASE_WORKFLOW) -> None:
+    """A stable release's body links the manual built from that tag.
+
+    docs.yml publishes `/vX.Y.Z/` for every stable tag, and nothing pointed a
+    reader of the Release at it: the notes carried install and verification
+    steps and no link to the manual they install. The link is written inside the
+    tail block that the step measures before it budgets the changelog, so it
+    cannot push the body over GitHub's 125,000-character limit, and it is
+    guarded on `is_prerelease` because docs.yml builds nothing for `vX.Y.Z-rc.N`
+    and the link would 404.
+    """
+    print("\nA stable release's notes link that version's own manual")
+    spec = yaml.safe_load(open(release_path))
+    steps = spec["jobs"]["github-release"]["steps"]
+    run = next((str(st.get("run", "")) for st in steps
+                if st.get("name") == "Assemble final release notes"), "")
+    check(bool(run), "release.yml has the 'Assemble final release notes' step")
+    if not run:
+        return
+    check(re.search(r"DOCS_URL=\"https://[^\"]*github\.io/[^\"]*/v\$\{VERSION\}/\"", run) is not None,
+          "the step builds the version's manual URL (…github.io/<repo>/v${VERSION}/)")
+    guarded = re.search(
+        r'if \[\[ "\$IS_PRE" != "true" \]\]; then\s+echo "## Documentation".*?\$\{DOCS_URL\}.*?\n\s*fi\b',
+        run, re.S)
+    check(guarded is not None,
+          "the link sits in a '## Documentation' section guarded on a stable release")
+    # It must be inside the block written to tail_notes.md, the part the step
+    # measures, not appended after the budget was decided.
+    tail = run.split("} > tail_notes.md", 1)[0]
+    check("${DOCS_URL}" in tail,
+          "the link is inside tail_notes.md, so the changelog's budget accounts for it")
+
+
+def check_runners_are_pinned(workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """No job runs on a `-latest` runner image.
+
+    `ubuntu-latest` moves to a new Ubuntu on GitHub's schedule, and a toolchain
+    that built yesterday can fail tomorrow with nothing in the diff — incident 9,
+    one level down. docs.yml was the one workflow still on it (every other job
+    names `ubuntu-24.04`, or `macos-14`, or a matrix value).
+    """
+    print("\nNo job runs on a moving runner image (incident 9)")
+    seen = 0
+    for path in sorted(glob.glob(workflows_glob)):
+        for name, job in (yaml.safe_load(open(path)).get("jobs") or {}).items():
+            target = job.get("runs-on")
+            if not isinstance(target, str):
+                continue
+            seen += 1
+            check(not target.endswith("-latest"),
+                  f"{path}::{name} runs on {target!r}, not a -latest image")
+    check(seen >= 20, f"the reader found the runners it is judging ({seen})")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -1230,6 +1324,9 @@ def main(argv: list[str] | None = None) -> int:
     check_named_lockfiles_are_tracked()
     check_fuzz_targets_are_run()
     check_workflows_readme()
+    check_docs_publish_main_as_dev()
+    check_release_notes_link_the_versions_manual()
+    check_runners_are_pinned()
     check_headroom_arithmetic()
 
     for job in unresolved:

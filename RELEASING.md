@@ -116,7 +116,8 @@ build takes `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` to build without them.
 
 ## What each workflow emits
 
-Pushing a `vX.Y.Z` tag triggers **three** workflows in parallel:
+Pushing a `vX.Y.Z` tag triggers **three** workflows in parallel (two for a
+pre-release tag: `docs.yml` builds stable tags only):
 
 ### `release.yml` — binaries, SBOM, attestation, GitHub Release
 
@@ -131,7 +132,7 @@ validate ──► ci ──► build (matrix) ──► package ──► githu
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in and on by default, in `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns it off). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
 | `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives, the SBOMs, `install.sh`, `uninstall.sh` and `SHA256SUMS`, signed via GitHub OIDC. |
-| `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install/Docker/verify notes. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
+| `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install, Docker, verify and (for a stable release) documentation notes, the last linking that version's own manual at `/vX.Y.Z/`. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
 | `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum, and each of them (and `SHA256SUMS`) carrying a valid build-provenance attestation from this repository (`gh attestation verify`). Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
 
 **Build targets** (three — there is no armv7 and no musl):
@@ -174,11 +175,37 @@ recipe.
 
 ### `docs.yml` — the versioned manual on GitHub Pages
 
-Rebuilds the whole site from tags with `scripts/build-versioned-docs.sh`: the
-root becomes this release's manual, which is also kept at `/vX.Y.Z/`; earlier
-versioned releases and `/dev/` (`main`) are rebuilt beside it. Every tree is
-link-checked, including each page's "Suggest an edit" link. Nothing to do by
+Rebuilds the whole site on every run with `scripts/build-versioned-docs.sh`: the
+root is the latest stable release's manual, which is also kept at `/vX.Y.Z/`;
+earlier versioned releases are rebuilt beside it, each from its own tag; and
+`/dev/` is `origin/main` (a pull request's run builds the pull request's own tree
+instead, to gate it, and deploys nothing). Every tree is link-checked. Only
+`/dev/` pages carry "Suggest an edit": a release cannot be edited, and a link to a
+page later renamed on `main` would fail the link check for an unrelated reason. A
+stable release's GitHub Release body links its own `/vX.Y.Z/`. Nothing to do by
 hand — see "What is NOT automated" for what this means for a docs fix.
+
+What "a manual per release" does and does not promise today:
+
+- **It does not wait for the release.** `docs.yml` is triggered by the stable tag
+  push itself, not by `release.yml`. A tag that `validate` rejects, or whose
+  later jobs fail, still moves the site root to that tag's manual, and so does a
+  tag on a commit that is not on `main`. To take a bad tag back, delete it and
+  run *Docs* from the Actions tab: the site is rebuilt from the tags that exist.
+- **It is rebuilt, not archived.** Every run re-renders every release from its
+  tag with today's tooling: the mdBook version pinned in `docs.yml`, the version
+  switcher and accessibility assets, and `check-book-links.py` from the checkout.
+  A page's words are the tag's; how it renders, and whether it passes the link
+  check, are today's. A tooling change that an old tag's pages fail makes *every*
+  deploy fail, and a tag cannot be edited: fix the tooling, or raise
+  `FIRST_VERSIONED_RELEASE` in the script to drop that version from the site.
+- **Pre-releases have no manual.** A `vX.Y.Z-rc.N` tag neither triggers
+  `docs.yml` nor is rendered by it, and its Release body carries no docs link.
+  Nothing before `v0.17.1` is versioned (those binaries' own `/help` is their
+  manual).
+- **A mistake in a released manual stays there.** It is fixed in `/dev/` at once
+  and at the root with the next release; correcting `/vX.Y.Z/` itself means a new
+  patch release.
 
 ## The shared model release (`models-v3.0-preview3`)
 
@@ -313,14 +340,17 @@ isn't half-done:
 - **Tag creation/push.** The pipeline is tag-triggered; creating and
   pushing the tag is the manual "go" action.
 - **Nothing for the docs.** The manual is versioned and needs no release step
-  of its own: pushing the tag triggers `docs.yml`, which rebuilds the whole
+  of its own: pushing a stable tag triggers `docs.yml`, which rebuilds the whole
   site with `scripts/build-versioned-docs.sh` — the root becomes the new
   release's manual, it is also kept at `/vX.Y.Z/`, earlier releases (from
-  `v0.17.1`, the first versioned one) stay at theirs, and `main` is at `/dev/`.
-  Each version is rendered from its own tag and link-checked. A docs fix merged
-  after a release reaches `/dev/` at once and the root at the next release; to
-  correct a released manual, cut a patch release. The in-app `/help/*` tree is
-  always the manual for the binary serving it, so it needs no versioning.
+  `v0.17.1`, the first versioned one) stay at theirs, and `main` is at `/dev/`
+  (built from `origin/main`, also on a tag run). Each version is rendered from its
+  own tag and link-checked. A docs fix merged after a release reaches `/dev/` at
+  once and the root at the next release; to correct a released manual, cut a patch
+  release. The in-app `/help/*` tree is always the manual for the binary serving
+  it, so it needs no versioning. What this does and does not guarantee is listed
+  under `docs.yml` above — chiefly that it runs whether or not the release
+  succeeds.
 - **Crates.io publishing.** Not published to crates.io (this is an
   application, not a library).
 - **The shared model release.** `publish-model.yml` is a manual, one-shot
