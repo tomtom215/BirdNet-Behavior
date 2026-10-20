@@ -82,8 +82,10 @@ internet-reachable, keep it set (and add TLS off-LAN).
   `/etc/birdnet/birdnet.conf`. Sign in as **`admin`** — the account the
   dashboard seeds. `/admin*` without a session redirects to a `/login` form
   that issues a session cookie; this is not HTTP Basic Auth, so `curl -u` does
-  not apply. Change the password any time via `CADDY_PWD` in the config or the
-  environment:
+  not apply. Change the password any time on the Accounts page, or by editing
+  `CADDY_PWD` in the config or the environment to a new value (the station
+  records the `CADDY_PWD` it last applied, so an unchanged one never replaces a
+  password changed on the Accounts page):
 
   ```dotenv
   CADDY_PWD=a-long-random-password

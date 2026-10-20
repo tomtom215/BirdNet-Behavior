@@ -39,7 +39,7 @@ sudo nano /etc/birdnet/birdnet.conf   # set CADDY_PWD=your-new-password
 sudo systemctl restart birdnet-behavior
 ```
 
-While `CADDY_PWD` is set, the password it names is applied at every start, so a password changed on the Accounts page is replaced by it at the next restart (the log says so at warning level). Change it in `CADDY_PWD` too, or remove it once you have signed in. Sign in as `admin` — that is the account the dashboard seeds. `CADDY_USER` is read from the process environment only, so setting it in `birdnet.conf` does not rename it (it does work under Docker). Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
+Editing `CADDY_PWD` to a new value replaces the admin password at the next restart. A password changed on the Accounts page is kept across restarts instead: the station records which `CADDY_PWD` it last applied (as a hash, in `admin-password.applied` beside the database) and does not put an unchanged one back over it. The log says so at warning level on every start while `CADDY_PWD` is still set. A station upgraded from a release that did not keep that record applies `CADDY_PWD` once, at its first start, and keeps the record from then on. Remove `CADDY_PWD` once you have signed in. Sign in as `admin` — that is the account the dashboard seeds. `CADDY_USER` is read from the process environment only, so setting it in `birdnet.conf` does not rename it (it does work under Docker). Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
 
 ## What happens to my records if the SD card dies?
 

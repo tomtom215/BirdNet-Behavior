@@ -321,6 +321,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (computed font size × the SVG's screen scale) at 1440 and 390 px: with the
   fitter withheld (`NO_FITTER=1`) 17 of 78 route-and-viewport combinations
   fail; with it, none do (631 labels graded, the smallest at least 8.5 px).
+- **A cooldown on webhook alert rules.** A rule on `Strix*` posted once per 3-second
+  chunk for as long as an owl called (`DUPLICATE_INTERVAL_SECS` is off by default).
+  Each rule now carries a per-species cooldown in seconds (migration 55,
+  `alert_rules.cooldown_secs`; at most 7 days). `0`, which every existing rule
+  receives, behaves exactly as before. The gate runs on the detection's own timestamp
+  (a backlog replayed out of order is not mistaken for a repeat), applies to webhook
+  actions only (a suppress rule that stopped suppressing after its first match would
+  let later notifications through), and returns its window when the request never
+  left, so an endpoint that was restarting does not cost the rule its window. The
+  rule export is version 3 and omits a zero cooldown: a version-2 file still imports,
+  and an older station refuses a version-3 file instead of dropping the limit. The
+  admin form has no field for it yet. Observed failing: with the gate made to always
+  fire, 12 of its 13 tests fail and the processor posts seven times where three are
+  expected.
 
 ### Changed
 
@@ -807,13 +821,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds is still a long time for a request on the public router; the analytics
   store is one connection behind a mutex, so heavy analytics requests queue, and
   that is unchanged.
-- **A password changed on the Accounts page is replaced at the next restart while
-  `CADDY_PWD` is set, and nothing said so.** That has always been the design
-  (`CADDY_PWD` is applied at every start), but the Accounts page invited the
-  change and the log recorded the reversal at `info`. The page, the FAQ and the log
-  (now `warn`) say it. The behaviour is unchanged: separating "set from the
-  environment" from "set by a person" needs a record of which it was, and the
-  accounts table has none.
+- **A password changed on the Accounts page no longer reverts at the next restart
+  while `CADDY_PWD` is set.** Every start compared the stored hash with `CADDY_PWD`
+  and, when they differed, put `CADDY_PWD` back, so the password an owner had just
+  chosen (possibly because the old one leaked) was undone by the restart, with only
+  an `info` line to show for it. The station now keeps a hash of the `CADDY_PWD` it
+  last applied in `admin-password.applied` beside the database: an unchanged
+  `CADDY_PWD` leaves the Accounts-page password alone and logs a warning saying so,
+  and a `CADDY_PWD` edited to a new value still replaces it. A station upgrading
+  from a release without the record applies `CADDY_PWD` once at its first start (the
+  old rule, so an owner locked out by an edited config still recovers) and keeps the
+  record from then; when the record cannot be written the old rule stands. The
+  Accounts page, Settings → System, the FAQ and the hardening page say this.
 - **The sound-level meter's top bands did not measure the band they named.** The
   band filter was designed with its bandwidth pre-warped for the bilinear
   transform but its edges were not, so near Nyquist one edge landed too low and the
@@ -1289,6 +1308,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A species card says what is actually missing.** With the image cache
   configured it no longer tells you to pass `--image-cache-dir`; with it off
   it says so and names the flag for whoever set the station up.
+- **BirdWeather is never sent a position the station does not have.** A station with
+  a token and no (or an unparseable) `LATITUDE`/`LONGITUDE` built its client at
+  0°, 0° and posted every detection to a public map in the Gulf of Guinea. The client
+  now refuses a position that is missing, not finite, off the globe or exactly 0, 0
+  (a real equator or prime-meridian station has one coordinate non-zero and passes);
+  the station logs one warning at start-up saying which value is wrong and builds no
+  client. `--doctor` gains a "BirdWeather location" check for the same condition, and
+  uploads an earlier version had parked at 0, 0 are dropped with a warning instead
+  of replayed once the station gets a position.
 
 ### Security
 
@@ -1518,7 +1546,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one bit changed is refused); the other three platforms could not be, so
   those pins are the registry's bytes as served on 2026-10-14. `RELEASING.md`
   says how to update a pin.
-
+- **A station whose admin pages are open says so at start-up.** `docker compose up`
+  with a hand-made `.env` publishes the dashboard on every interface with no admin
+  password, and the first browser to finish the first-run wizard chooses it; the only
+  trace in the journal was a `debug` line. A station whose admin account has no
+  password now logs one `warn` naming what is open, to whom, and how to close it. A
+  station whose owner has chosen a password says nothing. The first-run flow itself
+  is unchanged.
 
 ## [0.17.1] - 2026-10-04
 
