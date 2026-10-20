@@ -106,7 +106,8 @@ const CONFIG_KEY_OF: &[(&str, &str)] = &[
     ("privacy_threshold", "PRIVACY_THRESHOLD"),
 ];
 
-/// Every settings field the station reads as a count and not a fraction: the
+/// Every settings field the station reads as a count and not a fraction (a
+/// number of classes, a number of seconds): the
 /// form key, the label the page shows, the range outside which the value
 /// cannot do its job, and what a person typing the wrong thing needs told.
 ///
@@ -120,19 +121,32 @@ const CONFIG_KEY_OF: &[(&str, &str)] = &[
 /// Kept apart from [`BOUNDED_FIELDS`] because the check is a different one: a
 /// value in that list is parsed as a decimal, and `0.02` in this one would
 /// truncate to `0`, which for `privacy_rank` is the rule switched off.
-const WHOLE_NUMBER_FIELDS: &[(&str, &str, u64, u64, &str)] = &[(
-    "privacy_rank",
-    "Privacy Rank",
-    birdnet_core::config::validate::PRIVACY_RANK_MIN,
-    birdnet_core::config::validate::PRIVACY_RANK_MAX,
-    "It counts classes, it is not a confidence (that is the Privacy Threshold field): \
-     0 turns the rule off and 10 is BirdNET-Pi's own.",
-)];
+const WHOLE_NUMBER_FIELDS: &[(&str, &str, u64, u64, &str)] = &[
+    (
+        "privacy_rank",
+        "Privacy Rank",
+        birdnet_core::config::validate::PRIVACY_RANK_MIN,
+        birdnet_core::config::validate::PRIVACY_RANK_MAX,
+        "It counts classes, it is not a confidence (that is the Privacy Threshold field): \
+         0 turns the rule off and 10 is BirdNET-Pi's own.",
+    ),
+    (
+        "segment_duration",
+        "Segment Duration",
+        birdnet_core::config::validate::SEGMENT_DURATION_MIN,
+        birdnet_core::config::validate::SEGMENT_DURATION_MAX,
+        "It is the length of each recording chunk in seconds, not a count of chunks: \
+         3 is one analysis window and 15 is the default.",
+    ),
+];
 
 /// The config key each whole-number field maps to, for
 /// `the_form_and_the_validator_agree_about_a_whole_number`.
 #[cfg(test)]
-const WHOLE_NUMBER_CONFIG_KEY_OF: &[(&str, &str)] = &[("privacy_rank", "PRIVACY_RANK")];
+const WHOLE_NUMBER_CONFIG_KEY_OF: &[(&str, &str)] = &[
+    ("privacy_rank", "PRIVACY_RANK"),
+    ("segment_duration", "SEGMENT_DURATION"),
+];
 
 /// What is wrong with one whole-number submission, or `None` when it is fine.
 ///
@@ -232,8 +246,10 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
     }
     // The same rule for the counts: the submission, not the diff, and sized by
     // the table so a field added there and not here does not compile.
-    let submitted: [(&str, Option<&String>); WHOLE_NUMBER_FIELDS.len()] =
-        [("privacy_rank", form.privacy_rank.as_ref())];
+    let submitted: [(&str, Option<&String>); WHOLE_NUMBER_FIELDS.len()] = [
+        ("privacy_rank", form.privacy_rank.as_ref()),
+        ("segment_duration", form.segment_duration.as_ref()),
+    ];
     for (key, value) in submitted {
         let Some(value) = value else { continue };
         let Some(&(_, label, min, max, advice)) =
@@ -1011,6 +1027,62 @@ mod tests {
         }
     }
 
+    /// The two coordinates are bounded in `BOUNDED_FIELDS` and, as bare
+    /// literals, in `validate()`'s `check_coords`, so unlike the five fractions
+    /// there is no constant to read: this holds what each *does* equal, at the
+    /// edges and at the typed mistakes (a comma decimal, a unit, an exponent).
+    #[test]
+    fn the_form_and_the_validator_agree_about_a_coordinate() {
+        use birdnet_core::config::validate::{Severity, validate};
+        for (field, config_key, limit) in [
+            ("latitude", "LATITUDE", 90),
+            ("longitude", "LONGITUDE", 180),
+        ] {
+            let mut probes: Vec<String> = vec![
+                "0".into(),
+                limit.to_string(),
+                (-limit).to_string(),
+                format!("{limit}.0000001"),
+                format!("-{limit}.0000001"),
+                format!("{limit},5"),
+                (limit + 1).to_string(),
+                "42,3601".into(),
+                " 42.5 ".into(),
+            ];
+            probes.extend(
+                [
+                    "abc", "NaN", "inf", "-inf", "1e1", "1e3", "1,2,3", ".5", "5.", "+45", "45N",
+                    "0x10", "",
+                ]
+                .map(str::to_owned),
+            );
+            for v in probes {
+                let config = birdnet_core::config::Config::parse(&format!("{config_key}={v}"))
+                    .expect("a key=value line parses");
+                let validator_refuses = validate(&config)
+                    .iter()
+                    .any(|f| f.key == config_key && f.severity == Severity::Error);
+                let mut form = empty_form();
+                match field {
+                    "latitude" => form.latitude = Some(v.clone()),
+                    _ => form.longitude = Some(v.clone()),
+                }
+                let form_refuses = !range_problems(&form).is_empty();
+                assert_eq!(
+                    form_refuses,
+                    validator_refuses,
+                    "{field}={v:?}: the form {} it and `--doctor` {} it",
+                    if form_refuses { "refuses" } else { "accepts" },
+                    if validator_refuses {
+                        "refuses"
+                    } else {
+                        "accepts"
+                    },
+                );
+            }
+        }
+    }
+
     /// The form and `--doctor` must take the same view of a whole number.
     ///
     /// Both read the same two constants, so a drift here would need somebody to
@@ -1060,7 +1132,11 @@ mod tests {
                     .iter()
                     .any(|f| f.key == config_key && f.severity == Severity::Error);
                 let mut form = empty_form();
-                form.privacy_rank = Some(v.clone());
+                match field {
+                    "privacy_rank" => form.privacy_rank = Some(v.clone()),
+                    "segment_duration" => form.segment_duration = Some(v.clone()),
+                    other => panic!("{other} is in the whole-number table but not in this test"),
+                }
                 let form_refuses = !range_problems(&form).is_empty();
                 assert_eq!(
                     form_refuses,

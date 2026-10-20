@@ -87,7 +87,13 @@ pub fn validate(config: &Config) -> Vec<Finding> {
         &mut out,
     );
     check_positive_int(config, "RECORDING_LENGTH", 3, 60, &mut out);
-    check_positive_int(config, "SEGMENT_DURATION", 3, 600, &mut out);
+    check_positive_int(
+        config,
+        "SEGMENT_DURATION",
+        SEGMENT_DURATION_MIN,
+        SEGMENT_DURATION_MAX,
+        &mut out,
+    );
     check_schedule(config, &mut out);
     check_audio_sources(config, &mut out);
     check_audio_format(config, &mut out);
@@ -350,6 +356,22 @@ pub const PRIVACY_RANK_MIN: u64 = 0;
 /// its own, which `the_privacy_rank_default_is_birdnet_pis_and_zero_switches_it_off`
 /// holds to this.
 pub const PRIVACY_RANK_MAX: u64 = 12_000;
+
+/// The shortest `SEGMENT_DURATION` the station accepts, in seconds: the length
+/// of one analysis window, since a chunk shorter than that cannot be analysed.
+///
+/// Constants of their own, like [`PRIVACY_RANK_MIN`], so that the settings form
+/// and `PUT /api/v2/settings` read the numbers [`validate`] does instead of
+/// typing a second `3` and `600`.
+pub const SEGMENT_DURATION_MIN: u64 = 3;
+
+/// The longest `SEGMENT_DURATION` the station accepts, in seconds.
+///
+/// Past ten minutes a chunk holds the station deaf for as long as it takes to
+/// fill, and the stall watchdog's patience is derived from it. Read by
+/// [`validate`] for the config file and by the settings form for a value typed
+/// on the page; `--segment-duration` is a bare `u32` with no clap range.
+pub const SEGMENT_DURATION_MAX: u64 = 600;
 
 /// Warn about a `PRIVACY_THRESHOLD` that looks like BirdNET-Pi's scale.
 fn check_privacy_threshold_scale(config: &Config, out: &mut Vec<Finding>) {
@@ -754,6 +776,33 @@ mod tests {
         assert!(validate(&cfg(&[("PRIVACY_RANK", "")])).is_empty());
         // And the documented range is the one the constants carry.
         assert_eq!((PRIVACY_RANK_MIN, PRIVACY_RANK_MAX), (0, 12_000));
+    }
+
+    /// `SEGMENT_DURATION` is a whole number of seconds from one analysis window
+    /// to ten minutes. The settings form refuses exactly what is refused here
+    /// (`the_form_and_the_validator_agree_about_a_whole_number`), so this pins
+    /// the edges that test compares against.
+    #[test]
+    fn segment_duration_is_a_whole_number_of_seconds_from_three_to_six_hundred() {
+        let past = (SEGMENT_DURATION_MAX + 1).to_string();
+        for v in ["3", "4", "15", "600"] {
+            assert!(
+                validate(&cfg(&[("SEGMENT_DURATION", v)])).is_empty(),
+                "SEGMENT_DURATION={v} is in range and must pass clean"
+            );
+        }
+        for v in ["0", "2", past.as_str(), "-1", "15.5", "15,5", "15s", "abc"] {
+            let findings = validate(&cfg(&[("SEGMENT_DURATION", v)]));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.key == "SEGMENT_DURATION" && f.severity == Severity::Error),
+                "SEGMENT_DURATION={v} must be an error, got {findings:?}"
+            );
+        }
+        // A blank line is unset, as everywhere else in this file.
+        assert!(validate(&cfg(&[("SEGMENT_DURATION", "")])).is_empty());
+        assert_eq!((SEGMENT_DURATION_MIN, SEGMENT_DURATION_MAX), (3, 600));
     }
 
     #[test]

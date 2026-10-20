@@ -498,9 +498,14 @@ struct OnboardingForm {
 ///
 /// The wizard's cards can only emit `0.4`/`0.6`/`0.7`/`0.9`, so this exists
 /// for the hand-crafted POST: `birdnet_core::config::validate` treats a
-/// `CONFIDENCE` outside 0–1 as an *error*, and `--doctor` runs from the unit's
-/// `ExecStartPre` where exit 2 is fatal. An unvalidated write here would let a
-/// setup form leave the station unable to start.
+/// `CONFIDENCE` outside 0–1 as an *error*. That check only ever reads the
+/// config **file**; a value saved here is laid over it afterwards and never
+/// validated again, so an unvalidated write would leave a station that runs and
+/// records nothing (`75` is above every score the model can give).
+///
+/// Never looser than the validator, and stricter in one way: a comma decimal
+/// (`0,7`) is refused here, where the validator reads it.
+/// `the_wizard_never_accepts_what_the_validator_refuses` holds both.
 fn valid_confidence(raw: &str) -> bool {
     raw.parse::<f64>().is_ok_and(|v| (0.0..=1.0).contains(&v))
 }
@@ -516,6 +521,14 @@ fn valid_confidence(raw: &str) -> bool {
 fn valid_trigger(raw: &str) -> bool {
     matches!(raw, "each" | "new-species" | "new-species-daily")
 }
+
+/// The largest latitude, in degrees, the wizard stores. The same number
+/// `birdnet_core::config::validate` holds `LATITUDE` to (`check_coords`);
+/// `the_wizard_never_accepts_what_the_validator_refuses` compares the two.
+const LATITUDE_LIMIT: f64 = 90.0;
+
+/// The largest longitude, in degrees, the wizard stores. See [`LATITUDE_LIMIT`].
+const LONGITUDE_LIMIT: f64 = 180.0;
 
 /// A coordinate the station can use: parses after the decimal-separator
 /// normalisation the settings form applies, and lies inside the range the
@@ -632,8 +645,8 @@ async fn onboarding_save(
         // agrees with it. A rejected value is logged rather than dropped in
         // silence, so the log says why the doctor still reports no location.
         let coordinates = match (
-            valid_coordinate(lat, 90.0),
-            valid_coordinate(lon, 180.0),
+            valid_coordinate(lat, LATITUDE_LIMIT),
+            valid_coordinate(lon, LONGITUDE_LIMIT),
         ) {
             (Some(lat), Some(lon)) => Some((lat, lon)),
             _ if lat.is_empty() && lon.is_empty() => None,
@@ -671,10 +684,9 @@ async fn onboarding_save(
         }
         // Only persisted when it parses inside 0–1. The wizard's own cards can
         // only produce 0.4/0.6/0.7/0.9, but the field is a plain form value:
-        // a hand-crafted POST must not be able to seed a threshold the daemon
-        // would reject at startup (`--doctor` exits 2 on out-of-range
-        // CONFIDENCE, which `ExecStartPre` treats as fatal) — that would turn
-        // the setup wizard into a way to brick the service.
+        // a hand-crafted POST must not be able to seed a threshold the
+        // detection pipeline can never meet (see `valid_confidence`) — that
+        // would turn the setup wizard into a way to silence the station.
         let conf = form.confidence_threshold.trim();
         if valid_confidence(conf) {
             items.push(("confidence_threshold", conf, SettingsCategory::Detection));
@@ -1404,6 +1416,102 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The wizard is the third place a person can type a confidence or a
+    /// coordinate, and it keeps its own copy of the bounds. It may be stricter
+    /// than `birdnet_core::config::validate` (it does not read a comma decimal
+    /// for the confidence) but never looser: a value it stores is a value the
+    /// validator would have accepted in the config file.
+    #[test]
+    fn the_wizard_never_accepts_what_the_validator_refuses() {
+        use birdnet_core::config::validate::{Severity, validate};
+        let refused = |key: &str, v: &str| {
+            let config = birdnet_core::config::Config::parse(&format!("{key}={v}"))
+                .expect("a key=value line parses");
+            validate(&config)
+                .iter()
+                .any(|f| f.key == key && f.severity == Severity::Error)
+        };
+        let probes = [
+            "0",
+            "1",
+            "0.7",
+            "0.0",
+            "1.0",
+            "1.0000001",
+            "-0.0000001",
+            "75",
+            "100",
+            "-1",
+            "abc",
+            "NaN",
+            "inf",
+            "-inf",
+            "1e0",
+            "1e1",
+            "1e-1",
+            "0,7",
+            "1,5",
+            "1,2,3",
+            ".5",
+            "5.",
+            "+0.5",
+            "90",
+            "90.0000001",
+            "-90",
+            "-90.5",
+            "180",
+            "-180",
+            "180.0000001",
+            "-181",
+            "42,36",
+            "0x10",
+            "",
+        ];
+        for v in probes {
+            if valid_confidence(v) {
+                assert!(
+                    !refused("CONFIDENCE", v),
+                    "the wizard stores a confidence of {v:?} that the validator refuses"
+                );
+            }
+            if valid_coordinate(v, LATITUDE_LIMIT).is_some() {
+                assert!(
+                    !refused("LATITUDE", v),
+                    "the wizard stores a latitude of {v:?} that the validator refuses"
+                );
+            }
+            if valid_coordinate(v, LONGITUDE_LIMIT).is_some() {
+                assert!(
+                    !refused("LONGITUDE", v),
+                    "the wizard stores a longitude of {v:?} that the validator refuses"
+                );
+            }
+        }
+        // The counterparts, so "never looser" is not satisfied by a wizard that
+        // refuses everything: the ends of each range are real answers...
+        for v in ["0", "1", "0.7"] {
+            assert!(valid_confidence(v), "{v}");
+        }
+        assert!(
+            valid_coordinate("90", LATITUDE_LIMIT).is_some()
+                && valid_coordinate("-90", LATITUDE_LIMIT).is_some()
+        );
+        assert!(
+            valid_coordinate("180", LONGITUDE_LIMIT).is_some()
+                && valid_coordinate("-180", LONGITUDE_LIMIT).is_some()
+        );
+        assert_eq!(
+            valid_coordinate("42,36", LATITUDE_LIMIT).as_deref(),
+            Some("42.36")
+        );
+        // ...and one past the end is not.
+        assert!(!valid_confidence("1.0000001") && !valid_confidence("75"));
+        assert!(valid_coordinate("90.0000001", LATITUDE_LIMIT).is_none());
+        assert!(valid_coordinate("180.0000001", LONGITUDE_LIMIT).is_none());
+        // Stricter, on purpose and in one place: the confidence has no comma form.
+        assert!(!valid_confidence("0,7") && !refused("CONFIDENCE", "0,7"));
+    }
 
     fn prefill() -> Prefill {
         Prefill {

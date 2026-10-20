@@ -16,7 +16,7 @@ The file keys are the ones `birdnet-behavior --doctor` knows (`crates/birdnet-co
 | File key | Flag · environment variable | Default | What it does |
 |---|---|---|---|
 | `PIPEWIRE_DEVICE` | `--pipewire-device` · `BIRDNET_PIPEWIRE_DEVICE` | — | PipeWire or PulseAudio source (`default` for the system default). Takes precedence over `ALSA_CARD` when both are set |
-| `SEGMENT_DURATION` | `--segment-duration` · `BIRDNET_SEGMENT_DURATION` | `15` | Seconds per recording segment. BirdNET-Pi's `RECORDING_LENGTH` is range-checked (3–60) but is **not** what sets this |
+| `SEGMENT_DURATION` | `--segment-duration` · `BIRDNET_SEGMENT_DURATION` | `15` | Seconds per recording segment, from 3 to 600 (`--doctor` checks the config file against that; the Settings page and `PUT /api/v2/settings` refuse a value outside it, and a fraction, a unit or a negative number). BirdNET-Pi's `RECORDING_LENGTH` is range-checked (3–60) but is **not** what sets this |
 | `NIGHT_INHIBIT` | `--night-inhibit` · `BIRDNET_NIGHT_INHIBIT` | off | Do not record at night; needs `LATITUDE` and `LONGITUDE` |
 | `PRE_SUNRISE_OFFSET` | `--pre-sunrise-offset` · `BIRDNET_PRE_SUNRISE_OFFSET` | unset: `TWILIGHT_OFFSET` | Minutes before sunrise at which a `solar` schedule starts recording |
 | `POST_SUNSET_OFFSET` | `--post-sunset-offset` · `BIRDNET_POST_SUNSET_OFFSET` | unset: `TWILIGHT_OFFSET` | Minutes after sunset at which a `solar` schedule stops (`TWILIGHT_OFFSET` itself defaults to `30`) |

@@ -8,7 +8,7 @@ Incoming audio is split into fixed-length segments before inference. Two setting
 
 | Setting | Env var / flag | Default | What it does |
 |---|---|---|---|
-| Segment duration | `BIRDNET_SEGMENT_DURATION` / `--segment-duration` | `15` | Length (seconds) of each recorded segment. |
+| Segment duration | `BIRDNET_SEGMENT_DURATION` / `--segment-duration` | `15` | Length (seconds) of each recorded segment: a whole number from 3 to 600. |
 | Overlap | `BIRDNET_OVERLAP` / `--overlap` | `0.0` | Seconds of overlap between consecutive analysis chunks. A small overlap (e.g. `1.5`) helps catch calls that straddle a chunk boundary, at some CPU cost. |
 
 ## Recording schedule
