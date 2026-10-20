@@ -149,7 +149,38 @@ for (const theme of ['light', 'dark']) {
     rows.push(`${d >= 60 ? 'PASS' : 'FAIL'}  ${`${theme} conf-${t} is not the alert colour`.padEnd(58)} sRGB distance ${d.toFixed(0)} (>= 60)`);
     if (d < 60) failures.push(`${theme}: conf-${t} is within ${d.toFixed(0)} of --rare`);
   }
+  // The browser's own bar (<meta name="theme-color">) is --bg of the theme the
+  // page is in. It was a warm brown in dark for as long as the dark theme has
+  // been near-black, so on a phone the bar and the page were two different
+  // darks. Two things are held: what the HTML says (what a browser with no
+  // script, and the first paint, see), and what the page does when the
+  // operator's theme and the OS's disagree (the media query follows the OS).
+  const bg = await rgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg')));
+  const near = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+  const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const html = await (await page.request.get(`${BASE}/today`)).text();
+  const metas = [...html.matchAll(/<meta name="theme-color" content="(#[0-9a-fA-F]{6})" media="\(prefers-color-scheme: (light|dark)\)">/g)];
+  const mine = metas.find((m) => m[2] === theme);
+  const gap = mine ? near(hex(mine[1]), bg) : 999;
+  rows.push(`${gap <= 2 ? 'PASS' : 'FAIL'}  ${`${theme} theme-color meta in the HTML is --bg`.padEnd(58)} ${mine ? mine[1] : 'missing'} vs rgb(${bg}) off by ${gap} (<= 2)`);
+  if (gap > 2) failures.push(`${theme}: <meta name="theme-color"> is ${mine ? mine[1] : 'missing'}, --bg is rgb(${bg})`);
   await ctx.close();
+
+  // The operator chose `theme`; the OS says the other. After the page's own
+  // script has run, every theme-color meta must name the chosen theme's --bg.
+  const other = theme === 'light' ? 'dark' : 'light';
+  const ctx2 = await browser.newContext({ viewport: { width: 1000, height: 700 }, colorScheme: other });
+  await ctx2.addInitScript((t) => { try { localStorage.setItem('theme', t); } catch (e) {} }, theme);
+  const p2 = await ctx2.newPage();
+  await p2.goto(`${BASE}/today`, { waitUntil: 'domcontentloaded' });
+  await p2.waitForLoadState('networkidle').catch(() => {});
+  await resolver(p2);
+  const bg2 = await p2.evaluate(() => window.__resolve(getComputedStyle(document.documentElement).getPropertyValue('--bg')));
+  const live = await p2.evaluate(() => [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => m.getAttribute('content')));
+  const worst = live.length ? Math.max(...live.map((h) => near(hex(h), bg2))) : 999;
+  rows.push(`${worst <= 2 ? 'PASS' : 'FAIL'}  ${`${theme} chosen over an OS ${other}: bar follows the page`.padEnd(58)} ${live.join(' ')} vs rgb(${bg2}) off by ${worst} (<= 2)`);
+  if (worst > 2) failures.push(`${theme} chosen with the OS in ${other}: theme-color metas are ${live.join(', ')}, --bg is rgb(${bg2})`);
+  await ctx2.close();
 }
 
 await browser.close();

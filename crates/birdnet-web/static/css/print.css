@@ -104,6 +104,13 @@
     --conf-high:   #2e6b48;
     --conf-mid:    #5d7566;
     --conf-low:    #b8732d;
+    --info:        #2f5f9a;
+    --info-soft:   #e3ecf6;
+    --info-ink:    #1d3f6e;
+    --card-top:    #ffffff;
+    --card-bottom: #ffffff;
+    --sheen:       transparent;
+    --glow:        transparent;
     --shadow-sm:   none;
     --shadow-md:   none;
     --shadow-lg:   none;

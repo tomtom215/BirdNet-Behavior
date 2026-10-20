@@ -15,15 +15,30 @@ Two principles govern them:
   a hue stays the same "colour" as its lightness changes, and light/dark themes
   can be derived by moving lightness rather than re-picking hex values. The
   format is `oklch(L C H)` — lightness %, chroma, hue degrees — with an optional
-  `/ alpha`.
+  `/ alpha`. The one family written as hex is the categorical chart palette,
+  because a colour-blind-safety check can only be run on the exact values that
+  ship (see [Charts](#colour--charts)).
 - **The token set is closed.** New UI is built by composing existing tokens into
   new *classes*, **not** by adding tokens. Adding a token is a deliberate,
   reviewed design decision (see [Adding or changing a token](#adding-or-changing-a-token)).
 
-Every value below is checked against the stylesheet: the test
-`crates/birdnet-web/tests/design_tokens_doc_matches_the_stylesheet.rs` fails if
-this page omits a token the stylesheet declares, names one it does not, or gives
-a light or dark value that differs from `app.css`. Change both in one commit.
+## At a glance
+
+The stylesheet's light block declares
+<!--count-light-->123<!--/count--> tokens, and the dark block overrides
+<!--count-dark-->39<!--/count--> of them. Those two numbers are checked against
+`app.css` by the test below, so they cannot go stale; every other number on this
+page that describes the present is read from the stylesheet the same way.
+
+| What | Enforced by |
+|---|---|
+| Every token declared here, with the value it has in each theme | `tests/design_tokens_doc_matches_the_stylesheet.rs` |
+| Every `var(--x)` names a token that exists | `tests/css_variables_are_defined.rs` |
+| Every token that flips between themes is forced to a light value on paper | `tests/print_forces_every_theme_flipped_token.rs` |
+| No raw colour literal outside the token blocks, and no raw weight, hairline or bar radius where a token exists | `tests/design_tokens_are_the_only_literals.rs` |
+| Every colour token has a value in both themes, or is named as theme-invariant | `tests/design_tokens_are_the_only_literals.rs` |
+| The contrast ratios the tokens claim, measured in a browser in both themes | `tools/visual-qa/tokens.mjs` |
+| A token refactor changes no element's computed style | `tools/visual-qa/style-snapshot.mjs` |
 
 ## Themes
 
@@ -67,8 +82,12 @@ A four-step text hierarchy, brightest (most important) to faintest.
 
 ## Colour — semantic hues
 
-Three hue families carry meaning across the app. Each has a base, a `-soft`
-tint (for fills/badges) and most have an `-ink` (for text/icons on a soft fill).
+Four hue families carry meaning across the app, and the legacy names `--success`,
+`--warning`, `--danger` (below) say which: **success** is moss, **warning** is
+dawn, **danger** is rare, and **information** is its own cool blue so that "for
+your information" never reads as either "all is well" or "look at this". Each has
+a base, a `-soft` tint (for fills/badges) and an `-ink` (for text/icons on a soft
+fill; `--rare` is dark enough to be its own ink).
 
 | Token | Light | Dark | Meaning |
 |---|---|---|---|
@@ -80,6 +99,9 @@ tint (for fills/badges) and most have an `-ink` (for text/icons on a soft fill).
 | `--dawn-ink` | `oklch(42% 0.12 55)` | `oklch(92% 0.16 60)` | Amber text/ink. |
 | `--rare` | `oklch(50% 0.16 28)` | `oklch(74% 0.20 25)` | Rare bird / alert / danger — red. |
 | `--rare-soft` | `oklch(94% 0.05 28)` | `oklch(28% 0.12 25)` | Soft red fill (rare-bird and alert badges). Never a confidence. |
+| `--info` | `oklch(48% 0.10 245)` | `oklch(76% 0.11 245)` | Information — a cool blue. A fill or an icon; the text on it is `--info-ink`. |
+| `--info-soft` | `oklch(94% 0.03 245)` | `oklch(27% 0.06 245)` | Soft blue fill (an informational pill or callout). |
+| `--info-ink` | `oklch(36% 0.10 245)` | `oklch(88% 0.07 245)` | Blue text/ink on a soft fill. |
 
 ## Colour — confidence tiers
 
@@ -117,6 +139,10 @@ a detection the station accepted at 72 % is not a fault.
 |---|---|---|---|
 | `--paper` | `oklch(96% 0.012 75)` | `oklch(18% 0.010 250)` | Warm "paper" surface for editorial recaps (Reports). |
 | `--night` | `oklch(28% 0.04 270)` | `oklch(8% 0.020 250)` | Deep night surface (e.g. live spectrogram backdrop). |
+| `--card-top` | `var(--surface)` | `oklch(20% 0.010 250)` | The top of a dark card's gradient. Light cards are flat, so light only names it. |
+| `--card-bottom` | `var(--surface)` | `oklch(17% 0.010 250)` | The bottom of a dark card's gradient. |
+| `--sheen` | `transparent` | `oklch(100% 0 0 / .04)` | A faint light along a dark card's upper edge. |
+| `--glow` | `transparent` | `oklch(60% 0.04 240 / .10)` | The soft halo behind display type on a dark page. |
 
 ## Colour — text on a filled surface
 
@@ -126,6 +152,13 @@ a detection the station accepted at 72 % is not a fault.
 | `--on-fill` | `#fff` | `oklch(15% 0.02 150)` | Text on any saturated fill (badges, hovered amber buttons). |
 | `--sp-ink` | `oklch(10% 0 0)` | `oklch(98% 0 0)` | What a species colour is mixed toward for its own text, so the hue stays and the contrast holds. |
 | `--accent-rgb` | `60, 120, 80` | `120, 200, 150` | The accent as an `r, g, b` triple, for `rgba()` tints. |
+
+Two inks are fixed because the fill they sit on does not change between themes:
+
+| Token | Value | Use |
+|---|---|---|
+| `--on-dawn` | `oklch(20% 0.04 60)` | Ink on a `--dawn` fill (the amber button): amber is a bright fill in both themes, so its ink is dark in both. |
+| `--switch-thumb` | `oklch(100% 0 0)` | A toggle's thumb, white on its track in both themes. |
 
 ## Elevation — shadows
 
@@ -151,12 +184,20 @@ shadow and switches the ring to a faint light edge.
 
 | Token | Value | Use |
 |---|---|---|
+| `--r-2xs` | `3px` | The ends of a bar, a tile's chip, a small mark. |
 | `--r-xs` | `4px` | Checkboxes, tiny chips. |
 | `--r-sm` | `6px` | Buttons, inputs. |
 | `--r-md` | `10px` | Cards, rows. |
 | `--r-lg` | `14px` | Large cards, the head player. |
 | `--r-xl` | `20px` | Hero panels. |
-| `--r-pill` | `999px` | A fully rounded pill (chips, badges, round buttons). Written 36 times as a literal before it was a token. |
+| `--r-pill` | `999px` | A fully rounded pill (chips, badges, round buttons). |
+
+## Borders
+
+| Token | Value | Use |
+|---|---|---|
+| `--bw` | `0.5px` | The hairline: every card edge, row divider and control edge. High contrast (the Display preference, or the OS asking for more) changes this one value to `--bw-strong`, and every line in the product thickens at once. |
+| `--bw-strong` | `1px` | A line that must read as a line: what `--bw` becomes under high contrast. |
 
 ## Spacing & density
 
@@ -172,12 +213,29 @@ value rather than re-spacing every component.
 | `--pad-3` | `calc(18px * var(--density))` | Card padding; the gap between blocks on a page. |
 | `--pad-4` | `calc(28px * var(--density))` | Section padding. |
 
-There is deliberately **no second spacing scale**. `--pad-*` is the rhythm
-between blocks and inside cards, and it moves with density. The 2 – 14 px `gap`
-values inside a component (an icon beside its label, the cells of a calendar)
-are optical adjustments to that component's own size, not rhythm; naming them
-would add a scale nobody could tell apart from `--pad-*` and would not respond to
-density.
+`--pad-*` is the rhythm *between* blocks and *inside* cards, and it moves with
+density. The small gaps *within* a component — an icon beside its label, the
+cells of a calendar, the gap under an eyebrow — are optical adjustments to that
+component's own size and must not move with density, so they have their own,
+fixed ladder. `--space-N` is N pixels. It is the set of values the stylesheet
+used most, not a modular scale. The odd in-between gaps (3, 5, 7, 9, 11, 13 px)
+are still written as literals where a component's own optical balance depends
+on them; a new rule should use the nearer rung.
+
+| Token | Value | Use |
+|---|---|---|
+| `--space-2` | `2px` | The gap between a number and the bar under it. |
+| `--space-4` | `4px` | Tight pairs: a label and its value. |
+| `--space-6` | `6px` | An icon and its label; chips in a row. |
+| `--space-8` | `8px` | Rows of controls; a heading and its first line. |
+| `--space-10` | `10px` | The default gap inside a list row or a card header. |
+| `--space-12` | `12px` | Between a card's header and its body. |
+| `--space-14` | `14px` | Between small cards in a grid. |
+| `--space-16` | `16px` | Between groups inside a card. |
+| `--space-18` | `18px` | Between a detail page's blocks: a card, then its actions or the next card. |
+| `--space-20` | `20px` | Between a page's blocks on a phone. |
+| `--space-24` | `24px` | Between a page's blocks on a desktop. |
+| `--space-32` | `32px` | Between a page's major parts: an identity strip and what follows it. |
 
 ## Typography — families
 
@@ -192,12 +250,12 @@ fallbacks so localized common names render.
 
 ## Typography — sizes
 
-The stylesheet used 53 distinct `font-size` values (34 in px, six of them
-half-pixel steps — 9.5, 10.5, 11.5, 12.5, 13.5, 14.5 — and 19 in rem). They are
-now a scale. The first six steps are UI text; the rest are the serif display steps.
-Sizes at or below 16 px were snapped to the nearest step (never by more than
-0.8 px); larger one-off sizes (an icon glyph, a gauge numeral, a 404 code) stay
-literal and are listed under [What stays literal](#what-stays-literal).
+The stylesheet used to carry dozens of `font-size` values, half-pixel steps
+included. They are a scale now. The first six steps are UI text; the rest are the
+serif display steps. Sizes at or below 16 px were snapped to the nearest step
+(never by more than 0.8 px); larger one-off sizes (an icon glyph, a gauge
+numeral, a 404 code) stay literal and are listed under
+[What stays literal](#what-stays-literal).
 
 | Token | Value | Use |
 |---|---|---|
@@ -207,17 +265,34 @@ literal and are listed under [What stays literal](#what-stays-literal).
 | `--fs-md` | `13px` | Buttons, form controls, table cells. |
 | `--fs-base` | `14px` | Body text (set on `<body>`). |
 | `--fs-lg` | `16px` | Lede paragraphs and sub-headings. 16 px also keeps iOS from zooming a focused field. |
+| `--fs-lead` | `20px` | A headline sentence under a title; a small numeral. |
 | `--fs-title` | `22px` | A card or section title, in the serif. |
+| `--fs-h3` | `24px` | A sub-section title, or a numeral between a title and a statistic. |
 | `--fs-stat` | `32px` | A statistic's numeral, in the serif. |
 | `--fs-stat-lg` | `44px` | The large numeral of a four-up stat tile. |
 | `--fs-h1` | `clamp(34px, 9vw, 46px)` | A page title. Fluid, so a phone gets a title that fits rather than one that wraps four times. |
 | `--fs-hero` | `clamp(40px, 11vw, 60px)` | An editorial headline: Today, the species name, the weekly and yearly recaps. |
 
+## Typography — weights and tracking
+
+The stylesheet writes `font-weight` and `letter-spacing` as these, never as a
+number. Inter Tight ships 400, 500 and 600; 700 is the browser's synthetic bold
+and is asked for in a handful of places only.
+
+| Token | Value | Use |
+|---|---|---|
+| `--fw-regular` | `400` | Body text; the serif display faces have one weight. |
+| `--fw-medium` | `500` | UI labels, buttons, table heads, names. |
+| `--fw-semibold` | `600` | Emphasis inside a sentence; a selected tab. |
+| `--fw-bold` | `700` | Rare: a count in a badge. |
+| `--track-tight` | `-0.01em` | UI headings. |
+| `--track-display` | `-0.02em` | The serif at display sizes, where its default spacing opens up. |
+| `--track-caps-sm` | `0.08em` | Small-caps table heads and tile labels. |
+| `--track-caps` | `0.10em` | Eyebrows. |
+
 ## Motion
 
-Three durations and two curves. Interaction feedback had grown ten different
-durations (.1 s to .32 s, five of them within 50 ms of each other) and four
-spellings of the same two curves. `prefers-reduced-motion` (and the operator's
+Three durations and two curves. `prefers-reduced-motion` (and the operator's
 Motion setting) flatten every transition and animation at once, so none of these
 needs its own opt-out.
 
@@ -284,20 +359,21 @@ change should move. The clusters that remain, and why:
 | Species identity hues (`--sp`, set per bird) | Data, computed per species at render time. |
 | Chart ramps (heatmap cells, the streamgraph and ridgeline bands, the chord ribbons) | A colour encoding values; each is derived from `--moss` / `--dawn` with `color-mix()` or set per data point. |
 | Loops: skeleton shimmer 1.4 s, pulse 1.6 s, blink 1.2 s, the 0.6 s fresh-row fade | Ambient animation with its own tempo, not interaction feedback. |
-| `#fff` on the switch thumb, `#000` in a `mask-image` | A white thumb and an alpha mask are not theme colours. |
-| `oklch(20% 0.04 60)` on the amber `.bnb-btn.dawn` | Dark ink on an amber fill in both themes. |
+| `black` in a `mask-image` | An alpha mask has no colour of its own; only its alpha is read. |
 | Heading sizes above 16 px other than the steps above (gauge and tile numerals, an icon glyph, a 404 code) | Per-surface display type, sized to its one container. |
-| 2 – 14 px component gaps and paddings, 2 – 8 px bar radii | Optical adjustments; see Spacing above. |
+| Padding and the 2 px, 5 px, 7 px and 8 px bar radii | Optical adjustments to one component. A `gap` or a vertical margin that matches a `--space-N` rung uses it. |
+| Colours inside the admin pages' own `<style>` blocks, and in the SVG a chart renderer writes | Counted, not forbidden: `tests/design_tokens_are_the_only_literals.rs` holds each file to the number it has now, so none can grow. |
 
 ## Adding or changing a token
 
 The token set is deliberately closed (see the v3 spine
 [protect list](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/design/handover/v3_spine/IMPLEMENTATION_PLAN.md) —
 "OKLCH token set: zero new tokens"). The structural tokens on this page — type,
-motion, layers, focus, scrim and the pill radius — were added in one reviewed
-pass because each replaced a cluster of ad-hoc literals (53 font sizes, ten
-interaction durations, five stacking values, three scrim opacities, 36 pill
-radii) rather than introducing a new idea.
+weights, tracking, the hairline, the fixed gaps, motion, layers, focus, scrim and
+the pill radius — were each added in a reviewed pass because each replaced a
+cluster of ad-hoc literals rather than introducing a new idea; a refactor of that
+kind is proven pure with `tools/visual-qa/style-snapshot.mjs` (snapshot every
+element's computed style before, and after, and diff).
 
 - **Build new UI from existing tokens.** Compose them into new CSS *classes*;
   that is the additive path and needs no token change.

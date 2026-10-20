@@ -354,3 +354,78 @@ fn the_comparison_notices_each_way_the_page_can_drift() {
         "a three-column row must not paper over a dark override"
     );
 }
+
+// ── The numbers on the page ─────────────────────────────────────────────────
+
+/// The marker a count sits between: `<!--count-light-->123<!--/count-->`.
+fn marker(name: &str) -> (String, &'static str) {
+    (format!("<!--count-{name}-->"), "<!--/count-->")
+}
+
+/// The count written between the `name` markers, if the page has them.
+fn count_in(md: &str, name: &str) -> Option<usize> {
+    let (open, close) = marker(name);
+    let start = md.find(&open)? + open.len();
+    let end = start + md[start..].find(close)?;
+    md[start..end].trim().parse().ok()
+}
+
+/// `md` with the `name` count replaced by `n`.
+fn with_count(md: &str, name: &str, n: usize) -> String {
+    let (open, close) = marker(name);
+    let Some(at) = md.find(&open) else {
+        return md.to_string();
+    };
+    let start = at + open.len();
+    let Some(len) = md[start..].find(close) else {
+        return md.to_string();
+    };
+    format!("{}{n}{}", &md[..start], &md[start + len..])
+}
+
+/// "N tokens in the light block, M overrides in the dark block" is the first
+/// thing the page says about its own size, so it is read from the stylesheet
+/// and not typed. Run with `BNB_BLESS_DOC=1` to rewrite the two numbers.
+#[test]
+fn the_counts_on_the_page_are_the_stylesheets_counts() {
+    let sheet = Sheet::load();
+    let rel = "../../docs/book/reference/design-tokens.md";
+    let md = read(rel);
+    let (light, dark) = (sheet.light.len(), sheet.dark.len());
+
+    if std::env::var_os("BNB_BLESS_DOC").is_some() {
+        let blessed = with_count(&with_count(&md, "light", light), "dark", dark);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        std::fs::write(&path, blessed).expect("rewrite design-tokens.md");
+        return;
+    }
+    assert_eq!(
+        count_in(&md, "light"),
+        Some(light),
+        "design-tokens.md says a different number of light tokens than app.css declares \
+         ({light}); run `BNB_BLESS_DOC=1 cargo test -p birdnet-web --test \
+         design_tokens_doc_matches_the_stylesheet` to rewrite it"
+    );
+    assert_eq!(
+        count_in(&md, "dark"),
+        Some(dark),
+        "design-tokens.md says a different number of dark overrides than app.css declares \
+         ({dark}); run `BNB_BLESS_DOC=1 cargo test -p birdnet-web --test \
+         design_tokens_doc_matches_the_stylesheet` to rewrite it"
+    );
+}
+
+/// The counterpart: the reader and the rewriter agree, and a page with no
+/// marker reads as no number, which the test above treats as a failure and not
+/// as a pass.
+#[test]
+fn the_count_markers_read_and_rewrite() {
+    let md = "has <!--count-light-->0<!--/count--> and <!--count-dark-->7<!--/count-->.";
+    assert_eq!(count_in(md, "light"), Some(0));
+    assert_eq!(count_in(md, "dark"), Some(7));
+    let fixed = with_count(&with_count(md, "light", 312), "dark", 41);
+    assert_eq!(count_in(&fixed, "light"), Some(312));
+    assert_eq!(count_in(&fixed, "dark"), Some(41));
+    assert_eq!(count_in("no markers here", "light"), None);
+    assert_eq!(with_count("no markers here", "light", 3), "no markers here");
+}
