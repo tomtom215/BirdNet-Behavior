@@ -21,6 +21,7 @@ mod mqtt_presence;
 mod notification;
 mod probes;
 mod reminder;
+mod repeat_warning;
 mod station_health;
 mod store_forward;
 mod weather;
@@ -40,6 +41,7 @@ pub use mqtt::{MqttHandle, create_mqtt_client, get_mqtt_client_ref, publish_ha_d
 pub use mqtt_presence::spawn_mqtt_presence;
 pub use notification::{create_notification_filter, create_notification_template, station_url};
 pub use probes::notification_probes;
+pub use repeat_warning::RepeatWarning;
 pub use station_health::THERMAL_ALERT_C;
 pub use station_health::maintenance_condition;
 pub use station_health::spawn_station_health;

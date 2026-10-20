@@ -14,6 +14,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use birdnet_integrations::birdweather::{Client, DetectionPost, QUEUE_KIND};
 use birdnet_web::state::AppState;
 
+use super::RepeatWarning;
+
+/// Least time between two warnings that the queue depth cannot be read. The
+/// cycle runs every [`DRAIN_TICK`], so a database that stays locked would
+/// otherwise log a line a minute.
+const DEPTH_WARN_EVERY: Duration = Duration::from_secs(3_600);
+
 /// How often the drainer looks for due entries. Listing an empty/not-due
 /// queue is one indexed `SELECT`, so a tight-ish cadence costs nothing and
 /// rediscovers a returning uplink quickly.
@@ -42,9 +49,10 @@ pub fn spawn_birdweather_drainer(state: AppState, client: Client) {
         tracing::info!("BirdWeather store-and-forward drainer started");
         let mut tick = tokio::time::interval(DRAIN_TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut depth_warning = RepeatWarning::new(DEPTH_WARN_EVERY);
         loop {
             tick.tick().await;
-            drain_cycle(&state, &client).await;
+            drain_cycle(&state, &client, &mut depth_warning).await;
         }
     });
 }
@@ -53,7 +61,7 @@ pub fn spawn_birdweather_drainer(state: AppState, client: Client) {
 /// network failure (the uplink is evidently still down — hammering the rest
 /// of the batch would only burn radio and battery), and refresh the
 /// queue-depth gauge either way.
-async fn drain_cycle(state: &AppState, client: &Client) {
+async fn drain_cycle(state: &AppState, client: &Client, warning: &mut RepeatWarning) {
     let now = unix_now_secs();
     let queue_state = state.clone();
     let due = tokio::task::spawn_blocking(move || {
@@ -114,13 +122,39 @@ async fn drain_cycle(state: &AppState, client: &Client) {
 
     // Refresh the gauge after every pass so /metrics and the system page
     // track the backlog through outages and recovery alike.
+    //
+    // A depth that could not be read is **not** set to zero. This used to
+    // `unwrap_or(0)`, so a locked database exported "nothing is waiting" for a
+    // backlog that was exactly what an operator would be looking at the gauge
+    // for. The series keeps the last depth that was read (and does not appear
+    // at all if none ever was), and the failure is logged, throttled.
     let gauge_state = state.clone();
     let depth = tokio::task::spawn_blocking(move || {
-        gauge_state.with_db(|conn| birdnet_db::outbound_queue::depth(conn, QUEUE_KIND).unwrap_or(0))
+        gauge_state.with_db(|conn| {
+            birdnet_db::outbound_queue::depth(conn, QUEUE_KIND).map_err(|e| e.to_string())
+        })
     })
     .await
-    .unwrap_or(0);
-    state.metrics().set_outbound_queue_depth(QUEUE_KIND, depth);
+    .map_err(|e| e.to_string())
+    .and_then(|depth| depth);
+    match depth {
+        Ok(depth) => {
+            if warning.succeeded() {
+                tracing::info!("outbound queue depth can be read again");
+            }
+            state.metrics().set_outbound_queue_depth(QUEUE_KIND, depth);
+        }
+        Err(error) => {
+            if let Some(passed_over) = warning.failed(std::time::Instant::now()) {
+                tracing::warn!(
+                    error,
+                    passed_over,
+                    "outbound queue depth could not be read; the queue-depth metric keeps its \
+                     last value"
+                );
+            }
+        }
+    }
 }
 
 /// Why a parked upload must not be replayed: it was queued with a position
@@ -289,12 +323,79 @@ mod tests {
         park(&state, "Erithacus rubecula", 200.0, 3.0);
         assert_eq!(queued(&state), 3);
 
-        drain_cycle(&state, &client).await;
+        drain_cycle(&state, &client, &mut RepeatWarning::new(DEPTH_WARN_EVERY)).await;
 
         let sent = bodies.lock().unwrap().clone();
         assert_eq!(sent.len(), 1, "replayed: {sent:?}");
         assert!(sent[0].contains("Turdus merula"), "{}", sent[0]);
         assert_eq!(queued(&state), 0, "the unpublishable ones stay parked");
+    }
+
+    /// The exported depth of the `BirdWeather` queue, `None` if the series is
+    /// absent.
+    fn exported_depth(state: &AppState) -> Option<u64> {
+        state
+            .metrics()
+            .snapshot()
+            .outbound_queue
+            .into_iter()
+            .find(|(kind, _)| kind == QUEUE_KIND)
+            .map(|(_, depth)| depth)
+    }
+
+    fn idle_client() -> Client {
+        // Nothing is due in these tests, so the endpoint is never contacted.
+        Client::new("tok", 51.0, -0.1)
+            .expect("client")
+            .with_base_url("http://127.0.0.1:9/api/v1")
+    }
+
+    /// The defect: the depth read was `unwrap_or(0)`, so a database that could
+    /// not be read exported "nothing is waiting" — for the backlog the gauge
+    /// exists to show. The series keeps the last depth that was read, and is
+    /// absent if none ever was.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_queue_depth_that_could_not_be_read_is_not_exported_as_zero() {
+        // Never measured, and unreadable: the series must not appear.
+        let state = test_state();
+        state.with_db(|conn| conn.execute_batch("DROP TABLE outbound_queue;").unwrap());
+        let mut warning = RepeatWarning::new(DEPTH_WARN_EVERY);
+        drain_cycle(&state, &idle_client(), &mut warning).await;
+        assert_eq!(
+            exported_depth(&state),
+            None,
+            "an unmeasured queue was exported as a depth"
+        );
+
+        // Measured at five, then unreadable: five is still the last truth.
+        let state = test_state();
+        state.metrics().set_outbound_queue_depth(QUEUE_KIND, 5);
+        state.with_db(|conn| conn.execute_batch("DROP TABLE outbound_queue;").unwrap());
+        drain_cycle(&state, &idle_client(), &mut warning).await;
+        assert_eq!(
+            exported_depth(&state),
+            Some(5),
+            "a failed read overwrote the last depth that was read"
+        );
+    }
+
+    /// Counterpart: a queue that is read and is empty exports a real zero, and
+    /// a readable backlog is exported as it is. A fix that never set the gauge
+    /// would pass the test above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_queue_that_reads_empty_exports_zero_and_a_backlog_exports_its_depth() {
+        let state = test_state();
+        let mut warning = RepeatWarning::new(DEPTH_WARN_EVERY);
+        drain_cycle(&state, &idle_client(), &mut warning).await;
+        assert_eq!(exported_depth(&state), Some(0));
+
+        // Parked, but not due for an hour: stays queued, and is counted.
+        state.with_ingest_db(|conn| {
+            birdnet_db::outbound_queue::enqueue(conn, QUEUE_KIND, "{}", unix_now_secs() + 3_600)
+                .unwrap();
+        });
+        drain_cycle(&state, &idle_client(), &mut warning).await;
+        assert_eq!(exported_depth(&state), Some(1));
     }
 
     #[test]

@@ -517,6 +517,7 @@ pub(super) fn event_processor(
     // One post per rule and species per cooldown window; shared with the post
     // tasks so a request that never left can give its window back.
     let alert_cooldowns = crate::daemon::alert_cooldown::AlertCooldowns::default();
+    let mut alert_rules = crate::daemon::alert_rules::AlertRules::new();
     if daylight.is_enabled() {
         tracing::info!("taxon-aware daylight filter enabled");
     }
@@ -1050,9 +1051,12 @@ pub(super) fn event_processor(
 
         // Evaluate alert rules (loaded fresh for each detection to reflect UI changes).
         let rule_suppressed = state.with_db(|conn| {
-            let rules = birdnet_db::alert_rules::list_rules(conn).unwrap_or_default();
+            // The rules as just read — or, if the read failed, as last read.
+            // Defaulting a failed read to "no rules" switched every rule off
+            // for that detection, suppress rules included, and said nothing.
+            let rules = alert_rules.load(conn);
             let mut matched = birdnet_db::alert_rules::evaluate_rules(
-                &rules,
+                rules,
                 &detection.common_name,
                 f64::from(detection.confidence),
                 &detection.time,
@@ -1063,7 +1067,7 @@ pub(super) fn event_processor(
             // that matches by either name fires once.
             if shown_name != detection.common_name {
                 for rule in birdnet_db::alert_rules::evaluate_rules(
-                    &rules,
+                    rules,
                     &shown_name,
                     f64::from(detection.confidence),
                     &detection.time,
@@ -4390,6 +4394,58 @@ mod tests {
         assert!(
             hits_on(&hits, "/cooled") >= 2,
             "the first post failed and its window was never given back: {:?}",
+            hits.lock().unwrap()
+        );
+    }
+
+    /// A rule read that fails must not switch the rules off. The result used
+    /// to be `unwrap_or_default()`ed, so one locked or broken read meant "no
+    /// rules" for that detection — a suppress rule stopped suppressing, a
+    /// webhook stopped posting — with nothing in the log. The processor now
+    /// judges by the rules it last read.
+    ///
+    /// The table is made unreadable *between* two events of one running
+    /// processor, because only a processor that has already read the rules has
+    /// any to keep.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_rule_read_that_fails_keeps_the_rules_in_force() {
+        use birdnet_db::alert_rules::insert_rule;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let (port, hits) = spawn_stub_webhook_endpoint(false);
+        state.with_db(|c| {
+            insert_rule(c, &webhook_rule_to("every", port, "/every", 0)).unwrap();
+        });
+
+        let feeder_hits = std::sync::Arc::clone(&hits);
+        let feeder_state = state.clone();
+        let feeder_dir = tmp.path().to_path_buf();
+        run_processor_fed(&state, move |tx| {
+            let wait_for = |n: usize| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while hits_on(&feeder_hits, "/every") < n && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            };
+            tx.send(event_at("Strix aluco", "09:00:00", &feeder_dir))
+                .unwrap();
+            wait_for(1);
+            // The rules can no longer be read.
+            feeder_state.with_db(|c| {
+                c.execute_batch("ALTER TABLE alert_rules RENAME TO alert_rules_unreadable;")
+                    .unwrap();
+            });
+            tx.send(event_at("Strix aluco", "09:00:03", &feeder_dir))
+                .unwrap();
+            wait_for(2);
+        })
+        .await;
+
+        assert_eq!(
+            hits_on(&hits, "/every"),
+            2,
+            "the second detection was judged by no rules because their read failed: {:?}",
             hits.lock().unwrap()
         );
     }
