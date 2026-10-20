@@ -101,26 +101,43 @@ async fn load(state: AppState) -> Vec<SpeciesUsage> {
 ///
 /// Adds to the exclusion list the operator already has rather than inventing a
 /// second mechanism, the same reasoning the suspect-species report gives.
-async fn exclude(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Html<String> {
+///
+/// "Will no longer be recorded" is only said once the list was written. A list
+/// the database could not read or write is answered with a toast and the table
+/// left as it was, and is not audited.
+async fn exclude(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Form(form): Form<SpeciesForm>,
+) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return Html(table(&load(state).await, None)).into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        super::handler::add_to_exclude_list(&s, &name);
-        crate::audit::audit(
-            &s,
-            None,
-            "species.exclude.add",
-            Some(&name),
-            Some("via=species-storage"),
-        );
-    })
-    .await;
+    let result = state
+        .run_blocking(move |s| {
+            let result = super::handler::add_to_exclude_list(s, &name);
+            if result.is_ok() {
+                crate::audit::audit(
+                    s,
+                    Some(&request_user),
+                    "species.exclude.add",
+                    Some(&name),
+                    Some("via=species-storage"),
+                );
+            }
+            result
+        })
+        .await;
+    if let Err(e) = result {
+        tracing::warn!(error = %e, species = %sci_name, "species not excluded");
+        return not_applied(&Toast::error(
+            e.toast(&sci_name, "added to the exclusion list"),
+        ));
+    }
     let note = format!("{} will no longer be recorded.", escape_html(&sci_name));
-    Html(table(&load(state).await, Some(&note)))
+    Html(table(&load(state).await, Some(&note))).into_response()
 }
 
 /// `POST /admin/species/manage/detections` — remove this species' detections.

@@ -118,16 +118,40 @@ struct ExcludeForm {
 /// bird stops appearing.
 async fn exclude_phantom(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     axum::Form(form): axum::Form<ExcludeForm>,
-) -> Html<String> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+
     let sci_name = form.sci_name.trim().to_owned();
     if !sci_name.is_empty() {
-        let s = state.clone();
         let name = sci_name.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            crate::routes::admin::species::handler::add_to_exclude_list(&s, &name);
-        })
-        .await;
+        let result = state
+            .run_blocking(move |s| {
+                let result = crate::routes::admin::species::handler::add_to_exclude_list(s, &name);
+                if result.is_ok() {
+                    crate::audit::audit(
+                        s,
+                        Some(&request_user),
+                        "species.exclude.add",
+                        Some(&name),
+                        Some("via=suspect-species"),
+                    );
+                }
+                result
+            })
+            .await;
+        // The report is not re-rendered over a list that was not changed: the
+        // operator would read the unchanged row as an exclusion that failed
+        // silently, which is the one thing worse than being told.
+        if let Err(e) = result {
+            tracing::warn!(error = %e, species = %sci_name, "species not excluded");
+            return crate::routes::pages::toast::not_applied(
+                &crate::routes::pages::toast::Toast::error(
+                    e.toast(&sci_name, "added to the exclusion list"),
+                ),
+            );
+        }
         tracing::info!(species = %sci_name, "species excluded from the suspect-species report");
     }
     // An in-memory read, taken before `state` is moved into the closure.
@@ -135,7 +159,7 @@ async fn exclude_phantom(
     let loaded = tokio::task::spawn_blocking(move || load_phantoms(&state))
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
-    Html(render_phantoms_or_error(loaded, nearby.as_deref()))
+    Html(render_phantoms_or_error(loaded, nearby.as_deref())).into_response()
 }
 
 /// Render the suspect-species report.
