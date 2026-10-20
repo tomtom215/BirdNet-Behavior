@@ -324,6 +324,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A new install runs BirdNET V2.4, not the V3.0 preview.** `install.sh` and a new
+  Docker volume install V2.4 and its v2 range filter; `--classifier birdnet-v3` or
+  `BIRDNET_CLASSIFIER=birdnet-v3` chooses the V3.0 preview. A running station never
+  changes model: an existing `birdnet.conf` decides, and a Docker volume holding the
+  V3.0 file keeps it unless `BIRDNET_CLASSIFIER` is set. The files come from
+  `birdnet-behavior --install-model`, SHA-256 checked. Checked with the installer and
+  entrypoint suites on stub binaries (the Docker one seen failing against the old
+  entrypoint); not run: a container, a real `systemd`, or an upgrade from v0.17.1.
+
+- **`CONFIDENCE` defaults to 0.70, and the human-sound rule is on.** 0.70 is
+  BirdNET-Pi's own (it was 0.75). `PRIVACY_RANK` (`--privacy-rank`, default 10, `0` is
+  off) is BirdNET-Pi's rule: a window and the windows either side are dropped when a
+  human class is among the model's 10 best-scoring classes. It is on after an upgrade
+  for a station that sets neither key, works beside `PRIVACY_THRESHOLD` (off by
+  default; either suppresses) and is not on the Settings page yet. Checked against
+  BirdNET-Pi's masks with the real V2.4: 13 of 14 clips agree window for window; the
+  14th is a synthetic clip's digital-silence tail.
+
+- **V2.4 species carry BirdNET-Pi's English names.** The label file birdnet-go
+  publishes names 460 of V2.4's 6,522 classes differently ("Common Magpie" for
+  BirdNET-Pi's "Eurasian Magpie"), so an imported BirdNET-Pi history would hold one
+  species under two names. `--install-model birdnet-v24` now writes BirdNET-Pi's
+  names, built into the binary and checked against a digest; a station that already
+  installed the old file keeps it until the command is run again by hand. Through the
+  daemon, BirdNET-Pi's magpie recording stores Pica pica as "Eurasian Magpie" at
+  0.9123 / 0.9318 / 0.8864 (BirdNET-Pi's own: 0.912 / 0.9316 / 0.8857).
+
+- **`--install-model` does not fetch a file you already have.** It hashes a file
+  already under the right name and skips the download when the SHA-256 matches the
+  pinned one, and says so; a truncated or substituted file is fetched again. Before,
+  every run downloaded again (541 MB for V3.0, 84 MB for V2.4). Checked by a test
+  with an unreachable URL, seen failing with the check replaced by `false` and with
+  the digest comparison replaced by "the file can be read".
+
+- **The manual's `/dev/` is built from `main`, and each release links its own
+  manual.** On a tag push `/dev/` was built from the release tag; it now comes from
+  `DOCS_DEV_REF` (default `origin/main`). A stable release's notes link its `/vX.Y.Z/`
+  manual. Every crate tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE`,
+  checked by `scripts/check-crate-licences.py`. The documented source install is
+  `cargo install birdnet-behavior --locked` (`ort` is required as the pre-release
+  `^2.0.0-rc.14`). Nothing is published; crates.io admits five new crates at once,
+  then one per ten minutes (`RELEASING.md`). Not run: a release.
+
 - **htmx 2.0.4 → 2.0.11**, and the third-party licence notices regenerated.
   Both tarballs were checked against the registry's integrity hash; the vendored
   2.0.4 file was byte-identical to its package's `dist/htmx.min.js`, and so is the new
@@ -584,6 +627,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The frequency shift is a shift in hertz.** `--freq-shift-hz` was a ratio, documented
+  as a shift: with ffmpeg 6.1.1 an 8 kHz tone at -3000 came out at 7 500 Hz (not
+  5 000) and a 3.0 s clip at 3.2 s. Saved clips and the live stream now use
+  `afreqshift` (ffmpeg 4.3 or newer): 8 kHz at -3000 is 5 000 Hz and the length is
+  unchanged, measured on audio. The sox fallback is gone, as sox cannot shift by an
+  amount of hertz; if the shift fails the clip is saved unshifted and a warning says
+  so. A shifted WAV also lost its species, confidence and date tags; it keeps them.
+  Seen failing with the old filter pair, and with the bitexact flags removed.
+
 - **The layout gate no longer reports text that is cut off and not drawn.** On the first
   CI run of the gate (this branch added it) the A11y job failed: on a phone, the Today
   feed's "Ruby-throated Hummingbird" overlapped the play button beside it. The name is
@@ -829,7 +881,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not exist; the tuning guide gave a default of 0.7 (it is 0.75); `SF_THRESH=0` was
   labelled "disabled" while a species the occurrence model has no entry for is never
   let through; the stored `week` was called the ISO week (it is the 48-week value);
-  and the overlap docs said 3-second windows (V3.0's is 4.5 s).
+  and the overlap docs said 3-second windows (V3.0's is 4.5 s). (Two of these have
+  since changed: a new install runs V2.4, and `CONFIDENCE` defaults to 0.70; see the
+  first two entries under Changed.)
 - **Model catalogue URLs follow no branch.** `perch-v2` pointed at HuggingFace
   `resolve/main/`, so an upstream edit would have failed every install's checksum at
   once. Pinned to the revision whose LFS metadata lists the same sha256 and size;
@@ -1238,6 +1292,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The support bundle no longer carries the station's exact coordinates.**
+  `LATITUDE` and `LONGITUDE` are shown to one decimal (about 11 km) in the
+  configuration and wherever the journal printed them (BirdWeather's start-up line,
+  a settings change); a value that is not a number is masked. The bundle is written
+  to be pasted into a public issue, and four decimals are a house. A bundle made by
+  an earlier version has them exactly. `--doctor` was checked and prints neither.
+  Seen failing with the journal step replaced by a passthrough, and with the
+  configuration branch disabled.
+
 - **`duckdb` / `libduckdb-sys` 1.10506.0 → 1.10506.1, which takes the build-time `zip`
   from 6.0.0 to 9.0.5.** Three RustSec advisories against `zip` 6.0.0
   (RUSTSEC-2026-0367, -0368, -0369: `ZipArchive::extract` and
@@ -1570,7 +1633,7 @@ Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
   and with only the preflight reverted, at the rollback (preflight); the
   preflight fix without the syscall line at the rollback (SIGSYS).
 
-## [0.17.0] - 2026-09-25
+## [0.17.0] - 2026-10-03
 
 Where an entry names a test, that test was seen failing against the code
 before the fix. Each commit message says how, and names any part of its fix
@@ -8656,7 +8719,7 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
 ### Added
 
 - **`scripts/hardware-test.sh`** — an on-device acceptance harness, documented in
-  [`docs/book/field/hardware-test.md`](docs/book/field/hardware-test.md). It
+  [`docs/book/field/hardware-test.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/book/field/hardware-test.md). It
   installs from the
   published release, measures mean inference latency per 3 s chunk and peak SoC
   temperature under load, and then deliberately breaks the station — watchdog
@@ -10935,7 +10998,7 @@ only its reported version differs from 0.5.1.
   rather than 19 percentage points below it. Investigation, evidence
   and the comparison against BirdNET V2.4 (which BirdNET-Pi used and
   which still hits 93–97 % on the same WAV) live in the new ADR
-  [`docs/architecture/15-model-chunking.md`](docs/architecture/15-model-chunking.md).
+  [`docs/architecture/15-model-chunking.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/architecture/15-model-chunking.md).
 - `BirdNetModel::recommended_chunk_samples()` and
   `recommended_chunk_secs()` expose the per-model chunk size so the
   daemon can pick the right value without hard-coding model knowledge
@@ -11183,16 +11246,16 @@ x86_64 Linux.
 [0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
+[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.11.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
+[0.7.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.3.0
-[0.2.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.1.0...v0.2.0
+[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v.0.3.0...v0.4.0
+[0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v.0.3.0
 [0.1.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.1.0

@@ -22,16 +22,31 @@ will be added here.
 
 ## Reporting a vulnerability
 
-Please **do not** open a public GitHub issue, pull request, or discussion
-for suspected vulnerabilities. Instead, use one of the following private
-channels so we can coordinate disclosure:
+Please **do not** put the details of a suspected vulnerability in a public
+GitHub issue, pull request, or discussion.
 
-1. **GitHub Security Advisories (preferred).** Open a private advisory at
-   <https://github.com/tomtom215/BirdNet-Behavior/security/advisories/new>.
-2. **Email.** Send an encrypted message to the maintainer listed on the
-   repository profile, with `[birdnet-behavior security]` in the subject.
+**GitHub's private vulnerability reporting is switched off for this
+repository.** On 2026-10-20 the repository setting answered
+`{"enabled":false}` (`gh api repos/tomtom215/BirdNet-Behavior/private-vulnerability-reporting`),
+so GitHub does not offer reporters the *Security → Report a vulnerability*
+button. The `security/advisories/new` address that an earlier version of this
+file gave is the maintainers' form for drafting an advisory, not a way for a
+reporter to send one.
 
-Please include, where possible:
+Until the maintainer turns reporting on, do this:
+
+**Open an issue that contains no technical detail.** Title it "Security report —
+please contact me", say that you have one, and say how the maintainer can reach
+you privately (a GitHub profile with an email address on it, for instance). Do not
+name the component, the version or the impact in the issue. The maintainer replies
+by that route, and the details go there. No email address for security reports is
+published in this repository.
+
+That is slower and less private than an advisory, and it is the only route that
+works today. This file will name GitHub's private reporting as the preferred
+channel again once the setting is on.
+
+When the exchange is private, include, where possible:
 
 - A clear description of the issue and its impact (confidentiality,
   integrity, or availability)
@@ -40,8 +55,8 @@ Please include, where possible:
   architecture (`x86_64`, `aarch64`)
 - Any logs or screenshots that demonstrate the problem
 
-We aim to acknowledge new reports within **72 hours** and to provide a
-remediation plan within **14 days**. We will credit reporters in the
+Once a report has reached the maintainer, we aim to acknowledge it within
+**72 hours** and to provide a remediation plan within **14 days**. We will credit reporters in the
 release notes unless they request otherwise.
 
 ## Scope

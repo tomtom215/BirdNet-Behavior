@@ -17,11 +17,15 @@
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | bash
 ```
 
-Once a release publishes the `aarch64-apple-darwin` build, this downloads and
-installs it, writes a starter config under `~/Library/Application Support/birdnet-behavior/`,
-and writes a ready-to-load LaunchAgent. Until then it offers to `brew install`
-the dependencies and prints the one-time source-build steps below. A Homebrew
-formula is planned so this becomes `brew install`. Uninstall any time with
+When the release it resolves publishes an `aarch64-apple-darwin` build (v0.17.1
+does), this downloads and installs it, installs the classifier (BirdNET V2.4 and
+its range filter by default, `--classifier birdnet-v3` for the V3.0 preview; see
+[Installation](../getting-started/installation.md#which-classifier-a-new-install-runs)),
+writes a starter config under `~/Library/Application Support/birdnet-behavior/`,
+and writes a ready-to-load LaunchAgent. If that asset is missing for the version
+it resolved, it offers to `brew install` the dependencies and prints the
+one-time source-build steps below. A Homebrew formula is planned so this becomes
+`brew install`. Uninstall any time with
 [`./uninstall.sh`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/uninstall.sh)
 (`--purge` to remove data too).
 
@@ -48,7 +52,15 @@ cd BirdNet-Behavior
 cargo build --release    # analytics is a default feature; ONNX Runtime downloads on first build
 ```
 
-The binary lands at `target/release/birdnet-behavior`.
+The binary lands at `target/release/birdnet-behavior`. It does not download a
+model on its own: install one into a folder you own and point the config at it
+(`MODEL_PATH`, `LABELS_PATH` and, for the occurrence filter, `METADATA_MODEL_PATH`;
+the command prints the paths):
+
+```bash
+BIRDNET_MODEL_DIR=~/models target/release/birdnet-behavior --install-model birdnet-v24
+BIRDNET_MODEL_DIR=~/models target/release/birdnet-behavior --install-model birdnet-v24-range-v2
+```
 
 ### One-shot verification
 

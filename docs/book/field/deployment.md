@@ -31,7 +31,7 @@ Recommended baseline for unattended deployments:
 
 | Component  | Recommended                                          | Notes                                               |
 | ---------- | ---------------------------------------------------- | --------------------------------------------------- |
-| Compute    | Raspberry Pi 5 4 GB, or Pi 4 4 GB                    | Pi Zero 2 W works but is tight; enable ZRAM         |
+| Compute    | Raspberry Pi 5 4 GB, or Pi 4 4 GB                    | Pi 4, 5 and 400 are the supported boards; a Pi Zero 2 W is not a supported board (no test is recorded) and is tight on memory |
 | Storage    | 64 GB **endurance-class** microSD (Pi) or SSD on USB | Consumer SD cards fail after ~6 months of WAL churn |
 | Audio      | USB condenser mic with weatherproof housing          | Avoid Pi GPIO mics — they're noisy near the SoC      |
 | Power      | Dedicated 5V/3A PSU + UPS HAT or LiFePO4 + MPPT     | Mains glitches are a top failure cause              |
@@ -354,7 +354,7 @@ source's capture subprocess stops:
 ```bash
 journalctl -u birdnet-behavior -f
 # Expect: "recording paused (outside schedule or in quiet window)" for the source,
-# and the birdnet_audio_source_up{source=<id>} gauge drops to 0 on /metrics.
+# and the birdnet_audio_source_up{source=<id>} gauge drops to 0 on /api/v2/metrics.
 # Move the window so "now" is outside it, restart, and confirm the subprocess
 # is respawned and the gauge returns to 1.
 ```
@@ -559,7 +559,8 @@ Once the unit is sealed and shipped, the loop is:
    HTTP behind the admin login — `/admin/doctor` (rendered),
    `/admin/doctor.json` (the `--doctor-json` document) and
    `/admin/support-bundle` (the redacted archive `--support-bundle`
-   writes) — so a station can be diagnosed from a browser without SSH.
+   writes; it shows the station's coordinates to one decimal place, about
+   11 km) — so a station can be diagnosed from a browser without SSH.
 7. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
    gives you the web UI from anywhere without exposing a port to the
    open internet. Recommended over plain port-forward.
@@ -713,9 +714,7 @@ diagnostics not specific to field deployments.
 ## See also
 
 - [Troubleshooting](../guides/troubleshooting.md) — symptom-organised
-  problem solving (the fuller
-  [`TROUBLESHOOTING.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md)
-  lives in the repository)
+  problem solving (the repository's `TROUBLESHOOTING.md` is only a pointer to it)
 - [`SECURITY.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/SECURITY.md)
   — disclosure policy
 - [`docs/architecture/12-risks.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/architecture/12-risks.md)

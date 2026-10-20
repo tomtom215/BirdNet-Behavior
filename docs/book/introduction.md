@@ -2,7 +2,7 @@
 
 **Real-time acoustic bird classification with behavioral analytics — written in Rust, runs on a Raspberry Pi.**
 
-BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in real time with the BirdNET+ neural network, and serves a fast, beautiful web dashboard you open in any browser. It ships as **one self-contained binary** — the ONNX Runtime and DuckDB analytics engine are compiled in, so there's no Python, no `pip`, no virtualenv. Drop it on a modern 64-bit Pi and run it.
+BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in real time with a BirdNET neural network (BirdNET V2.4 by default), and serves a fast, beautiful web dashboard you open in any browser. It ships as **one self-contained binary** — the ONNX Runtime and DuckDB analytics engine are compiled in, so there's no Python, no `pip`, no virtualenv. Drop it on a modern 64-bit Pi and run it.
 
 ![The BirdNet-Behavior dashboard](./images/dashboard.png)
 
@@ -10,7 +10,7 @@ BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in 
 
 | If you want to… | Go to |
 |---|---|
-| Get it running in two commands | [Installation](./getting-started/installation.md) |
+| Get it running in one command | [Installation](./getting-started/installation.md) |
 | Run it in a container | [Running with Docker](./getting-started/docker.md) |
 | Understand the settings | [Configuration](./getting-started/configuration.md) |
 | Learn what each screen does | [Today](./guide/today.md) |
@@ -19,7 +19,7 @@ BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in 
 
 ## Why a rewrite?
 
-BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It keeps everything BirdNET-Pi does and adds behavioral analytics, a redesigned UI, MQTT/Home Assistant integration, and a much lighter runtime.
+BirdNet-Behavior is a rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi) in Rust, derived from it and licensed accordingly. It keeps everything BirdNET-Pi does and adds behavioral analytics, a redesigned UI, MQTT/Home Assistant integration, and a much lighter runtime.
 
 | Aspect | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
 |---|---|---|
@@ -30,7 +30,7 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 | Analytics | — | DuckDB behavioral engine, built in |
 | Each release ships | — | signed SLSA provenance + CycloneDX SBOM |
 
-> It is a **clean rewrite, not a fork.** See [Credits & License](./about.md) for full attribution.
+> It is a **rewrite of BirdNET-Pi in Rust, derived from it and licensed accordingly** (the repository's `LICENSE` says "derived from"). See [Credits & License](./about.md) for full attribution.
 
 ## A modern, two-audience interface
 

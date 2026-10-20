@@ -2,15 +2,17 @@
 
 ## Is it accurate? Which model does it use?
 
-It uses the **BirdNET+ V3.0** preview model, the successor to the BirdNET V2.4 network that BirdNET-Pi and birdnet-go run. It is a *different* model: it hears 4.5-second windows rather than 3, reports calibrated probabilities rather than raw scores, and covers about 11 500 species rather than 6 500, so its detections are not BirdNET-Pi's and are not meant to be. If you need the same detections BirdNET-Pi gives for the same audio, install V2.4 and set the settings as BirdNET-Pi sets them: see [Same audio, same detections](./parity.md), which also says what was measured. The V3.0 model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, falling back to Zenodo (the upstream source) if that asset is unavailable.
+A new install uses **BirdNET V2.4** with its v2 occurrence filter — the network BirdNET-Pi and birdnet-go run — and BirdNET-Pi's own defaults (`CONFIDENCE` 0.70, `SENSITIVITY` 1.25, and the human-sound rule on). [Same audio, same detections](./parity.md) says what was measured against BirdNET-Pi's own code and where the two still differ. The **BirdNET+ V3.0** preview is a *different* model, an explicit choice (`--classifier birdnet-v3`): it hears 4.5-second windows rather than 3, reports calibrated probabilities rather than raw scores, and covers about 11 500 species rather than 6 500, so its detections are not BirdNET-Pi's and are not meant to be. Up to v0.17.1 V3.0 was installed for everyone, and a station that already runs it keeps it: no install or update changes a running station's model.
+
+The V2.4 files (about 85 MB) are installed on the first run, each checked against a SHA-256 compiled into the binary; see [Installation](../getting-started/installation.md#which-classifier-a-new-install-runs) for where they come from. The V3.0 files (541 MB, plus a 14 MB occurrence model) come from this project's model release, with Zenodo as the fallback.
 
 ## Do I need a Raspberry Pi?
 
-No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended; the Pi 4B/400 are fully supported, and the 3B+ works on the **64-bit** Pi OS (tight on RAM — see [Hardware](../getting-started/hardware.md)). There's no Python interpreter or virtualenv overhead around the model, so it's happy on modest hardware.
+No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended and the Pi 4B and 400 are supported; older boards such as the 3B+ and Zero 2 W are not supported targets (see [Hardware](../getting-started/hardware.md)). There's no Python interpreter or virtualenv overhead around the model, so it's happy on modest hardware.
 
 ## Does it work offline / without internet?
 
-Yes, once set up. The only things that need the network are the **one-time model download**, optional **Wikipedia photo** caching, and any **notification/upload** channels you enable. The UI itself is fully self-contained — all fonts are embedded in the binary and it never calls out to a CDN.
+Yes, once set up. The only things that need the network are the **one-time model install**, optional **Wikipedia photo** caching, and any **notification/upload** channels you enable. The UI itself is fully self-contained — all fonts are embedded in the binary and it never calls out to a CDN.
 
 ## Does it need a camera, or just a microphone?
 
@@ -74,7 +76,7 @@ level it was given cannot reject anything. See
 
 ## Do I need anything special for behavioral analytics?
 
-No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source it is a default Cargo feature — `--no-default-features` leaves it out. On a very low-RAM board you can turn it off by passing an *empty* path, `--analytics-db ""` in the unit or `BIRDNET_ANALYTICS_DB: ""` in a compose override — removing the flag only falls back to `<database>.duckdb`; see [TROUBLESHOOTING.md §5](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md#5-memory--cpu-pressure-on-small-hardware).)
+No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source it is a default Cargo feature — `--no-default-features` leaves it out. On a very low-RAM board you can turn it off by passing an *empty* path, `--analytics-db ""` in the unit or `BIRDNET_ANALYTICS_DB: ""` in a compose override — removing the flag only falls back to `<database>.duckdb`; see [Troubleshooting](./troubleshooting.md#memory-and-cpu-pressure-on-small-hardware).)
 
 ## Can I use it commercially?
 
@@ -88,4 +90,4 @@ No. BirdNet-Behavior is licensed **CC BY-NC-SA 4.0**, matching upstream BirdNET 
 
 ## It's not detecting anything — what now?
 
-Almost always an audio-source problem. Run `birdnet-behavior --doctor` (or open `/admin/doctor` behind the admin login), confirm a source is set and reachable, and check the level meter on [Audio & Microphones](../admin/audio.md). The [Troubleshooting](./troubleshooting.md) guide has step-by-step recipes.
+Almost always an audio-source problem. Run `birdnet-behavior --doctor` (as the account the service runs as; or open `/admin/doctor` behind the admin login), confirm a source is set and reachable, and check the level meter on [Audio & Microphones](../admin/audio.md). The [Troubleshooting](./troubleshooting.md) guide has step-by-step recipes.

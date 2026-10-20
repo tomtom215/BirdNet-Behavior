@@ -29,7 +29,7 @@ Current maintainer: Tom F. ([@tomtom215](https://github.com/tomtom215)).
 
 ## Relationship to upstream
 
-BirdNet-Behavior is a clean rewrite derived from BirdNET-Pi and uses the
+BirdNet-Behavior is a rewrite of BirdNET-Pi in Rust, derived from it and licensed accordingly, and uses the
 BirdNET model published by the K. Lisa Yang Center for Conservation
 Bioacoustics (Cornell) and Chemnitz University of Technology. We track the
 upstream model licensing (CC BY-NC-SA 4.0) and do not relicense it; issues

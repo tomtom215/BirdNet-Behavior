@@ -2,7 +2,36 @@
 
 Your station always runs one classifier — BirdNET, the thing that makes it a BirdNET station. This page is about running a **second** one beside it, and what the station does with two opinions about the same three seconds of audio.
 
-You do not need this. One classifier is the supported, tested, default configuration, and most stations should stay there. Read on if you are in the tropics, where Google Perch v2 is materially better than BirdNET, or if you want a second opinion recorded on every detection.
+You do not need this. One classifier is the supported, tested, default configuration, and most stations should stay there. Read on if you are in the tropics, where Google Perch v2 is materially better than BirdNET, or if you want a second opinion recorded on every detection. The first section is about the one classifier every station has: which one a new station gets, and what changing it involves.
+
+## Choosing and changing the primary classifier
+
+A new install runs **BirdNET V2.4 with its range (occurrence) filter v2**, the network BirdNET-Pi and birdnet-go run; **BirdNET+ V3.0 preview** (a different network, with its own geomodel as the occurrence filter) is an explicit choice. The two are never mixed: the V2.4 range filter is indexed like the V2.4 labels and means nothing to another network, and the geomodel is matched by name through its own label file.
+
+| Where | Choose V3.0 on a new station | What decides an existing station |
+|---|---|---|
+| Bare metal | `install.sh --classifier birdnet-v3`, or `BIRDNET_CLASSIFIER=birdnet-v3` | the classifier `/etc/birdnet/birdnet.conf` names; a `--classifier` that disagrees is reported as not applied |
+| Docker | `BIRDNET_CLASSIFIER=birdnet-v3` in `.env` | the V3.0 model file already on the volume (an explicit `BIRDNET_CLASSIFIER` overrides it) |
+| macOS | the same installer flag | the same rule as bare metal |
+
+On bare metal the rule, first match: an existing config keeps the classifier it names (only a config whose `MODEL_PATH` is the V2.4 file the installer manages counts as V2.4; every other existing config is treated as V3.0, because that is what every earlier install fetched); otherwise `--classifier`, then `BIRDNET_CLASSIFIER`; otherwise, if the V3.0 model file is already in the model folder (a station restored from a backup of its data without its config), V3.0; otherwise V2.4. One `Classifier:` line in the install output says which was chosen and why. [Installation](../getting-started/installation.md#which-classifier-a-new-install-runs) and [Running with Docker](../getting-started/docker.md) have the details and say where the files come from.
+
+**Changing a running station is deliberate, never automatic.** No install, update, repair or reinstall does it, because the history would then hold rows two different networks scored. Rows already stored keep their old scores and names, and a species the two label files name differently appears under both names. If you do want to change:
+
+1. Install the other classifier's files (see *Installing one* below).
+2. Point the station at them in its configuration, then restart and run `birdnet-behavior --doctor`. Moving to V2.4:
+
+   ```ini
+   MODEL_PATH=<model dir>/birdnet-v24.onnx
+   LABELS_PATH=<model dir>/birdnet-v24_labels.txt
+   METADATA_MODEL_PATH=<model dir>/birdnet-v24-range-v2.onnx
+   # no METADATA_LABELS_PATH: the range filter needs none, so remove a geomodel's label file from here
+   ```
+
+   with `CONFIDENCE`, `SENSITIVITY` and `PRIVACY_RANK` as [Same audio, same detections](../guides/parity.md) describes. In Docker, set `BIRDNET_CLASSIFIER=birdnet-v24` instead and recreate the container.
+3. Moving the other way (V2.4 to V3.0) has no one-line recipe here: the V3.0 files and their pins are named in `installer/lib/10-config.sh`, and `install.sh --classifier birdnet-v3` is only for a new station. In Docker, `BIRDNET_CLASSIFIER=birdnet-v3` is enough.
+
+These steps were read from the installer and the container entrypoint and their tests, not run end to end on a station.
 
 ## What a second classifier buys, and what it costs
 
@@ -25,19 +54,29 @@ birdnet-behavior --install-model list
 To install one:
 
 ```bash
-birdnet-behavior --install-model perch-v2
+# Docker: BIRDNET_MODEL_DIR is already /data/model in the container
+docker compose exec birdnet birdnet-behavior --install-model perch-v2
+
+# Bare metal: the installer's model folder is <data dir>/models, but --install-model
+# writes to /data/model unless BIRDNET_MODEL_DIR (or MODEL_DIR in birdnet.conf) says
+# otherwise. Name the folder, and run as the service user, who owns it:
+SVC=$(systemctl show -p User --value birdnet-behavior)
+sudo -u "$SVC" env BIRDNET_MODEL_DIR="$(getent passwd "$SVC" | cut -d: -f6)/BirdNet-Behavior/models" \
+    birdnet-behavior --install-model perch-v2
 ```
+
+There is no `birdnet` user on a bare-metal station: the installer runs the service as the account that ran `sudo`, and `systemctl show -p User --value birdnet-behavior` prints it.
 
 What it can install:
 
 | id | what | it replaces or joins |
 |---|---|---|
-| `birdnet-v3` | BirdNET+ V3.0 preview, the station's default | the primary |
-| `birdnet-v24` | BirdNET V2.4, the network BirdNET-Pi and birdnet-go run (48 kHz, 3 s windows) | **replaces** the primary: it cannot run beside V3.0, because a recording is resampled once and the two want different rates |
-| `birdnet-v24-range-v2` | the V2.4 species-occurrence filter | `METADATA_MODEL_PATH`, with V2.4 only |
+| `birdnet-v3` | BirdNET+ V3.0 preview, 32 kHz, 4.5 s windows: an explicit choice for a new station (it was the default up to v0.17.1) | the primary; it cannot run beside V2.4, which wants 48 kHz |
+| `birdnet-v24` | BirdNET V2.4, the network BirdNET-Pi and birdnet-go run (48 kHz, 3 s windows), with the label file written by the binary itself (below). The default for a new station | **replaces** the primary: it cannot run beside V3.0, because a recording is resampled once and the two want different rates |
+| `birdnet-v24-range-v2` | the V2.4 species-occurrence filter, v2 (BirdNET-Pi's default is v1, which is not hosted as ONNX and so is not in the catalogue) | `METADATA_MODEL_PATH`, with V2.4 only |
 | `perch-v2` | Google Perch v2 | runs **beside** the primary |
 
-To make a station report what BirdNET-Pi would, install `birdnet-v24` and `birdnet-v24-range-v2` and follow [Same audio, same detections](../guides/parity.md).
+The installers do this for you on a new station (V2.4 and its range filter). To make an older station report what BirdNET-Pi would, install `birdnet-v24` and `birdnet-v24-range-v2` and follow [Same audio, same detections](../guides/parity.md).
 
 This runs in the foreground and exits — deliberately. It is a several-hundred-megabyte download that takes hours on the uplink a field station has, and you should be able to watch it, interrupt it, and see it fail. There is no button in the web interface for the same reason: a multi-hour download inside a request handler has nowhere to report progress, and a retry would start a second download beside the first.
 
@@ -47,7 +86,11 @@ Three things it does before and while it downloads:
 - **Verifies as the bytes arrive.** The sha256 of each file is compiled into the binary — not fetched alongside it — so the checksum is a promise this project makes rather than one the download site makes. The digest is computed while streaming, so a 541 MB model never has to fit in a 1 GB board's memory at once.
 - **Never leaves a half-file the station would load.** Unverified bytes carry a `.part` name; the file is renamed into place only after its digest matches.
 
-Files land in `MODEL_DIR` (`BIRDNET_MODEL_DIR`, default `/data/model`). The same catalogue is readable over the API at `GET /api/v2/models/catalog`.
+Running it again is cheap: a file already in place whose sha256 matches is **not fetched again** (the command says so, and skips the free-space check for it), while a truncated or substituted file under the right name is fetched afresh. A download that is interrupted starts over; it does not resume.
+
+Files land in the folder named by `BIRDNET_MODEL_DIR`, else `MODEL_DIR` in the config file, else `/data/model`. The same catalogue is readable over the API at `GET /api/v2/models/catalog`.
+
+**Where the files come from.** `birdnet-v3` and the Perch model are fetched from the URLs in the catalogue; `birdnet-v24` is the model from birdnet-go's published ONNX build on Hugging Face at a pinned revision, and `birdnet-v24-range-v2` the range filter from the `tphakala/birdnet-go` repository at a pinned commit. The V2.4 **labels are not downloaded**: the binary writes `birdnet-v24_labels.txt` itself, verified against a digest, with BirdNET-Pi's English names on V2.4's class order. birdnet-go's own label file, which the model is published with, names 460 of the 6 522 classes differently from BirdNET-Pi (Pica pica is "Eurasian Magpie" in one and "Common Magpie" in the other), and a station that imported a BirdNET-Pi history would otherwise hold one species under two names. A station that already has the older label file keeps it, because the installers skip a file that is present; run `birdnet-behavior --install-model birdnet-v24` yourself to replace it (the labels are always rewritten from the binary, the model that already verifies is not fetched again), then restart. The three files a V2.4 station has are `birdnet-v24.onnx`, `birdnet-v24_labels.txt` and `birdnet-v24-range-v2.onnx`.
 
 > Perch v2 ships **without a labels file**. You must supply one with 14 795 rows. Labels are positional against a model's output, so the wrong file reports species under other species' names at full confidence — a failure with no symptom at all.
 
@@ -62,9 +105,10 @@ MODEL_ID=birdnet
 MODEL_THRESHOLD=
 MODEL_SAMPLE_RATE=
 
-# The second classifier. Each needs its OWN labels file.
-MODEL_2_PATH=/data/model/perch-v2.onnx
-MODEL_2_LABELS=/data/model/perch_labels.csv
+# The second classifier. Each needs its OWN labels file. (<model dir> is
+# /data/model in Docker and <data dir>/models on bare metal.)
+MODEL_2_PATH=<model dir>/perch-v2.onnx
+MODEL_2_LABELS=<model dir>/perch_labels.csv
 MODEL_2_ID=perch
 MODEL_2_THRESHOLD=0.35
 MODEL_2_SAMPLE_RATE=32000

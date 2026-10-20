@@ -32,9 +32,11 @@ for the monitoring playbook.
 For a deeper, scriptable check, run the diagnostic from the CLI. It prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk space, tool dependencies and network — each problem with a concrete suggested fix.
 
 ```bash
-sudo -u birdnet birdnet-behavior --doctor          # bare metal
-docker compose exec birdnet birdnet-behavior --doctor   # Docker
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --doctor   # bare metal
+docker compose exec birdnet birdnet-behavior --doctor                                     # Docker
 ```
+
+(On bare metal the service runs as the account that ran the installer; there is no `birdnet` user, and the `systemctl show` call prints that account.)
 
 Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
 
@@ -43,6 +45,36 @@ For monitoring (Nagios / Zabbix / a Home Assistant command sensor / a Prometheus
 ```bash
 birdnet-behavior --doctor-json | jq .
 ```
+
+### The support bundle
+
+`birdnet-behavior --support-bundle [PATH]` (or **Download a support bundle** at `/admin/support-bundle`, behind the admin login) writes one `.tar.gz` holding the diagnostic report (`doctor.json` and `doctor.txt`), the station's version, a **redacted** copy of the configuration (`config.redacted`), the last 2000 journal lines, the station's own `errors.jsonl` (warnings and errors that survive a reboot), and `uname -a` and `df -h`; the download from the web UI also carries `recent.log`, the live log view's buffer. That is what a maintainer asks for in the first three replies to a bug report. Passwords, tokens and URL credentials are masked. **The station's `LATITUDE` and `LONGITUDE` are shown to one decimal place (about 11 km)** in the configuration section, and wherever the journal printed them (BirdWeather's start-up line, a settings change) the exact values are replaced by the same coarse form; a value that is not a number is masked. One decimal says which hemisphere, which season's daylight and which region's species, which is all a diagnosis needs; four decimals are a house. The bundle is written to be pasted into a public issue, but read it before you post it all the same. (Earlier builds printed the coordinates exactly.)
+
+### Before an upgrade: `--migration-report`
+
+Most database migrations only add columns and indexes. A few rewrite rows that are already on disk and cannot be undone from inside the database; migration 24, which folds each detection's chunk offset into its timestamp, is the one that has done so. `--migration-report` says what the next start would do to your history, before it does it:
+
+```bash
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --migration-report   # bare metal
+docker compose exec birdnet birdnet-behavior --migration-report                                     # Docker
+```
+
+For each pending migration that rewrites rows it prints what would move, by how much, how many rows are left alone and why, and the date range involved. It opens the database read-only and changes nothing, so it is safe on a live station. If there is no database yet it says so and stops; if no pending migration rewrites rows it says that, adding that schema-only migrations may still be pending.
+
+The rewrite itself happens on the next normal start, and just before it the database is copied to `<db>.pre-migration-<version>.backup`, so undoing it is a file move. The copy needs about as much free space as the database. A backup that cannot be written stops the migration rather than proceeding without one; a station whose disk cannot hold the copy can set `BIRDNET_SKIP_MIGRATION_BACKUP=1` and accept that the earlier timestamps cannot be recovered (see [Configuration](../getting-started/configuration.md)).
+
+### The species totals: `--rebuild-species-summary`
+
+The species list and the per-species charts read a maintained table of totals (`species_summary`) rather than counting the whole history on every page load. It is derived data. `--rebuild-species-summary` recomputes it from the detections and exits:
+
+```bash
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --rebuild-species-summary   # bare metal
+docker compose exec birdnet birdnet-behavior --rebuild-species-summary                                     # Docker
+```
+
+It prints how many species-per-hour buckets it rebuilt and how many had disagreed with the detections beforehand, and the detections themselves are not touched. If the summary still disagrees after a full rebuild it exits with an error rather than reporting success, which means something is writing to `detections` in a way the summary's triggers cannot see.
+
+You should rarely need it. `--doctor` reports a disagreement under "Species summary" and names this command, and the running station also checks for one once a day and, when it finds drift, rebuilds the summary itself.
 
 ## How much memory the analytics engine gets
 

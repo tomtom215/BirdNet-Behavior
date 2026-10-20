@@ -6,7 +6,7 @@ Plain-English definitions for the terms you'll meet around the dashboard.
 
 **Banding code** — the four-letter shorthand ornithologists use for a species (e.g. **NOCA** = Northern Cardinal, **AMRO** = American Robin). BirdNet-Behavior shows it in each species' colored avatar.
 
-**BirdNET / BirdNET+** — the neural network that identifies birds from sound, developed by the Cornell Lab of Ornithology. "BirdNET+ V3.0" is the specific model version this app uses.
+**BirdNET / BirdNET+** — the neural network that identifies birds from sound, developed by the Cornell Lab of Ornithology. This app runs BirdNET V2.4 by default (the network BirdNET-Pi runs) and can run the "BirdNET+ V3.0" preview instead; see [Installation](../getting-started/installation.md#which-classifier-a-new-install-runs).
 
 **Co-occurrence** — how often two species are heard in the same five-minute block of the same day, as a share of the blocks in which either was heard (their *overlap*, from 0 to 1). Two birds that are merely common are not a strong pair; two that are nearly always heard together are. It is association, not a test against chance. See [Behavioral Analytics](../guide/analytics.md).
 

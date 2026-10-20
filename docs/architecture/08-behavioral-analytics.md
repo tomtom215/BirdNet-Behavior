@@ -7,9 +7,8 @@
 - [Concept](#concept)
 - [Currently Implemented Analytics](#currently-implemented-analytics)
 - [duckdb-behavioral Functions](#duckdb-behavioral-functions)
-- [Implementation Status](#implementation-status)
 - [API Endpoints](#api-endpoints)
-- [Web UI Visualizations](#web-ui-visualizations)
+- [Web UI](#web-ui)
 - [Data Preparation](#data-preparation)
 
 ---

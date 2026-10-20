@@ -11,8 +11,9 @@ bad config value, disk almost full, model not yet downloaded). Run it
 before anything else:
 
 ```bash
-# Bare metal
-sudo -u birdnet birdnet-behavior --doctor
+# Bare metal: the service runs as the account that ran the installer (there is
+# no "birdnet" user); this prints that account and runs the doctor as it
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --doctor
 
 # Docker
 docker compose exec birdnet birdnet-behavior --doctor
@@ -29,7 +30,8 @@ issue.
 ## 2. Search before you ask
 
 - [Open and closed issues](https://github.com/tomtom215/BirdNet-Behavior/issues?q=is%3Aissue)
-- [Discussions](https://github.com/tomtom215/BirdNet-Behavior/discussions)
+- The [troubleshooting guide](docs/book/guides/troubleshooting.md), which
+  [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) points to
 - The `Troubleshooting` section of [`README.md`](README.md#troubleshooting)
 - The architecture documents under [`docs/architecture/`](docs/architecture/),
   in particular [`12-risks.md`](docs/architecture/12-risks.md) and
@@ -41,9 +43,14 @@ issue.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Report a bug                             | [Open an issue](https://github.com/tomtom215/BirdNet-Behavior/issues/new/choose) — bug form     |
 | Suggest a feature                        | [Open an issue](https://github.com/tomtom215/BirdNet-Behavior/issues/new/choose) — feature form |
-| Ask a how-to question                    | [Discussions](https://github.com/tomtom215/BirdNet-Behavior/discussions)                         |
-| Share a build / station / mod            | [Discussions](https://github.com/tomtom215/BirdNet-Behavior/discussions)                         |
-| Report a security vulnerability          | [Private security advisory](https://github.com/tomtom215/BirdNet-Behavior/security/advisories/new) — see [`SECURITY.md`](SECURITY.md) |
+| Ask a how-to question                    | [Open an issue](https://github.com/tomtom215/BirdNet-Behavior/issues/new/choose) and say it is a question (see the note below) |
+| Share a build / station / mod            | [Open an issue](https://github.com/tomtom215/BirdNet-Behavior/issues/new/choose) and say what it is |
+| Report a security vulnerability          | Not through a public issue. GitHub's private reporting is **off** at the moment — [`SECURITY.md`](SECURITY.md) says what to do instead |
+
+> GitHub Discussions are not enabled for this repository (the REST API answered
+> `has_discussions: false` on 2026-10-20), so older versions of this file that
+> pointed questions there pointed at a page that does not exist. If the maintainer
+> turns them on, how-to questions belong there.
 
 ## 4. What to include in a bug report
 
@@ -58,6 +65,15 @@ fill them in:
   digest from `docker image inspect`)
 - Last ~50 lines of `journalctl -u birdnet-behavior` or
   `docker compose logs birdnet`
+
+`birdnet-behavior --support-bundle` (also `/admin/support-bundle` behind the
+admin login) collects the report, the version, a redacted configuration and the
+last 2000 journal lines into one `.tar.gz`. Passwords, tokens and URL
+credentials are masked, and **the station's `LATITUDE` and `LONGITUDE` are shown
+to one decimal place (about 11 km)** in the configuration section and wherever
+the journal printed them: enough to say which hemisphere, season and region the
+station is in, not enough to find a house. Read the archive before posting it in
+a public issue all the same.
 
 ## 5. Response expectations
 

@@ -1,8 +1,10 @@
 # Credits & License
 
+Who built what this project stands on, and the terms it is released under; read this before reusing the software or its data, or if you are the author of one of the projects named.
+
 ## Lineage & attribution
 
-BirdNet-Behavior stands on the shoulders of the conservation-bioacoustics community. It is a **clean rewrite, not a fork.**
+BirdNet-Behavior stands on the shoulders of the conservation-bioacoustics community. It is a **rewrite of BirdNET-Pi in Rust, derived from it and licensed accordingly** (the repository's `LICENSE` says it "is derived from and inspired by" the upstream works below).
 
 - **[BirdNET](https://github.com/kahst/BirdNET-Analyzer)** — the ML model, by the K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab of Ornithology.
 - **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** — the original Raspberry Pi implementation, by [Patrick McGuire](https://github.com/mcguirepr89).

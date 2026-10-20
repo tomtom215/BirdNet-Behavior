@@ -353,8 +353,13 @@ station can be listened to. The id is kept on the detection row
 (`birdweather_soundscape_id`). If the clip cannot be uploaded the detection
 still goes, without it. Posts are stamped with the station's local time and
 its UTC offset. `algorithm` is sent only for a model BirdWeather has a name
-for (`2p4`, the V2.4 classifier); the shipped V3.0 model is left unnamed rather
-than mislabelled.
+for (`2p4`, the V2.4 classifier), and the code decides that from the classifier
+file's name without its extension: it must contain `V2.4`, as BirdNET-Pi's
+`BirdNET_GLOBAL_6K_V2.4_Model_FP16` does. The V3.0 preview is left unnamed
+rather than mislabelled. The file `--install-model birdnet-v24` writes is
+`birdnet-v24.onnx`, whose name does not contain `V2.4`, so by that rule a
+station on the default classifier sends no `algorithm`. That is read from
+`algorithm_for_model` and `model_name_of`, not observed against BirdWeather.
 
 Uploads are **resilient to a flaky uplink**: a post that fails after its
 in-flight retries is parked in the local database and replayed **oldest-first**
