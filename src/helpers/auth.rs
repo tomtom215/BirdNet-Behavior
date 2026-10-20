@@ -156,6 +156,17 @@ fn record_applied(marker: &std::path::Path, env_pwd: &str) {
     }
 }
 
+/// Whether the admin account has no password yet: the state in which the
+/// station's admin pages are open.
+///
+/// A database error reads as "not open": a warning that the station is open,
+/// printed because a read failed, would be a claim the station cannot support.
+fn admin_is_open(state: &AppState) -> bool {
+    state
+        .with_db(|conn| conn.find_user_by_name("admin"))
+        .is_ok_and(|admin| accounts::is_legacy_password_hash(&admin.pwd_argon2))
+}
+
 /// Run the one-shot admin-row password bootstrap. Idempotent across
 /// restarts.
 pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
@@ -163,6 +174,18 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         tracing::debug!(
             "CADDY_PWD unset or empty in both config and environment; bootstrap skipped"
         );
+        if admin_is_open(state) {
+            // The one line a container's owner reads: `docker compose up` with a
+            // hand-made `.env` publishes the port on every interface and sets no
+            // password, so until somebody finishes the first-run wizard, anyone
+            // who can reach the port chooses the admin password.
+            tracing::warn!(
+                "no admin password is set: /admin and the first-run setup are open to anyone \
+                 who can reach this station, and whoever finishes the setup first chooses the \
+                 password. Open the station in a browser and finish the setup now, or set \
+                 CADDY_PWD"
+            );
+        }
         return;
     };
 
@@ -440,6 +463,17 @@ mod tests {
             "the open window's session survived the station acquiring a password"
         );
         assert!(!accounts::is_legacy_password_hash(&admin_hash(&state)));
+    }
+
+    /// The start-up warning is printed for a station with no password and for
+    /// no other: a fresh database is open, and one whose owner has chosen a
+    /// password (the wizard, the Accounts page, `CADDY_PWD`) is not.
+    #[test]
+    fn a_station_is_open_until_it_has_a_password() {
+        let (_d, state) = fixture();
+        assert!(admin_is_open(&state), "a fresh station has no password");
+        change_on_the_accounts_page(&state, &pw("chosen-in-the-wizard"));
+        assert!(!admin_is_open(&state), "a chosen password closes it");
     }
 
     /// A password made per run, because the `CodeQL` query on hard-coded
