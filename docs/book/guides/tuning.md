@@ -19,7 +19,7 @@ If you're getting both at once, it's almost always an **audio** problem (wind, c
 
 The minimum score (0–1) a detection must clear to be logged. This is your main dial.
 
-- **Default 0.75** (BirdNET-Pi's is 0.7). Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
+- **Default 0.70**, which is BirdNET-Pi's own (it was 0.75 up to v0.17.1). Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
 - Lower toward **0.5–0.6** only if you're confident your audio is clean and you want maximum recall.
 - Set it at `/admin/settings → Detection`.
 
@@ -40,14 +40,19 @@ The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.con
 - **Lower (→0.5)** is a *steeper* curve: strong calls score higher and more of them clear the bar.
 - The default, 1.25, is a slope of 0.75: the same figure BirdNET-Pi gives a station with its defaults. A magpie whose raw score is 3.12 reads 91.2 % here and there.
 - Most stations leave this at the default and tune the confidence threshold instead. Reach for sensitivity only when the threshold alone can't find a good balance.
-- It only affects BirdNET V2.4 models; the bundled V3.0 model reports calibrated probabilities and ignores it.
+- It only affects BirdNET V2.4 models; the BirdNET+ V3.0 preview reports calibrated probabilities and ignores it.
 - birdnet-go's setting of the same name is the slope itself (its default, 1.0, is a plain sigmoid). To carry a birdnet-go value across, enter `2 − value`.
 
 ### 4. Species-frequency (SF) filter
 
 Uses your **location** and the **week of the year** to drop birds that shouldn't plausibly be present (no penguins in your back garden in July). The `SF_THRESH` (default `0.03`) sets how aggressive that prior is.
 
-It needs three things: your coordinates, the BirdNET geomodel, and that model's own label file. The installer and the Docker entrypoint fetch the last two (~14 MB) and wire them up, so on a current install the only thing you supply is the location.
+It needs your coordinates and an occurrence model that matches the classifier:
+
+- **BirdNET V2.4** (the default for a new install) pairs with the **range filter v2**, `birdnet-v24-range-v2.onnx` (about 30 MB). It is indexed like the V2.4 labels, so it needs **no label file of its own**.
+- **BirdNET+ V3.0** pairs with the **BirdNET geomodel** and that model's own label file (about 14 MB together).
+
+The two pairs are never mixed. The installer and the Docker entrypoint fetch the right one and wire it up, so on a current install the only thing you supply is the location. The rest of this section is mostly about the geomodel pair, because that is the one with a second label file to align.
 
 **Check it is actually on** &mdash; `SF_THRESH` does nothing by itself:
 
@@ -56,12 +61,12 @@ $ birdnet-behavior --doctor | grep occurrence
 [ PASS ] Species occurrence filter - active - .../BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx ...
 ```
 
-A `WARN` there names whichever of the three is missing. The geomodel download is deliberately non-fatal: a station without it still detects, it just stops filtering by location, and re-running `install.sh repair` picks it up later.
+(That line is a V3.0 station's; a V2.4 station's names the range filter and says it is indexed against the classifier's labels.) A `WARN` there names whichever of the missing pieces it needs: the model, or the coordinates. The geomodel download is deliberately non-fatal: a station without it still detects, it just stops filtering by location, and re-running `install.sh repair` picks it up later.
 
 | Setting | `birdnet.conf` | Environment | Flag |
 |---|---|---|---|
-| Geomodel | `METADATA_MODEL_PATH` | `BIRDNET_METADATA_MODEL` | `--metadata-model` |
-| Its label file | `METADATA_LABELS_PATH` | `BIRDNET_METADATA_LABELS` | `--metadata-labels` |
+| Occurrence model (the range filter, or the geomodel) | `METADATA_MODEL_PATH` | `BIRDNET_METADATA_MODEL` | `--metadata-model` |
+| Its label file (the geomodel only) | `METADATA_LABELS_PATH` | `BIRDNET_METADATA_LABELS` | `--metadata-labels` |
 | Extra name aliases | `SPECIES_ALIASES_PATH` | `BIRDNET_SPECIES_ALIASES` | `--species-aliases` |
 
 The model takes `(latitude, longitude, week)` and returns one occurrence probability per species. **It does not score the same species list as the classifier** &mdash; the geomodel covers 12 012 species across birds, mammals, insects, amphibians and reptiles, where the V3.0 Global 11K classifier emits 11 560 &mdash; so the label file is what maps one list onto the other.

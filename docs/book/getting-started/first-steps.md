@@ -31,7 +31,7 @@ If you'd like a guided setup, open **`/onboarding`** for a six-step wizard — l
 
 The **Microphone** step reports the capture source your station is actually configured with, read from its own settings — it does not change it (**Settings → Capture** owns that, with the full ALSA/RTSP handling). If nothing is configured, it says so plainly, because a station with no source detects nothing.
 
-The **Accuracy** step sets the minimum confidence a detection needs before it is recorded. It defaults to **0.75**, deliberately a little above BirdNET-Pi's 0.70: high enough that the log reads as realistic rather than padded with marginal IDs, low enough that quiet and distant birds still get recorded. Change it there, or later under **Settings → Capture → Detection Settings** (where per-species thresholds also live).
+The **Accuracy** step sets the minimum confidence a detection needs before it is recorded. It defaults to **0.70**, which is BirdNET-Pi's own default (it was 0.75 up to v0.17.1), so that a station nobody has customised stores the rows BirdNET-Pi stores for the same audio. Raise it to cut marginal IDs, lower it to catch fainter birds. Change it there, or later under **Settings → Capture → Detection Settings** (where per-species thresholds also live).
 
 ![The wizard's detection-accuracy step](../images/onboarding-accuracy.png)
 
@@ -40,8 +40,9 @@ The **Accuracy** step sets the minimum confidence a detection needs before it is
 At any time you can run the built-in diagnostic, which prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk, and network — each problem with a concrete suggested fix:
 
 ```bash
-# Bare metal
-sudo -u birdnet birdnet-behavior --doctor
+# Bare metal: the service runs as the account that ran the installer (there is
+# no "birdnet" user); this prints that account and runs the doctor as it
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --doctor
 
 # Docker
 docker compose exec birdnet birdnet-behavior --doctor

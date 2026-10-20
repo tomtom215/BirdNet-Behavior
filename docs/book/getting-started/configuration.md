@@ -1,17 +1,17 @@
 # Configuration
 
-Settings are read in this priority order (highest wins):
+A setting can come from four places. When more than one names the same setting, this is the order (highest wins):
 
 ```text
-CLI flag (or its BIRDNET_* env var)  >  /etc/birdnet/birdnet.conf  >  built-in defaults
+CLI flag or its BIRDNET_* variable  >  the Settings page  >  /etc/birdnet/birdnet.conf  >  built-in default
 ```
 
-A CLI flag and its matching `BIRDNET_*` environment variable are the **same**
-setting — the env var is the flag's default, so set one or the other, not both.
-The `birdnet.conf` INI keys (kept for BirdNET-Pi compatibility) are consulted
-only when neither the flag nor the env var is given.
+That is one rule, and the rest of the manual means it: the [Settings page](../admin/settings.md#how-a-setting-is-resolved) says the same, and the code that does it is `src/cli.rs` and `src/helpers/settings_overlay.rs`.
 
-On top of that, a **SQLite settings table** managed through the web UI at **`/admin/settings`** is the canonical place for everything that has no CLI flag or env var — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, quarantine rules, and so on. You do **not** need to touch any of these to get started.
+- **A CLI flag and its `BIRDNET_*` variable are the same setting** (the binary reads the variable when the flag is absent), so set one or the other. Either counts as *explicit* and beats the Settings page for good: a Docker station started with `-e BIRDNET_SEGMENT_DURATION=30` keeps 30 whatever that field of the page says.
+- **The Settings page** is the SQLite `settings` table, edited at `/admin/settings`; it is also the canonical place for everything that has no flag or variable — the detection confidence threshold, per-species thresholds, sensitivity, email SMTP, quarantine rules, and so on. You do **not** need to touch any of these to get started. Each key in `birdnet.conf` (and each value passed as a flag or variable at install time) is **copied into the table the first time the station sees it** — insert-only, so nothing you saved on the page is ever overwritten. Once a key has a row there, editing that key in the file changes nothing: the page's value is the one used. (That is why changing `LATITUDE` in the file does not move a station that has already started once: change it on the page.) Most values saved on the page take effect at the next restart.
+- **`birdnet.conf`** (kept for BirdNET-Pi compatibility) supplies the settings the page has no field for, and the first value of those it has.
+- **A setting with no field on the page** skips that level: the flag or variable, else the file, else the default. `PRIVACY_RANK` is one of these today (a field is planned).
 
 ## Environment variables & CLI flags
 
@@ -43,7 +43,8 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | — | — | `EBIRD_DIST_KM` | `25` (0–50; the radius asked about when using coordinates) |
 | — | — | `EBIRD_BACK_DAYS` | `14` (1–30; days of eBird history to ask about) |
 | `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` (no effect without a metadata model) |
-| `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
+| `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` (off). The model's confidence for a human sound at or above which a window is suppressed (typically 0.01–0.03). **Not** BirdNET-Pi's `PRIVACY_THRESHOLD`, which is a percentage: use `PRIVACY_RANK` below for BirdNET-Pi's rule |
+| `BIRDNET_PRIVACY_RANK` | `--privacy-rank` | `PRIVACY_RANK` | `10` (`0` = off, up to 12000). BirdNET-Pi's human-sound rule: a window, and the windows either side of it, are suppressed when a human class ranks in the model's top *N* classes, read before the detection threshold. **On by default, including on a station that never set it.** Either this rule or `PRIVACY_THRESHOLD` suppresses a window. Not yet a field on the Settings page. For a BirdNET-Pi `PRIVACY_THRESHOLD` of `p`, use `max(10, 60 × p)` here and `0` there — see [Same audio, same detections](../guides/parity.md#moving-an-existing-station-to-birdnet-pis-results) |
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
 | — | — | `NOISE_REMEMBER_SECS` | `0.0` (off; keeps suppressing the species a bark produced for this long after it — see [tuning](../guides/tuning.md#7-barking-dogs-and-other-non-birds)) |
@@ -153,18 +154,18 @@ connections**, so you can confirm it rather than infer it.
 
 ## Web-UI-only settings
 
-These are stored in the SQLite settings table and have no environment variable or command-line flag; a few also have a `birdnet.conf` key, noted beside them. That key is copied into the settings table on the station's first run; after that the value saved on the page is the one the station uses. Set them at `/admin/settings` — see [Settings & Detection](../admin/settings.md).
+These are stored in the SQLite settings table and have no environment variable or command-line flag; a few also have a `birdnet.conf` key, noted beside them. That key is copied into the settings table the first time the station sees it; after that the value saved on the page is the one the station uses. Set them at `/admin/settings` — see [Settings & Detection](../admin/settings.md).
 
 | Setting | Where | Note |
 |---|---|---|
-| Detection confidence threshold | Detection | Also `CONFIDENCE` in `birdnet.conf`; per-species overrides also live here |
-| Detection sensitivity (0.5–1.5) | Detection | Also `SENSITIVITY` in `birdnet.conf`; read as written, which is not how BirdNET-Pi applies it — see [Settings](../admin/settings.md) |
+| Detection confidence threshold | Detection | Also `CONFIDENCE` in `birdnet.conf`; default `0.70` (BirdNET-Pi's; it was 0.75 up to v0.17.1). Per-species overrides also live here |
+| Detection sensitivity (0.5–1.5) | Detection | Also `SENSITIVITY` in `birdnet.conf`; default `1.25`. It means what it means in BirdNET-Pi on a V2.4 model and is ignored by V3.0 — see [Settings](../admin/settings.md) |
 | Email / SMTP notifications | Notifications | |
 | Rare-bird quarantine rules | Species | |
 | BirdWeather station details | BirdWeather | Token can also be set via env var |
 
 > **Retention is off by default.** Nothing is deleted by age unless you ask for it: set **Keep Clip Audio (days)** in the UI (`CLIP_RETENTION_DAYS`) to reclaim the audio of older detections. Independently of that, the disk manager purges the oldest recordings once the disk hits `DISK_PURGE_THRESHOLD` (default 95%) and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species. Pin clips you want to keep with the **lock** action on any detection — locked clips are never purged by either limit.
 >
-> All three limits, plus the temporary streaming folder's retention and size ceiling, can be set from **Settings → General → System & Display** in the web UI; you never have to edit a config file to change them. A value given on the command line or as a `BIRDNET_*` variable wins over the UI, which in turn wins over the config file.
+> All three limits, plus the temporary streaming folder's retention and size ceiling, can be set from **Settings → General → System & Display** in the web UI; you never have to edit a config file to change them. A value given on the command line or as a `BIRDNET_*` variable wins over the UI, which in turn wins over the config file (the order at the top of this page).
 >
 > When a clip is purged the detection itself is kept — its filename and the date the audio was reclaimed stay on the record, so counts, species lists, trends and exports are unaffected. Only the audio goes.
