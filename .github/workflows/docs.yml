@@ -30,6 +30,14 @@ name: Docs
 # is what keeps old versions published — and keeps them reproducible. A
 # release tag push triggers a deploy, so the root moves to a release the
 # moment it is tagged.
+#
+# `/dev/` is built from `origin/main`, not from the checkout: on a tag push the
+# checkout *is* the tag, and building `/dev/` from it published the release's
+# own manual as "dev" until the next push to `main`. A pull request is the one
+# run that must build its own tree (it deploys nothing, and exists to grade the
+# change), so it sets `DOCS_DEV_REF=HEAD`. `scripts/check-ci-config.py` reads
+# that setting; `scripts/test-build-versioned-docs.sh` runs the build script
+# against synthetic tags before the real build does.
 
 on:
   push:
@@ -41,6 +49,7 @@ on:
       - "docs/book-theme/**"
       - "book.toml"
       - "scripts/build-versioned-docs.sh"
+      - "scripts/test-build-versioned-docs.sh"
       - "scripts/check-book-links.py"
       - ".github/workflows/docs.yml"
   pull_request:
@@ -49,6 +58,7 @@ on:
       - "docs/book-theme/**"
       - "book.toml"
       - "scripts/build-versioned-docs.sh"
+      - "scripts/test-build-versioned-docs.sh"
       - "scripts/check-book-links.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
@@ -59,7 +69,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Every non-PR build shares one group, whatever its ref: each builds the
     # *whole* site, so a `main` push that started before a release tag was
     # pushed must not deploy after the tag's run and move the root back to the
@@ -80,8 +90,13 @@ jobs:
           # Every release tag is rebuilt from its own sources.
           fetch-depth: 0
           fetch-tags: true
+      - name: Self-test the versioned-docs script
+        # Synthetic tags and a stub mdbook: seconds, no network. It is what
+        # shows `/dev/` coming from `main` on a tag run, and a pull request's
+        # build still grading the pull request.
+        run: bash scripts/test-build-versioned-docs.sh
       - name: Install mdBook
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }}
       - name: Build every version, link-checking each
@@ -90,6 +105,11 @@ jobs:
         # shipped documentation the first time it ran, which the 0.4 backend
         # had been passing, and later a "Suggest an edit" link on every page
         # that pointed at a path doubled by mdBook 0.5's `{path}`.
+        env:
+          # `/dev/` is main's manual on every run that publishes. A pull
+          # request deploys nothing and builds its own tree instead, or this
+          # job would stop grading the change it runs for.
+          DOCS_DEV_REF: ${{ github.event_name == 'pull_request' && 'HEAD' || 'origin/main' }}
         run: ./scripts/build-versioned-docs.sh docs/.book-build
       # Pages packaging is deploy-only: a pull request has no Pages token and
       # nothing to publish, so these steps would fail or waste a run.
@@ -103,7 +123,7 @@ jobs:
   deploy:
     needs: build
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15  # observed 11s
     permissions:
       contents: read

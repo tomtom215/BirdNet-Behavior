@@ -45,6 +45,12 @@ they get their own gate.
 
          python3 scripts/check-ci-config.py --update-observed
 
+     A job measured at or under a minute neither needs one nor is held to one
+     (`DRIFT_FLOOR_SECONDS`): run to run, the 7-25 s jobs vary by 2-3x, and the
+     check went red on `main` for `fmt # observed 18s` against 10s while every
+     annotation that mattered was right. `check_observed_rule` runs the rule
+     over fixtures in both directions on every run.
+
   6. A job that is not running the toolchain it is named for. The `msrv` job
      installed Rust 1.95 with `dtolnay/rust-toolchain@1.95`, which only runs
      `rustup default`; `rust-toolchain.toml` says `channel = "stable"`, and
@@ -104,14 +110,17 @@ CI they say loudly that they are skipping rather than passing silently.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import glob
+import io
 import json
 import os
 import re
 import statistics
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -122,6 +131,7 @@ import yaml
 MUTATION_WORKFLOW = ".github/workflows/mutation.yml"
 CI_WORKFLOW = ".github/workflows/ci.yml"
 RELEASE_WORKFLOW = ".github/workflows/release.yml"
+DOCS_WORKFLOW = ".github/workflows/docs.yml"
 
 # Matrix rows may omit `package`; the workflow falls back to this.
 DEFAULT_PACKAGE = "birdnet-core"
@@ -521,6 +531,36 @@ DURATION = re.compile(r"^(?:(\d+)m)?(\d+)s$")
 # 2.11x. A line at 1.5x sits in that gap with room on both sides.
 DRIFT_TOLERANCE = 1.5
 
+# Below this a job's duration is not something an annotation can usefully be
+# wrong about, so it is neither required nor compared.
+#
+# What the annotation is for: `timeout-minutes` is a whole number of minutes,
+# sized against how long the job really takes, and a reader of the file should
+# be able to see how far apart the two are. Incident 5 was annotations that
+# said 54s for 8m52s and 10m42s for 22m37s — a budget justified by a figure
+# that was never true. A job that takes under a minute has no budget that
+# figure could justify (the smallest is 60s) and no growth toward one to hide,
+# and it is the one kind of job whose run time is mostly noise: on main, in
+# the five-run window, `fmt` took 9, 9, 10, 16 and 23s, `cargo-machete` 7 and
+# 19s, `shellcheck` 13 and 20s, `third-party licence notices` 13 and 23s — up to
+# 2.7x between two runs — while `cargo-deny` (50, 61s) and `cargo-audit` (146,
+# 177s) sat within 1.2x of themselves. At 1.5x the short ones could not hold an
+# annotation still: four of the nine most recent `CI config` jobs on main went
+# red. Two of them (15 and 19 October) failed on nothing but jobs under a
+# minute — `fmt # observed 18s` against 10s, `cargo-machete 15s` against 9s,
+# and `osv`, `scorecard`, `third-party licence notices` and `publishable`
+# (15-42s) having no annotation yet. The other two also carried real findings
+# (long jobs drifted by 1.5-6x, a 14-minute job with no annotation, a shard at
+# 77% of its budget), which this leaves alone.
+#
+# So the line is one minute: a job whose measured median is at or under it
+# needs no annotation, and an annotation is held to the tolerance only when
+# the claim or the measurement is over it. 8m for a 20s job and 5s for a 90s
+# job are still findings; 18s for a 10s job is not. The headroom check
+# (incident 4) is untouched — it compares worst runs against the budget and has
+# no such noise problem.
+DRIFT_FLOOR_SECONDS = 60
+
 
 def format_duration(seconds: float) -> str:
     """Render seconds in the annotation format already used in these files."""
@@ -541,10 +581,33 @@ def has_drifted(claimed_seconds: float, actual_seconds: float,
     Symmetric: an annotation claiming far *more* than the job takes is as
     untrue as one claiming far less, even though only the second direction
     hides a job growing toward its timeout.
+
+    Two durations that are both at or under [`DRIFT_FLOOR_SECONDS`] have not
+    drifted: the claim cannot mislead about a budget of whole minutes, and the
+    measurement is noise at that size. The floor is read here, at call time.
     """
+    if max(claimed_seconds, actual_seconds) <= DRIFT_FLOOR_SECONDS:
+        return False
     if min(claimed_seconds, actual_seconds) <= 0:
         return claimed_seconds != actual_seconds
     return max(claimed_seconds, actual_seconds) / min(claimed_seconds, actual_seconds) > tolerance
+
+
+def annotation_verdict(claimed: str | None, actual_seconds: float) -> str:
+    """What is wrong, if anything, with one job's `# observed` annotation.
+
+    `ok`, or one of `missing` (the job takes longer than the floor and says
+    nothing), `unreadable` (the text is not a duration) or `drifted`. A job at
+    or under the floor owes no annotation; one it has is judged by
+    [`has_drifted`]. Shared by the check, the regenerator and the self-test, so
+    the three cannot disagree about what a finding is.
+    """
+    if claimed is None:
+        return "missing" if actual_seconds > DRIFT_FLOOR_SECONDS else "ok"
+    seconds = parse_duration(claimed)
+    if seconds is None:
+        return "unreadable"
+    return "drifted" if has_drifted(seconds, actual_seconds) else "ok"
 
 
 def annotation_lines(path: str) -> list[tuple[int, str, int, str | None]]:
@@ -1034,6 +1097,99 @@ def check_actions_are_pinned(workflows_glob: str = ".github/workflows/*.yml") ->
           f"{len(files)} workflows, {toolchain_uses} of them dtolnay/rust-toolchain)")
 
 
+def check_docs_publish_main_as_dev(docs_path: str = DOCS_WORKFLOW) -> None:
+    """docs.yml builds `/dev/` from main on a tag push, and from the PR on a PR.
+
+    `scripts/build-versioned-docs.sh` built `/dev/` from HEAD. On a release-tag
+    push HEAD is the tag, so the site's "development" manual was the release's
+    own until the next push to `main`. The script now takes `DOCS_DEV_REF`
+    (default `origin/main`) and the workflow decides per event: a pull request
+    builds its own tree, because that build exists to grade the change and
+    deploys nothing, and everything else builds main.
+
+    Both halves matter and either alone is a silent failure: a workflow that
+    sets nothing is correct only because the script's default is, and one that
+    sets `HEAD` everywhere is the original bug. So the expression is read back
+    for each kind of event rather than checked for being present.
+    """
+    print("\ndocs.yml publishes main as /dev/ and gates a pull request on its own tree")
+    spec = yaml.safe_load(open(docs_path))
+    steps = spec["jobs"]["build"]["steps"]
+    builds = [st for st in steps
+              if re.search(r"(?<!test-)build-versioned-docs\.sh", str(st.get("run", "")))]
+    check(len(builds) == 1, f"{docs_path} has one step that runs build-versioned-docs.sh "
+                            f"(found {len(builds)})")
+    if len(builds) != 1:
+        return
+    expr = str((builds[0].get("env") or {}).get("DOCS_DEV_REF", ""))
+    m = re.fullmatch(
+        r"\$\{\{\s*github\.event_name == 'pull_request' && '([^']+)' \|\| '([^']+)'\s*\}\}", expr)
+    check(m is not None,
+          f"DOCS_DEV_REF is `<pull_request> && 'X' || 'Y'` (found {expr!r})")
+    if m is not None:
+        check(m.group(1) == "HEAD",
+              f"a pull request builds /dev/ from its own checkout (found {m.group(1)!r})")
+        check(m.group(2) == "origin/main",
+              f"every other event builds /dev/ from origin/main (found {m.group(2)!r})")
+    # The counterpart: the self-test must still be wired in front of the build.
+    check(any("test-build-versioned-docs.sh" in str(st.get("run", "")) for st in steps),
+          f"{docs_path} runs the script's self-test before the real build")
+
+
+def check_release_notes_link_the_versions_manual(release_path: str = RELEASE_WORKFLOW) -> None:
+    """A stable release's body links the manual built from that tag.
+
+    docs.yml publishes `/vX.Y.Z/` for every stable tag, and nothing pointed a
+    reader of the Release at it: the notes carried install and verification
+    steps and no link to the manual they install. The link is written inside the
+    tail block that the step measures before it budgets the changelog, so it
+    cannot push the body over GitHub's 125,000-character limit, and it is
+    guarded on `is_prerelease` because docs.yml builds nothing for `vX.Y.Z-rc.N`
+    and the link would 404.
+    """
+    print("\nA stable release's notes link that version's own manual")
+    spec = yaml.safe_load(open(release_path))
+    steps = spec["jobs"]["github-release"]["steps"]
+    run = next((str(st.get("run", "")) for st in steps
+                if st.get("name") == "Assemble final release notes"), "")
+    check(bool(run), "release.yml has the 'Assemble final release notes' step")
+    if not run:
+        return
+    check(re.search(r"DOCS_URL=\"https://[^\"]*github\.io/[^\"]*/v\$\{VERSION\}/\"", run) is not None,
+          "the step builds the version's manual URL (…github.io/<repo>/v${VERSION}/)")
+    guarded = re.search(
+        r'if \[\[ "\$IS_PRE" != "true" \]\]; then\s+echo "## Documentation".*?\$\{DOCS_URL\}.*?\n\s*fi\b',
+        run, re.S)
+    check(guarded is not None,
+          "the link sits in a '## Documentation' section guarded on a stable release")
+    # It must be inside the block written to tail_notes.md, the part the step
+    # measures, not appended after the budget was decided.
+    tail = run.split("} > tail_notes.md", 1)[0]
+    check("${DOCS_URL}" in tail,
+          "the link is inside tail_notes.md, so the changelog's budget accounts for it")
+
+
+def check_runners_are_pinned(workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """No job runs on a `-latest` runner image.
+
+    `ubuntu-latest` moves to a new Ubuntu on GitHub's schedule, and a toolchain
+    that built yesterday can fail tomorrow with nothing in the diff — incident 9,
+    one level down. docs.yml was the one workflow still on it (every other job
+    names `ubuntu-24.04`, or `macos-14`, or a matrix value).
+    """
+    print("\nNo job runs on a moving runner image (incident 9)")
+    seen = 0
+    for path in sorted(glob.glob(workflows_glob)):
+        for name, job in (yaml.safe_load(open(path)).get("jobs") or {}).items():
+            target = job.get("runs-on")
+            if not isinstance(target, str):
+                continue
+            seen += 1
+            check(not target.endswith("-latest"),
+                  f"{path}::{name} runs on {target!r}, not a -latest image")
+    check(seen >= 20, f"the reader found the runners it is judging ({seen})")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -1100,6 +1256,112 @@ def check_headroom_arithmetic() -> None:
     check(budget_for("Nope", {"Build": 20}) is None, "an unknown name has no budget")
 
 
+def check_observed_rule() -> None:
+    """The `# observed` rule, run over fixtures in both directions (incident 5).
+
+    Needs no API access, so it runs everywhere the rest of the file does. The
+    figures are real: the first group is what `main` measured on the jobs that
+    kept failing the check for being a few seconds off (`fmt` 9-23s against an
+    annotation of 18s, `cargo-machete` 15s against 9s) or for having no
+    annotation yet (`OSV scan` at 26s); the second is what the check exists to
+    catch — the annotations that had rotted by 2x to 10x (`Clippy` `54s` for a
+    real 8m52s, `Tests` `10m42s` for 22m37s), a job that takes minutes and says
+    nothing, and a claim far above a short job.
+
+    Both groups are asserted. A rule that flagged everything would fail the
+    first and one that flagged nothing would fail the second, so neither a blanket
+    alarm nor a blanket pass satisfies this. Checked by setting
+    `DRIFT_FLOOR_SECONDS = 0`, which is the rule as it was: the first group fails.
+    """
+    print("\n`# observed` annotations: noise on short jobs passes, rot does not (incident 5)")
+    fixture = (
+        "name: fixture\n"
+        "jobs:\n"
+        "  fmt:\n"
+        "    name: Format (rustfmt)\n"
+        "    timeout-minutes: 10  # observed 18s\n"
+        "  machete:\n"
+        "    name: cargo-machete\n"
+        "    timeout-minutes: 10  # observed 15s\n"
+        "  osv:\n"
+        "    name: OSV scan\n"
+        "    timeout-minutes: 10\n"
+        "  tests:\n"
+        "    name: Tests (x86_64)\n"
+        "    timeout-minutes: 45  # observed 10m42s\n"
+        "  clippy:\n"
+        "    name: Clippy\n"
+        "    timeout-minutes: 30  # observed 54s\n"
+        "  audit:\n"
+        "    name: cargo-audit\n"
+        "    timeout-minutes: 20\n"
+        "  tiny:\n"
+        "    name: Tiny\n"
+        "    timeout-minutes: 10  # observed 8m00s\n"
+    )
+    # Job name -> seconds per run (the last five completed runs on main).
+    samples = {
+        "Format (rustfmt)": [23, 9, 9, 10, 16],       # median 10s
+        "cargo-machete": [19, 7, 9],                  # median 9s
+        "OSV scan": [26],
+        "Tests (x86_64)": [1357, 1357, 1357],         # 22m37s
+        "Clippy": [532, 532, 532],                    # 8m52s
+        "cargo-audit": [177, 146, 160],               # median 2m40s
+        "Tiny": [20],
+    }
+    noise = {"fmt": "ok", "machete": "ok", "osv": "ok"}
+    rot = {"tests": "drifted", "clippy": "drifted", "audit": "missing", "tiny": "drifted"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "fixture.yml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(fixture)
+        jobs = [(path, key, name, 10)
+                for key, name in [("fmt", "Format (rustfmt)"), ("machete", "cargo-machete"),
+                                  ("osv", "OSV scan"), ("tests", "Tests (x86_64)"),
+                                  ("clippy", "Clippy"), ("audit", "cargo-audit"),
+                                  ("tiny", "Tiny")]]
+        runtimes = {path: {name: [s / 60 for s in secs] for name, secs in samples.items()}}
+
+        def verdicts() -> dict[str, str | None]:
+            return {key: verdict for _p, key, _c, _a, verdict
+                    in annotation_findings(jobs, runtimes)}
+
+        got = verdicts()
+        for key, want in noise.items():
+            check(got.get(key) == want,
+                  f"noise on a short job is not a finding: {key} -> {got.get(key)!r} (want {want!r})")
+        for key, want in rot.items():
+            check(got.get(key) == want,
+                  f"rot is still a finding: {key} -> {got.get(key)!r} (want {want!r})")
+
+        # The regenerator follows the same rule: it repairs what is wrong, and
+        # leaves a short job's annotation (and its absence) as written.
+        with contextlib.redirect_stdout(io.StringIO()):
+            update_observed(jobs, runtimes)
+        text = open(path, encoding="utf-8").read()
+        check("timeout-minutes: 10  # observed 18s" in text and "OSV scan\n    timeout-minutes: 10\n" in text,
+              "--update-observed leaves short jobs as written (no churn, none added)")
+        check("# observed 22m37s" in text and "# observed 8m52s" in text
+              and "# observed 2m40s" in text and "# observed 20s" in text,
+              "--update-observed repairs the drifted and fills in the missing")
+        check(all(v == "ok" for v in verdicts().values()),
+              "after regeneration every annotation passes the rule it was written by")
+
+    # The boundary, in terms of the constant so that retuning it moves both
+    # sides together: at the floor nothing can have drifted, one second over it
+    # the tolerance applies again.
+    below, above = DRIFT_FLOOR_SECONDS, DRIFT_FLOOR_SECONDS + 1
+    check(not has_drifted(5, below), f"5s against {below}s is not a finding (both under a minute)")
+    check(has_drifted(5, above), f"5s against {above}s is (the measurement is over a minute)")
+    check(has_drifted(below * 8, 20), "8 minutes claimed for a 20s job is (the claim is over a minute)")
+    check(annotation_verdict(None, below) == "ok" and annotation_verdict(None, above) == "missing",
+          "an annotation is owed above the floor, not at it")
+    check(annotation_verdict("soon", 300) == "unreadable", "text that is not a duration is refused")
+    check(has_drifted(54, 532) and has_drifted(642, 1357),
+          "the two annotations that rotted in incident 5 are still caught")
+
+
 def check_duration_headroom(jobs: list[tuple[str, str, str, int]],
                             runtimes: dict[str, dict[str, list[float]]]) -> None:
     """Compare what each job actually took against the budget it declares."""
@@ -1122,35 +1384,48 @@ def check_duration_headroom(jobs: list[tuple[str, str, str, int]],
         skip(f"{unseen} job(s) had no completed run in the last {RUNS_SAMPLED} per workflow")
 
 
+def annotation_findings(
+    jobs: list[tuple[str, str, str, int]],
+    runtimes: dict[str, dict[str, list[float]]],
+) -> list[tuple[str, str, str | None, float | None, str | None]]:
+    """`(path, job key, claimed, measured seconds, verdict)` per job-level timeout.
+
+    The verdict is [`annotation_verdict`]'s, or None where there is no run
+    history to judge by. Pure apart from reading the workflow files, so the
+    self-test can run the whole rule over fixture files.
+    """
+    found = []
+    for path in sorted({p for p, _, _, _ in jobs}):
+        for _i, key, _budget, claimed in annotation_lines(path):
+            actual = median_seconds(path, key, jobs, runtimes)
+            found.append((path, key, claimed, actual,
+                          None if actual is None else annotation_verdict(claimed, actual)))
+    return found
+
+
 def check_observed_annotations(jobs: list[tuple[str, str, str, int]],
                                runtimes: dict[str, dict[str, list[float]]]) -> None:
     """Every `# observed` annotation still describes the job it annotates."""
     print("\nEvery `# observed` annotation is still true (incident 5)")
+    print(f"  ..    jobs measured at or under {DRIFT_FLOOR_SECONDS}s are neither "
+          f"required to carry one nor compared")
     stale = 0
-    for path in sorted({p for p, _, _, _ in jobs}):
-        for _i, key, _budget, claimed in annotation_lines(path):
-            actual = median_seconds(path, key, jobs, runtimes)
-            if actual is None:
-                # Nothing to compare against, and nothing to claim either: an
-                # annotation is only owed where there is run history.
-                if claimed:
-                    skip(f"{path}::{key} claims {claimed} but has no recent run to check it")
-                continue
-            if claimed is None:
-                check(False, f"{path}::{key} has no `# observed` annotation "
-                             f"(it runs {format_duration(actual)})")
-                stale += 1
-                continue
-            seconds = parse_duration(claimed)
-            if seconds is None:
-                check(False, f"{path}::{key} annotation {claimed!r} is not a duration")
-                stale += 1
-                continue
-            drifted = has_drifted(seconds, actual)
-            check(not drifted,
-                  f"{path}::{key} `# observed {claimed}` vs measured "
-                  f"{format_duration(actual)}")
-            stale += drifted
+    for path, key, claimed, actual, verdict in annotation_findings(jobs, runtimes):
+        if actual is None or verdict is None:
+            # Nothing to compare against, and nothing to claim either: an
+            # annotation is only owed where there is run history.
+            if claimed:
+                skip(f"{path}::{key} claims {claimed} but has no recent run to check it")
+            continue
+        measured = format_duration(actual)
+        if verdict == "missing":
+            check(False, f"{path}::{key} has no `# observed` annotation (it runs {measured})")
+        elif verdict == "unreadable":
+            check(False, f"{path}::{key} annotation {claimed!r} is not a duration")
+        elif claimed is not None:
+            check(verdict == "ok",
+                  f"{path}::{key} `# observed {claimed}` vs measured {measured}")
+        stale += verdict != "ok"
     if stale:
         print(f"\n  {stale} annotation(s) are stale. They are generated, not "
               f"hand-written:\n      python3 scripts/check-ci-config.py "
@@ -1159,7 +1434,12 @@ def check_observed_annotations(jobs: list[tuple[str, str, str, int]],
 
 def update_observed(jobs: list[tuple[str, str, str, int]],
                     runtimes: dict[str, dict[str, list[float]]]) -> int:
-    """Rewrite every `# observed` annotation from measured run history."""
+    """Rewrite each `# observed` annotation that is missing or has drifted.
+
+    An annotation that is still true is left as written, however far it sits
+    from today's median: rewriting every line on every run made a diff of noise
+    on every job under a minute. A job at or under the floor is not given one.
+    """
     written = 0
     for path in sorted({p for p, _, _, _ in jobs}):
         lines = open(path).read().split("\n")
@@ -1169,6 +1449,8 @@ def update_observed(jobs: list[tuple[str, str, str, int]],
             if actual is None:
                 if claimed:
                     print(f"  keep  {path}::{key} # observed {claimed} (no recent run)")
+                continue
+            if annotation_verdict(claimed, actual) == "ok":
                 continue
             new_line = f"    timeout-minutes: {budget}  # observed {format_duration(actual)}"
             if lines[i] != new_line:
@@ -1230,7 +1512,11 @@ def main(argv: list[str] | None = None) -> int:
     check_named_lockfiles_are_tracked()
     check_fuzz_targets_are_run()
     check_workflows_readme()
+    check_docs_publish_main_as_dev()
+    check_release_notes_link_the_versions_manual()
+    check_runners_are_pinned()
     check_headroom_arithmetic()
+    check_observed_rule()
 
     for job in unresolved:
         skip(f"{job}: name or timeout does not render without a matrix value")
