@@ -107,6 +107,48 @@ fn the_range_is_the_validators() {
     );
 }
 
+/// The browser enforces `min`/`max` before the server is asked: htmx will not
+/// submit a form whose number input is out of its own range. The input said 5 to
+/// 60 while `validate()` accepts 3 to 600, so a station whose file holds a valid
+/// `SEGMENT_DURATION` of 120 (or 3) could not save *anything* on that form until
+/// the field was changed to something the daemon was not running on. The page
+/// states the validator's bounds, read from the same constants.
+#[tokio::test]
+async fn the_input_allows_exactly_what_the_validator_allows() {
+    let (_dir, state) = station();
+    let (status, page) = send(
+        &state,
+        Request::builder()
+            .uri("/admin/settings")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let at = page
+        .find(r#"id="segment_duration""#)
+        .expect("the Segment Duration input is on the page");
+    let tag = &page[at..at + page[at..].find('>').expect("the tag ends")];
+    let attr = |name: &str| -> u64 {
+        let key = format!(r#" {name}=""#);
+        let from = tag
+            .find(&key)
+            .unwrap_or_else(|| panic!("no {name} in {tag}"))
+            + key.len();
+        tag[from..from + tag[from..].find('"').expect("closing quote")]
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} is not a number in {tag}"))
+    };
+    assert_eq!(
+        (attr("min"), attr("max")),
+        (
+            birdnet_core::config::validate::SEGMENT_DURATION_MIN,
+            birdnet_core::config::validate::SEGMENT_DURATION_MAX
+        ),
+        "the input would refuse a length the station accepts: {tag}"
+    );
+}
+
 #[tokio::test]
 async fn a_length_the_station_cannot_use_is_refused_and_nothing_is_written() {
     // 0, 1 and 2 are shorter than one analysis window; 601 and 100000 are
