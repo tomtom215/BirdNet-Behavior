@@ -33,10 +33,12 @@
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::response::Html;
+use axum::response::{Html, IntoResponse as _, Response};
 use axum::{Form, Router, routing::get, routing::post};
 use serde::Deserialize;
 
+use crate::auth_middleware::RequestUser;
+use crate::routes::pages::toast::{Toast, not_applied};
 use crate::state::AppState;
 use birdnet_db::sqlite::{BulkOutcome, SpeciesUsage};
 
@@ -122,34 +124,52 @@ async fn exclude(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -
 }
 
 /// `POST /admin/species/manage/detections` — remove this species' detections.
+///
+/// A delete the database refused is answered with a toast and the table left
+/// as it was ([`not_applied`]), not with "0 detections removed": that sentence
+/// is a claim about the station's data, and "the write failed" is a different
+/// claim. Nor is it audited as a delete of nothing: the audit log records what
+/// changed, and a refused write changed nothing.
 async fn delete_detections(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Form(form): Form<SpeciesForm>,
-) -> Html<String> {
+) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return Html(table(&load(state).await, None)).into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        let outcome = s
-            .with_db(|conn| birdnet_db::sqlite::delete_species_detections(conn, &name))
-            .unwrap_or_default();
-        crate::audit::audit(
-            &s,
-            None,
-            "species.detections.delete",
-            Some(&name),
-            Some(&format!(
-                "deleted={} locked_kept={}",
-                outcome.affected, outcome.locked_skipped
-            )),
-        );
-        outcome
-    })
-    .await
-    .unwrap_or_default();
+    let result = state
+        .run_blocking(move |s| {
+            let result =
+                s.with_db(|conn| birdnet_db::sqlite::delete_species_detections(conn, &name));
+            match &result {
+                Ok(outcome) => crate::audit::audit(
+                    s,
+                    Some(&request_user),
+                    "species.detections.delete",
+                    Some(&name),
+                    Some(&format!(
+                        "deleted={} locked_kept={}",
+                        outcome.affected, outcome.locked_skipped
+                    )),
+                ),
+                // Nothing was deleted, so nothing is audited as a delete: the
+                // log records what changed, and `warn` (which is persisted)
+                // records that it was tried.
+                Err(e) => {
+                    tracing::warn!(error = %e, species = %name, "species detections not removed");
+                }
+            }
+            result
+        })
+        .await;
+    let Ok(outcome) = result else {
+        return not_applied(&Toast::error(format!(
+            "The detections of {sci_name} were not deleted: the database refused the change."
+        )));
+    };
     tracing::info!(
         species = %sci_name,
         deleted = outcome.affected,
@@ -157,63 +177,97 @@ async fn delete_detections(
         "species detections removed"
     );
     let note = outcome_note(&sci_name, outcome, "detections removed");
-    Html(table(&load(state).await, Some(&note)))
+    Html(table(&load(state).await, Some(&note))).into_response()
 }
 
 /// `POST /admin/species/manage/clips` — reclaim this species' audio.
 ///
 /// The rows stay. Only the files go, and the rows are marked reclaimed — see
 /// `prune_species_clips` and migration 22 for why the filename is kept.
+///
+/// # The files are only ever removed after the mark succeeded
+///
+/// The order is list, mark, unlink — chosen so that being wrong costs disk
+/// space rather than a player for audio that is gone
+/// (`prune_species_clips`). That reasoning only holds if a failed mark stops
+/// the sequence: this handler used to default a refused mark to "0 marked" and
+/// go on to unlink every file anyway, which is the order it exists to avoid
+/// and cannot be taken back. A failed list is the same: it used to default to
+/// "no files", mark the rows, and report success having removed nothing.
 async fn delete_clips(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Form(form): Form<SpeciesForm>,
-) -> Html<String> {
+) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
-        return Html(table(&load(state).await, None));
+        return Html(table(&load(state).await, None)).into_response();
     }
-    let s = state.clone();
     let name = sci_name.clone();
     let dir = state.recording_dir();
 
-    let (outcome, removed, failed) = tokio::task::spawn_blocking(move || {
-        // The list first, then the mark, then the files: a row marked
-        // reclaimed whose file survives wastes disk, while a file removed
-        // without the mark offers a player for audio that is gone. Being
-        // wrong in the first direction is cheaper.
-        let files = s
-            .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
-            .unwrap_or_default();
-        let now = crate::routes::admin::species::manage::now_unix();
-        let outcome = s
-            .with_db(|conn| birdnet_db::sqlite::prune_species_clips(conn, &name, now))
-            .unwrap_or_default();
-
-        let mut removed = 0usize;
-        let mut failed = 0usize;
-        for file in &files {
-            match remove_clip(&dir, file) {
-                Ok(()) => removed += 1,
+    let result = state
+        .run_blocking(move |s| {
+            let files = match s
+                .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name))
+            {
+                Ok(files) => files,
                 Err(e) => {
-                    failed += 1;
-                    tracing::warn!(file = %file, error = %e, "clip could not be removed");
+                    tracing::warn!(error = %e, species = %name, "clip list not read; nothing was changed");
+                    return Err(ClipsRefused::List);
+                }
+            };
+            let now = now_unix();
+            let outcome = match s
+                .with_db(|conn| birdnet_db::sqlite::prune_species_clips(conn, &name, now))
+            {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    // No file is touched: see the handler's doc comment.
+                    tracing::warn!(error = %e, species = %name, "clips not marked; no file was removed");
+                    return Err(ClipsRefused::Mark);
+                }
+            };
+
+            let mut removed = 0usize;
+            let mut failed = 0usize;
+            for file in &files {
+                match remove_clip(&dir, file) {
+                    Ok(()) => removed += 1,
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!(file = %file, error = %e, "clip could not be removed");
+                    }
                 }
             }
+            crate::audit::audit(
+                s,
+                Some(&request_user),
+                "species.clips.delete",
+                Some(&name),
+                Some(&format!(
+                    "marked={} files_removed={} failed={} locked_kept={}",
+                    outcome.affected, removed, failed, outcome.locked_skipped
+                )),
+            );
+            Ok((outcome, removed, failed))
+        })
+        .await;
+    let (outcome, removed, failed) = match result {
+        Ok(done) => done,
+        Err(refused) => {
+            return not_applied(&Toast::error(match refused {
+                ClipsRefused::List => format!(
+                    "The clips of {sci_name} were not deleted: the list of them could not be \
+                     read from the database. Nothing was changed."
+                ),
+                ClipsRefused::Mark => format!(
+                    "The clips of {sci_name} were not deleted: the database refused the \
+                     change. No audio file was removed."
+                ),
+            }));
         }
-        crate::audit::audit(
-            &s,
-            None,
-            "species.clips.delete",
-            Some(&name),
-            Some(&format!(
-                "marked={} files_removed={} failed={} locked_kept={}",
-                outcome.affected, removed, failed, outcome.locked_skipped
-            )),
-        );
-        (outcome, removed, failed)
-    })
-    .await
-    .unwrap_or_default();
+    };
     tracing::info!(
         species = %sci_name,
         marked = outcome.affected,
@@ -229,7 +283,15 @@ async fn delete_clips(
             " {failed} file(s) could not be removed — see the log."
         );
     }
-    Html(table(&load(state).await, Some(&note)))
+    Html(table(&load(state).await, Some(&note))).into_response()
+}
+
+/// Which step of reclaiming clips the database refused.
+enum ClipsRefused {
+    /// The query for the species' clip files.
+    List,
+    /// Marking the rows reclaimed.
+    Mark,
 }
 
 /// `POST /admin/species/manage/measure` — add up this species' clips on disk.
