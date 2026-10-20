@@ -43,8 +43,11 @@ pub(super) fn check_disk_space(cli: &Cli, config: Option<&Config>) -> Vec<Check>
 
 /// Whether the data directory is somewhere its contents outlive the container.
 ///
-/// `docker run` with nothing mounted at the data directory leaves the database,
-/// the recordings and the settings on the container's own writable layer. The
+/// A data directory with nothing mounted at it leaves the database, the
+/// recordings and the settings on the container's own writable layer. (This
+/// project's image declares `VOLUME /data`, so a bare `docker run` gets an
+/// anonymous volume there and passes; this finds a `DB_PATH` outside `/data`, or
+/// an image without the declaration.) The
 /// station runs, records and answers; the directory is writable, has space and
 /// was never a mount, so nothing else here (the disk-space check above, the
 /// runtime probes in `birdnet_web::data_volume`) has anything to say — and all

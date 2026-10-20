@@ -232,10 +232,13 @@ pub fn data_dir_of(db_path: &Path) -> PathBuf {
 // The container's own layer
 // ---------------------------------------------------------------------------
 //
-// `docker run` with no volume leaves the data directory on the container's
+// A data directory that is not a mount leaves everything on the container's
 // writable layer: the station runs, records and answers, and every detection,
 // recording and setting is deleted with the container the next time it is
-// recreated — an image upgrade is enough. Nothing about that looks wrong from
+// recreated — an image upgrade is enough. (This project's image declares
+// `VOLUME /data`, so a bare `docker run` gets an anonymous volume there, which
+// is a mount and is not what this finds; it finds a `DB_PATH` outside `/data`,
+// or an image without the declaration.) Nothing about that looks wrong from
 // inside: the directory is writable, has space, and was never a mount, so none
 // of the probes above has anything to say. The question has to be asked of the
 // mount table: is the directory on the container's root filesystem, or on

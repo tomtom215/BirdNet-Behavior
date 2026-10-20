@@ -332,19 +332,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left, so an endpoint that was restarting does not cost the rule its window. The
   rule export is version 3 and omits a zero cooldown: a version-2 file still imports,
   and an older station refuses a version-3 file instead of dropping the limit. The
-  admin form has no field for it yet. Observed failing: with the gate made to always
-  fire, 12 of its 13 tests fail and the processor posts seven times where three are
-  expected.
-- **Station Health says when the data lives on the container's own layer.** A
-  `docker run` with nothing mounted at the data directory keeps the database and
-  recordings on the container's writable layer, where recreating the container
-  (an image upgrade is enough) deletes them, and no existing probe had anything to say
-  about a directory that is writable, has space and was never a mount. The banner now
-  names it when the process is in a container and the mount holding the data
-  directory is the image-layer root (overlay, aufs, fuse-overlayfs); a volume, a bind
-  mount, a tmpfs or a Pi with an overlay root is not flagged. Tested against
-  `mountinfo` fixtures modelled on Docker's output, not in a real container, and not
-  yet wired into `--doctor`.
+  rule form sets it (see the next entries).
+- **Station Health says when the data lives on the container's own layer.** A data
+  directory that is not a mount keeps the database and recordings on the
+  container's writable layer, where recreating the container (an image upgrade is
+  enough) deletes them, and no existing probe had anything to say about a
+  directory that is writable, has space and was never a mount. The banner and the
+  header badge name it when the process is in a container and the mount holding
+  the data directory is the image-layer root (overlay, aufs, fuse-overlayfs); a
+  volume, a bind mount, a tmpfs or a Pi with an overlay root is not flagged. The
+  shipped image declares `VOLUME /data`, so a bare `docker run` gets an anonymous
+  volume, which counts as a mount and is not flagged (`docker rm -v` or `--rm`
+  still deletes it). Tested against `mountinfo` fixtures modelled on Docker's
+  output, not in a real container.
+- **An alert rule made in the form has a cooldown.** The daemon has enforced
+  `cooldown_secs` since migration 55, but the form never set it, so every rule
+  created in the UI posted once per 3 s chunk of a calling bird. Webhook rules get a
+  "Cooldown (minutes, 0 = every match)" field, 5 by default; a blank, fractional,
+  negative or over-7-day value is refused rather than clamped, and the rules list
+  says "cooldown 5 min" or "no cooldown". Log and suppress rules ignore it and store 0.
+- **Settings → Detection has a Privacy Rank field.** The human-sound rule's N (a
+  human class in the model's top N classes drops the window and its neighbours; 10
+  by default, 0 = off, up to 12000) could only be set in `birdnet.conf`,
+  `BIRDNET_PRIVACY_RANK` or `--privacy-rank`. The page and `PUT /api/v2/settings`
+  take it now and refuse what would otherwise be cut to 0 (the rule off, reported as
+  saved): a fraction such as the Privacy Threshold's `0.02`, `10%`, `1,000`, a sign,
+  or more than 12000. A flag or variable other than 10 still beats the page; one left
+  at 10 yields to it.
+- **`--doctor` warns when the data directory is on the container's own layer.** A
+  new "Data volume" check (a warning, never an error, so it cannot park the unit)
+  says the database, recordings and settings are deleted with the container and
+  names the fix (`-v birdnet-data:/data`). It passes in a container with a mount at
+  the data directory and skips on a host. A bare `docker run` of the shipped image
+  gets an anonymous volume and passes.
+- **Every route the API serves is in `openapi.json`, and a test keeps it so.** Ten
+  served paths were missing (the API root, `analytics/abundance`,
+  `analytics/phenology`, `detections/export/raven`, the per-clip Raven and Audacity
+  tables, `soundlevel`, `species/tracking`, both WebSockets); they are documented
+  now. A gate reads the router and fails by name on a route with no entry or an
+  entry no route serves, and a structural check covers refs, path parameters,
+  operation ids and response descriptions. Redocly itself was not run.
+- **"Why isn't a bird heard here?"** `GET /api/v2/species/occurrence` and the page
+  `/species/occurrence` show what the range filter says about a species for the
+  station's place and a week: the model's probability, the threshold in force and
+  whether the station admits it, with the reason (the range model, or your lists). A
+  species page for a held-back bird links to it. The answer is a 503 with a `reason`
+  when the station has no location, no range model or a model that failed, never
+  an empty list; the station's position is shown rounded to 0.1 degrees. The first
+  ask loads a second copy of the range model (14.7 or 29.5 MB on disk; its memory
+  was not measured), and an answer is kept for 60 s.
 
 ### Changed
 
@@ -655,10 +691,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up is *very sure*, below the station's cut-off plus ten points is *borderline*,
   and between is *sure*, so the edges follow the cut-off the station chose (at 70 %:
   70-79 amber, 80-89 neutral, 90+ green). A key is printed above each list of bars.
-  The tiers are tokens (`--conf-*`); `tokens.mjs` grades each fill 3:1 against its
-  track and each pill's text 4.5:1 (61 checks on the merged tree). On a phone the
-  Today feed's names wrap instead of ending in an ellipsis and the confidence
-  is shown (it was hidden).
+  The tiers are tokens (`--conf-*`), graded by `tokens.mjs` (3:1 for a fill against
+  its track, 4.5:1 for pill text). On a phone the Today feed's names wrap instead
+  of ending in an ellipsis and the confidence is shown (it was hidden).
 - **The header badge and the Health page read one list.** The badge graded three
   things and the page a dozen, so a station with two cameras stalled read a green
   *Healthy* in the header over a page saying *Needs attention*. Both now build one
@@ -674,12 +709,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drawn empty state for migration in place of a 360 px blank card.
 - **One token set, held by tests.** About 770 literal font weights, hairlines,
   gaps and colours in `app.css` became tokens, with no computed style changed
-  (116 of 117 route-theme-viewport pages identical over 40,648 elements; the 117th
-  was a lazily loaded fragment, identical on re-runs). `prefers-contrast: more`
+  (116 of 117 page states identical over 40,648 elements; the 117th loads a
+  fragment lazily and matched on re-runs). `prefers-contrast: more`
   now does what the High contrast setting does, `forced-colors` keeps bars and
   card edges, and the browser's `theme-color` bar equals `--bg` in each theme and
-  follows the toggle. `app.css` grew from 272,772 to 298,659 bytes (gzip 61,084
-  to 67,545), measured by the UI branch.
+  follows the toggle. `app.css` grew from 272,772 to 298,659 bytes (gzip 61,084 to
+  67,545).
 
 ### Fixed
 
@@ -1405,12 +1440,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proportional; 280 of 879 were), and the sign-in fields have a 3:1 edge (4.89:1
   light, 4.98:1 dark; the earlier fields measured 1.74:1 and 1.98:1).
 - **Pages jumped as they filled in.** Placeholders now have the shape of what
-  replaces them, and the weekly-report column no longer widens in steps. Measured
-  with `cls.mjs`: 8 of 78 page loads over 0.1 on the merged tree (15 on the
-  baseline, by the UI branch's run); the dashboard, a never-heard species page,
-  the chord diagram and the footer still shift. The onboarding wizard was
+  replaces them, and the weekly-report column no longer widens in steps. With
+  `cls.mjs`, 8 of 78 page loads are over 0.1 (15 on the baseline, by the UI branch's
+  run); the dashboard, a never-heard species page, the chord diagram and the footer
+  still shift. The onboarding wizard was
   recomposed (what it saves is unchanged) and opens with the card that matches the
   stored threshold, whether it is spelled `0.7`, `0.70` or `.7`.
+- **`analytics/phenology` and `analytics/abundance` answered 503 on every
+  station.** The handler asked the prepared statement for its column names before
+  running it; the `duckdb` crate panics on that, and the catch-all arm turned the
+  panic into "analytics database not configured". Both routes now answer, a failed
+  query task is a 500 and no longer a claim about configuration, and a test calls
+  both through a real DuckDB and holds each row to the keys `openapi.json` documents.
 
 ### Security
 
