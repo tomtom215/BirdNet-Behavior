@@ -297,7 +297,8 @@ RUN set -eu; \
 #                      still depends on libstdc++.so.6 at load time.
 #   libgcc-s1        — libgcc_s.so.1 for unwind/EH support.
 #   ca-certificates  — TLS trust store for BirdWeather, Wikipedia, etc.
-#   curl             — used by the entrypoint to fetch the BirdNET+ model.
+#   curl             — used by the entrypoint to fetch the BirdNET+ V3.0 preview's
+#                      model (BirdNET V2.4 is installed by the binary itself).
 #   tini             — PID 1 init, reaps zombies and forwards signals.
 # -----------------------------------------------------------------------------
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime
@@ -387,7 +388,8 @@ COPY --chmod=0755 docker/strip-blank-env.sh /usr/local/bin/strip-blank-env.sh
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Persistent data layout under /data:
-#   /data/model        — BirdNET+ ONNX model + labels (downloaded on first run)
+#   /data/model        — classifier ONNX model + labels + occurrence filter
+#                        (installed on first run: BirdNET V2.4 by default)
 #   /data/recordings   — audio segments captured by the detection pipeline
 #   /data/cache        — Wikipedia species image cache
 #   /data/BirdNet-Behavior/birds.db — SQLite detections database
@@ -407,12 +409,14 @@ EXPOSE 8502/tcp
 # Container health check — hit the web server's health endpoint.  The binary
 # exposes /api/v2/health which returns 200 OK when ready to serve requests.
 #
-# start-period is 15 min because the BirdNET+ V3.0 model (~541 MB) is
-# downloaded from Zenodo on first run; failing health checks inside the
-# start-period window are not counted against the retry budget, so a slow
-# first-run download cannot cause the container to be marked unhealthy or
-# restarted mid-download.  Subsequent starts reuse the cached model and come
-# up in seconds, so this window has no steady-state cost.
+# start-period is 15 min because a first-run model install can be slow: the
+# BirdNET+ V3.0 preview's model (~541 MB) is downloaded from GitHub or Zenodo, and
+# the default BirdNET V2.4 (~85 MB with its range filter) is installed by the
+# binary.  Failing health checks inside the start-period window are not counted
+# against the retry budget, so a slow first-run download cannot cause the
+# container to be marked unhealthy or restarted mid-download.  Subsequent starts
+# reuse the cached model and come up in seconds, so this window has no
+# steady-state cost.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15m --retries=3 \
     CMD curl --fail --silent --show-error --max-time 4 \
              "http://127.0.0.1:${BIRDNET_LISTEN##*:}/api/v2/health" \

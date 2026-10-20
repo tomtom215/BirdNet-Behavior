@@ -74,9 +74,26 @@ fn failed_rows() -> String {
 // DELETE /admin/notifications/prune
 // ---------------------------------------------------------------------------
 
-async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
+async fn prune_handler(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+) -> Result<Html<String>, StatusCode> {
     let deleted = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::notifications::prune_old_notifications(conn, 90))
+        let deleted =
+            state.with_db(|conn| birdnet_db::notifications::prune_old_notifications(conn, 90));
+        // Pruning deletes the record of what the station told its owner; the
+        // count is the event, so a prune that removed nothing is still one the
+        // operator asked for.
+        if let Ok(n) = &deleted {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "notification.prune",
+                None,
+                Some(&format!("deleted={n} older_than_days=90")),
+            );
+        }
+        deleted
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -109,13 +126,23 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
 /// (`crate::routes::pages::homes::station_tabs`), which renders the "recent
 /// alerts sent" surface in the main shell.
 #[allow(clippy::similar_names)]
+///
+/// The log and its 30-day counts are read together and either failing is a
+/// failure of the whole panel: "No notifications yet" beside "Sent 0" is a
+/// statement that nothing was sent, made about a log that was not read.
 pub(crate) fn recent_body(state: &AppState) -> String {
-    let (entries, stats) = state.with_read_db(|conn| {
-        let entries = recent_notifications(conn, 100, 0).unwrap_or_default();
-        let stats = notification_stats(conn, 30).unwrap_or((0, 0, 0));
-        (entries, stats)
+    let read = state.with_read_db(|conn| {
+        let entries = recent_notifications(conn, 100, 0)?;
+        let stats = notification_stats(conn, 30)?;
+        Ok::<_, birdnet_db::notifications::NotifError>((entries, stats))
     });
-    notifications_body(&entries, stats)
+    match read {
+        Ok((entries, stats)) => notifications_body(&entries, stats),
+        Err(e) => {
+            tracing::warn!(error = %e, "notification history could not be read");
+            crate::routes::pages::error_states::could_not_load("the notification history")
+        }
+    }
 }
 
 static NOTIFICATIONS_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(

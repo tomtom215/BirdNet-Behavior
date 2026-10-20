@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/species/activity", get(hourly_activity))
         .route("/species/detail", get(species_detail))
         .route("/species/tracking", get(species_tracking))
+        .route("/species/occurrence", get(species_occurrence))
 }
 
 /// Query for [`species_tracking`].
@@ -41,7 +42,7 @@ struct TrackingQuery {
 async fn species_tracking(
     State(state): State<AppState>,
     Query(q): Query<TrackingQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     state
         .run_blocking(move |state| {
             let date = q
@@ -50,16 +51,29 @@ async fn species_tracking(
                 .unwrap_or_else(crate::routes::pages::today_date_string);
             let notable_only = q.notable_only.unwrap_or(false);
 
-            let (windows, rows) = state.with_read_db(|conn| {
+            // A read that failed is a 500, not `"species": []`: a consumer of
+            // this endpoint stores what it is told, and an empty list is the
+            // answer for a day on which nothing notable happened.
+            let read = state.with_read_db(|conn| {
                 let windows = crate::tracking::resolve_windows(conn, &date);
                 let rows = birdnet_db::species_tracking::statuses_for_date(
                     conn,
                     &date,
                     windows.as_windows(),
-                )
-                .unwrap_or_default();
-                (windows, rows)
+                )?;
+                Ok::<_, DbError>((windows, rows))
             });
+            let (windows, rows) = match read {
+                Ok(read) => read,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": crate::routes::log_internal("species tracking query failed", &e),
+                        })),
+                    );
+                }
+            };
 
             let species: Vec<Value> = rows
                 .iter()
@@ -78,24 +92,26 @@ async fn species_tracking(
                 })
                 .collect();
 
-            Json(json!({
-                "date": date,
-                "year_start": windows.year_start,
-                "season": windows.season,
-                "season_start": windows.season_start,
-                "absence_days": windows.absence_days,
-                "species": species,
-            }))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "date": date,
+                    "year_start": windows.year_start,
+                    "season": windows.season,
+                    "season_start": windows.season_start,
+                    "absence_days": windows.absence_days,
+                    "species": species,
+                })),
+            )
         })
         .await
 }
 
 /// Whether `s` is a plausible `YYYY-MM-DD`.
 ///
-/// Shape only. The query is parameterised so a malformed date is not a
-/// injection risk; the check is here so a typo returns an empty day rather
-/// than silently answering for today, which would look like a working page
-/// showing the wrong data.
+/// Shape only. The query is parameterised, so a malformed date is not an
+/// injection risk. A value that fails this check is treated as absent, and an
+/// absent date means today (what the OpenAPI document says); it is not a 400.
 fn is_iso_date(s: &str) -> bool {
     s.len() == 10
         && s.as_bytes()[4] == b'-'
@@ -107,6 +123,174 @@ fn is_iso_date(s: &str) -> bool {
                 b.is_ascii_digit()
             }
         })
+}
+
+// ---------------------------------------------------------------------------
+// Which species the occurrence filter admits (parity row P-3)
+// ---------------------------------------------------------------------------
+
+/// Query for [`species_occurrence`].
+///
+/// Every field is text, parsed by hand, so a malformed value is answered in the
+/// JSON error shape every other refusal here uses and with the range named,
+/// not with axum's plain-text `400`.
+#[derive(Deserialize)]
+struct OccurrenceQuery {
+    /// The model's week, `1..=48`. Defaults to the current week.
+    week: Option<String>,
+    /// Text to find in either name.
+    q: Option<String>,
+    /// `true` for the admitted, `false` for the held back.
+    admitted: Option<String>,
+    /// Page size.
+    limit: Option<String>,
+    /// Species to skip.
+    offset: Option<String>,
+}
+
+/// Why the station cannot answer, as the JSON body and the status it travels
+/// with. `503` for all of them, with a `reason` a client can branch on: an
+/// empty list would read as "nothing occurs here".
+pub(crate) fn occurrence_unavailable(
+    reason: &crate::occurrence::Unavailable,
+) -> (StatusCode, Json<Value>) {
+    use crate::occurrence::Unavailable;
+    let (key, message) = match reason {
+        Unavailable::NoLocation => (
+            "no-location",
+            "This station has no latitude and longitude, so the range filter has no place to be asked about. Set the station's location in Settings.".to_owned(),
+        ),
+        Unavailable::NoModel => (
+            "no-range-model",
+            "No range model is loaded, so the station does not filter species by where it is: every species the classifier knows is a candidate, wherever it is. There is no filter to list.".to_owned(),
+        ),
+        Unavailable::Failed(detail) => {
+            // The detail names files and paths; it is for the log.
+            let _ = crate::routes::log_internal("the range model could not be run", detail);
+            (
+                "range-model-failed",
+                "The range model could not be run. The station's log has the reason.".to_owned(),
+            )
+        }
+    };
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": message, "reason": key })),
+    )
+}
+
+/// The `503` for a process with no detection daemon to ask.
+pub(crate) fn occurrence_no_daemon() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": "This process is not running the detection daemon, so there is no range filter to ask.",
+            "reason": "no-detection-daemon",
+        })),
+    )
+}
+
+/// The model week of the station's current local date.
+pub(crate) fn current_model_week() -> u32 {
+    crate::occurrence::week_of(&crate::routes::pages::today_date_string()).unwrap_or(1)
+}
+
+/// `GET /api/v2/species/occurrence` — what the station's range filter says
+/// about each species, for this place and week.
+///
+/// Answers "why is this bird never heard here?" with the number behind it: the
+/// model's probability for the species, the threshold in force, and whether the
+/// station therefore admits it. The station's coordinates are returned to one
+/// decimal place (about 11 km): that says which region's birds the question was
+/// about, and the endpoint is as open as the rest of the read API.
+async fn species_occurrence(
+    State(state): State<AppState>,
+    Query(q): Query<OccurrenceQuery>,
+) -> (StatusCode, Json<Value>) {
+    use crate::occurrence::{
+        DEFAULT_LIMIT, MAX_LIMIT, Selection, parse_admitted, parse_count, parse_week, select,
+    };
+
+    let bad = |message: String| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
+    let week = match parse_week(q.week.as_deref()) {
+        Ok(w) => w,
+        Err(e) => return bad(e),
+    };
+    let admitted = match parse_admitted(q.admitted.as_deref()) {
+        Ok(a) => a,
+        Err(e) => return bad(e),
+    };
+    let limit = match parse_count("limit", q.limit.as_deref(), 1, MAX_LIMIT) {
+        Ok(n) => n.unwrap_or(DEFAULT_LIMIT),
+        Err(e) => return bad(e),
+    };
+    let offset = match parse_count("offset", q.offset.as_deref(), 0, usize::MAX) {
+        Ok(n) => n.unwrap_or(0),
+        Err(e) => return bad(e),
+    };
+    let selection = Selection {
+        q: q.q.clone(),
+        admitted,
+    };
+
+    let Some(source) = state.occurrence_source() else {
+        return occurrence_no_daemon();
+    };
+    let week_is_current = week.is_none();
+    let week = week.unwrap_or_else(current_model_week);
+    let names = state.names_handle();
+    let also = crate::routes::pages::name_search::also_species(&names, q.q.as_deref());
+    let also: std::collections::HashSet<String> = also.into_iter().collect();
+
+    // The model runs on the blocking pool: it is an inference, however small.
+    let report = state.run_blocking(move |_| source.report(week)).await;
+    let report = match report {
+        Ok(report) => report,
+        Err(reason) => return occurrence_unavailable(&reason),
+    };
+
+    let picked = select(&report, &selection, &also);
+    let rows: Vec<Value> = picked
+        .species
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|s| {
+            json!({
+                "scientific_name": s.scientific_name,
+                "common_name": s.common_name,
+                "display_name": names.name(&s.scientific_name, &s.common_name),
+                "probability": crate::occurrence::json_number(s.probability),
+                "admitted": s.admitted,
+                "verdict": crate::occurrence::Verdict::of(s, report.threshold).key(),
+                "explanation": crate::occurrence::sentence(s, &report),
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "location": {
+                "latitude": round_to_tenth(report.latitude),
+                "longitude": round_to_tenth(report.longitude),
+            },
+            "week": report.week,
+            "week_is_current": week_is_current,
+            "threshold": crate::occurrence::json_number(report.threshold),
+            "scored": picked.scored,
+            "admitted_total": picked.admitted,
+            "matched": picked.matched,
+            "limit": limit,
+            "offset": offset,
+            "species": rows,
+        })),
+    )
+}
+
+/// A coordinate to one decimal place: about 11 km, enough to say which
+/// region's birds were meant and no more than a public endpoint should say.
+pub(crate) fn round_to_tenth(degrees: f64) -> f64 {
+    (degrees * 10.0).round() / 10.0
 }
 
 #[derive(Deserialize)]

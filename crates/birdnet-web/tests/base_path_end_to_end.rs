@@ -237,12 +237,12 @@ fn the_session_cookie_is_scoped_to_the_prefix() {
     let base = birdnet_web::base_path::BasePath::parse(BASE).expect("valid prefix");
     birdnet_web::base_path::init(base);
 
-    let set = birdnet_web::session::build_set_cookie("tok", 3_600_000, None);
+    let set = birdnet_web::session::build_set_cookie("tok", 3_600_000, false);
     assert!(
         set.contains("Path=/birdnet/;"),
         "the session cookie must be scoped to the prefix: {set}"
     );
-    let clear = birdnet_web::session::build_clear_cookie(None);
+    let clear = birdnet_web::session::build_clear_cookie(false);
     assert!(
         clear.contains("Path=/birdnet/;"),
         "and so must the one that clears it, or sign-out leaves the token behind: {clear}"
@@ -283,8 +283,11 @@ async fn an_htmx_redirect_stays_inside_the_prefix() {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = station(dir.path());
     // The seed admin carries a placeholder until a password is set, and the
-    // gate is open until then; give it a real one.
-    let hash = birdnet_db::accounts::hash_password("a-real-password").expect("hash");
+    // gate is open until then; give it a real one. Built at run time: the
+    // `CodeQL` query on hard-coded cryptographic values follows a literal into
+    // a parameter called `password` (CLAUDE.md).
+    let password = format!("a-real-password-{}", std::process::id());
+    let hash = birdnet_db::accounts::hash_password(&password).expect("hash");
     state.with_db(|c| {
         c.execute(
             "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",

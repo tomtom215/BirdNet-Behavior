@@ -140,6 +140,12 @@ function isCacheable(res) {
   // Set-Cookie (defence-in-depth — the routing rules already exclude /admin/*).
   if (!res || !res.ok) return false;
   if (res.type !== 'basic') return false;
+  // A response that was reached through a redirect is not the page asked for.
+  // `fetch` follows a `303 /login` and hands back the sign-in form with
+  // `ok === true`, so a signed-out request for /today would cache the form
+  // under /today — and a signed-in browser would then be shown it first, from
+  // cache, every time, until the revalidation landed behind it.
+  if (res.redirected) return false;
   if (res.headers.has('set-cookie')) return false;
   if ((res.headers.get('cache-control') || '').includes('no-store')) return false;
   return true;

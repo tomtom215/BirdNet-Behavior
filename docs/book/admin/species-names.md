@@ -40,8 +40,8 @@ and calendar feeds, notifications and the weekly report, and the live feed.
 ## How much of your classifier it covers
 
 The names come from BirdNET-Pi's translation tables, which cover 7,058 species.
-The BirdNET+ V3.0 classifier reports 11,560, and a language does not have a name
-for every one of them: Swedish names nearly all the species in the tables,
+The BirdNET V2.4 classifier reports 6,522 and the BirdNET+ V3.0 preview 11,560, and a
+language does not have a name for every one of them: Swedish names nearly all the species in the tables,
 Korean fewer than one in ten. A species with no name in your language keeps the
 classifier's own, so a station set to Korean shows mostly English.
 

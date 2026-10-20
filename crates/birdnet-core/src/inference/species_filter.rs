@@ -190,6 +190,92 @@ impl CacheKey {
     }
 }
 
+/// Run the metadata model for one place and week and return one probability per
+/// species it scores, refusing an answer that cannot be read as probabilities.
+///
+/// Shared by [`SpeciesFilter::filter_species`] and
+/// [`SpeciesFilter::occurrence_scores`], so what the station filters by and what
+/// an operator is shown when they ask why a bird is not being heard are one
+/// computation, not two that could drift.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn occurrence_probabilities(
+    session: &mut Session,
+    lat: f64,
+    lon: f64,
+    week: u32,
+    expected_width: Option<usize>,
+    aligned: bool,
+) -> Result<Vec<f32>, InferenceError> {
+    // Run metadata model: input shape [1, 3] -> output [1, N]
+    let input_data = vec![lat as f32, lon as f32, week as f32];
+    let input_tensor = Tensor::<f32>::from_array(([1usize, 3], input_data))
+        .map_err(|e| InferenceError::Shape(e.to_string()))?;
+
+    let outputs = session
+        .run(ort::inputs![input_tensor])
+        .map_err(|e| InferenceError::Runtime(e.to_string()))?;
+
+    // Collect probabilities into a Vec to release the borrow on session/outputs.
+    let probabilities: Vec<f32> = {
+        let (_, flat) = outputs[0]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| InferenceError::Runtime(format!("cannot extract probabilities: {e}")))?;
+        flat.to_vec()
+    };
+    drop(outputs);
+
+    // The model's output width is the last chance to catch a vocabulary it
+    // was never meant to score. `load_with_vocabulary` checks the declared
+    // width, but a model with a dynamic output dimension declares nothing,
+    // so the real width is only knowable here. Erroring is the point: the
+    // alternative is reading species `i` of one list as species `i` of
+    // another, which produces confident detections of the wrong birds.
+    if let Some(expected) = expected_width
+        && probabilities.len() != expected
+    {
+        return Err(InferenceError::Shape(vocabulary_mismatch_message(
+            probabilities.len(),
+            expected,
+            aligned,
+        )));
+    }
+
+    // The threshold test below skips `prob < sf_thresh`, and `NaN < x` is
+    // false, so a NaN would *pass*. A model that produces one is not
+    // answering the question; say so, and the caller turns the filter off
+    // for this file and reports it, as for any other run-time failure.
+    if let Some(bad) = probabilities.iter().position(|p| !p.is_finite()) {
+        return Err(InferenceError::Runtime(format!(
+            "metadata model produced a non-finite score ({}) at output {bad} of {}; \
+             the model file is damaged or mis-quantised",
+            probabilities[bad],
+            probabilities.len()
+        )));
+    }
+
+    Ok(probabilities)
+}
+
+/// One species' score from the occurrence model, for one place and week.
+///
+/// What [`SpeciesFilter::occurrence_scores`] returns: the answer to "why is this
+/// bird never heard here?", with the number behind it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OccurrenceScore {
+    /// The classifier's own scientific name for the species.
+    pub scientific_name: String,
+    /// The classifier's common name for it (the scientific name when the
+    /// classifier has none).
+    pub common_name: String,
+    /// The model's probability that the species occurs there that week.
+    pub probability: f32,
+    /// Whether the station would let a detection of it through: the score
+    /// reaches the threshold (or the species is whitelisted) and the operator's
+    /// include and exclude lists allow it. Exactly the decision
+    /// [`SpeciesFilter::filter_species`] makes.
+    pub admitted: bool,
+}
+
 /// Species occurrence frequency filter.
 ///
 /// Optionally loads a metadata ONNX model that predicts species occurrence
@@ -426,52 +512,14 @@ impl SpeciesFilter {
             return Ok(cached.clone());
         }
 
-        // Run metadata model: input shape [1, 3] -> output [1, N]
-        let input_data = vec![lat as f32, lon as f32, week as f32];
-        let input_tensor = Tensor::<f32>::from_array(([1usize, 3], input_data))
-            .map_err(|e| InferenceError::Shape(e.to_string()))?;
-
-        let outputs = session
-            .run(ort::inputs![input_tensor])
-            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
-
-        // Collect probabilities into a Vec to release the borrow on session/outputs.
-        let probabilities: Vec<f32> = {
-            let (_, flat) = outputs[0].try_extract_tensor::<f32>().map_err(|e| {
-                InferenceError::Runtime(format!("cannot extract probabilities: {e}"))
-            })?;
-            flat.to_vec()
-        };
-        drop(outputs);
-
-        // The model's output width is the last chance to catch a vocabulary it
-        // was never meant to score. `load_with_vocabulary` checks the declared
-        // width, but a model with a dynamic output dimension declares nothing,
-        // so the real width is only knowable here. Erroring is the point: the
-        // alternative is reading species `i` of one list as species `i` of
-        // another, which produces confident detections of the wrong birds.
-        if let Some(expected) = self.expected_width
-            && probabilities.len() != expected
-        {
-            return Err(InferenceError::Shape(vocabulary_mismatch_message(
-                probabilities.len(),
-                expected,
-                self.alignment.is_some(),
-            )));
-        }
-
-        // The threshold test below skips `prob < sf_thresh`, and `NaN < x` is
-        // false, so a NaN would *pass*. A model that produces one is not
-        // answering the question; say so, and the caller turns the filter off
-        // for this file and reports it, as for any other run-time failure.
-        if let Some(bad) = probabilities.iter().position(|p| !p.is_finite()) {
-            return Err(InferenceError::Runtime(format!(
-                "metadata model produced a non-finite score ({}) at output {bad} of {}; \
-                 the model file is damaged or mis-quantised",
-                probabilities[bad],
-                probabilities.len()
-            )));
-        }
+        let probabilities = occurrence_probabilities(
+            session,
+            lat,
+            lon,
+            week,
+            self.expected_width,
+            self.alignment.is_some(),
+        )?;
 
         let result = self.passing_species(&probabilities, labels);
 
@@ -489,6 +537,75 @@ impl SpeciesFilter {
         self.cache_result = Some(result.clone());
 
         Ok(result)
+    }
+
+    /// Every species the occurrence model scores for a place and week, highest
+    /// probability first, each with whether the station would admit it.
+    ///
+    /// For showing an operator what the filter does: which birds it expects
+    /// here this week, how likely each is, and which side of the threshold a
+    /// particular one falls. `None` when no metadata model is loaded (nothing is
+    /// filtered, so there is nothing to explain). Whitelisted species the model
+    /// does not score are admitted by [`Self::filter_species`] and absent here,
+    /// because they have no score to show.
+    ///
+    /// Uncached: it is for a person looking at a page, not for the detection
+    /// loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InferenceError` if the metadata model fails or answers with
+    /// something that cannot be read as probabilities.
+    pub fn occurrence_scores(
+        &mut self,
+        location: (f64, f64),
+        week: u32,
+        labels: &LabelSet,
+    ) -> Result<Option<Vec<OccurrenceScore>>, InferenceError> {
+        let Some(session) = self.session.as_mut() else {
+            return Ok(None);
+        };
+        let (lat, lon) = location;
+        let probabilities = occurrence_probabilities(
+            session,
+            lat,
+            lon,
+            week,
+            self.expected_width,
+            self.alignment.is_some(),
+        )?;
+        let admitted = self.passing_species(&probabilities, labels);
+
+        let mut scores = Vec::with_capacity(probabilities.len());
+        for (index, &probability) in probabilities.iter().enumerate() {
+            let scientific_name = self.alignment.as_ref().map_or_else(
+                || labels.get(index).map(|l| l.scientific_name.clone()),
+                |alignment| alignment.classifier_name(index).map(str::to_owned),
+            );
+            // An output the alignment could not place names a species the
+            // classifier cannot emit: it has no answer to give.
+            let Some(scientific_name) = scientific_name else {
+                continue;
+            };
+            let common_name = labels
+                .find_by_scientific_name(&scientific_name)
+                .map_or_else(
+                    || scientific_name.clone(),
+                    |label| label.common_name.clone(),
+                );
+            scores.push(OccurrenceScore {
+                admitted: admitted.contains(&scientific_name),
+                scientific_name,
+                common_name,
+                probability,
+            });
+        }
+        scores.sort_by(|a, b| {
+            b.probability
+                .total_cmp(&a.probability)
+                .then_with(|| a.scientific_name.cmp(&b.scientific_name))
+        });
+        Ok(Some(scores))
     }
 
     /// The species the metadata model's scores let through, after the whitelist

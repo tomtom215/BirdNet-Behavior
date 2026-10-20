@@ -204,9 +204,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     <h2 class="section-title" id="set-auth-h">Web Authentication</h2>
     <p class="hint">
       The admin password is not stored in this table &mdash; it lives as an Argon2id
-      hash in the accounts database, seeded from the <code>CADDY_PWD</code> environment
-      variable. Set or rotate it there and restart; the station picks the new value up
-      on the next start. Until <code>CADDY_PWD</code> is set, <code>/admin</code> is
+      hash in the accounts database, seeded from <code>CADDY_PWD</code>. Editing
+      <code>CADDY_PWD</code> to a new value and restarting replaces it; a password changed
+      on the Accounts page is kept across restarts until then. Until a password is set
+      (<code>CADDY_PWD</code>, the setup wizard or the Accounts page), <code>/admin</code> is
       open to anyone who can reach this station.
     </p>
     <p class="hint">

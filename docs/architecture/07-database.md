@@ -32,8 +32,14 @@ WAL for crash safety             Append-only analysis
 ### Connection Management
 
 - WAL mode enforced on every connection
-- PRAGMAs: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`,
-  `cache_size=-2000` (2 MB), `foreign_keys=ON`
+- PRAGMAs on a writer connection: `journal_mode=WAL`, `synchronous=NORMAL`,
+  `busy_timeout=15000` (`WRITER_BUSY_TIMEOUT_MS`: long enough to cover a WAL
+  checkpoint, a backup step and a reclaim step, because a detection refused with
+  `database is locked` is lost), `cache_size=-2000` (2 MB), `foreign_keys=ON`.
+  A read-only connection (`READ_PRAGMAS`) sets `busy_timeout=5000`, the same
+  `cache_size` and `foreign_keys=ON`; `journal_mode` and `synchronous` are a
+  property of the file and of writes, so a reader does not set them
+  (`crates/birdnet-db/src/sqlite/connection.rs`)
 - `birdnet-db` hands back plain `rusqlite::Connection`s (`open_connection`,
   `open_or_create`, `open_readonly`). `birdnet-web` keeps one writer behind
   a `Mutex<Connection>` (`state.rs`) plus a small read-only `ReaderPool`

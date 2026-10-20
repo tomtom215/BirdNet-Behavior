@@ -16,7 +16,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, routing::get};
 use serde::Deserialize;
@@ -138,9 +138,14 @@ fn rare_gap_days(state: &AppState) -> u32 {
         .min(3650)
 }
 
-async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
+async fn rare_rss(
+    State(state): State<AppState>,
+    Query(q): Query<FeedQuery>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
-    let base = resolve_base(q.base);
+    let base = resolve_base(q.base, request_authority(&uri, &headers).as_deref());
     let names = state.names_handle();
     let Some(permit) = state.try_heavy_read_permit() else {
         return feed_busy();
@@ -180,9 +185,14 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     rss_response(body)
 }
 
-async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
+async fn today_rss(
+    State(state): State<AppState>,
+    Query(q): Query<FeedQuery>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let base = resolve_base(q.base);
+    let base = resolve_base(q.base, request_authority(&uri, &headers).as_deref());
     let names = state.names_handle();
     let Some(permit) = state.try_heavy_read_permit() else {
         return feed_busy();
@@ -264,9 +274,14 @@ fn rss_response(body: String) -> Response {
 // iCal feed — rare detections as point-in-time events.
 // ---------------------------------------------------------------------------
 
-async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
+async fn rare_ics(
+    State(state): State<AppState>,
+    Query(q): Query<FeedQuery>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
-    let base = resolve_base(q.base);
+    let base = resolve_base(q.base, request_authority(&uri, &headers).as_deref());
     let names = state.names_handle();
     let Some(permit) = state.try_heavy_read_permit() else {
         return feed_busy();
@@ -452,18 +467,85 @@ fn default_base_url() -> String {
     std::env::var("BNB_BASE_URL").unwrap_or_else(|_| "http://localhost:8502".to_string())
 }
 
-/// Resolve the feed base URL, validating any client-supplied `?base=` override.
+/// The `host[:port]` this request was addressed to: the `Host` header, or the
+/// URI's authority for an HTTP/2 request, which carries none.
+fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| uri.authority().map(|a| a.as_str().to_owned()))
+}
+
+/// The `host[:port]` of each address the operator has configured for this
+/// station: `BNB_PUBLIC_URL` and `BNB_BASE_URL`.
+fn configured_authorities() -> Vec<String> {
+    ["BNB_PUBLIC_URL", "BNB_BASE_URL"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .filter_map(|u| url_authority(&u).map(str::to_owned))
+        .collect()
+}
+
+/// Resolve the feed base URL, honouring a client-supplied `?base=` only for an
+/// address this station is already known by.
 ///
 /// `base` is interpolated into RSS/Atom XML elements and attributes and into
-/// iCal lines; an unvalidated value (containing `"`, `<`, `>`, `&`, or CR/LF)
-/// is a feed/XML-injection vector. Accept only an `http(s)://` origin built from
-/// URL-unreserved characters — which excludes every XML/iCal metacharacter — and
-/// otherwise fall back to the server default.
-fn resolve_base(base: Option<String>) -> String {
+/// iCal lines, and it decides where every item link in the feed leads. Two
+/// checks, for two different harms:
+///
+/// * **Shape.** An unvalidated value (containing `"`, `<`, `>`, `&`, or CR/LF)
+///   is a feed/XML-injection vector, so only an `http(s)://` origin built from
+///   URL-unreserved characters is accepted — which excludes every XML/iCal
+///   metacharacter.
+/// * **Host.** A well-formed value is still not the caller's to choose.
+///   `/feeds/rare.rss?base=https://evil.example` is a feed on this station's own
+///   domain whose every link leads to someone else's page, and a feed address is
+///   what people paste into a reader, a chat or an email. The host must be the
+///   one the request was addressed to, or one the operator configured
+///   (`BNB_PUBLIC_URL`, `BNB_BASE_URL`); what the override still adds is the
+///   scheme and a path prefix, which is what a reverse proxy needs.
+///
+/// Anything else falls back to the server default rather than failing, so a
+/// subscribed reader keeps working.
+fn resolve_base(base: Option<String>, request_host: Option<&str>) -> String {
+    resolve_base_with(base, request_host, &configured_authorities())
+}
+
+/// [`resolve_base`] with the configured authorities given explicitly.
+fn resolve_base_with(
+    base: Option<String>,
+    request_host: Option<&str>,
+    configured: &[String],
+) -> String {
     match base {
-        Some(b) if is_safe_base_url(&b) => b,
+        Some(b) if is_safe_base_url(&b) && host_is_known(&b, request_host, configured) => b,
         _ => default_base_url(),
     }
+}
+
+/// The authority (`host[:port]`) of an `http(s)://` URL, without userinfo
+/// handling: [`is_safe_base_url`] has already refused an `@`.
+fn url_authority(url: &str) -> Option<&str> {
+    let rest = url
+        .trim()
+        .strip_prefix("https://")
+        .or_else(|| url.trim().strip_prefix("http://"))?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    (!authority.is_empty()).then_some(authority)
+}
+
+/// Whether `base`'s authority is the request's own host or a configured one.
+/// Compared whole and case-insensitively: `station.local.evil.example` is not
+/// `station.local`.
+fn host_is_known(base: &str, request_host: Option<&str>, configured: &[String]) -> bool {
+    let Some(authority) = url_authority(base) else {
+        return false;
+    };
+    request_host
+        .into_iter()
+        .chain(configured.iter().map(String::as_str))
+        .any(|known| known.trim().eq_ignore_ascii_case(authority))
 }
 
 /// Whether `b` is an `http(s)://host[:port][/path]` made only of URL-unreserved
@@ -492,8 +574,18 @@ fn escape_xml(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Escape a value for an iCalendar TEXT property (RFC 5545 §3.3.11).
+///
+/// Every line break becomes the two characters `\n`, whichever way it was
+/// written: CRLF, LF, or a lone CR. The lone CR is the one that mattered — it
+/// was passed through raw, and a CR is a line end to enough calendar parsers
+/// that a species name containing one could start its own property. (Names come
+/// from the model's label file and from imported databases, neither of which
+/// promises a name without a control character.)
 fn escape_ics(s: &str) -> String {
     s.replace('\\', "\\\\")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
         .replace('\n', "\\n")
         .replace(',', "\\,")
         .replace(';', "\\;")
@@ -768,6 +860,102 @@ mod tests {
     #[test]
     fn escape_ics_special_chars() {
         assert_eq!(escape_ics("a,b;c\nd\\e"), "a\\,b\\;c\\nd\\\\e");
+    }
+
+    /// A lone CR was passed through raw; CRLF and LF were already handled
+    /// (CRLF as a stray CR plus an escaped LF). All three are now the same
+    /// two-character escape, and nothing raw is left.
+    #[test]
+    fn escape_ics_leaves_no_raw_line_break_of_any_kind() {
+        assert_eq!(escape_ics("a\rb"), "a\\nb");
+        assert_eq!(escape_ics("a\r\nb"), "a\\nb");
+        assert_eq!(escape_ics("a\nb"), "a\\nb");
+        assert_eq!(escape_ics("a\r\rb\n\r"), "a\\n\\nb\\n\\n");
+        for s in ["a\rb", "a\r\nb", "\r", "x\r\n\r\ny"] {
+            let e = escape_ics(s);
+            assert!(!e.contains('\r') && !e.contains('\n'), "{s:?} -> {e:?}");
+        }
+        // The backslash is still escaped first, so an escaped newline in the
+        // input is not turned into a real one.
+        assert_eq!(escape_ics("a\\nb"), "a\\\\nb");
+    }
+
+    // ── the ?base= override ─────────────────────────────────────────────
+
+    fn base(candidate: &str, host: Option<&str>, configured: &[&str]) -> String {
+        let configured: Vec<String> = configured.iter().map(|s| (*s).to_owned()).collect();
+        resolve_base_with(Some(candidate.to_owned()), host, &configured)
+    }
+
+    /// The override is honoured for the host the request was addressed to, and
+    /// for a host the operator configured — case-insensitively, whole-authority.
+    #[test]
+    fn a_base_naming_a_known_host_is_honoured() {
+        assert_eq!(
+            base("https://station.local/bn", Some("station.local"), &[]),
+            "https://station.local/bn"
+        );
+        assert_eq!(
+            base("http://Station.Local:8502", Some("station.local:8502"), &[]),
+            "http://Station.Local:8502"
+        );
+        // A reverse proxy that does not forward Host: the operator named it.
+        assert_eq!(
+            base(
+                "https://birds.example.com",
+                Some("192.168.1.5:8502"),
+                &["birds.example.com"]
+            ),
+            "https://birds.example.com"
+        );
+    }
+
+    /// Everything else falls back to the server default.
+    #[test]
+    fn a_base_naming_any_other_host_falls_back() {
+        let default = default_base_url();
+        for (candidate, host) in [
+            ("https://evil.example", Some("station.local")),
+            ("https://evil.example/birdnet", Some("station.local")),
+            // Same prefix, different host.
+            ("https://station.local.evil.example", Some("station.local")),
+            // A different port is a different authority.
+            ("https://station.local:8443", Some("station.local")),
+            // Userinfo smuggling is refused by the shape check.
+            ("http://station.local@evil.example", Some("station.local")),
+            // No Host and nothing configured: nothing to match.
+            ("https://station.local", None),
+        ] {
+            assert_eq!(
+                base(candidate, host, &[]),
+                default,
+                "{candidate} for {host:?}"
+            );
+        }
+        // A configured host does not open the door to a different one.
+        assert_eq!(
+            base("https://evil.example", None, &["birds.example.com"]),
+            default
+        );
+    }
+
+    /// The shape rule still stands in front of the host rule: a known host with
+    /// an XML metacharacter after it is not a base.
+    #[test]
+    fn a_known_host_does_not_excuse_a_malformed_base() {
+        let default = default_base_url();
+        for candidate in [
+            "https://station.local\"onload=x",
+            "https://station.local/<script>",
+            "https://station.local/a&b",
+            "https://station.local/\r\nX: y",
+        ] {
+            assert_eq!(
+                base(candidate, Some("station.local"), &[]),
+                default,
+                "{candidate:?}"
+            );
+        }
     }
 
     #[test]

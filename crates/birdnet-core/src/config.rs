@@ -33,12 +33,25 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 /// pre-selects), so they can never drift apart — a drift that previously let
 /// the daemon record at 0.25 while the UI advertised 0.70.
 ///
-/// Set slightly above BirdNET-Pi's 0.70 so an out-of-the-box station produces a
-/// realistic log rather than one padded with marginal IDs, while staying well
-/// clear of the over-filtered range where quiet and distant birds stop being
-/// recorded at all. Operators who want either extreme change it in one place:
-/// Settings → Detection, or the wizard's Accuracy step.
-pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.75;
+/// BirdNET-Pi's own default (`CONFIDENCE=0.7`), so that a station nobody has
+/// customised stores the rows BirdNET-Pi stores for the same audio: the whole
+/// point of `docs/book/guides/parity.md`. It was 0.75 until a fresh install and
+/// BirdNET-Pi were compared on the same recordings and the two disagreed about
+/// borderline calls for no reason an owner could see. Operators who want
+/// either extreme change it in one place: Settings → Detection, or the
+/// wizard's Accuracy step.
+pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.70;
+
+/// Default human-sound privacy rank: ten.
+///
+/// A window is suppressed, with the windows either side of it, when a human
+/// class is among the model's ten highest-scoring classes. That is BirdNET-Pi's
+/// own rule at its own default (`PRIVACY_THRESHOLD=0` gives
+/// `human_cutoff = max(10, …) = 10`), so a station nobody has customised
+/// neither stores nor keeps a clip of a conversation near its microphone, as
+/// BirdNET-Pi's does not. `0` turns the rule off. See
+/// [`crate::detection::privacy`].
+pub const DEFAULT_PRIVACY_RANK: usize = 10;
 
 /// Default detection sensitivity: BirdNET-Pi's default value.
 ///

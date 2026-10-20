@@ -25,6 +25,7 @@
 //!     hour_start: None,
 //!     hour_end: None,
 //!     days_of_week: None,
+//!     cooldown_secs: 300,
 //!     action: AlertAction::Webhook {
 //!         url: "https://example.com/hook".into(),
 //!         method: "POST".into(),
@@ -59,7 +60,12 @@ pub const REDACTED: &str = "***REDACTED***";
 /// the field carries a serde default — and a version-2 file is refused by an
 /// older station with a message naming both versions, which is what the
 /// version exists for.
-pub const EXPORT_VERSION: u32 = 2;
+/// Version 3 added each rule's `cooldown_secs`. A version-2 file imports with no
+/// cooldown, which is what its rules always had. The bump is for the other
+/// direction: a station that predates the field would import a version-3 file
+/// and silently drop every rule's cooldown, turning a rate-limited webhook
+/// back into one post per detection — so it refuses the file and says why.
+pub const EXPORT_VERSION: u32 = 3;
 
 /// One rule in its portable, flat form.
 ///
@@ -91,6 +97,10 @@ pub struct RuleExport {
     /// Comma-separated ISO weekday numbers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub days_of_week: Option<String>,
+    /// Webhook cooldown in seconds; `0` (or absent, in a file written before
+    /// version 3) is no cooldown.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cooldown_secs: u32,
     /// `"webhook"`, `"log"` or `"suppress"`.
     pub action: String,
     /// Webhook target URL.
@@ -128,6 +138,7 @@ impl fmt::Debug for RuleExport {
             .field("hour_start", &self.hour_start)
             .field("hour_end", &self.hour_end)
             .field("days_of_week", &self.days_of_week)
+            .field("cooldown_secs", &self.cooldown_secs)
             .field("action", &self.action)
             .field(
                 "webhook_url",
@@ -147,6 +158,14 @@ impl fmt::Debug for RuleExport {
 
 const fn default_true() -> bool {
     true
+}
+
+/// serde `skip_serializing_if` for [`RuleExport::cooldown_secs`]: a rule with
+/// no cooldown exports exactly as it did before the field existed.
+// serde passes the field by reference, so the signature cannot take it by value.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// serde default for [`RuleExport::confidence_max`].
@@ -196,6 +215,7 @@ pub fn to_export(rule: &AlertRule, include_secrets: bool) -> RuleExport {
         hour_start: rule.hour_start,
         hour_end: rule.hour_end,
         days_of_week: rule.days_of_week.clone(),
+        cooldown_secs: rule.cooldown_secs,
         action: rule.action.type_str().to_string(),
         webhook_url: None,
         webhook_method: None,
@@ -353,6 +373,7 @@ pub fn from_export(e: &RuleExport) -> Result<Imported, ImportRejection> {
             hour_start: e.hour_start.filter(|h| *h <= 23),
             hour_end: e.hour_end.filter(|h| *h <= 23),
             days_of_week: e.days_of_week.clone().filter(|d| !d.trim().is_empty()),
+            cooldown_secs: e.cooldown_secs.min(MAX_COOLDOWN_SECS),
             action,
         },
         credential_was_redacted,
@@ -572,6 +593,12 @@ pub struct AlertRule {
     pub hour_end: Option<u8>,
     /// Comma-separated ISO weekday numbers (1=Mon … 7=Sun). `None` = any day.
     pub days_of_week: Option<String>,
+    /// Seconds a **webhook** rule stays quiet for a species after it has fired
+    /// for it. `0` — what every rule written before migration 55 has — fires on
+    /// every matching detection. Ignored by `log` and `suppress` rules: a
+    /// suppress rule that stopped suppressing after its first match would let
+    /// every later notification through.
+    pub cooldown_secs: u32,
     /// Action to execute.
     pub action: AlertAction,
 }
@@ -598,9 +625,22 @@ pub struct NewAlertRule {
     pub hour_end: Option<u8>,
     /// Comma-separated weekdays (1–7). `None` = every day.
     pub days_of_week: Option<String>,
+    /// Webhook cooldown in seconds, per species; see [`AlertRule::cooldown_secs`].
+    /// `0` is none. [`DEFAULT_COOLDOWN_SECS`] is what the admin form offers for a
+    /// new rule; [`insert_rule`] caps it at [`MAX_COOLDOWN_SECS`].
+    pub cooldown_secs: u32,
     /// Action to execute.
     pub action: AlertAction,
 }
+
+/// The cooldown the admin form pre-fills for a new webhook rule: five minutes,
+/// the same default the notification (Apprise) cooldown has. A rule that
+/// already exists keeps the `0` migration 55 gave it.
+pub const DEFAULT_COOLDOWN_SECS: u32 = 300;
+
+/// The longest cooldown a rule may carry: seven days. A window longer than that
+/// is a typo (an extra zero in a field labelled seconds), not a policy.
+pub const MAX_COOLDOWN_SECS: u32 = 7 * 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Glob matching
@@ -731,7 +771,7 @@ pub fn list_rules(conn: &Connection) -> Result<Vec<AlertRule>, AlertRuleError> {
                 hour_start, hour_end, days_of_week,
                 action_type, action_webhook_url, action_webhook_method, action_webhook_body,
                 action_webhook_auth_kind, action_webhook_auth_value,
-                action_webhook_header_name
+                action_webhook_header_name, cooldown_secs
          FROM alert_rules ORDER BY id",
     )?;
 
@@ -774,6 +814,11 @@ pub fn list_rules(conn: &Connection) -> Result<Vec<AlertRule>, AlertRuleError> {
                     .get::<_, Option<i64>>(7)?
                     .map(|v| u8::try_from(v.clamp(0, 23)).unwrap_or(0)),
                 days_of_week: row.get(8)?,
+                cooldown_secs: u32::try_from(
+                    row.get::<_, i64>(16)?
+                        .clamp(0, i64::from(MAX_COOLDOWN_SECS)),
+                )
+                .unwrap_or(0),
                 action,
             })
         })?
@@ -826,8 +871,8 @@ pub fn insert_rule(conn: &Connection, rule: &NewAlertRule) -> Result<i64, AlertR
               hour_start, hour_end, days_of_week,
               action_type, action_webhook_url, action_webhook_method, action_webhook_body,
               action_webhook_auth_kind, action_webhook_auth_value,
-              action_webhook_header_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              action_webhook_header_name, cooldown_secs)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             rule.name,
             i64::from(rule.enabled),
@@ -844,6 +889,7 @@ pub fn insert_rule(conn: &Connection, rule: &NewAlertRule) -> Result<i64, AlertR
             auth_kind,
             auth_value,
             header_name,
+            i64::from(rule.cooldown_secs.min(MAX_COOLDOWN_SECS)),
         ],
     )?;
 
@@ -958,6 +1004,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action: "webhook".into(),
             webhook_url: Some(url.into()),
             webhook_method: None,
@@ -990,6 +1037,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Webhook {
                 url: "https://example.com/hook".into(),
                 method: "POST".into(),
@@ -1051,6 +1099,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Log,
         };
         assert!(matches_rule(&rule, "Any Bird", 0.8, 12, 3));
@@ -1068,6 +1117,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Suppress,
         };
         assert!(!matches_rule(&rule, "Any Bird", 0.7, 12, 3));
@@ -1086,6 +1136,7 @@ mod tests {
             hour_start: Some(5),
             hour_end: Some(9),
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Log,
         };
         assert!(matches_rule(&rule, "X", 0.5, 6, 1));
@@ -1105,6 +1156,7 @@ mod tests {
             hour_start: Some(22),
             hour_end: Some(4),
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Log,
         };
         assert!(matches_rule(&rule, "X", 0.5, 23, 1));
@@ -1124,6 +1176,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: Some("1,2,3,4,5".into()),
+            cooldown_secs: 0,
             action: AlertAction::Log,
         };
         assert!(matches_rule(&rule, "X", 0.5, 12, 1)); // Monday
@@ -1142,6 +1195,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Log,
         };
         assert!(!matches_rule(&rule, "Any Bird", 0.9, 12, 3));
@@ -1227,6 +1281,7 @@ mod tests {
             hour_start: None,
             hour_end: None,
             days_of_week: None,
+            cooldown_secs: 0,
             action: AlertAction::Webhook {
                 url: "https://ha.lan/api/webhook/abc".into(),
                 method: "POST".into(),
@@ -1398,6 +1453,89 @@ mod tests {
         assert!(rendered.contains("X-API-Key"), "{rendered}");
     }
 
+    // ── webhook cooldown (migration 55) ─────────────────────────────────
+
+    #[test]
+    fn a_cooldown_survives_a_round_trip_and_zero_stays_zero() {
+        let conn = memory_db();
+        let mut with = webhook_rule(None, 0.0);
+        with.name = "with".into();
+        with.cooldown_secs = 300;
+        let mut without = webhook_rule(None, 0.0);
+        without.name = "without".into();
+        insert_rule(&conn, &with).unwrap();
+        insert_rule(&conn, &without).unwrap();
+        let by_name = |n: &str| {
+            list_rules(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.name == n)
+                .unwrap()
+                .cooldown_secs
+        };
+        assert_eq!(by_name("with"), 300);
+        assert_eq!(by_name("without"), 0, "no cooldown stays no cooldown");
+    }
+
+    #[test]
+    fn an_absurd_cooldown_is_capped_not_stored_or_refused() {
+        // `u32::MAX` seconds is a hundred and thirty years: an extra zero in a
+        // field labelled seconds. Stored as asked, it would be a rule that
+        // fires once and is never heard from again.
+        let conn = memory_db();
+        let mut rule = webhook_rule(None, 0.0);
+        rule.cooldown_secs = u32::MAX;
+        insert_rule(&conn, &rule).unwrap();
+        // The column itself, not only the loaded rule: the read clamps too, and
+        // would mask a write that stored the absurd value.
+        let stored: i64 = conn
+            .query_row("SELECT cooldown_secs FROM alert_rules", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, i64::from(MAX_COOLDOWN_SECS));
+        assert_eq!(
+            list_rules(&conn).unwrap()[0].cooldown_secs,
+            MAX_COOLDOWN_SECS
+        );
+    }
+
+    #[test]
+    fn the_cooldown_travels_through_an_export_and_back() {
+        let mut rule = full_rule(None);
+        rule.cooldown_secs = 120;
+        let exported = to_export(&rule, true);
+        assert_eq!(exported.cooldown_secs, 120);
+        let json = serde_json::to_string(&exported).unwrap();
+        assert!(json.contains("\"cooldown_secs\":120"), "{json}");
+        let back: RuleExport = serde_json::from_str(&json).unwrap();
+        assert_eq!(from_export(&back).unwrap().rule.cooldown_secs, 120);
+    }
+
+    #[test]
+    fn a_rule_without_a_cooldown_exports_as_it_did_before_the_field_existed() {
+        // The counterpart, and the compatibility rule for files in the wild:
+        // version 2 has no such key, and importing it must give the rule the
+        // cooldown it always had, which is none.
+        let exported = to_export(&full_rule(None), true);
+        let json = serde_json::to_string(&exported).unwrap();
+        assert!(
+            !json.contains("cooldown"),
+            "a zero cooldown was written out: {json}"
+        );
+        let v2 = r#"{"name":"old","action":"log"}"#;
+        let parsed: RuleExport = serde_json::from_str(v2).unwrap();
+        assert_eq!(from_export(&parsed).unwrap().rule.cooldown_secs, 0);
+    }
+
+    #[test]
+    fn an_imported_cooldown_is_capped_like_a_typed_one() {
+        let mut e = to_export(&full_rule(None), true);
+        e.cooldown_secs = u32::MAX;
+        assert_eq!(
+            from_export(&e).unwrap().rule.cooldown_secs,
+            MAX_COOLDOWN_SECS
+        );
+    }
+
     // ── export / import ─────────────────────────────────────────────────
 
     /// A rule with every field set to something distinguishable.
@@ -1412,6 +1550,7 @@ mod tests {
             hour_start: Some(22),
             hour_end: Some(4),
             days_of_week: Some("1,2,3".into()),
+            cooldown_secs: 0,
             action: AlertAction::Webhook {
                 url: "https://ha.lan/api/webhook/xyz".into(),
                 method: "GET".into(),

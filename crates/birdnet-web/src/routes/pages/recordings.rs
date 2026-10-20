@@ -160,7 +160,14 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
 
     let list = render_clips_block(&data, filter, search.as_deref(), 0, state.names());
 
-    format!(r#"{lede}{controls}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
+    // The key to the bars, once, above the first of them.
+    let legend = if data.rows.is_empty() {
+        String::new()
+    } else {
+        super::confidence::legend(data.floor)
+    };
+
+    format!(r#"{lede}{controls}{legend}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
 }
 
 /// HTMX partial: the next page of clip rows (the "Show more" target).
@@ -204,13 +211,16 @@ struct ClipsData {
     /// same gate the play button effectively has). Loaded once per page like
     /// `locked`, so there is no per-row filesystem stat.
     present: HashSet<String>,
-    /// The clip query itself failed, as opposed to returning no rows.
+    /// A read the page is drawn from failed, as opposed to returning nothing.
     ///
     /// Every query in `fetch_clips` used to be `unwrap_or_default`-ed, so a
     /// database error produced `rows: []`, `total: 0` and the empty state —
     /// which on this page reads *"No saved clips yet"*, i.e. exactly what an
-    /// operator would see if the auto-purge had deleted their recordings.
+    /// operator would see if the auto-purge had deleted their recordings. See
+    /// [`assemble_clips`] for the three reads after the clip query.
     failed: bool,
+    /// The station's confidence cut-off, for the colour of each row's bar.
+    floor: f64,
 }
 
 /// Run the clip query, count, and per-page lookups on the blocking pool.
@@ -226,42 +236,79 @@ async fn fetch_clips(
     let also = super::name_search::also_species(state.names(), search.as_deref());
     tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let clips = birdnet_db::sqlite::recent_clips(
-                conn,
-                filter,
-                search.as_deref(),
-                &also,
-                CLIP_PAGE,
-                offset,
-            );
-            let failed = clips.is_err();
-            if let Err(e) = &clips {
-                tracing::warn!(error = %e, "recordings: recent_clips failed");
-            }
-            let rows = clips.unwrap_or_default();
-            let total =
-                birdnet_db::sqlite::recent_clips_count(conn, filter, search.as_deref(), &also)
-                    .unwrap_or(0);
-            let locked = birdnet_db::sqlite::locked_file_names(conn)
-                .unwrap_or_default()
-                .iter()
-                .map(|f| base_name(f))
-                .collect::<HashSet<String>>();
-            // First-ever date per species → the "first today" / "rare" badge,
-            // the same first-seen signal the Today feed-row uses.
-            let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
-            ClipsData {
-                rows,
-                total,
-                locked,
-                first_seen,
+            assemble_clips(
+                birdnet_db::sqlite::recent_clips(
+                    conn,
+                    filter,
+                    search.as_deref(),
+                    &also,
+                    CLIP_PAGE,
+                    offset,
+                ),
+                birdnet_db::sqlite::recent_clips_count(conn, filter, search.as_deref(), &also),
+                birdnet_db::sqlite::locked_file_names(conn),
+                // First-ever date per species → the "first today" / "rare"
+                // badge, the same first-seen signal the Today feed-row uses.
+                birdnet_db::sqlite::species_first_detection(conn),
                 present,
-                failed,
-            }
+                super::confidence::station_floor(conn),
+            )
         })
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "recordings: task failed");
+        ClipsData {
+            failed: true,
+            ..ClipsData::default()
+        }
+    })
+}
+
+/// Put the page's reads together, and mark the page failed if any of them was.
+///
+/// Only the clip query used to count. The total, the lock set and the
+/// first-seen map were each defaulted, and each default is a claim the grid
+/// then draws: a total of zero is a page with no "Show more" however many clips
+/// remain, an empty lock set draws every keeper as "Lock — protect from
+/// auto-purge", and an empty first-seen map is a page on which nothing was ever
+/// a first. A page built on any of them is a page the station could not read.
+fn assemble_clips(
+    clips: Result<Vec<DetectionRow>, birdnet_db::sqlite::DbError>,
+    total: Result<i64, birdnet_db::sqlite::DbError>,
+    locked: Result<Vec<String>, birdnet_db::sqlite::DbError>,
+    first_seen: Result<HashMap<String, String>, birdnet_db::sqlite::DbError>,
+    present: HashSet<String>,
+    floor: f64,
+) -> ClipsData {
+    fn kept<T: Default>(
+        read: Result<T, birdnet_db::sqlite::DbError>,
+        what: &str,
+        failed: &mut bool,
+    ) -> T {
+        read.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "recordings: {what} failed");
+            *failed = true;
+            T::default()
+        })
+    }
+    let mut failed = false;
+    let rows = kept(clips, "recent_clips", &mut failed);
+    let total = kept(total, "recent_clips_count", &mut failed);
+    let locked = kept(locked, "locked_file_names", &mut failed)
+        .iter()
+        .map(|f| base_name(f))
+        .collect::<HashSet<String>>();
+    let first_seen = kept(first_seen, "species_first_detection", &mut failed);
+    ClipsData {
+        rows,
+        total,
+        locked,
+        first_seen,
+        present,
+        failed,
+        floor,
+    }
 }
 
 /// Collect the set of file basenames present in the recording directory.
@@ -369,7 +416,7 @@ fn render_clip_row(
     let meta = escape_html(&meta);
 
     let av = avatar(&d.com_name, shown, &d.sci_name, "");
-    let conf = conf_bar(d.confidence);
+    let conf = conf_bar(d.confidence, page.floor);
     let row = crate::state::RowRef::from(d);
     let lock = lock_button(&row, is_locked);
     let row_vals = row_vals(&row);
@@ -581,10 +628,28 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
 
 async fn lock_clip(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, true);
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, true)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, true);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.lock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=recordings"),
+            );
+        }
+        result
+    })
+    .await;
     clip_write(
         super::toast::RowWrite::from_result(result, "lock clip"),
         button,
@@ -594,10 +659,28 @@ async fn lock_clip(
 
 async fn unlock_clip(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, false);
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, false)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, false);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.unlock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=recordings"),
+            );
+        }
+        result
+    })
+    .await;
     clip_write(
         super::toast::RowWrite::from_result(result, "unlock clip"),
         button,
@@ -629,12 +712,30 @@ fn clip_write(
 
 async fn delete_clip(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     // Paired write: the analytics copy is incremental and cannot notice a
     // removal on its own. See `AppState::delete_detection`, which also
     // removes the clip once no detection names it.
-    let result = tokio::task::spawn_blocking(move || state.delete_detection(&row)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.delete_detection(&row);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.delete",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=recordings"),
+            );
+        }
+        result
+    })
+    .await;
     match super::toast::RowWrite::from_result(result, "delete clip") {
         // Empty body → the row's `hx-swap="outerHTML"` removes it from the
         // list — right whether this request removed it or someone else had.
@@ -772,6 +873,7 @@ mod tests {
             first_seen,
             present,
             failed: false,
+            floor: 0.70,
         }
     }
 
@@ -1001,5 +1103,63 @@ mod tests {
             "the species photograph has nothing to do with the clip's audio \
              and must survive its absence: {absent}"
         );
+    }
+
+    fn refused() -> birdnet_db::sqlite::DbError {
+        birdnet_db::sqlite::DbError::Sqlite(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    /// One read in four failing is a page the station could not read, whichever
+    /// of the four it was. The integration test in
+    /// `a_defaulted_read_is_not_published_as_fact.rs` can break two of them
+    /// through the schema; the total reads the same table as the rows, so it is
+    /// held here, where each can be made to fail on its own.
+    #[test]
+    fn a_grid_built_on_a_read_that_failed_is_a_failed_grid() {
+        let ok = |failed: [bool; 4]| {
+            assemble_clips(
+                if failed[0] {
+                    Err(refused())
+                } else {
+                    Ok(Vec::new())
+                },
+                if failed[1] { Err(refused()) } else { Ok(3) },
+                if failed[2] {
+                    Err(refused())
+                } else {
+                    Ok(vec!["a.wav".to_owned()])
+                },
+                if failed[3] {
+                    Err(refused())
+                } else {
+                    Ok(HashMap::new())
+                },
+                HashSet::new(),
+                0.7,
+            )
+        };
+        assert!(!ok([false; 4]).failed, "all four reads worked");
+        for (i, name) in ["rows", "total", "lock set", "first-seen map"]
+            .iter()
+            .enumerate()
+        {
+            let mut failed = [false; 4];
+            failed[i] = true;
+            let data = ok(failed);
+            assert!(data.failed, "the {name} failed and the grid did not say so");
+            let html = render_clips_block(
+                &data,
+                RecordingsFilter::All,
+                None,
+                0,
+                &birdnet_core::i18n::NameLocalizer::english(),
+            );
+            assert!(html.contains("couldn't load"), "{name}: {html}");
+            assert!(!html.contains("No saved clips yet"), "{name}: {html}");
+        }
+        // And what the working reads gave is kept.
+        let data = ok([false; 4]);
+        assert_eq!(data.total, 3);
+        assert!(data.locked.contains("a.wav"));
     }
 }

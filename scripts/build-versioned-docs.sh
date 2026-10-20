@@ -9,8 +9,13 @@
 #                 `…/BirdNet-Behavior/guide/today.html` keeps working, and
 #                 now means "the release you can install", not "main"
 #   /vX.Y.Z/      one manual per release tag, from that tag's own sources
-#   /dev/         the manual on the branch being built (normally `main`):
-#                 documentation for features that have not been released
+#   /dev/         the manual on `main` (origin/main), whatever this run checked
+#                 out: documentation for features that have not been released.
+#                 A release-tag run checks out the tag, so building /dev/ from
+#                 HEAD there published the release's own manual as "dev" until
+#                 the next push to main. DOCS_DEV_REF=HEAD builds the checkout
+#                 instead; docs.yml sets it for pull requests, whose build exists
+#                 to grade the pull request's own tree and deploys nothing.
 #   /versions.json  what the version switcher reads
 #
 # Versioning starts at FIRST_VERSIONED_RELEASE. Earlier tags were rendered by
@@ -21,13 +26,14 @@
 # Every build — including old tags — gets the *current* switcher assets, so
 # the switcher behaves the same on every version. Each tree is link-checked.
 #
-# Requires: git with tags fetched (`fetch-depth: 0`), mdbook on PATH (or
-# $MDBOOK), python3.
+# Requires: git with tags and origin/main fetched (`fetch-depth: 0`), mdbook on
+# PATH (or $MDBOOK), python3. Self-test: scripts/test-build-versioned-docs.sh.
 set -euo pipefail
 
 FIRST_VERSIONED_RELEASE="v0.17.1"
 SITE_PATH="${DOCS_SITE_PATH:-/BirdNet-Behavior/}"
 MDBOOK="${MDBOOK:-mdbook}"
+DEV_REF="${DOCS_DEV_REF:-origin/main}"
 
 out="${1:?usage: $0 <out-dir>}"
 repo="$(git rev-parse --show-toplevel)"
@@ -61,6 +67,17 @@ if [ "${#releases[@]}" -eq 0 ]; then
     exit 1
 fi
 latest="${releases[${#releases[@]}-1]}"
+
+# Resolve /dev/'s source now rather than after every release has been rendered:
+# a checkout without origin/main (a shallow clone, a fresh local repository)
+# would otherwise fail at the very end, or, worse, quietly publish some other
+# branch under the name `dev`.
+if ! dev_commit="$(git -C "$repo" rev-parse -q --verify "${DEV_REF}^{commit}")"; then
+    echo "build-versioned-docs: cannot resolve '$DEV_REF' to build /dev/ from." >&2
+    echo "  Fetch it (git fetch origin main) so /dev/ is main's manual, or set" >&2
+    echo "  DOCS_DEV_REF=HEAD to build the current checkout instead." >&2
+    exit 1
+fi
 
 # render <source-tree> <dest> <version-label> <depth-below-site-root>
 render() {
@@ -103,9 +120,10 @@ for tag in "${releases[@]}"; do
     git -C "$repo" worktree remove --force "$work/$tag"
 done
 
-# `dev` is the current checkout's committed state — a worktree of HEAD, so an
-# uncommitted edit cannot reach the published site.
-git -C "$repo" worktree add -q --detach "$work/dev" HEAD
+# `dev` is the committed state of $DEV_REF — a worktree of that commit, so an
+# uncommitted edit cannot reach the published site. It is main (origin/main), not
+# HEAD: on a release-tag run HEAD is the release.
+git -C "$repo" worktree add -q --detach "$work/dev" "$dev_commit"
 render "$work/dev" "$out/dev" "dev" 1
 git -C "$repo" worktree remove --force "$work/dev"
 
@@ -136,3 +154,4 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 
 echo "build-versioned-docs: root = $latest; versions: ${releases[*]} dev"
+echo "build-versioned-docs: dev = $DEV_REF at ${dev_commit:0:12}"

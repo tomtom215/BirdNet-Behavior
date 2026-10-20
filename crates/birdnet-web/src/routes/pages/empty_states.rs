@@ -36,6 +36,18 @@ pub fn no_chorus() -> String {
     )
 }
 
+/// Empty state shown on the Migration page when no species has come and gone
+/// yet this year.
+///
+/// It replaces a 12 px line of text above 360 px of blank card (the ridgeline's
+/// reserved height), which read as a chart that had failed to draw. A dotted
+/// flight path and one bird on the wing say what the chart is for.
+pub fn no_migrants() -> String {
+    format!(
+        r#"{SHELL_OPEN}<svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true"><path d="M8,66 C34,14 86,14 112,52" fill="none" stroke="var(--fg-4)" stroke-width="1.4" stroke-dasharray="3 5" stroke-linecap="round"/><path d="M50,32 q6,-9 12,0 q6,-9 12,0" fill="none" stroke="var(--moss-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="112" cy="52" r="2.6" fill="var(--fg-4)"/></svg><p class="display es-h">No one has come or gone yet.</p><p class="bnb-meta es-sub">A species gets a ridge once it has been heard in four different weeks this year and its busiest week is three times its usual one. Residents hold a steady ribbon and are left out, so a yard of year-round birds looks like this.</p>{SHELL_CLOSE}"#,
+    )
+}
+
 /// Empty state shown when co-occurrence analysis finds no species that
 /// were detected together within the same 5-minute window.
 pub fn no_co_signal() -> String {
@@ -71,6 +83,7 @@ mod tests {
             ("quiet_yard", quiet_yard()),
             ("no_species", no_species()),
             ("no_chorus", no_chorus()),
+            ("no_migrants", no_migrants()),
             ("no_co_signal", no_co_signal()),
             ("no_rare_yet", no_rare_yet()),
             ("no_life_list", no_life_list()),

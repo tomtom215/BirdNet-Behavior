@@ -598,6 +598,38 @@ pub(super) fn resolve_required_paths(
     Some((model, labels, watch_dir))
 }
 
+/// The per-species thresholds the daemon starts with, and what to say when they
+/// could not be read.
+///
+/// The read used to be `.unwrap_or_default()` inside the `with_db` closure, so a
+/// failure started the daemon with *no* per-species thresholds and no word of it:
+/// every species the operator had raised to cut false positives was accepted at
+/// the global threshold, and the station looked configured. `ThresholdCache`
+/// already keeps the previous map when a later refresh fails; at startup there
+/// is no previous map to keep, so the honest options are to say so, and to let
+/// the cache's own refresh (the first event after its 30 s TTL) correct it.
+///
+/// Returns the map (empty on failure) and the warning to log, which names the
+/// consequence — a bare "could not read thresholds" does not tell an operator
+/// that their raised bars are not in force.
+#[must_use]
+pub(super) fn startup_species_thresholds<E: std::fmt::Display>(
+    read: Result<HashMap<String, f64>, E>,
+) -> (HashMap<String, f64>, Option<String>) {
+    match read {
+        Ok(map) => (map, None),
+        Err(e) => (
+            HashMap::new(),
+            Some(format!(
+                "could not read the per-species confidence thresholds ({e}): until they can be \
+                 read — the next detection after 30 seconds tries again — every species is \
+                 judged by the global threshold alone, so a species raised above it is accepted \
+                 at the global one"
+            )),
+        ),
+    }
+}
+
 /// "Should we log the loaded per-species threshold count, and what is it?"
 ///
 /// Returns `Some(count)` when there's at least one per-species threshold
@@ -1315,6 +1347,52 @@ mod tests {
         let _ = std::fs::remove_file(&tmpcfg);
     }
 
+    // ── startup_species_thresholds ──────────────────────────────────────
+
+    #[test]
+    fn thresholds_that_read_are_used_and_nothing_is_said() {
+        let read: Result<_, String> = Ok(thresholds(&[("Pica pica", 0.8)]));
+        let (map, warning) = startup_species_thresholds(read);
+        assert_eq!(map.get("Pica pica"), Some(&0.8));
+        assert_eq!(warning, None);
+    }
+
+    /// An empty table is a configuration, not a fault: no thresholds set.
+    #[test]
+    fn an_empty_threshold_table_is_not_a_warning() {
+        let read: Result<_, String> = Ok(HashMap::new());
+        let (map, warning) = startup_species_thresholds(read);
+        assert!(map.is_empty());
+        assert_eq!(warning, None, "no thresholds set is not a read failure");
+    }
+
+    /// The defect: a failed read became an empty map with no word of it.
+    #[test]
+    fn thresholds_that_could_not_be_read_start_empty_and_say_what_that_means() {
+        let (map, warning) = startup_species_thresholds::<&str>(Err("database is locked"));
+        assert!(map.is_empty());
+        let warning = warning.expect("a failed read was silent");
+        assert!(warning.contains("database is locked"), "{warning}");
+        assert!(
+            warning.contains("global threshold"),
+            "must name the consequence, not just the failure: {warning}"
+        );
+    }
+
+    /// Through the real query and a real broken table, not only the pure
+    /// function: the premise is that this read can fail.
+    #[test]
+    fn a_missing_thresholds_table_is_reported_by_the_real_read() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute_batch("DROP TABLE species_thresholds;")
+            .unwrap();
+        let (map, warning) =
+            startup_species_thresholds(birdnet_db::sqlite::get_species_threshold_map(&conn));
+        assert!(map.is_empty());
+        assert!(warning.is_some(), "the real read failed silently");
+    }
+
     // ── species_thresholds_log_count ────────────────────────────────────
 
     #[test]
@@ -1406,13 +1484,16 @@ mod tests {
     }
 
     #[test]
-    fn confidence_default_is_075_not_the_old_025() {
+    fn confidence_default_is_birdnet_pis_070_not_the_old_025() {
         // Counter-test for the drift the shared constant was introduced to
         // kill: the daemon recorded at 0.25 while the UI advertised 0.70.
+        // And for the one after it: 0.75 here against BirdNET-Pi's 0.70 made
+        // an uncustomised station store fewer rows than BirdNET-Pi for the
+        // same audio.
         let got = resolve_confidence(None);
         assert!(
-            (got - 0.75).abs() < f32::EPSILON,
-            "daemon default must be the shipped 0.75, got {got}"
+            (got - 0.70).abs() < f32::EPSILON,
+            "daemon default must be BirdNET-Pi's 0.70, got {got}"
         );
     }
 

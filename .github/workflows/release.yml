@@ -145,6 +145,17 @@ jobs:
         # that.
         run: cargo package --workspace --locked --no-verify
 
+      - name: Every crate tarball carries the licence files
+        shell: bash
+        # LICENSE, LICENSE-UPSTREAM and NOTICE, byte for byte, in each of the
+        # nine tarballs `cargo publish` would upload. Eight of them carried none
+        # until each crate got a symlink to the root file; a checkout that did not
+        # keep the symlinks would package a 13-byte text file instead, which is
+        # why this reads the tarballs rather than the tree.
+        run: |
+          python3 scripts/check-crate-licences.py --self-test
+          python3 scripts/check-crate-licences.py target/package
+
       - name: Third-party notices match this release
         shell: bash
         env:
@@ -363,7 +374,7 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: ${{ matrix.toolchain }}
           components: ${{ matrix.components || '' }}
@@ -462,7 +473,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -689,7 +700,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
 
@@ -720,7 +731,7 @@ jobs:
       # version so a transitive bug in the generator can't silently
       # poison the release artifact set.
       - name: Install cargo-cyclonedx
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-cyclonedx@0.5.7
 
@@ -866,7 +877,7 @@ jobs:
           path: dist/
 
       - name: Cache the models
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/upgrade-models
           key: upgrade-models-v3.0-preview3-geo-3.0.2
@@ -935,6 +946,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.validate.outputs.version }}"
+          IS_PRE="${{ needs.validate.outputs.is_prerelease }}"
+
+          # The manual for exactly this version (docs.yml publishes one per
+          # stable tag at /vX.Y.Z/, from the tag's own sources). Pages hostnames
+          # are lowercase.
+          OWNER="${{ github.repository_owner }}"
+          DOCS_URL="https://${OWNER,,}.github.io/${{ github.event.repository.name }}/v${VERSION}/"
 
           # GitHub rejects a release body over 125,000 characters with HTTP
           # 422. v0.16.0's CHANGELOG section alone was 270,796, the edit
@@ -1004,6 +1022,20 @@ jobs:
             echo "The image includes DuckDB analytics (no separate \`-analytics\` tag)."
             echo "Multi-arch manifests cover \`linux/amd64\` and \`linux/arm64\`."
             echo ""
+            # docs.yml builds a manual for stable tags only (its tag filter has
+            # no pre-release form, and the build script skips them), so a
+            # pre-release has no /vX.Y.Z-rc.N/ to link and gets no section
+            # rather than a link that 404s. Inside the group, so the tail is
+            # still measured whole and the changelog's budget shrinks to fit.
+            if [[ "$IS_PRE" != "true" ]]; then
+              echo "## Documentation"
+              echo ""
+              echo "The operator manual for exactly this version, built from this tag:"
+              echo "<${DOCS_URL}>"
+              echo ""
+              echo "The binary serves the same manual offline at \`/help\`."
+              echo ""
+            fi
             echo "## Verification"
             echo ""
             echo '### Checksums'

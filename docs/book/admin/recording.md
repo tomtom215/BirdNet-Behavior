@@ -8,7 +8,7 @@ Incoming audio is split into fixed-length segments before inference. Two setting
 
 | Setting | Env var / flag | Default | What it does |
 |---|---|---|---|
-| Segment duration | `BIRDNET_SEGMENT_DURATION` / `--segment-duration` | `15` | Length (seconds) of each recorded segment. |
+| Segment duration | `BIRDNET_SEGMENT_DURATION` / `--segment-duration` | `15` | Length (seconds) of each recorded segment: a whole number from 3 to 600. |
 | Overlap | `BIRDNET_OVERLAP` / `--overlap` | `0.0` | Seconds of overlap between consecutive analysis chunks. A small overlap (e.g. `1.5`) helps catch calls that straddle a chunk boundary, at some CPU cost. |
 
 ## Recording schedule
@@ -22,6 +22,15 @@ BIRDNET_RECORDING_SCHEDULE=all-day      # default
 The same choice is on **Settings → Capture → Location & Recording Schedule**. Set the
 variable only to pin it: an environment variable wins over the settings page,
 which then shows your choice while the station runs this one.
+
+The schedule is `all-day`, `solar` (sunrise to sunset, from your location) or
+`fixed:HH:MM-HH:MM` (UTC). The Settings page and `PUT /api/v2/settings` refuse
+anything else, and a fixed window that does not end after it starts: the
+scheduler cannot express one that crosses midnight, so it would be ignored and
+the station would record all day. A `RECORDING_SCHEDULE` like that in `birdnet.conf`
+is a `--doctor` warning, not a refusal. The clip format (`wav`, `mp3`, `flac`, `ogg`)
+and the species-info site (`ebird`, `allaboutbirds`, `none`) are held to the
+same lists `--doctor` uses for the config file.
 
 The [scheduler](../reference/architecture.md) computes sunrise and sunset from your latitude/longitude, so schedules can be anchored to solar events (e.g. the dawn-chorus window) rather than fixed clock times. This is also what powers the day/night cues in the dashboard and the kiosk night mode.
 

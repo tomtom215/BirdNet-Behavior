@@ -61,6 +61,9 @@ do_install() {
     arch="$(detect_arch)"
     check_glibc
     check_required_tools
+    # Before anything is downloaded or sized: which classifier this station
+    # runs decides which files are fetched and how much space they need.
+    resolve_classifier
     check_disk_space
     version="$(resolve_version)"
 
@@ -73,8 +76,8 @@ do_install() {
     install_binary "${version}" "${arch}"
     create_directories
     setup_tmpfs_streaming
-    download_model
-    download_geomodel        # optional: the species occurrence filter
+    download_classifier
+    download_occurrence_filter   # optional: the species occurrence filter that pairs with the classifier
     prompt_station_settings
     resolve_listen_addr      # finalize the bind address (env > config > unit > prompt)
     ensure_admin_password    # auto-protect /admin on a fresh LAN install
@@ -96,6 +99,7 @@ do_repair() {
     MODE="repair"
     info "Repairing the existing BirdNet-Behavior install…"
     check_required_tools
+    resolve_classifier
 
     local was_active=0
     if has_systemd; then
@@ -124,11 +128,12 @@ do_repair() {
     # subcommand named for fixing this could not fix it. `download_model`'s own
     # guard now verifies, so handing the decision to it is both correct and one
     # fewer place for the two to disagree.
-    download_model
+    download_classifier
 
     # A repair run is how a station installed before the geomodel shipped picks
-    # it up: download_geomodel is a no-op when both files are already there.
-    download_geomodel
+    # it up: the download is a no-op when the files are already there. Which
+    # filter that is follows the station's classifier (V2.4: the range filter).
+    download_occurrence_filter
 
     write_config             # idempotent: fixes ownership/permissions, keeps content
     resolve_listen_addr      # preserve LAN bind across re-runs (env > config > unit)
@@ -215,7 +220,7 @@ remove_data_or_keep() {
     if [ "${BIRDNET_PURGE:-0}" = "1" ]; then
         do_purge=1
     elif [ "${INTERACTIVE}" = 1 ] \
-        && yesno "  Also delete ALL data — database, recordings, model (~541 MB), config?" n; then
+        && yesno "  Also delete ALL data — database, recordings, models (up to ~560 MB), config?" n; then
         do_purge=1
     fi
 

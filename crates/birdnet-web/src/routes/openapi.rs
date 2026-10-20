@@ -6,7 +6,10 @@
 //! `openapi-generator` — can point at a running station and get a complete,
 //! machine-readable map of the API. The document is hand-maintained; the
 //! `every_documented_path_is_routed` test below keeps it from drifting away
-//! from the actual router.
+//! from the actual router, and
+//! `tests/every_route_the_api_serves_is_in_the_openapi_document.rs` holds the
+//! other direction (a route served under `/api/v2` that the document omits) and
+//! the document's structure.
 
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -204,6 +207,13 @@ mod tests {
                 continue;
             }
             for (method, op) in item.as_object().expect("path item") {
+                // A path item also carries `servers`, `parameters` and the like;
+                // only the HTTP methods are operations.
+                if !["get", "put", "post", "delete", "patch", "head", "options"]
+                    .contains(&method.as_str())
+                {
+                    continue;
+                }
                 assert!(
                     op["security"].is_null(),
                     "{method} {path} is not in the bearer route tables but is \
@@ -236,12 +246,20 @@ mod tests {
             .merge(crate::routes::api_write::router())
             .with_state(test_state());
 
-        for path in paths.keys() {
+        for (path, item) in paths {
             // Fill path templates with throwaway-but-valid (URL-safe) values.
             let concrete = path
                 .replace("{filename}", "nope.wav")
                 .replace("{scientific_name}", "Cardinalis_cardinalis");
-            let url = format!("/api/v2{concrete}");
+            // The server URL a path is appended to is the path item's own when
+            // it names one, else the document's. The API root is the only one
+            // that does: it is `/api/v2` exactly, `/api/v2/` is a 404, and a
+            // path must begin with `/`.
+            let prefix = item["servers"][0]["url"]
+                .as_str()
+                .or_else(|| spec["servers"][0]["url"].as_str())
+                .expect("a server URL");
+            let url = format!("{prefix}{concrete}");
 
             let resp = app
                 .clone()

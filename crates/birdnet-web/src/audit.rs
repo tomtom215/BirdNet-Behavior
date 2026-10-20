@@ -56,6 +56,16 @@ pub fn audit(
     }
 }
 
+/// The audit target for one detection: `"{date} {time} {sci_name}"`.
+///
+/// The tuple the schema keys a detection on, in the schema's order, so a row
+/// written from a page and one written from the API for the same detection
+/// carry the same target and `/admin/audit` can be searched for either.
+#[must_use]
+pub fn detection_target(date: &str, time: &str, sci_name: &str) -> String {
+    format!("{date} {time} {sci_name}")
+}
+
 /// Record an event for a user identified by id rather than by request.
 ///
 /// Login is the case: the session does not exist yet when the row is written,

@@ -62,3 +62,83 @@ async fn a_stored_value_cannot_break_out_of_its_field() {
         "the password would change on the next save: its entity was decoded"
     );
 }
+
+/// `/admin/settings` for a station holding `seed` in its settings table.
+async fn settings_page(seed: &str) -> String {
+    let conn = rusqlite::Connection::open_in_memory().expect("open");
+    birdnet_db::migration::migrate(&conn).expect("migrate");
+    conn.execute_batch(seed).expect("seed settings");
+    let resp = build_router(AppState::from_connection(
+        conn,
+        std::path::PathBuf::from(":memory:"),
+    ))
+    .oneshot(
+        Request::builder()
+            .uri("/admin/settings")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    String::from_utf8_lossy(
+        &axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .into_owned()
+}
+
+/// From `needle` to the first `end` after it: the region one print site writes.
+fn region<'a>(html: &'a str, needle: &str, end: &str) -> &'a str {
+    let start = html
+        .find(needle)
+        .unwrap_or_else(|| panic!("the page has no {needle}"));
+    let rest = &html[start..];
+    &rest[..rest
+        .find(end)
+        .unwrap_or_else(|| panic!("no {end} after {needle}"))]
+}
+
+/// The same property as above, asked with a probe nothing downstream rewrites,
+/// and of the region each value is printed into.
+///
+/// `seal::redeem` turns any `<script` the server did not seal into
+/// `&lt;script` in the finished body, so a test that types a `<script>` and looks
+/// for it cannot tell a page that escaped from a page that did not. The test
+/// above still stands because it also asks about the closing tag and the whole
+/// escaped attribute, neither of which the response pass can forge; it depends on
+/// that, though, and a payload without a closing tag would pass it by default.
+/// `<i>` is not touched by anything, so what is read back here is the page's
+/// own escaping, in an attribute and in element content.
+#[tokio::test]
+async fn a_stored_tag_is_text_in_an_attribute_and_in_a_textarea() {
+    let html = settings_page(
+        r#"INSERT INTO settings (key, value) VALUES
+             ('station_name', 'Plot"><i>probe</i>'),
+             ('notify_body_template', '</textarea><i>probe</i>');"#,
+    )
+    .await;
+
+    let input = region(&html, r#"<input id="station_name""#, ">");
+    assert!(
+        input.contains(r#"value="Plot&quot;&gt;&lt;i&gt;probe&lt;/i&gt;""#),
+        "the station name is not carried as escaped text in its attribute: {input}"
+    );
+
+    let area = region(
+        &html,
+        r#"<textarea id="notify_body_template""#,
+        "</textarea>",
+    );
+    let content = area.rsplit_once('>').expect("the textarea's opening tag").1;
+    assert_eq!(
+        content, "&lt;/textarea&gt;&lt;i&gt;probe&lt;/i&gt;",
+        "the template closed its own textarea or was not shown as text: {area}"
+    );
+
+    assert!(
+        !html.contains("<i>probe"),
+        "a stored tag reached the settings page as markup"
+    );
+}

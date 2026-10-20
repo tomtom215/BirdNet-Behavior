@@ -10,7 +10,7 @@
 - [REST API Endpoints](#rest-api-endpoints)
 - [HTMX Pages](#htmx-pages)
 - [Admin Panel](#admin-panel)
-- [Server-Sent Events (SSE)](#server-sent-events-sse)
+- [Live streams](#live-streams)
 - [Design Decisions](#design-decisions)
 
 ---
@@ -110,42 +110,58 @@ derived from the database path rather than stored.
 
 ## REST API Endpoints
 
+Every path in this section is under `/api/v2` (the routers are nested with
+`.nest("/api/v2", …)` in `routes/mod.rs`), and the tables name the main routes
+by the group they belong to; they are not the whole list. The whole list, with
+parameters and response shapes, is the manual's
+[HTTP & WebSocket API](../book/reference/api.md) page, and
+`crates/birdnet-web/openapi.json` is the machine-readable form. Two
+gates hold it to the router in both directions: `every_documented_path_is_routed`
+(every documented path is served) and
+`every_route_the_api_serves_is_in_the_openapi_document` (every served
+`/api/v2` method and path is documented, read from the router's own `Debug`
+output); the same file checks the document's structure (references, path
+parameters, operation ids, response descriptions). A route added without its
+entry fails by name.
+
 ### System
 
 | Endpoint | Response |
 |----------|----------|
 | `GET /api/v2/` | `{ name, version, status }` |
-| `GET /api/v2/health` | `{ status: "healthy"/"degraded", database: bool }` |
-| `GET /api/v2/stats` | `{ total_detections, unique_species, today_count }` |
+| `GET /api/v2/health` | `{ status: "healthy"/"degraded", version, database, … }`: the full body is on the manual's API page |
+| `GET /api/v2/stats` | Summary counts (detections, species, today) |
+| `GET /api/v2/metrics` | Prometheus text format |
 
 ### Detections
 
 | Endpoint | Query Params | Response |
 |----------|-------------|----------|
-| `GET /detections` | `date?`, `limit?` (default 100) | `{ detections: [...], total }` |
-| `GET /detections/recent` | `limit?` (default 20) | `{ detections: [...], total }` |
-| `POST /detections/delete` | body: detection id | Bearer-gated write API (`routes/api_write.rs`); the Today page's HTMX rows post to `/pages/today-delete` instead |
-| `GET /ws/detections` | — | WebSocket live detection feed (there is no SSE detection stream) |
+| `GET /api/v2/detections` | `date?`, `species?`, `source?`, `limit?`, `offset?` | `{ detections: [...], total_count }` |
+| `GET /api/v2/detections/recent` | `limit?` | `{ detections: [...] }` |
+| `GET /api/v2/detections/export` (and `/export/birddb`, `/export/ebird`, `/export/raven`) | `from?`, `to?`, `format?` | CSV / JSON / BirdDB.txt / eBird / Raven downloads |
+| `POST /api/v2/detections/delete` | body: detection id | Bearer-gated write API (`routes/api_write.rs`); the Today page's HTMX rows post to `/pages/today-delete` instead |
+| `GET /api/v2/ws/detections` | — | WebSocket live detection feed (there is no SSE detection stream) |
 
 ### Species
 
 | Endpoint | Query Params | Response |
 |----------|-------------|----------|
-| `GET /species/top` | `limit?` (default 20) | `{ species: [{ name, count, avg_confidence }] }` |
-| `GET /species/activity` | `date` (required) | `{ activity: [{ hour, count }], date }` |
-| `GET /species/image/{scientific_name}` | — | Image metadata JSON or 404; `/file` suffix serves the cached image |
+| `GET /api/v2/species/top` | `limit?` (default 20) | `{ species: [{ name, count, avg_confidence }] }` |
+| `GET /api/v2/species/activity` | `date` (required) | `{ activity: [{ hour, count }], date }` |
+| `GET /api/v2/species/image/{scientific_name}` | — | Image metadata JSON or 404; the `/file` suffix serves the cached image |
+| `GET /api/v2/species/occurrence` | `week?`, `q?`, `admitted?`, `limit?`, `offset?` | What the range filter says about each species for the station's place and a week of the model's 48-week year: each species' probability, the threshold in force and the station's decision, with the reason. `503` with a `reason` when the station cannot say (no location, no range model, a model that failed, no detection daemon). Served by `routes/species.rs` from an `OccurrenceSource` the detection daemon installs (`src/daemon/occurrence.rs`) |
 
 ### Recordings & Logs
 
 | Endpoint | Response |
 |----------|----------|
-| `GET /recordings/{filename}` | `audio/wav` file stream (chunked) |
-| `GET /admin/system/logs` | `text/event-stream` SSE of log lines (admin session required) |
+| `GET /api/v2/recordings` | The files in the recordings directory (`species?`, `limit?`, `offset?`) |
+| `GET /api/v2/recordings/{filename}` | The clip, streamed, honouring `Range` (`206`); the type follows the extension |
+| `GET /admin/system/logs` | `text/event-stream` SSE of log lines (admin session required; not under `/api/v2`) |
 
 ### Analytics
 
-| Endpoint | Query Params | Response |
-|----------|-------------|----------|
 Behavioural analytics (DuckDB) live under `/api/v2/analytics/*`:
 `sessions`, `retention`, `funnel`, `funnel-events`, `patterns`,
 `sequence-count`, `sequence-match-events`, `next-species`, `abundance`,
@@ -268,7 +284,7 @@ weight for an embedded application.
 
 **Why one writer plus an in-house `ReaderPool`, not a pool crate:** `AppState`
 originally held a single `Mutex<Connection>` and every path took it — each
-page render, the health-badge poll on every open tab, `/metrics`, the live
+page render, the health-badge poll on every open tab, `/api/v2/metrics`, the live
 feed and the detection writer. WAL was enabled the whole time, and a single
 connection uses none of what WAL is for (`db_pool.rs` records a 1.3 s
 lock hold on the history calendar at 3.3 M rows). `birdnet-web::db_pool`

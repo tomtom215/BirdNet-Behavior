@@ -15,6 +15,10 @@
 //! "answers while it is held" cannot pass by a route being broken, and a write
 //! made through the writer connection must be visible to the reads afterwards.
 
+// Needs the DuckDB analytics store: without the feature `AppState` has no
+// analytics methods to call, and the file would not compile.
+#![cfg(feature = "analytics")]
+
 use std::sync::mpsc;
 use std::time::Duration;
 

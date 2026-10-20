@@ -150,6 +150,7 @@ fn infer_chunk(
 ) -> Result<ChunkPrediction, DaemonError> {
     let mut verdicts = Vec::with_capacity(route.len());
     let mut human_score = 0.0_f32;
+    let mut human_rank: Option<usize> = None;
     let mut loudest_noise = None;
     // The first classifier error, returned only if no routed classifier
     // answered: one model failing must not silence the others (`e853776`).
@@ -187,6 +188,10 @@ fn infer_chunk(
             }
         };
         human_score = human_score.max(prediction.human_score);
+        human_rank = match (human_rank, prediction.human_rank) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         // Likewise the loudest watched noise class across classifiers.
         if let Some(noise) = prediction.loudest_noise
             && loudest_noise
@@ -213,6 +218,7 @@ fn infer_chunk(
     Ok(ChunkPrediction {
         detections: crate::detection::merge::merge_verdicts(&verdicts),
         human_score,
+        human_rank,
         loudest_noise,
     })
 }

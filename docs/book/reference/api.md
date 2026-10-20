@@ -8,7 +8,7 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 >
 > The **write** endpoints, and the eight token-gated reads, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
-> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: ten routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking`, the three verification exports `/api/v2/detections/export/raven`, `/api/v2/recordings/{clip}/raven.txt` and `/api/v2/recordings/{clip}/labels.txt`, and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` (the live audio is at `/stream`, outside `/api/v2`) — and the test that guards it (`every_documented_path_is_routed`) checks only that every *documented* path is routed, not the reverse.
+> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It describes every route served under `/api/v2`, and a test holds it to that: `every_route_the_api_serves_is_documented` reads the routes from the router itself (axum's `Debug` listing of every router the server merges: public, admin and token-gated) and fails, naming each, on a served method and path that the document omits; `every_documented_operation_is_served` fails on one the document names that no route serves; and `the_document_is_structurally_valid` checks that every `$ref` resolves, every path placeholder is a declared path parameter, and every operation has a unique `operationId`, a summary and a described response. Two things are not in it because they are not under `/api/v2`: the live audio stream at `/stream`, and the feeds and share pages. The two WebSockets, `/api/v2/ws/detections` and `/api/v2/ws/spectrogram`, are described by the status that upgrades them, `101`, with the messages they carry. The API root is `/api/v2` exactly, and `/api/v2/` is a `404`; an OpenAPI path must begin with `/`, so the root is the one path item that names its own server (`/api`, path `/v2`) rather than being spelled `/`. The structural check is a small one of our own and is not [Redocly](https://redocly.com/docs/cli/)'s rule set (`redocly.yaml` is in the repository root); run `redocly lint crates/birdnet-web/openapi.json` to apply that.
 
 ## Health & metrics
 
@@ -165,6 +165,19 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/detections` | `date`, `species` (common or scientific name), `source`, `limit`, `offset` — paginated, newest first; the filters combine, and `total_count` counts every page of the filtered set |
 | `GET /api/v2/detections/recent` | `limit` — most recent first |
 | `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
+| `GET /api/v2/detections/export` | `format` (`csv` or `json`, default `csv`), `from`, `to` (inclusive `YYYY-MM-DD`) — the detection history as a download (`detections.csv`); more than 1 000 000 rows is a `413` that asks you to narrow the range |
+| `GET /api/v2/detections/export/birddb` | `from`, `to` — BirdNET-Pi's semicolon-separated `BirdDB.txt` (`BirdDB.txt`), the twelve BirdNET-Pi columns and nothing more |
+| `GET /api/v2/detections/export/ebird` | `date`, `lat` with `lon`, `location`, `min_confidence`, `protocol`, `observers`, `state`, `country`, `complete` — eBird Record Format (`ebird_export_….csv`) |
+
+The rest of the export family (`detections/export/raven`, the per-clip Raven and Audacity tables) is under [Export](#export), and the exports' columns are described on the [Backups](../admin/backups.md#export) page.
+
+### Analysis runs
+
+`GET /api/v2/analysis-runs?limit=` lists the station's analysis runs, newest first (`limit` defaults to 50, at most 500), as `{"runs": [...]}`, and `GET /api/v2/analysis-runs/{id}` returns one (or `404`). A run is one detection-daemon start: it records the SHA-256 of the model and labels it analysed with and the settings in force, and carries `detections`, the number of rows that name it. A detection row's `run_id` points at one of these; the exports resolve it to the model's name and checksum, and this is where the rest (when the run started, the label count, the geomodel) is read.
+
+### Languages
+
+`GET /api/v2/languages` lists the languages species common names can be shown in, as `{"languages": [{"code", "name", "native_name", "active", "coverage"}], "count", "active"}`. `coverage` is `{"named", "of"}`, how many of the installed classifier's species the language names, and `null` for English and when no classifier label file was available to count against. See [Species Names in Your Language](../admin/species-names.md).
 
 ## Species
 
@@ -174,8 +187,36 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/species/search` | `q`, `limit` | Search by name |
 | `GET /api/v2/species/detail` | `name` | Per-species stats |
 | `GET /api/v2/species/activity` | `date` | Hourly activity (all species) on a given day |
-| `GET /api/v2/species/image/{scientific_name}` | — | Cached Wikipedia image (redirect/bytes) |
-| `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip (WAV) |
+| `GET /api/v2/species/occurrence` | `week` (1–48), `q`, `admitted` (`true`/`false`), `limit` (default 100, at most 1000), `offset` | What the station's range (occurrence) filter says about each species for its place and a week: the model's probability, the threshold, whether the station admits the species and why. See [Why isn't a bird heard here?](#why-isnt-a-bird-heard-here) |
+| `GET /api/v2/species/export` | `format` (`csv` or `json`), `limit` | Per-species totals as a download (`species.csv`) |
+| `GET /api/v2/species/image/{scientific_name}` | — | The image's metadata (URL, cache status, description) as JSON, or `404`; it does not download the picture. Only species the station has detected are looked up |
+| `GET /api/v2/species/image/{scientific_name}/file` | — | The cached picture itself (a custom image first, then the provider's), with a five-minute `private` cache header on the picture and on the `404` |
+| `GET /api/v2/recordings` | `species` (matched against the file name), `limit` (default 50, at most 500), `offset` | List the files in the recordings directory: `filename`, `size_bytes`, `modified_secs`, `content_type` |
+| `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip, honouring `Range` requests (`206`); the type follows the extension (WAV, MP3, FLAC, Ogg, AAC) |
+| `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached; with the `raw_spectrogram` setting on, never labelled |
+
+
+### Why isn't a bird heard here?
+
+`GET /api/v2/species/occurrence` answers it with the number behind it. The station asks a range model which species occur around its location in a week of the model's 48-week year (four weeks to a month) and admits a species when the model scores it at or above the threshold (`SF_THRESH`, default 0.03), or you put it on the Always allowed list, and your include and exclude lists allow it. The response is every species the model scores, most likely first, each with that decision:
+
+```json
+{
+  "location": { "latitude": 52.5, "longitude": 13.4 },
+  "week": 22, "week_is_current": false, "threshold": 0.03,
+  "scored": 6522, "admitted_total": 412, "matched": 1, "limit": 100, "offset": 0,
+  "species": [{
+    "scientific_name": "Spiza americana", "common_name": "Dickcissel",
+    "display_name": "Dickcissel", "probability": 0.0004, "admitted": false,
+    "verdict": "held-back-by-range",
+    "explanation": "Held back: the range model gives it <0.01 % here in week 22; this station admits species at 3 % and above."
+  }]
+}
+```
+
+`verdict` is `admitted`, `admitted-by-whitelist` (under the threshold, allowed by the Always allowed list), `held-back-by-range` (under the threshold) or `held-back-by-lists` (over it, kept out by your include or exclude list). `week` defaults to the current week; `q` matches either name, or the name in the station's language; `admitted=false` is the held-back species. A `week` outside 1–48, an `admitted` that is not `true` or `false`, and a `limit` outside 1–1000 are a `400` that names the range and does not run the model (the model reads a week it does not know as "no seasonal information" and answers with a year-round list, so the value is refused rather than clamped).
+
+A station that cannot say answers **`503`** with a `reason` and no `species` key, because an empty list would read as "nothing occurs here": `no-location` (the station has no coordinates), `no-range-model` (no range model is loaded: the filter is off and every species the classifier knows is a candidate), `range-model-failed` (the model is there and would not run; the log has the reason), or `no-detection-daemon` (this process does not run the detection daemon). The coordinates are rounded to one decimal place (about 11 km) because the endpoint is as open as the rest of the read API. The same answer is the page at `/species/occurrence`, linked from the Species page.
 
 ## Time-series & analytics
 
@@ -191,6 +232,8 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/timeseries/heatmap` · `sessions` | Hour×day heatmap, activity sessions |
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
 | `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `previous-species` · `patterns` | DuckDB behavioral analytics |
+| `GET /api/v2/analytics/funnel-events` | The `window_funnel_events` variant of `funnel`, with the same parameters (`species`, a comma-separated sequence of at most 64 names; `window`; `hour_start`, `hour_end`) |
+| `GET /api/v2/analytics/sequence-count` · `sequence-match-events` | The `sequence_count` and `sequence_match_events` variants of `patterns`, with the same parameters (`species`, `max_gap`, `hour_start`, `hour_end`) |
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
 | `GET /api/v2/insights/dawn-chorus?period_days=&min_days=` | Each species' typical first song of the morning (mean and earliest first detection between 04:00 and 10:00), over species heard on at least `min_days` (default 3) of the last `period_days` (default 30, at most 365) days, earliest first. A value that is not a positive integer is a `400`; one over the limit is clamped, and both values applied are echoed. |
 | `GET /api/v2/insights/migration` | Species first heard in the last 14 days, and species with at least 5 detections and none in the last 14 days, with when and how often. |

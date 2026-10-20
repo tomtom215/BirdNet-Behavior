@@ -1,6 +1,6 @@
 # Installation
 
-There are two supported ways to install BirdNet-Behavior. **Docker is the fastest path** — two commands and you are watching detections. The bare-metal installer is ideal for a dedicated Raspberry Pi with no container runtime.
+There are two supported ways to install BirdNet-Behavior, and each is one command. The **bare-metal installer** puts a native binary and a hardened `systemd` service on a Raspberry Pi or a modern x86_64 Linux machine. **Docker** carries its own runtime, so it also works where the native binary cannot run (Raspberry Pi OS Bookworm), and it suits a machine that already runs containers. Neither is the lesser path; choose by what the host is.
 
 ## Supported hardware & OS
 
@@ -21,14 +21,25 @@ There are two supported ways to install BirdNet-Behavior. **Docker is the fastes
 > installer's systemd unit enables it automatically (for a manual run, pass
 > `--analytics-db`).
 
-- **Storage:** ~1.5 GB free (541 MB for the BirdNET+ model, the rest for recordings and database).
+- **Storage:** about 1.5 GB free to start, most of it for recordings and the database. The default classifier is about 85 MB (BirdNET V2.4: a 54 MB model and a 30 MB range filter); the BirdNET+ V3.0 preview you can choose instead is 541 MB, plus a 14 MB occurrence model. The installer warns below 600 MB free for V2.4 and 900 MB for V3.0, because the model installer will not run without its own size plus a 512 MiB margin free.
 - **Audio input** — one of:
   - a USB microphone or USB sound card (`arecord` from `alsa-utils`), or
   - an IP camera or any RTSP stream (`ffmpeg`).
 
-The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically on first run — sha256-verified, from the same GitHub release line as the binary, with Zenodo (the upstream source) as a fallback. You never pick, locate, or install a model yourself.
+## Which classifier a new install runs
 
-## Option 1 — Docker quick start (recommended)
+A new bare-metal install, a new Docker volume and the macOS formula run **BirdNET V2.4 with its v2 range (occurrence) filter** — the network BirdNET-Pi and birdnet-go run, so the station agrees with them about what it heard ([Same audio, same detections](../guides/parity.md) says what was measured). **BirdNET+ V3.0 preview**, the network earlier releases installed for everyone, is an explicit choice:
+
+```bash
+# bare metal: a flag, or the environment variable; Docker: BIRDNET_CLASSIFIER in .env
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --classifier birdnet-v3
+```
+
+The values are `birdnet-v24` and `birdnet-v3` (`--classifier`, or `BIRDNET_CLASSIFIER` for the installer, the container and `quickstart.sh`, which writes it to `.env` only if you set it). An existing station **never changes model** on an install, update, repair or reinstall: the installer reads the classifier that `/etc/birdnet/birdnet.conf` names and keeps it, and says so (a `--classifier` that disagrees is reported as not applied). A Docker volume that already holds the V3.0 model file keeps V3.0 and logs one line saying how to change that. Changing a running station's classifier splits its history between two networks that name and score birds differently, so it is something you do on purpose, by editing `MODEL_PATH`, `LABELS_PATH` and `METADATA_MODEL_PATH`; [the classifiers page](../admin/classifiers.md#choosing-and-changing-the-primary-classifier) has the details.
+
+**Where the files come from.** The installer and the container ask the binary to install V2.4 (`birdnet-behavior --install-model birdnet-v24` and `birdnet-v24-range-v2`), and the binary checks each file against a SHA-256 compiled into it. The model comes from birdnet-go's published ONNX build on Hugging Face (`huggingface.co/tphakala/BirdNET-v2.4`) and the range filter from `raw.githubusercontent.com` (`tphakala/birdnet-go`), each at a pinned revision. The label file is not downloaded: the binary carries it, with BirdNET-Pi's English names. So a default install needs `huggingface.co` and `raw.githubusercontent.com` as well as `github.com` (for the binary), and nothing in it comes from this project's own model release. (The V2.4 files are also mirrored in this repository's `models-v2.4` release, published on 2026-10-20 with `publish-model.yml`; nothing fetches from it yet, because the binary's catalogue names one origin per file.) V3.0 still comes from this project's `models-v3.0-preview3` release, with Zenodo as the fallback. Either way you never locate a model yourself; the files are installed into the data directory's `models/` folder on bare metal and `/data/model` in Docker.
+
+## Option 1 — Docker quick start
 
 One command. It asks two or three plain-English questions, auto-detects your USB mic, writes a minimal `.env`, and starts the container. No git clone, no editor, no hand-picking compose overlays.
 
@@ -47,7 +58,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 6. (DuckDB behavioral analytics is built into every image and on by default — nothing to choose.)
 7. Writes a short `.env` with only your chosen values and a generated admin password (the file is readable by you alone).
 8. Starts the container with the matching compose overlay.
-9. Streams logs so you can watch the one-time 541 MB model download.
+9. Streams logs so you can watch the one-time model install (about 85 MB for the default BirdNET V2.4; 541 MB if you chose the V3.0 preview with `BIRDNET_CLASSIFIER=birdnet-v3`).
 10. Stops tailing as soon as the web server reports healthy, then prints the dashboard URL, your LAN IP and the admin login (user `admin`; the password is also in `~/birdnet-behavior/.env`, as `CADDY_PWD`).
 
 </details>
@@ -62,14 +73,15 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behav
 
 That address always serves the newest published release's `install.sh`, the same file that release lists in `SHA256SUMS` and attests with build provenance — not whatever the development branch holds that minute. (Fetching it from the branch, as earlier versions of this page said, ran unreleased code as root.) `--proto '=https' --tlsv1.2` refuses a downgrade on the way.
 
-The installer runs pre-flight checks (required tools, free disk, glibc version), detects your architecture, downloads the pre-built binary and the BirdNET+ model, creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately. When it finishes it runs post-install validation — the binary runs, `systemd-analyze verify` passes, directory ownership and config are correct, the doctor preflight is clean, and the port is listening.
+The installer runs pre-flight checks (required tools, free disk, glibc version), detects your architecture, downloads the pre-built binary, installs the classifier (BirdNET V2.4 and its range filter unless you chose otherwise, above), creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately. When it finishes it runs post-install validation — the binary runs, `systemd-analyze verify` passes, directory ownership and config are correct, the doctor preflight is clean, and the port is listening.
 
 The dashboard binds to all interfaces (`0.0.0.0:8502`) so it is reachable across your LAN right away. Viewing is open; everything that *changes* something — the `/admin` panel, and deleting, relabelling, reviewing or locking a detection — is gated by a strong **admin password the installer auto-generates** (username `admin`) — it is printed once in the post-install summary and stored as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. Save it. If you answer "restrict to this device" in the interactive prompts (or set `BIRDNET_LISTEN=127.0.0.1:8502`), the dashboard is reachable only from the Pi itself. If your config has an `RTSP_URL`, the installer also installs `ffmpeg` (required for RTSP capture) via apt, or prints the exact command if it can't.
 
 ```bash
-# Install a specific version (defaults to latest). The `-s --` passes the
-# argument through to the installer.
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.7.2
+# Install a specific release (defaults to the latest). The `-s --` passes the
+# argument through to the installer. Replace 0.17.1 with a release that exists:
+# https://github.com/tomtom215/BirdNet-Behavior/releases
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.17.1
 ```
 
 > **Don't run the installer with `sudo bash <(curl ...)`.** Process substitution
@@ -80,7 +92,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behav
 >
 > ```bash
 > curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh -o install.sh
-> sudo bash install.sh --version 0.7.2
+> sudo bash install.sh --version 0.17.1
 > ```
 
 ### Update, repair, reinstall, uninstall

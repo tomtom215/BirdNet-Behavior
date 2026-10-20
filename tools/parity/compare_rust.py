@@ -20,7 +20,15 @@ top-1 label differs, or the decision sets differ.  Logit differences are
 reported, not gated: they are a property of the ONNX build under test, and the
 README of this directory says how much each build moves.
 
+It also compares BirdNET-Pi's privacy mask: a window is masked when a human
+class ranks within the first ``--privacy-rank`` classes (BirdNET-Pi's
+``filter_humans`` at its default ``PRIVACY_THRESHOLD=0`` is 10), and so are the
+windows either side of it. Ours is the probe's ``human_rank``; the golden's is
+``privacy_masked``. A mask that differs fails the run; the two ranks themselves
+(an FP32 ONNX build against an FP16 TFLite one) are reported, not gated.
+
 Usage: compare_rust.py OURS.json GOLDEN.json [--confidence 0.7] [--sensitivity 1.25]
+                       [--privacy-rank 10]
 """
 import argparse
 import json
@@ -38,6 +46,8 @@ def main() -> int:
     ap.add_argument("golden")
     ap.add_argument("--confidence", type=float, default=0.7)
     ap.add_argument("--sensitivity", type=float, default=1.25)
+    ap.add_argument("--privacy-rank", type=int, default=10,
+                    help="BirdNET-Pi's human_cutoff: max(10, 60 x PRIVACY_THRESHOLD)")
     ap.add_argument("--min-tail-floor", action="store_true", default=True,
                     help="accept one chunk where BirdNET-Pi has none (recording under 1.5 s)")
     args = ap.parse_args()
@@ -50,7 +60,7 @@ def main() -> int:
     s = slope(args.sensitivity)
     bad = 0
     print(f"slope {s}, confidence >= {args.confidence}")
-    print(f"{'clip':28} {'chunks':>9} {'top1':>7} {'max|dlogit|':>12} {'decisions':>10}")
+    print(f"{'clip':28} {'chunks':>9} {'top1':>7} {'max|dlogit|':>12} {'decisions':>10} {'privacy':>8}")
     worst = 0.0
     for run in golden["runs"]:
         name = run["clip"]["file"].removesuffix(".wav")
@@ -97,7 +107,25 @@ def main() -> int:
         if top1_ok != top1_n:
             bad += 1
         worst = max(worst, max_dlogit)
-        print(f"{name:28} {len(och):>3}/{len(gch):<5} {top1_ok:>3}/{top1_n:<3} {max_dlogit:>12.4f} {dec_ok:>5}/{dec_n:<4}")
+
+        # The privacy mask: the human class within the first N classes, then
+        # the windows either side. Compared window by window.
+        priv_ok = priv_n = 0
+        if len(gch) == len(och):
+            own = [o.get("human_rank") is not None and o["human_rank"] < args.privacy_rank
+                   for o in och]
+            ours_mask = [own[i] or (i > 0 and own[i - 1]) or (i + 1 < len(own) and own[i + 1])
+                         for i in range(len(own))]
+            for g, om in zip(gch, ours_mask):
+                priv_n += 1
+                if bool(g["privacy_masked"]) == om:
+                    priv_ok += 1
+                else:
+                    notes.append(f"chunk@{g['start']}: PRIVACY MASK pi={bool(g['privacy_masked'])} "
+                                 f"ours={om} (pi human rank {g['human_best_rank']}, "
+                                 f"ours {och[g['i']].get('human_rank')})")
+                    bad += 1
+        print(f"{name:28} {len(och):>3}/{len(gch):<5} {top1_ok:>3}/{top1_n:<3} {max_dlogit:>12.4f} {dec_ok:>5}/{dec_n:<4} {priv_ok:>4}/{priv_n:<3}")
         for n in notes:
             print(f"    {n}")
     print(f"worst max|dlogit| over clips: {worst:.4f}")

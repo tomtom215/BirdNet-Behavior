@@ -9,7 +9,12 @@ is where every change is announced.
 ## 1. Where the project is
 
 BirdNet-Behavior is at `0.17.x`. Between `0.1.0` (2026-04-12) and `0.17.1`
-(2026-10-04) there were 24 releases, eleven of them from `0.10.0` (2026-08-07) on. That cadence
+(2026-10-04) there were 22 releases, ten of them from `0.11.0` (2026-08-09) on
+(`0.10.0` has a changelog section but was never tagged). The count is the
+application releases in
+`gh api repos/tomtom215/BirdNet-Behavior/releases --paginate --jq '.[].tag_name'`,
+which lists 23 names on 2026-10-20: the 22 releases, one of them tagged
+`v.0.3.0` by mistake, and the `models-v3.0-preview3` model release. That cadence
 suits a station whose owners want fixes quickly; it is hard on anyone who has to
 keep an integration compiling. This policy says what a release may and may not
 change so that the cadence can stay.
@@ -24,9 +29,9 @@ An operator or an integrator can rely on these, in this order of seriousness:
 
 | Surface | Where it is defined | Today |
 |---|---|---|
-| **Station data** — the SQLite database and its migrations | `crates/birdnet-db/src/migration.rs` | 53 migrations, contiguous from 1; forward-only |
-| **Configuration** — `birdnet.conf` keys, `BIRDNET_*` / `BNB_*` environment variables, command-line flags | `crates/birdnet-core/src/config/known_keys.rs`, `src/cli.rs`, `--help` | 147 file keys; 111 option lines in `--help` |
-| **HTTP API** — `/api/v2`, bearer-token and public | `crates/birdnet-web/openapi.json`, [`docs/book/reference/api.md`](docs/book/reference/api.md) | 85 paths, 87 operations |
+| **Station data** — the SQLite database and its migrations | `crates/birdnet-db/src/migration.rs` | N migrations, contiguous from 1; forward-only. N is what `awk '/pub const MIGRATIONS/,/^\];/' crates/birdnet-db/src/migration.rs \| grep -cE '^\s+version: [0-9]+,'` prints: 54 on 2026-10-20 |
+| **Configuration** — `birdnet.conf` keys, `BIRDNET_*` / `BNB_*` environment variables, command-line flags | `crates/birdnet-core/src/config/known_keys.rs`, `src/cli.rs`, `--help` | 148 file keys (the quoted strings in `KNOWN_CONFIG_KEYS`) and 112 option lines in `--help` (`grep -cE '^\s{2,6}(-[a-zA-Z], )?--[a-z0-9-]+' docs/book/_generated/cli-help.txt`), on 2026-10-20 |
+| **HTTP API** — `/api/v2`, bearer-token and public | `crates/birdnet-web/openapi.json`, [`docs/book/reference/api.md`](docs/book/reference/api.md) | 96 paths, 98 operations (the sizes of `paths` and of its HTTP-method entries in `openapi.json`), on 2026-10-20 |
 | **Metrics and messages** — Prometheus series, MQTT topics and Home Assistant discovery payloads, webhook bodies | [`docs/book/reference/integrations.md`](docs/book/reference/integrations.md) | `birdnet_*` series |
 | **Release artefacts and installer** — tarball names, `SHA256SUMS`, `install.sh` flags, the container image tags | [RELEASING.md](RELEASING.md) | |
 | **Supported platforms** | [README](README.md#supported-hardware--os) | see §6 |
@@ -106,11 +111,16 @@ Windows. Dropping a supported row (not the preview) is a breaking change.
 
 ## 7. Models
 
-The classifier and the occurrence model are pinned by SHA-256 in
-`installer/lib/10-config.sh` and refused on mismatch. Changing the default
-classifier changes what a station detects and how its confidences read, so it is
-a minor release, announced in the changelog with the before and after on the
-bundled test recording.
+Every model file is pinned by SHA-256 and refused on mismatch. BirdNET V2.4 and
+its range filter (the default for a new install) are pinned in
+`crates/birdnet-integrations/src/model_catalog.rs`, which is what
+`birdnet-behavior --install-model` checks; the BirdNET+ V3.0 preview and the
+geomodel are pinned in `installer/lib/10-config.sh` and `docker/entrypoint.sh`.
+Changing the default classifier changes what a station detects and how its
+confidences read, so it is a minor release, announced in the changelog with what
+was measured before and after. An existing station is never moved to another
+classifier by an install, update or repair; the same holds for a Docker volume
+that already holds the V3.0 model.
 
 ## 8. Security fixes
 
@@ -124,8 +134,11 @@ Nothing in the list below is promised for a date; each is a measurable condition
 
 - Two consecutive minor releases with no breaking change, by §3.
 - The HTTP API described by `openapi.json` in both directions — every routed path
-  documented, every documented path routed — and that checked in CI against the
-  previous release's file, so a breaking change cannot ship unlabelled.
+  documented, every documented path routed — which
+  `crates/birdnet-web/tests/every_route_the_api_serves_is_in_the_openapi_document.rs`
+  now checks on every test run, and that checked in CI against the previous
+  release's file, so a breaking change cannot ship unlabelled. The second half is
+  not done.
 - The upgrade path exercised from every release in the supported window.
 - Branch protection and a required-checks list on `main` (a repository setting,
   recorded in `docs/HANDOFF.md`).

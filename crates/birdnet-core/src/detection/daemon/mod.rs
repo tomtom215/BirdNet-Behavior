@@ -671,6 +671,10 @@ pub struct DaemonConfig {
     pub shed: Option<ShedPolicy>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
+    /// Privacy rank rule: suppress a window when a human class is among the
+    /// model's this-many highest-scoring classes (0 = off). See
+    /// [`crate::detection::privacy::PrivacyFilter::with_rank_cutoff`].
+    pub privacy_rank: usize,
     /// How far a saved clip reaches beyond its detection, so the privacy
     /// filter can check the whole of it for speech (`PIPE7`). The binary takes
     /// it from `ExtractionConfig::clip_reach`.
@@ -912,6 +916,7 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            privacy_rank: 0,
             privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_classes: Vec::new(),

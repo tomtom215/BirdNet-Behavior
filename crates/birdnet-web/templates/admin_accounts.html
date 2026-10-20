@@ -68,7 +68,7 @@
       {{user_rows}}
     </ul>
 
-    <p class="bnb-meta">If <code>CADDY_PWD</code> is set for this station (in the config file or the service environment), the password it names replaces <strong>admin</strong>&rsquo;s again at every restart, including one changed here. Change it there too, or remove it once you have signed in.</p>
+    <p class="bnb-meta">If <code>CADDY_PWD</code> is set for this station (in the config file or the service environment), a password changed here is kept across restarts: the station remembers the <code>CADDY_PWD</code> it last applied and only a new value replaces <strong>admin</strong>&rsquo;s. Remove it once you have signed in.</p>
 
     <details class="bnb-add-form acct-add-form" id="add-user">
       <summary>
@@ -79,7 +79,7 @@
       <div class="bnb-add-form__body">
         <form hx-post="/admin/accounts/users"
               hx-target="#user-list"
-              hx-swap="beforeend">
+              hx-swap="innerHTML">
           <div class="bnb-field-grid">
             <div class="bnb-field">
               <label class="bnb-eyebrow" for="new-username">Username</label>

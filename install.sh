@@ -16,6 +16,8 @@
 #   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- --version 0.5.1
 #   # from a saved copy:
 #   sudo bash install.sh [--version 0.5.1]
+#   # choose the classifier of a NEW install (default: BirdNET V2.4):
+#   sudo bash install.sh --classifier birdnet-v3
 #
 # When an existing install is detected the script offers update / repair /
 # reinstall / uninstall. You can also pick one explicitly:
@@ -45,11 +47,14 @@
 #     BIRDNET_SKIP_MODEL=1 sudo -E bash install.sh
 #   Installs the binary from a tarball you already downloaded (skips the GitHub
 #   fetch + checksum round-trip — you vouch for the local file), and skips the
-#   ~541 MB model pull. Place the model in <data>/models and restart afterwards.
+#   model pull (~85 MB for BirdNET V2.4, ~555 MB for the V3.0 preview). Place the
+#   model files in <data>/models and restart afterwards.
 #
 # Environment overrides (all optional):
 #   BIRDNET_BINARY_TARBALL=PATH  install the binary from a local tarball (offline)
 #   BIRDNET_SKIP_MODEL=1         do not download the model (stage it out-of-band)
+#   BIRDNET_CLASSIFIER=ID        birdnet-v24 (default) or birdnet-v3, as --classifier
+#                                (the flag wins; an existing station keeps its own)
 #   BIRDNET_NONINTERACTIVE=1     never prompt; take env/config/defaults
 #   BIRDNET_LISTEN=HOST:PORT     dashboard bind address (default 0.0.0.0:8502)
 #   BIRDNET_SKIP_GLIBC_CHECK=1   bypass the glibc floor check (built from source)
@@ -124,19 +129,86 @@ SUBCOMMAND=""
 # BIRDNET_SKIP_GLIBC_CHECK=1 to bypass (e.g. you built from source).
 REQUIRED_GLIBC="2.39"
 
-# Rough free-space floor for a fresh install: ~541 MB model + binary + DB
+# Rough free-space floor for a fresh install: the model download + binary + DB
 # headroom. Below this we warn (model download would otherwise fail mid-way
-# with a less obvious error).
+# with a less obvious error). It depends on the classifier, so
+# select_classifier (52-classifier.sh) sets it: 600 for BirdNET V2.4 and 900
+# for the BirdNET+ V3.0 preview (~541 MB). V2.4's is not about its ~85 MB of
+# files: the binary that installs them refuses unless the model's size PLUS a
+# 512 MiB margin is free (FREE_SPACE_MARGIN in model_catalog.rs), 564 MiB for
+# the 54 MB model.
 REQUIRED_FREE_MB=900
 
 # Set to 1 by main() when an already-running service is stopped for an upgrade,
 # so we know to restart it afterwards rather than leave it down.
 SERVICE_WAS_RUNNING=0
 
-# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB), arch-independent and working
-# on every platform. This is the successor to BirdNET V2.4, the network
-# BirdNET-Pi and birdnet-go run, not the same model: its detections differ by
-# design. To run V2.4 instead, see docs/book/guides/parity.md.
+# ---------------------------------------------------------------------------
+# Classifiers
+#
+# Two are supported. `--classifier` (or BIRDNET_CLASSIFIER) picks one for a new
+# install; select_classifier in 52-classifier.sh copies the chosen one's names
+# (and, for V3.0, its pins) into the unprefixed MODEL_FILE / LABELS_FILE /
+# MODEL_SHA256 / LABELS_SHA256 / MODEL_RELEASE_TAG that the rest of the
+# installer reads.
+#
+#   birdnet-v24  BirdNET V2.4 + its range (occurrence) filter v2. THE DEFAULT.
+#                The network BirdNET-Pi and birdnet-go run, so a station that
+#                installs with no customisation agrees with them about what it
+#                heard (docs/book/guides/parity.md says what was measured).
+#   birdnet-v3   BirdNET+ V3.0 preview + the BirdNET geomodel. Opt-in. A
+#                different network (4.5 s windows at 32 kHz, calibrated
+#                probabilities, ~11 500 species): its detections differ from
+#                BirdNET-Pi's by design.
+#
+# A classifier and its occurrence filter are a pair and are never mixed: the
+# V2.4 range filter is indexed like the V2.4 labels (by position) and means
+# nothing to another network; the geomodel is matched by name through its own
+# label file. The V3.0 pins below are also in the Rust catalogue and in the
+# container's entrypoint; installer/test/model-pins-match-catalogue.sh fails
+# when they disagree.
+# ---------------------------------------------------------------------------
+CLASSIFIER_V24="birdnet-v24"
+CLASSIFIER_V3="birdnet-v3"
+DEFAULT_CLASSIFIER="${CLASSIFIER_V24}"
+
+# What the operator asked for (--classifier, else BIRDNET_CLASSIFIER); empty
+# means "no preference". resolve_classifier turns it, together with whatever
+# is already installed, into CLASSIFIER.
+CLASSIFIER_REQUEST="${BIRDNET_CLASSIFIER:-}"
+
+# ---------------------------------------------------------------------------
+# BirdNET V2.4 (the default). FP32 ONNX (~54 MB) + labels (~0.3 MB) + range
+# filter v2 (~30 MB), arch-independent.
+#
+# Installed by the binary, not by this script: `birdnet-behavior --install-model
+# birdnet-v24` and `... birdnet-v24-range-v2`. Nothing about those files is
+# pinned here — no digest, no URL, no size. The digests, the origins and the
+# size check live in crates/birdnet-integrations/src/model_catalog.rs, and the
+# binary verifies each file against them and renames it into place only when it
+# matches. That is deliberate and it is not only tidiness: the V2.4 labels are a
+# file the binary itself carries (BirdNET-Pi's English names on V2.4's class
+# order — the file birdnet-go publishes names 460 of 6 522 classes differently,
+# which would split a species in two the day a BirdNET-Pi history is imported),
+# so there is nothing for this script to download, and a second copy of the
+# other two pins would be a second place for them to go stale.
+#
+# What IS here is the names the binary gives the files, so the config can point
+# at them. installer/test/model-pins-match-catalogue.sh holds them to the
+# catalogue's ids, and fails if a digest or a URL for V2.4 ever appears in this
+# file or in the container's entrypoint.
+# ---------------------------------------------------------------------------
+V24_MODEL_ID="birdnet-v24"
+V24_RANGE_ID="birdnet-v24-range-v2"
+V24_MODEL_FILE="birdnet-v24.onnx"
+V24_LABELS_FILE="birdnet-v24_labels.txt"
+V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
+
+# ---------------------------------------------------------------------------
+# BirdNET+ V3.0 model files (opt-in: --classifier birdnet-v3). FP32 ONNX
+# (~541 MB), arch-independent and working on every platform. This is the
+# successor to BirdNET V2.4, the network BirdNET-Pi and birdnet-go run, not the
+# same model: its detections differ by design. See docs/book/guides/parity.md.
 #
 # Primary origin is a stable, arch-independent GitHub release shared by all app
 # releases (uploaded once, never re-pushed per patch), so a fresh install pulls
@@ -150,19 +222,34 @@ SERVICE_WAS_RUNNING=0
 # download from either host is rejected. The same hashes are published as the
 # `SHA256SUMS` asset of the models release; publish-model.yml cross-checks the
 # Zenodo bytes against these values before it uploads, so the two never drift.
-MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
-LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
+# ---------------------------------------------------------------------------
+V3_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+V3_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+V3_MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+V3_LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
 
 # Primary origin: the stable GitHub models release (one per model version).
-MODEL_RELEASE_TAG="models-v3.0-preview3"
-MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}"
+V3_MODEL_RELEASE_TAG="models-v3.0-preview3"
 
 # Fallback origin: Zenodo. The API /content endpoint handles the + in the
 # filenames correctly and needs no login.
-ZENODO_RECORD="18247420"
-ZENODO_API="https://zenodo.org/api/records/${ZENODO_RECORD}/files"
+V3_ZENODO_RECORD="18247420"
+ZENODO_API="https://zenodo.org/api/records/${V3_ZENODO_RECORD}/files"
+
+# What the rest of the installer reads: the SELECTED classifier's files. Empty
+# until select_classifier runs (52-classifier.sh runs it with the default as
+# soon as it is loaded, and main re-runs it once it knows better).
+CLASSIFIER=""
+CLASSIFIER_NAME=""
+MODEL_FILE=""
+LABELS_FILE=""
+MODEL_SHA256=""
+LABELS_SHA256=""
+MODEL_RELEASE_TAG=""
+MODEL_GH_BASE=""
+MODEL_SIZE_HINT=""
+# One line the final summary prints under "Classifier:", set by resolve_classifier.
+CLASSIFIER_SUMMARY=""
 
 # ---------------------------------------------------------------------------
 # BirdNET Geomodel v3.0.2 — the species occurrence ("range") filter.
@@ -199,9 +286,9 @@ GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
 GEOMODEL_SHA256="b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea"
 GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784"
 
-# Primary origin: our models release (the same one the classifier comes from,
-# so a fresh install still contacts a single host).
-GEOMODEL_GH_BASE="${MODEL_GH_BASE}"
+# Primary origin: our models release (the same one the V3.0 classifier comes
+# from, so a fresh install still contacts a single host).
+GEOMODEL_GH_BASE="https://github.com/${REPO}/releases/download/${V3_MODEL_RELEASE_TAG}"
 # Fallback origin: the upstream release the mirror is taken from.
 GEOMODEL_UPSTREAM_BASE="https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}"
 
@@ -675,7 +762,7 @@ resolve_version() {
 # Pre-install checks and installation-state detection
 #
 # These run before any download or filesystem change so a doomed install fails
-# fast with an actionable message instead of half-way through a 541 MB pull.
+# fast with an actionable message instead of half-way through a model pull.
 # ---------------------------------------------------------------------------
 
 # Verify the tools the installer itself depends on are present. A hard-missing
@@ -756,7 +843,7 @@ check_disk_space() {
     fi
     if [ "${free_mb}" -lt "${REQUIRED_FREE_MB}" ]; then
         warn "Only ${free_mb} MB free on the data filesystem (${DATA_DIR})."
-        warn "The BirdNET model alone is ~541 MB; free up space or the download may fail."
+        warn "The BirdNET model alone is ${MODEL_SIZE_HINT:-large}; free up space or the download may fail."
     else
         success "Disk space OK (${free_mb} MB free for ${DATA_DIR})."
     fi
@@ -1153,8 +1240,192 @@ install_binary() {
     fi
 }
 
+# ===== installer/lib/52-classifier.sh =====
+# ---------------------------------------------------------------------------
+# Choosing the classifier
+#
+# Which network a station runs decides every detection it stores, so the rule
+# for choosing is written down here and held by installer/test/classifier-*.sh:
+#
+#   1. A station that already has a config keeps the classifier that config
+#      names. The config is pinned per station (write_config never rewrites an
+#      existing one), and an upgrade must never swap the model under a running
+#      station: its history would split into rows two different networks
+#      scored. Only a config whose MODEL_PATH is the V2.4 file this installer
+#      manages selects V2.4; every other existing config selects the V3.0 files,
+#      because that is what every install before V2.4 became the default
+#      fetched, and what a repair of one of those must keep fetching.
+#   2. Otherwise an explicit request (--classifier, else BIRDNET_CLASSIFIER).
+#   3. Otherwise, if the V3.0 model file is already in the models directory
+#      (a station restored from a backup of its data without its config), V3.0:
+#      the same "never switch under a history" rule, applied to the evidence
+#      that is left.
+#   4. Otherwise the default, BirdNET V2.4.
+# ---------------------------------------------------------------------------
+
+# Where an operator reads how the two classifiers differ and how to move a
+# station from one to the other.
+CLASSIFIER_GUIDE_URL="https://github.com/${REPO}/blob/main/docs/book/guides/parity.md"
+
+# True when $1 is a classifier id this installer knows.
+valid_classifier_id() {
+    case "$1" in
+        birdnet-v24 | birdnet-v3) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Make $1 the classifier the rest of the installer works with, by copying its
+# file names (and, for V3.0 only, its digests and release tag) into the
+# unprefixed names the download, config and summary code read.
+# Silent: it only sets variables.
+select_classifier() {
+    case "$1" in
+        birdnet-v24)
+            CLASSIFIER="birdnet-v24"
+            CLASSIFIER_NAME="BirdNET V2.4"
+            MODEL_FILE="${V24_MODEL_FILE}"
+            LABELS_FILE="${V24_LABELS_FILE}"
+            # No digests and no release tag: the binary installs these files
+            # and owns what they must hash to (see 10-config.sh).
+            MODEL_SHA256=""
+            LABELS_SHA256=""
+            MODEL_RELEASE_TAG=""
+            MODEL_SIZE_HINT="~54 MB"
+            # The binary will not install into less than the model's size plus
+            # a 512 MiB margin, so the floor is above that, not above 85 MB.
+            REQUIRED_FREE_MB=600
+            ;;
+        birdnet-v3)
+            CLASSIFIER="birdnet-v3"
+            CLASSIFIER_NAME="BirdNET+ V3.0"
+            MODEL_FILE="${V3_MODEL_FILE}"
+            LABELS_FILE="${V3_LABELS_FILE}"
+            MODEL_SHA256="${V3_MODEL_SHA256}"
+            LABELS_SHA256="${V3_LABELS_SHA256}"
+            MODEL_RELEASE_TAG="${V3_MODEL_RELEASE_TAG}"
+            MODEL_SIZE_HINT="~541 MB"
+            REQUIRED_FREE_MB=900
+            ;;
+        *)
+            fatal "Unknown classifier '$1'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
+            ;;
+    esac
+    if [ -n "${MODEL_RELEASE_TAG}" ]; then
+        MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}"
+    else
+        MODEL_GH_BASE=""
+    fi
+}
+
+# The value of KEY in FILE (default: the station config): the last active
+# `KEY=value` line, trimmed and unquoted. Prints nothing when there is none.
+config_value() {
+    local key="$1" file="${2:-${CONFIG_FILE}}" line
+    [ -f "${file}" ] || return 0
+    line="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "${file}" 2>/dev/null | tail -n 1 || true)"
+    line="${line#*=}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    case "${line}" in
+        \"*\") line="${line#\"}"; line="${line%\"}" ;;
+    esac
+    printf '%s' "${line}"
+}
+
+# Settle CLASSIFIER for this run (see the rules at the top of this file) and
+# say what was decided and why. Needs MODEL_DIR and CONFIG_FILE final, so it
+# runs after require_root has derived them.
+resolve_classifier() {
+    local requested="${CLASSIFIER_REQUEST}"
+    if [ -n "${requested}" ] && ! valid_classifier_id "${requested}"; then
+        fatal "Unknown classifier '${requested}'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
+    fi
+
+    local chosen how kept_model=""
+    if [ -f "${CONFIG_FILE}" ]; then
+        how="kept"
+        kept_model="$(config_value MODEL_PATH)"
+        if [ "${kept_model}" = "${MODEL_DIR}/${V24_MODEL_FILE}" ]; then
+            chosen="${CLASSIFIER_V24}"
+        else
+            chosen="${CLASSIFIER_V3}"
+        fi
+    elif [ -n "${requested}" ]; then
+        how="requested"
+        chosen="${requested}"
+    elif [ -f "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+        how="v3-files"
+        chosen="${CLASSIFIER_V3}"
+    else
+        how="default"
+        chosen="${DEFAULT_CLASSIFIER}"
+    fi
+    select_classifier "${chosen}"
+
+    case "${how}" in
+        kept)
+            if [ "${chosen}" = "${CLASSIFIER_V24}" ] \
+                || [ "${kept_model}" = "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+                CLASSIFIER_SUMMARY="$(classifier_summary "${chosen}")"
+            elif [ -n "${kept_model}" ]; then
+                CLASSIFIER_SUMMARY="the model in MODEL_PATH (${kept_model}) — this installer did not change it"
+            else
+                CLASSIFIER_SUMMARY="none named: ${CONFIG_FILE} has no MODEL_PATH, and this installer did not add one"
+            fi
+            info "Classifier: ${CLASSIFIER_SUMMARY}."
+            info "  (kept from ${CONFIG_FILE} — an existing station's classifier is never changed by an install, update or repair.)"
+            if [ -n "${requested}" ] && [ "${requested}" != "${chosen}" ]; then
+                warn "--classifier ${requested} was NOT applied: ${CONFIG_FILE} already names this station's model,"
+                warn "and changing a running station's classifier splits its detection history between two networks."
+                warn "To switch on purpose, install the other classifier's files and edit MODEL_PATH, LABELS_PATH and"
+                warn "METADATA_MODEL_PATH in that file — ${CLASSIFIER_GUIDE_URL} has the steps."
+            fi
+            ;;
+        requested)
+            CLASSIFIER_SUMMARY="$(classifier_summary "${chosen}")"
+            info "Classifier: ${CLASSIFIER_SUMMARY} (--classifier ${chosen})."
+            ;;
+        v3-files)
+            CLASSIFIER_SUMMARY="$(classifier_summary "${chosen}")"
+            info "Classifier: ${CLASSIFIER_SUMMARY}."
+            info "  The BirdNET+ V3.0 model is already in ${MODEL_DIR} and there is no ${CONFIG_FILE}, so this keeps it:"
+            info "  a station restored from a backup must not change networks under its history."
+            info "  Pass --classifier ${CLASSIFIER_V24} to use BirdNET V2.4 instead."
+            ;;
+        default)
+            CLASSIFIER_SUMMARY="$(classifier_summary "${chosen}")"
+            info "Classifier: ${CLASSIFIER_SUMMARY}."
+            info "  (the default; pass --classifier ${CLASSIFIER_V3} on a new install for the BirdNET+ V3.0 preview.)"
+            ;;
+    esac
+}
+
+# The one-line description of a classifier for a station this run is setting up.
+classifier_summary() {
+    case "$1" in
+        birdnet-v24) printf '%s' "BirdNET V2.4 + range filter v2 — the network BirdNET-Pi and birdnet-go run" ;;
+        *)           printf '%s' "BirdNET+ V3.0 preview — a different network from BirdNET-Pi's; its detections differ by design" ;;
+    esac
+}
+
+# Until main() knows better the default is selected, so every name the
+# download and config code reads is defined whichever path reaches it first.
+select_classifier "${DEFAULT_CLASSIFIER}"
+
 # ===== installer/lib/55-model.sh =====
 # ---------------------------------------------------------------------------
+# Two classifiers are installed two ways, on purpose.
+#
+#   BirdNET V2.4 (the default) is installed by the binary itself — see
+#   "BirdNET V2.4: the binary installs it" at the end of this file. Nothing in
+#   this script downloads, hashes or names an origin for those files.
+#
+#   BirdNET+ V3.0 (--classifier birdnet-v3) is installed by the functions below,
+#   exactly as before: from our own models release, falling back to Zenodo, each
+#   file checked against the pins in 10-config.sh. They are unchanged by V2.4
+#   becoming the default.
+#
 # Download the BirdNET+ V3.0 model + labels.
 #
 # Origin: the stable, arch-independent `models-v3.0-preview3` GitHub release
@@ -1462,6 +1733,172 @@ download_geomodel() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# BirdNET V2.4: the binary installs it.
+#
+# `birdnet-behavior --install-model birdnet-v24` fetches the model, writes the
+# labels (a file the binary carries: BirdNET-Pi's English names on V2.4's class
+# order), checks the model's sha256 and size and the labels' sha256, and renames
+# each into place only when it matches, so nothing under a name the station
+# loads is ever half-written or unverified. `--install-model
+# birdnet-v24-range-v2` does the same for the range filter. This script runs
+# them and checks only that the files appeared; what they must hash to, and where
+# they come from, is the binary's business (model_catalog.rs) and appears nowhere
+# here. Pinning V2.4 in this script as well would be a second copy of digests
+# that already live in the binary, with nothing but a test to say when it went
+# stale; the V3.0 pins above are the only ones left, and they have the test.
+#
+# What this gives up, and why that is acceptable: the V3.0 code re-hashes a file
+# that is already there before trusting it, because it wrote that file with a
+# plain download that a dropped connection leaves truncated at the final name.
+# The binary's install is atomic — a file under its final name has already been
+# verified once — so a file that is present and non-empty is trusted, and a
+# missing one is installed. A file damaged AFTER it was installed (a bad card, a
+# truncated restore) is not found here; `birdnet-behavior --install-model
+# birdnet-v24` over the top replaces it, and the cheap fix for this gap is an
+# idempotent --install-model that re-hashes what is there, which belongs in the
+# binary.
+# ---------------------------------------------------------------------------
+
+# Run `birdnet-behavior --install-model ID` into ${MODEL_DIR}. Output is the
+# binary's own, shown as it comes: it says what it is installing, and why when it
+# refuses.
+install_model_with_binary() {
+    local id="$1" bin="${INSTALL_DIR}/${BINARY_NAME}"
+    if [ ! -x "${bin}" ]; then
+        warn "${bin} is not installed, so ${id} cannot be installed with it."
+        return 127
+    fi
+    # The child gets the model directory and nothing of the installer's own
+    # settings: the binary reports every BIRDNET_* variable it does not read, so
+    # `BIRDNET_CLASSIFIER=… sudo -E bash install.sh` would open the install with
+    # "BIRDNET_CLASSIFIER is not a variable this station reads". `--config
+    # /dev/null` is an empty config: there is no config yet on a fresh install,
+    # and without one the binary warns that it found none.
+    env -u BIRDNET_CLASSIFIER -u BIRDNET_SKIP_MODEL -u BIRDNET_NONINTERACTIVE \
+        -u BIRDNET_BINARY_TARBALL -u BIRDNET_SKIP_GLIBC_CHECK \
+        BIRDNET_MODEL_DIR="${MODEL_DIR}" "${bin}" --config /dev/null --install-model "${id}"
+}
+
+# Is FILE there and not empty? (The binary's installs are atomic: a file at its
+# final name is a finished one. See above for what that does not cover.)
+installed_file_present() {
+    [ -s "$1" ]
+}
+
+download_model_v24() {
+    local model_dest="${MODEL_DIR}/${V24_MODEL_FILE}"
+    local labels_dest="${MODEL_DIR}/${V24_LABELS_FILE}"
+
+    if installed_file_present "${model_dest}" && installed_file_present "${labels_dest}"; then
+        success "BirdNET V2.4 model and labels already installed at ${MODEL_DIR} — skipping."
+        return
+    fi
+
+    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
+        install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+        loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT installed." \
+                  "The service will start but will detect NOTHING until you stage it:" \
+                  "  put ${V24_MODEL_FILE} and ${V24_LABELS_FILE} (and ${V24_RANGE_FILE} to filter by location)" \
+                  "  in ${MODEL_DIR}, then restart the service. They are what" \
+                  "  ${BINARY_NAME} --install-model ${V24_MODEL_ID} and ${V24_RANGE_ID} write."
+        return
+    fi
+
+    info "Installing the BirdNET V2.4 model (${MODEL_SIZE_HINT} FP32 ONNX) + labels with ${BINARY_NAME} --install-model…"
+    info "  The binary checks each file's sha256 and size before it keeps it."
+
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+
+    if ! install_model_with_binary "${V24_MODEL_ID}"; then
+        warn "BirdNET V2.4 could not be installed (the reason is above)."
+        warn "Common causes: no internet connection, huggingface.co temporarily down,"
+        warn "less than ~600 MB free in ${MODEL_DIR}, or a ${BINARY_NAME} older than BirdNET V2.4"
+        warn "support (it answers that the model is unknown) — install a current release."
+        warn "Re-run this installer to try again, or use the BirdNET+ V3.0 preview instead:"
+        warn "  sudo bash install.sh --classifier ${CLASSIFIER_V3}"
+        fatal "BirdNET V2.4 install failed. Check the cause above and retry."
+    fi
+    if ! installed_file_present "${model_dest}" || ! installed_file_present "${labels_dest}"; then
+        fatal "${BINARY_NAME} --install-model ${V24_MODEL_ID} reported success but ${model_dest} or ${labels_dest} is missing; this installer and the binary disagree about the file names."
+    fi
+    chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
+    success "BirdNET V2.4 model and labels installed to ${MODEL_DIR}"
+}
+
+# The V2.4 counterpart of download_geomodel, with the same stance: NON-FATAL. A
+# station without the classifier detects nothing and must stop; one without the
+# filter detects everything and merely stops filtering by location, so aborting
+# an otherwise good install over a 30 MB optional download would be the worse
+# failure. It warns, leaves METADATA_MODEL_PATH commented out, and `--doctor`
+# reports the filter as off with the command that fixes it.
+#
+# One file, no labels of its own: the filter is indexed like the V2.4 labels. For
+# the same reason it is only ever installed for V2.4, and the geomodel only for
+# V3.0 (download_occurrence_filter below); each means nothing to the other
+# network.
+#
+# Sets RANGE_FILTER_INSTALLED=1 when the file is in place, which is what
+# 62-config-file.sh keys METADATA_MODEL_PATH on.
+RANGE_FILTER_INSTALLED=0
+
+download_range_filter() {
+    local dest="${MODEL_DIR}/${V24_RANGE_FILE}"
+
+    if installed_file_present "${dest}"; then
+        RANGE_FILTER_INSTALLED=1
+        success "Range filter already installed at ${MODEL_DIR} — skipping."
+        return 0
+    fi
+
+    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
+        info "BIRDNET_SKIP_MODEL=1 — skipping the range filter install too."
+        return 0
+    fi
+
+    info "Installing the BirdNET V2.4 range filter v2 (~30 MB) with ${BINARY_NAME} --install-model…"
+    info "  This is the species occurrence filter: it drops birds that do not"
+    info "  occur near this station at this time of year (it needs LATITUDE and LONGITUDE)."
+
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+
+    if ! install_model_with_binary "${V24_RANGE_ID}" || ! installed_file_present "${dest}"; then
+        rm -f "${dest}"
+        warn "The range filter could not be installed (the reason is above)."
+        warn "The station will run WITHOUT species occurrence filtering: every"
+        warn "species the classifier knows stays a candidate wherever it is."
+        warn "Re-run this installer to retry, then check with:"
+        warn "  birdnet-behavior --doctor"
+        return 0
+    fi
+
+    chown "${SERVICE_USER}:${SERVICE_USER}" "${dest}"
+    RANGE_FILTER_INSTALLED=1
+    success "Range filter installed to ${dest}"
+    return 0
+}
+
+# What do_install / do_repair call. The classifier's own installer: the binary
+# for V2.4, the download code above for V3.0 (and for a station whose config
+# names neither, as before).
+download_classifier() {
+    if [ "${CLASSIFIER}" = "${CLASSIFIER_V24}" ]; then
+        download_model_v24
+    else
+        download_model
+    fi
+}
+
+# The occurrence filter that belongs to the selected classifier, and only that
+# one: the V2.4 range filter for V2.4, the geomodel for everything else.
+download_occurrence_filter() {
+    if [ "${CLASSIFIER}" = "${CLASSIFIER_V24}" ]; then
+        download_range_filter
+    else
+        download_geomodel
+    fi
+}
+
 # ===== installer/lib/60-dirs.sh =====
 # ---------------------------------------------------------------------------
 # Create data directories and the tmpfs streaming directory
@@ -1551,6 +1988,16 @@ MEOF
 # leave it.
 enable_geomodel_in_kept_config() {
     [ "${GEOMODEL_INSTALLED:-0}" = "1" ] || return 0
+    # The geomodel belongs to the V3.0 classifier. A config that names the V2.4
+    # file this installer manages is paired with the range filter instead
+    # (enable_range_filter_in_kept_config); writing the geomodel into it would
+    # hand one network the other's occurrence filter. Nothing in the install
+    # flow gets here with both, so this is the file-level backstop for the
+    # invariant rather than a path anyone takes.
+    if [ "$(config_value MODEL_PATH "${CONFIG_FILE}")" = "${MODEL_DIR}/${V24_MODEL_FILE}" ]; then
+        warn "${CONFIG_FILE} runs BirdNET V2.4, whose occurrence filter is the range filter, not the geomodel — leaving METADATA_* alone."
+        return 0
+    fi
     local model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
     local labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
     if ! grep -q 'METADATA_MODEL_PATH' "${CONFIG_FILE}"; then
@@ -1582,10 +2029,41 @@ enable_geomodel_in_kept_config() {
     fi
 }
 
+# The V2.4 twin of the function above, for a config that names the V2.4 file.
+# Narrower on purpose: it fills in the template's own empty placeholders (the
+# state a fresh install's failed range-filter download leaves behind) and
+# nothing else. A config with no METADATA_MODEL_PATH line at all was written by
+# hand — the installer has never written one without — and switching occurrence
+# filtering on in it is the operator's decision, not an update's. The V3.0
+# geomodel retrofit adds one because it was introduced as on-by-default in the
+# same release; there is no such release to honour here.
+enable_range_filter_in_kept_config() {
+    [ "${RANGE_FILTER_INSTALLED:-0}" = "1" ] || return 0
+    # Only the V2.4 file pairs with the V2.4 range filter. This guard is the
+    # other half of the one above: a V3.0 (or any other) config is never given
+    # a filter that is indexed like a different network's labels.
+    if [ "$(config_value MODEL_PATH "${CONFIG_FILE}")" != "${MODEL_DIR}/${V24_MODEL_FILE}" ]; then
+        warn "${CONFIG_FILE} does not run BirdNET V2.4, so the V2.4 range filter was not written into it."
+        return 0
+    fi
+    local model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${V24_RANGE_FILE}"
+    if grep -qE '^# METADATA_MODEL_PATH=$' "${CONFIG_FILE}"; then
+        sed -i -e "s|^# METADATA_MODEL_PATH=\$|${model_line}|" "${CONFIG_FILE}"
+        success "Species occurrence filtering is ON: filled in the range filter in ${CONFIG_FILE}."
+    elif grep -qE '^[[:space:]]*METADATA_MODEL_PATH=' "${CONFIG_FILE}"; then
+        success "Species occurrence filtering is configured in ${CONFIG_FILE}."
+    else
+        warn "The range filter is installed, but ${CONFIG_FILE} does not name it, so species"
+        warn "occurrence filtering stays OFF. Add this line (and LATITUDE/LONGITUDE) to use it:"
+        warn "  ${model_line}"
+    fi
+}
+
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
         enable_geomodel_in_kept_config
+        enable_range_filter_in_kept_config
         # Upgrade from a version that left the config world-readable: tighten it
         # without touching the user's settings.
         chown "root:${SERVICE_USER}" "${CONFIG_FILE}" 2>/dev/null || true
@@ -1616,11 +2094,65 @@ write_config() {
     # them unconditionally would point a fresh station at paths that do not
     # exist, and `--doctor` would then report FAIL on an install that had merely
     # declined an optional download.
+    #
+    # Which filter belongs to the station is decided by its classifier, never by
+    # what happens to be on disk: V2.4 gets the range filter (and no labels
+    # line — it is indexed like the V2.4 labels), everything else the geomodel
+    # and its labels. The two are not interchangeable (see 10-config.sh).
     local geo_model_line="# METADATA_MODEL_PATH="
     local geo_labels_line="# METADATA_LABELS_PATH="
-    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
-        geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
-        geo_labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+    local filter_lines occurrence_prose detection_prose
+    if [ "${CLASSIFIER:-}" = "${CLASSIFIER_V24}" ]; then
+        if [ "${RANGE_FILTER_INSTALLED:-0}" = "1" ]; then
+            geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${V24_RANGE_FILE}"
+        fi
+        filter_lines="${geo_model_line}"
+        occurrence_prose=$'# Drops species that do not occur near this station at this time of year. Needs
+# both of the following; the installer fetches the second for you, and the
+# setting below is live when it succeeded, commented out when it did not.
+#   1. station coordinates (set above, or on the dashboard)
+#   2. METADATA_MODEL_PATH   — the BirdNET V2.4 range filter v2 (ONNX)
+# The range filter is indexed like the V2.4 labels, so it needs no
+# METADATA_LABELS_PATH of its own; and it means nothing to any other network,
+# so do not point another classifier at it, or this one at the V3.0 geomodel.
+# Run `birdnet-behavior --doctor` to see which of the two is missing.'
+        detection_prose=$'# BirdNET-Pi\'s defaults, which BirdNET V2.4 shares with it and which mean here what
+# they mean there. They are shown commented because they are what you get when
+# you set nothing.
+# CONFIDENCE=0.70          # 0.0–1.0 (detections below this are discarded).
+#                          # The setup wizard asks for this on first login; note
+#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
+#                          # it records every window as a detection.
+# SENSITIVITY=1.25         # 0.5–1.5; the same number, with the same meaning, as BirdNET-Pi\'s
+# OVERLAP=0.0              # seconds of overlap between analysis windows (0.0 = none)
+# PRIVACY_RANK=10          # BirdNET-Pi\'s human-sound rule: drop a window (and its neighbours) when a human sound ranks in the model\'s top 10 classes; 0 = off
+# DATABASE_LANG=en'
+    else
+        if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+            geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
+            geo_labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+        fi
+        filter_lines="${geo_model_line}"$'\n'"${geo_labels_line}"
+        occurrence_prose=$'# Drops species that do not occur near this station at this time of year. Needs
+# all three of the following; the installer fetches the last two for you, and
+# the two settings below are live when it succeeded, commented out when it did
+# not.
+#   1. station coordinates (set above, or on the dashboard)
+#   2. METADATA_MODEL_PATH   — the BirdNET geomodel (ONNX)
+#   3. METADATA_LABELS_PATH  — that model\'s own label file
+# The geomodel scores a different species list from the classifier (12 012
+# against 11 560), so the label file is what maps one onto the other; omit it
+# only for a metadata model indexed identically to the classifier, which the
+# station verifies at startup and refuses if it does not hold.
+# Run `birdnet-behavior --doctor` to see which of the three is missing.'
+        detection_prose=$'# CONFIDENCE=0.70          # 0.0–1.0, default 0.70 (detections below this are discarded).
+#                          # The setup wizard asks for this on first login; note
+#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
+#                          # it records every window as a detection.
+# SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
+# OVERLAP=0.0              # seconds of overlap between analysis windows
+# PRIVACY_RANK=10          # BirdNET-Pi\'s human-sound rule: drop a window (and its neighbours) when a human sound ranks in the model\'s top 10 classes; 0 = off
+# DATABASE_LANG=en'
     fi
 
     info "Writing default config to ${CONFIG_FILE}…"
@@ -1642,7 +2174,7 @@ DB_PATH=${DB_PATH}
 RECS_DIR=${RECS_DIR}
 IMAGE_CACHE_DIR=${IMAGE_CACHE_DIR}
 
-# --- Model (BirdNET+ V3.0, downloaded automatically by installer) ---
+# --- Model (${CLASSIFIER_NAME:-the classifier}, downloaded automatically by installer) ---
 MODEL_PATH=${MODEL_DIR}/${MODEL_FILE}
 LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
@@ -1664,13 +2196,7 @@ ${lon_line}
 #                              # under Settings -> Capture -> Location & Recording Schedule.
 
 # --- Detection ---
-# CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).
-#                          # The setup wizard asks for this on first login; note
-#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
-#                          # it records every window as a detection.
-# SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
-# OVERLAP=0.0              # seconds of 3 s analysis window overlap
-# DATABASE_LANG=en
+${detection_prose}
 
 # EXTRACTION_LENGTH=6      # seconds of audio saved around each detection
 # RARE_SPECIES_THRESHOLD   # set on /admin/settings (days since last heard)
@@ -1681,20 +2207,8 @@ ${lon_line}
 #                          # names: audio detection web db integrations analytics
 
 # --- Species occurrence filtering ---
-# Drops species that do not occur near this station at this time of year. Needs
-# all three of the following; the installer fetches the last two for you, and
-# the two settings below are live when it succeeded, commented out when it did
-# not.
-#   1. station coordinates (set above, or on the dashboard)
-#   2. METADATA_MODEL_PATH   — the BirdNET geomodel (ONNX)
-#   3. METADATA_LABELS_PATH  — that model's own label file
-# The geomodel scores a different species list from the classifier (12 012
-# against 11 560), so the label file is what maps one onto the other; omit it
-# only for a metadata model indexed identically to the classifier, which the
-# station verifies at startup and refuses if it does not hold.
-# Run \`birdnet-behavior --doctor\` to see which of the three is missing.
-${geo_model_line}
-${geo_labels_line}
+${occurrence_prose}
+${filter_lines}
 # SF_THRESH=0.03           # occurrence threshold; no effect while the filter is off
 
 # --- Disk management ---
@@ -1919,8 +2433,11 @@ WatchdogSec=120
 # Resource ceilings — cap a runaway process without starving the workload.
 # The bundled DuckDB analytics engine is on by default and its queries can be
 # memory-hungry under load. The FP32 model is NOT mmap'd: ONNX Runtime loads
-# its weights into anonymous memory, measured at ~575 MB idle and ~650 MB
-# while analysing with analytics on, so 1 GiB is headroom, not slack. On a
+# its weights into anonymous memory, measured with the 541 MB BirdNET+ V3.0
+# model at ~575 MB idle and ~650 MB while analysing with analytics on, so 1 GiB
+# is headroom, not slack for that classifier. (The default, BirdNET V2.4, is a
+# 54 MB model and has not been measured here; the ceiling stays sized for the
+# larger opt-in.) On a
 # multi-GB Pi this is the binding limit; on a 512 MB board physical RAM + zram
 # bind first, so raising the cgroup ceiling here is harmless there.
 MemoryHigh=768M
@@ -2308,7 +2825,7 @@ prompt_station_settings() {
     #
     # This loops, like the audio-source prompt above it. It used to warn once
     # and fall through, which meant unreadable input was discarded into a
-    # single [WARN] line that scrolled away behind the 541 MB model download —
+    # single [WARN] line that scrolled away behind the model download —
     # the operator answered the question, the station recorded no location, and
     # nothing said so again until the species filter silently stayed off.
     printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty
@@ -2642,6 +3159,9 @@ do_install() {
     arch="$(detect_arch)"
     check_glibc
     check_required_tools
+    # Before anything is downloaded or sized: which classifier this station
+    # runs decides which files are fetched and how much space they need.
+    resolve_classifier
     check_disk_space
     version="$(resolve_version)"
 
@@ -2654,8 +3174,8 @@ do_install() {
     install_binary "${version}" "${arch}"
     create_directories
     setup_tmpfs_streaming
-    download_model
-    download_geomodel        # optional: the species occurrence filter
+    download_classifier
+    download_occurrence_filter   # optional: the species occurrence filter that pairs with the classifier
     prompt_station_settings
     resolve_listen_addr      # finalize the bind address (env > config > unit > prompt)
     ensure_admin_password    # auto-protect /admin on a fresh LAN install
@@ -2677,6 +3197,7 @@ do_repair() {
     MODE="repair"
     info "Repairing the existing BirdNet-Behavior install…"
     check_required_tools
+    resolve_classifier
 
     local was_active=0
     if has_systemd; then
@@ -2705,11 +3226,12 @@ do_repair() {
     # subcommand named for fixing this could not fix it. `download_model`'s own
     # guard now verifies, so handing the decision to it is both correct and one
     # fewer place for the two to disagree.
-    download_model
+    download_classifier
 
     # A repair run is how a station installed before the geomodel shipped picks
-    # it up: download_geomodel is a no-op when both files are already there.
-    download_geomodel
+    # it up: the download is a no-op when the files are already there. Which
+    # filter that is follows the station's classifier (V2.4: the range filter).
+    download_occurrence_filter
 
     write_config             # idempotent: fixes ownership/permissions, keeps content
     resolve_listen_addr      # preserve LAN bind across re-runs (env > config > unit)
@@ -2796,7 +3318,7 @@ remove_data_or_keep() {
     if [ "${BIRDNET_PURGE:-0}" = "1" ]; then
         do_purge=1
     elif [ "${INTERACTIVE}" = 1 ] \
-        && yesno "  Also delete ALL data — database, recordings, model (~541 MB), config?" n; then
+        && yesno "  Also delete ALL data — database, recordings, models (up to ~560 MB), config?" n; then
         do_purge=1
     fi
 
@@ -3003,6 +3525,9 @@ print_summary() {
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
+    echo -e "  ${BOLD}Model:${RESET}   ${CLASSIFIER_SUMMARY:-${CLASSIFIER_NAME:-unknown}}"
+    echo    "           A new install takes --classifier birdnet-v24 or birdnet-v3; this station keeps what"
+    echo    "           ${CONFIG_FILE} names. How to move one on purpose: ${CLASSIFIER_GUIDE_URL}"
     # Lead with the IP address: it works for every device on the LAN. The mDNS
     # `.local` name is friendlier but NOT universal — some phones and networks
     # don't resolve it — so it is shown as a clearly-secondary convenience, never
@@ -3175,10 +3700,76 @@ mac_brew_dep() { # $1=formula  $2=why
     esac
 }
 
+# Put the classifier's files in ${MAC_DATA_DIR}/models by asking the binary to
+# install them (`--install-model`), not by downloading them here.
+#
+# Linux's installer fetches and checks the files itself; macOS does not ship
+# `sha256sum`, and the binary already carries the same sha256 pins (the Rust
+# catalogue is the source of truth the Linux installer's are tested against),
+# fetches atomically through a .part file, and refuses a size or digest it
+# cannot verify. The files land under the names the Rust installer gives them
+# (birdnet-v24.onnx, birdnet-v24_labels.txt, birdnet-v24-range-v2.onnx; for the
+# V3.0 preview birdnet-v3.onnx and birdnet-v3_labels.csv), which is what the
+# config below names. The V3.0 geomodel is not in that catalogue, so a macOS
+# V3.0 station has no occurrence filter until one is added by hand.
+#
+# Non-fatal: a failed fetch leaves the config naming the files and prints the
+# command that fetches them, so an install on a flaky link can be finished
+# later. Returns 1 when any file could not be installed.
+macos_install_models() { # $1=binary path  $2=classifier id
+    local bin="$1" id="$2" dir="${MAC_DATA_DIR}/models" item rc=0 items
+    mkdir -p "${dir}"
+    case "${id}" in
+        birdnet-v24) items="birdnet-v24 birdnet-v24-range-v2" ;;
+        *)           items="birdnet-v3" ;;
+    esac
+    for item in ${items}; do
+        info "Installing ${item} into ${dir} (sha256-verified)…"
+        # Without the installer's own BIRDNET_* settings (the binary reports every
+        # one it does not read) and with an empty config (there is none yet).
+        if ! env -u BIRDNET_CLASSIFIER -u BIRDNET_NONINTERACTIVE -u BIRDNET_BINARY_TARBALL \
+            BIRDNET_MODEL_DIR="${dir}" "${bin}" --config /dev/null --install-model "${item}"; then
+            warn "Could not install ${item}. Finish later with:"
+            warn "  BIRDNET_MODEL_DIR=\"${dir}\" \"${bin}\" --install-model ${item}"
+            rc=1
+        fi
+    done
+    return "${rc}"
+}
+
 macos_setup_config_and_agent() { # $1=binary path
     local bin="$1"
     mkdir -p "${MAC_DATA_DIR}" "${HOME}/Library/Logs" "$(dirname "${MAC_PLIST}")"
     if [ ! -f "${MAC_DATA_DIR}/birdnet.conf" ]; then
+        # A config is written once, so there is no station here to keep: the
+        # request, else the default. (An existing config below is left as it is,
+        # and so is the model it names.)
+        if [ -n "${CLASSIFIER_REQUEST}" ] && ! valid_classifier_id "${CLASSIFIER_REQUEST}"; then
+            fatal "Unknown classifier '${CLASSIFIER_REQUEST}'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
+        fi
+        local mac_classifier="${CLASSIFIER_REQUEST:-${DEFAULT_CLASSIFIER}}"
+        local mac_models="${MAC_DATA_DIR}/models"
+        local mac_model_path mac_labels_path mac_filter_line mac_name
+        if [ "${mac_classifier}" = "${CLASSIFIER_V24}" ]; then
+            mac_name="BirdNET V2.4"
+            mac_model_path="${mac_models}/${V24_MODEL_FILE}"
+            mac_labels_path="${mac_models}/${V24_LABELS_FILE}"
+            mac_filter_line="# METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+        else
+            mac_name="BirdNET+ V3.0 preview"
+            mac_model_path="${mac_models}/birdnet-v3.onnx"
+            mac_labels_path="${mac_models}/birdnet-v3_labels.csv"
+            mac_filter_line="# METADATA_MODEL_PATH="
+            info "BirdNET+ V3.0 on macOS runs without species-occurrence filtering: the binary does not install the geomodel (the Linux installer does)."
+        fi
+        if macos_install_models "${bin}" "${mac_classifier}"; then
+            # Live only when the file is really there, so a failed fetch cannot
+            # leave a config the doctor reports as FAIL.
+            [ "${mac_classifier}" = "${CLASSIFIER_V24}" ] && mac_filter_line="${mac_filter_line#\# }"
+            success "Classifier: ${mac_name}."
+        else
+            warn "The config below names the ${mac_name} files; the station detects nothing until they are installed."
+        fi
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
 # BirdNet-Behavior config (macOS). Set your coordinates and a mic device.
 #
@@ -3194,6 +3785,12 @@ SITENAME=My Backyard
 DB_PATH=${MAC_DATA_DIR}/birds.db
 RECS_DIR=${MAC_DATA_DIR}/recordings
 IMAGE_CACHE_DIR=${MAC_DATA_DIR}/image_cache
+
+# --- Model (${mac_name}; installed by install.sh) ---
+MODEL_PATH=${mac_model_path}
+LABELS_PATH=${mac_labels_path}
+# Species-occurrence filtering needs LATITUDE and LONGITUDE above as well.
+${mac_filter_line}
 CONF
         success "Wrote starter config: ${MAC_DATA_DIR}/birdnet.conf"
     else
@@ -3231,7 +3828,9 @@ PLIST
     echo "  2. Start it:  launchctl load -w \"${MAC_PLIST}\""
     echo "  3. The first microphone access shows a permission prompt — approve it under"
     echo "     System Settings → Privacy & Security → Microphone."
-    echo "  4. Open http://localhost:8502  (the BirdNET+ model downloads on first run)."
+    echo "  4. Open http://localhost:8502"
+    echo "     The classifier's files are in ${MAC_DATA_DIR}/models; MODEL_PATH in the config names them."
+    echo "     New installs take --classifier birdnet-v24 (default) or birdnet-v3; an existing config is kept."
     echo "  Uninstall any time with:  ./uninstall.sh   (or --purge to remove data too)"
 }
 
@@ -3316,9 +3915,10 @@ BirdNet-Behavior installer
 Linux / Raspberry Pi (installs a systemd service, so it needs root):
   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash
   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --version X.Y.Z
+  curl --proto '=https' --tlsv1.2 -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --classifier birdnet-v3
 
 From a saved copy of this script:
-  sudo bash install.sh [--version X.Y.Z]
+  sudo bash install.sh [--version X.Y.Z] [--classifier birdnet-v24|birdnet-v3]
 
 Commands (auto-offered as a menu when an existing install is detected):
   install        Fresh install (the default when nothing is installed).
@@ -3333,6 +3933,15 @@ Commands (auto-offered as a menu when an existing install is detected):
 Options:
   -v, --version X.Y.Z   Install a specific release (default: latest stable).
                         The VERSION environment variable is still honoured too.
+      --classifier ID   Which classifier a NEW install runs (also: BIRDNET_CLASSIFIER):
+                          birdnet-v24  BirdNET V2.4 + its range filter v2 (default).
+                                       The network BirdNET-Pi and birdnet-go run,
+                                       so detections agree with theirs. ~85 MB.
+                          birdnet-v3   BirdNET+ V3.0 preview + the BirdNET geomodel.
+                                       A different network; detections differ from
+                                       BirdNET-Pi's by design. ~555 MB.
+                        An existing station keeps the classifier its config names:
+                        install, update, repair and reinstall never change it.
       --noninteractive  Don't prompt; auto-detect audio and leave location
                         unset (also implied by BIRDNET_NONINTERACTIVE=1 or no TTY).
                         With an existing install this implies 'update'.
@@ -3353,6 +3962,15 @@ parse_args() {
                 ;;
             --version=*)
                 VERSION="${1#*=}"
+                shift
+                ;;
+            --classifier)
+                [ "$#" -ge 2 ] || fatal "--classifier needs a value: ${CLASSIFIER_V24} or ${CLASSIFIER_V3}."
+                CLASSIFIER_REQUEST="$2"
+                shift 2
+                ;;
+            --classifier=*)
+                CLASSIFIER_REQUEST="${1#*=}"
                 shift
                 ;;
             --noninteractive | --non-interactive)
@@ -3379,6 +3997,12 @@ parse_args() {
                 ;;
         esac
     done
+    # Refuse a typo now, before any download, whichever way it arrived (flag or
+    # BIRDNET_CLASSIFIER). resolve_classifier checks again for the paths that
+    # do not come through here.
+    if [ -n "${CLASSIFIER_REQUEST}" ] && ! valid_classifier_id "${CLASSIFIER_REQUEST}"; then
+        fatal "Unknown classifier '${CLASSIFIER_REQUEST}'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
+    fi
 }
 
 # ===== installer/lib/95-main.sh =====

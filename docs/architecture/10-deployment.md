@@ -113,20 +113,28 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behav
 ```
 
 The installer detects the host architecture, downloads the matching
-pre-built binary from GitHub Releases, downloads the BirdNET+ V3.0 model
-(from the same GitHub release line, sha256-verified, Zenodo fallback),
-writes the systemd unit, and starts the service.
+pre-built binary from GitHub Releases (checked against the release's
+`SHA256SUMS`), installs the classifier (BirdNET V2.4 and its range filter by
+default, through `birdnet-behavior --install-model`; the BirdNET+ V3.0 preview
+with `--classifier birdnet-v3`, from this project's model release with Zenodo
+as the fallback), writes the systemd unit, and starts the service. The
+operator manual (`docs/book/getting-started/installation.md`) has the details.
 
-For manual installation:
+For an offline or hand-checked installation, download the release archive and
+its checksums yourself, verify them, and give the archive to the installer. A
+release archive is named `birdnet-behavior-<version>-<target>.tar.gz` and
+holds the binary, the installer, the changelog, the licences and the rendered
+manual; it holds no systemd unit, because the installer writes that:
 
 ```bash
-# Download the release binary for the target architecture
-curl -L https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/birdnet-behavior-aarch64-unknown-linux-gnu \
-  -o /usr/local/bin/birdnet-behavior
-chmod +x /usr/local/bin/birdnet-behavior
-
-# Enable and start the systemd service
-sudo systemctl enable --now birdnet-behavior
+VERSION=0.17.1   # a release that exists
+TARGET=aarch64-unknown-linux-gnu   # or x86_64-unknown-linux-gnu
+BASE=https://github.com/tomtom215/BirdNet-Behavior/releases/download/v${VERSION}
+curl --proto '=https' --tlsv1.2 -fsSLO "${BASE}/birdnet-behavior-${VERSION}-${TARGET}.tar.gz"
+curl --proto '=https' --tlsv1.2 -fsSLO "${BASE}/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+curl --proto '=https' --tlsv1.2 -fsSLO "${BASE}/install.sh"
+sudo BIRDNET_BINARY_TARBALL="$PWD/birdnet-behavior-${VERSION}-${TARGET}.tar.gz" bash install.sh --version "${VERSION}"
 ```
 
 ### Migrate from BirdNET-Pi
@@ -207,10 +215,10 @@ sudo systemctl status birdnet-behavior
 
 | Metric | Python BirdNET-Pi | Rust BirdNet-Behavior |
 |--------|------------------|----------------------|
-| Install footprint | venv + interpreter + deps | one ~75 MB binary (ONNX Runtime + DuckDB compiled in) |
+| Install footprint | venv + interpreter + deps | one binary with ONNX Runtime and DuckDB compiled in: 107 488 608 bytes on x86_64 and 99 158 736 on aarch64 for v0.17.1 (`ls -l` of the stripped binary in each release archive; the archives themselves are 45.2 and 43.0 MB) |
 | Resident memory (running) | model + a full Python/TFLite interpreter stack | model + a thin native process (no interpreter on top) |
 | Cold start | interpreter + numpy/scipy/librosa import | native process start (model load dominates) |
-| Inference latency (3 s clip) | ~1–2 seconds | ~0.5–1 second |
+| Inference latency (3 s clip) | ~1–2 seconds | unmeasured here (an earlier estimate of 0.5–1 s was never backed by a recorded run; `scripts/hardware-test.sh` measures it on a board) |
 | Disk write durability | WAL | WAL + fsync control |
 | Number of systemd services | 6+ | 1 |
 

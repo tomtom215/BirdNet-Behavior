@@ -354,19 +354,31 @@ async fn create_user(
                         Some(form.username.trim()),
                         None,
                     );
-                    // Re-render the full user list so the new row appears.
-                    let users = state
-                        .with_read_db(UserStore::list_users)
-                        .unwrap_or_default();
-                    let body = Html(render_user_rows(&users));
-                    toast::with(
-                        body,
-                        Toast::success(format!(
-                            "Invited {}. They can sign in now with that password.",
-                            form.username
-                        )),
-                    )
-                    .into_response()
+                    // Re-render the full user list so the new row appears. The
+                    // account exists whether or not this read works: a failed one
+                    // used to be an empty list ("No users"), swapped over the
+                    // real one under a toast reporting success.
+                    match state.with_read_db(UserStore::list_users) {
+                        Ok(users) => toast::with(
+                            Html(render_user_rows(&users)),
+                            Toast::success(format!(
+                                "Invited {}. They can sign in now with that password.",
+                                form.username
+                            )),
+                        )
+                        .into_response(),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "create_user: the user list could not be redrawn");
+                            toast::applied_but_not_redrawn(
+                                &Toast::warn(format!(
+                                    "Invited {}. They can sign in now with that password. \
+                                     The list above could not be refreshed — reload the page to see it.",
+                                    form.username
+                                ))
+                                .sticky(),
+                            )
+                        }
+                    }
                 }
                 Err(AccountsError::Conflict(_)) => toast::oob_only(Toast::error(format!(
                     "Username \"{}\" is already taken.",
@@ -407,11 +419,23 @@ async fn remove_user(
                         Some(&format!("user:{id}")),
                         None,
                     );
-                    let users = state
-                        .with_read_db(UserStore::list_users)
-                        .unwrap_or_default();
-                    let body = Html(render_user_rows(&users));
-                    toast::with(body, Toast::success("User removed.")).into_response()
+                    match state.with_read_db(UserStore::list_users) {
+                        Ok(users) => toast::with(
+                            Html(render_user_rows(&users)),
+                            Toast::success("User removed."),
+                        )
+                        .into_response(),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "remove_user: the user list could not be redrawn");
+                            toast::applied_but_not_redrawn(
+                                &Toast::warn(
+                                    "User removed. The list above could not be refreshed — \
+                                     reload the page to see it.",
+                                )
+                                .sticky(),
+                            )
+                        }
+                    }
                 }
                 Err(AccountsError::Invalid(msg)) => {
                     toast::oob_only(Toast::warn(msg)).into_response()
@@ -441,6 +465,7 @@ async fn set_password(
     State(state): State<AppState>,
     request_user: RequestUser,
     client: Option<axum::extract::Extension<crate::client_ip::ClientIp>>,
+    scheme: Option<axum::extract::Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<PasswordForm>,
@@ -499,6 +524,7 @@ async fn set_password(
                     state,
                     id,
                     client.as_deref(),
+                    scheme.as_deref(),
                     &headers,
                 ) && let Ok(value) = axum::http::HeaderValue::from_str(&cookie)
                 {
@@ -570,13 +596,27 @@ async fn revoke_session_handler(
                 None,
             );
             let current_session_id = request_user.session_id.clone();
-            let body = state
-                .with_read_db(|conn| -> Result<String, AccountsError> {
-                    let sessions = conn.list_sessions(request_user.user.id)?;
-                    Ok(render_session_rows(&sessions, &current_session_id))
-                })
-                .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
-            toast::with(Html(body), Toast::success("Session signed out.")).into_response()
+            // The session is gone whether or not the list can be read back. A
+            // failed read used to be a single dash, swapped over the list the
+            // reader was looking at, under a toast saying it had worked.
+            match state.with_read_db(|conn| -> Result<String, AccountsError> {
+                let sessions = conn.list_sessions(request_user.user.id)?;
+                Ok(render_session_rows(&sessions, &current_session_id))
+            }) {
+                Ok(body) => {
+                    toast::with(Html(body), Toast::success("Session signed out.")).into_response()
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "revoke_session: the session list could not be redrawn");
+                    toast::applied_but_not_redrawn(
+                        &Toast::warn(
+                            "Session signed out. The list above could not be refreshed — \
+                             reload the page to see it.",
+                        )
+                        .sticky(),
+                    )
+                }
+            }
         })
         .await
 }
@@ -613,18 +653,26 @@ async fn revoke_others_handler(
                 Some(&format!("user:{user_id}")),
                 Some(&format!("revoked={n}")),
             );
-            let body = state
-                .with_read_db(|conn| -> Result<String, AccountsError> {
-                    let sessions = conn.list_sessions(user_id)?;
-                    Ok(render_session_rows(&sessions, &current_session_id))
-                })
-                .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
             let label = if n == 1 {
                 "Signed out 1 other device.".to_string()
             } else {
                 format!("Signed out {n} other devices.")
             };
-            toast::with(Html(body), Toast::success(label)).into_response()
+            match state.with_read_db(|conn| -> Result<String, AccountsError> {
+                let sessions = conn.list_sessions(user_id)?;
+                Ok(render_session_rows(&sessions, &current_session_id))
+            }) {
+                Ok(body) => toast::with(Html(body), Toast::success(label)).into_response(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "revoke_others: the session list could not be redrawn");
+                    toast::applied_but_not_redrawn(
+                        &Toast::warn(format!(
+                            "{label} The list above could not be refreshed — reload the page to see it."
+                        ))
+                        .sticky(),
+                    )
+                }
+            }
         })
         .await
 }
@@ -988,6 +1036,7 @@ mod tests {
                     user: admin,
                     session_id: "sess-me".to_owned(),
                 },
+                None,
                 None,
                 axum::http::HeaderMap::new(),
                 Path(id),

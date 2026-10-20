@@ -7,25 +7,32 @@
 >   surviving maintained fork of the PHP/Python original this project descends
 >   from. Compared at `88985a3` (2026‑02‑28).
 > * [`tphakala/birdnet-go`](https://github.com/tphakala/birdnet-go) — an
->   independent Go rewrite of the same idea, an order of magnitude larger than
->   either. Compared at `1e74c82` (2026‑09‑02), then re-checked at `780ce51`
->   (2026‑10‑11): the 239 commits between are triaged in **Part 5**.
->   `Nachtzuster/BirdNET-Pi` was re-checked the same day and is still at
->   `88985a3`.
+>   independent Go rewrite of the same idea: more than twenty times
+>   BirdNET-Pi's size and about two to three times this project's (table below).
+>   Compared at `1e74c82` (2026‑09‑02), then re-checked at `780ce51`
+>   (2026‑10‑11), where the 239 commits between are triaged in **Part 5**;
+>   `f4f019a` (2026‑10‑15), 37 more commits, **Part 7**; and `a1a77af`, 65 more,
+>   found by the parity audit of 2026‑10‑20 and listed in **Part 8**.
+>   `Nachtzuster/BirdNET-Pi` was re-checked on 2026‑10‑11 and was still at
+>   `88985a3`; Part 8 did not re-check it.
 
 ## How this was measured
 
 Both repositories were cloned and read, not summarised from memory. Sizes, for
 scale — and each names the tip it was measured at rather than inheriting the
 comparison's, because these numbers move: upstream at `88985a3` and
-`b184f689` (2026‑09‑03), ours at `ee795ed`. All three are `git ls-files`
-line counts with tests included.
+`b184f689` (2026‑09‑03), ours at `ee795ed`; those three are `git ls-files`
+line counts with tests included. Our row was counted again on 2026‑10‑20, at
+the commit this was edited on, with
+`find src crates -name '*.rs' | xargs cat | wc -l`, which counts `.rs` files
+only and so is not the same measure as the two upstream rows; the upstream rows
+were not counted again.
 
 | Project | Language | Lines | Notes |
 |---|---|---|---|
 | Nachtzuster/BirdNET-Pi | PHP + Python + shell | ~25 k, of which ~18 k is the fork's own code — the rest is vendored Adminer and file-manager PHP | 188 tracked files |
 | tphakala/birdnet-go | Go + Svelte | ~542 k Go (~265 k excluding `_test.go`) | 52 subtrees under `internal/`; 137 Go packages counting nested ones |
-| **BirdNet-Behavior** | Rust | ~200 k `.rs` | 8 crates + binary |
+| **BirdNet-Behavior** | Rust | ~200 k `.rs` at `ee795ed`; 276 926 `.rs` lines on 2026‑10‑20 (a different command, see above) | 8 crates + binary |
 
 Every row below carries the upstream file that is the evidence for the claim
 and the file in this repository that is the evidence for our state. A row that
@@ -60,10 +67,10 @@ cross-reference lands on, so that is what has to be updated when work lands.
 The configuration file is the fork's own feature list, so it is the right place
 to start. `scripts/install_config.sh` defines 57 settings. Mapping each onto
 this project (`.env.example`, the `settings` table keys rendered by
-`crates/birdnet-web/src/routes/admin/settings/render/`) leaves five genuine
+`crates/birdnet-web/src/routes/admin/settings/render/`) leaves six genuine
 gaps and a handful of deliberate divergences. (The fifth, N‑5, was missed by the
 first mapping because the setting existed: `DATABASE_LANG` was a field on the
-settings page and a bridged key, so it counted as present. Nothing used it.)
+settings page and a bridged key, so it counted as present. Nothing used it. The sixth, N‑6, was found by the audit of 2026‑10‑20 and is the same mistake: `custom_image_dir` was taken to be BirdNET-Pi's `CUSTOM_IMAGE`, and it is not.)
 
 ### N‑1 · Flickr image provider — SHIPPED
 
@@ -79,8 +86,9 @@ settings page and a bridged key, so it counted as present. Nothing used it.)
 | | |
 |---|---|
 | **Upstream** | `scripts/livestream.sh:15` — `if [ "$ACTIVATE_FREQSHIFT_IN_LIVESTREAM" == "true" ]; then FREQSHIFT_OPT='-af rubberband=pitch='${FREQSHIFT_LO}'/'${FREQSHIFT_HI}; fi`, applied to the Icecast MP3 source. |
-| **Ours** | **This row was wrong when first written, and the correction is the finding.** It said "`routes/livestream.rs` streams the raw tap unshifted". It does not: `livestream.rs:275` builds `freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz)` (the filter itself is defined at `:126`) and passes it to ffmpeg as `-af`, so `/stream?freq_shift_hz=N` has always worked. What was missing is that **nothing in the UI ever sent it** — `recordings.html`'s `srcFor()` built `/stream` or `/stream?source_id=…` and never a shift — so the feature was reachable only by hand-editing a URL. |
+| **Ours** | **This row was wrong when first written, and the correction is the finding.** It said "`routes/livestream.rs` streams the raw tap unshifted". It does not: `livestream.rs:444` builds `freq_shift_filter(freq_shift_hz)` (defined at `:169`; when this row was written the call was at `:275` and the definition at `:126`, and the function took the stream's sample rate too) and passes it to ffmpeg as `-af`, so `/stream?freq_shift_hz=N` has always worked. What was missing is that **nothing in the UI ever sent it** — `recordings.html`'s `srcFor()` built `/stream` or `/stream?source_id=…` and never a shift — so the feature was reachable only by hand-editing a URL. |
 | **And a defect the re-check found** | Five doc comments, including the `--freq-shift-hz` CLI help an operator reads before choosing a value, said a **positive** (upward) shift "makes calls accessible to people with high-frequency hearing loss". That is backwards. Presbycusis takes the *top* of the range first, so an 8 kHz warbler is restored by moving it **down**. Upstream agrees and was checked as the primary source: `install_config.sh` ships `FREQSHIFT_HI=6000` / `FREQSHIFT_LO=3000` (a `rubberband` ratio of 0.5) and a sox `FREQSHIFT_PITCH=-1500` — two independent settings, both downward. A listener following our documentation would have shifted the song further out of their hearing. |
+| **And a second defect, found 2026‑10‑20** | The filter this row calls working was `asetrate` followed by `aresample`, documented as shifting without stretching the audio. It scaled frequencies by a ratio: measured with ffmpeg 6.1.1 on an 8 kHz tone, `-3000` gave 7 500 Hz, not the 5 000 the text promised, and the audio was slowed by the same ratio, which on a live stream is a delay that grows. `bf05525e` replaced it, here and in the saved-clip path, with `afreqshift` (ffmpeg 4.3 or newer), a shift in hertz that leaves the length alone (`freq_shift_filter` in `routes/livestream.rs`, with tests that pin the filter string). The saved-clip path also lost its sox fallback, because sox cannot shift by an amount of hertz. |
 | **Why it matters** | This is an accessibility feature, not a novelty. Age-related high-frequency hearing loss starts around 8 kHz; a great deal of warbler and kinglet song lives above it. A feature that works only if you know to hand-edit a query string is not available to the people it is for, and one documented in the wrong direction is worse than absent. |
 | **Resolution** | A pitch control beside the Listen button on `/recordings`, with downward presets (the accessibility direction) and one upward option; the choice is remembered per browser in `localStorage`. Per-listener rather than upstream's station-wide flag, and deliberately: hearing loss is a property of a person, and this station serves one ffmpeg per connection rather than one Icecast broadcast for everyone, so it can do better than upstream here. All five doc comments corrected against the primary source, with `ACCESSIBILITY_SHIFT_HZ` naming the direction and a `const` assertion failing the *build* if its sign is ever flipped back. The `freq_shift_hz` query parameter is now clamped to ±24 kHz — it was an unbounded `i32` from an unauthenticated request, and `freq_shift_hz=2000000000` asked ffmpeg to resample from ~2 GHz, four streams at a time. |
 
@@ -120,6 +128,15 @@ settings page and a bridged key, so it counted as present. Nothing used it.)
 | **How it is held** | `every_name_a_reader_sees_is_in_the_stations_language` fetches the pages from a German station and fails on any English name a reader sees, fails when a link, form or API field carries a translated one, and fails on any web-crate site that escapes a stored name and is not classified. `the_language_setting_is_a_language_we_have`, `species_names_table.rs`, and a doctor check cover the rest. |
 | **Still open** | Coverage is uneven (Korean 8.8% of the table's 7,058, Swedish 98.4%) and the BirdNET+ V3.0 classifier has 11,560 species, of which 6,632 have a name in at least one language. The interface text is not translated. The table's licence fit is the maintainer's to decide (`HANDOFF.md`). |
 
+### N‑6 · A dashboard picture with a title — GAP
+
+| | |
+|---|---|
+| **Upstream** | BirdNET-Pi's `CUSTOM_IMAGE`: one picture of the operator's choosing, with a title, on the Overview page (`scripts/overview.php:19-27`); the audit also names a webcam snapshot. The citation is the 2026‑10‑20 audit's. It was not re-read for this row, because upstream was not reachable from the session that wrote it. |
+| **Ours** | Nothing shows one picture on a dashboard page. `custom_image_dir` (`--custom-image-dir`) is something else: `species_image_file` in `routes/images.rs` looks in that directory for a file named `{lowercase_scientific_name_with_underscores}` with the extension `jpg`, `jpeg`, `png` or `webp`, before the Wikipedia cache, so it replaces one species' picture. Its code comment, the hint on the Settings page (`routes/admin/settings/render/system.rs`) and its `--help` text all call it BirdNET-Pi's `CUSTOM_IMAGE`. By the audit's reading of upstream it is not that. |
+| **Why it matters** | A wall-mounted display (G‑22) is where a photograph of the site, or a feeder camera frame, belongs, and there is no place to put one. |
+| **Plan** | None yet. Whoever builds it also owes the three labels above a correction. |
+
 ### Deliberate divergences from BirdNET-Pi — DECLINED
 
 These are not gaps. They are recorded so the comparison does not keep
@@ -140,7 +157,7 @@ re-discovering them.
 
 ## Part 2 — versus tphakala/birdnet-go
 
-birdnet-go is roughly 2.7× this project by line count and has taken the design
+birdnet-go was roughly 2.7× this project by line count when both were counted (about 542 k Go against ~200 k Rust, ours at `ee795ed`); against our 276 926 `.rs` lines of 2026‑10‑20 and its older count the ratio is about 2×, a figure that mixes dates. It has taken the design
 in directions we have not. Sorting its capabilities against ours produces 34
 findings (G‑1 … G‑34, contiguous). They are grouped by the part of the system they touch, and ordered
 within each group by how much they change what a station can do.
@@ -295,8 +312,8 @@ within each group by how much they change what a station can do.
 
 | | |
 |---|---|
-| **Upstream** | `conf.VADSettings` — an embedded Silero VAD ONNX model detecting speech *presence* (not content, not speaker), opt-in, augmenting the label-based privacy filter. |
-| **Ours** | `crates/birdnet-core/src/detection/privacy.rs` gates on the chunk's *human score* — the highest confidence BirdNET gave any human class, read before the detection threshold and top-N cut — with adjacent-chunk masking. (This row used to say the filter was rank-based and never excluded anything at the shipped `top_n`; that described the BirdNET-Pi rule this port inherited, which `privacy.rs` replaced. `noise.rs`'s doc comment repeated it and was corrected at the same time.) It is still BirdNET's own label set, not a speech detector. |
+| **Upstream** | `conf.VADSettings` — an embedded Silero VAD ONNX model detecting speech *presence* (not content, not speaker), opt-in, augmenting the label-based privacy filter. **Refreshed from the audit of 2026‑10‑20** (upstream not re-read here): birdnet-go raised its VAD threshold from 0.35 to 0.6 (`61009d9`), now needs a second hit at high overlap (`e81763b`), and defers detections until the whole clip has been scanned (`fc34a97`). |
+| **Ours** | `crates/birdnet-core/src/detection/privacy.rs` has two rules, and either one suppresses a chunk and the chunks either side of it. Both read the model's whole output, before the detection threshold and the top-N cut. The **rank rule** is BirdNET-Pi's: a human class among the model's `N` highest-scoring classes (`ChunkPrediction::human_rank`; `PRIVACY_RANK`, default 10, `0` = off). It has been on by default since `6888399f`, so a station that sets neither key now masks a human in its top ten. The **score rule** is this project's: a human class whose confidence reaches `PRIVACY_THRESHOLD`, off at its default of `0`. (An earlier version of this row said the filter was rank-based and never excluded anything at the shipped `top_n`: that described a rule which read only the detection list, which `privacy.rs` replaced by reading the model's whole output. The rank rule came back afterwards, read the same way.) Neither rule is a speech detector; both use BirdNET's own human labels. |
 | **Why it matters** | A garden microphone records the neighbours. BirdNET's human classes are a by-product of its training set, not a speech detector, and they miss quiet conversation at exactly the distance where it is still intelligible. For anyone deploying where consent matters, a real VAD is the difference between a defensible privacy claim and a hopeful one. |
 | **Plan** | Optional second small ONNX session (~2 MB) run only on chunks that pass the cheap gates, gating clip *retention* rather than detection: a chunk with speech is analysed and its detection recorded, but no audio is written. Off by default, and the model shipped alongside rather than embedded so the binary size story does not change for stations that do not want it. |
 
@@ -383,8 +400,8 @@ within each group by how much they change what a station can do.
 
 | | |
 |---|---|
-| **Upstream** | `conf.DashboardLayout` — an ordered list of elements (`banner`, `daily-summary`, `new-species-highlights`, `currently-hearing`, `detections-grid`, `live-spectrogram`, `video-embed`), each enabled/half/full width, with a banner carrying a location map, live weather and a custom image, plus six colour schemes and a custom primary/accent pair. |
-| **Ours** | A fixed dashboard (`routes/pages/dashboard/`, `homes/`), light/dark via `theme-guard.js`, and a custom image (`custom_image_dir`). |
+| **Upstream** | `conf.DashboardLayout` — an ordered list of elements (`banner`, `daily-summary`, `new-species-highlights`, `currently-hearing`, `detections-grid`, `live-spectrogram`, `video-embed`), each enabled/half/full width, with a banner carrying a location map, live weather and a custom image, plus five colour schemes (an earlier draft said six; Part 5 corrected it) and a custom primary/accent pair. |
+| **Ours** | A fixed dashboard (`routes/pages/dashboard/`, `homes/`), light/dark via `theme-guard.js`. (This cell used to add "and a custom image (`custom_image_dir`)". That is a per-species picture override, not a dashboard image: see N‑6.) |
 | **Why it matters** | Half the stations that exist are on a wall-mounted tablet in a visitor centre or a kitchen, where what needs to be on screen is not what a person debugging a microphone needs. |
 | **Plan** | Store an element list in `settings` and render from it. Our HTMX partials are *already* the element vocabulary — `/pages/hero-status`, `/pages/today-list`, `/pages/most-recent`, `/pages/hourly-chart` and the rest are exactly these components — so this is a layout table and a drag-to-reorder editor over machinery that exists, not a rewrite. |
 
@@ -416,7 +433,7 @@ within each group by how much they change what a station can do.
 | **Upstream** | `internal/telemetry` — opt-in Sentry with a `SystemID`, plus `internal/observability`. |
 | **Ours** | Prometheus metrics, structured tracing, and the support bundle with secret redaction gated by a test (`src/helpers/offsite.rs:591`). |
 | **Verdict** | Shipping a crash reporter that phones a third party from a device with a microphone in someone's garden is a privacy posture this project should not adopt, even opt-in. |
-| **Substitute** | Make the local path better: a persistent panic/error ring buffer written to disk, surfaced in the support bundle and at `/station/…`, so a user can *choose* to send it. That is the same diagnostic value without the default-on-the-network question. |
+| **Substitute** | Make the local path better: a persistent panic/error ring buffer written to disk, surfaced in the support bundle and at `/station/…`, so a user can *choose* to send it. That is the same diagnostic value without the default-on-the-network question. **Status, read on 2026‑10‑20: most of it exists.** `src/log_capture.rs` appends ERROR and WARN lines to `errors.jsonl` beside the database, which survives a reboot, and starts the file again when it passes `ERROR_LOG_MAX_BYTES` (1 000 000) rather than rotating it. `src/support.rs` stages it in the support bundle (`read_error_log`), after the same secret scrub as the journal. Not done: no `/station` page shows it (nothing outside `src/support.rs`, `src/log_capture.rs` and `src/main.rs` names the file), and whether a panic reaches it was not checked. |
 
 ### 2.4 Integrations
 
@@ -608,16 +625,16 @@ against the code it was written for, per `CLAUDE.md`.
 | # | Item | Finding | Shape |
 |---|---|---|---|
 | 26 | Multi-model classifier stack | G‑10 | **Stages 1–5 shipped.** Perch v2 exposed two defects (class head by position, sample rate derived not declared), both fixed against the real model; the catalogue and verified installer ship. Classifiers with different windows now run together — chunk cut to the longest, stepped by the shortest, so none loses coverage — and agreement means both judged audio from the same chunk start. Only a differing sample rate is still refused. Stage 6 (bats) follows |
-| 27 | Inference backends (OpenVINO / XNNPACK) | G‑11 | Gated on Stage 1 of #26 |
+| 27 | Inference backends (OpenVINO / XNNPACK) | G‑11 | Not gated: the trait it waited for (#26 Stage 1) has shipped. Nobody has built it |
 | 28 | OAuth2 / OIDC | G‑20 | One generic OIDC implementation; named providers are configuration |
 | 29 | ~~HLS live streaming~~ — **shipped** (upstream's API; fixed encoder settings). See G‑21. | G‑21 | Shares the encode seam with #10 |
 | 30 | ~~Dashboard layout customisation~~ — **shipped** (order and visibility). See G‑22. | G‑22 | The HTMX partials are already the component vocabulary |
-| 31 | Extended capture | G‑6 | Depends on #6 |
+| 31 | Extended capture | G‑6 | Not gated: what it depended on, pre-capture across segments (#6, G‑3), is Done. Nobody has built it |
 | 32 | ~~Additional stream protocols~~ — **shipped** (HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined). See G‑7. | G‑7 | One kind, the URL decides the protocol |
-| 33 | Silero VAD privacy gate | G‑13 | Depends on #26 Stage 1 for a second ONNX session |
+| 33 | Silero VAD privacy gate | G‑13 | Not gated: #26 Stage 1 has shipped. G‑13's plan is a second, small ONNX session that gates clip retention, beside the classifiers |
 | 34 | ~~RTSP media mode~~ — **shipped** (`full` / `audio`). See G‑8. | G‑8 | It mattered for RTSP on its own — the camera's video sessions — not only alongside #32 |
 | 35 | ~~Profiling endpoints~~ — **shipped** (CPU, behind the `profiling` feature). See G‑24. | G‑24 | No heap profile |
-| 36 | Local error ring buffer (Sentry substitute) | G‑25 | |
+| 36 | ~~Local error ring buffer (Sentry substitute)~~ — **mostly shipped** as the capped `errors.jsonl` and its place in the support bundle; no page shows it. See G‑25. | G‑25 | |
 | 37 | Parquet export (MySQL substitute) | G‑31 | |
 | 38 | Bat support + ultrasonic filter | G‑14 | Depends on #26 Stage 6 and a ≥192 kHz capture path |
 
@@ -680,7 +697,7 @@ declined: `inference/registry.rs` refuses an empty registry on purpose.
 
 * **G‑13**'s "Ours" cell described a rank-based filter that had been replaced.
   Corrected above. Upstream now embeds Silero in every build (`3e03da1`); our
-  plan to ship it alongside stands.
+  plan to ship it alongside stands. (Since then the rank rule has returned beside the score rule, on by default; G‑13 has the current description.)
 * **G‑20** upstream now always sends PKCE (S256) (`90ebedf`).
 * **G‑22** upstream's colour schemes are five plus custom, not six.
 * **G‑26** upstream's set is now yr.no, OpenWeather, Wunderground and Pirate
@@ -744,11 +761,44 @@ project has, not that the diff was checked.
 | `5eb998d` third-octave bands measured with a tested DSP library, "correcting high-band levels" | Same class of defect as ours, found independently: the top bands' edges were wrong near Nyquist. Ours is corrected and measured in `tests/soundlevel_accuracy.rs` (CHANGELOG, "Make each third-octave band measure the band it names"). Their change was not compared sample for sample. |
 | `a122b6b` *read*: float → 16-bit conversion by 32768, round half to even, saturating; was 32767 and truncation (resampler) | Ours had the truncation (fixed earlier in this release) and the 32767 scale (fixed in `Export a 16-bit recording's clip bit for bit`). Rounding here is half away from zero, not half to even; they differ only on exact ties. The live-gain half of that commit (gain edits applied to running sources without a restart) was not compared. |
 | `00941d4` trim a trailing partial sample before WAV/FLAC export | Not applicable: clips here are written from decoded `f32` samples, never from raw byte buffers. |
-| `4610` evaluate every new voice-activity hop before trimming | Not applicable: there is no voice-activity stage here. Whether there should be is a feature gap that predates this range; it is not in the plan above. |
+| `4610` evaluate every new voice-activity hop before trimming | Not applicable to a stage we do not have: there is no voice-activity stage here (the privacy filter reads BirdNET's human labels; see G‑13). Whether there should be one is G‑13, a GAP that predates this range and is in the plan (Tier 3 #33). The hash is four characters as first written and the commit was not identified. |
 | `ed89e32` *read (stat only)*: trusted reverse proxies configurable from the Security page, and a read-only endpoint saying how the requester's connection relates to the list | Gap in kind, not in function: the list exists here (`BIRDNET_TRUSTED_PROXIES`, `client_ip.rs`) and is set from the environment or the config file only; no page edits it, and no endpoint reports how a request was classified. |
 | `2ddb837` *read (message and test only)*: Perch sound-class labels such as `Bathtub_(filling_or_washing)` kept whole instead of split at the first underscore | Not verified here. The text-format label parser splits at the first underscore; the CSV and TSV parsers do not. Whether a Perch label file in text form reaches the first one was not checked, and no Perch label file is on this machine. |
 | `da2938f`, `ba1e9f4` clip clean-up leaving spectrogram renders, stale clip references | Not applicable to the first: spectrograms are rendered on demand here and never stored. The second (stale clip references on aged-out libraries) was not compared against `maintenance.rs`. |
 | `335d8d1`, `c275285` reconcile-pass back-off | Not compared. |
 | `86a9863` unreadable cgroup memory limits reported as unknown | Not compared against `memory.rs`. |
-| the `go-audio-dsp`, `go-flac`, `go-mp3`, `go-m4a`, `go-opus` refactors; native AAC/MP3/Opus clip encoding with no FFmpeg; Node 26 CI | Implementation changes in a Go project. Native non-WAV clip export would be a feature here (clips are WAV only); it is not in the plan above. |
+| the `go-audio-dsp`, `go-flac`, `go-mp3`, `go-m4a`, `go-opus` refactors; native AAC/MP3/Opus clip encoding with no FFmpeg; Node 26 CI | Implementation changes in a Go project. Native clip encoding would be a feature here, but the statement this row first made, that clips are WAV only, was wrong: clips are WAV, converted to MP3, FLAC or Ogg by `ffmpeg` or, failing that, `sox` (`crates/birdnet-core/src/audio/extraction/format.rs`, `convert.rs`). Opus and AAC are not offered; see P‑18. |
 | `9642f74`, `c77f11b` interface-language and settings-page fixes | Not applicable: this interface is English, and species names are the localised part (Part 5). |
+
+## Part 8 — birdnet-go `f4f019a` → `a1a77af`, and the parity audit of 2026‑10‑20
+
+Sixty-five commits, and the 22 findings the audit listed, P‑1 … P‑22.
+
+**What was and was not checked.** The upstream columns are the audit's citations (a file and line in birdnet-go, one in BirdNET-Pi) and were **not re-read** for this part; upstream was not reachable from the session that wrote it. The `Ours` column was checked at the commit this was edited on: each cell names the file and says what a grep or a read of it showed. It was written first when none of P‑1 to P‑6 was in the tree; rows P‑1 to P‑4 and P‑6 were rewritten on 2026‑10‑20 after the work landed on this branch (commits named in each cell), and what each commit's tests did and did not cover is said in its cell. The verdicts are the document's (GAP, PARTIAL, SHIPPED, PARITY, DECLINED).
+
+Tallied from the last column, counting P‑2 once, as PARTIAL (its 0,0 default is fixed; fuzzing and a separate threshold are not): 4 SHIPPED (P‑1, P‑3, P‑5, P‑6), 7 PARTIAL (P‑2, P‑4, P‑7, P‑14, P‑15, P‑20, P‑22), 11 GAP.
+
+| # | Upstream (the audit's citation) | Ours (checked) | Verdict |
+|---|---|---|---|
+| P‑1 | Alert-rule cooldown per rule and species (`internal/alerting/engine.go:337,436,475`) | `alert_rules.cooldown_secs` (migration 55, `51eaaa71`) and the gate in `src/daemon/alert_cooldown.rs`, which runs on the detection's own time, applies to webhook actions only and gives its window back when the request never left. The rule form sets it (`49def1d8`): minutes, 5 by default, refused above 7 days. The export is version 3. Upstream's "per rule *and species*" is matched: the gate is keyed on both. | SHIPPED |
+| P‑2 | BirdWeather: the audit lists three differences. Ours posts coordinates 0,0 when no location is set; upstream can fuzz the posted location; upstream has an upload threshold separate from the detection threshold (`internal/conf/config.go:348-349`, `birdweather_client.go:258`) | The 0,0 default is fixed (`0b456c20`): `birdnet_integrations::birdweather::check_location` refuses a missing, non-finite, off-globe or exactly 0,0 position, the client is not built without one, `--doctor` has a "BirdWeather location" family, and an upload an earlier version parked at 0,0 is dropped. No fuzzing: the only "jitter" in `crates/birdnet-integrations/src/birdweather.rs` is retry back-off. No BirdWeather-specific threshold: the posts are the detections that passed the global one. | SHIPPED (the 0,0 default); GAP (fuzzing, separate threshold) |
+| P‑3 | Range-filter explorer: a route that lists the species the filter admits (`internal/api/v2/range/range.go:49-60`) | `GET /api/v2/species/occurrence` and the page `/species/occurrence` (`1f92c980`) give, per species, the model's probability, the threshold in force and the station's decision with its reason (range model, or the operator's lists), for the station's place and a week; a species page for a held-back bird links to it. Checked against the real V2.4 range model (a European station keeps the magpie and holds back a North American bird, and the reverse) and, with the operator's lists, against `filter_species`. Not run: the V3 geomodel variant, a Raspberry Pi, and the memory a second copy of the range model takes. | SHIPPED |
+| P‑4 | Container storage-persistence check (`a43718b`, `internal/health/checks/storage_persistence.go:54`) | The Station Health banner and header badge (`b1025a19`, shared list `station_issues`) and `--doctor`'s "Data volume" check (`45781dcd`) flag a data directory on the container's own writable layer, from the mount table. The shipped image declares `VOLUME /data`, so a bare `docker run` gets an anonymous volume, which is a mount and is not flagged although `docker rm -v` or `--rm` deletes it. Tested on `mountinfo` fixtures modelled on Docker's output, not in a container. | PARTIAL |
+| P‑5 | Support-bundle coordinates (`91618b8`, `internal/support/collector.go:245`) | The bundle shows `LATITUDE` and `LONGITUDE` to one decimal, in the configuration and wherever the journal printed them: `145f95e4`, `src/support.rs` (`coarse_coordinate`), gated by `the_stations_coordinates_leave_the_bundle_at_one_decimal`. | SHIPPED |
+| P‑6 | Session cookie `Secure` decided from the connection (`6596663`) | `birdnet_web::request_scheme` (`af748031`): a request is HTTPS when it arrived on the station's own TLS listener, when a trusted proxy says so (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or when `BNB_PUBLIC_URL` is `https://` and the request's `Host` is that address; `Secure` follows. A real TLS handshake is in the test. | SHIPPED |
+| P‑7 | Settings that take effect without a restart | `SETTING_SPECS` in `src/helpers/settings_overlay.rs` has 67 entries: 47 are `Wiring::Bridged` (overlaid onto the config, so they take effect on the next restart, as the enum's own comment says) and 20 are `Wiring::OwnedBy` (read from the `settings` table by the named subsystem). Whether each of the 20 reads it per use or once at start was not checked. Counted with `grep -c 'Wiring::Bridged'` and `grep -c 'Wiring::OwnedBy'` over the text of `SETTING_SPECS`. | PARTIAL |
+| P‑8 | Browser playback gain, high-pass and compressor (`frontend/src/lib/utils/audioNodes.ts:110-150`) | No Web Audio code in `crates/birdnet-web` (a grep of its `.js`, `.html` and `.rs` for `AudioContext`, `createGain` and `BiquadFilter` finds none). The player offers a pitch control only (N‑2). | GAP |
+| P‑9 | Opt-in iframe embedding (`internal/api/middleware/security.go:51-132`) | `content_security_policy` sends `frame-ancestors 'self'` (`crates/birdnet-web/src/security.rs:75`) and `X-Frame-Options: SAMEORIGIN`, both fixed; no setting changes them. | GAP |
+| P‑10 | MQTT client-certificate TLS | `.with_no_client_auth()` at `crates/birdnet-integrations/src/mqtt/publisher.rs:267` (the audit gave `src/integrations/mqtt/publisher.rs`, which does not exist). MQTT over TLS with a CA file and a user name and password is there; a client certificate is not. | GAP |
+| P‑11 | Dynamic-threshold list, stats and reset routes (the test route is in G‑12) | Nothing under `crates/birdnet-web/src` names `DynamicThresholds` or the `dynamic_thresholds` table, so no route or page lists what has been learned, reports it, or clears it. It is the remainder G‑12 already records. | GAP |
+| P‑12 | Per-species minimum interval between detections | No setting or table of that shape was found (a grep for `min_interval`, `minimum.interval` and `species_interval` in `crates` and `src` finds none). `species_thresholds` carries thresholds, by its name; its columns were not opened. | GAP |
+| P‑13 | A dashboard custom image or webcam snapshot with a title (BirdNET-Pi `scripts/overview.php:19-27`) | Nothing on a dashboard page. `custom_image_dir` is a per-species override. See N‑6. | GAP |
+| P‑14 | A hardware inventory in the support bundle | The bundle stages `uname -a` and `df -h` (`uname.txt`, `disk.txt`) beside the doctor report, which has a CPU check; no CPU model, memory or USB audio inventory member. The doctor report's contents were not compared item for item. | PARTIAL |
+| P‑15 | "Test connection" buttons for MQTT, eBird, weather and ntfy | `routes/admin/notification_test.rs` tests the push channel and BirdWeather. No route tests MQTT, eBird or weather. ntfy is a native push URL, so the push test sends to it; that was not run. | PARTIAL |
+| P‑16 | Temperature unit and 12/24-hour display | No setting for either was found (a grep of `crates` and `src` for `fahrenheit`, `temperature_unit`, `time_format` and `12h` finds only `routes/feeds.rs`, which was not opened). | GAP |
+| P‑17 | Spectrogram style and dynamic-range options | One colour map, `viridis` (`routes/spectrogram/colormap.rs`); no dynamic-range constant or setting was found in `routes/spectrogram/`. `raw_spectrogram` only removes the overlay label. | GAP |
+| P‑18 | Opus and AAC clip export | Clips are WAV, converted to MP3, FLAC or Ogg by `ffmpeg` or `sox` (`audio/extraction/format.rs`). Deferred on purpose: `UNATTENDED_DEPLOYMENT_AUDIT.md` S-15 calls it optional and low priority. | GAP |
+| P‑19 | AviCommons image provider (the licence is to check) | The providers are Wikipedia and Flickr (`species_images/`); AviCommons is named nowhere in the tree. Its licence was not checked. | GAP |
+| P‑20 | Season carry-over: "new this season" for a resident (`3582fc8`) | `species_tracking.rs` computes `new_this_season` (G‑16, served at `routes/species.rs`). Whether it treats a resident heard last season the way the upstream change does was not compared. | PARTIAL |
+| P‑21 | A weather JSON API | The weather providers shipped (G‑26), but no route serves the data: `openapi.json` has no weather path and a grep of the route tables finds none. | GAP |
+| P‑22 | A page to upload, generate and download TLS certificates (ACME declined here: `crates/birdnet-web/src/tls.rs:17-23`) | `--tls-mode` has `off`, `self-signed` and `manual`, set by flag, environment or config; the generated CA is a file on disk. No page uploads, generates or downloads a certificate. | PARTIAL |

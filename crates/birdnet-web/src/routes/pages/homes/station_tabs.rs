@@ -54,6 +54,24 @@ pub fn router() -> Router<AppState> {
         .route("/station/access", get(access_page))
 }
 
+/// The assembled tab, or — when the task that assembled it panicked — the tab
+/// strip over a plain statement that it could not be built.
+///
+/// This was `.unwrap_or_default()`: a panic in any of the five builders
+/// answered `200` with an empty body inside the shell, a Station page with no
+/// tabs and nothing on it, which is not an error anyone can read. The strip is
+/// kept so the reader can leave for another tab.
+fn built(tab: &str, what: &str, joined: Result<String, tokio::task::JoinError>) -> String {
+    joined.unwrap_or_else(|e| {
+        tracing::error!(error = %e, tab, "station tab: the task that builds the page failed");
+        format!(
+            "{}{}",
+            station_subtabs(tab),
+            crate::routes::pages::error_states::could_not_load(what)
+        )
+    })
+}
+
 /// Render assembled `content` through the main shell with Station active.
 fn page(content: &str, headers: &HeaderMap) -> Html<String> {
     render_page_for_request("Settings", content, "station", headers)
@@ -68,9 +86,11 @@ async fn capture_page(
     user: crate::auth_middleware::RequestUser,
     headers: HeaderMap,
 ) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_capture(&state, &user))
-        .await
-        .unwrap_or_default();
+    let content = built(
+        "capture",
+        "the Capture tab",
+        tokio::task::spawn_blocking(move || build_capture(&state, &user)).await,
+    );
     page(&content, &headers)
 }
 
@@ -109,9 +129,11 @@ async fn alerts_page(
     user: crate::auth_middleware::RequestUser,
     headers: HeaderMap,
 ) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_alerts(&state, &user))
-        .await
-        .unwrap_or_default();
+    let content = built(
+        "alerts",
+        "the Alerts tab",
+        tokio::task::spawn_blocking(move || build_alerts(&state, &user)).await,
+    );
     page(&content, &headers)
 }
 
@@ -147,9 +169,11 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
 // ───────────────────────────────────────────────────────────────────────────
 
 async fn data_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_data(&state))
-        .await
-        .unwrap_or_default();
+    let content = built(
+        "data",
+        "the Data tab",
+        tokio::task::spawn_blocking(move || build_data(&state)).await,
+    );
     page(&content, &headers)
 }
 
@@ -182,9 +206,11 @@ async fn settings_page(
     user: crate::auth_middleware::RequestUser,
     headers: HeaderMap,
 ) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_settings(&state, &user))
-        .await
-        .unwrap_or_default();
+    let content = built(
+        "settings",
+        "the Settings tab",
+        tokio::task::spawn_blocking(move || build_settings(&state, &user)).await,
+    );
     page(&content, &headers)
 }
 
@@ -225,9 +251,11 @@ async fn access_page(
     request_user: RequestUser,
     headers: HeaderMap,
 ) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_access(&state, &request_user))
-        .await
-        .unwrap_or_default();
+    let content = built(
+        "access",
+        "the Access tab",
+        tokio::task::spawn_blocking(move || build_access(&state, &request_user)).await,
+    );
     page(&content, &headers)
 }
 
@@ -261,6 +289,26 @@ const fn danger_zone() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page-building task that panicked answered an empty 200. The panic is
+    /// real here — `spawn_blocking` is what turns it into the `JoinError` the
+    /// handlers see — and the output is what the reader gets in the shell.
+    #[tokio::test]
+    async fn a_tab_whose_task_panicked_says_it_could_not_be_built() {
+        let panicked =
+            tokio::task::spawn_blocking(|| -> String { panic!("probe: builder panicked") }).await;
+        assert!(panicked.is_err(), "the probe must produce a JoinError");
+        let html = built("capture", "the Capture tab", panicked);
+        assert!(html.contains("We couldn't load the Capture tab."), "{html}");
+        assert!(
+            html.contains("/station/alerts"),
+            "the tab strip must survive so the reader can leave: {html}"
+        );
+
+        // The counterpart: a page that was built is returned as it was.
+        let ok = tokio::task::spawn_blocking(|| "<p>built</p>".to_owned()).await;
+        assert_eq!(built("capture", "the Capture tab", ok), "<p>built</p>");
+    }
 
     fn test_state() -> AppState {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");

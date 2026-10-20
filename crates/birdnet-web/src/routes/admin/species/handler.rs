@@ -2,11 +2,10 @@
 
 use axum::Form;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::Html;
+use axum::response::{Html, IntoResponse as _, Response};
 use serde::Deserialize;
 
-use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
+use birdnet_db::settings::{SettingsCategory, SettingsError, ensure_settings_table, get, set};
 
 use super::render::{
     SuggestedThreshold, render_filter_test_page, render_species_partial, render_thresholds_partial,
@@ -26,18 +25,30 @@ pub async fn species_page() -> axum::response::Redirect {
 }
 
 /// Return the HTMX partial fragment containing the current species lists.
-pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
-    state
-        .run_blocking(move |state| {
-            let (exclude, include, whitelist) = load_lists(state);
-            Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            ))
-        })
-        .await
+pub async fn species_partial(State(state): State<AppState>) -> Response {
+    state.run_blocking(list_partial).await
+}
+
+/// The three lists as the partial the Species lists card swaps in, or the
+/// inline failure note when they could not be read.
+///
+/// An unreadable list is not an empty one: three empty lists on screen read as
+/// "nothing is excluded", and the operator who then adds a name has no way to
+/// know they were looking at a fault.
+fn list_partial(state: &AppState) -> Response {
+    match try_species_lists(state) {
+        Ok(lists) => Html(render_species_partial(
+            &lists.exclude,
+            &lists.include,
+            &lists.whitelist,
+            state.names(),
+        ))
+        .into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "species lists could not be read");
+            crate::routes::pages::error_states::failed_partial("the species lists").into_response()
+        }
+    }
 }
 
 /// Render the species filter-test page, which shows every known species and
@@ -45,18 +56,34 @@ pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
 pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
     state
         .run_blocking(move |state| {
-            let (exclude, include, _) = load_lists(state);
-            let species = state.with_read_db(|conn| {
-                birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default()
-            });
+            let unreadable = |what: &str, e: &dyn std::fmt::Display| {
+                tracing::warn!(error = %e, "{what} could not be read");
+                Html(crate::routes::admin::admin_subpage_shell(
+                    "Filter test",
+                    "species",
+                    "Filter test",
+                    &crate::routes::pages::error_states::could_not_load(what),
+                ))
+            };
+            let lists = match try_species_lists(state) {
+                Ok(lists) => lists,
+                Err(e) => return unreadable("the species lists", &e),
+            };
+            // An empty species table would preview a filter that blocks and
+            // passes nothing, as though the station had heard nothing.
+            let species =
+                match state.with_read_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000)) {
+                    Ok(species) => species,
+                    Err(e) => return unreadable("the species this station has heard", &e),
+                };
             #[allow(clippy::cast_sign_loss)]
             let rows: Vec<(String, String, u64)> = species
                 .into_iter()
                 .map(|s| (s.sci_name, s.com_name, s.count.max(0) as u64))
                 .collect();
             Html(render_filter_test_page(
-                &exclude,
-                &include,
+                &lists.exclude,
+                &lists.include,
                 &rows,
                 state.names(),
             ))
@@ -77,136 +104,108 @@ pub struct SpeciesNameForm {
 
 /// Add a species to the exclusion list and return the updated partial.
 ///
-/// # Errors
-///
-/// This function currently always returns `Ok`.
+/// A list the database could not read or write is answered with a toast and
+/// the page left as it was (`list_changed`), and is not audited: the audit
+/// log records what changed.
 pub async fn add_exclude(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Response {
     state
         .run_blocking(move |state| {
-            modify_list(state, "species_exclude", &form.name, &ListAction::Add);
-            // A filter list decides what the station is allowed to record. A season
-            // missing a species is otherwise indistinguishable from a season in which
-            // it was not heard.
-            crate::audit::audit(
-                state,
-                Some(&request_user),
-                "species.exclude.add",
-                Some(&form.name),
-                None,
-            );
-            let (exclude, include, whitelist) = load_lists(state);
-            Ok(Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            )))
+            let result = modify_list(state, "species_exclude", &form.name, &ListAction::Add);
+            if result.is_ok() {
+                // A filter list decides what the station is allowed to record. A season
+                // missing a species is otherwise indistinguishable from a season in which
+                // it was not heard.
+                crate::audit::audit(
+                    state,
+                    Some(&request_user),
+                    "species.exclude.add",
+                    Some(&form.name),
+                    None,
+                );
+            }
+            list_changed(state, result, &form.name, "added to the exclusion list")
         })
         .await
 }
 
 /// Remove a species from the exclusion list and return the updated partial.
-///
-/// # Errors
-///
-/// This function currently always returns `Ok`.
 pub async fn remove_exclude(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Response {
     state
         .run_blocking(move |state| {
-            modify_list(state, "species_exclude", &form.name, &ListAction::Remove);
-            // A filter list decides what the station is allowed to record. A season
-            // missing a species is otherwise indistinguishable from a season in which
-            // it was not heard.
-            crate::audit::audit(
-                state,
-                Some(&request_user),
-                "species.exclude.remove",
-                Some(&form.name),
-                None,
-            );
-            let (exclude, include, whitelist) = load_lists(state);
-            Ok(Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            )))
+            let result = modify_list(state, "species_exclude", &form.name, &ListAction::Remove);
+            if result.is_ok() {
+                // A filter list decides what the station is allowed to record. A season
+                // missing a species is otherwise indistinguishable from a season in which
+                // it was not heard.
+                crate::audit::audit(
+                    state,
+                    Some(&request_user),
+                    "species.exclude.remove",
+                    Some(&form.name),
+                    None,
+                );
+            }
+            list_changed(state, result, &form.name, "removed from the exclusion list")
         })
         .await
 }
 
 /// Add a species to the allow-list and return the updated partial.
-///
-/// # Errors
-///
-/// This function currently always returns `Ok`.
 pub async fn add_include(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Response {
     state
         .run_blocking(move |state| {
-            modify_list(state, "species_include", &form.name, &ListAction::Add);
-            // A filter list decides what the station is allowed to record. A season
-            // missing a species is otherwise indistinguishable from a season in which
-            // it was not heard.
-            crate::audit::audit(
-                state,
-                Some(&request_user),
-                "species.include.add",
-                Some(&form.name),
-                None,
-            );
-            let (exclude, include, whitelist) = load_lists(state);
-            Ok(Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            )))
+            let result = modify_list(state, "species_include", &form.name, &ListAction::Add);
+            if result.is_ok() {
+                // A filter list decides what the station is allowed to record. A season
+                // missing a species is otherwise indistinguishable from a season in which
+                // it was not heard.
+                crate::audit::audit(
+                    state,
+                    Some(&request_user),
+                    "species.include.add",
+                    Some(&form.name),
+                    None,
+                );
+            }
+            list_changed(state, result, &form.name, "added to the allow-list")
         })
         .await
 }
 
 /// Remove a species from the allow-list and return the updated partial.
-///
-/// # Errors
-///
-/// This function currently always returns `Ok`.
 pub async fn remove_include(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Response {
     state
         .run_blocking(move |state| {
-            modify_list(state, "species_include", &form.name, &ListAction::Remove);
-            // A filter list decides what the station is allowed to record. A season
-            // missing a species is otherwise indistinguishable from a season in which
-            // it was not heard.
-            crate::audit::audit(
-                state,
-                Some(&request_user),
-                "species.include.remove",
-                Some(&form.name),
-                None,
-            );
-            let (exclude, include, whitelist) = load_lists(state);
-            Ok(Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            )))
+            let result = modify_list(state, "species_include", &form.name, &ListAction::Remove);
+            if result.is_ok() {
+                // A filter list decides what the station is allowed to record. A season
+                // missing a species is otherwise indistinguishable from a season in which
+                // it was not heard.
+                crate::audit::audit(
+                    state,
+                    Some(&request_user),
+                    "species.include.remove",
+                    Some(&form.name),
+                    None,
+                );
+            }
+            list_changed(state, result, &form.name, "removed from the allow-list")
         })
         .await
 }
@@ -215,65 +214,72 @@ pub async fn remove_include(
 ///
 /// The whitelist exempts a species from the occurrence threshold and from
 /// nothing else; see `SpeciesFilterConfig::whitelist`.
-///
-/// # Errors
-///
-/// This function currently always returns `Ok`.
 pub async fn add_whitelist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Response {
     state
         .run_blocking(move |state| {
-            modify_list(state, "species_whitelist", &form.name, &ListAction::Add);
-            crate::audit::audit(
-                state,
-                Some(&request_user),
-                "species.whitelist.add",
-                Some(&form.name),
-                None,
-            );
-            let (exclude, include, whitelist) = load_lists(state);
-            Ok(Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            )))
+            let result = modify_list(state, "species_whitelist", &form.name, &ListAction::Add);
+            if result.is_ok() {
+                crate::audit::audit(
+                    state,
+                    Some(&request_user),
+                    "species.whitelist.add",
+                    Some(&form.name),
+                    None,
+                );
+            }
+            list_changed(state, result, &form.name, "added to the whitelist")
         })
         .await
 }
 
 /// Remove a species from the whitelist and return the updated partial.
-///
-/// # Errors
-///
-/// This function currently always returns `Ok`.
 pub async fn remove_whitelist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Response {
     state
         .run_blocking(move |state| {
-            modify_list(state, "species_whitelist", &form.name, &ListAction::Remove);
-            crate::audit::audit(
-                state,
-                Some(&request_user),
-                "species.whitelist.remove",
-                Some(&form.name),
-                None,
-            );
-            let (exclude, include, whitelist) = load_lists(state);
-            Ok(Html(render_species_partial(
-                &exclude,
-                &include,
-                &whitelist,
-                state.names(),
-            )))
+            let result = modify_list(state, "species_whitelist", &form.name, &ListAction::Remove);
+            if result.is_ok() {
+                crate::audit::audit(
+                    state,
+                    Some(&request_user),
+                    "species.whitelist.remove",
+                    Some(&form.name),
+                    None,
+                );
+            }
+            list_changed(state, result, &form.name, "removed from the whitelist")
         })
         .await
+}
+
+/// Answer a list change: the re-rendered lists when it was made, a toast
+/// that leaves the page as it was when it was not.
+///
+/// `200` with `HX-Reswap: none`, not a `5xx`: htmx drops the body of an error
+/// response, so a refusal answered that way changes nothing on the page and
+/// says nothing either (see [`not_applied`](crate::routes::pages::toast::not_applied)).
+fn list_changed(
+    state: &AppState,
+    result: Result<(), ListError>,
+    name: &str,
+    what: &str,
+) -> Response {
+    match result {
+        Ok(()) => list_partial(state),
+        Err(e) => {
+            tracing::warn!(error = %e, species = %name, "species list not changed");
+            crate::routes::pages::toast::not_applied(&crate::routes::pages::toast::Toast::error(
+                e.toast(name, what),
+            ))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -450,9 +456,75 @@ enum ListAction {
     Remove,
 }
 
-fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let lists = configured_species_lists(state);
-    (lists.exclude, lists.include, lists.whitelist)
+/// Why a list could not be changed.
+///
+/// Two kinds because they promise different things: a list that could not be
+/// *read* was never written to, which is certain, while a write the database
+/// refused is only known to have not been applied.
+#[derive(Debug)]
+pub(crate) enum ListError {
+    /// The stored list could not be read, so nothing was written.
+    Read(SettingsError),
+    /// The new list could not be written.
+    Write(SettingsError),
+}
+
+impl std::fmt::Display for ListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Read(e) => write!(f, "the list could not be read: {e}"),
+            Self::Write(e) => write!(f, "the list could not be written: {e}"),
+        }
+    }
+}
+
+impl ListError {
+    /// What to tell the operator: the species, what was meant to happen to it,
+    /// and only what is certainly true about why. The database's own words stay
+    /// in the log.
+    pub(crate) fn toast(&self, name: &str, what: &str) -> String {
+        match self {
+            Self::Read(_) => format!(
+                "{name} was not {what}: the list could not be read from the database, so it was \
+                 left as it was."
+            ),
+            Self::Write(_) => {
+                format!("{name} was not {what}: the database refused the change.")
+            }
+        }
+    }
+}
+
+/// Read one comma-separated list setting.
+///
+/// A key that has never been written is an empty list, because that is what a
+/// new station has. Any other failure is an error: an unreadable list is not an
+/// empty one, and treating it as one lets the next write replace the whole of
+/// it with whatever was just added.
+fn read_list(conn: &rusqlite::Connection, key: &str) -> Result<Vec<String>, SettingsError> {
+    match get(conn, key) {
+        Ok(value) => Ok(parse_list(Some(&value))),
+        Err(SettingsError::NotFound(_)) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The operator's species include, exclude and whitelist lists, or the first
+/// error the database returned reading them.
+///
+/// What the pages use: they must be able to say "could not read" instead of
+/// drawing an empty list. The detection daemon uses
+/// [`configured_species_lists`], which cannot say anything.
+pub(crate) fn try_species_lists(
+    state: &AppState,
+) -> Result<birdnet_core::inference::species_filter::SpeciesLists, SettingsError> {
+    state.with_read_db(|conn| {
+        Ok(birdnet_core::inference::species_filter::SpeciesLists {
+            include: read_list(conn, "species_include")?,
+            exclude: read_list(conn, "species_exclude")?,
+            whitelist: read_list(conn, "species_whitelist")?,
+        })
+    })
 }
 
 /// The operator's species include, exclude and whitelist lists as stored by
@@ -463,17 +535,28 @@ fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>, Vec<String>) {
 /// binary passes this to the daemon as a
 /// [`SpeciesListsProvider`](birdnet_core::inference::species_filter::SpeciesListsProvider)
 /// so a change here takes effect on the next processed file.
+///
+/// A list that cannot be read is empty **for the daemon**, one list at a time,
+/// and is logged at `warn`: the provider's signature has no way to say "I do
+/// not know", and detection continuing is the lesser harm. The pages do not
+/// share that fallback; they use `try_species_lists`.
 #[must_use]
 pub fn configured_species_lists(
     state: &AppState,
 ) -> birdnet_core::inference::species_filter::SpeciesLists {
-    state.with_read_db(
-        |conn| birdnet_core::inference::species_filter::SpeciesLists {
-            include: parse_list(get(conn, "species_include").ok().as_deref()),
-            exclude: parse_list(get(conn, "species_exclude").ok().as_deref()),
-            whitelist: parse_list(get(conn, "species_whitelist").ok().as_deref()),
-        },
-    )
+    state.with_read_db(|conn| {
+        let read = |key: &str| {
+            read_list(conn, key).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, key, "species list could not be read; applying none");
+                Vec::new()
+            })
+        };
+        birdnet_core::inference::species_filter::SpeciesLists {
+            include: read("species_include"),
+            exclude: read("species_exclude"),
+            whitelist: read("species_whitelist"),
+        }
+    })
 }
 
 /// Render the species-list management body (no document shell).
@@ -482,8 +565,18 @@ pub fn configured_species_lists(
 /// (`crate::routes::pages::homes::station_tabs`), which renders the same
 /// include/exclude UI in the main shell.
 pub(crate) fn species_body(state: &AppState) -> String {
-    let (exclude, include, whitelist) = load_lists(state);
-    super::render::species_lists_body(&exclude, &include, &whitelist, state.names())
+    match try_species_lists(state) {
+        Ok(lists) => super::render::species_lists_body(
+            &lists.exclude,
+            &lists.include,
+            &lists.whitelist,
+            state.names(),
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "species lists could not be read");
+            crate::routes::pages::error_states::inline("the species lists")
+        }
+    }
 }
 
 fn parse_list(val: Option<&str>) -> Vec<String> {
@@ -500,11 +593,21 @@ fn parse_list(val: Option<&str>) -> Vec<String> {
 /// Public so the suspect-species report can reuse the list the operator
 /// already has, rather than inventing a second exclusion mechanism that would
 /// be a second place to look when a bird stops appearing.
-pub(crate) fn add_to_exclude_list(state: &AppState, sci_name: &str) {
-    modify_list(state, "species_exclude", sci_name, &ListAction::Add);
+///
+/// # Errors
+///
+/// A [`ListError`] when the list could not be read or the new one written; the
+/// caller must not tell the operator the species is excluded.
+pub(crate) fn add_to_exclude_list(state: &AppState, sci_name: &str) -> Result<(), ListError> {
+    modify_list(state, "species_exclude", sci_name, &ListAction::Add)
 }
 
-fn modify_list(state: &AppState, key: &'static str, name: &str, action: &ListAction) {
+fn modify_list(
+    state: &AppState,
+    key: &'static str,
+    name: &str,
+    action: &ListAction,
+) -> Result<(), ListError> {
     let name = name.trim();
     // A name typed in the station's language is stored as the scientific name.
     // The filter resolves entries against the classifier's label set, which has
@@ -518,12 +621,12 @@ fn modify_list(state: &AppState, key: &'static str, name: &str, action: &ListAct
     }
     .to_string();
     if name.is_empty() {
-        return;
+        return Ok(());
     }
 
     state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        let mut list = parse_list(get(conn, key).ok().as_deref());
+        ensure_settings_table(conn).map_err(ListError::Write)?;
+        let mut list = read_list(conn, key).map_err(ListError::Read)?;
         match action {
             ListAction::Add => {
                 if !list.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
@@ -535,6 +638,6 @@ fn modify_list(state: &AppState, key: &'static str, name: &str, action: &ListAct
             }
         }
         let joined = list.join(", ");
-        set(conn, key, &joined, SettingsCategory::Species).ok();
-    });
+        set(conn, key, &joined, SettingsCategory::Species).map_err(ListError::Write)
+    })
 }

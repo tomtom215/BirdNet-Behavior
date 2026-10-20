@@ -106,6 +106,76 @@ const CONFIG_KEY_OF: &[(&str, &str)] = &[
     ("privacy_threshold", "PRIVACY_THRESHOLD"),
 ];
 
+/// Every settings field the station reads as a count and not a fraction (a
+/// number of classes, a number of seconds): the
+/// form key, the label the page shows, the range outside which the value
+/// cannot do its job, and what a person typing the wrong thing needs told.
+///
+/// The bounds are `birdnet-core`'s own constants — the ones
+/// [`birdnet_core::config::validate::validate`] enforces on the config file —
+/// read, not copied, so the page cannot accept a number `--doctor` refuses or
+/// refuse one it accepts. `the_form_and_the_validator_agree_about_a_whole_number`
+/// holds the two *behaviours* equal at each edge, which is the claim that
+/// matters if somebody later swaps a constant for a literal.
+///
+/// Kept apart from [`BOUNDED_FIELDS`] because the check is a different one: a
+/// value in that list is parsed as a decimal, and `0.02` in this one would
+/// truncate to `0`, which for `privacy_rank` is the rule switched off.
+const WHOLE_NUMBER_FIELDS: &[(&str, &str, u64, u64, &str)] = &[
+    (
+        "privacy_rank",
+        "Privacy Rank",
+        birdnet_core::config::validate::PRIVACY_RANK_MIN,
+        birdnet_core::config::validate::PRIVACY_RANK_MAX,
+        "It counts classes, it is not a confidence (that is the Privacy Threshold field): \
+         0 turns the rule off and 10 is BirdNET-Pi's own.",
+    ),
+    (
+        "segment_duration",
+        "Segment Duration",
+        birdnet_core::config::validate::SEGMENT_DURATION_MIN,
+        birdnet_core::config::validate::SEGMENT_DURATION_MAX,
+        "It is the length of each recording chunk in seconds, not a count of chunks: \
+         3 is one analysis window and 15 is the default.",
+    ),
+];
+
+/// The config key each whole-number field maps to, for
+/// `the_form_and_the_validator_agree_about_a_whole_number`.
+#[cfg(test)]
+const WHOLE_NUMBER_CONFIG_KEY_OF: &[(&str, &str)] = &[
+    ("privacy_rank", "PRIVACY_RANK"),
+    ("segment_duration", "SEGMENT_DURATION"),
+];
+
+/// What is wrong with one whole-number submission, or `None` when it is fine.
+///
+/// A blank value is fine: it clears the setting, and the station runs on the
+/// default. Nothing is rounded, truncated or reinterpreted — a fraction, a
+/// percent sign, a sign or a thousands separator is refused and quoted back, so
+/// the number stored is always the number typed.
+fn whole_number_problem(
+    label: &str,
+    raw: &str,
+    min: u64,
+    max: u64,
+    advice: &str,
+) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let rule = format!("{label} must be a whole number from {min} to {max}. {advice}");
+    if raw.bytes().all(|b| b.is_ascii_digit()) {
+        // Digits only. One too long for a u64 is out of range, not unreadable.
+        return match raw.parse::<u64>() {
+            Ok(v) if (min..=max).contains(&v) => None,
+            _ => Some(format!("{rule} You entered {raw}.")),
+        };
+    }
+    Some(format!("{rule} You entered “{raw}”."))
+}
+
 /// Problems with the numbers in `form`, phrased for the person who typed them.
 ///
 /// # Why this exists at all
@@ -174,14 +244,108 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
             "{label} must be between {min} and {max}. You entered {raw}{hint}"
         ));
     }
+    // The same rule for the counts: the submission, not the diff, and sized by
+    // the table so a field added there and not here does not compile.
+    let submitted: [(&str, Option<&String>); WHOLE_NUMBER_FIELDS.len()] = [
+        ("privacy_rank", form.privacy_rank.as_ref()),
+        ("segment_duration", form.segment_duration.as_ref()),
+    ];
+    for (key, value) in submitted {
+        let Some(value) = value else { continue };
+        let Some(&(_, label, min, max, advice)) =
+            WHOLE_NUMBER_FIELDS.iter().find(|(k, ..)| *k == key)
+        else {
+            continue;
+        };
+        problems.extend(whole_number_problem(label, value, min, max, advice));
+    }
+    problems
+}
+
+/// Problems with the fields that take one word out of a short list, phrased for
+/// the person who typed them.
+///
+/// The page offers a `<select>` for the clip format and the species-info site, so
+/// only a hand-made request or `PUT /api/v2/settings` can send anything else;
+/// the recording window is a free-text box with suggestions, so a person can.
+/// Each is held to the predicate `birdnet_core::config::validate` uses for the
+/// same key in the config file, not to a second list, and a blank value clears
+/// the setting as it does everywhere else.
+///
+/// An unknown value is not rejected downstream, it is *reinterpreted*: a window
+/// the scheduler cannot parse becomes "record all day" with a line in the log,
+/// and the page goes on showing the text that was typed.
+fn choice_problems(form: &SettingsForm) -> Vec<String> {
+    use birdnet_core::config::validate as v;
+    let given = |value: &Option<String>| -> Option<String> {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+            .map(str::to_owned)
+    };
+    let mut problems = Vec::new();
+    if let Some(raw) = given(&form.recording_schedule) {
+        if !v::is_recording_schedule(&raw) {
+            problems.push(format!(
+                "Recording window must be all-day, solar, or fixed:HH:MM-HH:MM \
+                 (for example fixed:06:00-20:00). You entered “{raw}”."
+            ));
+        } else if let Some((start, end)) =
+            raw.strip_prefix("fixed:").and_then(v::fixed_window_minutes)
+            && birdnet_scheduler::RecordingWindow::fixed(start, end).is_err()
+        {
+            // `validate()` accepts this grammar; the scheduler does not. A
+            // window that crosses midnight is the likely typo for a night
+            // recorder, and it would be run as all-day.
+            problems.push(format!(
+                "Recording window “{raw}” does not end after it starts. A fixed window \
+                 stays within one day, so the station would ignore it and record all day. \
+                 Use solar, or a window such as fixed:06:00-20:00."
+            ));
+        }
+    }
+    if let Some(raw) = given(&form.audio_format)
+        && !v::is_audio_format(&raw)
+    {
+        problems.push(format!(
+            "Extracted Clip Format must be one of {}. You entered “{raw}”.",
+            v::AUDIO_FORMATS.join(", ")
+        ));
+    }
+    if let Some(raw) = given(&form.info_site)
+        && !v::is_info_site(&raw)
+    {
+        problems.push(format!(
+            "Species Info Links must be one of {}. You entered “{raw}”.",
+            v::INFO_SITES.join(", ")
+        ));
+    }
+    problems
+}
+
+/// Everything wrong with a submission, for the settings page and for
+/// `PUT /api/v2/settings` alike.
+///
+/// The two used to run different sets: the page ran the range, token and
+/// language checks, the API only the ranges, so `{"database_lang": "xx"}` and a
+/// BirdWeather token with a `/` in it were stored by a script and refused from the
+/// page. One list means a check added here reaches both.
+pub(crate) fn submission_problems(form: &SettingsForm) -> Vec<String> {
+    let mut problems = range_problems(form);
+    problems.extend(choice_problems(form));
+    problems.extend(birdweather_token_problem(form));
+    problems.extend(language_problem(form));
     problems
 }
 
 /// Fields saved with surrounding whitespace removed.
 ///
-/// Opaque identifiers only, which a copy from a web page tends to bring a
-/// newline or a space with. Not passwords: a space can be part of one.
-const TRIMMED_FIELDS: &[&str] = &["birdweather_token"];
+/// Opaque identifiers, which a copy from a web page tends to bring a newline
+/// or a space with, and whole numbers, where a stray space would make the
+/// daemon's `PRIVACY_RANK` read fail and fall back to the default. Not
+/// passwords: a space can be part of one.
+const TRIMMED_FIELDS: &[&str] = &["birdweather_token", "privacy_rank"];
 
 /// A BirdWeather token holding anything but letters and digits, explained.
 ///
@@ -257,9 +421,7 @@ pub async fn save_settings(
 
     // Reject before writing, and reject the whole submission: a partial save
     // would leave the form showing one thing and the station running another.
-    let mut problems = range_problems(&form);
-    problems.extend(birdweather_token_problem(&form));
-    problems.extend(language_problem(&form));
+    let problems = submission_problems(&form);
     if !problems.is_empty() {
         let list = problems.iter().fold(String::new(), |mut acc, p| {
             use std::fmt::Write as _;
@@ -701,6 +863,11 @@ pub(crate) fn build_settings_items(
         SettingsCategory::Detection
     );
     push!(
+        form.privacy_rank,
+        "privacy_rank",
+        SettingsCategory::Detection
+    );
+    push!(
         form.confirmation_level,
         "confirmation_level",
         SettingsCategory::Detection
@@ -935,6 +1102,328 @@ mod tests {
         }
     }
 
+    /// The two coordinates are bounded in `BOUNDED_FIELDS` and, as bare
+    /// literals, in `validate()`'s `check_coords`, so unlike the five fractions
+    /// there is no constant to read: this holds what each *does* equal, at the
+    /// edges and at the typed mistakes (a comma decimal, a unit, an exponent).
+    #[test]
+    fn the_form_and_the_validator_agree_about_a_coordinate() {
+        use birdnet_core::config::validate::{Severity, validate};
+        for (field, config_key, limit) in [
+            ("latitude", "LATITUDE", 90),
+            ("longitude", "LONGITUDE", 180),
+        ] {
+            let mut probes: Vec<String> = vec![
+                "0".into(),
+                limit.to_string(),
+                (-limit).to_string(),
+                format!("{limit}.0000001"),
+                format!("-{limit}.0000001"),
+                format!("{limit},5"),
+                (limit + 1).to_string(),
+                "42,3601".into(),
+                " 42.5 ".into(),
+            ];
+            probes.extend(
+                [
+                    "abc", "NaN", "inf", "-inf", "1e1", "1e3", "1,2,3", ".5", "5.", "+45", "45N",
+                    "0x10", "",
+                ]
+                .map(str::to_owned),
+            );
+            for v in probes {
+                let config = birdnet_core::config::Config::parse(&format!("{config_key}={v}"))
+                    .expect("a key=value line parses");
+                let validator_refuses = validate(&config)
+                    .iter()
+                    .any(|f| f.key == config_key && f.severity == Severity::Error);
+                let mut form = empty_form();
+                match field {
+                    "latitude" => form.latitude = Some(v.clone()),
+                    _ => form.longitude = Some(v.clone()),
+                }
+                let form_refuses = !range_problems(&form).is_empty();
+                assert_eq!(
+                    form_refuses,
+                    validator_refuses,
+                    "{field}={v:?}: the form {} it and `--doctor` {} it",
+                    if form_refuses { "refuses" } else { "accepts" },
+                    if validator_refuses {
+                        "refuses"
+                    } else {
+                        "accepts"
+                    },
+                );
+            }
+        }
+    }
+
+    /// The three fields that take a word from a short list are held to the
+    /// predicates `validate()` itself uses, so the form refuses exactly what
+    /// `--doctor` refuses in the file. The one exception is the recording
+    /// window, where the form is stricter on purpose (see the next test).
+    #[test]
+    fn the_form_and_the_validator_agree_about_a_choice() {
+        use birdnet_core::config::validate::{Severity, validate};
+        let cases: [(&str, &str, &[&str]); 3] = [
+            (
+                "recording_schedule",
+                "RECORDING_SCHEDULE",
+                &[
+                    "all-day",
+                    "solar",
+                    "fixed:06:00-20:00",
+                    "fixed:00:00-23:59",
+                    " solar ",
+                    "SOLAR",
+                    "Solar",
+                    "allday",
+                    "sunrise-sunset",
+                    "fixed:",
+                    "fixed:06:00",
+                    "fixed:6:0-7:0",
+                    "fixed:24:00-25:00",
+                    "fixed:06:60-07:00",
+                    "fixed: 06:00-20:00",
+                    "fixed:06:00 - 20:00",
+                    "fixed:06:00-20:00 UTC",
+                ],
+            ),
+            (
+                "audio_format",
+                "AUDIOFMT",
+                &[
+                    "wav", "mp3", "flac", "ogg", "WAV", " ogg ", "aiff", "S16_LE", "mp4", "wav,mp3",
+                ],
+            ),
+            (
+                "info_site",
+                "INFO_SITE",
+                &[
+                    "ebird",
+                    "allaboutbirds",
+                    "none",
+                    "eBird",
+                    " none ",
+                    "wikipedia",
+                    "all about birds",
+                ],
+            ),
+        ];
+        for (field, config_key, probes) in cases {
+            for &v in probes {
+                let config = birdnet_core::config::Config::parse(&format!("{config_key}={v}"))
+                    .expect("a key=value line parses");
+                let validator_refuses = validate(&config)
+                    .iter()
+                    .any(|f| f.severity == Severity::Error);
+                let mut form = empty_form();
+                match field {
+                    "recording_schedule" => form.recording_schedule = Some(v.to_owned()),
+                    "audio_format" => form.audio_format = Some(v.to_owned()),
+                    _ => form.info_site = Some(v.to_owned()),
+                }
+                let form_refuses = !choice_problems(&form).is_empty();
+                assert_eq!(
+                    form_refuses,
+                    validator_refuses,
+                    "{field}={v:?}: the form {} it and `--doctor` {} it",
+                    if form_refuses { "refuses" } else { "accepts" },
+                    if validator_refuses {
+                        "refuses"
+                    } else {
+                        "accepts"
+                    },
+                );
+            }
+        }
+    }
+
+    /// `validate()` reads `fixed:20:00-06:00` as a recording window; the
+    /// scheduler (`RecordingWindow::fixed`) refuses it, and the station then
+    /// records all day with a line in the log. The form is stricter than the
+    /// validator here, and says why, because the window that crosses midnight is
+    /// the one a person recording owls types.
+    #[test]
+    fn a_window_the_scheduler_would_ignore_is_refused_and_one_it_runs_is_not() {
+        for bad in [
+            "fixed:20:00-06:00",
+            "fixed:06:00-06:00",
+            "fixed:23:59-00:00",
+        ] {
+            let mut form = empty_form();
+            form.recording_schedule = Some(bad.to_owned());
+            let problems = choice_problems(&form);
+            assert_eq!(problems.len(), 1, "{bad}: {problems:?}");
+            assert!(
+                problems[0].contains("does not end after it starts")
+                    && problems[0].contains("record all day")
+                    && problems[0].contains(bad),
+                "{bad}: {}",
+                problems[0]
+            );
+        }
+        for good in [
+            "fixed:06:00-20:00",
+            "fixed:00:00-23:59",
+            "solar",
+            "all-day",
+            "",
+        ] {
+            let mut form = empty_form();
+            form.recording_schedule = Some(good.to_owned());
+            assert!(
+                choice_problems(&form).is_empty(),
+                "{good:?} is a valid answer"
+            );
+        }
+    }
+
+    /// The page and the API run one list. Before it, the API ran only the
+    /// ranges.
+    #[test]
+    fn the_submission_list_holds_every_check_the_page_runs() {
+        let mut form = empty_form();
+        form.database_lang = Some("xx".to_owned());
+        form.birdweather_token = Some("abc/123".to_owned());
+        form.audio_format = Some("aiff".to_owned());
+        form.confidence_threshold = Some("75".to_owned());
+        let problems = submission_problems(&form);
+        assert_eq!(problems.len(), 4, "{problems:?}");
+    }
+
+    /// The form and `--doctor` must take the same view of a whole number.
+    ///
+    /// Both read the same two constants, so a drift here would need somebody to
+    /// replace a constant with a literal; this compares what each *does* at the
+    /// edges and at the typed mistakes, which is the claim made in
+    /// `WHOLE_NUMBER_FIELDS`. The form may be stricter than the validator on a
+    /// shape no person types by accident (`+5`, which the validator reads as 5)
+    /// but never looser, so every value here is one they must agree about.
+    #[test]
+    fn the_form_and_the_validator_agree_about_a_whole_number() {
+        use birdnet_core::config::validate::{Severity, validate};
+        for &(field, config_key) in WHOLE_NUMBER_CONFIG_KEY_OF {
+            let &(_, _, min, max, _) = WHOLE_NUMBER_FIELDS
+                .iter()
+                .find(|(k, ..)| *k == field)
+                .unwrap_or_else(|| panic!("{field} is not a whole-number field"));
+            let mut probes: Vec<String> = [
+                (min + 1).to_string(),
+                min.to_string(),
+                max.to_string(),
+                (max - 1).to_string(),
+                (max + 1).to_string(),
+                (max * 5).to_string(),
+            ]
+            .into();
+            probes.extend(
+                [
+                    "10",
+                    "75",
+                    "007",
+                    "-1",
+                    "0.5",
+                    "0,5",
+                    "0.02",
+                    "10%",
+                    "1,000",
+                    "1e3",
+                    "abc",
+                    "99999999999999999999999",
+                ]
+                .map(str::to_owned),
+            );
+            for v in probes {
+                let config = birdnet_core::config::Config::parse(&format!("{config_key}={v}"))
+                    .expect("a key=value line parses");
+                let validator_refuses = validate(&config)
+                    .iter()
+                    .any(|f| f.key == config_key && f.severity == Severity::Error);
+                let mut form = empty_form();
+                match field {
+                    "privacy_rank" => form.privacy_rank = Some(v.clone()),
+                    "segment_duration" => form.segment_duration = Some(v.clone()),
+                    other => panic!("{other} is in the whole-number table but not in this test"),
+                }
+                let form_refuses = !range_problems(&form).is_empty();
+                assert_eq!(
+                    form_refuses,
+                    validator_refuses,
+                    "{field}={v:?}: the form {} it and `--doctor` {} it",
+                    if form_refuses { "refuses" } else { "accepts" },
+                    if validator_refuses {
+                        "refuses"
+                    } else {
+                        "accepts"
+                    },
+                );
+            }
+        }
+    }
+
+    /// The typed mistakes are refused with a message that names the range, and
+    /// a fraction is never truncated into the rule being switched off.
+    #[test]
+    fn a_privacy_rank_that_is_not_a_count_is_refused_and_says_what_a_count_is() {
+        for bad in ["0.02", "0,02", "10%", "-5", "12001", "1,000", "ten"] {
+            let mut form = empty_form();
+            form.privacy_rank = Some(bad.to_owned());
+            let problems = range_problems(&form);
+            assert_eq!(problems.len(), 1, "{bad:?}: {problems:?}");
+            let p = &problems[0];
+            assert!(p.contains("Privacy Rank"), "{bad:?}: names the field: {p}");
+            assert!(
+                p.contains("from 0 to 12000"),
+                "{bad:?}: names the range: {p}"
+            );
+            assert!(
+                p.contains("0 turns the rule off"),
+                "{bad:?}: says what 0 does: {p}"
+            );
+            assert!(p.contains(bad), "{bad:?}: quotes what was typed: {p}");
+        }
+        // Counterpart: counts, blanks and padding are not problems.
+        for good in ["0", "10", "75", "12000", " 25 ", ""] {
+            let mut form = empty_form();
+            form.privacy_rank = Some(good.to_owned());
+            assert!(
+                range_problems(&form).is_empty(),
+                "{good:?} is a valid answer"
+            );
+        }
+    }
+
+    /// Saved trimmed, and not rewritten when it is what is already stored.
+    #[test]
+    fn a_privacy_rank_is_stored_trimmed_and_an_unchanged_one_is_not_rewritten() {
+        let mut form = empty_form();
+        form.privacy_rank = Some(" 25 ".to_owned());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsShownByTheForm);
+        let (key, value, category) = items
+            .iter()
+            .find(|(k, ..)| *k == "privacy_rank")
+            .expect("a changed rank is written");
+        assert_eq!((*key, value.as_str()), ("privacy_rank", "25"));
+        assert_eq!(*category, SettingsCategory::Detection);
+
+        let stored = HashMap::from([("privacy_rank".to_owned(), "25".to_owned())]);
+        let again = build_settings_items(&form, &stored, Unset::AsShownByTheForm);
+        assert!(
+            !again.iter().any(|(k, ..)| *k == "privacy_rank"),
+            "the stored value, padded, is not a change: {again:?}"
+        );
+
+        // The page shows the default for a key with no row; saving it back is
+        // not a change either, or the first press of Save would pin it.
+        form.privacy_rank = Some(super::super::render::form_default("privacy_rank"));
+        let untouched = build_settings_items(&form, &HashMap::new(), Unset::AsShownByTheForm);
+        assert!(
+            !untouched.iter().any(|(k, ..)| *k == "privacy_rank"),
+            "the default shown by the form is not a change: {untouched:?}"
+        );
+    }
+
     /// The counterpart: the two alert thresholds must stay *out* of the
     /// validator's list. Putting them in is the change this whole arrangement
     /// exists to prevent.
@@ -976,6 +1465,7 @@ mod tests {
             overlap: None,
             sf_thresh: None,
             privacy_threshold: None,
+            privacy_rank: None,
             confirmation_level: None,
             apprise_url: None,
             apprise_config: None,

@@ -7,6 +7,24 @@
 use std::fmt;
 use std::path::Path;
 
+/// The BirdNET V2.4 label file with BirdNET-Pi's English names, one
+/// `Scientific_Common` line per class in the model's output order.
+///
+/// Compiled in so that `--install-model birdnet-v24` can write it without a
+/// download, and so that a station recording with V2.4 stores the same common
+/// name BirdNET-Pi stores for the same class. The birdnet-go label file V2.4 is
+/// otherwise paired with names 460 of its 6 522 classes differently, which would
+/// split one species into two the moment a BirdNET-Pi history is imported.
+/// `scripts/build-v24-labels.py` regenerates it and explains the provenance;
+/// `data/labels/README.md` records the inputs.
+pub const BIRDNET_V24_ENGLISH_LABELS: &str = include_str!("../../data/labels/birdnet-v24-en.txt");
+
+/// The lowercase hex SHA-256 of [`BIRDNET_V24_ENGLISH_LABELS`], which is what
+/// the model catalogue pins and what `analysis_runs.labels_sha256` records for
+/// a station that installed it.
+pub const BIRDNET_V24_ENGLISH_LABELS_SHA256: &str =
+    "3773334c2ad218bde0ac083dd0b6e839a5cf34e84a6017830b9f446fbb57a215";
+
 /// A species label entry.
 #[derive(Debug, Clone)]
 pub struct SpeciesLabel {

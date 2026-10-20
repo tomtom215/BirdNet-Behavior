@@ -29,6 +29,10 @@ extend-exclude = [
     # Bird names in 35 languages, byte for byte from BirdNET-Pi's tables; the
     # README beside them is made of the same names.
     "crates/birdnet-core/data/l18n/**",
+    # The V2.4 label file: scientific names (62 of them read as typos) and
+    # BirdNET-Pi's English names, byte for byte from its tables, and the
+    # README beside it says the same. A gate holds the file to its digest.
+    "crates/birdnet-core/data/labels/**",
     # Reference outputs of BirdNET-Pi's own code and of the ONNX and TFLite
     # models, written by tools/parity byte for byte and pinned by
     # arrays.sha256: scientific names (afer, americanus, mexicanus, varius) and

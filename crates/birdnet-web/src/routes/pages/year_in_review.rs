@@ -178,7 +178,7 @@ fn render_content(
         let pct = (intensity * 92.0).round() as i64 + if c > 0 { 8 } else { 0 };
         let (wy, wm, wd) = days_to_date(base + wk as u64 * 7);
         let bg = if c > 0 {
-            format!("color-mix(in oklch, var(--moss) {pct}%, var(--surface-2))")
+            format!("color-mix(in oklab, var(--moss) {pct}%, var(--surface-2))")
         } else {
             "var(--surface-2)".to_string()
         };

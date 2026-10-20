@@ -98,23 +98,27 @@ OFFSITE_SFTP_HOST=backup.example.net
 OFFSITE_SFTP_PORT=22
 OFFSITE_SFTP_USER=birdnet
 OFFSITE_SFTP_DIR=/srv/backups/garden
-OFFSITE_SFTP_IDENTITY=/var/lib/birdnet/ssh/id_ed25519
-OFFSITE_SFTP_KNOWN_HOSTS=/var/lib/birdnet/ssh/known_hosts   # defaults beside the key
+OFFSITE_SFTP_IDENTITY=/home/pi/BirdNet-Behavior/ssh/id_ed25519
+OFFSITE_SFTP_KNOWN_HOSTS=/home/pi/BirdNet-Behavior/ssh/known_hosts   # defaults beside the key
 OFFSITE_SFTP_HOST_KEY_POLICY=yes                            # yes | accept-new
 OFFSITE_PASSPHRASE=...
 ```
 
-Key authentication only — passwords are disabled, because a batch upload cannot answer a prompt and would hang until something killed it. Generate a key for the station and authorise it on the server:
+Key authentication only — passwords are disabled, because a batch upload cannot answer a prompt and would hang until something killed it. The key lives where you choose; the examples put it in an `ssh` folder inside the station's data directory, which is the one place the service is allowed to read and write (`/home/pi/BirdNet-Behavior` here: the data directory of the account the bare-metal service runs as — substitute yours; in Docker it is `/data`). There is no `birdnet` user on a bare-metal station, so run the commands as the service's account (the `OFFSITE_SFTP_USER` above is the user on the *backup server*). Generate a key for the station and authorise it on the server:
 
 ```bash
-sudo -u birdnet ssh-keygen -t ed25519 -f /var/lib/birdnet/ssh/id_ed25519 -N ''
-ssh-copy-id -i /var/lib/birdnet/ssh/id_ed25519.pub birdnet@backup.example.net
+SVC=$(systemctl show -p User --value birdnet-behavior)       # bare metal: the account the service runs as
+DATA=$(getent passwd "$SVC" | cut -d: -f6)/BirdNet-Behavior   # its data directory
+sudo -u "$SVC" mkdir -p "$DATA/ssh"
+sudo -u "$SVC" ssh-keygen -t ed25519 -f "$DATA/ssh/id_ed25519" -N ''
+sudo -u "$SVC" ssh-copy-id -i "$DATA/ssh/id_ed25519.pub" birdnet@backup.example.net
+# Docker: docker compose exec birdnet sh -c 'mkdir -p /data/ssh && ssh-keygen -t ed25519 -f /data/ssh/id_ed25519 -N ""'
 ```
 
 Then record the server's host key, **after checking the fingerprint against the server itself**:
 
 ```bash
-ssh-keyscan -p 22 backup.example.net | sudo -u birdnet tee /var/lib/birdnet/ssh/known_hosts
+ssh-keyscan -p 22 backup.example.net | sudo -u "$SVC" tee "$DATA/ssh/known_hosts"
 ```
 
 `OFFSITE_SFTP_HOST_KEY_POLICY` has no "off". Host key checking is what makes the upload go to *your* server rather than to whoever answers, and there is no setting that disables it. Use `accept-new` for the first connection on a network you control, then set it back to `yes` so a *changed* key is refused.

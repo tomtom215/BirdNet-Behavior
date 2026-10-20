@@ -30,7 +30,7 @@ use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
     build_species_filter_config, resolve_required_paths, resolve_sensitivity,
-    species_lists_log_counts, species_thresholds_log_count,
+    species_lists_log_counts, species_thresholds_log_count, startup_species_thresholds,
 };
 use processor::event_processor;
 
@@ -46,10 +46,13 @@ pub use config::{
     clip_format, resolve_confidence, resolve_confirmation_level, resolve_f32_with_default,
     resolve_station_coords,
 };
+mod alert_cooldown;
+mod alert_rules;
 mod daylight;
 pub mod disposition;
 mod duplicate;
 mod local_offset;
+mod occurrence;
 mod processor;
 mod run;
 
@@ -292,6 +295,18 @@ pub fn start_detection_daemon(
         config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
     );
 
+    // `10` is the flag default and `0` ("off") is a meaningful value, so the
+    // config key is consulted only when the flag was left alone.
+    let privacy_rank = usize::try_from(
+        crate::daemon::config::resolve_i64_with_default(
+            i64::from(cli.privacy_rank),
+            i64::try_from(birdnet_core::config::DEFAULT_PRIVACY_RANK).unwrap_or(10),
+            config.and_then(|c| c.get_parsed::<i64>("PRIVACY_RANK").ok()),
+        )
+        .max(0),
+    )
+    .unwrap_or(birdnet_core::config::DEFAULT_PRIVACY_RANK);
+
     // `0` is both the flag default and a meaningful value ("disabled"), so
     // the config key is consulted only when the flag was left alone. Passing
     // the default in rather than comparing here keeps the one comparison in
@@ -333,8 +348,11 @@ pub fn start_detection_daemon(
         config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
     );
 
-    let species_thresholds = state
-        .with_db(|conn| birdnet_db::sqlite::get_species_threshold_map(conn).unwrap_or_default());
+    let (species_thresholds, thresholds_warning) =
+        startup_species_thresholds(state.with_db(birdnet_db::sqlite::get_species_threshold_map));
+    if let Some(warning) = thresholds_warning {
+        tracing::warn!("{warning}");
+    }
 
     if let Some(count) = species_thresholds_log_count(&species_thresholds) {
         tracing::info!(count, "loaded per-species confidence thresholds");
@@ -406,8 +424,29 @@ pub fn start_detection_daemon(
     // from are read once at start. "On" is the filter's own rule, so clips
     // are kept in their segment exactly when the filter runs.
     extraction_config.own_segment_only =
-        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold).is_enabled();
+        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold)
+            .with_rank_cutoff(privacy_rank)
+            .is_enabled();
     let privacy_clip_reach = extraction_config.clip_reach();
+
+    // The web crate cannot reach the daemon's own occurrence filter: it lives on
+    // the detection thread, behind an ONNX session that needs `&mut` to run. It
+    // is given a source that builds the same filter, lazily, from the same
+    // files, threshold and lists, so the Species page and the API can say why a
+    // bird is or is not admitted. Nothing is loaded until somebody asks.
+    state.set_occurrence_source(std::sync::Arc::new(occurrence::DaemonOccurrence::new(
+        latitude.zip(longitude),
+        metadata_model_path
+            .clone()
+            .map(|model| occurrence::RangeModelFiles {
+                model,
+                labels: metadata_labels_path.clone(),
+                aliases: species_aliases_path.clone(),
+            }),
+        labels_path.clone(),
+        build_species_filter_config(sf_thresh, species_lists.clone()),
+        species_lists_provider.clone(),
+    )));
 
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
@@ -453,6 +492,7 @@ pub fn start_detection_daemon(
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
+        privacy_rank,
         privacy_clip_reach,
         noise_threshold,
         noise_classes,

@@ -25,7 +25,7 @@ executes.*
 | Raspberry Pi 4 or 5, **64-bit** OS | There is no armv7 binary |
 | Raspberry Pi OS **Trixie** / Debian 13 (glibc ≥ 2.39) | Bookworm's glibc 2.36 cannot run the native binary — use Docker there instead |
 | A USB microphone, plugged in | Half the phases are about live capture |
-| ~6 GiB free disk | 34 MB binary + ~541 MB model + recordings + test ballast |
+| ~6 GiB free disk | the binary (about 100 MB), the model (about 85 MB for BirdNET V2.4, the default; about 560 MB for the V3.0 preview) + recordings + test ballast |
 | Network (for the install only) | Everything after the fetch runs offline |
 | An ordinary login account with `sudo` | **Do not run the harness as root** — the station's data directory is derived from `$HOME` |
 
@@ -54,8 +54,8 @@ chmod +x hardware-test.sh
 SSH session outside tmux and warns before it starts. Reattach after a drop with
 `tmux attach -t hwtest`.)
 
-The full suite takes roughly **45–70 minutes**, most of it the install (a
-~541 MB model over wifi) and the 10-minute performance sampling window.
+The full suite takes roughly **45–70 minutes**, most of it the install (the
+classifier download over wifi) and the 10-minute performance sampling window. That estimate dates from when the install fetched the 541 MB V3.0 model; the default classifier is now the smaller V2.4, and the figure has not been re-measured.
 
 Useful variants:
 
@@ -102,7 +102,7 @@ Exit status is non-zero if any check failed.
 | `install` | The published one-liner completes on a clean box, and how long it takes |
 | `verify` | Binary runs, doctor's verdict, service active, health endpoint, **`--verify-extension` under `unshare -rn`**, systemd hardening actually applied |
 | `capture` | A real capture subprocess is running, segments reach the tmpfs watch dir, recordings persist, and the mic is not delivering digital silence |
-| `detect` | The reference Eurasian Magpie recording, pushed through the watch directory, produces a **new stored** `Pica pica` detection — the total must rise, so a magpie the station recorded last week cannot satisfy it. Real inference against the 11k-species model, on this board |
+| `detect` | The reference Eurasian Magpie recording, pushed through the watch directory, produces a **new stored** `Pica pica` detection — the total must rise, so a magpie the station recorded last week cannot satisfy it. Real inference on this board, with whichever classifier the install chose |
 | `pipeline` | Accounts for every segment between capture and inference over a ten-minute window — the segments capture wrote against the files the daemon actually opened — and names the stage that drops them |
 | `perf` | Mean decode-to-prediction latency **per stored detection** (a measurement, not a verdict — see below), peak SoC temperature, throttle register under load, RSS against the unit's `MemoryHigh=768M` |
 | `web` | Every documented endpoint answers; the dashboard is reachable from the LAN; whether `/admin` is open without a password |

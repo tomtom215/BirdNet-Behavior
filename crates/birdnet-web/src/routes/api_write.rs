@@ -402,7 +402,7 @@ const VIA_API: &str = "via=api";
 
 /// The audit target for a key: the tuple, in the order the schema uses.
 fn target_of(date: &str, time: &str, sci_name: &str) -> String {
-    format!("{date} {time} {sci_name}")
+    crate::audit::detection_target(date, time, sci_name)
 }
 
 async fn review(
@@ -951,10 +951,11 @@ async fn write_settings(
         return bad_request("the body could not be read as a settings payload");
     };
 
-    // The settings page's own range check, on the submission. The API skipped
-    // it, so `{"confidence_threshold": 75}` — the percentage slip the page
-    // exists to catch — stored cleanly and the station stopped recording.
-    let problems = crate::routes::admin::settings::handler::range_problems(&form);
+    // The settings page's own checks, on the submission. The API skipped them,
+    // so `{"confidence_threshold": 75}` — the percentage slip the page exists to
+    // catch — stored cleanly and the station stopped recording. It later ran only
+    // the ranges, and still stored a language or a clip format the page refuses.
+    let problems = crate::routes::admin::settings::handler::submission_problems(&form);
     if !problems.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -1373,7 +1374,7 @@ async fn models_catalog() -> (StatusCode, Json<Value>) {
                 "sha256": e.model_sha256,
                 "bytes": e.model_bytes,
                 "sample_rate": e.sample_rate,
-                "ships_labels": e.labels_url.is_some(),
+                "ships_labels": e.ships_labels(),
                 "use": e.usage.as_str(),
                 "notes": e.notes,
             })

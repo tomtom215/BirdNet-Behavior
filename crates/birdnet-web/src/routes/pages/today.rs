@@ -555,15 +555,23 @@ pub(super) enum CaptureState {
     /// in the first seconds after a start). Not an outage — just not known.
     /// A process with no running daemon and no gauge is [`Self::Down`].
     Unknown,
+    /// The list of audio sources could not be read, so nothing is known about
+    /// them. Not [`Self::NoSource`]: that says the station has no microphone,
+    /// in the colour of a fault, to an operator whose microphone may be fine.
+    Unreadable,
 }
 
 /// Resolve [`CaptureState`] from the same per-source gauge the Capture tab's
 /// status pill reads, so the dashboard and that page cannot disagree.
 pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let sources = state
-        .with_read_db(AudioSourceStore::list)
-        .unwrap_or_default();
+    let sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(sources) => sources,
+        Err(e) => {
+            tracing::warn!(error = %e, "capture state: the audio sources could not be listed");
+            return CaptureState::Unreadable;
+        }
+    };
     if sources.is_empty() {
         return CaptureState::NoSource;
     }
@@ -621,6 +629,10 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                 ),
                 (CaptureState::Down, _) => out.push_str(
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · the microphone has stopped</span>"#,
+                ),
+                // Neither green nor red: a pill that could not look says so.
+                (CaptureState::Unreadable, _) => out.push_str(
+                    r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the audio sources</span>"#,
                 ),
                 (_, Some((_, last))) => {
                     let _ = write!(
@@ -701,8 +713,13 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
 async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse {
     let html = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let pending = birdnet_db::sqlite::quarantine_pending_count(conn).unwrap_or(0);
-            if pending > 0 {
+            // Not defaulted: this strip is "absent entirely when nothing waits",
+            // so a count that fell to zero on a failed read hid the one prompt
+            // that asks the operator to act.
+            let pending = birdnet_db::sqlite::quarantine_pending_count(conn);
+            if let Ok(pending) = pending
+                && pending > 0
+            {
                 let (noun, verb, obj) = if pending == 1 {
                     ("rare sighting is", "it's", "it")
                 } else {
@@ -712,17 +729,28 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
                     r#"<div class="x-nudge" data-screen-label="Review nudge" data-announce="{pending} {noun} waiting for review."><span class="ico">✦</span><div class="txt"><b>{pending} {noun} waiting for your eye.</b> Confirm {verb} real to add {obj} to your records.</div><a class="bnb-btn primary" href="/quarantine">Review →</a></div>"#
                 );
             }
+            let mut strip = String::new();
             if let Some((silent, last)) = capture_outage(conn) {
                 let dur = fmt_duration(silent);
-                return format!(
+                let _ = write!(
+                    strip,
                     r#"<div class="x-nudge" data-screen-label="Outage banner" data-announce="No detections recently: the microphone may be unplugged or the recorder stopped."><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
                 );
             }
-            String::new()
+            if let Err(e) = pending {
+                tracing::warn!(error = %e, "review nudge: the sightings waiting could not be counted");
+                strip.push_str(&super::error_states::inline(
+                    "the list of sightings waiting for review",
+                ));
+            }
+            strip
         })
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "review nudge: task failed");
+        super::error_states::inline("the list of sightings waiting for review")
+    });
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
@@ -917,13 +945,14 @@ async fn today_partial(
                     .iter()
                     .map(|f| super::recordings::base_name(f))
                     .collect();
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, locked))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, locked, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, total, locked))) => {
+        Ok(Ok((detections, total, locked, floor))) => {
             let mut html = String::with_capacity(4096);
 
             if detections.is_empty() && offset == 0 {
@@ -932,7 +961,7 @@ async fn today_partial(
             }
 
             for d in &detections {
-                render_detection_card(&mut html, d, &locked, names_state.names());
+                render_detection_card(&mut html, d, &locked, names_state.names(), floor);
             }
 
             // "Load more" button if there are more results. It replaces
@@ -1109,6 +1138,7 @@ fn render_detection_card(
     d: &birdnet_db::sqlite::DetectionRow,
     locked: &std::collections::HashSet<String>,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
     // The link and the detail URL carry the stored name; only what is *drawn*
     // is in the station's language.
@@ -1144,7 +1174,7 @@ fn render_detection_card(
         })
         .unwrap_or_default();
     let av = avatar(&d.com_name, shown, &d.sci_name, "");
-    let conf = conf_bar(d.confidence);
+    let conf = conf_bar(d.confidence, floor);
     let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
     let time = escape_html(&d.time);
@@ -1211,12 +1241,32 @@ fn after_write(
 /// Delete a detection and re-render the list.
 async fn delete_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
     // deletion has to be mirrored at the same moment.
-    let result = tokio::task::spawn_blocking(move || state.delete_detection(&row)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.delete_detection(&row);
+        // Recorded when a row went, not when a button was pressed: a refused
+        // write or a row somebody else removed first changed nothing.
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.delete",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=today"),
+            );
+        }
+        result
+    })
+    .await;
     after_write(
         super::toast::RowWrite::from_result(result, "delete detection"),
         "Detection deleted.",
@@ -1227,6 +1277,7 @@ async fn delete_detection(
 /// Re-label a detection and re-render the list.
 async fn relabel_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<RelabelForm>,
 ) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
@@ -1237,7 +1288,24 @@ async fn relabel_detection(
         file_name: form.file_name,
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.relabel_detection(&row, &form.new_sci_name, &form.new_com_name)
+        let result = state.relabel_detection(&row, &form.new_sci_name, &form.new_com_name);
+        // A relabel rewrites what the station says it heard, and changes which
+        // species every count and share link names. The old name is the target
+        // (it is what the row was); the new one is the event.
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.relabel",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some(&format!("via=today to={}", form.new_sci_name)),
+            );
+        }
+        result
     })
     .await;
     after_write(
@@ -1250,9 +1318,27 @@ async fn relabel_detection(
 /// Lock a detection to protect it from disk purge.
 async fn lock_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, true)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, true);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.lock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=today"),
+            );
+        }
+        result
+    })
+    .await;
     after_write(
         super::toast::RowWrite::from_result(result, "lock clip"),
         "Clip locked — it will not be removed to free space.",
@@ -1263,9 +1349,27 @@ async fn lock_detection(
 /// Unlock a detection (allow disk purge again).
 async fn unlock_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, false)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, false);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.unlock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=today"),
+            );
+        }
+        result
+    })
+    .await;
     after_write(
         super::toast::RowWrite::from_result(result, "unlock clip"),
         "Clip unlocked.",

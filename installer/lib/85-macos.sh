@@ -25,10 +25,76 @@ mac_brew_dep() { # $1=formula  $2=why
     esac
 }
 
+# Put the classifier's files in ${MAC_DATA_DIR}/models by asking the binary to
+# install them (`--install-model`), not by downloading them here.
+#
+# Linux's installer fetches and checks the files itself; macOS does not ship
+# `sha256sum`, and the binary already carries the same sha256 pins (the Rust
+# catalogue is the source of truth the Linux installer's are tested against),
+# fetches atomically through a .part file, and refuses a size or digest it
+# cannot verify. The files land under the names the Rust installer gives them
+# (birdnet-v24.onnx, birdnet-v24_labels.txt, birdnet-v24-range-v2.onnx; for the
+# V3.0 preview birdnet-v3.onnx and birdnet-v3_labels.csv), which is what the
+# config below names. The V3.0 geomodel is not in that catalogue, so a macOS
+# V3.0 station has no occurrence filter until one is added by hand.
+#
+# Non-fatal: a failed fetch leaves the config naming the files and prints the
+# command that fetches them, so an install on a flaky link can be finished
+# later. Returns 1 when any file could not be installed.
+macos_install_models() { # $1=binary path  $2=classifier id
+    local bin="$1" id="$2" dir="${MAC_DATA_DIR}/models" item rc=0 items
+    mkdir -p "${dir}"
+    case "${id}" in
+        birdnet-v24) items="birdnet-v24 birdnet-v24-range-v2" ;;
+        *)           items="birdnet-v3" ;;
+    esac
+    for item in ${items}; do
+        info "Installing ${item} into ${dir} (sha256-verified)…"
+        # Without the installer's own BIRDNET_* settings (the binary reports every
+        # one it does not read) and with an empty config (there is none yet).
+        if ! env -u BIRDNET_CLASSIFIER -u BIRDNET_NONINTERACTIVE -u BIRDNET_BINARY_TARBALL \
+            BIRDNET_MODEL_DIR="${dir}" "${bin}" --config /dev/null --install-model "${item}"; then
+            warn "Could not install ${item}. Finish later with:"
+            warn "  BIRDNET_MODEL_DIR=\"${dir}\" \"${bin}\" --install-model ${item}"
+            rc=1
+        fi
+    done
+    return "${rc}"
+}
+
 macos_setup_config_and_agent() { # $1=binary path
     local bin="$1"
     mkdir -p "${MAC_DATA_DIR}" "${HOME}/Library/Logs" "$(dirname "${MAC_PLIST}")"
     if [ ! -f "${MAC_DATA_DIR}/birdnet.conf" ]; then
+        # A config is written once, so there is no station here to keep: the
+        # request, else the default. (An existing config below is left as it is,
+        # and so is the model it names.)
+        if [ -n "${CLASSIFIER_REQUEST}" ] && ! valid_classifier_id "${CLASSIFIER_REQUEST}"; then
+            fatal "Unknown classifier '${CLASSIFIER_REQUEST}'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
+        fi
+        local mac_classifier="${CLASSIFIER_REQUEST:-${DEFAULT_CLASSIFIER}}"
+        local mac_models="${MAC_DATA_DIR}/models"
+        local mac_model_path mac_labels_path mac_filter_line mac_name
+        if [ "${mac_classifier}" = "${CLASSIFIER_V24}" ]; then
+            mac_name="BirdNET V2.4"
+            mac_model_path="${mac_models}/${V24_MODEL_FILE}"
+            mac_labels_path="${mac_models}/${V24_LABELS_FILE}"
+            mac_filter_line="# METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+        else
+            mac_name="BirdNET+ V3.0 preview"
+            mac_model_path="${mac_models}/birdnet-v3.onnx"
+            mac_labels_path="${mac_models}/birdnet-v3_labels.csv"
+            mac_filter_line="# METADATA_MODEL_PATH="
+            info "BirdNET+ V3.0 on macOS runs without species-occurrence filtering: the binary does not install the geomodel (the Linux installer does)."
+        fi
+        if macos_install_models "${bin}" "${mac_classifier}"; then
+            # Live only when the file is really there, so a failed fetch cannot
+            # leave a config the doctor reports as FAIL.
+            [ "${mac_classifier}" = "${CLASSIFIER_V24}" ] && mac_filter_line="${mac_filter_line#\# }"
+            success "Classifier: ${mac_name}."
+        else
+            warn "The config below names the ${mac_name} files; the station detects nothing until they are installed."
+        fi
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
 # BirdNet-Behavior config (macOS). Set your coordinates and a mic device.
 #
@@ -44,6 +110,12 @@ SITENAME=My Backyard
 DB_PATH=${MAC_DATA_DIR}/birds.db
 RECS_DIR=${MAC_DATA_DIR}/recordings
 IMAGE_CACHE_DIR=${MAC_DATA_DIR}/image_cache
+
+# --- Model (${mac_name}; installed by install.sh) ---
+MODEL_PATH=${mac_model_path}
+LABELS_PATH=${mac_labels_path}
+# Species-occurrence filtering needs LATITUDE and LONGITUDE above as well.
+${mac_filter_line}
 CONF
         success "Wrote starter config: ${MAC_DATA_DIR}/birdnet.conf"
     else
@@ -81,7 +153,9 @@ PLIST
     echo "  2. Start it:  launchctl load -w \"${MAC_PLIST}\""
     echo "  3. The first microphone access shows a permission prompt — approve it under"
     echo "     System Settings → Privacy & Security → Microphone."
-    echo "  4. Open http://localhost:8502  (the BirdNET+ model downloads on first run)."
+    echo "  4. Open http://localhost:8502"
+    echo "     The classifier's files are in ${MAC_DATA_DIR}/models; MODEL_PATH in the config names them."
+    echo "     New installs take --classifier birdnet-v24 (default) or birdnet-v3; an existing config is kept."
     echo "  Uninstall any time with:  ./uninstall.sh   (or --purge to remove data too)"
 }
 

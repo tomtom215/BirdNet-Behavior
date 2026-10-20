@@ -79,8 +79,21 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_confidence_ceiling(config, &mut out);
     check_sf_thresh_ceiling(config, &mut out);
     check_privacy_threshold_scale(config, &mut out);
+    check_positive_int(
+        config,
+        "PRIVACY_RANK",
+        PRIVACY_RANK_MIN,
+        PRIVACY_RANK_MAX,
+        &mut out,
+    );
     check_positive_int(config, "RECORDING_LENGTH", 3, 60, &mut out);
-    check_positive_int(config, "SEGMENT_DURATION", 3, 600, &mut out);
+    check_positive_int(
+        config,
+        "SEGMENT_DURATION",
+        SEGMENT_DURATION_MIN,
+        SEGMENT_DURATION_MAX,
+        &mut out,
+    );
     check_schedule(config, &mut out);
     check_audio_sources(config, &mut out);
     check_audio_format(config, &mut out);
@@ -324,6 +337,42 @@ fn check_sf_thresh_ceiling(config: &Config, out: &mut Vec<Finding>) {
 /// privacy filter the owner believes is on never fires.
 const PRIVACY_THRESHOLD_CEILING: f64 = 0.5;
 
+/// The smallest `PRIVACY_RANK` the station accepts: `0`, which switches the
+/// rank rule off.
+///
+/// A constant of its own so that the two other places that bound the key — the
+/// admin settings form and `--privacy-rank` — read the same number [`validate`]
+/// does instead of typing a second `0`.
+pub const PRIVACY_RANK_MIN: u64 = 0;
+
+/// The largest `PRIVACY_RANK` the station accepts.
+///
+/// V2.4 has 6 522 classes and V3.0 has 11 560, so a rank past either masks
+/// every window; BirdNET-Pi's own largest cutoff (`PRIVACY_THRESHOLD=100`)
+/// is 6 000.
+///
+/// Read by [`validate`] for the config file and by the settings form for a
+/// value typed on the page; `--privacy-rank` carries a clap range literal of
+/// its own, which `the_privacy_rank_default_is_birdnet_pis_and_zero_switches_it_off`
+/// holds to this.
+pub const PRIVACY_RANK_MAX: u64 = 12_000;
+
+/// The shortest `SEGMENT_DURATION` the station accepts, in seconds: the length
+/// of one analysis window, since a chunk shorter than that cannot be analysed.
+///
+/// Constants of their own, like [`PRIVACY_RANK_MIN`], so that the settings form
+/// and `PUT /api/v2/settings` read the numbers [`validate`] does instead of
+/// typing a second `3` and `600`.
+pub const SEGMENT_DURATION_MIN: u64 = 3;
+
+/// The longest `SEGMENT_DURATION` the station accepts, in seconds.
+///
+/// Past ten minutes a chunk holds the station deaf for as long as it takes to
+/// fill, and the stall watchdog's patience is derived from it. Read by
+/// [`validate`] for the config file and by the settings form for a value typed
+/// on the page; `--segment-duration` is a bare `u32` with no clap range.
+pub const SEGMENT_DURATION_MAX: u64 = 600;
+
 /// Warn about a `PRIVACY_THRESHOLD` that looks like BirdNET-Pi's scale.
 fn check_privacy_threshold_scale(config: &Config, out: &mut Vec<Finding>) {
     let Some(Ok(v)) = parse_float(config, "PRIVACY_THRESHOLD") else {
@@ -340,8 +389,10 @@ fn check_privacy_threshold_scale(config: &Config, out: &mut Vec<Finding>) {
              value came from BirdNET-Pi, note that BirdNET-Pi reads the same key as a \
              percentage of the species list instead"
         ),
-        "for a privacy filter that fires, use a small confidence such as \
-         PRIVACY_THRESHOLD=0.02 (typical range 0.01-0.03; lower masks more); 0 turns it off",
+        "BirdNET-Pi's rule is PRIVACY_RANK here: for a BirdNET-Pi value p, set \
+         PRIVACY_RANK=max(10, 60 x p) and PRIVACY_THRESHOLD=0. For a confidence-based \
+         filter on top of it, use a small PRIVACY_THRESHOLD such as 0.02 (typical \
+         range 0.01-0.03; lower masks more); 0 turns that rule off",
     ));
 }
 
@@ -387,34 +438,75 @@ fn check_schedule(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = config.get("RECORDING_SCHEDULE") else {
         return;
     };
-    let raw = raw.trim();
-    if matches!(raw, "all-day" | "solar" | "") {
-        return;
-    }
-    if let Some(window) = raw.strip_prefix("fixed:")
-        && parse_time_window(window).is_some()
-    {
+    if is_recording_schedule(raw) {
+        // The grammar allows a window that ends at or before its start, which
+        // the scheduler cannot express (`RecordingWindow::fixed`): it ignores
+        // the schedule and the station records all day. Said here because
+        // nothing else would: the daemon logs one line and the doctor, which
+        // reads this, is where an owner who asked for a night-time window looks.
+        if let Some((start, end)) = raw
+            .trim()
+            .strip_prefix("fixed:")
+            .and_then(fixed_window_minutes)
+            && start >= end
+        {
+            out.push(Finding::warn(
+                "RECORDING_SCHEDULE",
+                format!(
+                    "RECORDING_SCHEDULE={:?} does not end after it starts: the scheduler cannot \
+                     express a window that crosses midnight and ignores it, so the station \
+                     records all day",
+                    raw.trim()
+                ),
+                r#"use a window inside one day (fixed:06:00-20:00; the times are UTC), "solar", or "all-day""#
+                    .to_string(),
+            ));
+        }
         return;
     }
     out.push(Finding::error(
         "RECORDING_SCHEDULE",
-        format!("RECORDING_SCHEDULE={raw:?} is not a recognised schedule"),
+        format!(
+            "RECORDING_SCHEDULE={:?} is not a recognised schedule",
+            raw.trim()
+        ),
         r#"use "all-day", "solar", or "fixed:HH:MM-HH:MM" (e.g. fixed:06:00-20:00)"#.to_string(),
     ));
 }
 
-fn parse_time_window(window: &str) -> Option<()> {
-    let (start, end) = window.split_once('-')?;
-    parse_hhmm(start)?;
-    parse_hhmm(end)?;
-    Some(())
+/// Whether `raw` is a recording schedule this file accepts: `all-day`,
+/// `solar`, blank (unset), or `fixed:HH:MM-HH:MM`.
+///
+/// Public so that the settings form and `PUT /api/v2/settings` ask the question
+/// [`validate`] asks instead of keeping a second grammar. It is the *grammar*
+/// only: the scheduler additionally refuses a fixed window that does not end
+/// after it starts (`RecordingWindow::fixed`), which this accepts, so the form
+/// checks that too.
+#[must_use]
+pub fn is_recording_schedule(raw: &str) -> bool {
+    let raw = raw.trim();
+    if matches!(raw, "all-day" | "solar" | "") {
+        return true;
+    }
+    raw.strip_prefix("fixed:")
+        .is_some_and(|window| fixed_window_minutes(window).is_some())
 }
 
-fn parse_hhmm(s: &str) -> Option<()> {
+/// `HH:MM-HH:MM` as minutes since midnight, `(start, end)`, or `None` when it
+/// is not two valid clock times.
+///
+/// Does not require `start < end`; see [`is_recording_schedule`].
+#[must_use]
+pub fn fixed_window_minutes(window: &str) -> Option<(u32, u32)> {
+    let (start, end) = window.split_once('-')?;
+    Some((parse_hhmm(start)?, parse_hhmm(end)?))
+}
+
+fn parse_hhmm(s: &str) -> Option<u32> {
     let (h, m) = s.split_once(':')?;
     let h: u8 = h.parse().ok()?;
     let m: u8 = m.parse().ok()?;
-    (h < 24 && m < 60).then_some(())
+    (h < 24 && m < 60).then_some(u32::from(h) * 60 + u32::from(m))
 }
 
 fn check_audio_sources(config: &Config, out: &mut Vec<Finding>) {
@@ -434,31 +526,54 @@ fn check_audio_sources(config: &Config, out: &mut Vec<Finding>) {
     }
 }
 
+/// The clip formats the station can write.
+pub const AUDIO_FORMATS: [&str; 4] = ["wav", "mp3", "flac", "ogg"];
+
+/// Whether `raw` names one of the [`AUDIO_FORMATS`], in any letter case.
+#[must_use]
+pub fn is_audio_format(raw: &str) -> bool {
+    AUDIO_FORMATS.contains(&raw.trim().to_ascii_lowercase().as_str())
+}
+
 fn check_audio_format(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = value_of(config, "AUDIOFMT").or_else(|| value_of(config, "AUDIO_FORMAT"))
     else {
         return;
     };
-    let raw = raw.trim().to_ascii_lowercase();
-    if !["wav", "mp3", "flac", "ogg"].contains(&raw.as_str()) {
+    if !is_audio_format(raw) {
         out.push(Finding::error(
             "AUDIO_FORMAT",
-            format!("AUDIO_FORMAT={raw:?} is not supported"),
+            format!(
+                "AUDIO_FORMAT={:?} is not supported",
+                raw.trim().to_ascii_lowercase()
+            ),
             r#"use "wav", "mp3", "flac", or "ogg" (non-WAV formats need ffmpeg or sox)"#
                 .to_string(),
         ));
     }
 }
 
+/// The external sites a species page can link to, besides `none`.
+pub const INFO_SITES: [&str; 3] = ["ebird", "allaboutbirds", "none"];
+
+/// Whether `raw` is an [`INFO_SITES`] entry, in any letter case, or blank.
+#[must_use]
+pub fn is_info_site(raw: &str) -> bool {
+    let raw = raw.trim().to_ascii_lowercase();
+    raw.is_empty() || INFO_SITES.contains(&raw.as_str())
+}
+
 fn check_info_site(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = config.get("INFO_SITE") else {
         return;
     };
-    let raw = raw.trim().to_ascii_lowercase();
-    if !["ebird", "allaboutbirds", "none", ""].contains(&raw.as_str()) {
+    if !is_info_site(raw) {
         out.push(Finding::error(
             "INFO_SITE",
-            format!("INFO_SITE={raw:?} is not recognised"),
+            format!(
+                "INFO_SITE={:?} is not recognised",
+                raw.trim().to_ascii_lowercase()
+            ),
             r#"use "ebird", "allaboutbirds", or "none""#.to_string(),
         ));
     }
@@ -576,6 +691,37 @@ mod tests {
     fn fixed_window_schedule_accepted() {
         let c = cfg(&[("RECORDING_SCHEDULE", "fixed:06:00-20:00")]);
         assert!(is_clean(&validate(&c)));
+    }
+
+    /// The grammar accepts a window that ends before it starts, and the
+    /// scheduler (`RecordingWindow::fixed`) refuses it and records all day, which
+    /// is the opposite of what someone asking for a night-time window wanted. A
+    /// warning, not an error: an `Error` makes the file unusable and reverts the
+    /// station to its last-good configuration, which is a worse answer than
+    /// recording all day with the reason in `--doctor`.
+    #[test]
+    fn a_fixed_window_that_does_not_end_after_it_starts_is_a_warning() {
+        for raw in ["fixed:20:00-06:00", "fixed:06:00-06:00"] {
+            let findings = validate(&cfg(&[("RECORDING_SCHEDULE", raw)]));
+            assert_eq!(findings.len(), 1, "{raw}: {findings:?}");
+            assert_eq!(findings[0].severity, Severity::Warning, "{raw}");
+            assert_eq!(findings[0].key, "RECORDING_SCHEDULE");
+            assert!(
+                findings[0].message.contains("all day"),
+                "the message says what will happen: {}",
+                findings[0].message
+            );
+            assert!(
+                is_usable(&findings),
+                "{raw} must not make the file unusable"
+            );
+        }
+        // Counterparts: a window that ends after it starts, and the other
+        // schedules, are clean.
+        for raw in ["fixed:06:00-20:00", "fixed:00:00-23:59", "solar", "all-day"] {
+            let findings = validate(&cfg(&[("RECORDING_SCHEDULE", raw)]));
+            assert!(findings.is_empty(), "{raw}: {findings:?}");
+        }
     }
 
     #[test]
@@ -696,6 +842,157 @@ mod tests {
                 "PRIVACY_THRESHOLD={v} is a normal setting"
             );
         }
+    }
+
+    /// `PRIVACY_RANK` is a count of classes: 0 (off) to [`PRIVACY_RANK_MAX`],
+    /// whole numbers only. The settings form refuses exactly what is refused
+    /// here (`the_form_and_the_validator_agree_about_a_whole_number`), so this
+    /// pins the edges that test compares against.
+    #[test]
+    fn privacy_rank_is_a_whole_number_from_zero_to_its_maximum() {
+        let max = PRIVACY_RANK_MAX.to_string();
+        let past = (PRIVACY_RANK_MAX + 1).to_string();
+        for v in ["0", "10", "75", "600", max.as_str()] {
+            assert!(
+                validate(&cfg(&[("PRIVACY_RANK", v)])).is_empty(),
+                "PRIVACY_RANK={v} is in range and must pass clean"
+            );
+        }
+        for v in [past.as_str(), "-1", "0.5", "0,5", "10%", "abc"] {
+            let findings = validate(&cfg(&[("PRIVACY_RANK", v)]));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.key == "PRIVACY_RANK" && f.severity == Severity::Error),
+                "PRIVACY_RANK={v} must be an error, got {findings:?}"
+            );
+        }
+        // A blank line is unset, as everywhere else in this file.
+        assert!(validate(&cfg(&[("PRIVACY_RANK", "")])).is_empty());
+        // And the documented range is the one the constants carry.
+        assert_eq!((PRIVACY_RANK_MIN, PRIVACY_RANK_MAX), (0, 12_000));
+    }
+
+    /// `SEGMENT_DURATION` is a whole number of seconds from one analysis window
+    /// to ten minutes. The settings form refuses exactly what is refused here
+    /// (`the_form_and_the_validator_agree_about_a_whole_number`), so this pins
+    /// the edges that test compares against.
+    #[test]
+    fn segment_duration_is_a_whole_number_of_seconds_from_three_to_six_hundred() {
+        let past = (SEGMENT_DURATION_MAX + 1).to_string();
+        for v in ["3", "4", "15", "600"] {
+            assert!(
+                validate(&cfg(&[("SEGMENT_DURATION", v)])).is_empty(),
+                "SEGMENT_DURATION={v} is in range and must pass clean"
+            );
+        }
+        for v in ["0", "2", past.as_str(), "-1", "15.5", "15,5", "15s", "abc"] {
+            let findings = validate(&cfg(&[("SEGMENT_DURATION", v)]));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.key == "SEGMENT_DURATION" && f.severity == Severity::Error),
+                "SEGMENT_DURATION={v} must be an error, got {findings:?}"
+            );
+        }
+        // A blank line is unset, as everywhere else in this file.
+        assert!(validate(&cfg(&[("SEGMENT_DURATION", "")])).is_empty());
+        assert_eq!((SEGMENT_DURATION_MIN, SEGMENT_DURATION_MAX), (3, 600));
+    }
+
+    /// The settings form and the API ask [`is_recording_schedule`],
+    /// [`is_audio_format`] and [`is_info_site`] instead of keeping a grammar of
+    /// their own. `validate()` is built on the same three, so equality with it
+    /// would hold for any grammar at all; what pins *this* grammar is the table
+    /// of answers below, and the equality only shows the three checks still
+    /// route through the predicates.
+    #[test]
+    fn the_shared_choice_predicates_say_what_validate_says() {
+        let refused = |key: &str, v: &str| {
+            validate(&cfg(&[(key, v)]))
+                .iter()
+                .any(|f| f.severity == Severity::Error)
+        };
+        // (value, accepted)
+        let schedules = [
+            ("all-day", true),
+            ("solar", true),
+            (" solar ", true),
+            ("", true),
+            ("fixed:06:00-20:00", true),
+            ("fixed:00:00-23:59", true),
+            // The grammar accepts a window that does not end after it starts;
+            // the scheduler does not, so the settings form checks that too.
+            ("fixed:20:00-06:00", true),
+            ("fixed:6:0-7:0", true),
+            ("SOLAR", false),
+            ("Solar", false),
+            ("allday", false),
+            ("sunrise-sunset", false),
+            ("fixed:", false),
+            ("fixed:06:00", false),
+            ("fixed:24:00-25:00", false),
+            // Hour 24 on its own: the line above is refused for its 25 alone.
+            ("fixed:24:00-23:00", false),
+            ("fixed:00:00-24:00", false),
+            ("fixed:06:60-07:00", false),
+            ("fixed:06:00-07:60", false),
+            ("fixed: 06:00-20:00", false),
+            ("fixed:06:00 - 20:00", false),
+            ("fixed:06:00-20:00-21:00", false),
+            ("fixed:06:00-20:00 UTC", false),
+        ];
+        for (v, accepted) in schedules {
+            assert_eq!(
+                is_recording_schedule(v),
+                accepted,
+                "RECORDING_SCHEDULE={v:?}"
+            );
+            assert_eq!(
+                !accepted,
+                refused("RECORDING_SCHEDULE", v),
+                "validate: {v:?}"
+            );
+        }
+        let formats = [
+            ("wav", true),
+            ("mp3", true),
+            ("flac", true),
+            ("ogg", true),
+            ("WAV", true),
+            (" ogg ", true),
+            ("aiff", false),
+            ("S16_LE", false),
+            ("mp4", false),
+            ("wav,mp3", false),
+        ];
+        for (v, accepted) in formats {
+            assert_eq!(is_audio_format(v), accepted, "AUDIOFMT={v:?}");
+            assert_eq!(!accepted, refused("AUDIOFMT", v), "validate: {v:?}");
+        }
+        let sites = [
+            ("ebird", true),
+            ("allaboutbirds", true),
+            ("none", true),
+            ("eBird", true),
+            (" none ", true),
+            ("", true),
+            ("wikipedia", false),
+            ("all about birds", false),
+        ];
+        for (v, accepted) in sites {
+            assert_eq!(is_info_site(v), accepted, "INFO_SITE={v:?}");
+            assert_eq!(!accepted, refused("INFO_SITE", v), "validate: {v:?}");
+        }
+        // A window is its minutes since midnight, and does not have to end later.
+        assert_eq!(fixed_window_minutes("06:30-20:00"), Some((390, 1200)));
+        assert_eq!(fixed_window_minutes("20:00-06:00"), Some((1200, 360)));
+        assert_eq!(fixed_window_minutes("25:00-06:00"), None);
+        // The edges of the day: 23:59 is the last minute, and there is no hour 24.
+        assert_eq!(fixed_window_minutes("00:00-23:59"), Some((0, 1439)));
+        assert_eq!(fixed_window_minutes("00:00-24:00"), None);
+        assert_eq!(fixed_window_minutes("24:00-06:00"), None);
+        assert_eq!(fixed_window_minutes("00:00-06:60"), None);
     }
 
     #[test]
@@ -993,7 +1290,9 @@ mod tests {
             );
         }
 
-        /// Any well-formed "fixed:HH:MM-HH:MM" schedule is accepted.
+        /// Any well-formed "fixed:HH:MM-HH:MM" schedule is accepted: it is never
+        /// an `Error`, and it carries a `Warning` exactly when the window does not
+        /// end after it starts (the scheduler ignores such a window).
         #[test]
         fn well_formed_fixed_schedule_is_accepted(
             sh in 0_u8..24,
@@ -1004,9 +1303,22 @@ mod tests {
             let raw = format!("fixed:{sh:02}:{sm:02}-{eh:02}:{em:02}");
             let c = cfg(&[("RECORDING_SCHEDULE", &raw)]);
             let findings = validate(&c);
+            let about_it: Vec<_> = findings
+                .iter()
+                .filter(|f| f.key == "RECORDING_SCHEDULE")
+                .collect();
             prop_assert!(
-                !findings.iter().any(|f| f.key == "RECORDING_SCHEDULE"),
+                about_it.iter().all(|f| f.severity == Severity::Warning),
                 "{raw} unexpectedly rejected: {findings:?}"
+            );
+            let start = u32::from(sh) * 60 + u32::from(sm);
+            let end = u32::from(eh) * 60 + u32::from(em);
+            prop_assert_eq!(
+                !about_it.is_empty(),
+                start >= end,
+                "{}: a warning exactly when the window does not end after it starts: {:?}",
+                raw,
+                findings
             );
         }
 

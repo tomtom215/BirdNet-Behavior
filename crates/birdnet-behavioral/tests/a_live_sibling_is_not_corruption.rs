@@ -10,6 +10,8 @@
 //! test re-runs its own binary as a worker that opens the store and keeps it
 //! open, and asks `open_or_quarantine_with_grace` for the same file.
 
+#![cfg(feature = "analytics")]
+
 use std::path::Path;
 use std::time::Duration;
 

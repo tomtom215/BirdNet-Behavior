@@ -91,6 +91,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::Detection,
     ),
     (
+        "privacy_rank",
+        Wiring::Bridged("PRIVACY_RANK"),
+        SettingsCategory::Detection,
+    ),
+    (
         "confirmation_level",
         Wiring::Bridged("CONFIRMATION_LEVEL"),
         SettingsCategory::Detection,
@@ -1511,6 +1516,7 @@ mod tests {
             ("overlap", f64::from(cli.overlap)),
             ("sf_thresh", f64::from(cli.sf_thresh)),
             ("privacy_threshold", f64::from(cli.privacy_threshold)),
+            ("privacy_rank", f64::from(cli.privacy_rank)),
             (
                 "confidence_threshold",
                 f64::from(birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),

@@ -236,21 +236,25 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
     let station_label = state.site_name().to_string();
     let db = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        db.with_read_db(|conn| lookup(conn, &date, &time, &com))
+        db.with_read_db(|conn| {
+            lookup(conn, &date, &time, &com)
+                .map(|d| (d, crate::routes::pages::confidence::station_floor(conn)))
+        })
     })
     .await;
 
-    let Ok(Some(det)) = result else {
+    let Ok(Some((det, floor))) = result else {
         return gone_page();
     };
 
     let conf_pct = format!("{:.0}%", det.confidence * 100.0);
-    let conf_class_pill = if det.confidence >= 0.85 {
-        "moss"
-    } else if det.confidence >= 0.60 {
-        "dawn"
-    } else {
-        "rare"
+    // The same three tiers as every other surface. This page had a sixth rule
+    // of its own (85 / 60) and drew anything under 60 % in the alert hue, on the
+    // one page a stranger is shown to say "look what I heard".
+    let conf_class_pill = match crate::routes::pages::confidence::tier(det.confidence, floor) {
+        crate::routes::pages::confidence::Tier::High => "moss",
+        crate::routes::pages::confidence::Tier::Mid => "",
+        crate::routes::pages::confidence::Tier::Low => "dawn",
     };
     let station_handle = station_label
         .to_lowercase()

@@ -1147,6 +1147,15 @@ pub fn server_config(settings: &TlsSettings) -> Result<Option<ConfiguredTls>, Tl
 // Serve loop
 // ---------------------------------------------------------------------------
 
+/// Request extension: this request arrived over the station's own TLS listener.
+///
+/// Inserted by [`serve`] and by nothing else, so its presence is a fact about
+/// the connection and not a claim by the sender — which is why the session
+/// cookie reads it, and not a header, to decide `Secure` for a request that
+/// needs no proxy to vouch for it. See [`crate::request_scheme`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViaTls;
+
 /// Serve `app` over TLS on `listener` until `shutdown` resolves.
 ///
 /// Returns once the listener has stopped accepting and every connection that
@@ -1217,6 +1226,9 @@ where
                 // read this. `axum::serve` installs it for the plain-HTTP
                 // listener; this loop is the TLS equivalent.
                 req.extensions_mut().insert(ConnectInfo(peer));
+                // And this request came over the handshake that just completed:
+                // the session cookie's `Secure` attribute is decided from it.
+                req.extensions_mut().insert(ViaTls);
                 app.clone().call(req)
             });
 

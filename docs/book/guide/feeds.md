@@ -31,10 +31,10 @@ BNB_BASE_URL=http://birdnet.local        # mDNS on the LAN
 BNB_BASE_URL=https://birds.example.com    # behind a reverse proxy
 ```
 
-If unset it defaults to `http://localhost:8502` (the server's own port). You can also override per-request with `?base=…`, and cap item counts with `?limit=…`.
+If unset it defaults to `http://localhost:8502` (the server's own port). A request can name its own base with `?base=…`, which is how a reverse proxy gets the scheme and path prefix right, but only for an address the station already knows: the host the request was addressed to, or the host of `BNB_PUBLIC_URL` or `BNB_BASE_URL`. Any other `?base=` is ignored and the default is used, so a feed address cannot be made to point at someone else's site. If a proxy rewrites `Host` and your readers pass `?base=`, set `BNB_BASE_URL`. Cap item counts with `?limit=…`.
 
 ## Caching
 
-RSS responds with `Cache-Control: public, max-age=300` (5 minutes); iCal with one hour, since calendar clients repoll slowly. An empty station still returns valid, well-formed XML/iCalendar.
+RSS responds with `Cache-Control: private, max-age=300` (5 minutes); iCal with `private, max-age=3600` (one hour), since calendar clients repoll slowly. Both say `private`, so a shared cache or CDN in front of the station will not keep a copy. An empty station still returns valid, well-formed XML/iCalendar.
 
 > These endpoints are unauthenticated and expose the same information as the public dashboard. If you gate the UI behind a reverse proxy, decide whether to expose `/feeds/*` alongside it.

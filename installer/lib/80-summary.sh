@@ -125,6 +125,9 @@ print_summary() {
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
+    echo -e "  ${BOLD}Model:${RESET}   ${CLASSIFIER_SUMMARY:-${CLASSIFIER_NAME:-unknown}}"
+    echo    "           A new install takes --classifier birdnet-v24 or birdnet-v3; this station keeps what"
+    echo    "           ${CONFIG_FILE} names. How to move one on purpose: ${CLASSIFIER_GUIDE_URL}"
     # Lead with the IP address: it works for every device on the LAN. The mDNS
     # `.local` name is friendlier but NOT universal — some phones and networks
     # don't resolve it — so it is shown as a clearly-secondary convenience, never

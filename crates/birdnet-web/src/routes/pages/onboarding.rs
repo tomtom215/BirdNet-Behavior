@@ -111,7 +111,7 @@ pub fn gated_router() -> Router<AppState> {
 /// answers. For the two hidden fields it was worse: because they are never
 /// empty, they slip past `onboarding_save`'s skip-if-blank guard and are
 /// written on every completion. An operator who had set `CONFIDENCE=0.6` and
-/// then clicked through the wizard had it silently reset to 0.75.
+/// then clicked through the wizard had it silently reset to the default.
 #[derive(Default)]
 struct Prefill {
     latitude: String,
@@ -132,7 +132,9 @@ impl Prefill {
             longitude: get("longitude", ""),
             confidence: get(
                 "confidence_threshold",
-                &format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
+                // `Display`, not `{:.2}`: the cards carry `0.9`, `0.6`, `0.7`, and the
+                // card that matches the stored value is chosen by comparing them.
+                &birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD.to_string(),
             ),
             notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER),
         }
@@ -494,11 +496,16 @@ struct OnboardingForm {
 
 /// Whether `raw` is a confidence threshold the daemon will accept.
 ///
-/// The wizard's cards can only emit `0.4`/`0.6`/`0.75`/`0.9`, so this exists
+/// The wizard's cards can only emit `0.4`/`0.6`/`0.7`/`0.9`, so this exists
 /// for the hand-crafted POST: `birdnet_core::config::validate` treats a
-/// `CONFIDENCE` outside 0–1 as an *error*, and `--doctor` runs from the unit's
-/// `ExecStartPre` where exit 2 is fatal. An unvalidated write here would let a
-/// setup form leave the station unable to start.
+/// `CONFIDENCE` outside 0–1 as an *error*. That check only ever reads the
+/// config **file**; a value saved here is laid over it afterwards and never
+/// validated again, so an unvalidated write would leave a station that runs and
+/// records nothing (`75` is above every score the model can give).
+///
+/// Never looser than the validator, and stricter in one way: a comma decimal
+/// (`0,7`) is refused here, where the validator reads it.
+/// `the_wizard_never_accepts_what_the_validator_refuses` holds both.
 fn valid_confidence(raw: &str) -> bool {
     raw.parse::<f64>().is_ok_and(|v| (0.0..=1.0).contains(&v))
 }
@@ -514,6 +521,14 @@ fn valid_confidence(raw: &str) -> bool {
 fn valid_trigger(raw: &str) -> bool {
     matches!(raw, "each" | "new-species" | "new-species-daily")
 }
+
+/// The largest latitude, in degrees, the wizard stores. The same number
+/// `birdnet_core::config::validate` holds `LATITUDE` to (`check_coords`);
+/// `the_wizard_never_accepts_what_the_validator_refuses` compares the two.
+const LATITUDE_LIMIT: f64 = 90.0;
+
+/// The largest longitude, in degrees, the wizard stores. See [`LATITUDE_LIMIT`].
+const LONGITUDE_LIMIT: f64 = 180.0;
 
 /// A coordinate the station can use: parses after the decimal-separator
 /// normalisation the settings form applies, and lies inside the range the
@@ -583,6 +598,7 @@ pub fn plausible_timezone(raw: &str) -> bool {
 async fn onboarding_save(
     State(state): State<AppState>,
     client: Option<Extension<ClientIp>>,
+    scheme: Option<Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
     Form(form): Form<OnboardingForm>,
 ) -> Response {
@@ -603,6 +619,7 @@ async fn onboarding_save(
                     state,
                     admin_id,
                     client.as_deref(),
+                    scheme.as_deref(),
                     &headers,
                 );
             }
@@ -628,8 +645,8 @@ async fn onboarding_save(
         // agrees with it. A rejected value is logged rather than dropped in
         // silence, so the log says why the doctor still reports no location.
         let coordinates = match (
-            valid_coordinate(lat, 90.0),
-            valid_coordinate(lon, 180.0),
+            valid_coordinate(lat, LATITUDE_LIMIT),
+            valid_coordinate(lon, LONGITUDE_LIMIT),
         ) {
             (Some(lat), Some(lon)) => Some((lat, lon)),
             _ if lat.is_empty() && lon.is_empty() => None,
@@ -666,11 +683,10 @@ async fn onboarding_save(
             items.push(("notify_trigger", mode, SettingsCategory::Notifications));
         }
         // Only persisted when it parses inside 0–1. The wizard's own cards can
-        // only produce 0.4/0.6/0.75/0.9, but the field is a plain form value:
-        // a hand-crafted POST must not be able to seed a threshold the daemon
-        // would reject at startup (`--doctor` exits 2 on out-of-range
-        // CONFIDENCE, which `ExecStartPre` treats as fatal) — that would turn
-        // the setup wizard into a way to brick the service.
+        // only produce 0.4/0.6/0.7/0.9, but the field is a plain form value:
+        // a hand-crafted POST must not be able to seed a threshold the
+        // detection pipeline can never meet (see `valid_confidence`) — that
+        // would turn the setup wizard into a way to silence the station.
         let conf = form.confidence_threshold.trim();
         if valid_confidence(conf) {
             items.push(("confidence_threshold", conf, SettingsCategory::Detection));
@@ -744,7 +760,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 <style>
   body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
   .ob-root { max-width:980px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:0 24px; }
-  .ob-stepper { display:flex; align-items:center; gap:8px; padding:22px 0 8px; margin:0; list-style:none; position:sticky; top:0; background:color-mix(in oklch, var(--bg) 92%, transparent); backdrop-filter:saturate(1.4) blur(10px); z-index:5; }
+  .ob-stepper { display:flex; align-items:center; gap:8px; padding:22px 0 8px; margin:0; list-style:none; position:sticky; top:0; background:color-mix(in oklab, var(--bg) 92%, transparent); backdrop-filter:saturate(1.4) blur(10px); z-index:5; }
   .ob-pip { display:flex; align-items:center; gap:8px; }
   .ob-pip .dot { width:22px; height:22px; border-radius:999px; border:0.5px solid var(--border-2); display:flex; align-items:center; justify-content:center; font-size:11px; font-family:var(--font-mono); color:var(--fg-3); background:var(--surface); }
   .ob-pip .nm { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--fg-3); }
@@ -763,7 +779,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .ob-bullets { list-style:none; padding:0; margin:18px 0 0; display:flex; flex-direction:column; gap:10px; }
   .ob-bullets li { display:flex; gap:10px; align-items:center; font-size:14px; }
   .ob-bullets .tick { width:18px; height:18px; border-radius:999px; background:var(--moss-soft); color:var(--moss-ink); display:inline-flex; align-items:center; justify-content:center; font-size:11px; }
-  .ob-nav { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 0 28px; border-top:0.5px solid var(--hairline); }
+  /* One axis: Back, where you are, then everything that moves you on. "Use the
+     defaults and finish" used to sit centred under "Step 1 of 6", off the line
+     the Continue button was on. */
+  .ob-nav { display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px; padding:18px 0 28px; border-top:0.5px solid var(--hairline); }
+  .ob-stepcount { flex:1 1 auto; margin:0; }
+  /* On step 1 there is nothing to go back to; it hid itself but kept its room, which pushed "Step 1 of 6" in from the left edge. */
+  #ob-back[style*="hidden"] { display:none; }
+  .ob-skip-note { flex:1 1 100%; margin:-4px 0 0; text-align:right; }
   .ob-field { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
   .ob-field label { font-size:12.5px; font-weight:500; }
   .ob-field input { padding:9px 12px; border-radius:var(--r-sm); border:0.5px solid var(--border-2); background:var(--surface); color:var(--fg); font:inherit; }
@@ -792,6 +815,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   /* O-25: static inline style= attributes folded into this page's own <style>
      block (faithful, value-preserving). */
   .ob-center { display:flex; align-items:center; justify-content:center; }
+  /* Step 1. The task here is the password, so it sits on the right beside the
+     promises and the picture is its header: before, the picture floated in the
+     middle of a column 270px from either edge while the card it belonged to hung
+     off the left column under three bullets. */
+  .ob-two--top { align-items:start; }
+  .ob-aside { display:flex; flex-direction:column; gap:18px; min-width:0; }
+  .ob-aside .sonar { align-self:center; width:168px; height:168px; flex:none; }
+  .ob-aside .bnb-card { margin-top:0; }
   .ob-grow { flex:1; }
   .ob-mt-6 { margin-top:6px; }
   .ob-mt-16 { margin-top:16px; }
@@ -832,8 +863,10 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     .ob-h { font-size:32px; }
     /* The nav is three controls in a row; below this width they need to stack
        or the primary action is squeezed to an ellipsis. */
-    .ob-nav { flex-wrap:wrap; gap:10px; }
-    .ob-nav-mid { order:3; width:100%; }
+    .ob-stepcount { order:-1; flex:1 1 100%; text-align:center; }
+    .ob-skip-btn, #ob-next { flex:1 1 auto; justify-content:center; }
+    .ob-skip-note { text-align:left; }
+    .ob-aside .sonar { width:120px; height:120px; }
   }
   /* The only server-rendered error the wizard has was styled nowhere — it
      rendered as ordinary body text, visually identical to the paragraph above
@@ -851,8 +884,6 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   /* The microphone cards are deliberately not selectable; the pointer cursor
      said otherwise. */
   .ob-card.ob-card--static { cursor:default; }
-  .ob-nav-mid { display:flex; flex-direction:column; align-items:center; gap:6px; }
-  .ob-stepcount { margin:0; }
   /* Shown only by the <noscript> block above. */
   .ob-noscript-note, .ob-nosubmit { display:none; }
 </style>
@@ -902,7 +933,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   <div class="ob-stage">
     <!-- Step 1 — Welcome -->
     <section class="ob-step active" data-step="1">
-      <div class="ob-two">
+      <div class="ob-two ob-two--top">
         <div>
           <div class="ob-eyebrow">Welcome</div>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
@@ -912,9 +943,8 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
             <li><span class="tick">✓</span> Always tweakable — change anything later in Settings</li>
           </ul>
-          {{password_step}}
         </div>
-        <div class="ob-center">
+        <div class="ob-aside">
           <svg class="sonar" width="240" height="240" viewBox="0 0 240 240" aria-hidden="true">
             <g fill="none" stroke="var(--moss)" stroke-width="1">
               <circle cx="120" cy="120" r="30"><animate attributeName="r" values="30;110" dur="5s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.7;0" dur="5s" repeatCount="indefinite"/></circle>
@@ -927,6 +957,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
               <line x1="122" y1="106" x2="122" y2="134"/><line x1="128" y1="113" x2="128" y2="127"/>
             </g>
           </svg>
+          {{password_step}}
         </div>
       </div>
     </section>
@@ -979,7 +1010,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
       <div class="ob-cards cols2" role="radiogroup" aria-labelledby="ob-conf-h">
         <label class="ob-card" data-radio="conf" data-value="0.9"><input class="ob-pick" type="radio" name="conf_card" value="0.9" aria-labelledby="ob-conf-strict-t" aria-describedby="ob-conf-strict-s"><div class="ob-grow"><div class="t" id="ob-conf-strict-t">Strict</div><div class="s" id="ob-conf-strict-s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></label>
-        <label class="ob-card" data-radio="conf" data-value="0.75"><input class="ob-pick" type="radio" name="conf_card" value="0.75" aria-labelledby="ob-conf-balanced-t" aria-describedby="ob-conf-balanced-s"><div class="ob-grow"><div class="t" id="ob-conf-balanced-t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-conf-balanced-s">0.75 — realistic results without over-filtering. Start here.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.7"><input class="ob-pick" type="radio" name="conf_card" value="0.7" aria-labelledby="ob-conf-balanced-t" aria-describedby="ob-conf-balanced-s"><div class="ob-grow"><div class="t" id="ob-conf-balanced-t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-conf-balanced-s">0.70 — realistic results without over-filtering. Start here.</div></div></label>
         <label class="ob-card" data-radio="conf" data-value="0.6"><input class="ob-pick" type="radio" name="conf_card" value="0.6" aria-labelledby="ob-conf-sensitive-t" aria-describedby="ob-conf-sensitive-s"><div class="ob-grow"><div class="t" id="ob-conf-sensitive-t">Sensitive</div><div class="s" id="ob-conf-sensitive-s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></label>
         <label class="ob-card" data-radio="conf" data-value="0.4"><input class="ob-pick" type="radio" name="conf_card" value="0.4" aria-labelledby="ob-conf-everything-t" aria-describedby="ob-conf-everything-s"><div class="ob-grow"><div class="t" id="ob-conf-everything-t">Everything</div><div class="s" id="ob-conf-everything-s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></label>
       </div>
@@ -1011,7 +1042,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
-            <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.75 · Balanced</span></div>
+            <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.70 · Balanced</span></div>
             <div class="summary-row"><span class="k">Alerts</span><span id="ob-sum-notify">Rare birds only</span></div>
             <div class="summary-row"><span class="k">Dashboard</span><span class="mono" id="ob-sum-url">—</span></div>
           </div>
@@ -1047,12 +1078,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
          Continue was an <a href="#" role="button">: an anchor fires click on
          Enter but not on Space, so a keyboard user pressing Space on something
          announced as a button scrolled the page instead. -->
-    <div class="ob-nav-mid">
-      <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 6</p>
-      <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
-    </div>
+    <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 6</p>
+    <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
     <button type="button" class="bnb-btn primary" id="ob-next">Continue →</button>
     <button type="submit" class="bnb-btn primary ob-nosubmit">Save setup</button>
+    <!-- What "use the defaults" does about the password, said where the choice
+         is made. Shown only on step 1 of a station that has none; the wording
+         follows what is typed. It changes nothing the wizard saves. -->
+    <p class="bnb-meta ob-skip-note" id="ob-skip-note" role="note" hidden></p>
   </div>
   </form>
 </main>
@@ -1076,6 +1109,24 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   var announce = document.getElementById('ob-announce');
   var NAMES = ['Welcome', 'Location', 'Microphone', 'Accuracy', 'Alerts', 'Done'];
 
+  // "Use the defaults and finish" finishes with both password boxes as they are:
+  // blank keeps the station open (the dashboard keeps saying so), anything typed
+  // must be long enough and typed twice, and is saved. Say which, beside the button.
+  var skipNote = document.getElementById('ob-skip-note');
+  var pw1 = document.getElementById('ob-password-1');
+  var pw2 = document.getElementById('ob-password-2');
+  function refreshSkipNote() {
+    if (!skipNote) { return; }
+    var show = step === 1 && pw1;
+    skipNote.hidden = !show;
+    if (!show) { return; }
+    skipNote.textContent = (pw1.value || (pw2 && pw2.value))
+      ? 'Finishing now saves the password you typed.'
+      : 'Finishing now with no password leaves this station open to anyone who can reach it. Set one any time under Settings \u2192 Access.';
+  }
+  if (pw1) { pw1.addEventListener('input', refreshSkipNote); }
+  if (pw2) { pw2.addEventListener('input', refreshSkipNote); }
+
   function render(moveFocus) {
     stepsEls.forEach(function (s) {
       var on = +s.dataset.step === step;
@@ -1095,6 +1146,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       else { p.removeAttribute('aria-current'); }
     });
     cur.textContent = step;
+    refreshSkipNote();
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
     next.textContent = step === total ? 'Finish & save →' : 'Continue →';
     // Step changes were entirely silent to assistive tech: the content of the
@@ -1196,7 +1248,9 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     var input = document.getElementById(mirrors[group]);
     if (!input) { return; }
     document.querySelectorAll('[data-radio="' + group + '"]').forEach(function (c) {
-      if (c.dataset.value === input.value) {
+      // Numbers compare as numbers (`0.7` and `0.70` are one setting); the
+      // notification group's words only ever match as strings.
+      if (c.dataset.value === input.value || (c.dataset.value !== '' && input.value !== '' && Number(c.dataset.value) === Number(input.value))) {
         c.classList.add('sel');
         var pick = c.querySelector('.ob-pick');
         if (pick) { pick.checked = true; }
@@ -1362,6 +1416,102 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The wizard is the third place a person can type a confidence or a
+    /// coordinate, and it keeps its own copy of the bounds. It may be stricter
+    /// than `birdnet_core::config::validate` (it does not read a comma decimal
+    /// for the confidence) but never looser: a value it stores is a value the
+    /// validator would have accepted in the config file.
+    #[test]
+    fn the_wizard_never_accepts_what_the_validator_refuses() {
+        use birdnet_core::config::validate::{Severity, validate};
+        let refused = |key: &str, v: &str| {
+            let config = birdnet_core::config::Config::parse(&format!("{key}={v}"))
+                .expect("a key=value line parses");
+            validate(&config)
+                .iter()
+                .any(|f| f.key == key && f.severity == Severity::Error)
+        };
+        let probes = [
+            "0",
+            "1",
+            "0.7",
+            "0.0",
+            "1.0",
+            "1.0000001",
+            "-0.0000001",
+            "75",
+            "100",
+            "-1",
+            "abc",
+            "NaN",
+            "inf",
+            "-inf",
+            "1e0",
+            "1e1",
+            "1e-1",
+            "0,7",
+            "1,5",
+            "1,2,3",
+            ".5",
+            "5.",
+            "+0.5",
+            "90",
+            "90.0000001",
+            "-90",
+            "-90.5",
+            "180",
+            "-180",
+            "180.0000001",
+            "-181",
+            "42,36",
+            "0x10",
+            "",
+        ];
+        for v in probes {
+            if valid_confidence(v) {
+                assert!(
+                    !refused("CONFIDENCE", v),
+                    "the wizard stores a confidence of {v:?} that the validator refuses"
+                );
+            }
+            if valid_coordinate(v, LATITUDE_LIMIT).is_some() {
+                assert!(
+                    !refused("LATITUDE", v),
+                    "the wizard stores a latitude of {v:?} that the validator refuses"
+                );
+            }
+            if valid_coordinate(v, LONGITUDE_LIMIT).is_some() {
+                assert!(
+                    !refused("LONGITUDE", v),
+                    "the wizard stores a longitude of {v:?} that the validator refuses"
+                );
+            }
+        }
+        // The counterparts, so "never looser" is not satisfied by a wizard that
+        // refuses everything: the ends of each range are real answers...
+        for v in ["0", "1", "0.7"] {
+            assert!(valid_confidence(v), "{v}");
+        }
+        assert!(
+            valid_coordinate("90", LATITUDE_LIMIT).is_some()
+                && valid_coordinate("-90", LATITUDE_LIMIT).is_some()
+        );
+        assert!(
+            valid_coordinate("180", LONGITUDE_LIMIT).is_some()
+                && valid_coordinate("-180", LONGITUDE_LIMIT).is_some()
+        );
+        assert_eq!(
+            valid_coordinate("42,36", LATITUDE_LIMIT).as_deref(),
+            Some("42.36")
+        );
+        // ...and one past the end is not.
+        assert!(!valid_confidence("1.0000001") && !valid_confidence("75"));
+        assert!(valid_coordinate("90.0000001", LATITUDE_LIMIT).is_none());
+        assert!(valid_coordinate("180.0000001", LONGITUDE_LIMIT).is_none());
+        // Stricter, on purpose and in one place: the confidence has no comma form.
+        assert!(!valid_confidence("0,7") && !refused("CONFIDENCE", "0,7"));
+    }
 
     fn prefill() -> Prefill {
         Prefill {

@@ -10,7 +10,7 @@
 - [Inference Code Pattern](#inference-code-pattern)
 - [Validation](#validation)
 - [Performance](#performance)
-- [Hot Reload](#hot-reload)
+- [Model reload](#model-reload)
 
 ---
 
@@ -46,8 +46,8 @@ Audio chunk (f32, model sample rate)
 
 | Model | Species | Input | Metadata | Notes |
 |-------|---------|-------|----------|-------|
-| BirdNET+ V3.0 | ~11 000 | 32 kHz audio; 4.5 s (144 000 samples) by default for the dynamic-shape preview, 3 s for the fixed-shape `[1, 96 000]` build ([15-model-chunking.md](15-model-chunking.md)) | Optional | Default (fetched by the installer from GitHub, Zenodo fallback) |
-| BirdNET V2.4 FP16 | 6 362 | 3 s audio @ 48 kHz | Separate metadata model | Legacy compatibility |
+| BirdNET+ V3.0 | ~11 000 | 32 kHz audio; 4.5 s (144 000 samples) by default for the dynamic-shape preview, 3 s for the fixed-shape `[1, 96 000]` build ([15-model-chunking.md](15-model-chunking.md)) | Optional (the BirdNET geomodel, matched by name through its own label file) | The preview; an explicit choice for a new install (`--classifier birdnet-v3`) and what installs up to v0.17.1 fetched (this project's GitHub release, Zenodo fallback) |
+| BirdNET V2.4 (FP32 ONNX, 54 MB, installed by `birdnet-behavior --install-model birdnet-v24`) | 6 522 (`--install-model list`) | 3 s audio @ 48 kHz | Range filter v2, `birdnet-v24-range-v2.onnx`, indexed like the labels | The default for a new install: the network BirdNET-Pi and birdnet-go run. BirdNET-Pi itself runs FP16 weights of it (`model_catalog.rs`) |
 | BirdNET V1 | 6 000+ | 3 s audio @ 48 kHz | Lat/lon/week tensor | Legacy |
 
 BirdNET models are supplied as ONNX. Users can drop in either the
@@ -126,6 +126,8 @@ inferred one at a time.
   assert a Eurasian Magpie detection at expected confidence.
 
 ## Performance
+
+Estimates: this page does not cite a run that produced them, and none of it was re-measured for V2.4. `scripts/hardware-test.sh` measures decode-to-prediction latency on a real board.
 
 | Metric | Python (TFLite) | Rust (ort) |
 |--------|----------------|------------|

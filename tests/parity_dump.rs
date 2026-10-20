@@ -3,7 +3,9 @@
 //! Runs our real decode -> resample -> chunk -> ONNX path over a list of WAVs
 //! and writes, per WAV, every chunk's start/end and the model's top 10 as raw
 //! logits (sensitivity 1.0, threshold 0, so `confidence = sigmoid(raw)` and the
-//! logit is recovered exactly), plus the first three chunks' samples as
+//! logit is recovered exactly), the rank of the best human class among all the
+//! model's classes (`human_rank`, what BirdNET-Pi's privacy rule reads), plus
+//! the first three chunks' samples as
 //! little-endian `f32` for comparing against BirdNET-Pi's own resampled input.
 //! `tools/parity/compare_rust.py` reads the JSON.
 //!
@@ -113,7 +115,10 @@ fn parity_dump() {
                 }
                 write!(json, "[\"{}\",{:.6},{:.6}]", d.scientific_name, logit, p).unwrap();
             }
-            json.push_str("]}");
+            match pred.human_rank {
+                Some(rank) => write!(json, "],\"human_rank\":{rank}}}").unwrap(),
+                None => json.push_str("],\"human_rank\":null}"),
+            }
             if i < 3 {
                 let bytes: Vec<u8> = c
                     .spectrogram

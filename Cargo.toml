@@ -21,9 +21,15 @@ edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
 repository = "https://github.com/tomtom215/BirdNet-Behavior"
+# The operator manual: the site root is the latest release's, `/dev/` is main's
+# (.github/workflows/docs.yml). Every crate inherits it, so crates.io links the
+# one place a person who found any of the nine crates can learn what they are
+# for. `documentation` is set per crate: the manual for the binary, docs.rs for
+# the libraries (their READMEs say they are internal).
+homepage = "https://tomtom215.github.io/BirdNet-Behavior/"
 authors = ["tomtom215"]
 readme = "README.md"
-keywords = ["birdnet", "bird-classification", "acoustic-monitoring", "duckdb", "raspberry-pi"]
+keywords =["birdnet", "bird-classification", "acoustic-monitoring", "duckdb", "raspberry-pi"]
 categories = ["science", "multimedia::audio"]
 
 [workspace.dependencies]
@@ -153,7 +159,7 @@ rubato = "5.0.1"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
-ort = { version = "2.0.0-rc.14", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs"] }
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs"] }
 # Pulled in transitively through ort's `ndarray` feature; tracked here so the
 # declared version matches what the lockfile resolves.
 ndarray = "0.17"
@@ -315,6 +321,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://tomtom215.github.io/BirdNet-Behavior/"
 authors.workspace = true
 readme.workspace = true
 keywords.workspace = true

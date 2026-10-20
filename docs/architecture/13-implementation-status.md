@@ -1,6 +1,13 @@
 # Implementation Status
 
-> Current state of the BirdNet-Behavior implementation, crate by crate.
+> What each crate contains, module by module.
+>
+> **Read this as a map, not a scoreboard.** The module tables were checked
+> against the tree at one commit and are kept by hand. Every *count* that used
+> to be printed here (migrations, tests, lines of code, doctor check families,
+> dependency versions) went stale within a release, so each is now the command
+> that prints it, with the value it printed on 2026-10-20 for reference. Run the
+> command; do not quote the number.
 
 ## Table of Contents
 
@@ -52,7 +59,7 @@
 | Connection | `sqlite/connection.rs` | `open_connection` / `open_or_create` / `open_readonly` / `quick_check`; WAL mode and PRAGMA tuning. The crate hands back plain `Connection`s — the single-writer `Mutex<Connection>` plus read-only `ReaderPool` live in `birdnet-web` (`state.rs`, `db_pool.rs`) |
 | Types | `sqlite/types.rs` | Detection row types, query result types |
 | Query API | `sqlite/queries/` | Detections, species, analytics, correlation, heatmap, images, quarantine, detection reviews, effort, imports, maintenance |
-| Migrations | `migration.rs` | 42 idempotent schema migrations (v1…v42) with version tracking; v42 re-keys `species_summary` by `(Com_Name, Sci_Name, hour, is_import)` |
+| Migrations | `migration.rs` | Idempotent, forward-only schema migrations numbered from 1, with version tracking (count: `awk '/pub const MIGRATIONS/,/^\];/' crates/birdnet-db/src/migration.rs \| grep -cE '^\s+version: [0-9]+,'`, which printed 54 on 2026-10-20); v42 re-keys `species_summary` by `(Com_Name, Sci_Name, hour, is_import)` |
 | Settings | `settings.rs` | SQLite-backed key-value store with categories |
 | Resilience | `resilience.rs` | Backup, restore, integrity check, auto-recovery |
 | Alert rules | `alert_rules.rs` | Detection-triggered actions (webhook / log / suppress), glob matching |
@@ -152,7 +159,7 @@
 | Integrations factory | `src/integrations/` + `src/integrations.rs` | Apprise, BirdWeather, email, MQTT client construction |
 | CLI | `src/cli.rs` | clap argument definitions |
 | Maintenance loop | `src/maintenance.rs` | Weekly VACUUM, backup pruning, clip and audit retention |
-| Doctor | `src/doctor/` + `src/doctor.rs` | `--doctor` / `--doctor-json` preflight checks (21 check families in `CHECK_FAMILIES`), opt-in `--fix` repairs (`doctor/fix.rs`); also served at `/admin/doctor` |
+| Doctor | `src/doctor/` + `src/doctor.rs` | `--doctor` / `--doctor-json` preflight checks (one row of `CHECK_FAMILIES` per family; `grep -n 'const CHECK_FAMILIES' src/doctor.rs` shows the length, 26 on 2026-10-20), opt-in `--fix` repairs (`doctor/fix.rs`); also served at `/admin/doctor` |
 | Watchdog notifications | `src/sd_notify.rs` | `READY=1` / `WATCHDOG=1` / `STOPPING=1` for `Type=notify` |
 | Log capture | `src/log_capture.rs` + `src/log_filter.rs` | Broadcast of `tracing` events to the admin log viewer |
 | Channel report | `src/channel_report.rs` | `--channel-report` capture diagnostics |
@@ -187,83 +194,62 @@ not listed above:
 
 ## Test Coverage
 
-Counted as `#[test]` / `#[tokio::test]` attributes, at commit `dd10fe7`:
+Counted as `#[test]` / `#[tokio::test]` attributes, which is also how the README's
+test count is gated (`tests/documented_samples_match_the_build.rs`). It undercounts
+anything a macro expands into many cases (`proptest!`, parameterised tests):
 
 ```bash
-grep -rn --include='*.rs' -E '^\s*#\[(test|tokio::test)' src crates tests | wc -l
+# one row per crate, then the binary and the integration tests
+for d in crates/* src tests; do
+  printf '%-28s %s\n' "$d" "$(grep -rhE --include='*.rs' '^\s*#\[(test|tokio::test)\]\s*$' "$d" | wc -l)"
+done
+# the total
+grep -rhE --include='*.rs' '^\s*#\[(test|tokio::test)\]\s*$' src crates tests benches | wc -l
 ```
 
-| Crate | Test count | Coverage |
-|-------|-----------:|----------|
-| birdnet-core | 722 | Audio pipeline, inference, daemon, quality (SNR / flatness / noise floor / rain) |
-| birdnet-db | 432 | SQLite, resilience, heatmap, correlation, settings, notifications, quarantine CRUD |
-| birdnet-web | 831 | Pages, admin, backup, settings, export, auth, WebSocket, rate limiter |
-| birdnet-integrations | 352 | Email, Apprise, BirdWeather, images, MQTT wire encoding, HA discovery |
-| birdnet-behavioral | 105 | Types, query builders, phenology timing and abundance SQL correctness |
-| birdnet-migrate | 72 | Schema, validator, importer, species report |
-| birdnet-timeseries | 40 | All analytics modules |
-| birdnet-scheduler | 27 | Solar calculation and recording-window scheduling |
-| Binary (`src/`) | 813 | CLI, app wiring, daemon, doctor, maintenance, capture |
-| Integration tests (`tests/`) | 300 | Audio pipeline end-to-end, web API, HTMX pages, quarantine routes |
-| **Total** | **3 694** | |
-
-Re-derive rather than trusting the figure above; it moves with every
-branch.
+On 2026-10-20 the total was 5 030. The crates differ by an order of magnitude
+(`birdnet-web` is the largest, `birdnet-scheduler` the smallest), so the loop is
+the useful part; the single figure is only a reference point.
 
 ---
 
 ## Lines of Code
 
-Counted at commit `dd10fe7` with:
-
 ```bash
 find src crates -name '*.rs' | xargs cat | wc -l
 ```
 
-Each crate row is the whole crate directory (`src/`, `tests/`, `benches/`).
-
-| Crate | Approx. LOC |
-|-------|------------:|
-| birdnet-core | 30 343 |
-| birdnet-db | 24 986 |
-| birdnet-web | 64 405 |
-| birdnet-integrations | 17 957 |
-| birdnet-migrate | 4 648 |
-| birdnet-behavioral | 6 758 |
-| birdnet-timeseries | 3 588 |
-| birdnet-scheduler | 1 246 |
-| Binary (`src/`) | 34 194 |
-| **Total** | **188 125** |
-
-Of that total, 484 lines are Criterion benchmarks (`crates/birdnet-core/benches/audio_pipeline.rs`,
-`crates/birdnet-db/benches/db_queries.rs`); they are already inside the
-`birdnet-core` and `birdnet-db` rows and are not a separate addend.
-
-Lines are counted with comments and inline tests included. Like the test
-count, re-derive it rather than trusting the figure here.
+printed 276 926 on 2026-10-20 (comments and inline tests included; each crate's
+`tests/` and `benches/` directories are inside `crates/`). Per crate, run the same
+pipeline on `find crates/<name> -name '*.rs'`. Do not quote the figure without the
+date.
 
 ---
 
 ## Key Dependencies
 
-| Purpose | Crate | Version | Pure Rust |
-|---------|-------|---------|-----------|
-| Web framework | `axum` | 0.8 | Yes |
-| Async runtime | `tokio` | 1.52 (lock 1.53) | Yes |
-| ONNX inference | `ort` | 2.0.0-rc | No (C++ core, statically linked) |
-| Audio decode | `symphonia` | 0.6 | Yes |
-| Resampling | `rubato` | 4.0 | Yes |
-| FFT | `realfft` | 3 | Yes |
-| File watching | `notify` | 8 | Yes |
-| Email (SMTP) | `lettre` | 0.11 | Yes (rustls TLS) |
-| System monitoring | `sysinfo` | 0.39 | Yes |
-| SSE streaming | `tokio-stream` | 0.1 | Yes |
-| File streaming | `tokio-util` | 0.7 | Yes |
-| SQLite | `rusqlite` | 0.40 | No (bundled C) |
-| DuckDB | `duckdb` | 1.10506 (DuckDB 1.5.6) | No (bundled C++, optional) |
-| CLI | `clap` | 4.6 | Yes |
-| Serialization | `serde` + `serde_json` | 1 | Yes |
-| Logging | `tracing` | 0.1 | Yes |
+The version of each is in `Cargo.toml` under `[workspace.dependencies]` (the
+requirement) and in `Cargo.lock` (what is built); this table says what each is
+for and whether it is Rust all the way down.
+
+| Purpose | Crate | Pure Rust |
+|---------|-------|-----------|
+| Web framework | `axum` | Yes |
+| Async runtime | `tokio` | Yes |
+| ONNX inference | `ort` (required as a release candidate, `^2.0.0-rc.N`) | No (C++ core, statically linked) |
+| Audio decode | `symphonia` | Yes |
+| Resampling | `rubato` | Yes |
+| FFT | `realfft` | Yes |
+| File watching | `notify` | Yes |
+| Email (SMTP) | `lettre` | Yes (rustls TLS) |
+| System monitoring | `sysinfo` | Yes |
+| SSE streaming | `tokio-stream` | Yes |
+| File streaming | `tokio-util` | Yes |
+| SQLite | `rusqlite` | No (bundled C) |
+| DuckDB | `duckdb` | No (bundled C++, optional) |
+| CLI | `clap` | Yes |
+| Serialization | `serde` + `serde_json` | Yes |
+| Logging | `tracing` | Yes |
 
 ---
 

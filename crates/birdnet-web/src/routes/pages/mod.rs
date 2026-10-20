@@ -23,6 +23,7 @@ pub mod behavioral;
 pub(crate) mod changelog;
 pub mod charts;
 pub(crate) mod cmdk;
+pub(crate) mod confidence;
 pub(crate) mod confirm;
 pub mod correlation;
 pub mod dashboard;
@@ -43,6 +44,7 @@ pub mod migration;
 pub(crate) mod name_search;
 pub(crate) mod nav;
 pub mod notification_center;
+pub(crate) mod occurrence_page;
 pub mod onboarding;
 pub(crate) mod overlays;
 pub mod provenance;
@@ -52,6 +54,7 @@ pub mod search;
 pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod station_health;
+pub(crate) mod station_issues;
 pub mod timeseries_dash;
 pub(crate) mod toast;
 pub mod today;
@@ -129,6 +132,7 @@ pub fn router() -> Router<AppState> {
         .merge(detection_reviews::router())
         .merge(detection_comments::router())
         .merge(species_pages::router())
+        .merge(occurrence_page::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())
         .merge(heatmap::router())

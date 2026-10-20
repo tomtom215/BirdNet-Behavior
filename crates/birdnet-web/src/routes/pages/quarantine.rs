@@ -136,7 +136,13 @@ fn build_page_html(active_filter: &str) -> String {
      hx-get=\"/pages/quarantine-stats\" \
      hx-trigger=\"load\" \
      hx-swap=\"innerHTML\">\
-  <p class=\"qz-loading\">Loading stats\u{2026}</p>\
+  <div class=\"stats-grid qz-stats-flush\">\
+    <span class=\"sr-only\">Loading stats\u{2026}</span>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Pending Review</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Approved</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Rejected</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Total</div></div>\
+  </div>\
 </div>\
 <div class=\"card qz-filter-card\">\
   <div class=\"qz-filter-row\">\
@@ -209,26 +215,40 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
 }
 
 /// Tiny partial used by the nav badge to show pending count.
+///
+/// Three answers, because there are three facts: nothing waiting (no badge),
+/// `n` waiting (the count), and *could not count* — which is a `?`, not a
+/// missing badge, since a missing badge is how "nothing waits" looks.
 async fn quarantine_pending_count_partial(State(state): State<AppState>) -> impl IntoResponse {
-    let count = tokio::task::spawn_blocking(move || {
+    let counted = tokio::task::spawn_blocking(move || {
         state.with_read_db(birdnet_db::sqlite::quarantine_pending_count)
     })
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .unwrap_or(0);
+    .await;
 
-    let html = if count > 0 {
-        format!(
+    let html = match counted {
+        Ok(Ok(count)) if count > 0 => format!(
             r#"<span class="qz-pending-badge">
                {count}
             </span>"#
-        )
-    } else {
-        String::new()
+        ),
+        Ok(Ok(_)) => String::new(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "quarantine badge: the pending count could not be read");
+            unknown_pending_badge()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "quarantine badge: task failed");
+            unknown_pending_badge()
+        }
     };
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// The badge for a count that could not be read.
+fn unknown_pending_badge() -> String {
+    r#"<span class="qz-pending-badge" role="img" aria-label="The number of sightings waiting for review could not be read" title="The number of sightings waiting for review could not be read">?</span>"#
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -247,13 +267,14 @@ async fn quarantine_list_partial(
         state.with_read_db(|conn| {
             let rows = birdnet_db::sqlite::list_quarantine(conn, filter, limit, offset)?;
             let total = birdnet_db::sqlite::count_quarantine(conn, filter)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, total))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((rows, total))) => {
+        Ok(Ok((rows, total, floor))) => {
             let mut html = String::with_capacity(4096);
 
             if rows.is_empty() && offset == 0 {
@@ -270,7 +291,7 @@ async fn quarantine_list_partial(
                 render_table_header(&mut html);
             }
             for row in &rows {
-                render_quarantine_row(&mut html, row, &filter_str(filter), &names);
+                render_quarantine_row(&mut html, row, &filter_str(filter), &names, floor);
             }
 
             // Pagination
@@ -331,15 +352,9 @@ fn render_quarantine_row(
     row: &birdnet_db::sqlite::QuarantineRow,
     filter_param: &str,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
-    let conf_pct = row.confidence * 100.0;
-    let conf_cls = if conf_pct >= 80.0 {
-        "high"
-    } else if conf_pct >= 50.0 {
-        "mid"
-    } else {
-        "low"
-    };
+    let conf = super::atoms::conf_pill(row.confidence * 100.0, floor);
     // What is read; the link and the share token below carry the stored name.
     let com_name = escape_html(names.name(&row.sci_name, &row.com_name));
     let sci_name = escape_html(&row.sci_name);
@@ -391,7 +406,7 @@ fn render_quarantine_row(
             {sf_info}
             {audio}
           </td>
-          <td><span class="conf {conf_cls}">{conf_pct:.0}%</span></td>
+          <td>{conf}</td>
           <td class="qz-reason">{reason_label}</td>
           <td class="qz-datetime">{date}<br><span class="qz-time">{time}</span></td>
           <td class="qz-status">{status}</td>
@@ -494,6 +509,7 @@ fn row_audio_player(file_name: Option<&str>) -> String {
 
 async fn quarantine_approve(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
@@ -506,7 +522,23 @@ async fn quarantine_approve(
     // back-dated by construction, so the incremental analytics sync would skip
     // it on every future start. Without the paired write an approved detection
     // never reached the analytics dashboards at all.
-    let result = tokio::task::spawn_blocking(move || state.approve_quarantine(id)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.approve_quarantine(id);
+        // Approving admits a record the station held back as too unlikely to
+        // believe into every count and share link: that is the decision the
+        // log is for.
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "quarantine.approve",
+                Some(&format!("quarantine:{id}")),
+                None,
+            );
+        }
+        result
+    })
+    .await;
 
     // O-18: outcome toast.
     let toast = match &result {
@@ -514,9 +546,15 @@ async fn quarantine_approve(
             tracing::info!(id, newly_inserted, "quarantine entry approved");
             Some(Toast::success("Approved."))
         }
+        // Not `{e}`: the database's own words ("sqlite error: no such table…")
+        // are for the log. What is certain is that the approval is one
+        // transaction — the sighting and its record in the review log are
+        // written together or not at all — so nothing was half-done.
         Ok(Err(e)) => {
             tracing::warn!(id, error = %e, "failed to approve quarantine entry");
-            Some(Toast::error(format!("Approve failed: {e}")))
+            Some(Toast::error(
+                "Not approved: the station could not save that.",
+            ))
         }
         Err(e) => {
             tracing::warn!(id, error = %e, "task panic approving quarantine entry");
@@ -529,6 +567,7 @@ async fn quarantine_approve(
 
 async fn quarantine_reject(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
@@ -538,7 +577,17 @@ async fn quarantine_reject(
     let offset = form.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::reject_quarantine(conn, id))
+        let result = state.with_db(|conn| birdnet_db::sqlite::reject_quarantine(conn, id));
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "quarantine.reject",
+                Some(&format!("quarantine:{id}")),
+                None,
+            );
+        }
+        result
     })
     .await;
 
@@ -562,6 +611,7 @@ async fn quarantine_reject(
 
 async fn quarantine_delete(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
@@ -571,7 +621,17 @@ async fn quarantine_delete(
     let offset = form.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id))
+        let result = state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id));
+        if result.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "quarantine.delete",
+                Some(&format!("quarantine:{id}")),
+                None,
+            );
+        }
+        result
     })
     .await;
 

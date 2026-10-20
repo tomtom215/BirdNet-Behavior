@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + rustfmt)
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
           components: rustfmt
@@ -61,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + clippy)
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
           components: clippy
@@ -85,6 +85,14 @@ jobs:
         # code is never linted; lint both cfg branches so an analytics-only
         # type/signature error can't slip through (as it did before v0.5.0).
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy — no default features (the analytics store compiled out)
+        # `analytics` is a default feature, so the two steps above both build it.
+        # The build without it (install-smoke builds the binary that way, and
+        # nothing lints or compiles its tests) had a web-crate test that called
+        # analytics methods the feature removes, so `cargo test --no-default-features`
+        # did not compile and nobody could have known. No libduckdb to build here,
+        # so it is the cheap leg.
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
 
   # ── test ───────────────────────────────────────────────────────────────────
   test:
@@ -135,7 +143,7 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
       - name: Install native build dependencies
@@ -264,7 +272,7 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
       - name: Install native build dependencies
@@ -279,7 +287,7 @@ jobs:
       # cache on its checksum: it is fetched once and reused by every later run.
       - name: Cache the BirdNET model
         id: model-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/birdnet-model
           key: birdnet-model-2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743
@@ -351,7 +359,7 @@ jobs:
       # 51 MiB, pinned to a HuggingFace revision and to the digests in
       # `crates/birdnet-integrations/src/model_catalog.rs`.
       - name: Cache the BirdNET V2.4 model
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/birdnet-v24
           key: birdnet-v24-3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d
@@ -411,6 +419,11 @@ jobs:
             -- --nocapture
           cargo test -p birdnet-core --test the_geomodel_keeps_out_birds_that_do_not_occur_here \
             -- --nocapture
+          # The embedded V2.4 label file names birds as BirdNET-Pi does; its class
+          # order is checked line for line against the file the model ships with,
+          # which this job has just fetched and verified.
+          cargo test -p birdnet-core --test the_v24_labels_name_birds_as_birdnet_pi_does \
+            -- --nocapture
 
   doc:
     name: Rustdoc (no broken links)
@@ -419,7 +432,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
       - name: Install native build dependencies
@@ -443,7 +456,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
       - name: Install native build dependencies
@@ -529,7 +542,7 @@ jobs:
           echo "::notice::MSRV is consistently ${declared}"
 
       - name: Install MSRV toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: "1.95"
       # `dtolnay/rust-toolchain` only runs `rustup default 1.95`, and rustup
@@ -595,7 +608,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + aarch64 target)
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
           targets: aarch64-unknown-linux-gnu
@@ -651,7 +664,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
           toolchain: stable
       - name: Install native build dependencies

@@ -114,8 +114,14 @@ pub struct CatalogEntry {
     pub model_sha256: &'static str,
     /// Its size in bytes, for the free-space check before downloading.
     pub model_bytes: u64,
-    /// Where its labels come from, when the catalogue ships them.
+    /// Where its labels are downloaded from, when the catalogue ships them
+    /// that way. Never set together with [`Self::labels_embedded`].
     pub labels_url: Option<&'static str>,
+    /// The labels file itself, when it is compiled into the binary instead of
+    /// downloaded. Written to disk by [`install`] and verified against
+    /// [`Self::labels_sha256`] like a download, so a binary that carries the
+    /// wrong bytes refuses to install them rather than naming the wrong birds.
+    pub labels_embedded: Option<&'static str>,
     /// Lowercase hex sha256 of the labels file.
     pub labels_sha256: Option<&'static str>,
     /// The sample rate it needs — what `MODEL_n_SAMPLE_RATE` should be set to.
@@ -128,6 +134,14 @@ pub struct CatalogEntry {
     pub usage: Use,
     /// Anything an operator needs to know before installing it.
     pub notes: &'static str,
+}
+
+impl CatalogEntry {
+    /// Whether installing this entry also installs a labels file.
+    #[must_use]
+    pub const fn ships_labels(&self) -> bool {
+        self.labels_url.is_some() || self.labels_embedded.is_some()
+    }
 }
 
 /// The classifiers this build knows how to install.
@@ -148,6 +162,7 @@ pub const CATALOG: &[CatalogEntry] = &[
             "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
              models-v3.0-preview3/BirdNET%2B_V3.0-preview3_Global_11K_Labels.csv",
         ),
+        labels_embedded: None,
         labels_sha256: Some("8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"),
         sample_rate: 32_000,
         usage: Use::Classifier,
@@ -165,6 +180,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         // one. Saying so here is better than shipping a URL that 404s in the
         // field.
         labels_url: None,
+        labels_embedded: None,
         labels_sha256: None,
         sample_rate: 32_000,
         usage: Use::Classifier,
@@ -185,18 +201,24 @@ pub const CATALOG: &[CatalogEntry] = &[
                     acd49768d227c726ac94550c94f0effb3e1dd04c/BirdNET_v2.4_fp32_dfttrunc.onnx",
         model_sha256: "3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d",
         model_bytes: 54_068_648,
-        labels_url: Some(
-            "https://huggingface.co/tphakala/BirdNET-v2.4/resolve/\
-             acd49768d227c726ac94550c94f0effb3e1dd04c/labels.txt",
-        ),
-        labels_sha256: Some("487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d"),
+        // Not downloaded: the birdnet-go file this model is paired with names 460
+        // of its 6 522 classes differently from BirdNET-Pi ("Common Magpie"
+        // against "Eurasian Magpie"), which would split a species in two the
+        // moment a BirdNET-Pi history is imported. The embedded file is that
+        // file's class order with BirdNET-Pi's English names
+        // (`scripts/build-v24-labels.py`, and a gate that holds the order to
+        // birdnet-go's file line for line).
+        labels_url: None,
+        labels_embedded: Some(birdnet_core::inference::labels::BIRDNET_V24_ENGLISH_LABELS),
+        labels_sha256: Some(birdnet_core::inference::labels::BIRDNET_V24_ENGLISH_LABELS_SHA256),
         sample_rate: 48_000,
         usage: Use::PrimaryReplacement,
         notes: "The classifier BirdNET-Pi and birdnet-go run. Its scores are \
                 BirdNET-Pi's to within a few thousandths (it is the FP32 build; \
                 BirdNET-Pi runs FP16 weights) once CONFIDENCE and SENSITIVITY are \
-                set as BirdNET-Pi sets them. 48 kHz, 3 s windows, no calibration: \
-                its scores are raw logits put through SENSITIVITY. Replaces the \
+                set as BirdNET-Pi sets them, and its labels carry BirdNET-Pi's \
+                English names. 48 kHz, 3 s windows, no calibration: its scores \
+                are raw logits put through SENSITIVITY. Replaces the \
                 BirdNET+ V3.0 classifier rather than running beside it, because the \
                 two want different sample rates. Pair it with birdnet-v24-range-v2.",
     },
@@ -212,6 +234,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         model_sha256: "b1810073d16c6c39df95a7419f9a11a02f98dbea562c96d4993c6af52b54b271",
         model_bytes: 29_524_170,
         labels_url: None,
+        labels_embedded: None,
         labels_sha256: None,
         sample_rate: 0,
         usage: Use::RangeFilter,
@@ -457,6 +480,79 @@ fn fetch_verified(
     Ok(())
 }
 
+/// Lowercase hex SHA-256 of a file's contents, or `None` if it cannot be read.
+fn sha256_of_file(path: &Path) -> Option<String> {
+    use std::fmt::Write as _;
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in &hasher.finalize() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
+}
+
+/// Whether `dest` already holds exactly the bytes `expected` names.
+///
+/// What lets `--install-model` be run again, by an installer on every start or
+/// by an operator who is not sure it finished, without fetching a 541 MB file it
+/// already has. The file is hashed, not trusted for being there: a truncated or
+/// substituted file under the right name is fetched again.
+fn already_installed(dest: &Path, expected: &str) -> bool {
+    sha256_of_file(dest).is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+}
+
+/// [`fetch_verified`], unless `dest` already verifies. `Ok(true)` when bytes
+/// were fetched, `Ok(false)` when the file was already there and intact.
+fn fetch_unless_installed(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    expected: &'static str,
+    dest: &Path,
+) -> Result<bool, InstallError> {
+    if already_installed(dest, expected) {
+        return Ok(false);
+    }
+    fetch_verified(client, url, expected, dest)?;
+    Ok(true)
+}
+
+/// Write bytes the binary carries to `dest`, only if they hash to `expected`.
+///
+/// The same discipline as [`fetch_verified`] for a file that needs no network:
+/// the bytes land on a `.part` path nothing loads and are renamed into place
+/// once they match, so a binary built with data that disagrees with the digest
+/// pinned beside it fails here rather than naming the wrong birds.
+fn write_verified(bytes: &[u8], expected: &'static str, dest: &Path) -> Result<(), InstallError> {
+    use std::fmt::Write as _;
+    let mut actual = String::with_capacity(64);
+    for byte in &Sha256::digest(bytes) {
+        let _ = write!(actual, "{byte:02x}");
+    }
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(InstallError::Integrity { expected, actual });
+    }
+    let part = dest.with_extension("part");
+    if part.exists() {
+        fs::remove_file(&part)?;
+    }
+    let mut file = fs::File::create(&part)?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&part, dest)?;
+    Ok(())
+}
+
 /// Install a classifier from the catalogue into `dest_dir`.
 ///
 /// # Errors
@@ -479,7 +575,11 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
 
     fs::create_dir_all(dest_dir)?;
 
-    fits(entry.model_bytes, free_space_bytes(dest_dir))?;
+    let model_path = dest_dir.join(format!("{}.onnx", entry.id));
+    // A file that already verifies needs neither the room nor the download.
+    if !already_installed(&model_path, entry.model_sha256) {
+        fits(entry.model_bytes, free_space_bytes(dest_dir))?;
+    }
 
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
@@ -489,24 +589,32 @@ pub fn install(id: &str, dest_dir: &Path) -> Result<Installed, InstallError> {
         .build()
         .map_err(|e| InstallError::Network(e.to_string()))?;
 
-    let model_path = dest_dir.join(format!("{}.onnx", entry.id));
-    tracing::info!(
-        id = entry.id,
-        url = entry.model_url,
-        "downloading classifier"
-    );
-    fetch_verified(&client, entry.model_url, entry.model_sha256, &model_path)?;
-    tracing::info!(id = entry.id, path = %model_path.display(), "classifier verified and installed");
+    if already_installed(&model_path, entry.model_sha256) {
+        tracing::info!(id = entry.id, path = %model_path.display(), "classifier already installed and verified; not downloading it again");
+    } else {
+        tracing::info!(
+            id = entry.id,
+            url = entry.model_url,
+            "downloading classifier"
+        );
+        fetch_verified(&client, entry.model_url, entry.model_sha256, &model_path)?;
+        tracing::info!(id = entry.id, path = %model_path.display(), "classifier verified and installed");
+    }
 
-    let labels_path = match (entry.labels_url, entry.labels_sha256) {
-        (Some(url), Some(sha)) => {
+    let labels_path = match (entry.labels_url, entry.labels_embedded, entry.labels_sha256) {
+        (Some(url), None, Some(sha)) => {
             let ext = url
                 .rsplit('.')
                 .next()
                 .filter(|e| e.len() <= 4)
                 .unwrap_or("csv");
             let path = dest_dir.join(format!("{}_labels.{ext}", entry.id));
-            fetch_verified(&client, url, sha, &path)?;
+            fetch_unless_installed(&client, url, sha, &path)?;
+            Some(path)
+        }
+        (None, Some(text), Some(sha)) => {
+            let path = dest_dir.join(format!("{}_labels.txt", entry.id));
+            write_verified(text.as_bytes(), sha, &path)?;
             Some(path)
         }
         _ => None,
@@ -565,18 +673,51 @@ mod tests {
         }
     }
 
-    /// A labels URL without its digest, or the reverse, would either install
-    /// an unverified file or silently skip one an operator was promised.
+    /// A labels source without its digest, or the reverse, would either
+    /// install an unverified file or silently skip one an operator was
+    /// promised; and a file that is both downloaded and embedded has no
+    /// answer to "which one did I get".
     #[test]
     fn labels_are_either_fully_specified_or_absent() {
         for entry in CATALOG {
             assert_eq!(
-                entry.labels_url.is_some(),
+                entry.ships_labels(),
                 entry.labels_sha256.is_some(),
-                "{}: a labels URL and its digest must travel together",
+                "{}: a labels source and its digest must travel together",
+                entry.id
+            );
+            assert!(
+                entry.labels_url.is_none() || entry.labels_embedded.is_none(),
+                "{}: labels are downloaded or embedded, not both",
                 entry.id
             );
         }
+    }
+
+    /// The embedded labels are the bytes the pinned digest names, and
+    /// installing them writes exactly those bytes — checked by installing into
+    /// a scratch directory with no network at all, which is what an embedded
+    /// file is for.
+    #[test]
+    fn embedded_labels_install_without_a_network_and_verify() {
+        let entry = find("birdnet-v24").expect("in the catalogue");
+        let text = entry.labels_embedded.expect("V2.4's labels are embedded");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("birdnet-v24_labels.txt");
+        super::write_verified(text.as_bytes(), entry.labels_sha256.expect("digest"), &path)
+            .expect("the embedded bytes match their own digest");
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), text);
+        // And the check has teeth: a different byte is refused and leaves
+        // nothing under the name the station loads.
+        let refused = dir.path().join("refused_labels.txt");
+        let err = super::write_verified(
+            b"Pica pica_Common Magpie\n",
+            entry.labels_sha256.expect("digest"),
+            &refused,
+        )
+        .expect_err("wrong bytes must not verify");
+        assert!(matches!(err, InstallError::Integrity { .. }), "{err:?}");
+        assert!(!refused.exists());
     }
 
     /// Ids are what an operator types and what the installed file is named, so
@@ -852,6 +993,48 @@ mod tests {
         );
     }
 
+    /// Installing again is cheap and safe: a file that already hashes to the
+    /// pinned digest is not fetched (the URL here is unreachable, so a fetch
+    /// would fail), and one that does not is fetched again rather than trusted
+    /// for having the right name.
+    #[test]
+    fn a_file_that_already_verifies_is_not_downloaded_again_and_a_damaged_one_is() {
+        const BODY: &[u8] = b"already on the disk";
+        let expected: &'static str = {
+            use sha2::{Digest as _, Sha256};
+            use std::fmt::Write as _;
+            let mut hex = String::new();
+            for b in &Sha256::digest(BODY) {
+                let _ = write!(hex, "{b:02x}");
+            }
+            Box::leak(hex.into_boxed_str())
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        std::fs::write(&dest, BODY).expect("seed");
+
+        let fetched = super::fetch_unless_installed(
+            &test_client(),
+            "https://example.invalid/model.onnx",
+            expected,
+            &dest,
+        )
+        .expect("an intact file needs no network");
+        assert!(!fetched, "an intact file must not be fetched again");
+        assert_eq!(std::fs::read(&dest).expect("read"), BODY);
+
+        // The counterpart: the same name holding other bytes is not trusted.
+        std::fs::write(&dest, b"truncated").expect("damage");
+        let err = super::fetch_unless_installed(
+            &test_client(),
+            "https://example.invalid/model.onnx",
+            expected,
+            &dest,
+        )
+        .expect_err("a damaged file must be fetched, and here the fetch fails");
+        assert!(matches!(err, InstallError::Network(_)), "{err:?}");
+    }
+
     /// A network failure leaves nothing behind either.
     #[test]
     fn an_unreachable_host_leaves_nothing_behind() {
@@ -907,8 +1090,10 @@ mod tests {
         assert_eq!(v24.usage, Use::PrimaryReplacement);
         assert_eq!(
             v24.labels_sha256,
-            Some("487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d")
+            Some("3773334c2ad218bde0ac083dd0b6e839a5cf34e84a6017830b9f446fbb57a215"),
+            "BirdNET-Pi's English names on V2.4's class order, embedded"
         );
+        assert!(v24.labels_url.is_none() && v24.labels_embedded.is_some());
         assert!(
             v24.model_url
                 .contains("acd49768d227c726ac94550c94f0effb3e1dd04c"),

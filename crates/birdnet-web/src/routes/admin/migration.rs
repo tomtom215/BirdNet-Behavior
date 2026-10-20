@@ -223,25 +223,37 @@ async fn batches_handler(State(state): State<AppState>) -> Html<String> {
 ///
 /// Both handlers render from the database rather than from what they think they
 /// just changed, so a partial failure shows what is actually there.
+///
+/// A list that could not be read is not "No histories have been imported", and
+/// a batch whose row count could not be read is not a batch of zero rows: the
+/// operator decides what to delete from these numbers.
 async fn render_batches(state: AppState) -> String {
-    let (batches, exclude) = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| {
-            let batches = birdnet_db::sqlite::list_import_batches(conn)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|b| {
-                    let rows = birdnet_db::sqlite::import_batch_row_count(conn, b.id).unwrap_or(0);
-                    (b, rows)
-                })
-                .collect::<Vec<_>>();
-            let exclude = birdnet_db::settings::get_or(conn, EXCLUDE_IMPORTS_SETTING, "false")
-                .is_ok_and(|v| v == "true");
-            (batches, exclude)
+    let read = state
+        .run_blocking(|state| {
+            state.with_read_db(|conn| {
+                let batches = birdnet_db::sqlite::list_import_batches(conn)?
+                    .into_iter()
+                    .map(|b| {
+                        let rows = birdnet_db::sqlite::import_batch_row_count(conn, b.id)?;
+                        Ok((b, rows))
+                    })
+                    .collect::<Result<Vec<_>, birdnet_db::sqlite::DbError>>()?;
+                // The toggle is a setting the operator chose; a read that
+                // fails shows it off, which is its default, and the page does
+                // not claim otherwise.
+                let exclude = birdnet_db::settings::get_or(conn, EXCLUDE_IMPORTS_SETTING, "false")
+                    .is_ok_and(|v| v == "true");
+                Ok::<_, birdnet_db::sqlite::DbError>((batches, exclude))
+            })
         })
-    })
-    .await
-    .unwrap_or_default();
-    render::import_batches(&batches, exclude)
+        .await;
+    match read {
+        Ok((batches, exclude)) => render::import_batches(&batches, exclude),
+        Err(e) => {
+            tracing::warn!(error = %e, "import history could not be read");
+            crate::routes::pages::error_states::inline("the import history")
+        }
+    }
 }
 
 /// Which import to remove.

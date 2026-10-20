@@ -702,6 +702,26 @@ pub struct Cli {
     )]
     pub privacy_threshold: f32,
 
+    /// BirdNET-Pi's privacy rule: suppress an analysis window, and the windows
+    /// either side of it, when a human class (speech, whistling, other human
+    /// sounds) is among the model's this-many highest-scoring classes
+    /// (0 = off).
+    ///
+    /// Read from the model's output before the detection threshold applies, as
+    /// BirdNET-Pi reads it. The default, 10, is BirdNET-Pi's own at its own
+    /// default (`PRIVACY_THRESHOLD=0` gives `human_cutoff = max(10, …)`), so a
+    /// station nobody has customised does not keep a clip of a conversation
+    /// near its microphone. For a BirdNET-Pi `PRIVACY_THRESHOLD` of `p`, set
+    /// this to `max(10, 60 × p)`. It works beside `--privacy-threshold`;
+    /// either rule suppresses a window. Config key: `PRIVACY_RANK`.
+    #[arg(
+        long,
+        default_value = "10",
+        env = "BIRDNET_PRIVACY_RANK",
+        value_parser = clap::value_parser!(u32).range(0..=12_000)
+    )]
+    pub privacy_rank: u32,
+
     /// Confidence at which a barking dog suppresses its audio chunk
     /// (0.0 = disabled).
     ///
@@ -972,8 +992,9 @@ pub struct Cli {
 
     /// Frequency shift applied to extracted audio clips in Hz (0 = disabled).
     ///
-    /// Shifts the pitch of saved detection clips by the given number of Hz.
-    /// Positive raises the pitch, negative lowers it.
+    /// Shifts every frequency in a saved detection clip by the given number of
+    /// Hz (a shift, not a ratio: an 8 kHz song at -3000 is heard at 5 kHz), and
+    /// leaves the clip's length alone. Positive raises, negative lowers.
     ///
     /// For age-related high-frequency hearing loss the useful direction is
     /// **negative**: it brings warbler and kinglet song, which lives above
@@ -981,8 +1002,9 @@ pub struct Cli {
     /// (Earlier releases documented this backwards — see
     /// `birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ`.)
     ///
-    /// Requires ffmpeg or sox. `BirdNET-Pi` equivalent: `FREQ_SHIFT` +
-    /// `FREQ_SHIFT_AMOUNT` config options.
+    /// Requires ffmpeg 4.3 or newer (its `afreqshift` filter); without one the
+    /// clip is saved unshifted and a warning says so. `BirdNET-Pi` equivalent:
+    /// its `FREQSHIFT_*` options, which scale by a ratio instead.
     #[arg(long, default_value = "0", env = "BIRDNET_FREQ_SHIFT_HZ")]
     pub freq_shift_hz: i32,
 
@@ -1195,6 +1217,40 @@ mod tests {
         }
     }
     use clap::Parser;
+
+    /// The flag's `default_value` is a string literal, so nothing ties it to
+    /// the constant the daemon and the documentation name. This does: a station
+    /// nobody has customised masks a human in the model's top ten, as
+    /// BirdNET-Pi's does, and `--privacy-rank 0` is how it is switched off.
+    #[test]
+    fn the_privacy_rank_default_is_birdnet_pis_and_zero_switches_it_off() {
+        let cli = Cli::try_parse_from(["birdnet-behavior"]).expect("defaults parse");
+        assert_eq!(
+            cli.privacy_rank as usize,
+            birdnet_core::config::DEFAULT_PRIVACY_RANK
+        );
+        assert_eq!(birdnet_core::config::DEFAULT_PRIVACY_RANK, 10);
+        let off = Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "0"]).expect("0");
+        assert_eq!(off.privacy_rank, 0);
+        assert!(Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "12001"]).is_err());
+        assert!(Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "-1"]).is_err());
+        // The clap range is a literal of its own; the validator's constants are
+        // what the config file and the settings page are held to. All three
+        // must accept the same edges.
+        let max = birdnet_core::config::validate::PRIVACY_RANK_MAX;
+        let min = birdnet_core::config::validate::PRIVACY_RANK_MIN;
+        let at =
+            |n: u64| Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", &n.to_string()]);
+        assert!(
+            at(max).is_ok(),
+            "the flag must accept the validator's maximum"
+        );
+        assert!(at(max + 1).is_err(), "and refuse one past it");
+        assert!(
+            at(min).is_ok(),
+            "the flag must accept the validator's minimum"
+        );
+    }
 
     #[test]
     fn explicit_set_distinguishes_supplied_flags_from_defaults() {

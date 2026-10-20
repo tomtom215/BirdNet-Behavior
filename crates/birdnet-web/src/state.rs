@@ -245,6 +245,11 @@ struct AppStateInner {
     /// The channel probes the binary configured (DD-24). Set after the
     /// integrations exist, which is after the state does.
     notification_probes: std::sync::RwLock<crate::notification_probes::NotificationProbes>,
+    /// What the species-occurrence ("range") filter says about a place and
+    /// week, for the pages and API that explain it. Installed by the binary
+    /// when it starts the detection daemon, which is after the state exists;
+    /// `None` in a process with no daemon. See [`crate::occurrence`].
+    occurrence: std::sync::RwLock<Option<Arc<dyn crate::occurrence::OccurrenceSource>>>,
     /// What the boot journal found changed since the last start (UP-3):
     /// empty on a first or ordinary start.
     boot_anomalies: std::sync::RwLock<Vec<crate::boot_journal::Anomaly>>,
@@ -358,6 +363,7 @@ impl AppState {
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
                 ),
+                occurrence: std::sync::RwLock::new(None),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
@@ -620,6 +626,7 @@ impl AppState {
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
                 ),
+                occurrence: std::sync::RwLock::new(None),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
@@ -680,6 +687,7 @@ impl AppState {
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
                 ),
+                occurrence: std::sync::RwLock::new(None),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
@@ -1727,6 +1735,25 @@ impl AppState {
         if let Ok(mut guard) = self.inner.data_volume.write() {
             *guard = Some(status);
         }
+    }
+
+    /// Install the station's occurrence filter, as the web crate may read it
+    /// (the binary does this when it starts the detection daemon).
+    pub fn set_occurrence_source(&self, source: Arc<dyn crate::occurrence::OccurrenceSource>) {
+        if let Ok(mut guard) = self.inner.occurrence.write() {
+            *guard = Some(source);
+        }
+    }
+
+    /// The station's occurrence filter, if this process runs a detection
+    /// daemon to have one.
+    #[must_use]
+    pub fn occurrence_source(&self) -> Option<Arc<dyn crate::occurrence::OccurrenceSource>> {
+        self.inner
+            .occurrence
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     /// Install the channel probes the binary configured (DD-24).

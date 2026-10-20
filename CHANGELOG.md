@@ -321,8 +321,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (computed font size × the SVG's screen scale) at 1440 and 390 px: with the
   fitter withheld (`NO_FITTER=1`) 17 of 78 route-and-viewport combinations
   fail; with it, none do (631 labels graded, the smallest at least 8.5 px).
+- **A cooldown on webhook alert rules.** A rule on `Strix*` posted once per 3-second
+  chunk for as long as an owl called (`DUPLICATE_INTERVAL_SECS` is off by default).
+  Each rule now carries a per-species cooldown in seconds (migration 55,
+  `alert_rules.cooldown_secs`; at most 7 days). `0`, which every existing rule
+  receives, behaves exactly as before. The gate runs on the detection's own timestamp
+  (a backlog replayed out of order is not mistaken for a repeat), applies to webhook
+  actions only (a suppress rule that stopped suppressing after its first match would
+  let later notifications through), and returns its window when the request never
+  left, so an endpoint that was restarting does not cost the rule its window. The
+  rule export is version 3 and omits a zero cooldown: a version-2 file still imports,
+  and an older station refuses a version-3 file instead of dropping the limit. The
+  rule form sets it (see the next entries).
+- **Station Health says when the data lives on the container's own layer.** A data
+  directory that is not a mount keeps the database and recordings on the
+  container's writable layer, where recreating the container (an image upgrade is
+  enough) deletes them, and no existing probe had anything to say about a
+  directory that is writable, has space and was never a mount. The banner and the
+  header badge name it when the process is in a container and the mount holding
+  the data directory is the image-layer root (overlay, aufs, fuse-overlayfs); a
+  volume, a bind mount, a tmpfs or a Pi with an overlay root is not flagged. The
+  shipped image declares `VOLUME /data`, so a bare `docker run` gets an anonymous
+  volume, which counts as a mount and is not flagged (`docker rm -v` or `--rm`
+  still deletes it). Tested against `mountinfo` fixtures modelled on Docker's
+  output, not in a real container.
+- **An alert rule made in the form has a cooldown.** The daemon has enforced
+  `cooldown_secs` since migration 55, but the form never set it, so every rule
+  created in the UI posted once per 3 s chunk of a calling bird. Webhook rules get a
+  "Cooldown (minutes, 0 = every match)" field, 5 by default; a blank, fractional,
+  negative or over-7-day value is refused rather than clamped, and the rules list
+  says "cooldown 5 min" or "no cooldown". Log and suppress rules ignore it and store 0.
+- **Settings → Detection has a Privacy Rank field.** The human-sound rule's N (a
+  human class in the model's top N classes drops the window and its neighbours; 10
+  by default, 0 = off, up to 12000) could only be set in `birdnet.conf`,
+  `BIRDNET_PRIVACY_RANK` or `--privacy-rank`. The page and `PUT /api/v2/settings`
+  take it now and refuse what would otherwise be cut to 0 (the rule off, reported as
+  saved): a fraction such as the Privacy Threshold's `0.02`, `10%`, `1,000`, a sign,
+  or more than 12000. A flag or variable other than 10 still beats the page; one left
+  at 10 yields to it.
+- **`--doctor` warns when the data directory is on the container's own layer.** A
+  new "Data volume" check (a warning, never an error, so it cannot park the unit)
+  says the database, recordings and settings are deleted with the container and
+  names the fix (`-v birdnet-data:/data`). It passes in a container with a mount at
+  the data directory and skips on a host. A bare `docker run` of the shipped image
+  gets an anonymous volume and passes.
+- **Every route the API serves is in `openapi.json`, and a test keeps it so.** Ten
+  served paths were missing (the API root, `analytics/abundance`,
+  `analytics/phenology`, `detections/export/raven`, the per-clip Raven and Audacity
+  tables, `soundlevel`, `species/tracking`, both WebSockets); they are documented
+  now. A gate reads the router and fails by name on a route with no entry or an
+  entry no route serves, and a structural check covers refs, path parameters,
+  operation ids and response descriptions. Redocly itself was not run.
+- **"Why isn't a bird heard here?"** `GET /api/v2/species/occurrence` and the page
+  `/species/occurrence` show what the range filter says about a species for the
+  station's place and a week: the model's probability, the threshold in force and
+  whether the station admits it, with the reason (the range model, or your lists). A
+  species page for a held-back bird links to it. The answer is a 503 with a `reason`
+  when the station has no location, no range model or a model that failed, never
+  an empty list; the station's position is shown rounded to 0.1 degrees. The first
+  ask loads a second copy of the range model (14.7 or 29.5 MB on disk; its memory
+  was not measured), and an answer is kept for 60 s.
 
 ### Changed
+
+- **A new install runs BirdNET V2.4, not the V3.0 preview.** `install.sh` and a new
+  Docker volume install V2.4 and its v2 range filter; `--classifier birdnet-v3` or
+  `BIRDNET_CLASSIFIER=birdnet-v3` chooses the V3.0 preview. A running station never
+  changes model: an existing `birdnet.conf` decides, and a Docker volume holding the
+  V3.0 file keeps it unless `BIRDNET_CLASSIFIER` is set. The files come from
+  `birdnet-behavior --install-model`, SHA-256 checked. Checked with the installer and
+  entrypoint suites on stub binaries (the Docker one seen failing against the old
+  entrypoint); not run: a container, a real `systemd`, or an upgrade from v0.17.1.
+
+- **`CONFIDENCE` defaults to 0.70, and the human-sound rule is on.** 0.70 is
+  BirdNET-Pi's own (it was 0.75). `PRIVACY_RANK` (`--privacy-rank`, default 10, `0` is
+  off) is BirdNET-Pi's rule: a window and the windows either side are dropped when a
+  human class is among the model's 10 best-scoring classes. It is on after an upgrade
+  for a station that sets neither key, works beside `PRIVACY_THRESHOLD` (off by
+  default; either suppresses) and is not on the Settings page yet. Checked against
+  BirdNET-Pi's masks with the real V2.4: 13 of 14 clips agree window for window; the
+  14th is a synthetic clip's digital-silence tail.
+
+- **V2.4 species carry BirdNET-Pi's English names.** The label file birdnet-go
+  publishes names 460 of V2.4's 6,522 classes differently ("Common Magpie" for
+  BirdNET-Pi's "Eurasian Magpie"), so an imported BirdNET-Pi history would hold one
+  species under two names. `--install-model birdnet-v24` now writes BirdNET-Pi's
+  names, built into the binary and checked against a digest; a station that already
+  installed the old file keeps it until the command is run again by hand. Through the
+  daemon, BirdNET-Pi's magpie recording stores Pica pica as "Eurasian Magpie" at
+  0.9123 / 0.9318 / 0.8864 (BirdNET-Pi's own: 0.912 / 0.9316 / 0.8857).
+
+- **`--install-model` does not fetch a file you already have.** It hashes a file
+  already under the right name and skips the download when the SHA-256 matches the
+  pinned one, and says so; a truncated or substituted file is fetched again. Before,
+  every run downloaded again (541 MB for V3.0, 84 MB for V2.4). Checked by a test
+  with an unreachable URL, seen failing with the check replaced by `false` and with
+  the digest comparison replaced by "the file can be read".
+
+- **The manual's `/dev/` is built from `main`, and each release links its own
+  manual.** On a tag push `/dev/` was built from the release tag; it now comes from
+  `DOCS_DEV_REF` (default `origin/main`). A stable release's notes link its `/vX.Y.Z/`
+  manual. Every crate tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE`,
+  checked by `scripts/check-crate-licences.py`. The documented source install is
+  `cargo install birdnet-behavior --locked` (`ort` is required as the pre-release
+  `^2.0.0-rc.14`). Nothing is published; crates.io admits five new crates at once,
+  then one per ten minutes (`RELEASING.md`). Not run: a release.
 
 - **htmx 2.0.4 → 2.0.11**, and the third-party licence notices regenerated.
   Both tarballs were checked against the registry's integrity hash; the vendored
@@ -581,8 +684,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagrees with a manifest (checked against a lock with one workspace
   version edited) and so fails in seconds rather than partway through the
   build matrix.
+- **One rule for confidence, with a key.** Five rules drew the same detection in
+  different colours (82 % was amber on the Today feed and green on the Review
+  page; everything between the cut-off and 75 % was the grey of a disabled
+  control; there was no legend). One function now grades every surface: 90 % and
+  up is *very sure*, below the station's cut-off plus ten points is *borderline*,
+  and between is *sure*, so the edges follow the cut-off the station chose (at 70 %:
+  70-79 amber, 80-89 neutral, 90+ green). A key is printed above each list of bars.
+  The tiers are tokens (`--conf-*`), graded by `tokens.mjs` (3:1 for a fill against
+  its track, 4.5:1 for pill text). On a phone the Today feed's names wrap instead
+  of ending in an ellipsis and the confidence is shown (it was hidden).
+- **The header badge and the Health page read one list.** The badge graded three
+  things and the page a dozen, so a station with two cameras stalled read a green
+  *Healthy* in the header over a page saying *Needs attention*. Both now build one
+  issue list; one issue names itself ("Source stopped"), two or more read "Needs
+  attention", and a damaged or unreadable database is red. The badge reads the
+  integrity verdict the daily pass recorded and caches its two `df` readings for
+  25 s; it never runs the full check.
+- **Charts you can read.** The categorical palette (8 colours per theme, graded
+  by arithmetic for distance, contrast and gamut; the old one had two colours
+  outside sRGB), a heat ramp that gets darker with more in both themes, a
+  streamgraph with a scale bar, the busiest day marked, a pointer readout and a
+  table, a key under the dawn-chorus rings, Trends charts above their tables, and a
+  drawn empty state for migration in place of a 360 px blank card.
+- **One token set, held by tests.** About 770 literal font weights, hairlines,
+  gaps and colours in `app.css` became tokens, with no computed style changed
+  (116 of 117 page states identical over 40,648 elements; the 117th loads a
+  fragment lazily and matched on re-runs). `prefers-contrast: more`
+  now does what the High contrast setting does, `forced-colors` keeps bars and
+  card edges, and the browser's `theme-color` bar equals `--bg` in each theme and
+  follows the toggle. `app.css` grew from 272,772 to 298,659 bytes (gzip 61,084 to
+  67,545).
 
 ### Fixed
+
+- **The frequency shift is a shift in hertz.** `--freq-shift-hz` was a ratio, documented
+  as a shift: with ffmpeg 6.1.1 an 8 kHz tone at -3000 came out at 7 500 Hz (not
+  5 000) and a 3.0 s clip at 3.2 s. Saved clips and the live stream now use
+  `afreqshift` (ffmpeg 4.3 or newer): 8 kHz at -3000 is 5 000 Hz and the length is
+  unchanged, measured on audio. The sox fallback is gone, as sox cannot shift by an
+  amount of hertz; if the shift fails the clip is saved unshifted and a warning says
+  so. A shifted WAV also lost its species, confidence and date tags; it keeps them.
+  Seen failing with the old filter pair, and with the bitexact flags removed.
 
 - **The layout gate no longer reports text that is cut off and not drawn.** On the first
   CI run of the gate (this branch added it) the A11y job failed: on a phone, the Today
@@ -755,13 +898,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds is still a long time for a request on the public router; the analytics
   store is one connection behind a mutex, so heavy analytics requests queue, and
   that is unchanged.
-- **A password changed on the Accounts page is replaced at the next restart while
-  `CADDY_PWD` is set, and nothing said so.** That has always been the design
-  (`CADDY_PWD` is applied at every start), but the Accounts page invited the
-  change and the log recorded the reversal at `info`. The page, the FAQ and the log
-  (now `warn`) say it. The behaviour is unchanged: separating "set from the
-  environment" from "set by a person" needs a record of which it was, and the
-  accounts table has none.
+- **A password changed on the Accounts page no longer reverts at the next restart
+  while `CADDY_PWD` is set.** Every start compared the stored hash with `CADDY_PWD`
+  and, when they differed, put `CADDY_PWD` back, so the password an owner had just
+  chosen (possibly because the old one leaked) was undone by the restart, with only
+  an `info` line to show for it. The station now keeps a hash of the `CADDY_PWD` it
+  last applied in `admin-password.applied` beside the database: an unchanged
+  `CADDY_PWD` leaves the Accounts-page password alone and logs a warning saying so,
+  and a `CADDY_PWD` edited to a new value still replaces it. A station upgrading
+  from a release without the record applies `CADDY_PWD` once at its first start (the
+  old rule, so an owner locked out by an edited config still recovers) and keeps the
+  record from then; when the record cannot be written the old rule stands. The
+  Accounts page, Settings → System, the FAQ and the hardening page say this.
 - **The sound-level meter's top bands did not measure the band they named.** The
   band filter was designed with its bandwidth pre-warped for the bilinear
   transform but its edges were not, so near Nyquist one edge landed too low and the
@@ -829,7 +977,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not exist; the tuning guide gave a default of 0.7 (it is 0.75); `SF_THRESH=0` was
   labelled "disabled" while a species the occurrence model has no entry for is never
   let through; the stored `week` was called the ISO week (it is the 48-week value);
-  and the overlap docs said 3-second windows (V3.0's is 4.5 s).
+  and the overlap docs said 3-second windows (V3.0's is 4.5 s). (Two of these have
+  since changed: a new install runs V2.4, and `CONFIDENCE` defaults to 0.70; see the
+  first two entries under Changed.)
 - **Model catalogue URLs follow no branch.** `perch-v2` pointed at HuggingFace
   `resolve/main/`, so an upstream edit would have failed every install's checksum at
   once. Pinned to the revision whose LFS metadata lists the same sha256 and size;
@@ -1235,8 +1385,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A species card says what is actually missing.** With the image cache
   configured it no longer tells you to pass `--image-cache-dir`; with it off
   it says so and names the flag for whoever set the station up.
+- **BirdWeather is never sent a position the station does not have.** A station with
+  a token and no (or an unparseable) `LATITUDE`/`LONGITUDE` built its client at
+  0°, 0° and posted every detection to a public map in the Gulf of Guinea. The client
+  now refuses a position that is missing, not finite, off the globe or exactly 0, 0
+  (a real equator or prime-meridian station has one coordinate non-zero and passes);
+  the station logs one warning at start-up saying which value is wrong and builds no
+  client. `--doctor` gains a "BirdWeather location" check for the same condition, and
+  uploads an earlier version had parked at 0, 0 are dropped with a warning instead
+  of replayed once the station gets a position.
+- **A failed read is no longer published as "nothing" on the API and the admin pages.**
+  `/api/v2/species/tracking` answered 200 with no species and `/api/v2/soundlevel`
+  "no observations yet" (both now 500); the data-quality panels drew "No detections in
+  database" and "Database quality looks good!"; Species storage drew "0 B across 0
+  clips"; the filter-test page, both rule lists, the notification history, the image
+  blacklist and the import history drew empty states. They show the could-not-load
+  state instead, each panel on its own.
+- **A refused bulk species action no longer reports "0 removed" and deletes the audio.**
+  The clips handler marked rows reclaimed, defaulted a failure to zero, and went on
+  to unlink every file of the species. It now stops at the first refusal, answers 200
+  with a toast (htmx discards a 5xx body) saying only what is certain, and writes no
+  audit row for a change that did not happen.
+- **An unreadable species list is no longer replaced by the one name just added.**
+  The include, exclude and whitelist handlers read the stored list with `.ok()`, so a
+  read error looked like "never written" and forty excluded species became one. Only
+  a list that was never written is empty now; the six handlers, Species storage and
+  the suspect-species report say so when a list cannot be read or written. The
+  daemon still treats an unreadable list as empty (logged at `warn`).
+- **`BIRDNET_CORS_ALLOWED_ORIGINS=*` no longer aborts the service at boot.**
+  tower-http panics on a wildcard and the workspace builds with `panic = "abort"`, so
+  the service restarted into the same panic. The entry is dropped with an `error`
+  log, valid entries are kept, and with none left the policy is same-origin only. A
+  wildcard is not turned into "any origin": that is what the setting's default
+  exists to prevent.
+- **Camera passwords stay out of the live-stream log.** `livestream.rs` logged
+  ffmpeg's stderr and the source's device at `warn`/`info` verbatim, and ffmpeg
+  names its RTSP input in its errors; both sites now redact as the capture path does.
+- **The audit log records the page-side mutations the API's already recorded.**
+  Deleting, locking, unlocking and relabelling from the Today list, the Clips page and
+  the Search bulk bar, review verdicts, quarantine approve/reject/delete, image
+  blacklist add/remove, notification prune, backup delete and the suspect-species
+  exclude each leave a row with the signed-in user as actor, only when the write took
+  effect. New action names: `detection.relabel`, `quarantine.*`, `image.blacklist.*`,
+  `notification.prune`, `data.backup.delete`.
+- **Tints were the wrong colour.** `color-mix(in oklch, ...)` over a neutral walks
+  the hue toward 0 or 250: a 16 % amber came out pink, a 16 % moss brown, and
+  the dark warning toast magenta. The 72 mixes are in OKLab now, and `tokens.mjs`
+  checks a tint keeps its hue.
+- **Focus squared off every rounded control.** `:focus-visible { border-radius:
+  2px }` reshaped 948 of 1,156 focus stops. A focused control keeps its shape
+  and a 2 px ring that is 3:1 against what is behind it (`focus.mjs`: 2,264
+  stops, 0 changed shape, 0 weak; 28 stops inside the browser's own audio bar are
+  not graded). Digits are tabular everywhere (`figures.mjs`: 879 figures, none
+  proportional; 280 of 879 were), and the sign-in fields have a 3:1 edge (4.89:1
+  light, 4.98:1 dark; the earlier fields measured 1.74:1 and 1.98:1).
+- **Pages jumped as they filled in.** Placeholders now have the shape of what
+  replaces them, and the weekly-report column no longer widens in steps. With
+  `cls.mjs`, 8 of 78 page loads are over 0.1 (15 on the baseline, by the UI branch's
+  run); the dashboard, a never-heard species page, the chord diagram and the footer
+  still shift. The onboarding wizard was
+  recomposed (what it saves is unchanged) and opens with the card that matches the
+  stored threshold, whether it is spelled `0.7`, `0.70` or `.7`.
+- **`analytics/phenology` and `analytics/abundance` answered 503 on every
+  station.** The handler asked the prepared statement for its column names before
+  running it; the `duckdb` crate panics on that, and the catch-all arm turned the
+  panic into "analytics database not configured". Both routes now answer, a failed
+  query task is a 500 and no longer a claim about configuration, and a test calls
+  both through a real DuckDB and holds each row to the keys `openapi.json` documents.
+- **More places no longer present a failed read as an empty or healthy one.**
+  Today's recording pill and review strip, the Recordings grid, the live feed's
+  "first ever" badge, Station Health's microphone panel, the merged-history note and
+  the account and session lists now say they could not read. A user or session
+  change that went through is reported as done even if the list cannot be redrawn,
+  a panicked Station tab says so instead of rendering blank, and a failed approval no
+  longer quotes the database's error.
+- **Inviting a viewer on Station → Access no longer shows the existing users twice.**
+- **Settings holds more values to what the daemon accepts.** Segment Duration (and
+  `PUT /api/v2/settings`) refuses a length outside 3 to 600 seconds, a fraction or a
+  unit, and its input allowed 5 to 60, which blocked saving the form on a station
+  whose valid value was 120. The API runs the same checks as the page (language,
+  BirdWeather token, recording window, clip format, info site). A fixed recording
+  window that does not end after it starts is refused, since the scheduler ignores
+  it and records all day; `--doctor` warns about one in `birdnet.conf`.
 
 ### Security
+
+- **The support bundle no longer carries the station's exact coordinates.**
+  `LATITUDE` and `LONGITUDE` are shown to one decimal (about 11 km) in the
+  configuration and wherever the journal printed them (BirdWeather's start-up line,
+  a settings change); a value that is not a number is masked. The bundle is written
+  to be pasted into a public issue, and four decimals are a house. A bundle made by
+  an earlier version has them exactly. `--doctor` was checked and prints neither.
+  Seen failing with the journal step replaced by a passthrough, and with the
+  configuration branch disabled.
 
 - **`duckdb` / `libduckdb-sys` 1.10506.0 → 1.10506.1, which takes the build-time `zip`
   from 6.0.0 to 9.0.5.** Three RustSec advisories against `zip` 6.0.0
@@ -1455,7 +1696,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one bit changed is refused); the other three platforms could not be, so
   those pins are the registry's bytes as served on 2026-10-14. `RELEASING.md`
   says how to update a pin.
-
+- **A station whose admin pages are open says so at start-up.** `docker compose up`
+  with a hand-made `.env` publishes the dashboard on every interface with no admin
+  password, and the first browser to finish the first-run wizard chooses it; the only
+  trace in the journal was a `debug` line. A station whose admin account has no
+  password now logs one `warn` naming what is open, to whom, and how to close it. A
+  station whose owner has chosen a password says nothing. The first-run flow itself
+  is unchanged.
+- **The session cookie's `Secure` flag follows the request, not `BNB_PUBLIC_URL`.**
+  It came from the scheme of that variable alone, so `--tls-mode` without it issued
+  a cookie without `Secure` on an encrypted connection (and cookies are not
+  port-scoped, so it also travelled to the plain-HTTP listener), while an `https://`
+  public URL made every sign-in `Secure`, including one from `http://192.168.1.5:8502`
+  where the browser drops the cookie and the sign-in loops. A request is HTTPS now
+  when it arrived on the station's own TLS listener, when a trusted proxy says so
+  (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or when `BNB_PUBLIC_URL`
+  is `https://` and the request's `Host` is that address. A reverse proxy should send
+  `X-Forwarded-Proto`; the nginx examples now do.
+- **A signed-out browser is no longer handed the private dashboard from cache.** The
+  service worker answers dashboard pages from cache first, and on a private station
+  that copy was the private page, returned before the server could say `303 /login`;
+  a sign-in form reached through a redirect was also cached under the page's own
+  address. The private-mode gate now marks what it serves, and its refusals,
+  `Cache-Control: no-store` (a handler's own value wins; an open station is
+  unchanged), and the worker refuses a redirected response.
+- **A feed address can no longer choose where its links lead.** `?base=` on
+  `/feeds/*` set the host of every item link, so a link on the station's own domain
+  could point at a phishing page. It is honoured only for the host the request was
+  addressed to or the host of `BNB_PUBLIC_URL`/`BNB_BASE_URL`; anything else falls back
+  to the default. A deployment whose proxy rewrites `Host` and whose readers pass
+  `?base=` must set `BNB_BASE_URL`. A lone carriage return in a species name no longer
+  starts a new iCalendar property.
 
 ## [0.17.1] - 2026-10-04
 
@@ -1570,7 +1841,7 @@ Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
   and with only the preflight reverted, at the rollback (preflight); the
   preflight fix without the syscall line at the rollback (SIGSYS).
 
-## [0.17.0] - 2026-09-25
+## [0.17.0] - 2026-10-03
 
 Where an entry names a test, that test was seen failing against the code
 before the fix. Each commit message says how, and names any part of its fix
@@ -8656,7 +8927,7 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
 ### Added
 
 - **`scripts/hardware-test.sh`** — an on-device acceptance harness, documented in
-  [`docs/book/field/hardware-test.md`](docs/book/field/hardware-test.md). It
+  [`docs/book/field/hardware-test.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/book/field/hardware-test.md). It
   installs from the
   published release, measures mean inference latency per 3 s chunk and peak SoC
   temperature under load, and then deliberately breaks the station — watchdog
@@ -10935,7 +11206,7 @@ only its reported version differs from 0.5.1.
   rather than 19 percentage points below it. Investigation, evidence
   and the comparison against BirdNET V2.4 (which BirdNET-Pi used and
   which still hits 93–97 % on the same WAV) live in the new ADR
-  [`docs/architecture/15-model-chunking.md`](docs/architecture/15-model-chunking.md).
+  [`docs/architecture/15-model-chunking.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/architecture/15-model-chunking.md).
 - `BirdNetModel::recommended_chunk_samples()` and
   `recommended_chunk_secs()` expose the per-model chunk size so the
   daemon can pick the right value without hard-coding model knowledge
@@ -11183,16 +11454,16 @@ x86_64 Linux.
 [0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
+[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.11.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
+[0.7.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.3.0
-[0.2.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.1.0...v0.2.0
+[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v.0.3.0...v0.4.0
+[0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v.0.3.0
 [0.1.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.1.0

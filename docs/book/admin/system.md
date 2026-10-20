@@ -7,7 +7,7 @@ The Settings **Health** tab (`/station`) is the station's vital-signs monitor �
 - **Status banner** — one line that stays green while nothing needs attention, and flips to amber naming the problem when storage runs low, the database integrity check fails, no audio sources are configured, or uploads are backed up.
 - **Audio sources** — a per-source panel fed live by the capture supervisor: a state chip (Live · Stalled · Backing off · Paused), a rolling 24-hour uptime strip, how long since audio last arrived, today's detections for the source and the current retry/backoff line. When the web server runs without the capture supervisor (`--web-only`, or tooling) it falls back to an *activity* view — how many detections each source produced today and how recently — and never fakes a live/stalled chip.
 - **Vitals** — CPU, memory, temperature (with a graceful "no sensor" state where a probe isn't available) and disk, each with a meter. The disk figure follows `df`'s "used of reachable space", so reserved blocks or a container quota don't understate it.
-- **Microphone health** — the station's own background **noise floor** per source over the last 7 days, and how far it has moved against that source's own 30-day average. This is the one signal that separates *a season going quiet* from *a microphone going deaf*: a failing capsule keeps its process alive and its status green, and shows up only as fewer detections — exactly like autumn. Ambient background does not stop when the birds do, so a large, sustained **drop** here, with nothing else changed, points at the equipment. The panel is absent until the station has sampled something, and says "building a baseline" rather than reporting a change it has nothing to compare against. No threshold is applied and no alert is sent: a noise floor moves for weather, season, a road and leaf-out, and a number picked without a season of real recordings behind it would fire on all of them. Same figures are exported as `birdnet_noise_floor_dbfs` and `birdnet_noise_floor_drift_db` for anyone who wants to draw their own line.
+- **Microphone health** — the station's own background **noise floor** per source over the last 7 days, and how far it has moved against that source's own 30-day average. This is the one signal that separates *a season going quiet* from *a microphone going deaf*: a failing capsule keeps its process alive and its status green, and shows up only as fewer detections — exactly like autumn. Ambient background does not stop when the birds do, so a large, sustained **drop** here, with nothing else changed, points at the equipment. The panel is absent until the station has sampled something (if the history cannot be read, the page says it could not load it rather than staying absent), and says "building a baseline" rather than reporting a change it has nothing to compare against. No threshold is applied and no alert is sent: a noise floor moves for weather, season, a road and leaf-out, and a number picked without a season of real recordings behind it would fire on all of them. Same figures are exported as `birdnet_noise_floor_dbfs` and `birdnet_noise_floor_drift_db` for anyone who wants to draw their own line.
 - **Pipeline** — the **last detection** (the plain-English answer to "is it actually working right now?" — every other gauge can read healthy while the station records silence, but a fresh detection proves the whole chain from microphone to database is alive), queued uploads (shown only when a network outage backs them up), the service uptime, total detections, and the **species filter**: whether the occurrence filter is running and how many species it currently admits. A filter admitting zero species means nothing the station hears can be recorded, and the status banner says so.
 - **Diagnostics** — a short checklist (audio sources · disk headroom · database integrity) with a link to the station's full `doctor` report at `/admin/doctor`: the same checks `birdnet-behavior --doctor` runs — audio device listing, model, clock, TLS, database, offsite, disk — run on request and read-only, with **Download as JSON** (`/admin/doctor.json`, what `--doctor-json` prints) and **Download a support bundle** (`/admin/support-bundle`, the same redacted archive `--support-bundle` writes) beside it. Both are behind the admin login, so a station in a field can be diagnosed from a phone without SSH.
 
@@ -29,12 +29,14 @@ for the monitoring playbook.
 
 ## The built-in doctor
 
-For a deeper, scriptable check, run the diagnostic from the CLI. It prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk space, tool dependencies and network — each problem with a concrete suggested fix.
+For a deeper, scriptable check, run the diagnostic from the CLI. It prints a one-screen report covering CPU, configuration, audio reachability, the model file, database integrity, disk space, whether a container's data would survive the container, tool dependencies and network — each problem with a concrete suggested fix.
 
 ```bash
-sudo -u birdnet birdnet-behavior --doctor          # bare metal
-docker compose exec birdnet birdnet-behavior --doctor   # Docker
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --doctor   # bare metal
+docker compose exec birdnet birdnet-behavior --doctor                                     # Docker
 ```
+
+(On bare metal the service runs as the account that ran the installer; there is no `birdnet` user, and the `systemctl show` call prints that account.)
 
 Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
 
@@ -43,6 +45,36 @@ For monitoring (Nagios / Zabbix / a Home Assistant command sensor / a Prometheus
 ```bash
 birdnet-behavior --doctor-json | jq .
 ```
+
+### The support bundle
+
+`birdnet-behavior --support-bundle [PATH]` (or **Download a support bundle** at `/admin/support-bundle`, behind the admin login) writes one `.tar.gz` holding the diagnostic report (`doctor.json` and `doctor.txt`), the station's version, a **redacted** copy of the configuration (`config.redacted`), the last 2000 journal lines, the station's own `errors.jsonl` (warnings and errors that survive a reboot), and `uname -a` and `df -h`; the download from the web UI also carries `recent.log`, the live log view's buffer. That is what a maintainer asks for in the first three replies to a bug report. Passwords, tokens and URL credentials are masked. **The station's `LATITUDE` and `LONGITUDE` are shown to one decimal place (about 11 km)** in the configuration section, and wherever the journal printed them (BirdWeather's start-up line, a settings change) the exact values are replaced by the same coarse form; a value that is not a number is masked. One decimal says which hemisphere, which season's daylight and which region's species, which is all a diagnosis needs; four decimals are a house. The bundle is written to be pasted into a public issue, but read it before you post it all the same. (Earlier builds printed the coordinates exactly.)
+
+### Before an upgrade: `--migration-report`
+
+Most database migrations only add columns and indexes. A few rewrite rows that are already on disk and cannot be undone from inside the database; migration 24, which folds each detection's chunk offset into its timestamp, is the one that has done so. `--migration-report` says what the next start would do to your history, before it does it:
+
+```bash
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --migration-report   # bare metal
+docker compose exec birdnet birdnet-behavior --migration-report                                     # Docker
+```
+
+For each pending migration that rewrites rows it prints what would move, by how much, how many rows are left alone and why, and the date range involved. It opens the database read-only and changes nothing, so it is safe on a live station. If there is no database yet it says so and stops; if no pending migration rewrites rows it says that, adding that schema-only migrations may still be pending.
+
+The rewrite itself happens on the next normal start, and just before it the database is copied to `<db>.pre-migration-<version>.backup`, so undoing it is a file move. The copy needs about as much free space as the database. A backup that cannot be written stops the migration rather than proceeding without one; a station whose disk cannot hold the copy can set `BIRDNET_SKIP_MIGRATION_BACKUP=1` and accept that the earlier timestamps cannot be recovered (see [Configuration](../getting-started/configuration.md)).
+
+### The species totals: `--rebuild-species-summary`
+
+The species list and the per-species charts read a maintained table of totals (`species_summary`) rather than counting the whole history on every page load. It is derived data. `--rebuild-species-summary` recomputes it from the detections and exits:
+
+```bash
+sudo -u "$(systemctl show -p User --value birdnet-behavior)" birdnet-behavior --rebuild-species-summary   # bare metal
+docker compose exec birdnet birdnet-behavior --rebuild-species-summary                                     # Docker
+```
+
+It prints how many species-per-hour buckets it rebuilt and how many had disagreed with the detections beforehand, and the detections themselves are not touched. If the summary still disagrees after a full rebuild it exits with an error rather than reporting success, which means something is writing to `detections` in a way the summary's triggers cannot see.
+
+You should rarely need it. `--doctor` reports a disagreement under "Species summary" and names this command, and the running station also checks for one once a day and, when it finds drift, rebuilds the summary itself.
 
 ## How much memory the analytics engine gets
 
@@ -148,9 +180,15 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 | `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `whitelist.add`, `whitelist.remove`, `threshold.set`, `threshold.delete`, `detections.delete`, `clips.delete` |
 | `audio.` | `source.create`, `source.update`, `source.delete`, `source.restart`, `source.listen_default` |
 | `rule.` | `create`, `delete`, `toggle`, `import` |
-| `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run` |
+| `detection.` | `delete`, `lock`, `unlock`, `review`, `relabel`, `comment.add`, `comment.delete` |
+| `quarantine.` | `approve`, `reject`, `delete` |
+| `image.` | `blacklist.add`, `blacklist.remove` |
+| `notification.` | `prune` |
+| `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run`, `backup.delete` |
 | `system.` | `restart`, `update.apply` |
 | `today.` | `layout.change` (the block and the move, e.g. `nudge hide`) |
+
+The `detection.` rows are written for the same change whichever way it was made, and say which way: `via=api` for the write API, otherwise `via=` the page (`today`, `recordings`, `search`, `review`, `detection`). Search's bulk bar records one row per detection it changed. A change that did not happen (a row already gone, a write the database refused) records nothing; a refused write is in the log at `warn`.
 
 `species.detections.delete` and `species.clips.delete` are the bulk actions on
 [Species storage](settings.md#species-storage). Each records how many rows it

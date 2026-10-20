@@ -10,6 +10,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let rtsp = get_setting(s, "rtsp_url");
     let rtsp_urls = get_setting(s, "rtsp_urls");
     let seg = get_setting(s, "segment_duration");
+    // The browser refuses to submit a form whose number input is outside its
+    // own `min`/`max`, so these are `validate()`'s bounds, not a tidier range.
+    let seg_min = birdnet_core::config::validate::SEGMENT_DURATION_MIN;
+    let seg_max = birdnet_core::config::validate::SEGMENT_DURATION_MAX;
     let fmt = get_setting(s, "audio_format");
     let fmt_wav = if fmt == "wav" { " selected" } else { "" };
     let fmt_mp3 = if fmt == "mp3" { " selected" } else { "" };
@@ -53,7 +57,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div class="grid-2">
       <div>
         <label for="segment_duration">Segment Duration (seconds)</label>
-        <input id="segment_duration" name="segment_duration" type="number" value="{seg}" min="5" max="60" class="bnb-w-num">
+        <input id="segment_duration" name="segment_duration" type="number" value="{seg}" min="{seg_min}" max="{seg_max}" class="bnb-w-num">
         <p class="hint">Length of each recording chunk for analysis (BirdNET-Pi: RECORDING_LENGTH)</p>
       </div>
       <div>
