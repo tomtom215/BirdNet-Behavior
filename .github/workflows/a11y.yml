@@ -121,6 +121,28 @@ jobs:
         # species-name column at 0 px on a phone, on pages every other gate
         # called clean. Both viewports, both themes.
         run: node layout.mjs
+      - name: Design-token gate (what the browser paints, graded)
+        working-directory: tools/visual-qa
+        # Reads the colours the browser paints after color-mix(), var() and the
+        # theme cascade, not the stylesheet's source: confidence tiers, tints that
+        # keep their hue, the chart palette, the sign-in fields, the theme-color
+        # bar. It is the check that a stylesheet's literals cannot answer.
+        run: node tokens.mjs
+      - name: Reduced-motion gate (the OS and the operator's setting both stop motion)
+        working-directory: tools/visual-qa
+        # No animation may be running on any route under either request, and a
+        # control run with neither must find some, so the probe is known to see.
+        run: node motion.mjs
+      - name: Focus gate (a focused control keeps its shape and shows a ring)
+        working-directory: tools/visual-qa
+        # Tabs through every route in both themes and reads the computed style
+        # of the focused element. A `border-radius` written onto :focus-visible
+        # squared off 948 of 1,156 stops while every other gate called the pages
+        # clean.
+        run: node focus.mjs
+      - name: Figures gate (numbers are set in tabular figures)
+        working-directory: tools/visual-qa
+        run: node figures.mjs --fail
       - name: Base-path gate (served under a prefix, nothing leaves it)
         working-directory: tools/visual-qa
         run: |

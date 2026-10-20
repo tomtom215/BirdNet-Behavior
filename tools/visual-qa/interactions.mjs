@@ -1031,6 +1031,40 @@ async function liveLogsConnectCleanly(page) {
   check('live logs: connecting logs no error', errs.length === 0, JSON.stringify(errs).slice(0, 300));
 }
 
+/** The wizard opens with the card that matches the threshold the station has.
+ *
+ * The cards carry `0.9`, `0.6`, `0.7` and `0.4`; the stored value can be spelled
+ * `0.70` (a hand-edited config) or `.7`. The script that picks the card compared
+ * the two as strings, so a station on the default read as "none of the above"
+ * whenever the value was not spelled exactly as the card is. Driven by serving
+ * the real page with the hidden input's value rewritten, so the page's own script
+ * does the choosing. The counterpart, a value no card carries, must leave every
+ * card unselected: a blanket "select Balanced" would pass the first half alone.
+ */
+async function wizardSelectsTheCardForTheStoredThreshold(page) {
+  let stored = '';
+  await page.route('**/onboarding', async (route) => {
+    const resp = await route.fetch();
+    const html = await resp.text();
+    const body = html.replace(/id="ob-conf" value="[^"]*"/, `id="ob-conf" value="${stored}"`);
+    await route.fulfill({ response: resp, body });
+  });
+  for (const [value, expectCard] of [['0.7', '0.7'], ['0.70', '0.7'], ['.7', '0.7'], ['0.9', '0.9'], ['0.75', null]]) {
+    stored = value;
+    await page.goto(`${BASE}/onboarding`, { waitUntil: 'domcontentloaded' });
+    const got = await page.evaluate(() => ({
+      input: document.getElementById('ob-conf')?.value,
+      selected: [...document.querySelectorAll('[data-radio="conf"].sel')].map((c) => c.dataset.value),
+    }));
+    const want = expectCard === null ? [] : [expectCard];
+    check(
+      `wizard: a stored threshold of ${value} selects ${expectCard === null ? 'no card' : `the ${expectCard} card`}`,
+      got.input === value && JSON.stringify(got.selected) === JSON.stringify(want),
+      `input "${got.input}", selected ${JSON.stringify(got.selected)}, wanted ${JSON.stringify(want)}`,
+    );
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1',
@@ -1050,6 +1084,7 @@ async function main() {
     ['bulk actions', bulkActions],
     ['destructive controls', destructiveControlDisables],
     ['wizard cards by keyboard', wizardCardsByKeyboard],
+    ['wizard selects the stored threshold', wizardSelectsTheCardForTheStoredThreshold],
     ['server toasts', serverToasts],
     ['activity clock', polarClock],
     ['search address bar', searchAddressBar],
