@@ -48,16 +48,13 @@ use super::escape_html;
 static PAGE_HTML: crate::seal::Sealed =
     crate::seal::Sealed::new(include_str!("../../../templates/migration.html"));
 
-/// Empty-state body for a year with no migratory detections yet.
+/// Empty-state body for a diversity strip with no weeks yet. (The ridgeline's is
+/// [`super::empty_states::no_migrants`].)
 ///
 /// Returned *from the compute closure* rather than used as `cached_fragment`'s
 /// fallback — see [`FRAGMENT_ERR`]. `cached_fragment`'s fallback is what a
 /// **failed** computation renders, and pointing it at this string is what made
 /// a DuckDB or SQLite error on this tab read as a quiet year.
-const RIDGELINE_EMPTY: &str =
-    r#"<p class="bnb-meta">No migratory species detected yet this year.</p>"#;
-/// Empty-state body for a diversity strip with no weeks yet. See
-/// [`RIDGELINE_EMPTY`].
 const DIVERSITY_EMPTY: &str = r#"<p class="bnb-meta">No data for diversity bars yet.</p>"#;
 /// What a *failed* fragment renders, matching the three sibling analytics pages
 /// (`heatmap`, `correlation`, `timeseries_dash`) which all use this wording.
@@ -182,7 +179,7 @@ fn collect_ridges(
 
 /// `None` means **the query failed**; an empty year returns its own body.
 ///
-/// This used to return `None` for both, with `RIDGELINE_EMPTY` as
+/// This used to return `None` for both, with the empty body as
 /// `cached_fragment`'s fallback, so a database error on the Migration tab was
 /// reported to the operator as "No migratory species detected yet this year."
 /// The three sibling analytics pages already follow the contract restored
@@ -194,7 +191,7 @@ fn compute_ridgeline(state: &AppState) -> Option<String> {
         .with_read_db(|conn| collect_ridges(conn, year, 12))
         .ok()?;
     if ridges.is_empty() {
-        return Some(RIDGELINE_EMPTY.to_string());
+        return Some(super::empty_states::no_migrants());
     }
     Some(render_ridgeline_svg(&ridges, current_week(), state.names()))
 }

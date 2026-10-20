@@ -252,6 +252,35 @@ for (const theme of ['light', 'dark']) {
   rows.push(`${worst <= 2 ? 'PASS' : 'FAIL'}  ${`${theme} chosen over an OS ${other}: bar follows the page`.padEnd(58)} ${live.join(' ')} vs rgb(${bg2}) off by ${worst} (<= 2)`);
   if (worst > 2) failures.push(`${theme} chosen with the OS in ${other}: theme-color metas are ${live.join(', ')}, --bg is rgb(${bg2})`);
   await ctx2.close();
+
+  // A text field has to look like one (WCAG 1.4.11: the boundary a person needs
+  // to find the control is 3:1 against what it sits on). The sign-in fields were
+  // filled a grey one step off the card with a hairline edge, and read as
+  // disabled, which axe does not grade. Measured on the real controls: the
+  // edge, composited over the card, against the card; or, if the edge is not
+  // enough, the fill against the card.
+  const ctx3 = await browser.newContext({ viewport: { width: 1000, height: 700 }, colorScheme: theme });
+  await ctx3.addInitScript((t) => { try { localStorage.setItem('theme', t); } catch (e) {} }, theme);
+  const p3 = await ctx3.newPage();
+  await p3.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await p3.waitForLoadState('networkidle').catch(() => {});
+  await resolver(p3);
+  for (const id of ['username', 'password']) {
+    const m = await p3.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      const cs = getComputedStyle(el);
+      // The card is a gradient in dark (no background-colour of its own), so
+      // its lighter end is read from the token it is drawn with.
+      const card = getComputedStyle(document.documentElement).getPropertyValue('--card-top');
+      return { edge: cs.borderTopColor, width: parseFloat(cs.borderTopWidth), fill: cs.backgroundColor, card };
+    }, `#${id}`);
+    const cardRgb = await p3.evaluate((c) => window.__resolve(c), m.card);
+    const edge = await over(m.edge, cardRgb, p3);
+    const fill = await over(m.fill, cardRgb, p3);
+    const best = Math.max(m.width > 0 ? contrast(edge, cardRgb) : 1, contrast(fill, cardRgb));
+    check(`${theme} sign-in ${id} field is findable against the card (1.4.11)`, best, 3, `edge ${m.width}px`);
+  }
+  await ctx3.close();
 }
 
 await browser.close();

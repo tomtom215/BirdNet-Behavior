@@ -835,7 +835,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .progress-bar { height: 100%; border-radius: var(--r-2xs); background: var(--moss); transition: width var(--dur-slow); }
 
 .empty-state { text-align: center; padding: 48px 24px; color: var(--fg-3); }
-.empty-state svg { width: 48px; height: 48px; margin-bottom: var(--space-12); opacity: .5; }
+/* The illustrations are drawn on a 120-unit canvas; at 48 px square and half
+   opacity they were a smudge above the sentence they were meant to introduce.
+   Seventy-two px tall, full strength, the line art reads as a picture. */
+.empty-state svg { width: auto; height: 72px; margin-bottom: var(--space-12); opacity: .9; }
+.empty-state .es-sub { max-width: 60ch; margin-inline: auto; }
 /* Failure, not emptiness (see routes/pages/error_states.rs). Reuses the
    empty-state shell so the two never disagree on spacing, and re-tones it into
    the --rare family so an operator can tell at a glance which of the two they
@@ -1766,10 +1770,15 @@ footer a:hover { color: var(--moss-ink); }
   font-size: var(--fs-base);
   padding: 11px 12px;
   border-radius: var(--r-md);
-  background: var(--bg-2);
+  /* A field is a white well with an edge you can find (3:1, WCAG 1.4.11). It was
+     filled a grey one step off the card with a hairline edge, 1.74:1 in light
+     and 1.98:1 in dark, which is what a disabled field looks like, and axe does
+     not grade that (tools/visual-qa/tokens.mjs does). */
+  background: var(--surface);
+  border-color: var(--fg-4);
 }
 .login-field input:focus {
-  background: var(--surface);
+  border-color: var(--moss);
 }
 .login-field__withtoggle { position: relative; display: flex; align-items: center; }
 .login-field__withtoggle input { padding-right: 60px; flex: 1; }
@@ -1803,8 +1812,8 @@ footer a:hover { color: var(--moss-ink); }
   appearance: none;
   width: 15px; height: 15px;
   border-radius: 4px;
-  border: var(--bw) solid var(--border-2);
-  background: var(--bg-2);
+  border: var(--bw) solid var(--fg-4);
+  background: var(--surface);
   display: grid; place-items: center;
   cursor: pointer;
   transition: background var(--dur-fast), border-color var(--dur-fast);
@@ -3718,6 +3727,14 @@ a.spp-inherit    { color: inherit; }
 .login-logo      { color: var(--fg); }
 .login-vrule     { height: 16px; align-self: center; }
 .login-main      { display: grid; place-items: center; min-height: calc(100dvh - 56px - 64px); padding: 36px 18px; }
+/* The one page a visitor sees before anything else is branded: a wash of the
+   station's green coming down from the top edge, and the mark a size up. Painted
+   once, static, no filter. */
+.login-page      { background: radial-gradient(70% 46% at 50% 0%, color-mix(in oklab, var(--moss-soft) 70%, transparent) 0%, transparent 100%), var(--bg); background-repeat: no-repeat; }
+/* `--moss-soft` in dark is a 26 % saturated green, made for a pill; as a wash
+   across the top of a black page it is a bruise. A third of it is a glow. */
+:root[data-theme="dark"] .login-page { background: radial-gradient(70% 46% at 50% 0%, color-mix(in oklab, var(--moss-soft) 30%, transparent) 0%, transparent 100%), var(--bg); background-repeat: no-repeat; }
+.login-mark      { width: 30px; height: 30px; color: var(--moss); }
 .login-brand     { font-size: var(--fs-lg); }
 .login-brand-sub { color: var(--fg-3); }
 .login-card__head .login-h1 { font-size: 38px; line-height: 1.05; letter-spacing: -0.012em; margin: 0; }
@@ -3738,6 +3755,10 @@ a.login-about    { color: var(--fg-3); }
 .mig-swatch.spring { background: color-mix(in oklab, var(--moss) 60%, transparent); }
 .mig-swatch.fall   { background: color-mix(in oklab, var(--dawn) 60%, transparent); }
 .mig-ridge       { min-height: 360px; }
+/* The 360 px is reserved so the chart does not jump in; an empty year has no
+   chart to jump in, and the reservation was a blank card under one line of text. */
+.mig-ridge:has(.empty-state) { min-height: 0; }
+.mig-ridge .empty-state { padding: var(--space-24) var(--space-24); }
 .mig-divider     { margin-top: var(--space-14); padding-top: 14px; border-top: var(--bw) solid var(--hairline); }
 .mig-divider-head { display: flex; justify-content: space-between; margin-bottom: var(--space-6); }
 .mig-diversity   { min-height: 70px; }
@@ -4624,6 +4645,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: var(--bw) solid var(--hairlin
 .td-station-link { display: inline-block; margin-top: var(--space-10); }
 .td-rail-hr { margin: 14px 0 12px; }
 .td-look-eb { margin-bottom: var(--space-6); }
+.td-customise { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-4); margin-top: var(--space-4); }
 .td-check-eb { margin-bottom: var(--space-8); }
 
 /* ── Recordings home (Recordings_home.html) ──────────────────────────────────
