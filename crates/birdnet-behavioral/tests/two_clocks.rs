@@ -16,6 +16,8 @@
 //! These gates run against a real `DuckDB` with the real view, because the
 //! failure they describe is a *value* being wrong, not a string being absent.
 
+#![cfg(feature = "analytics")]
+
 use birdnet_behavioral::connection::AnalyticsDb;
 
 /// 2026-10-25, Europe/Berlin: the offset moves +2 → +1 at 01:00 UTC, so local
