@@ -254,7 +254,7 @@ fn resolve(req: &Request<Body>, trusted: &TrustedProxies) -> crate::client_ip::R
 }
 
 /// The address at the far end of the TCP connection (loopback when the request
-/// carries no `ConnectInfo`; see [`extract_ip`]).
+/// carries no `ConnectInfo`; see `extract_ip`).
 fn peer_ip(req: &Request<Body>) -> IpAddr {
     req.extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()

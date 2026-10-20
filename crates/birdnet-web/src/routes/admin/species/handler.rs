@@ -105,7 +105,7 @@ pub struct SpeciesNameForm {
 /// Add a species to the exclusion list and return the updated partial.
 ///
 /// A list the database could not read or write is answered with a toast and
-/// the page left as it was ([`list_changed`]), and is not audited: the audit
+/// the page left as it was (`list_changed`), and is not audited: the audit
 /// log records what changed.
 pub async fn add_exclude(
     State(state): State<AppState>,
@@ -539,7 +539,7 @@ pub(crate) fn try_species_lists(
 /// A list that cannot be read is empty **for the daemon**, one list at a time,
 /// and is logged at `warn`: the provider's signature has no way to say "I do
 /// not know", and detection continuing is the lesser harm. The pages do not
-/// share that fallback; they use [`try_species_lists`].
+/// share that fallback; they use `try_species_lists`.
 #[must_use]
 pub fn configured_species_lists(
     state: &AppState,

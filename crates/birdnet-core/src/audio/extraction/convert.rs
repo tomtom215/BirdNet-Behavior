@@ -206,7 +206,7 @@ fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), Extractio
 /// settings.
 ///
 /// −3000 Hz rather than upstream's halving because this project's shift is
-/// linear (`afreqshift`, see [`freq_shift_filter`]) rather than a ratio: it
+/// linear (`afreqshift`, see `freq_shift_filter`) rather than a ratio: it
 /// moves an 8 kHz song to 5 kHz — measured, on an 8 kHz tone, in
 /// `apply_freq_shift_moves_the_pitch_by_that_many_hertz_and_keeps_the_length` —
 /// while leaving a 2 kHz blackbird at a strange but still recognisable pitch.
