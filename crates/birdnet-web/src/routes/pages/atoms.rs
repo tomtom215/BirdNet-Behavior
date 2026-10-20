@@ -172,8 +172,9 @@ pub(crate) fn avatar(common: &str, shown: &str, scientific: &str, size: &str) ->
     )
 }
 
-/// Confidence bar with the design's colour thresholds:
-/// `> 0.90` moss, `> 0.75` dawn, else neutral.
+/// Confidence bar. The colour is the tier from [`super::confidence::tier`] for
+/// a station whose cut-off is `floor` — the one rule every surface shares — and
+/// `--conf-high` / `--conf-mid` / `--conf-low` paint it.
 ///
 /// # Why it reads `97%` and not `0.97`
 ///
@@ -190,18 +191,28 @@ pub(crate) fn avatar(common: &str, shown: &str, scientific: &str, size: &str) ->
 /// bird — does not say what it measures.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub(crate) fn conf_bar(value: f64) -> String {
+pub(crate) fn conf_bar(value: f64, floor: f64) -> String {
     let v = value.clamp(0.0, 1.0);
-    let cls = if v > 0.90 {
-        "high"
-    } else if v > 0.75 {
-        "mid"
-    } else {
-        ""
-    };
+    let tier = super::confidence::tier(v, floor);
     let pct = (v * 100.0).round() as i64;
     format!(
-        r#"<span class="bnb-conf {cls}" role="img" aria-label="Confidence {pct}% — how sure the identifier was"><span class="track"><span class="fill" data-style="width:{pct}%"></span></span><span class="val">{pct}%</span></span>"#,
+        r#"<span class="bnb-conf {cls}" role="img" aria-label="Confidence {pct}%, {word} — how sure the identifier was"><span class="track"><span class="fill" data-style="width:{pct}%"></span></span><span class="val">{pct}%</span></span>"#,
+        cls = tier.class(),
+        word = tier.word(),
+    )
+}
+
+/// The compact confidence badge used in tables and review queues: the same tier
+/// as [`conf_bar`], drawn as a pill. `percent` is 0–100.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn conf_pill(percent: f64, floor: f64) -> String {
+    let tier = super::confidence::tier_of_percent(percent, floor);
+    format!(
+        r#"<span class="bnb-conf-pill {cls}">{pct}%<span class="sr-only"> {word}</span></span>"#,
+        cls = tier.class(),
+        word = tier.word(),
+        pct = percent.clamp(0.0, 100.0).round() as i64,
     )
 }
 
@@ -382,11 +393,28 @@ mod tests {
         assert_eq!(colours.len(), 5, "every series needs its own colour");
     }
 
+    /// The bar and the pill use the one tier function; their classes agree for
+    /// the same score and the same station.
+    #[test]
+    fn the_bar_and_the_pill_agree_on_the_tier() {
+        for pct in 0..=100 {
+            let f = f64::from(pct) / 100.0;
+            let bar = conf_bar(f, 0.70);
+            let pill = conf_pill(f64::from(pct), 0.70);
+            let tier = crate::routes::pages::confidence::tier(f, 0.70).class();
+            assert!(bar.contains(&format!("bnb-conf {tier}\"")), "{pct}: {bar}");
+            assert!(
+                pill.contains(&format!("bnb-conf-pill {tier}\"")),
+                "{pct}: {pill}"
+            );
+        }
+    }
+
     #[test]
     fn conf_bar_thresholds() {
-        assert!(conf_bar(0.95).contains("bnb-conf high"));
-        assert!(conf_bar(0.80).contains("bnb-conf mid"));
-        assert!(conf_bar(0.50).contains("bnb-conf "));
+        assert!(conf_bar(0.95, 0.70).contains("bnb-conf high"));
+        assert!(conf_bar(0.85, 0.70).contains("bnb-conf mid"));
+        assert!(conf_bar(0.72, 0.70).contains("bnb-conf low"));
     }
 
     /// The number beside a bird has to say what it is.
@@ -397,7 +425,7 @@ mod tests {
     /// name, because `95%` read aloud on its own is no better than `0.95`.
     #[test]
     fn a_confidence_reads_as_a_percentage_and_says_what_it_measures() {
-        let bar = conf_bar(0.95);
+        let bar = conf_bar(0.95, 0.70);
         assert!(
             bar.contains(">95%<"),
             "the visible value must be percent: {bar}"
@@ -417,7 +445,7 @@ mod tests {
     /// control.
     #[test]
     fn the_bar_and_its_number_round_together() {
-        let bar = conf_bar(0.955);
+        let bar = conf_bar(0.955, 0.70);
         assert!(bar.contains("width:96%"), "{bar}");
         assert!(bar.contains(">96%<"), "{bar}");
     }

@@ -137,13 +137,14 @@ async fn detection_reviews_queue_partial(
                 birdnet_db::sqlite::detection_reviews_page(conn, status, RECENT_LIMIT, offset)?;
             let matching = birdnet_db::sqlite::detection_review_total(conn, status)?;
             let counts = birdnet_db::sqlite::detection_review_counts(conn)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((pending, recent, matching, counts))
+            let floor = super::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((pending, recent, matching, counts, floor))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((pending, recent, matching, (confirmed, rejected)))) => {
+        Ok(Ok((pending, recent, matching, (confirmed, rejected), floor))) => {
             let html = render_queue(
                 &pending,
                 &recent,
@@ -158,6 +159,7 @@ async fn detection_reviews_queue_partial(
                     matching,
                 },
                 &names,
+                floor,
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -190,6 +192,7 @@ fn render_queue(
     rejected: i64,
     view: QueueView,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) -> String {
     let mut html = String::with_capacity(8192);
 
@@ -210,8 +213,9 @@ fn render_queue(
             "<p class=\"dr-empty\">Every recent detection has a verdict. Nice and tidy.</p>",
         );
     } else {
+        html.push_str(&super::confidence::legend(floor));
         for d in pending {
-            render_pending_row(&mut html, d, names);
+            render_pending_row(&mut html, d, names, floor);
         }
     }
     html.push_str("</div>");
@@ -249,6 +253,7 @@ fn render_pending_row(
     html: &mut String,
     d: &birdnet_db::sqlite::UnreviewedDetection,
     names: &birdnet_core::i18n::NameLocalizer,
+    floor: f64,
 ) {
     // `com` is the identity the form posts back; `shown` is what is read.
     let com = escape_html(&d.com_name);
@@ -257,14 +262,7 @@ fn render_pending_row(
     let date = escape_html(&d.date);
     let time = escape_html(&d.time);
     let enc_com = simple_url_encode(&d.com_name);
-    let conf_pct = d.confidence * 100.0;
-    let conf_cls = if conf_pct >= 80.0 {
-        "high"
-    } else if conf_pct >= 50.0 {
-        "mid"
-    } else {
-        "low"
-    };
+    let conf = super::atoms::conf_pill(d.confidence * 100.0, floor);
     // Per-row form: hidden inputs carry the (possibly apostrophe-bearing)
     // identity safely as escaped attribute values; the clicked submit button's
     // name=status value selects the verdict.
@@ -281,7 +279,7 @@ fn render_pending_row(
     <div class=\"dr-row-sci\">{sci}</div>\
     <div class=\"dr-row-meta\">{date} · {time}</div>\
   </div>\
-  <span class=\"conf {conf_cls}\">{conf_pct:.0}%</span>\
+  {conf}\
   <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"bnb-btn dr-confirm-btn\">&#10003; Confirm</button>\
   <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"bnb-btn ghost dr-nowrap\">&#10007; Reject</button>\
 </form>"

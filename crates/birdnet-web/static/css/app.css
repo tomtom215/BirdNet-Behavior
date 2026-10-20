@@ -112,6 +112,24 @@
   --rare:        oklch(50% 0.16 28);    /* 58% was 3.7:1 on --rare-soft (DD-29) */
   --rare-soft:   oklch(94% 0.05 28);
 
+  /* Confidence tiers. The rule that picks a tier is one function
+     (routes/pages/confidence.rs); these are only what it paints with.
+       high = 90 % and up        green
+       mid  = sure, clear of the station's own cut-off   neutral green-grey
+       low  = within ten points of the cut-off (or below it)   amber
+     The scale never uses --rare: a detection the station accepted at 72 % is
+     not a fault. Fills are held to 3:1 against the bar's track and the -ink
+     text to 4.5:1 on its -soft fill (see tools/visual-qa/tokens.mjs). */
+  --conf-high:      var(--moss);
+  --conf-high-soft: var(--moss-soft);
+  --conf-high-ink:  var(--moss-ink);
+  --conf-mid:       oklch(58% 0.025 150);
+  --conf-mid-soft:  var(--surface-2);
+  --conf-mid-ink:   var(--fg-2);
+  --conf-low:       oklch(62% 0.125 74);
+  --conf-low-soft:  var(--dawn-soft);
+  --conf-low-ink:   var(--dawn-ink);
+
   --paper:       oklch(96% 0.012 75);
   --night:       oklch(28% 0.04 270);
 
@@ -193,9 +211,9 @@
   --danger:       var(--rare);
   --radius:       var(--r-md);
   --input-bg:     var(--surface);
-  --conf-high-bg: var(--moss-soft);
-  --conf-mid-bg:  var(--dawn-soft);
-  --conf-low-bg:  var(--rare-soft);
+  --conf-high-bg: var(--conf-high-soft);
+  --conf-mid-bg:  var(--conf-mid-soft);
+  --conf-low-bg:  var(--conf-low-soft);
 }
 
 /* ── Tokens · dark ────────────────────────────────────────────────────── */
@@ -224,6 +242,12 @@
 
   --rare:        oklch(74% 0.20 25);
   --rare-soft:   oklch(28% 0.12 25);
+
+  /* Dark confidence fills are stepped for the dark surface, not inherited:
+     --moss here is a 78 % lime that glows beside the grey text it sits on. */
+  --conf-high:   oklch(70% 0.12 150);
+  --conf-mid:    oklch(68% 0.025 150);
+  --conf-low:    oklch(80% 0.14 75);
 
   --paper:       oklch(18% 0.010 250);
   --night:       oklch(8% 0.020 250);
@@ -471,13 +495,34 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   object-fit: cover; border-radius: inherit;
 }
 
-/* Confidence bar */
+/* Confidence: the bar, the pill and the key all paint from the same three
+   tiers (--conf-high / -mid / -low; the rule is routes/pages/confidence.rs).
+   Every confidence carries a class, so a bar can never fall back to a colour
+   of its own. */
 .bnb-conf { display: inline-flex; align-items: center; gap: 6px; }
 .bnb-conf .track { width: 56px; height: 4px; border-radius: 2px; background: var(--bg-2); overflow: hidden; display: inline-block; }
-.bnb-conf .fill  { display: block; height: 100%; background: var(--fg-3); }
-.bnb-conf.high .fill { background: var(--moss); }
-.bnb-conf.mid  .fill { background: var(--dawn); }
-.bnb-conf .val { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); }
+.bnb-conf .fill  { display: block; height: 100%; background: var(--conf-mid); }
+.bnb-conf.high .fill { background: var(--conf-high); }
+.bnb-conf.mid  .fill { background: var(--conf-mid); }
+.bnb-conf.low  .fill { background: var(--conf-low); }
+.bnb-conf .val { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; }
+
+.bnb-conf-pill { display: inline-block; padding: 2px 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
+.bnb-conf-pill.high { background: var(--conf-high-soft); color: var(--conf-high-ink); }
+.bnb-conf-pill.mid  { background: var(--conf-mid-soft);  color: var(--conf-mid-ink); }
+.bnb-conf-pill.low  { background: var(--conf-low-soft);  color: var(--conf-low-ink); }
+
+/* The key, printed once above the first list of bars. It states the numbers
+   this station uses (its own cut-off moves the amber edge), so it is built by
+   `confidence::legend`, not typed here. */
+.bnb-conf-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin: 0 0 var(--pad-2); font-size: var(--fs-xs); color: var(--fg-3); line-height: 1.5; }
+.bnb-conf-key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.bnb-conf-key i { display: inline-block; width: 16px; height: 4px; border-radius: 2px; background: var(--conf-mid); }
+.bnb-conf-key.high i { background: var(--conf-high); }
+.bnb-conf-key.mid  i { background: var(--conf-mid); }
+.bnb-conf-key.low  i { background: var(--conf-low); }
+.bnb-conf-cut { margin-left: auto; white-space: nowrap; }
+@media (max-width: 520px) { .bnb-conf-cut { margin-left: 0; } }
 
 /* ── Shell: top nav ───────────────────────────────────────────────────── */
 .topnav {
@@ -4291,7 +4336,25 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
    `grid-template-columns: 50px 32px 0px 88px 86px 30px`.
    Same specificity, later in the file, so this one wins. */
 @media (max-width: 720px) {
-  #detections-table .feed-row { grid-template-columns: 46px 30px minmax(0,1fr) 30px; gap: 9px; }
+  #detections-table .feed-row { grid-template-columns: 46px 30px minmax(0,1fr) 30px; gap: 4px 9px; align-items: center; }
+  /* A phone row is two lines, and the second is the confidence.
+     Measured at 390 px: the species name, the one thing the row is for, ran
+     `Black-capped Chickad…` and `White-breasted Nutha…` into an ellipsis for the
+     commonest birds, and the confidence — the number that says how far to trust
+     the identification — was `display: none` here, so a phone could not read it
+     at all. The name now wraps (it is allowed two lines before anything is cut)
+     and the confidence takes the row's second line, under the scientific name.
+     Every cell is placed by area, so the avatar, time and play button centre on
+     the pair of lines rather than on the first one. */
+  #detections-table .feed-row { grid-template-areas: "ago av who play" "ago av conf play"; }
+  #detections-table .feed-row > .ago { grid-area: ago; }
+  #detections-table .feed-row > .bnb-avatar { grid-area: av; }
+  #detections-table .feed-row > .who { grid-area: who; }
+  #detections-table .feed-row > .bnb-conf { grid-area: conf; display: inline-flex; justify-self: start; }
+  #detections-table .feed-row > .x-fplay,
+  #detections-table .feed-row > .dp-noclip { grid-area: play; }
+  #detections-table .feed-row .who .name { flex-wrap: wrap; row-gap: 0; }
+  #detections-table .feed-row .who .name > a { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: break-word; }
 }
 /* Fixed-size play affordance replacing native <audio> (native controls render
    at different widths per row → they never aligned) */

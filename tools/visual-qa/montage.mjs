@@ -38,7 +38,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
 const tmp = path.resolve(dir, '.montage.html');
 fs.writeFileSync(tmp, html);
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const page = await browser.newPage({ viewport: { width: cols * (thumbW + 14) + 28, height: 1000 }, deviceScaleFactor: 1 });
 await page.goto('file://' + tmp, { waitUntil: 'networkidle' });
 await page.waitForTimeout(800);

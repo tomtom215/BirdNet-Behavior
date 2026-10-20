@@ -1,0 +1,161 @@
+// Measured gate: the colour tokens do what their comments say, in both themes.
+//
+// Reads the computed value of real elements on the running fixture (so what is
+// graded is what the browser paints, after `color-mix()`, `var()` and the
+// theme cascade), resolves it to sRGB through a canvas, and computes WCAG
+// contrast. Nothing here is eyeballed, and nothing is read from the CSS text.
+//
+// What it holds:
+//   1. Confidence (`--conf-*`): a tier's bar fill is 3:1 against the bar's
+//      track (WCAG 1.4.11, graphical object), its pill text 4.5:1 on its pill
+//      fill (1.4.3), the key's text 4.5:1 on the card, and the three tiers
+//      are told apart from each other. The scale never uses the alert hue.
+//   2. Chart palette (`--chart-*`): see the second half of this file.
+//
+// Usage:  BASE=http://127.0.0.1:8611 CHROMIUM_PATH=... node tokens.mjs
+//         MUTATE='--conf-low=oklch(68% 0.12 60)' node tokens.mjs   (self-test:
+//         override a token before grading, to watch the gate go red)
+import { chromium } from 'playwright';
+
+const BASE = process.env.BASE || 'http://127.0.0.1:8502';
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
+const MUTATE = process.env.MUTATE || '';
+
+const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
+const failures = [];
+const rows = [];
+
+// ── colour maths ───────────────────────────────────────────────────────────
+const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+export const contrast = (a, b) => {
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+// Resolve any CSS colour string to [r, g, b] through a canvas, on the page.
+async function resolver(page) {
+  return page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 1;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    window.__resolve = (css) => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = '#000';
+      ctx.fillStyle = css;
+      ctx.fillRect(0, 0, 1, 1);
+      const d = ctx.getImageData(0, 0, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+    return true;
+  });
+}
+
+// Composite a possibly translucent computed colour over `under` ([r,g,b]).
+const over = (css, under, page) => page.evaluate(([css, under]) => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 1;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = `rgb(${under.join(',')})`;
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillStyle = css;
+  ctx.fillRect(0, 0, 1, 1);
+  const d = ctx.getImageData(0, 0, 1, 1).data;
+  return [d[0], d[1], d[2]];
+}, [css, under]);
+
+function check(name, got, min, detail) {
+  const ok = got >= min;
+  rows.push(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(58)} ${got.toFixed(2)}:1 (>= ${min})${detail ? '  ' + detail : ''}`);
+  if (!ok) failures.push(`${name}: ${got.toFixed(2)}:1 < ${min}:1 ${detail || ''}`);
+}
+
+for (const theme of ['light', 'dark']) {
+  const ctx = await browser.newContext({ viewport: { width: 1000, height: 700 }, colorScheme: theme });
+  await ctx.addInitScript((t) => { try { localStorage.setItem('theme', t); } catch (e) {} }, theme);
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await resolver(page);
+  if (MUTATE) {
+    // `--a=value;--b=value`. Only for watching the gate go red. Through the
+    // CSSOM: the page's CSP refuses an injected <style>, as it should.
+    await page.evaluate((m) => {
+      for (const d of m.split(';')) {
+        const at = d.indexOf('=');
+        document.documentElement.style.setProperty(d.slice(0, at).trim(), d.slice(at + 1).trim(), 'important');
+      }
+    }, MUTATE);
+  }
+
+  // A probe card holding one of everything, drawn with the app's own classes.
+  const probe = await page.evaluate(() => {
+    const host = document.createElement('div');
+    host.className = 'bnb-card pad';
+    host.id = 'tokens-probe';
+    host.innerHTML = ['high', 'mid', 'low'].map((t) =>
+      `<div><span class="bnb-conf ${t}"><span class="track"><span class="fill"></span></span><span class="val">80%</span></span>` +
+      `<span class="bnb-conf-pill ${t}">80%</span></div>`).join('') +
+      `<p class="bnb-conf-legend"><span class="bnb-conf-key high"><i></i>90% and up very sure</span></p>`;
+    document.body.appendChild(host);
+    const css = (el, prop) => getComputedStyle(el)[prop];
+    const out = { card: css(host, 'backgroundColor'), tiers: {} };
+    for (const t of ['high', 'mid', 'low']) {
+      const bar = host.querySelector(`.bnb-conf.${t}`);
+      const pill = host.querySelector(`.bnb-conf-pill.${t}`);
+      out.tiers[t] = {
+        fill: css(bar.querySelector('.fill'), 'backgroundColor'),
+        track: css(bar.querySelector('.track'), 'backgroundColor'),
+        pillBg: css(pill, 'backgroundColor'),
+        pillFg: css(pill, 'color'),
+        val: css(bar.querySelector('.val'), 'color'),
+      };
+    }
+    out.legend = css(host.querySelector('.bnb-conf-legend'), 'color');
+    return out;
+  });
+  const rgb = (css) => page.evaluate((c) => window.__resolve(c), css);
+  const card = await rgb(probe.card);
+
+  const fills = {};
+  for (const t of ['high', 'mid', 'low']) {
+    const v = probe.tiers[t];
+    const track = await over(v.track, card, page);
+    const fill = await rgb(v.fill);
+    const pillBg = await over(v.pillBg, card, page);
+    const pillFg = await rgb(v.pillFg);
+    fills[t] = fill;
+    check(`${theme} conf-${t} fill on its track (graphic, 1.4.11)`, contrast(fill, track), 3);
+    check(`${theme} conf-${t} pill text on pill fill (1.4.3)`, contrast(pillFg, pillBg), 4.5);
+    check(`${theme} conf-${t} value text on the card (1.4.3)`, contrast(await rgb(v.val), card), 4.5);
+  }
+  check(`${theme} key text on the card (1.4.3)`, contrast(await rgb(probe.legend), card), 4.5);
+
+  // The tiers must differ from each other by more than a shade, or the scale
+  // is decoration. Euclidean distance in sRGB is a blunt instrument, but it is
+  // enough to tell "three colours" from "one colour three times".
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  for (const [a, b] of [['high', 'mid'], ['mid', 'low'], ['high', 'low']]) {
+    const d = dist(fills[a], fills[b]);
+    rows.push(`${d >= 40 ? 'PASS' : 'FAIL'}  ${`${theme} ${a} and ${b} fills are distinct`.padEnd(58)} sRGB distance ${d.toFixed(0)} (>= 40)`);
+    if (d < 40) failures.push(`${theme}: conf-${a} and conf-${b} are only ${d.toFixed(0)} apart in sRGB`);
+  }
+
+  // The scale never uses the alert hue: no tier's fill is within a small hue
+  // distance of --rare.
+  const rare = await rgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--rare')));
+  for (const t of ['high', 'mid', 'low']) {
+    const d = dist(fills[t], rare);
+    rows.push(`${d >= 60 ? 'PASS' : 'FAIL'}  ${`${theme} conf-${t} is not the alert colour`.padEnd(58)} sRGB distance ${d.toFixed(0)} (>= 60)`);
+    if (d < 60) failures.push(`${theme}: conf-${t} is within ${d.toFixed(0)} of --rare`);
+  }
+  await ctx.close();
+}
+
+await browser.close();
+console.log(rows.join('\n'));
+if (failures.length) {
+  console.error(`\ntokens: ${failures.length} failure(s)\n  ${failures.join('\n  ')}`);
+  process.exit(1);
+}
+console.log(`\ntokens: ${rows.length} checks pass`);

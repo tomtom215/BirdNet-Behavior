@@ -73,13 +73,43 @@ tint (for fills/badges) and most have an `-ink` (for text/icons on a soft fill).
 | Token | Light | Dark | Meaning |
 |---|---|---|---|
 | `--moss` | `oklch(52% 0.09 150)` | `oklch(78% 0.18 150)` | Primary / healthy / success — the "green" of a thriving yard. |
-| `--moss-soft` | `oklch(92% 0.04 150)` | `oklch(26% 0.10 150)` | Soft green fill (e.g. high-confidence background). |
+| `--moss-soft` | `oklch(92% 0.04 150)` | `oklch(26% 0.10 150)` | Soft green fill (a positive pill, the "live" tint, a very-sure confidence pill). |
 | `--moss-ink` | `oklch(35% 0.09 150)` | `oklch(90% 0.16 150)` | Green text/ink on a soft fill. |
 | `--dawn` | `oklch(68% 0.12 60)` | `oklch(82% 0.18 65)` | Morning / dawn chorus / warning — amber. A fill, never text. |
-| `--dawn-soft` | `oklch(94% 0.05 65)` | `oklch(28% 0.10 60)` | Soft amber fill (mid-confidence background). |
+| `--dawn-soft` | `oklch(94% 0.05 65)` | `oklch(28% 0.10 60)` | Soft amber fill (a warning pill, a borderline-confidence pill). |
 | `--dawn-ink` | `oklch(42% 0.12 55)` | `oklch(92% 0.16 60)` | Amber text/ink. |
 | `--rare` | `oklch(50% 0.16 28)` | `oklch(74% 0.20 25)` | Rare bird / alert / danger — red. |
-| `--rare-soft` | `oklch(94% 0.05 28)` | `oklch(28% 0.12 25)` | Soft red fill (low-confidence / rare badge background). |
+| `--rare-soft` | `oklch(94% 0.05 28)` | `oklch(28% 0.12 25)` | Soft red fill (rare-bird and alert badges). Never a confidence. |
+
+## Colour — confidence tiers
+
+How sure the identifier was, painted the same way on every surface that shows it
+(the Today feed, species, recordings, the review and quarantine queues, the share
+page). **One rule picks the tier** — `crates/birdnet-web/src/routes/pages/confidence.rs`
+— and these tokens only say what each tier looks like.
+
+| Tier | Whole percent | Reads as |
+|---|---|---|
+| high | 90 and up | very sure |
+| mid | from the borderline edge to 89 | sure |
+| low | below the borderline edge | borderline |
+
+The *borderline edge* follows the station's own confidence cut-off: the cut-off
+plus ten points, never above 90. At a 70 % cut-off, 80–89 is mid and 70–79 is low;
+a strict station (85 % or more) has no mid tier. The scale never uses `--rare`:
+a detection the station accepted at 72 % is not a fault.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--conf-high` | `var(--moss)` | `oklch(70% 0.12 150)` | Bar fill for a very sure detection. |
+| `--conf-high-soft` | `var(--moss-soft)` | Pill background, high. |
+| `--conf-high-ink` | `var(--moss-ink)` | Pill text, high. |
+| `--conf-mid` | `oklch(58% 0.025 150)` | `oklch(68% 0.025 150)` | Bar fill for a sure detection. |
+| `--conf-mid-soft` | `var(--surface-2)` | Pill background, mid. |
+| `--conf-mid-ink` | `var(--fg-2)` | Pill text, mid. |
+| `--conf-low` | `oklch(62% 0.125 74)` | `oklch(80% 0.14 75)` | Bar fill for a borderline detection. |
+| `--conf-low-soft` | `var(--dawn-soft)` | Pill background, low. |
+| `--conf-low-ink` | `var(--dawn-ink)` | Pill text, low. |
 
 ## Colour — special surfaces
 
@@ -231,9 +261,9 @@ rewritten. Prefer the modern token in new code.
 | `--danger` | `var(--rare)` |
 | `--radius` | `var(--r-md)` |
 | `--input-bg` | `var(--surface)` |
-| `--conf-high-bg` | `var(--moss-soft)` |
-| `--conf-mid-bg` | `var(--dawn-soft)` |
-| `--conf-low-bg` | `var(--rare-soft)` |
+| `--conf-high-bg` | `var(--conf-high-soft)` |
+| `--conf-mid-bg` | `var(--conf-mid-soft)` |
+| `--conf-low-bg` | `var(--conf-low-soft)` |
 
 One alias differs by theme, because amber is a fill and not a text colour:
 

@@ -23,6 +23,7 @@ pub mod behavioral;
 pub(crate) mod changelog;
 pub mod charts;
 pub(crate) mod cmdk;
+pub(crate) mod confidence;
 pub(crate) mod confirm;
 pub mod correlation;
 pub mod dashboard;
