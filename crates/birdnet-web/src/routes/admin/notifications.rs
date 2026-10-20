@@ -74,9 +74,26 @@ fn failed_rows() -> String {
 // DELETE /admin/notifications/prune
 // ---------------------------------------------------------------------------
 
-async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
+async fn prune_handler(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+) -> Result<Html<String>, StatusCode> {
     let deleted = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::notifications::prune_old_notifications(conn, 90))
+        let deleted =
+            state.with_db(|conn| birdnet_db::notifications::prune_old_notifications(conn, 90));
+        // Pruning deletes the record of what the station told its owner; the
+        // count is the event, so a prune that removed nothing is still one the
+        // operator asked for.
+        if let Ok(n) = &deleted {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "notification.prune",
+                None,
+                Some(&format!("deleted={n} older_than_days=90")),
+            );
+        }
+        deleted
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

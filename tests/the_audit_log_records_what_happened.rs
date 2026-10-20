@@ -25,7 +25,12 @@ fn station() -> (AppState, String) {
     let conn = Connection::open_in_memory().expect("memory db");
     birdnet_db::migration::migrate(&conn).expect("migrate");
     let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+    let cookie = admin_session(&state);
+    (state, cookie)
+}
 
+/// Give `state`'s seed admin a password and a session; return its cookie.
+fn admin_session(state: &AppState) -> String {
     let sid = state
         .with_db(|conn| -> Result<String, AccountsError> {
             let admin = conn.find_user_by_name("admin")?;
@@ -36,12 +41,11 @@ fn station() -> (AppState, String) {
         })
         .expect("seed admin");
 
-    let cookie = format!(
+    format!(
         "{}={}",
         session::COOKIE_NAME,
         session::issue_token(&sid, session::DEFAULT_TTL_MS)
-    );
-    (state, cookie)
+    )
 }
 
 fn rows(state: &AppState) -> Vec<AuditEntry> {
@@ -254,6 +258,472 @@ async fn the_admin_audit_page_shows_what_was_recorded() {
     );
 }
 
+// ── a detection changed from a page, and the other quiet mutations ──────
+//
+// The audit module's claim is that mutations are recorded. The API's write
+// endpoints did record theirs; the pages that do the same things did not, and
+// neither did four admin actions that delete or block something: so the same
+// detection deleted through `/api/v2/detections/delete` left a row and through
+// the Today list left nothing, and "who deleted the 40 wren clips?" could be
+// answered only for the API.
+
+/// A detection, as the page forms name it.
+const ROW: &str = "date=2026-05-01&time=06%3A10%3A00&sci_name=Turdus+merula";
+/// The same detection as an audit target: the schema's key, in its order.
+const TARGET: &str = "2026-05-01 06:10:00 Turdus merula";
+
+fn seed_detection(state: &AppState, time: &str, sci: &str) {
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-01', ?1, ?2, 'Eurasian Blackbird', 0.91, 'b.wav')",
+            rusqlite::params![time, sci],
+        )
+        .expect("seed a detection");
+    });
+}
+
+async fn send(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    body: &str,
+) -> StatusCode {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/x-www-form-urlencoded");
+    if let Some(c) = cookie {
+        builder = builder.header(axum::http::header::COOKIE, c);
+    }
+    build_router(state.clone())
+        .oneshot(builder.body(Body::from(body.to_owned())).expect("request"))
+        .await
+        .expect("response")
+        .status()
+}
+
+fn rows_of(state: &AppState, action: &str) -> Vec<AuditEntry> {
+    rows(state)
+        .into_iter()
+        .filter(|e| e.action == action)
+        .collect()
+}
+
+/// Every page that changes one detection, with the row it must leave.
+#[tokio::test]
+async fn a_detection_changed_from_a_page_is_recorded_against_the_operator() {
+    for (uri, body, action, via) in [
+        ("/pages/today-delete", ROW, "detection.delete", "via=today"),
+        ("/pages/today-lock", ROW, "detection.lock", "via=today"),
+        ("/pages/today-unlock", ROW, "detection.unlock", "via=today"),
+        (
+            "/pages/recordings-delete",
+            ROW,
+            "detection.delete",
+            "via=recordings",
+        ),
+        (
+            "/pages/recordings-lock",
+            ROW,
+            "detection.lock",
+            "via=recordings",
+        ),
+        (
+            "/pages/recordings-unlock",
+            ROW,
+            "detection.unlock",
+            "via=recordings",
+        ),
+    ] {
+        let (state, cookie) = station();
+        seed_detection(&state, "06:10:00", "Turdus merula");
+        let status = send(&state, "POST", uri, Some(&cookie), body).await;
+        assert!(status.is_success(), "{uri}: {status}");
+
+        let entries = rows_of(&state, action);
+        assert_eq!(entries.len(), 1, "{uri}: {:?}", rows(&state));
+        assert_eq!(entries[0].target.as_deref(), Some(TARGET), "{uri}");
+        assert!(
+            entries[0].user_id.is_some(),
+            "{uri}: a change made from a signed-in page has an actor"
+        );
+        assert!(
+            entries[0].metadata.as_deref().unwrap_or("").contains(via),
+            "{uri}: {:?}",
+            entries[0].metadata
+        );
+    }
+}
+
+#[tokio::test]
+async fn relabelling_a_detection_records_what_it_became() {
+    let (state, cookie) = station();
+    seed_detection(&state, "06:10:00", "Turdus merula");
+    let status = send(
+        &state,
+        "POST",
+        "/pages/today-relabel",
+        Some(&cookie),
+        "date=2026-05-01&time=06%3A10%3A00&old_sci_name=Turdus+merula\
+         &new_sci_name=Turdus+philomelos&new_com_name=Song+Thrush",
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+
+    let entries = rows_of(&state, "detection.relabel");
+    assert_eq!(entries.len(), 1, "{:?}", rows(&state));
+    assert_eq!(
+        entries[0].target.as_deref(),
+        Some(TARGET),
+        "the target is what the row was"
+    );
+    assert!(
+        entries[0]
+            .metadata
+            .as_deref()
+            .unwrap_or("")
+            .contains("to=Turdus philomelos"),
+        "and the metadata what it became: {:?}",
+        entries[0].metadata
+    );
+}
+
+/// The discrimination: a row that is not there, or a write the store refused,
+/// changed nothing and so records nothing — otherwise the log fills with
+/// button presses and the entry that matters is buried in them.
+#[tokio::test]
+async fn a_page_change_that_changed_nothing_records_nothing() {
+    // No such detection.
+    let (state, cookie) = station();
+    for uri in [
+        "/pages/today-delete",
+        "/pages/today-lock",
+        "/pages/recordings-delete",
+        "/pages/recordings-unlock",
+    ] {
+        let status = send(&state, "POST", uri, Some(&cookie), ROW).await;
+        assert!(status.is_success(), "{uri}: {status}");
+    }
+    assert!(
+        !actions(&state).iter().any(|a| a.starts_with("detection.")),
+        "{:?}",
+        rows(&state)
+    );
+
+    // A store that refuses the write.
+    let (state, cookie) = station();
+    seed_detection(&state, "06:10:00", "Turdus merula");
+    state
+        .with_db(|c| {
+            c.execute_batch(
+                "CREATE TRIGGER refuse BEFORE DELETE ON detections
+                 BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
+            )
+        })
+        .expect("trigger");
+    let status = send(&state, "POST", "/pages/today-delete", Some(&cookie), ROW).await;
+    assert!(status.is_success(), "{status}");
+    assert!(
+        rows_of(&state, "detection.delete").is_empty(),
+        "audited as a delete that did not happen: {:?}",
+        rows(&state)
+    );
+}
+
+#[tokio::test]
+async fn a_verdict_set_or_undone_from_a_page_is_recorded() {
+    for (uri, body, verdict, via) in [
+        (
+            "/pages/detection-review",
+            format!("{ROW}&com_name=Eurasian+Blackbird&status=rejected"),
+            "verdict=rejected",
+            "via=review",
+        ),
+        (
+            "/pages/detection-review-inline",
+            format!("{ROW}&com_name=Eurasian+Blackbird&status=confirmed"),
+            "verdict=confirmed",
+            "via=detection",
+        ),
+        (
+            "/pages/detection-review-clear",
+            ROW.to_owned(),
+            "verdict=cleared",
+            "via=review",
+        ),
+    ] {
+        let (state, cookie) = station();
+        seed_detection(&state, "06:10:00", "Turdus merula");
+        let status = send(&state, "POST", uri, Some(&cookie), &body).await;
+        assert!(status.is_success(), "{uri}: {status}");
+
+        let entries = rows_of(&state, "detection.review");
+        assert_eq!(entries.len(), 1, "{uri}: {:?}", rows(&state));
+        assert_eq!(entries[0].target.as_deref(), Some(TARGET), "{uri}");
+        assert!(entries[0].user_id.is_some(), "{uri}");
+        let meta = entries[0].metadata.as_deref().unwrap_or("");
+        assert!(
+            meta.contains(verdict) && meta.contains(via),
+            "{uri}: {meta}"
+        );
+    }
+
+    // A status the handler ignores is not a verdict.
+    let (state, cookie) = station();
+    seed_detection(&state, "06:10:00", "Turdus merula");
+    let status = send(
+        &state,
+        "POST",
+        "/pages/detection-review",
+        Some(&cookie),
+        &format!("{ROW}&com_name=x&status=maybe"),
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    assert!(rows_of(&state, "detection.review").is_empty());
+}
+
+#[tokio::test]
+async fn the_search_pages_bulk_action_records_each_detection_it_changed() {
+    let (state, cookie) = station();
+    seed_detection(&state, "06:10:00", "Turdus merula");
+    seed_detection(&state, "06:20:00", "Turdus merula");
+    let status = send(
+        &state,
+        "POST",
+        "/pages/search-bulk",
+        Some(&cookie),
+        "action=delete\
+         &selected=2026-05-01%7C06%3A10%3A00%7CTurdus+merula\
+         &selected=2026-05-01%7C06%3A20%3A00%7CTurdus+merula\
+         &selected=2026-05-01%7C06%3A30%3A00%7CNo+such+bird",
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+
+    let mut targets: Vec<String> = rows_of(&state, "detection.delete")
+        .into_iter()
+        .map(|e| e.target.unwrap_or_default())
+        .collect();
+    targets.sort();
+    assert_eq!(
+        targets,
+        vec![
+            "2026-05-01 06:10:00 Turdus merula".to_owned(),
+            "2026-05-01 06:20:00 Turdus merula".to_owned(),
+        ],
+        "one row per detection that went, none for the one that was not there: {:?}",
+        rows(&state)
+    );
+    assert!(
+        rows(&state)
+            .iter()
+            .all(|e| e.user_id.is_some() && e.metadata.as_deref() == Some("via=search")),
+        "{:?}",
+        rows(&state)
+    );
+
+    // An action the page does not offer does nothing and records nothing.
+    let before = rows(&state).len();
+    send(
+        &state,
+        "POST",
+        "/pages/search-bulk",
+        Some(&cookie),
+        "action=explode&selected=2026-05-01%7C06%3A10%3A00%7CTurdus+merula",
+    )
+    .await;
+    assert_eq!(rows(&state).len(), before);
+}
+
+#[tokio::test]
+async fn deciding_a_quarantined_detection_is_recorded() {
+    for (uri, action) in [
+        ("/pages/quarantine-approve", "quarantine.approve"),
+        ("/pages/quarantine-reject", "quarantine.reject"),
+        ("/pages/quarantine-delete", "quarantine.delete"),
+    ] {
+        let (state, cookie) = station();
+        let id = state.with_db(|conn| {
+            birdnet_db::sqlite::insert_quarantine(
+                conn,
+                &birdnet_db::sqlite::QuarantineRecord {
+                    date: "2026-05-01",
+                    time: "06:10:00",
+                    sci_name: "Upupa epops",
+                    com_name: "Eurasian Hoopoe",
+                    confidence: 0.42,
+                    sf_probability: Some(0.61),
+                    reason: birdnet_db::sqlite::QuarantineReason::LowConfidence,
+                    file_name: Some("h.wav"),
+                    lat: None,
+                    lon: None,
+                    week: Some(18),
+                    run_id: None,
+                    cutoff: Some(0.8),
+                    sensitivity: Some(1.25),
+                    overlap: Some(0.5),
+                },
+            )
+            .expect("quarantine a detection");
+            birdnet_db::sqlite::list_quarantine(
+                conn,
+                birdnet_db::sqlite::QuarantineFilter::Pending,
+                10,
+                0,
+            )
+            .expect("list")[0]
+                .id
+        });
+
+        let status = send(&state, "POST", uri, Some(&cookie), &format!("id={id}")).await;
+        assert!(status.is_success(), "{uri}: {status}");
+
+        let entries = rows_of(&state, action);
+        assert_eq!(entries.len(), 1, "{uri}: {:?}", rows(&state));
+        assert_eq!(
+            entries[0].target.as_deref(),
+            Some(format!("quarantine:{id}").as_str())
+        );
+        assert!(entries[0].user_id.is_some(), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn blocking_a_species_picture_and_unblocking_it_are_recorded() {
+    let (state, cookie) = station();
+    let status = send(
+        &state,
+        "POST",
+        "/admin/images/blacklist",
+        Some(&cookie),
+        "sci_name=Turdus+merula&url=https%3A%2F%2Fimg.example%2Fa.jpg%3Ftoken%3Dsecret",
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    let added = rows_of(&state, "image.blacklist.add");
+    assert_eq!(added.len(), 1, "{:?}", rows(&state));
+    assert_eq!(added[0].target.as_deref(), Some("Turdus merula"));
+    assert!(added[0].user_id.is_some());
+    assert!(
+        !format!("{:?}", added[0]).contains("secret"),
+        "the URL, which can carry a token, is not recorded: {:?}",
+        added[0]
+    );
+
+    let id: i64 = state.with_db(|c| {
+        c.query_row("SELECT id FROM image_blacklist", [], |r| r.get(0))
+            .expect("the entry")
+    });
+    let status = send(
+        &state,
+        "DELETE",
+        &format!("/admin/images/blacklist/{id}"),
+        Some(&cookie),
+        "",
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    let removed = rows_of(&state, "image.blacklist.remove");
+    assert_eq!(removed.len(), 1, "{:?}", rows(&state));
+    assert_eq!(
+        removed[0].target.as_deref(),
+        Some(format!("blacklist:{id}").as_str())
+    );
+
+    // Removing what is not there changes nothing, so records nothing.
+    send(
+        &state,
+        "DELETE",
+        "/admin/images/blacklist/9999",
+        Some(&cookie),
+        "",
+    )
+    .await;
+    assert_eq!(rows_of(&state, "image.blacklist.remove").len(), 1);
+}
+
+#[tokio::test]
+async fn pruning_the_notification_log_is_recorded_with_how_much_went() {
+    let (state, cookie) = station();
+    let status = send(
+        &state,
+        "DELETE",
+        "/admin/notifications/prune",
+        Some(&cookie),
+        "",
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    let entries = rows_of(&state, "notification.prune");
+    assert_eq!(entries.len(), 1, "{:?}", rows(&state));
+    assert!(entries[0].user_id.is_some());
+    assert!(
+        entries[0]
+            .metadata
+            .as_deref()
+            .unwrap_or("")
+            .contains("deleted=0"),
+        "{:?}",
+        entries[0].metadata
+    );
+
+    // A prune that failed deleted nothing and says so elsewhere; it is not a
+    // prune in the log.
+    let (state, cookie) = station();
+    state
+        .with_db(|c| c.execute_batch("DROP TABLE notification_log"))
+        .expect("drop");
+    send(
+        &state,
+        "DELETE",
+        "/admin/notifications/prune",
+        Some(&cookie),
+        "",
+    )
+    .await;
+    assert!(rows_of(&state, "notification.prune").is_empty());
+}
+
+#[tokio::test]
+async fn deleting_a_backup_file_is_recorded_and_a_missing_one_is_not() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = AppState::new(dir.path().join("birds.db")).expect("state");
+    let cookie = admin_session(&state);
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).expect("mkdir");
+    let name = "birds.db.backup.1733400000";
+    std::fs::write(backups.join(name), b"not really a database").expect("write");
+
+    let status = send(
+        &state,
+        "DELETE",
+        &format!("/admin/system/backups/{name}"),
+        Some(&cookie),
+        "",
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    assert!(!backups.join(name).exists(), "the file should be gone");
+    let entries = rows_of(&state, "data.backup.delete");
+    assert_eq!(entries.len(), 1, "{:?}", rows(&state));
+    assert_eq!(entries[0].target.as_deref(), Some(name));
+    assert!(entries[0].user_id.is_some());
+
+    // The file is gone now; a second delete removes nothing and records nothing.
+    send(
+        &state,
+        "DELETE",
+        &format!("/admin/system/backups/{name}"),
+        Some(&cookie),
+        "",
+    )
+    .await;
+    assert_eq!(rows_of(&state, "data.backup.delete").len(), 1);
+}
+
 // ── the vocabulary ──────────────────────────────────────────────────────
 
 /// Every action string the production code writes.
@@ -282,6 +752,7 @@ const ACTIONS: &[&str] = &[
     "auth.login.ok",
     "auth.login.throttled",
     "auth.logout",
+    "data.backup.delete",
     "data.backup.run",
     "data.database.restore",
     "data.detections.clear",
@@ -290,8 +761,15 @@ const ACTIONS: &[&str] = &[
     "detection.comment.delete",
     "detection.delete",
     "detection.lock",
+    "detection.relabel",
     "detection.review",
     "detection.unlock",
+    "image.blacklist.add",
+    "image.blacklist.remove",
+    "notification.prune",
+    "quarantine.approve",
+    "quarantine.delete",
+    "quarantine.reject",
     "rule.create",
     "rule.delete",
     "rule.import",

@@ -581,10 +581,28 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
 
 async fn lock_clip(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, true);
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, true)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, true);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.lock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=recordings"),
+            );
+        }
+        result
+    })
+    .await;
     clip_write(
         super::toast::RowWrite::from_result(result, "lock clip"),
         button,
@@ -594,10 +612,28 @@ async fn lock_clip(
 
 async fn unlock_clip(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, false);
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, false)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, false);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.unlock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=recordings"),
+            );
+        }
+        result
+    })
+    .await;
     clip_write(
         super::toast::RowWrite::from_result(result, "unlock clip"),
         button,
@@ -629,12 +665,30 @@ fn clip_write(
 
 async fn delete_clip(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     // Paired write: the analytics copy is incremental and cannot notice a
     // removal on its own. See `AppState::delete_detection`, which also
     // removes the clip once no detection names it.
-    let result = tokio::task::spawn_blocking(move || state.delete_detection(&row)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.delete_detection(&row);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.delete",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=recordings"),
+            );
+        }
+        result
+    })
+    .await;
     match super::toast::RowWrite::from_result(result, "delete clip") {
         // Empty body → the row's `hx-swap="outerHTML"` removes it from the
         // list — right whether this request removed it or someone else had.

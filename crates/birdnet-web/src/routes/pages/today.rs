@@ -1211,12 +1211,32 @@ fn after_write(
 /// Delete a detection and re-render the list.
 async fn delete_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
     // deletion has to be mirrored at the same moment.
-    let result = tokio::task::spawn_blocking(move || state.delete_detection(&row)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.delete_detection(&row);
+        // Recorded when a row went, not when a button was pressed: a refused
+        // write or a row somebody else removed first changed nothing.
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.delete",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=today"),
+            );
+        }
+        result
+    })
+    .await;
     after_write(
         super::toast::RowWrite::from_result(result, "delete detection"),
         "Detection deleted.",
@@ -1227,6 +1247,7 @@ async fn delete_detection(
 /// Re-label a detection and re-render the list.
 async fn relabel_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<RelabelForm>,
 ) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
@@ -1237,7 +1258,24 @@ async fn relabel_detection(
         file_name: form.file_name,
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.relabel_detection(&row, &form.new_sci_name, &form.new_com_name)
+        let result = state.relabel_detection(&row, &form.new_sci_name, &form.new_com_name);
+        // A relabel rewrites what the station says it heard, and changes which
+        // species every count and share link names. The old name is the target
+        // (it is what the row was); the new one is the event.
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.relabel",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some(&format!("via=today to={}", form.new_sci_name)),
+            );
+        }
+        result
     })
     .await;
     after_write(
@@ -1250,9 +1288,27 @@ async fn relabel_detection(
 /// Lock a detection to protect it from disk purge.
 async fn lock_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, true)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, true);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.lock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=today"),
+            );
+        }
+        result
+    })
+    .await;
     after_write(
         super::toast::RowWrite::from_result(result, "lock clip"),
         "Clip locked — it will not be removed to free space.",
@@ -1263,9 +1319,27 @@ async fn lock_detection(
 /// Unlock a detection (allow disk purge again).
 async fn unlock_detection(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, false)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let result = state.set_detection_lock(&row, false);
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.unlock",
+                Some(&crate::audit::detection_target(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                )),
+                Some("via=today"),
+            );
+        }
+        result
+    })
+    .await;
     after_write(
         super::toast::RowWrite::from_result(result, "unlock clip"),
         "Clip unlocked.",

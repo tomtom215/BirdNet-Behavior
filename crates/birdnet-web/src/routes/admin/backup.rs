@@ -234,7 +234,11 @@ async fn download_backup(State(state): State<AppState>, Path(name): Path<String>
 /// Called by `hx-delete` on a row: a failure answers 200 with a toast and
 /// leaves the row (`toast::not_applied`). A bare `4xx`/`5xx` is discarded by
 /// htmx, so a delete that failed left the row there and said nothing.
-async fn delete_backup(State(state): State<AppState>, Path(name): Path<String>) -> Response {
+async fn delete_backup(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Path(name): Path<String>,
+) -> Response {
     use crate::routes::pages::toast::{Toast, not_applied};
     if !is_safe_backup_name(&name) {
         return not_applied(&Toast::error(
@@ -246,6 +250,21 @@ async fn delete_backup(State(state): State<AppState>, Path(name): Path<String>) 
     match tokio::fs::remove_file(&path).await {
         Ok(()) => {
             tracing::info!(file = %name, "backup deleted");
+            // A backup is what the operator restores from; its removal is
+            // recorded against them. The audit write takes the database lock,
+            // so it runs on the blocking pool.
+            let target = name.clone();
+            state
+                .run_blocking(move |state| {
+                    crate::audit::audit(
+                        state,
+                        Some(&request_user),
+                        "data.backup.delete",
+                        Some(&target),
+                        None,
+                    );
+                })
+                .await;
             // Return empty (HTMX swap removes the row)
             StatusCode::OK.into_response()
         }
