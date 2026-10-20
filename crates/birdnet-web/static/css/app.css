@@ -388,6 +388,13 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: var(--font-ui);
   font-feature-settings: "ss01", "cv11";
+  /* Every figure lines up with the one above it. Inter Tight's default figures
+     are proportional, so a column of times, counts and percentages had a ragged
+     edge and a ticking counter jittered; 17 rules asked for tabular figures one
+     class at a time and 280 of 879 figures on the 39 routes (the cells of every
+     table among them) were left out (tools/visual-qa/figures.mjs). Inherited, so
+     the answer is "all of them". */
+  font-variant-numeric: tabular-nums;
   background: var(--bg);
   color: var(--fg);
   letter-spacing: -0.005em;
@@ -856,7 +863,11 @@ footer a:hover { color: var(--moss-ink); }
 .htmx-settling { opacity: 1; transition: opacity var(--dur-base); }
 
 /* ── Accessibility ────────────────────────────────────────────────────── */
-:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; border-radius: 2px; }
+/* The outline follows the element's own corners (every current engine does). It
+   used to say `border-radius: 2px` here, which squared off every control the
+   moment it was focused: 948 of 1,156 focus stops across the app (tools/visual-qa/
+   focus.mjs), a pill (999px) or a 6px button turning into a hard-cornered box. */
+:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
 .skip-link {
   position: absolute; top: -48px; left: 8px; z-index: var(--z-skip);
   background: var(--moss); color: var(--on-moss); padding: 8px 14px; border-radius: var(--r-sm);
@@ -2798,6 +2809,17 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
      the brand from nothing. */
   .lay-vrule { display: none; }
   .topnav-right .nav-search { display: none; }
+  /* One row. The bar wrapped, so the brand sat alone on a first row and the
+     status pills on a second: 93 px, 11 % of an 844 px screen, before any
+     content. "Behavior" and the "?" (Help is in the footer and the More sheet)
+     give up their room, and the health pill is the one thing allowed to shrink. */
+  .topnav { flex-wrap: nowrap; gap: var(--space-8); }
+  .topnav-brand { flex: none; }
+  .topnav-brand .sub { display: none; }
+  .topnav-right { gap: var(--space-8); min-width: 0; flex: 0 1 auto; }
+  .topnav-right [data-help-drawer] { display: none; }
+  .topnav-right .status { min-width: 6.5rem; }
+  .topnav-right .status .bnb-pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* ── Bottom-sheet "More" dialog ──────────────────────────────────── */
