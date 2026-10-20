@@ -81,11 +81,15 @@ async fn login_submit(
     State(state): State<AppState>,
     client: Option<Extension<ClientIp>>,
     vouched_by: Option<Extension<crate::client_ip::VouchedBy>>,
+    scheme: Option<Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
+            // `Secure` follows this request, not the station's configuration; see
+            // `request_scheme`.
+            let secure = crate::request_scheme::cookie_secure(scheme.as_deref(), &headers);
             let next = sanitize_next(form.next.as_deref()).to_string();
             let device = DeviceFingerprint::from_request(client.as_deref(), &headers);
             // The throttle (O-6), before any hash is computed. A request with no
@@ -150,7 +154,7 @@ async fn login_submit(
                     if !crate::open_admin_host::may_open_bypass(host) {
                         return crate::open_admin_host::refused(host.unwrap_or(""));
                     }
-                    return open_bypass_redirect(state, &next, &device);
+                    return open_bypass_redirect(state, &next, &device, secure);
                 }
                 // The target carries the *submitted* username, not a verified one:
                 // "someone tried to sign in as admin sixty times last night" is the
@@ -213,7 +217,7 @@ async fn login_submit(
             );
 
             let token = session::issue_token(&session_id, ttl_ms);
-            redirect_with_cookie(&token, ttl_ms, &next)
+            redirect_with_cookie(&token, ttl_ms, &next, secure)
         })
         .await
 }
@@ -305,6 +309,7 @@ pub(crate) fn mint_session_cookie(
     state: &AppState,
     user_id: i64,
     client: Option<&ClientIp>,
+    scheme: Option<&crate::request_scheme::RequestScheme>,
     headers: &axum::http::HeaderMap,
 ) -> Option<String> {
     let device = DeviceFingerprint::from_request(client, headers);
@@ -323,11 +328,10 @@ pub(crate) fn mint_session_cookie(
         })
         .ok()?;
     let token = session::issue_token(&session_id, ttl_ms);
-    let public_url = std::env::var("BNB_PUBLIC_URL").ok();
     Some(session::build_set_cookie(
         &token,
         ttl_ms,
-        public_url.as_deref(),
+        crate::request_scheme::cookie_secure(scheme, headers),
     ))
 }
 
@@ -335,7 +339,12 @@ pub(crate) fn mint_session_cookie(
 /// a DB-stored admin password is configured. Mirrors the basic-auth
 /// shape from #89: the surface is reachable on a freshly provisioned
 /// station before the operator has chosen a password.
-fn open_bypass_redirect(state: &AppState, next: &str, device: &DeviceFingerprint) -> Response {
+fn open_bypass_redirect(
+    state: &AppState,
+    next: &str,
+    device: &DeviceFingerprint,
+    secure: bool,
+) -> Response {
     let session_id = session::generate_session_id();
     let Ok(admin) = state.with_read_db(|conn| conn.find_user_by_name("admin")) else {
         return Redirect::to(next).into_response();
@@ -352,7 +361,7 @@ fn open_bypass_redirect(state: &AppState, next: &str, device: &DeviceFingerprint
         )
     });
     let token = session::issue_token(&session_id, session::default_ttl_ms());
-    redirect_with_cookie(&token, session::default_ttl_ms(), next)
+    redirect_with_cookie(&token, session::default_ttl_ms(), next, secure)
 }
 
 /// Compute the `sessions.expires_at` value for a given ttl. Stored as a
@@ -391,6 +400,11 @@ fn format_sqlite_datetime(secs: i64) -> String {
 async fn logout_submit(State(state): State<AppState>, req: Request) -> Response {
     state
         .run_blocking(move |state| {
+            let secure = crate::request_scheme::cookie_secure(
+                req.extensions()
+                    .get::<crate::request_scheme::RequestScheme>(),
+                req.headers(),
+            );
             // Pull the cookie from the request and revoke the bound session
             // before clearing the browser-side cookie. Failures are logged but
             // never block the redirect — the cookie still gets cleared.
@@ -417,8 +431,7 @@ async fn logout_submit(State(state): State<AppState>, req: Request) -> Response 
             }
 
             let mut resp = Redirect::to("/").into_response();
-            let public_url = std::env::var("BNB_PUBLIC_URL").ok();
-            let clear = session::build_clear_cookie(public_url.as_deref());
+            let clear = session::build_clear_cookie(secure);
             if let Ok(val) = HeaderValue::from_str(&clear) {
                 resp.headers_mut().append(header::SET_COOKIE, val);
             }
@@ -427,10 +440,9 @@ async fn logout_submit(State(state): State<AppState>, req: Request) -> Response 
         .await
 }
 
-fn redirect_with_cookie(token: &str, ttl_ms: u64, next: &str) -> Response {
+fn redirect_with_cookie(token: &str, ttl_ms: u64, next: &str, secure: bool) -> Response {
     let mut resp = Redirect::to(next).into_response();
-    let public_url = std::env::var("BNB_PUBLIC_URL").ok();
-    let set_cookie = session::build_set_cookie(token, ttl_ms, public_url.as_deref());
+    let set_cookie = session::build_set_cookie(token, ttl_ms, secure);
     if let Ok(val) = HeaderValue::from_str(&set_cookie) {
         resp.headers_mut().append(header::SET_COOKIE, val);
     }
