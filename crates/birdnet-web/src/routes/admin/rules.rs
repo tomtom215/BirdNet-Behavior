@@ -640,6 +640,10 @@ async fn create_rule(
         hour_start: form.hour_start,
         hour_end: form.hour_end,
         days_of_week,
+        // The form has no cooldown field yet: 0 is "fire on every match", what a
+        // rule created here did before the column existed. Replace with the
+        // parsed field (default `DEFAULT_COOLDOWN_SECS`) when the form gets one.
+        cooldown_secs: 0,
         action,
     };
 

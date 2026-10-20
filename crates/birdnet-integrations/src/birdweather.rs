@@ -36,6 +36,8 @@ pub enum BirdWeatherError {
     },
     /// Station token not configured.
     NoToken,
+    /// The station has no coordinates `BirdWeather` could be given.
+    Location(LocationProblem),
 }
 
 impl BirdWeatherError {
@@ -73,11 +75,76 @@ impl fmt::Display for BirdWeatherError {
                 write!(f, "BirdWeather API error: {msg}")
             }
             Self::NoToken => write!(f, "BirdWeather station token not configured"),
+            Self::Location(problem) => write!(f, "BirdWeather station location: {problem}"),
         }
     }
 }
 
 impl std::error::Error for BirdWeatherError {}
+
+/// Why a station's coordinates cannot be sent to `BirdWeather`.
+///
+/// Every detection is posted with the station's latitude and longitude, and
+/// `BirdWeather` plots them on a public map. A station that has not set its
+/// location used to be posted at 0°, 0° — "Null Island", in the Gulf of
+/// Guinea — and so was every detection it ever uploaded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LocationProblem {
+    /// Latitude or longitude is not set, or is not a number.
+    Unset,
+    /// A coordinate lies outside ±90° latitude / ±180° longitude, or is not
+    /// finite.
+    OutOfRange {
+        /// The latitude as given.
+        lat: f64,
+        /// The longitude as given.
+        lon: f64,
+    },
+    /// Exactly 0°, 0°. Taken to mean "never set" rather than a station in the
+    /// open sea: the point is ocean, hundreds of kilometres from the nearest
+    /// land, so no station sits on it by design. (A buoy there would report
+    /// coordinates that are not exactly zero.)
+    NullIsland,
+}
+
+impl fmt::Display for LocationProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unset => write!(f, "latitude or longitude is not set"),
+            Self::OutOfRange { lat, lon } => write!(
+                f,
+                "latitude {lat} / longitude {lon} is outside -90..90 / -180..180"
+            ),
+            Self::NullIsland => write!(
+                f,
+                "latitude and longitude are both 0, which is the unset default \
+                 and a point in the Atlantic, not a station"
+            ),
+        }
+    }
+}
+
+/// The coordinates to give `BirdWeather`, or why there are none.
+///
+/// `None` for either coordinate is [`LocationProblem::Unset`]. The single
+/// definition of "a location we will publish", shared by the client, the
+/// startup check, `--doctor` and the replay of parked uploads.
+///
+/// # Errors
+///
+/// A [`LocationProblem`] naming what is wrong.
+pub fn check_location(lat: Option<f64>, lon: Option<f64>) -> Result<(f64, f64), LocationProblem> {
+    let (Some(lat), Some(lon)) = (lat, lon) else {
+        return Err(LocationProblem::Unset);
+    };
+    if !(lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0) {
+        return Err(LocationProblem::OutOfRange { lat, lon });
+    }
+    if lat == 0.0 && lon == 0.0 {
+        return Err(LocationProblem::NullIsland);
+    }
+    Ok((lat, lon))
+}
 
 /// `BirdWeather` API client.
 #[derive(Clone)]
@@ -246,7 +313,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `BirdWeatherError::NoToken` if the token is empty.
+    /// Returns `BirdWeatherError::NoToken` if the token is empty, and
+    /// `BirdWeatherError::Location` if the coordinates are not ones
+    /// [`check_location`] accepts: a client holding a made-up position would
+    /// publish every detection at it.
     pub fn new(station_token: &str, lat: f64, lon: f64) -> Result<Self, BirdWeatherError> {
         // Trimmed: a token copied from the BirdWeather page tends to bring a
         // newline with it, and the token is a path segment, where the stray
@@ -255,6 +325,8 @@ impl Client {
         if station_token.is_empty() {
             return Err(BirdWeatherError::NoToken);
         }
+        let (lat, lon) =
+            check_location(Some(lat), Some(lon)).map_err(BirdWeatherError::Location)?;
 
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
@@ -528,7 +600,7 @@ mod tests {
         // Copied from the BirdWeather page with the newline after it, the
         // token used to go into the request path as-is, and every upload
         // was refused for good.
-        let client = Client::new("  abc123XYZ\n", 0.0, 0.0).unwrap();
+        let client = Client::new("  abc123XYZ\n", 42.36, -71.06).unwrap();
         assert_eq!(client.token(), "abc123XYZ");
         assert_eq!(
             client.station_url("detections"),
@@ -539,7 +611,7 @@ mod tests {
     #[test]
     fn a_blank_token_is_no_token() {
         assert!(matches!(
-            Client::new(" \t\n", 0.0, 0.0),
+            Client::new(" \t\n", 42.36, -71.06),
             Err(BirdWeatherError::NoToken)
         ));
     }
@@ -548,7 +620,7 @@ mod tests {
     /// another path or a query on the same host.
     #[test]
     fn the_token_cannot_change_the_path() {
-        let client = Client::new("a/../b?c=d", 0.0, 0.0).unwrap();
+        let client = Client::new("a/../b?c=d", 42.36, -71.06).unwrap();
         assert_eq!(
             client.station_url("detections"),
             "https://app.birdweather.com/api/v1/stations/a%2F..%2Fb%3Fc%3Dd/detections"
@@ -561,6 +633,85 @@ mod tests {
         assert!(matches!(result, Err(BirdWeatherError::NoToken)));
     }
 
+    // ── the location a station may be published at ──────────────────────
+
+    #[test]
+    fn a_station_with_no_location_is_not_published_at_null_island() {
+        // The defect: a station with a token and no LATITUDE/LONGITUDE got a
+        // client at 0, 0 and posted every detection there, onto a public map.
+        assert!(matches!(
+            Client::new("tok", 0.0, 0.0),
+            Err(BirdWeatherError::Location(LocationProblem::NullIsland))
+        ));
+        assert_eq!(check_location(None, None), Err(LocationProblem::Unset));
+        assert_eq!(
+            check_location(Some(51.5), None),
+            Err(LocationProblem::Unset)
+        );
+        assert_eq!(
+            check_location(None, Some(-0.1)),
+            Err(LocationProblem::Unset)
+        );
+        // `-0.0` is zero: a station typed as "-0.0, 0" is no more placed.
+        assert_eq!(
+            check_location(Some(-0.0), Some(0.0)),
+            Err(LocationProblem::NullIsland)
+        );
+    }
+
+    #[test]
+    fn coordinates_outside_the_globe_or_not_numbers_are_refused() {
+        for (lat, lon) in [
+            (91.0, 10.0),
+            (-90.5, 10.0),
+            (10.0, 180.5),
+            (10.0, -181.0),
+            (f64::NAN, 10.0),
+            (10.0, f64::INFINITY),
+            (200.0, 0.0), // a longitude typed into the latitude box
+        ] {
+            assert!(
+                matches!(
+                    check_location(Some(lat), Some(lon)),
+                    Err(LocationProblem::OutOfRange { .. })
+                ),
+                "({lat}, {lon}) was accepted"
+            );
+            assert!(Client::new("tok", lat, lon).is_err(), "({lat}, {lon})");
+        }
+    }
+
+    #[test]
+    fn real_places_are_accepted_including_the_ones_that_touch_zero() {
+        // Counterpart: the gate refuses 0, 0 and nothing near it. The equator
+        // and the prime meridian are real places to keep a station — Quito
+        // sits almost on one, Greenwich on the other — and so are the limits.
+        for (lat, lon) in [
+            (51.48, -0.13),
+            (-0.18, -78.47),
+            (0.0, 25.0),
+            (51.4769, 0.0),
+            (90.0, 180.0),
+            (-90.0, -180.0),
+            (0.000_1, 0.000_1),
+        ] {
+            assert_eq!(
+                check_location(Some(lat), Some(lon)),
+                Ok((lat, lon)),
+                "({lat}, {lon})"
+            );
+            assert!(Client::new("tok", lat, lon).is_ok(), "({lat}, {lon})");
+        }
+    }
+
+    #[test]
+    fn the_location_error_names_what_is_wrong() {
+        let e = Client::new("tok", 0.0, 0.0).unwrap_err().to_string();
+        assert!(e.contains("both 0"), "{e}");
+        let e = Client::new("tok", 123.0, 0.0).unwrap_err().to_string();
+        assert!(e.contains("123"), "{e}");
+    }
+
     #[test]
     fn client_stores_coordinates() {
         let client = Client::new("test-token", 42.36, -71.06).unwrap();
@@ -570,13 +721,13 @@ mod tests {
 
     #[test]
     fn base_url_defaults_to_public_api() {
-        let client = Client::new("t", 0.0, 0.0).unwrap();
+        let client = Client::new("t", 42.36, -71.06).unwrap();
         assert_eq!(client.base_url(), API_BASE);
     }
 
     #[test]
     fn with_base_url_overrides_and_normalises() {
-        let client = Client::new("t", 0.0, 0.0)
+        let client = Client::new("t", 42.36, -71.06)
             .unwrap()
             .with_base_url("http://127.0.0.1:9000/api/v1/");
         // Trailing slash trimmed so the joined URL has exactly one separator.
@@ -586,7 +737,9 @@ mod tests {
     #[test]
     fn with_base_url_ignores_blank_override() {
         // A blank env var must keep the default, never produce relative URLs.
-        let client = Client::new("t", 0.0, 0.0).unwrap().with_base_url("   ");
+        let client = Client::new("t", 42.36, -71.06)
+            .unwrap()
+            .with_base_url("   ");
         assert_eq!(client.base_url(), API_BASE);
     }
 }

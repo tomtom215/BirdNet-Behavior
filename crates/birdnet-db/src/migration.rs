@@ -2306,6 +2306,31 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_species_date
                      ON detections(Com_Name, Date);",
     },
+    Migration {
+        version: 55,
+        description: "Per-rule webhook cooldown: at most one webhook per rule and species per window",
+        // A webhook rule fired for every detection that matched it. A calling
+        // owl is detected in every 3 s chunk of every segment, so a rule on
+        // `Strix*` posted to its endpoint once per chunk for as long as the
+        // bird called — hundreds an hour into Home Assistant, a Discord
+        // channel or a phone. tphakala/birdnet-go's alert engine has a
+        // `CooldownSec` per rule (and per species) for exactly this; the
+        // daemon now enforces this column the same way.
+        //
+        // `0` — the default, and what every row already there receives — means
+        // *no cooldown*: the rule fires on every match, exactly as it did
+        // before this migration. That is deliberate. A rule an operator wrote
+        // last year is not changed by an upgrade; only a rule created with a
+        // window (the admin form's default for a new rule is 300 s) is limited.
+        //
+        // Seconds, not a unit the form must convert: the daemon compares it
+        // against detection timestamps that are already seconds. A negative
+        // window is meaningless and would read as "always suppress", so the
+        // column refuses it.
+        up_sql: "ALTER TABLE alert_rules
+                     ADD COLUMN cooldown_secs INTEGER NOT NULL DEFAULT 0
+                     CHECK (cooldown_secs >= 0);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -3614,10 +3639,7 @@ mod tests {
         // columns default to "no credential", not to an empty one, because an
         // empty `Authorization` header is rejected by some servers and counted
         // as a failed login by others.
-        let conn = memory_db();
-        for m in MIGRATIONS.iter().filter(|m| m.version < 35) {
-            conn.execute_batch(m.up_sql).unwrap();
-        }
+        let conn = memory_db_at_version(34);
         conn.execute_batch(
             "INSERT INTO alert_rules
                  (name, enabled, species_pattern, confidence_min, confidence_max,
@@ -3631,6 +3653,11 @@ mod tests {
             .find(|m| m.version == 35)
             .expect("migration 35 exists");
         conn.execute_batch(m35.up_sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version, description) VALUES (?1, ?2)",
+            rusqlite::params![m35.version, m35.description],
+        )
+        .unwrap();
 
         let (kind, value, header): (String, Option<String>, Option<String>) = conn
             .query_row(
@@ -3645,7 +3672,10 @@ mod tests {
         assert_eq!(value, None);
         assert_eq!(header, None);
 
-        // And the row still loads as an unauthenticated webhook.
+        // And the row still loads as an unauthenticated webhook — after every
+        // later migration, since the store reads the columns they add (55's
+        // `cooldown_secs` made `list_rules` fail on a database stopped at 35).
+        migrate(&conn).unwrap();
         let rule = crate::alert_rules::list_rules(&conn)
             .unwrap()
             .into_iter()
@@ -3655,6 +3685,68 @@ mod tests {
             rule.action,
             crate::alert_rules::AlertAction::Webhook { auth: None, .. }
         ));
+    }
+
+    #[test]
+    fn migration_55_leaves_existing_rules_firing_on_every_match() {
+        // The no-op-upgrade guarantee. A webhook rule written before the column
+        // existed must keep firing on every match: the default is `0`, "no
+        // cooldown", and not the 300 s the admin form offers a *new* rule.
+        // Getting this wrong would not break anything visibly — it would make
+        // a station's existing owl alert go quiet for five minutes at a time
+        // the morning after an upgrade.
+        let conn = memory_db_at_version(54);
+        conn.execute_batch(
+            "INSERT INTO alert_rules
+                 (name, enabled, species_pattern, confidence_min, confidence_max,
+                  action_type, action_webhook_url, action_webhook_method)
+             VALUES ('legacy', 1, 'Strix*', 0.0, 1.0, 'webhook', 'https://x/y', 'POST');",
+        )
+        .unwrap();
+
+        let m55 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 55)
+            .expect("migration 55 exists");
+        conn.execute_batch(m55.up_sql).unwrap();
+
+        let stored: i64 = conn
+            .query_row(
+                "SELECT cooldown_secs FROM alert_rules WHERE name = 'legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 0, "a pre-existing rule must carry no cooldown");
+
+        // And the row loads through today's store as a rule with none.
+        let rule = crate::alert_rules::list_rules(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == "legacy")
+            .expect("the rule survived the migration");
+        assert_eq!(rule.cooldown_secs, 0);
+    }
+
+    #[test]
+    fn migration_55_refuses_a_negative_cooldown() {
+        // A negative window would read as "always suppressed" to the daemon's
+        // comparison. The column is the last line of defence for a hand-edited
+        // database; the form and the importer have their own.
+        let conn = memory_db_at_version(55);
+        let negative = conn.execute(
+            "INSERT INTO alert_rules (name, action_type, cooldown_secs)
+             VALUES ('bad', 'log', -1)",
+            [],
+        );
+        assert!(negative.is_err(), "a negative cooldown was stored");
+        // Counterpart: the refusal is about the sign, not about the column.
+        conn.execute(
+            "INSERT INTO alert_rules (name, action_type, cooldown_secs)
+             VALUES ('ok', 'log', 300)",
+            [],
+        )
+        .expect("a positive cooldown is stored");
     }
 
     #[test]

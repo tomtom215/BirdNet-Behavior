@@ -30,7 +30,7 @@ use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
     build_species_filter_config, resolve_required_paths, resolve_sensitivity,
-    species_lists_log_counts, species_thresholds_log_count,
+    species_lists_log_counts, species_thresholds_log_count, startup_species_thresholds,
 };
 use processor::event_processor;
 
@@ -46,6 +46,8 @@ pub use config::{
     clip_format, resolve_confidence, resolve_confirmation_level, resolve_f32_with_default,
     resolve_station_coords,
 };
+mod alert_cooldown;
+mod alert_rules;
 mod daylight;
 pub mod disposition;
 mod duplicate;
@@ -345,8 +347,11 @@ pub fn start_detection_daemon(
         config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
     );
 
-    let species_thresholds = state
-        .with_db(|conn| birdnet_db::sqlite::get_species_threshold_map(conn).unwrap_or_default());
+    let (species_thresholds, thresholds_warning) =
+        startup_species_thresholds(state.with_db(birdnet_db::sqlite::get_species_threshold_map));
+    if let Some(warning) = thresholds_warning {
+        tracing::warn!("{warning}");
+    }
 
     if let Some(count) = species_thresholds_log_count(&species_thresholds) {
         tracing::info!(count, "loaded per-species confidence thresholds");

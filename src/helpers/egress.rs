@@ -110,6 +110,10 @@ mod tests {
         cli.offline = true;
         cli.apprise_url = Some("http://localhost:8000".to_owned());
         cli.birdweather_token = Some("token".to_owned());
+        // A BirdWeather client needs a position to upload at; offline mode is
+        // not what is under test, so give it one.
+        cli.latitude = Some(51.48);
+        cli.longitude = Some(-0.13);
         cli.mqtt_host = Some("mqtt.local".to_owned());
         cli.heartbeat_url = Some("https://hc-ping.com/abc".to_owned());
 

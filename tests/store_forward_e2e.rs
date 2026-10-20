@@ -171,7 +171,7 @@ fn spawn_station(dir: &std::path::Path, db_path: &std::path::Path, stub_port: u1
     std::fs::write(
         &config_path,
         format!(
-            "DB_PATH={}\nBIRDWEATHER_TOKEN=e2e-station-token\n",
+            "DB_PATH={}\nBIRDWEATHER_TOKEN=e2e-station-token\nLATITUDE=51.0\nLONGITUDE=-0.1\n",
             db_path.display()
         ),
     )

@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use birdnet_integrations::mqtt::{KEEPALIVE_SECS, MqttConfig, PresenceSession};
 use birdnet_web::state::AppState;
 
-use super::MqttHandle;
+use super::{MqttHandle, RepeatWarning};
 
 /// How often the session is pinged.
 ///
@@ -48,6 +48,12 @@ const PING_EVERY: Duration = Duration::from_secs(KEEPALIVE_SECS as u64 / 2);
 /// acoustic-health polls, so a station has one background cadence rather than
 /// three.
 const STATS_EVERY: Duration = Duration::from_secs(300);
+
+/// Least time between two warnings that today's count cannot be read.
+///
+/// The count is read every [`STATS_EVERY`], so a database that stays locked
+/// would otherwise log twelve lines an hour for as long as it lasts.
+const STATS_WARN_EVERY: Duration = Duration::from_secs(3_600);
 
 /// First reconnect delay after the session drops.
 const RECONNECT_MIN: Duration = Duration::from_secs(15);
@@ -133,6 +139,7 @@ pub fn spawn_mqtt_presence(state: AppState, client: Option<MqttHandle>) {
         ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut stats_tick = tokio::time::interval(STATS_EVERY);
         stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut stats_warning = RepeatWarning::new(STATS_WARN_EVERY);
 
         loop {
             tokio::select! {
@@ -147,7 +154,7 @@ pub fn spawn_mqtt_presence(state: AppState, client: Option<MqttHandle>) {
                     session = tick_presence(&state, &config, session, &mut backoff, &mut next_attempt).await;
                 }
                 _ = stats_tick.tick() => {
-                    session = publish_today(&state, &stats_topic, session).await;
+                    session = publish_today(&state, &stats_topic, session, &mut stats_warning).await;
                 }
             }
         }
@@ -241,25 +248,51 @@ async fn tick_presence(
 /// acknowledged: this is the only surface that tells an operator the station
 /// is still *doing* something, as opposed to still being powered on, and a
 /// `QoS` 0 publish would report success into a broker that had gone away.
+///
+/// **A count that could not be read is not published.** The message is
+/// *retained*, so `{"count":0}` sent on a failed read would sit on the broker
+/// and read, in Home Assistant, as a station that has heard nothing today —
+/// from a station that is hearing plenty and cannot reach its own database.
+/// Skipping the publish leaves the last real count in place, which is stale
+/// and says so by not moving, instead of a zero that looks measured. The
+/// session itself is fine and is handed back.
 async fn publish_today(
     state: &AppState,
     topic: &str,
     session: Option<PresenceSession>,
+    warning: &mut RepeatWarning,
 ) -> Option<PresenceSession> {
     let mut open = session?;
 
     let db_state = state.clone();
-    let count = tokio::task::spawn_blocking(move || {
+    let read = tokio::task::spawn_blocking(move || {
         let date = local_date();
         db_state.with_db(|conn| {
-            birdnet_db::sqlite::detection_count_for_date(conn, &date).unwrap_or_else(|e| {
-                tracing::debug!(error = %e, "MQTT daily-stats query failed");
-                0
-            })
+            birdnet_db::sqlite::detection_count_for_date(conn, &date).map_err(|e| e.to_string())
         })
     })
     .await
-    .unwrap_or(0);
+    .map_err(|e| e.to_string())
+    .and_then(|read| read);
+    let count = match read {
+        Ok(count) => {
+            if warning.succeeded() {
+                tracing::info!("MQTT daily-stats count can be read again");
+            }
+            count
+        }
+        Err(error) => {
+            if let Some(passed_over) = warning.failed(Instant::now()) {
+                tracing::warn!(
+                    error,
+                    passed_over,
+                    "MQTT daily-stats not published: today's detection count could not be \
+                     read (the last published count stays on the broker)"
+                );
+            }
+            return Some(open);
+        }
+    };
 
     let payload = format!(r#"{{"count":{count}}}"#);
     let topic = topic.to_owned();
@@ -369,5 +402,160 @@ mod tests {
             ..MqttConfig::default()
         };
         assert_eq!(stats_topic(&cfg), "garden/stats/today");
+    }
+
+    // ── the stats publish, against a broker that records what it is sent ──
+
+    /// What the stub broker was sent: `(topic, payload, retain)`.
+    type Published = std::sync::Arc<std::sync::Mutex<Vec<(String, String, bool)>>>;
+
+    /// A broker for one connection: answers CONNECT, acknowledges every
+    /// `QoS` 1 PUBLISH after recording it, and answers pings.
+    fn spawn_stub_broker() -> (u16, Published) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub broker");
+        let port = listener.local_addr().expect("addr").port();
+        let seen: Published = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let _ = sock.set_read_timeout(Some(Duration::from_secs(10)));
+            // One packet: the fixed header byte and the body it announces.
+            let read = |sock: &mut std::net::TcpStream| -> Option<(u8, Vec<u8>)> {
+                let mut first = [0_u8; 1];
+                sock.read_exact(&mut first).ok()?;
+                let (mut remaining, mut scale) = (0_usize, 1_usize);
+                loop {
+                    let mut b = [0_u8; 1];
+                    sock.read_exact(&mut b).ok()?;
+                    remaining += usize::from(b[0] & 0x7F) * scale;
+                    if b[0] & 0x80 == 0 {
+                        break;
+                    }
+                    scale *= 128;
+                }
+                let mut body = vec![0_u8; remaining];
+                sock.read_exact(&mut body).ok()?;
+                Some((first[0], body))
+            };
+            // CONNECT, then CONNACK (accepted).
+            if read(&mut sock).is_none() || sock.write_all(&[0x20, 0x02, 0x00, 0x00]).is_err() {
+                return;
+            }
+            while let Some((header, body)) = read(&mut sock) {
+                match header & 0xF0 {
+                    0x30 => {
+                        let topic_len = usize::from(body[0]) << 8 | usize::from(body[1]);
+                        let topic = String::from_utf8_lossy(&body[2..2 + topic_len]).into_owned();
+                        let (id, payload_at) = if (header >> 1) & 0b11 > 0 {
+                            ([body[2 + topic_len], body[3 + topic_len]], 4 + topic_len)
+                        } else {
+                            ([0, 0], 2 + topic_len)
+                        };
+                        let payload = String::from_utf8_lossy(&body[payload_at..]).into_owned();
+                        if let Ok(mut log) = sink.lock() {
+                            log.push((topic, payload, header & 1 == 1));
+                        }
+                        if (header >> 1) & 0b11 > 0
+                            && sock.write_all(&[0x40, 0x02, id[0], id[1]]).is_err()
+                        {
+                            return;
+                        }
+                    }
+                    0xC0 => {
+                        let _ = sock.write_all(&[0xD0, 0x00]);
+                    }
+                    _ => return,
+                }
+            }
+        });
+        (port, seen)
+    }
+
+    /// A presence session connected to a fresh stub broker, and the config it
+    /// used (for the stats topic).
+    fn connected() -> (PresenceSession, Published, MqttConfig) {
+        let (port, seen) = spawn_stub_broker();
+        let config = MqttConfig {
+            host: "127.0.0.1".to_owned(),
+            port,
+            topic_prefix: "garden".to_owned(),
+            client_id: "station-presence".to_owned(),
+            timeout_ms: 5_000,
+            ..MqttConfig::default()
+        };
+        let session = PresenceSession::connect(&config).expect("presence session connects");
+        (session, seen, config)
+    }
+
+    fn stats_publishes(seen: &Published, config: &MqttConfig) -> Vec<(String, bool)> {
+        let topic = stats_topic(config);
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(t, _, _)| *t == topic)
+            .map(|(_, payload, retain)| (payload.clone(), *retain))
+            .collect()
+    }
+
+    /// The defect: a failed read became `0`, and the zero was published
+    /// **retained**. Home Assistant then showed "0 detections today" for a
+    /// station that was hearing birds and could not reach its own database.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_count_that_could_not_be_read_is_not_published_as_zero() {
+        let state = crate::integrations::test_support::test_state();
+        let today = local_date();
+        state.with_db(|conn| {
+            for time in ["06:00:00", "06:00:03"] {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES (?1, ?2, 'Turdus merula', 'Eurasian Blackbird', 0.9)",
+                    rusqlite::params![today, time],
+                )
+                .unwrap();
+            }
+        });
+        let (session, seen, config) = connected();
+        let topic = stats_topic(&config);
+        let mut warning = RepeatWarning::new(STATS_WARN_EVERY);
+
+        // The count is published while it can be read...
+        let session = publish_today(&state, &topic, Some(session), &mut warning).await;
+        assert!(session.is_some(), "a healthy publish dropped the session");
+        assert_eq!(
+            stats_publishes(&seen, &config),
+            vec![(r#"{"count":2}"#.to_owned(), true)]
+        );
+
+        // ...and nothing is published when it cannot.
+        state.with_db(|conn| conn.execute_batch("DROP TABLE detections;").unwrap());
+        let session = publish_today(&state, &topic, session, &mut warning).await;
+        assert!(
+            session.is_some(),
+            "the connection is fine; only the count was unreadable"
+        );
+        assert_eq!(
+            stats_publishes(&seen, &config),
+            vec![(r#"{"count":2}"#.to_owned(), true)],
+            "a count that could not be read was published"
+        );
+    }
+
+    /// Counterpart: a real zero — a quiet morning — is a measurement, and is
+    /// published. A fix that withheld every zero would pass the test above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_real_zero_is_still_published() {
+        let state = crate::integrations::test_support::test_state();
+        let (session, seen, config) = connected();
+        let topic = stats_topic(&config);
+        let mut warning = RepeatWarning::new(STATS_WARN_EVERY);
+        let session = publish_today(&state, &topic, Some(session), &mut warning).await;
+        assert!(session.is_some());
+        assert_eq!(
+            stats_publishes(&seen, &config),
+            vec![(r#"{"count":0}"#.to_owned(), true)]
+        );
     }
 }
