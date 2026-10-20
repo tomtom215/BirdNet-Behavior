@@ -932,7 +932,11 @@ mod tests {
             ("fixed:", false),
             ("fixed:06:00", false),
             ("fixed:24:00-25:00", false),
+            // Hour 24 on its own: the line above is refused for its 25 alone.
+            ("fixed:24:00-23:00", false),
+            ("fixed:00:00-24:00", false),
             ("fixed:06:60-07:00", false),
+            ("fixed:06:00-07:60", false),
             ("fixed: 06:00-20:00", false),
             ("fixed:06:00 - 20:00", false),
             ("fixed:06:00-20:00-21:00", false),
@@ -984,6 +988,11 @@ mod tests {
         assert_eq!(fixed_window_minutes("06:30-20:00"), Some((390, 1200)));
         assert_eq!(fixed_window_minutes("20:00-06:00"), Some((1200, 360)));
         assert_eq!(fixed_window_minutes("25:00-06:00"), None);
+        // The edges of the day: 23:59 is the last minute, and there is no hour 24.
+        assert_eq!(fixed_window_minutes("00:00-23:59"), Some((0, 1439)));
+        assert_eq!(fixed_window_minutes("00:00-24:00"), None);
+        assert_eq!(fixed_window_minutes("24:00-06:00"), None);
+        assert_eq!(fixed_window_minutes("00:00-06:60"), None);
     }
 
     #[test]
