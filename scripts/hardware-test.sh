@@ -419,9 +419,9 @@ phase_env() {
 
   local free_gb; free_gb="$(df -BG --output=avail / | tail -1 | tr -dc '0-9')"
   if [ "${free_gb:-0}" -ge 6 ]; then
-    record PASS env.disk "${free_gb} GiB free on / (need ~6: 34 MB binary + 541 MB model + recordings)"
+    record PASS env.disk "${free_gb} GiB free on / (need ~6: 34 MB binary + model (~85 MB BirdNET V2.4, ~560 MB V3.0 preview) + recordings)"
   else
-    record FAIL env.disk "only ${free_gb} GiB free on /" "The model alone needs ~541 MB plus room to unpack."
+    record FAIL env.disk "only ${free_gb} GiB free on /" "The model needs ~85 MB (BirdNET V2.4, the default; the installer wants ~600 MB free to install it) or ~560 MB (V3.0 preview), plus room to unpack."
   fi
 
   record INFO env.temp "SoC temperature at rest: $(soc_temp_c) °C"
@@ -438,7 +438,7 @@ phase_install() {
   local t0 rc
   t0=$SECONDS
   say "${C_DIM}    running: curl -fsSL ${INSTALL_URL} | sudo BIRDNET_NONINTERACTIVE=1 bash${C_OFF}"
-  say "${C_DIM}    (this pulls a 34 MB binary and a ~541 MB model — several minutes on wifi)${C_OFF}"
+  say "${C_DIM}    (this pulls a 34 MB binary and a ~85 MB model, BirdNET V2.4 — a few minutes on wifi)${C_OFF}"
 
   # The pipe form is deliberate: `sudo bash <(curl ...)` hands sudo a file
   # descriptor owned by the calling user, which it closes crossing to root.
@@ -941,8 +941,9 @@ phase_perf() {
   if [ "$dc" -gt 0 ]; then
     mean="$(awk "BEGIN { printf \"%.1f\", (${ds} / ${dc}) * 1000 }")"
     # A mean over a handful of samples is not a throughput figure, and the
-    # denominator is not fixed either: BirdNET+ V3.0 dynamic takes 144 000
-    # samples at 32 kHz — a 4.5 s chunk — while the fixed variant takes 3 s. So
+    # denominator is not fixed either: BirdNET V2.4 (the default) takes 144 000
+    # samples at 48 kHz — a 3 s chunk — and BirdNET+ V3.0 dynamic takes 144 000
+    # samples at 32 kHz — a 4.5 s chunk. So
     # report the latency as a measurement and let the backlog below decide
     # whether the board keeps up.
     record INFO perf.latency "mean decode-to-prediction latency ${mean} ms over ${dc} stored detection(s)" \

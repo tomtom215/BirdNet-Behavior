@@ -1,6 +1,7 @@
-# Publish the shared BirdNET+ model release.
+# Publish a shared model release: the BirdNET+ V3.0 preview's (the default
+# input) or BirdNET V2.4's (`classifier: birdnet-v24`, the second job below).
 #
-# This workflow mirrors the ~541 MB BirdNET+ V3.0 model + labels from Zenodo
+# V3.0: this workflow mirrors the ~541 MB BirdNET+ V3.0 model + labels from Zenodo
 # (the upstream source) into a **stable, arch-independent GitHub release** that
 # every app release's install.sh / Docker entrypoint pulls from. It is run
 # **once per model version** (manually, via the "Run workflow" button), not on
@@ -8,9 +9,22 @@
 # 541 MB per patch would be pure waste. Re-run it only if the model file or its
 # pinned checksums in installer/lib/10-config.sh change.
 #
+# V2.4: mirrors the BirdNET V2.4 model and its range filter v2 from their pinned
+# upstream URLs into `models-v2.4`, verifying sha256 AND size against the Rust
+# catalogue (crates/birdnet-integrations/src/model_catalog.rs, read through
+# installer/catalogue-field.sh — the installer does not pin V2.4, the binary
+# does). Not the labels: they are a file the binary carries (BirdNET-Pi's English
+# names), and the labels upstream publishes name 460 classes differently. NOTHING
+# FETCHES FROM THIS RELEASE YET: the installer and the container run
+# `birdnet-behavior --install-model`, whose origins are the catalogue's. The
+# mirror exists so the catalogue can name it first (with the upstream URL as the
+# fallback) when the maintainer decides to depend on our own host; the asset
+# names are birdnet-v24.onnx and birdnet-v24-range-v2.onnx, the names the binary
+# installs them under.
+#
 # What it guarantees:
 #   * The bytes published to GitHub are byte-for-byte the bytes pinned in
-#     installer/lib/10-config.sh (MODEL_SHA256 / LABELS_SHA256) — the job fails
+#     installer/lib/10-config.sh (V3_MODEL_SHA256 / V3_LABELS_SHA256) — the job fails
 #     if Zenodo's content does not match, so the release asset and the
 #     installer's verification hash can never drift.
 #   * The release carries a SHA256SUMS asset and a SLSA build-provenance
@@ -29,15 +43,23 @@ name: Publish model release
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag for the model assets (must match MODEL_RELEASE_TAG in installer/lib/10-config.sh)."
+      classifier:
+        description: "Which model release to publish."
         required: false
-        default: "models-v3.0-preview3"
+        default: "birdnet-v3"
+        type: choice
+        options:
+          - birdnet-v3
+          - birdnet-v24
+      tag:
+        description: "Release tag for the model assets. Blank takes the pinned one: V3_MODEL_RELEASE_TAG in installer/lib/10-config.sh (birdnet-v3), models-v2.4 (birdnet-v24). A different tag is refused."
+        required: false
+        default: ""
         type: string
 
-# Never run two publishes for the same tag at once.
+# Never run two publishes for the same release at once.
 concurrency:
-  group: publish-model-${{ inputs.tag }}
+  group: publish-model-${{ inputs.classifier }}-${{ inputs.tag }}
   cancel-in-progress: false
 
 permissions:
@@ -46,6 +68,7 @@ permissions:
 jobs:
   publish-model:
     name: Mirror model from Zenodo and publish
+    if: ${{ inputs.classifier != 'birdnet-v24' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60  # observed 7m09s
     permissions:
@@ -67,14 +90,15 @@ jobs:
 
           # installer/lib/10-config.sh is the single source of truth for the
           # filenames, the Zenodo record, the model release tag, and the pinned
-          # sha256 hashes. Parse them here so this workflow and the installer can
-          # never disagree about what "the model" is.
-          record=$(grep -oP '^ZENODO_RECORD="\K[0-9]+'              "$cfg")
-          model_file=$(grep -oP '^MODEL_FILE="\K[^"]+'             "$cfg")
-          labels_file=$(grep -oP '^LABELS_FILE="\K[^"]+'           "$cfg")
-          model_sha=$(grep -oP '^MODEL_SHA256="\K[0-9a-f]{64}'     "$cfg")
-          labels_sha=$(grep -oP '^LABELS_SHA256="\K[0-9a-f]{64}'   "$cfg")
-          cfg_tag=$(grep -oP '^MODEL_RELEASE_TAG="\K[^"]+'         "$cfg")
+          # sha256 hashes of the BirdNET+ V3.0 preview (the V3_ names; BirdNET
+          # V2.4 is not pinned there — see the other job). Parse them here so this
+          # workflow and the installer can never disagree about what "the model" is.
+          record=$(grep -oP '^V3_ZENODO_RECORD="\K[0-9]+'            "$cfg")
+          model_file=$(grep -oP '^V3_MODEL_FILE="\K[^"]+'           "$cfg")
+          labels_file=$(grep -oP '^V3_LABELS_FILE="\K[^"]+'         "$cfg")
+          model_sha=$(grep -oP '^V3_MODEL_SHA256="\K[0-9a-f]{64}'   "$cfg")
+          labels_sha=$(grep -oP '^V3_LABELS_SHA256="\K[0-9a-f]{64}' "$cfg")
+          cfg_tag=$(grep -oP '^V3_MODEL_RELEASE_TAG="\K[^"]+'       "$cfg")
 
           # The geomodel (species occurrence filter) is mirrored into the same
           # release: it pairs with this classifier, and a station that fetched
@@ -88,9 +112,9 @@ jobs:
 
           # The dispatch input must match the tag the installer points at, or we
           # would publish assets nobody fetches.
-          want_tag="${WANT_TAG}"
+          want_tag="${WANT_TAG:-$cfg_tag}"
           if [[ "$want_tag" != "$cfg_tag" ]]; then
-            echo "::error::Input tag '$want_tag' != MODEL_RELEASE_TAG '$cfg_tag' in $cfg."
+            echo "::error::Input tag '$want_tag' != V3_MODEL_RELEASE_TAG '$cfg_tag' in $cfg."
             echo "Update one so they match before publishing."
             exit 1
           fi
@@ -305,6 +329,221 @@ jobs:
               "dist/${LABELS_FILE}" \
               "dist/${GEO_FILE}" \
               "dist/${GEO_LABELS}" \
+              dist/SHA256SUMS
+          fi
+
+          echo "::notice::Published model release ${TAG}"
+
+  # ---------------------------------------------------------------------------
+  # BirdNET V2.4: model + range filter v2 (see the header for why not the labels,
+  # and for the fact that nothing fetches from this release yet).
+  # ---------------------------------------------------------------------------
+  publish-model-v24:
+    name: Mirror BirdNET V2.4 and publish
+    if: ${{ inputs.classifier == 'birdnet-v24' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write     # create the release + upload assets
+      id-token: write     # OIDC token for SLSA attestation
+      attestations: write # attach the attestation to the repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the V2.4 pins from the catalogue
+        id: cfg
+        shell: bash
+        env:
+          WANT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          field() { bash installer/catalogue-field.sh "$1" "$2"; }
+
+          # The catalogue is the one place the digests, URLs and sizes live; the
+          # installer carries only the file names the binary gives them.
+          model_url=$(field birdnet-v24 model_url)
+          model_sha=$(field birdnet-v24 model_sha256)
+          model_bytes=$(field birdnet-v24 model_bytes)
+          range_url=$(field birdnet-v24-range-v2 model_url)
+          range_sha=$(field birdnet-v24-range-v2 model_sha256)
+          range_bytes=$(field birdnet-v24-range-v2 model_bytes)
+          model_file=$(grep -oP '^V24_MODEL_FILE="\K[^"]+' installer/lib/10-config.sh)
+          range_file=$(grep -oP '^V24_RANGE_FILE="\K[^"]+' installer/lib/10-config.sh)
+          tag="models-v2.4"
+
+          if [[ -n "${WANT_TAG}" && "${WANT_TAG}" != "${tag}" ]]; then
+            echo "::error::Input tag '${WANT_TAG}' != '${tag}'. Publishing under another tag would create assets nothing fetches."
+            exit 1
+          fi
+          for v in model_url range_url model_file range_file; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::Could not read '$v'"
+              exit 1
+            fi
+          done
+          for v in model_sha range_sha; do
+            if ! [[ "${!v}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::'$v' is not a sha256 hex digest: '${!v}'"
+              exit 1
+            fi
+          done
+          for v in model_bytes range_bytes; do
+            if ! [[ "${!v}" =~ ^[0-9]+$ ]]; then
+              echo "::error::'$v' is not a byte count: '${!v}'"
+              exit 1
+            fi
+          done
+
+          {
+            echo "tag=$tag"
+            echo "model_url=$model_url"
+            echo "model_sha=$model_sha"
+            echo "model_bytes=$model_bytes"
+            echo "model_file=$model_file"
+            echo "range_url=$range_url"
+            echo "range_sha=$range_sha"
+            echo "range_bytes=$range_bytes"
+            echo "range_file=$range_file"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::group::V2.4 pins"
+          echo "tag=$tag"
+          echo "model=$model_file ($model_sha, $model_bytes bytes) from $model_url"
+          echo "range filter=$range_file ($range_sha, $range_bytes bytes) from $range_url"
+          echo "::endgroup::"
+
+      - name: Download from the pinned upstream URLs
+        shell: bash
+        env:
+          MODEL_URL: ${{ steps.cfg.outputs.model_url }}
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          RANGE_URL: ${{ steps.cfg.outputs.range_url }}
+          RANGE_FILE: ${{ steps.cfg.outputs.range_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          echo "Fetching ${MODEL_FILE} (~54 MB)…"
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -o "dist/${MODEL_FILE}" "${MODEL_URL}"
+          echo "Fetching ${RANGE_FILE} (~30 MB)…"
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -o "dist/${RANGE_FILE}" "${RANGE_URL}"
+          ls -l dist/
+
+      - name: Verify sha256 and size against the catalogue
+        shell: bash
+        env:
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          MODEL_SHA: ${{ steps.cfg.outputs.model_sha }}
+          MODEL_BYTES: ${{ steps.cfg.outputs.model_bytes }}
+          RANGE_FILE: ${{ steps.cfg.outputs.range_file }}
+          RANGE_SHA: ${{ steps.cfg.outputs.range_sha }}
+          RANGE_BYTES: ${{ steps.cfg.outputs.range_bytes }}
+        run: |
+          set -euo pipefail
+          cd dist
+          # If these fail, the bytes behind the pinned URLs are not the ones the
+          # catalogue was built against (or the download was corrupted). Do not
+          # publish a mismatched asset.
+          echo "${MODEL_SHA}  ${MODEL_FILE}" | sha256sum -c -
+          echo "${RANGE_SHA}  ${RANGE_FILE}" | sha256sum -c -
+          for pair in "${MODEL_FILE}:${MODEL_BYTES}" "${RANGE_FILE}:${RANGE_BYTES}"; do
+            f="${pair%%:*}"; want="${pair##*:}"; got=$(stat -c %s "$f")
+            if [[ "$got" != "$want" ]]; then
+              echo "::error::$f is $got bytes, the catalogue says $want"
+              exit 1
+            fi
+          done
+          echo "Checksums and sizes match the catalogue."
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: dist
+        env:
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          RANGE_FILE: ${{ steps.cfg.outputs.range_file }}
+        run: |
+          set -euo pipefail
+          sha256sum "${MODEL_FILE}" "${RANGE_FILE}" | tee SHA256SUMS
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/${{ steps.cfg.outputs.model_file }}
+            dist/${{ steps.cfg.outputs.range_file }}
+
+      - name: Create or update the model release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.cfg.outputs.tag }}
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          MODEL_SHA: ${{ steps.cfg.outputs.model_sha }}
+          RANGE_FILE: ${{ steps.cfg.outputs.range_file }}
+          RANGE_SHA: ${{ steps.cfg.outputs.range_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TITLE="BirdNET V2.4 model assets"
+
+          # A *data* release, marked non-latest so it never shadows the app
+          # release's "Latest" badge.
+          {
+            echo "Shared, arch-independent BirdNET V2.4 model assets, mirrored from the"
+            echo "URLs pinned in \`crates/birdnet-integrations/src/model_catalog.rs\`"
+            echo "(the V2.4 ONNX conversion at <https://huggingface.co/tphakala/BirdNET-v2.4>"
+            echo "and the range filter v2 shipped with <https://github.com/tphakala/birdnet-go>)."
+            echo ""
+            echo "V2.4 is the network BirdNET-Pi and birdnet-go run; it is the default"
+            echo "classifier of this project's installer and Docker image."
+            echo ""
+            echo "**Nothing fetches from this release yet.** \`install.sh\` and the Docker"
+            echo "entrypoint run \`birdnet-behavior --install-model birdnet-v24\`, whose origins"
+            echo "are the ones in the catalogue. The labels are not here on purpose: the"
+            echo "binary carries BirdNET-Pi's English names for V2.4's classes, and the labels"
+            echo "published upstream name 460 of 6 522 classes differently."
+            echo ""
+            echo "### Files"
+            echo ""
+            echo "| File | sha256 |"
+            echo "|------|--------|"
+            echo "| \`${MODEL_FILE}\` | \`${MODEL_SHA}\` |"
+            echo "| \`${RANGE_FILE}\` | \`${RANGE_SHA}\` |"
+            echo ""
+            echo "Both names are the ones \`--install-model\` installs the files under."
+            echo ""
+            echo "### Verify"
+            echo ""
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS"
+            echo "gh attestation verify --repo ${{ github.repository }} ${MODEL_FILE}"
+            echo '```'
+            echo ""
+            echo "### License"
+            echo ""
+            echo "BirdNET V2.4 and its metadata (range) model are © their authors (the"
+            echo "K. Lisa Yang Center for Conservation Bioacoustics at the Cornell Lab of"
+            echo "Ornithology, and Chemnitz University of Technology) and are licensed"
+            echo "**CC BY-NC-SA 4.0 — non-commercial**. This release only mirrors them; see"
+            echo "the upstream repositories' licence files."
+          } > release_body.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Release ${TAG} already exists — updating in place."
+            gh release edit "$TAG" \
+              --title "$TITLE" \
+              --notes-file release_body.md \
+              --latest=false
+            gh release upload "$TAG" --clobber \
+              "dist/${MODEL_FILE}" \
+              "dist/${RANGE_FILE}" \
+              dist/SHA256SUMS
+          else
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --notes-file release_body.md \
+              --latest=false \
+              "dist/${MODEL_FILE}" \
+              "dist/${RANGE_FILE}" \
               dist/SHA256SUMS
           fi
 

@@ -22,7 +22,7 @@
 #   --remove-db            delete the database (birds.db + analytics + backups)
 #   --remove-recordings    delete the saved birdsong audio (recordings/)
 #   --remove-config        delete /etc/birdnet (your settings)
-#   --remove-models        delete the downloaded BirdNET model (~541 MB)
+#   --remove-models        delete the downloaded BirdNET model (~85 MB for V2.4, ~560 MB for the V3.0 preview)
 #   --remove-image-cache   delete cached species images
 #   --remove-zram          remove the zram-swap service install.sh may have added
 #   --purge                shorthand for all of the above + logs
@@ -275,7 +275,7 @@ plan_line() { printf "    %-18s %s\n" "$1" "$2"; }
 plan_line "database"      "$([ "$REMOVE_DB" = 1 ] && echo REMOVE || echo keep)   (${DB_PATH}, ${ANALYTICS_DB}, ${BACKUPS_DIR})"
 plan_line "recordings"    "$([ "$REMOVE_RECS" = 1 ] && echo REMOVE || echo keep)   (${RECS_DIR})"
 plan_line "settings"      "$([ "$REMOVE_CONFIG" = 1 ] && echo REMOVE || echo keep)   (${CONFIG_DIR})"
-plan_line "model (~541MB)" "$([ "$REMOVE_MODELS" = 1 ] && echo REMOVE || echo keep)   (${MODEL_DIR:-${MODEL_FILES[*]:-no MODEL_PATH in the config}})"
+plan_line "models" "$([ "$REMOVE_MODELS" = 1 ] && echo REMOVE || echo keep)   (${MODEL_DIR:-${MODEL_FILES[*]:-no MODEL_PATH in the config}})"
 plan_line "image cache"   "$([ "$REMOVE_IMAGE_CACHE" = 1 ] && echo REMOVE || echo keep)   (${IMAGE_CACHE_DIR})"
 plan_line "zram-swap"     "$([ "$REMOVE_ZRAM" = 1 ] && echo REMOVE || echo keep)   (${ZRAM_FILE})"
 echo
