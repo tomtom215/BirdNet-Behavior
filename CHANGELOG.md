@@ -648,6 +648,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagrees with a manifest (checked against a lock with one workspace
   version edited) and so fails in seconds rather than partway through the
   build matrix.
+- **One rule for confidence, with a key.** Five rules drew the same detection in
+  different colours (82 % was amber on the Today feed and green on the Review
+  page; everything between the cut-off and 75 % was the grey of a disabled
+  control; there was no legend). One function now grades every surface: 90 % and
+  up is *very sure*, below the station's cut-off plus ten points is *borderline*,
+  and between is *sure*, so the edges follow the cut-off the station chose (at 70 %:
+  70-79 amber, 80-89 neutral, 90+ green). A key is printed above each list of bars.
+  The tiers are tokens (`--conf-*`); `tokens.mjs` grades each fill 3:1 against its
+  track and each pill's text 4.5:1 (61 checks on the merged tree). On a phone the
+  Today feed's names wrap instead of ending in an ellipsis and the confidence
+  is shown (it was hidden).
+- **The header badge and the Health page read one list.** The badge graded three
+  things and the page a dozen, so a station with two cameras stalled read a green
+  *Healthy* in the header over a page saying *Needs attention*. Both now build one
+  issue list; one issue names itself ("Source stopped"), two or more read "Needs
+  attention", and a damaged or unreadable database is red. The badge reads the
+  integrity verdict the daily pass recorded and caches its two `df` readings for
+  25 s; it never runs the full check.
+- **Charts you can read.** The categorical palette (8 colours per theme, graded
+  by arithmetic for distance, contrast and gamut; the old one had two colours
+  outside sRGB), a heat ramp that gets darker with more in both themes, a
+  streamgraph with a scale bar, the busiest day marked, a pointer readout and a
+  table, a key under the dawn-chorus rings, Trends charts above their tables, and a
+  drawn empty state for migration in place of a 360 px blank card.
+- **One token set, held by tests.** About 770 literal font weights, hairlines,
+  gaps and colours in `app.css` became tokens, with no computed style changed
+  (116 of 117 route-theme-viewport pages identical over 40,648 elements; the 117th
+  was a lazily loaded fragment, identical on re-runs). `prefers-contrast: more`
+  now does what the High contrast setting does, `forced-colors` keeps bars and
+  card edges, and the browser's `theme-color` bar equals `--bg` in each theme and
+  follows the toggle. `app.css` grew from 272,772 to 298,659 bytes (gzip 61,084
+  to 67,545), measured by the UI branch.
 
 ### Fixed
 
@@ -1361,6 +1393,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exclude each leave a row with the signed-in user as actor, only when the write took
   effect. New action names: `detection.relabel`, `quarantine.*`, `image.blacklist.*`,
   `notification.prune`, `data.backup.delete`.
+- **Tints were the wrong colour.** `color-mix(in oklch, ...)` over a neutral walks
+  the hue toward 0 or 250: a 16 % amber came out pink, a 16 % moss brown, and
+  the dark warning toast magenta. The 72 mixes are in OKLab now, and `tokens.mjs`
+  checks a tint keeps its hue.
+- **Focus squared off every rounded control.** `:focus-visible { border-radius:
+  2px }` reshaped 948 of 1,156 focus stops. A focused control keeps its shape
+  and a 2 px ring that is 3:1 against what is behind it (`focus.mjs`: 2,264
+  stops, 0 changed shape, 0 weak; 28 stops inside the browser's own audio bar are
+  not graded). Digits are tabular everywhere (`figures.mjs`: 879 figures, none
+  proportional; 280 of 879 were), and the sign-in fields have a 3:1 edge (4.89:1
+  light, 4.98:1 dark; the earlier fields measured 1.74:1 and 1.98:1).
+- **Pages jumped as they filled in.** Placeholders now have the shape of what
+  replaces them, and the weekly-report column no longer widens in steps. Measured
+  with `cls.mjs`: 8 of 78 page loads over 0.1 on the merged tree (15 on the
+  baseline, by the UI branch's run); the dashboard, a never-heard species page,
+  the chord diagram and the footer still shift. The onboarding wizard was
+  recomposed (what it saves is unchanged) and opens with the card that matches the
+  stored threshold, whether it is spelled `0.7`, `0.70` or `.7`.
 
 ### Security
 

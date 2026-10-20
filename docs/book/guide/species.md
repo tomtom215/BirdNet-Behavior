@@ -32,4 +32,4 @@ The **Life List** (`/species?view=lifelist` — the old `/life-list` still redir
 
 ![The life list with its accumulation curve](../images/life-list.png)
 
-> Confidence pills are color-coded — moss for high-confidence species, dawn (amber) for the more tentative ones — so the quality of each entry reads at a glance.
+> Confidence pills and bars use one colour rule everywhere in the app: green at 90 % and up, amber for a detection within ten points of the station's own cut-off (*borderline*), neutral in between. Because the edge follows your cut-off, a station that keeps 80 % and up has two tiers only: everything under 90 % reads as borderline. A key above each list says which applies, and none of the colours is the alert red.
