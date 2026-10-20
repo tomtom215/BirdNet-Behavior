@@ -35,6 +35,6 @@ If unset it defaults to `http://localhost:8502` (the server's own port). You can
 
 ## Caching
 
-RSS responds with `Cache-Control: public, max-age=300` (5 minutes); iCal with one hour, since calendar clients repoll slowly. An empty station still returns valid, well-formed XML/iCalendar.
+RSS responds with `Cache-Control: private, max-age=300` (5 minutes); iCal with `private, max-age=3600` (one hour), since calendar clients repoll slowly. Both say `private`, so a shared cache or CDN in front of the station will not keep a copy. An empty station still returns valid, well-formed XML/iCalendar.
 
 > These endpoints are unauthenticated and expose the same information as the public dashboard. If you gate the UI behind a reverse proxy, decide whether to expose `/feeds/*` alongside it.

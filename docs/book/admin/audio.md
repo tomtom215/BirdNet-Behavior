@@ -347,9 +347,21 @@ for bat calls rather than for hearing loss.)
 Changing the pitch reconnects the stream — the shift is applied by the encoder
 on the station, not in your browser — so expect about a second of silence.
 
-For **saved clips** the equivalent is `--freq-shift-hz` (config key
-`FREQ_SHIFT`), applied when the clip is written. The same rule applies:
-**negative** shifts down and is the direction that helps.
+For **saved clips** the equivalent is `--freq-shift-hz` (`BIRDNET_FREQ_SHIFT_HZ`,
+config key `FREQ_SHIFT`), applied when the clip is written. The same rule applies:
+**negative** shifts down and is the direction that helps; a typical value is
+`-3000`.
+
+**It is a shift in hertz, not a ratio.** Every frequency moves by the number you
+give: with `-3000`, an 8 kHz song is heard at 5 kHz, and the clip's length is
+unchanged. Both the live stream and saved clips do this with ffmpeg's
+`afreqshift` filter, which needs **ffmpeg 4.3 or newer**. If the ffmpeg on the
+station lacks it, a saved clip is kept **unshifted** and a warning says so; there
+is no other tool to fall back on (sox cannot shift by an amount of hertz). A
+shifted clip still carries its species, confidence and date tags. (Releases up to
+v0.17.1 scaled frequencies by a ratio instead, so `-3000` turned 8 kHz into
+7.5 kHz and slowed the clip by 6.7 %, measured with ffmpeg 6.1.1 on an 8 kHz
+tone, while this page said otherwise.)
 
 > Releases before this one documented that setting backwards, saying a positive
 > value helped high-frequency hearing loss. It does the opposite. If you set a

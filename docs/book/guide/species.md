@@ -1,5 +1,7 @@
 # Species & the Life List
 
+What the Species home shows — the list of every bird the station has recorded, how to browse it by taxonomy, the per-species page and the life list — and how to read each; for anyone, hobbyist or researcher, who wants to browse or review what the station has heard.
+
 ## Species list
 
 The **Species** page (`/species`) is the browsable index of every bird you've recorded — searchable and sortable by most-heard, A→Z, or newest.
