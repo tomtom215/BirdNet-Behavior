@@ -136,7 +136,13 @@ fn build_page_html(active_filter: &str) -> String {
      hx-get=\"/pages/quarantine-stats\" \
      hx-trigger=\"load\" \
      hx-swap=\"innerHTML\">\
-  <p class=\"qz-loading\">Loading stats\u{2026}</p>\
+  <div class=\"stats-grid qz-stats-flush\">\
+    <span class=\"sr-only\">Loading stats\u{2026}</span>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Pending Review</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Approved</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Rejected</div></div>\
+    <div class=\"stat-card\" aria-hidden=\"true\"><div class=\"value\">\u{2013}</div><div class=\"label\">Total</div></div>\
+  </div>\
 </div>\
 <div class=\"card qz-filter-card\">\
   <div class=\"qz-filter-row\">\
