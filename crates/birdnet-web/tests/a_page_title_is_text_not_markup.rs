@@ -66,6 +66,27 @@ async fn a_name_in_the_url_cannot_close_the_title() {
     );
 }
 
+/// The same property with a probe the response pass leaves alone.
+///
+/// `seal::redeem` rewrites any `<script` it did not seal to `&lt;script` in the
+/// finished body, so the test above is carried by its closing-tag clause and by
+/// the exact title; a typed `<script>` read back as `&lt;script>` proves nothing
+/// about the layout. `<i>` is rewritten by nothing, so the title read back here
+/// is exactly what the layout made of the name.
+#[tokio::test]
+async fn a_name_in_the_url_cannot_close_the_title_with_a_tag_nothing_rewrites() {
+    let html = get("/species/detail?name=%3C%2Ftitle%3E%3Ci%3Eprobe%3C%2Fi%3E").await;
+    assert!(
+        !html.contains("<i>probe"),
+        "the query string became an element in the page"
+    );
+    assert_eq!(
+        title_of(&html),
+        "&lt;/title&gt;&lt;i&gt;probe&lt;/i&gt; · BirdNet-Behavior",
+        "the title must carry the name as escaped text"
+    );
+}
+
 #[tokio::test]
 async fn an_apostrophe_in_a_title_is_escaped_exactly_once() {
     let species = get("/species/detail?name=Cooper%27s%20Hawk").await;
