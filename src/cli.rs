@@ -702,6 +702,26 @@ pub struct Cli {
     )]
     pub privacy_threshold: f32,
 
+    /// BirdNET-Pi's privacy rule: suppress an analysis window, and the windows
+    /// either side of it, when a human class (speech, whistling, other human
+    /// sounds) is among the model's this-many highest-scoring classes
+    /// (0 = off).
+    ///
+    /// Read from the model's output before the detection threshold applies, as
+    /// BirdNET-Pi reads it. The default, 10, is BirdNET-Pi's own at its own
+    /// default (`PRIVACY_THRESHOLD=0` gives `human_cutoff = max(10, …)`), so a
+    /// station nobody has customised does not keep a clip of a conversation
+    /// near its microphone. For a BirdNET-Pi `PRIVACY_THRESHOLD` of `p`, set
+    /// this to `max(10, 60 × p)`. It works beside `--privacy-threshold`;
+    /// either rule suppresses a window. Config key: `PRIVACY_RANK`.
+    #[arg(
+        long,
+        default_value = "10",
+        env = "BIRDNET_PRIVACY_RANK",
+        value_parser = clap::value_parser!(u32).range(0..=12_000)
+    )]
+    pub privacy_rank: u32,
+
     /// Confidence at which a barking dog suppresses its audio chunk
     /// (0.0 = disabled).
     ///
@@ -1195,6 +1215,24 @@ mod tests {
         }
     }
     use clap::Parser;
+
+    /// The flag's `default_value` is a string literal, so nothing ties it to
+    /// the constant the daemon and the documentation name. This does: a station
+    /// nobody has customised masks a human in the model's top ten, as
+    /// BirdNET-Pi's does, and `--privacy-rank 0` is how it is switched off.
+    #[test]
+    fn the_privacy_rank_default_is_birdnet_pis_and_zero_switches_it_off() {
+        let cli = Cli::try_parse_from(["birdnet-behavior"]).expect("defaults parse");
+        assert_eq!(
+            cli.privacy_rank as usize,
+            birdnet_core::config::DEFAULT_PRIVACY_RANK
+        );
+        assert_eq!(birdnet_core::config::DEFAULT_PRIVACY_RANK, 10);
+        let off = Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "0"]).expect("0");
+        assert_eq!(off.privacy_rank, 0);
+        assert!(Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "12001"]).is_err());
+        assert!(Cli::try_parse_from(["birdnet-behavior", "--privacy-rank", "-1"]).is_err());
+    }
 
     #[test]
     fn explicit_set_distinguishes_supplied_flags_from_defaults() {

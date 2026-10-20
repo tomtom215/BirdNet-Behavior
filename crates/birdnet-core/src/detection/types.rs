@@ -64,6 +64,17 @@ pub struct ChunkPrediction {
     /// whistling, other human sounds) for this chunk, on the same scale as
     /// [`Detection::confidence`]. `0.0` when the label set has no human class.
     pub human_score: f32,
+    /// Where the best-scoring human class stands among *all* the model's
+    /// classes for this chunk, counting from `0` for the highest score: the
+    /// number of classes that outscored it. `None` when the label set has no
+    /// human class.
+    ///
+    /// This is the quantity BirdNET-Pi's privacy rule reads (`filter_humans`
+    /// masks a window when a human class is within the first
+    /// `max(10, 6000 × PRIVACY_THRESHOLD / 100)` classes of the sorted
+    /// output), taken, like [`Self::human_score`], before the detection
+    /// threshold and the top-N cut. A non-finite human score ranks `0`.
+    pub human_rank: Option<usize>,
     /// The highest-scoring watched noise class (see
     /// [`crate::inference::model::BirdNetModel::watch_noise_classes`]) in this
     /// chunk, read like [`Self::human_score`] from the model output *before*

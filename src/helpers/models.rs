@@ -473,7 +473,7 @@ fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) 
             println!("  MODEL_PATH={model}      (BIRDNET_MODEL)");
             println!("  LABELS_PATH={labels}      (BIRDNET_LABELS)");
             println!("\nIts scores are BirdNET-Pi's when CONFIDENCE and SENSITIVITY are:");
-            println!("  CONFIDENCE=0.7     (BirdNET-Pi's default; this station's is 0.75)");
+            println!("  CONFIDENCE=0.7     (BirdNET-Pi's default, and this station's)");
             println!("  SENSITIVITY=1.25   (the default here too, with BirdNET-Pi's meaning)");
             println!("\nFor the species-occurrence filter:");
             println!("  birdnet-behavior --install-model birdnet-v24-range-v2");

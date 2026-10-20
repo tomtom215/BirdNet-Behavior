@@ -239,6 +239,7 @@ pub fn run_daemon(
     if chunk_filters.privacy.is_enabled() {
         tracing::info!(
             threshold = config.privacy_threshold,
+            rank = config.privacy_rank,
             "privacy filter enabled"
         );
         if !model.has_human_labels() {
@@ -634,6 +635,7 @@ pub fn run_daemon(
 fn chunk_filters(config: &DaemonConfig, pipeline_config: &PipelineConfig) -> ChunkFilters {
     ChunkFilters {
         privacy: PrivacyFilter::new(config.privacy_threshold)
+            .with_rank_cutoff(config.privacy_rank)
             .with_clip_reach(config.privacy_clip_reach)
             .with_chunk_secs(pipeline_config.chunk_duration_secs),
         noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
@@ -943,6 +945,7 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            privacy_rank: 0,
             privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_remember_secs: 0.0,

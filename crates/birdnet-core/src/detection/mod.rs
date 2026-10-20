@@ -83,6 +83,7 @@ mod chunk_filter_tests {
         ChunkPrediction {
             detections,
             human_score: 0.0,
+            human_rank: None,
             loudest_noise: None,
         }
     }
@@ -92,6 +93,7 @@ mod chunk_filter_tests {
         ChunkPrediction {
             detections,
             human_score: 0.8,
+            human_rank: None,
             loudest_noise: None,
         }
     }

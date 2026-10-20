@@ -79,6 +79,7 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_confidence_ceiling(config, &mut out);
     check_sf_thresh_ceiling(config, &mut out);
     check_privacy_threshold_scale(config, &mut out);
+    check_positive_int(config, "PRIVACY_RANK", 0, PRIVACY_RANK_MAX, &mut out);
     check_positive_int(config, "RECORDING_LENGTH", 3, 60, &mut out);
     check_positive_int(config, "SEGMENT_DURATION", 3, 600, &mut out);
     check_schedule(config, &mut out);
@@ -324,6 +325,13 @@ fn check_sf_thresh_ceiling(config: &Config, out: &mut Vec<Finding>) {
 /// privacy filter the owner believes is on never fires.
 const PRIVACY_THRESHOLD_CEILING: f64 = 0.5;
 
+/// The largest `PRIVACY_RANK` the station accepts.
+///
+/// V2.4 has 6 522 classes and V3.0 has 11 560, so a rank past either masks
+/// every window; BirdNET-Pi's own largest cutoff (`PRIVACY_THRESHOLD=100`)
+/// is 6 000.
+pub const PRIVACY_RANK_MAX: u64 = 12_000;
+
 /// Warn about a `PRIVACY_THRESHOLD` that looks like BirdNET-Pi's scale.
 fn check_privacy_threshold_scale(config: &Config, out: &mut Vec<Finding>) {
     let Some(Ok(v)) = parse_float(config, "PRIVACY_THRESHOLD") else {
@@ -340,8 +348,10 @@ fn check_privacy_threshold_scale(config: &Config, out: &mut Vec<Finding>) {
              value came from BirdNET-Pi, note that BirdNET-Pi reads the same key as a \
              percentage of the species list instead"
         ),
-        "for a privacy filter that fires, use a small confidence such as \
-         PRIVACY_THRESHOLD=0.02 (typical range 0.01-0.03; lower masks more); 0 turns it off",
+        "BirdNET-Pi's rule is PRIVACY_RANK here: for a BirdNET-Pi value p, set \
+         PRIVACY_RANK=max(10, 60 x p) and PRIVACY_THRESHOLD=0. For a confidence-based \
+         filter on top of it, use a small PRIVACY_THRESHOLD such as 0.02 (typical \
+         range 0.01-0.03; lower masks more); 0 turns that rule off",
     ));
 }
 

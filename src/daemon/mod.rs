@@ -292,6 +292,18 @@ pub fn start_detection_daemon(
         config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
     );
 
+    // `10` is the flag default and `0` ("off") is a meaningful value, so the
+    // config key is consulted only when the flag was left alone.
+    let privacy_rank = usize::try_from(
+        crate::daemon::config::resolve_i64_with_default(
+            i64::from(cli.privacy_rank),
+            i64::try_from(birdnet_core::config::DEFAULT_PRIVACY_RANK).unwrap_or(10),
+            config.and_then(|c| c.get_parsed::<i64>("PRIVACY_RANK").ok()),
+        )
+        .max(0),
+    )
+    .unwrap_or(birdnet_core::config::DEFAULT_PRIVACY_RANK);
+
     // `0` is both the flag default and a meaningful value ("disabled"), so
     // the config key is consulted only when the flag was left alone. Passing
     // the default in rather than comparing here keeps the one comparison in
@@ -406,7 +418,9 @@ pub fn start_detection_daemon(
     // from are read once at start. "On" is the filter's own rule, so clips
     // are kept in their segment exactly when the filter runs.
     extraction_config.own_segment_only =
-        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold).is_enabled();
+        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold)
+            .with_rank_cutoff(privacy_rank)
+            .is_enabled();
     let privacy_clip_reach = extraction_config.clip_reach();
 
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
@@ -453,6 +467,7 @@ pub fn start_detection_daemon(
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
+        privacy_rank,
         privacy_clip_reach,
         noise_threshold,
         noise_classes,

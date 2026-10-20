@@ -4,10 +4,18 @@
 //! other human sounds) and the chunks either side of it, so a conversation
 //! near the microphone is not kept in the recordings a station retains.
 //!
-//! The judgement is made on the chunk's *human score* — the highest confidence
-//! the model gave any human class, read from its output before the detection
-//! threshold and top-N cut ([`ChunkPrediction::human_score`]). It is not made
-//! on the detection list. A list only carries a human label when speech scored
+//! Two rules, either of which flags a chunk, each read from the model's output
+//! before the detection threshold and the top-N cut:
+//!
+//! * the *rank rule* is BirdNET-Pi's: a human class among the model's `N`
+//!   highest-scoring classes ([`ChunkPrediction::human_rank`]; `N = 10` is
+//!   BirdNET-Pi's own default, and what a station gets unless it sets
+//!   `PRIVACY_RANK`);
+//! * the *score rule* is this project's addition: a human class whose
+//!   confidence reaches a threshold ([`ChunkPrediction::human_score`]; off
+//!   unless `PRIVACY_THRESHOLD` is set).
+//!
+//! The judgement is not made on the detection list. A list only carries a human label when speech scored
 //! above the *detection* threshold, so a filter that scanned the list was tuned
 //! by that threshold, and its own setting never bound: the BirdNET-Pi rule this
 //! port inherited, `human_cutoff = max(10, 6000 × threshold / 100)`, looked at
@@ -29,8 +37,11 @@ pub struct ClipReach {
 #[derive(Debug, Clone)]
 pub struct PrivacyFilter {
     /// The human score at or above which a chunk is suppressed.
-    /// `0.0` disables the filter.
+    /// `0.0` switches the score rule off.
     threshold: f32,
+    /// A chunk is suppressed when a human class ranks within this many of the
+    /// model's highest-scoring classes. `0` switches the rank rule off.
+    rank_cutoff: usize,
     /// How far a saved clip reaches beyond its detection.
     reach: ClipReach,
     /// Length of one analysed chunk, in seconds.
@@ -38,18 +49,30 @@ pub struct PrivacyFilter {
 }
 
 impl PrivacyFilter {
-    /// Create a new privacy filter with the given threshold.
+    /// Create a privacy filter with the given score threshold and the rank
+    /// rule off.
     ///
-    /// A threshold of 0.0 disables the filter entirely.
+    /// A threshold of 0.0 disables the filter entirely, until
+    /// [`Self::with_rank_cutoff`] turns the other rule on.
     pub const fn new(threshold: f32) -> Self {
         Self {
             threshold,
+            rank_cutoff: 0,
             reach: ClipReach {
                 before: 0.0,
                 after: 0.0,
             },
             chunk_secs: 3.0,
         }
+    }
+
+    /// The same filter with BirdNET-Pi's rank rule: a chunk is suppressed when
+    /// a human class is among the model's `rank_cutoff` highest-scoring
+    /// classes. `0` switches the rule off.
+    #[must_use]
+    pub const fn with_rank_cutoff(mut self, rank_cutoff: usize) -> Self {
+        self.rank_cutoff = rank_cutoff;
+        self
     }
 
     /// The same filter, told how far a saved clip reaches (see
@@ -74,19 +97,26 @@ impl PrivacyFilter {
         self.chunk_secs
     }
 
-    /// Whether the privacy filter is enabled (threshold > 0).
+    /// Whether the privacy filter is enabled (either rule is on).
     pub fn is_enabled(&self) -> bool {
-        self.threshold > 0.0
+        self.threshold > 0.0 || self.rank_cutoff > 0
     }
 
-    /// Get the current threshold.
+    /// Get the current score threshold (`0.0` when the score rule is off).
     pub const fn threshold(&self) -> f32 {
         self.threshold
     }
 
+    /// Get the current rank cutoff (`0` when the rank rule is off).
+    pub const fn rank_cutoff(&self) -> usize {
+        self.rank_cutoff
+    }
+
     /// Whether one chunk, on its own evidence, is to be suppressed.
     fn flags(&self, chunk: &ChunkPrediction) -> bool {
-        chunk.human_score >= self.threshold
+        let by_score = self.threshold > 0.0 && chunk.human_score >= self.threshold;
+        let by_rank = chunk.human_rank.is_some_and(|rank| rank < self.rank_cutoff);
+        by_score || by_rank
     }
 
     /// Suppress every chunk whose human score reaches the threshold, and the
@@ -225,6 +255,7 @@ mod tests {
         ChunkPrediction {
             detections: vec![make_detection("Turdus merula", "Eurasian Blackbird", 0.9)],
             human_score,
+            human_rank: None,
             loudest_noise: None,
         }
     }
@@ -265,6 +296,7 @@ mod tests {
                     ..make_detection("Turdus merula", "Blackbird", 0.9)
                 }],
                 human_score: if speech.contains(&i) { 0.8 } else { 0.0 },
+                human_rank: None,
                 loudest_noise: None,
             })
             .collect();
@@ -353,6 +385,7 @@ mod tests {
         let human_in_list = vec![ChunkPrediction {
             detections: vec![make_detection("Homo sapiens", "Human", 0.02)],
             human_score: 0.02,
+            human_rank: None,
             loudest_noise: None,
         }];
         assert!(
@@ -402,5 +435,115 @@ mod tests {
         let flags2 = vec![false, false, true];
         let expanded2 = expand_adjacent(&flags2);
         assert_eq!(expanded2, vec![false, true, true]);
+    }
+
+    /// A chunk with one blackbird detection, no score on the confidence scale,
+    /// and a human class at `rank` among the model's classes.
+    fn ranked(rank: Option<usize>) -> ChunkPrediction {
+        ChunkPrediction {
+            human_rank: rank,
+            ..chunk(0.0)
+        }
+    }
+
+    /// BirdNET-Pi's rule at its default: a human class within the model's
+    /// ten highest-scoring classes. "Within the first ten" is ranks 0..=9,
+    /// so rank 9 masks and rank 10 does not — the boundary BirdNET-Pi's
+    /// `prediction[:human_cutoff]` draws, and the one a `<=` slip moves.
+    #[test]
+    fn the_rank_rule_masks_a_human_in_the_top_ten_and_not_the_eleventh() {
+        let filter = PrivacyFilter::new(0.0).with_rank_cutoff(10);
+        assert!(
+            filter.is_enabled(),
+            "the rank rule alone enables the filter"
+        );
+
+        let kept = |rank| !filter.filter_predictions(&[ranked(rank)])[0].is_empty();
+        assert!(!kept(Some(0)), "the top answer");
+        assert!(
+            !kept(Some(9)),
+            "the tenth class is inside BirdNET-Pi's cutoff"
+        );
+        assert!(kept(Some(10)), "the eleventh class is outside it");
+        assert!(
+            kept(Some(500)),
+            "a human sound far down the list is not speech"
+        );
+        assert!(kept(None), "a model with no human class never masks");
+    }
+
+    /// The neighbour rule is BirdNET-Pi's too: the windows either side of a
+    /// flagged one go with it, whichever rule flagged it.
+    #[test]
+    fn the_rank_rule_masks_the_neighbours_of_the_window_too() {
+        let filter = PrivacyFilter::new(0.0).with_rank_cutoff(10);
+        let result = filter.filter_predictions(&[
+            ranked(Some(40)),
+            ranked(Some(3)),
+            ranked(Some(40)),
+            ranked(Some(40)),
+        ]);
+        assert!(result[0].is_empty() && result[1].is_empty() && result[2].is_empty());
+        assert!(!result[3].is_empty(), "two windows away is clear");
+    }
+
+    /// `PRIVACY_RANK=0` is the off switch, and it must not be the same thing
+    /// as "rank below zero": with the rule off a human at the very top of the
+    /// list masks nothing, as the all-off filter does.
+    #[test]
+    fn a_rank_cutoff_of_zero_switches_the_rank_rule_off() {
+        let filter = PrivacyFilter::new(0.0).with_rank_cutoff(0);
+        assert!(!filter.is_enabled());
+        assert!(!filter.filter_predictions(&[ranked(Some(0))])[0].is_empty());
+    }
+
+    /// The two rules are independent and either one suppresses: the rank
+    /// rule does not turn the score threshold off, and a score threshold of
+    /// zero does not turn the rank rule off.
+    #[test]
+    fn either_rule_alone_suppresses_a_window() {
+        let both = PrivacyFilter::new(0.03).with_rank_cutoff(10);
+        let by_score = ChunkPrediction {
+            human_rank: Some(200),
+            ..chunk(0.5)
+        };
+        let by_rank = ChunkPrediction {
+            human_rank: Some(2),
+            ..chunk(0.0)
+        };
+        let neither = ChunkPrediction {
+            human_rank: Some(200),
+            ..chunk(0.0)
+        };
+        assert!(both.filter_predictions(&[by_score])[0].is_empty());
+        assert!(both.filter_predictions(&[by_rank])[0].is_empty());
+        assert!(!both.filter_predictions(&[neither])[0].is_empty());
+        // Score rule off, rank rule on: a loud score alone masks nothing.
+        let rank_only = PrivacyFilter::new(0.0).with_rank_cutoff(10);
+        let loud_but_low_ranked = ChunkPrediction {
+            human_rank: Some(200),
+            ..chunk(0.9)
+        };
+        assert!(!rank_only.filter_predictions(&[loud_but_low_ranked])[0].is_empty());
+    }
+
+    /// The timed filter (clips that reach a flagged window) honours the rank
+    /// rule, not only the score rule: its own flag test is the same one.
+    #[test]
+    fn a_clip_that_would_reach_a_rank_flagged_window_is_suppressed() {
+        let filter = PrivacyFilter::new(0.0)
+            .with_rank_cutoff(10)
+            .with_clip_reach(ClipReach {
+                before: 4.5,
+                after: 4.5,
+            });
+        let (starts, mut chunks) = timed(5, 3.0, &[]);
+        chunks[0].human_rank = Some(1);
+        let kept = filter.filter_timed(&starts, &chunks);
+        assert!(
+            kept[2].is_empty(),
+            "chunk 2's clip reaches back into chunk 0"
+        );
+        assert!(!kept[3].is_empty(), "chunk 3's clip does not");
     }
 }

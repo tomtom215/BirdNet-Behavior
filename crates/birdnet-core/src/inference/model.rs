@@ -516,9 +516,12 @@ impl BirdNetModel {
                 })
             });
 
+        let human_rank = human_rank(flat_logits, &self.human_indices);
+
         Ok(ChunkPrediction {
             detections,
             human_score,
+            human_rank,
             loudest_noise,
         })
     }
@@ -1154,6 +1157,30 @@ fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
     }
 }
 
+/// How many classes outscored the best human class: `0` when a human class
+/// is the model's top answer, `None` when the label set has no human class
+/// the output covers.
+///
+/// Compared on the raw output, which orders classes exactly as their
+/// confidences do (the sigmoid is monotonic, and a probability model's
+/// output already is the confidence), so this does not depend on the
+/// sensitivity setting. A human class whose score is not finite ranks `0`,
+/// for the reason [`human_confidence`] reads it as speech: a damaged output
+/// must not be able to switch the privacy filter off.
+fn human_rank(raw_scores: &[f32], human_indices: &[usize]) -> Option<usize> {
+    human_indices
+        .iter()
+        .filter_map(|&i| raw_scores.get(i))
+        .map(|&raw| {
+            if raw.is_finite() {
+                raw_scores.iter().filter(|&&other| other > raw).count()
+            } else {
+                0
+            }
+        })
+        .min()
+}
+
 /// The ONNX Runtime environment every session in this process is created
 /// under: the classifiers and the geomodel alike.
 ///
@@ -1290,13 +1317,13 @@ mod tests {
     }
 
     #[test]
-    fn default_confidence_threshold_is_the_shipped_075() {
+    fn default_confidence_threshold_is_birdnet_pis_070() {
         // Counter-test for the drift this default used to carry: pin the
         // literal so a change to either the constant or this default has to
         // be deliberate rather than silent.
         assert!(
-            (ModelConfig::default().confidence_threshold - 0.75).abs() < f32::EPSILON,
-            "expected the shipped out-of-the-box 0.75, got {}",
+            (ModelConfig::default().confidence_threshold - 0.70).abs() < f32::EPSILON,
+            "expected BirdNET-Pi's out-of-the-box 0.70, got {}",
             ModelConfig::default().confidence_threshold
         );
     }
@@ -2069,6 +2096,33 @@ mod tests {
 
     /// The privacy gate fails the other way: a human score the model could
     /// not produce is treated as speech present, so the clip is masked.
+    /// The rank is how many classes outscored the best human class, so the
+    /// top answer is `0` and BirdNET-Pi's "within the first ten" is `< 10`.
+    #[test]
+    fn human_rank_counts_the_classes_that_outscored_the_best_human_class() {
+        // Classes 0..=4; classes 1 and 3 are human. Scores: the best human
+        // class (index 3, 2.0) is outscored by class 0 (5.0) and class 2 (3.0).
+        let scores = [5.0, 1.0, 3.0, 2.0, -1.0];
+        assert_eq!(human_rank(&scores, &[1, 3]), Some(2));
+        // The top answer is rank 0, whichever human class holds it.
+        assert_eq!(human_rank(&[0.1, 9.0, 0.3], &[1]), Some(0));
+        // Ties do not push a class below its equal.
+        assert_eq!(human_rank(&[2.0, 2.0, 1.0], &[1]), Some(0));
+        // No human class, or none inside the output: nothing to rank.
+        assert_eq!(human_rank(&scores, &[]), None);
+        assert_eq!(human_rank(&scores, &[99]), None);
+    }
+
+    /// A damaged output must not be able to switch the privacy filter off: a
+    /// human class that is not finite ranks first, as `human_confidence`
+    /// reads it as certain speech.
+    #[test]
+    fn a_non_finite_human_score_ranks_first() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(human_rank(&[5.0, bad, 3.0], &[1]), Some(0), "{bad}");
+        }
+    }
+
     #[test]
     fn human_confidence_non_finite_is_speech_present() {
         for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {

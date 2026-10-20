@@ -1406,13 +1406,16 @@ mod tests {
     }
 
     #[test]
-    fn confidence_default_is_075_not_the_old_025() {
+    fn confidence_default_is_birdnet_pis_070_not_the_old_025() {
         // Counter-test for the drift the shared constant was introduced to
         // kill: the daemon recorded at 0.25 while the UI advertised 0.70.
+        // And for the one after it: 0.75 here against BirdNET-Pi's 0.70 made
+        // an uncustomised station store fewer rows than BirdNET-Pi for the
+        // same audio.
         let got = resolve_confidence(None);
         assert!(
-            (got - 0.75).abs() < f32::EPSILON,
-            "daemon default must be the shipped 0.75, got {got}"
+            (got - 0.70).abs() < f32::EPSILON,
+            "daemon default must be BirdNET-Pi's 0.70, got {got}"
         );
     }
 
