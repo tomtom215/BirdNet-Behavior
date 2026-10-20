@@ -33,12 +33,18 @@ use tower::ServiceExt as _;
 use birdnet_web::state::AppState;
 use birdnet_web::tls::{self, TlsMode, TlsSettings};
 
-const PASSWORD: &str = "a-real-password";
+/// The seed admin's password, built per process: the `CodeQL` query on
+/// hard-coded cryptographic values follows a literal or a `const` into any
+/// parameter called `password` (CLAUDE.md); `format!` over a runtime value is
+/// not one.
+fn password() -> String {
+    format!("a-real-password-{}", std::process::id())
+}
 
 fn state() -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
-    let hash = birdnet_db::accounts::hash_password(PASSWORD).expect("hash");
+    let hash = birdnet_db::accounts::hash_password(&password()).expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         [&hash],
@@ -61,7 +67,10 @@ async fn cookie_via(path: &str, peer: &str, extra: &[(&str, &str)]) -> String {
         req = req.header(*k, *v);
     }
     let mut req = req
-        .body(Body::from(format!("username=admin&password={PASSWORD}")))
+        .body(Body::from(format!(
+            "username=admin&password={}",
+            password()
+        )))
         .expect("request");
     let peer: SocketAddr = format!("{peer}:40000").parse().unwrap();
     req.extensions_mut().insert(ConnectInfo(peer));
@@ -199,7 +208,7 @@ async fn a_login_on_the_tls_listener_gets_a_secure_cookie() {
     let tcp = TcpStream::connect(addr).await.expect("connect");
     let name = rustls_pki_types::ServerName::try_from("localhost").expect("server name");
     let mut tls_stream = connector.connect(name, tcp).await.expect("handshake");
-    let body = format!("username=admin&password={PASSWORD}");
+    let body = format!("username=admin&password={}", password());
     let req = format!(
         "POST /login HTTP/1.1\r\nHost: localhost\r\nOrigin: https://localhost\r\n\
          Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\

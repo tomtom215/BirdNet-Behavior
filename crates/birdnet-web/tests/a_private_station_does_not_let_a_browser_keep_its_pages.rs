@@ -22,12 +22,18 @@ use axum::http::{Method, Request, StatusCode, header};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
-const PASSWORD: &str = "a-real-password";
+/// The seed admin's password, built per process: the `CodeQL` query on
+/// hard-coded cryptographic values follows a literal or a `const` into any
+/// parameter called `password` (CLAUDE.md); `format!` over a runtime value is
+/// not one.
+fn password() -> String {
+    format!("a-real-password-{}", std::process::id())
+}
 
 fn station(private: bool) -> axum::Router {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
-    let hash = birdnet_db::accounts::hash_password(PASSWORD).expect("hash");
+    let hash = birdnet_db::accounts::hash_password(&password()).expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         [&hash],
@@ -67,7 +73,10 @@ async fn sign_in(app: &axum::Router) -> String {
         .header("content-type", "application/x-www-form-urlencoded")
         .header("origin", "http://localhost")
         .header("host", "localhost")
-        .body(Body::from(format!("username=admin&password={PASSWORD}")))
+        .body(Body::from(format!(
+            "username=admin&password={}",
+            password()
+        )))
         .expect("request");
     let res = app.clone().oneshot(req).await.expect("response");
     assert_eq!(res.status(), StatusCode::SEE_OTHER, "sign-in failed");

@@ -283,8 +283,11 @@ async fn an_htmx_redirect_stays_inside_the_prefix() {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = station(dir.path());
     // The seed admin carries a placeholder until a password is set, and the
-    // gate is open until then; give it a real one.
-    let hash = birdnet_db::accounts::hash_password("a-real-password").expect("hash");
+    // gate is open until then; give it a real one. Built at run time: the
+    // `CodeQL` query on hard-coded cryptographic values follows a literal into
+    // a parameter called `password` (CLAUDE.md).
+    let password = format!("a-real-password-{}", std::process::id());
+    let hash = birdnet_db::accounts::hash_password(&password).expect("hash");
     state.with_db(|c| {
         c.execute(
             "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",

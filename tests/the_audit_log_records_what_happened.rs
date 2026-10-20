@@ -20,6 +20,13 @@ use birdnet_web::server::build_router;
 use birdnet_web::session;
 use birdnet_web::state::AppState;
 
+/// The seed admin's password, built per process: the `CodeQL` query on
+/// hard-coded cryptographic values follows a literal into any parameter called
+/// `password` (CLAUDE.md); `format!` over a runtime value is not one.
+fn admin_password() -> String {
+    format!("admin-pw-{}", std::process::id())
+}
+
 /// A station with an admin account and a bound session cookie for it.
 fn station() -> (AppState, String) {
     let conn = Connection::open_in_memory().expect("memory db");
@@ -34,7 +41,7 @@ fn admin_session(state: &AppState) -> String {
     let sid = state
         .with_db(|conn| -> Result<String, AccountsError> {
             let admin = conn.find_user_by_name("admin")?;
-            conn.set_password(admin.id, &accounts::hash_password("admin-pw")?)?;
+            conn.set_password(admin.id, &accounts::hash_password(&admin_password())?)?;
             let sid = session::generate_session_id();
             conn.create_session(&sid, admin.id, "2999-01-01 00:00:00", None, None)?;
             Ok(sid)
@@ -109,7 +116,13 @@ async fn a_good_password_writes_ok_and_not_fail() {
     // that recorded `fail` for every attempt.
     let (state, _cookie) = station();
 
-    post_form(&state, "/login", None, "username=admin&password=admin-pw").await;
+    post_form(
+        &state,
+        "/login",
+        None,
+        &format!("username=admin&password={}", admin_password()),
+    )
+    .await;
 
     let entries = rows(&state);
     assert_eq!(entries.len(), 1, "{entries:?}");

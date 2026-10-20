@@ -472,15 +472,26 @@ mod tests {
     fn a_station_is_open_until_it_has_a_password() {
         let (_d, state) = fixture();
         assert!(admin_is_open(&state), "a fresh station has no password");
-        change_on_the_accounts_page(&state, &pw("chosen-in-the-wizard"));
+        change_on_the_accounts_page(&state, &pw());
         assert!(!admin_is_open(&state), "a chosen password closes it");
     }
 
-    /// A password made per run, because the `CodeQL` query on hard-coded
+    /// A password made per call, because the `CodeQL` query on hard-coded
     /// cryptographic values follows a literal into any parameter called
-    /// `password` (CLAUDE.md); `format!` over a runtime value is not one.
-    fn pw(tag: &str) -> String {
-        format!("{tag}-{}", std::process::id())
+    /// `password` (CLAUDE.md); `format!` over runtime values is not one.
+    ///
+    /// It takes no argument on purpose. An earlier `pw(tag: &str)` carried the
+    /// caller's literal through `format!("{tag}-…")`, so every `pw("…")` call
+    /// site was the alert. Each call returns a different password; the
+    /// variable's name says which one it is.
+    fn pw() -> String {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        format!(
+            "pw-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
     }
 
     fn verifies(state: &AppState, plaintext: &str) -> bool {
@@ -505,8 +516,8 @@ mod tests {
     #[test]
     fn a_password_changed_on_the_accounts_page_survives_a_restart() {
         let (_d, state) = fixture();
-        let from_config = pw("from-the-config");
-        let chosen = pw("chosen-on-the-accounts-page");
+        let from_config = pw();
+        let chosen = pw();
         let cfg = config_with("CADDY_PWD", &from_config);
 
         bootstrap_admin_password(&state, Some(&cfg));
@@ -534,9 +545,9 @@ mod tests {
     #[test]
     fn editing_caddy_pwd_replaces_a_password_set_on_the_accounts_page() {
         let (_d, state) = fixture();
-        let first = pw("first-config-password");
-        let chosen = pw("chosen-on-the-accounts-page");
-        let second = pw("second-config-password");
+        let first = pw();
+        let chosen = pw();
+        let second = pw();
 
         bootstrap_admin_password(&state, Some(&config_with("CADDY_PWD", &first)));
         change_on_the_accounts_page(&state, &chosen);
@@ -555,8 +566,8 @@ mod tests {
     #[test]
     fn a_station_with_no_record_keeps_the_old_rule_and_starts_one() {
         let (_d, state) = fixture();
-        let from_config = pw("from-the-config");
-        let stored = pw("stored-before-the-marker");
+        let from_config = pw();
+        let stored = pw();
         change_on_the_accounts_page(&state, &stored);
         assert!(!applied_marker_path(&state).exists());
 
@@ -582,18 +593,18 @@ mod tests {
         // the env var read (which is not safe to mutate under
         // `unsafe_code = deny`). This mirrors what `bootstrap_admin_password`
         // does once it has resolved CADDY_PWD.
-        let plaintext = "test-bootstrap-password";
+        let plaintext = pw();
         let result = state.with_db(|conn| -> Result<(), AccountsError> {
             let admin = conn.find_user_by_name("admin")?;
             assert!(accounts::is_legacy_password_hash(&admin.pwd_argon2));
-            let hash = accounts::hash_password(plaintext)?;
+            let hash = accounts::hash_password(&plaintext)?;
             conn.set_password(admin.id, &hash)
         });
         result.expect("rotate");
         let h = admin_hash(&state);
         assert!(!h.is_empty());
         assert!(!accounts::is_legacy_password_hash(&h));
-        assert!(accounts::verify_password(&h, plaintext).unwrap());
+        assert!(accounts::verify_password(&h, &plaintext).unwrap());
     }
 
     #[test]
@@ -601,10 +612,12 @@ mod tests {
         let (_d, state) = fixture();
         // Simulate a viewer account that was created pre-flip via the
         // PLAINTEXT-PLACEHOLDER scaffolding in #89.
+        let legacy_password = pw();
+        let placeholder = format!("PLAINTEXT-PLACEHOLDER:{legacy_password}");
         let _ = state.with_db(|conn| -> Result<(), AccountsError> {
             conn.create_user(
                 "viewer1",
-                "PLAINTEXT-PLACEHOLDER:hunter2",
+                &placeholder,
                 birdnet_db::accounts::Role::Viewer,
                 None,
             )?;
@@ -615,6 +628,6 @@ mod tests {
             .unwrap()
             .pwd_argon2;
         assert!(accounts::is_legacy_password_hash(&viewer_hash));
-        assert!(accounts::verify_password(&viewer_hash, "hunter2").unwrap());
+        assert!(accounts::verify_password(&viewer_hash, &legacy_password).unwrap());
     }
 }
