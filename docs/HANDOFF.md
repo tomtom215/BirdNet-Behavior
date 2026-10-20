@@ -224,7 +224,9 @@ finished, 69 `success` and 2 `skipped` (`deploy` and `Merge multi-arch manifest`
 which do not run on a pull request), none failed. That was tallied by a script from
 the check-runs API, not read off the list. It includes the four new `a11y.yml`
 steps, `cargo-deny`, `cargo-audit`, every `cargo-mutants` shard, the three upgrade
-jobs (from v0.15.0, v0.16.1 and v0.17.0), the real-model inference job and CodeQL.
+jobs (from v0.15.0, v0.16.1 and v0.17.0, each running
+`installer/test/upgrade-e2e.sh` under real systemd on a GitHub runner), the
+real-model inference job and CodeQL.
 The first run, on `c1fbea97`, was not green. Three things were red, each in this
 PR's own code, each fixed with the evidence in its commit message:
 
@@ -250,8 +252,7 @@ answers 403 without one, so what `main`'s Security tab lists is **not known**.
 parity numbers are an x86 ONNX build against BirdNET-Pi's FP16 TFLite; the memory a
 second copy of the range model takes on a Pi 4B was not measured); Docker (no
 daemon here, so the mount-table fixtures are modelled on Docker's output, not
-captured); systemd (`installer/test/upgrade-e2e.sh` needs a real systemd host);
-the release workflow as a whole; `redocly lint` (not installed here and not in CI);
+captured); the release workflow as a whole; `redocly lint` (not installed here and not in CI);
 a verifying `cargo package` of any crate (it needs a full second build, including
 the bundled DuckDB); `cargo publish`; the V3.0 geomodel variant of the new
 range-filter tests.
