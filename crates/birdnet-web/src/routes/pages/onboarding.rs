@@ -763,7 +763,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .ob-bullets { list-style:none; padding:0; margin:18px 0 0; display:flex; flex-direction:column; gap:10px; }
   .ob-bullets li { display:flex; gap:10px; align-items:center; font-size:14px; }
   .ob-bullets .tick { width:18px; height:18px; border-radius:999px; background:var(--moss-soft); color:var(--moss-ink); display:inline-flex; align-items:center; justify-content:center; font-size:11px; }
-  .ob-nav { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 0 28px; border-top:0.5px solid var(--hairline); }
+  /* One axis: Back, where you are, then everything that moves you on. "Use the
+     defaults and finish" used to sit centred under "Step 1 of 6", off the line
+     the Continue button was on. */
+  .ob-nav { display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px; padding:18px 0 28px; border-top:0.5px solid var(--hairline); }
+  .ob-stepcount { flex:1 1 auto; margin:0; }
+  /* On step 1 there is nothing to go back to; it hid itself but kept its room, which pushed "Step 1 of 6" in from the left edge. */
+  #ob-back[style*="hidden"] { display:none; }
+  .ob-skip-note { flex:1 1 100%; margin:-4px 0 0; text-align:right; }
   .ob-field { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
   .ob-field label { font-size:12.5px; font-weight:500; }
   .ob-field input { padding:9px 12px; border-radius:var(--r-sm); border:0.5px solid var(--border-2); background:var(--surface); color:var(--fg); font:inherit; }
@@ -792,6 +799,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   /* O-25: static inline style= attributes folded into this page's own <style>
      block (faithful, value-preserving). */
   .ob-center { display:flex; align-items:center; justify-content:center; }
+  /* Step 1. The task here is the password, so it sits on the right beside the
+     promises and the picture is its header: before, the picture floated in the
+     middle of a column 270px from either edge while the card it belonged to hung
+     off the left column under three bullets. */
+  .ob-two--top { align-items:start; }
+  .ob-aside { display:flex; flex-direction:column; gap:18px; min-width:0; }
+  .ob-aside .sonar { align-self:center; width:168px; height:168px; flex:none; }
+  .ob-aside .bnb-card { margin-top:0; }
   .ob-grow { flex:1; }
   .ob-mt-6 { margin-top:6px; }
   .ob-mt-16 { margin-top:16px; }
@@ -832,8 +847,10 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     .ob-h { font-size:32px; }
     /* The nav is three controls in a row; below this width they need to stack
        or the primary action is squeezed to an ellipsis. */
-    .ob-nav { flex-wrap:wrap; gap:10px; }
-    .ob-nav-mid { order:3; width:100%; }
+    .ob-stepcount { order:-1; flex:1 1 100%; text-align:center; }
+    .ob-skip-btn, #ob-next { flex:1 1 auto; justify-content:center; }
+    .ob-skip-note { text-align:left; }
+    .ob-aside .sonar { width:120px; height:120px; }
   }
   /* The only server-rendered error the wizard has was styled nowhere — it
      rendered as ordinary body text, visually identical to the paragraph above
@@ -851,8 +868,6 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   /* The microphone cards are deliberately not selectable; the pointer cursor
      said otherwise. */
   .ob-card.ob-card--static { cursor:default; }
-  .ob-nav-mid { display:flex; flex-direction:column; align-items:center; gap:6px; }
-  .ob-stepcount { margin:0; }
   /* Shown only by the <noscript> block above. */
   .ob-noscript-note, .ob-nosubmit { display:none; }
 </style>
@@ -902,7 +917,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   <div class="ob-stage">
     <!-- Step 1 — Welcome -->
     <section class="ob-step active" data-step="1">
-      <div class="ob-two">
+      <div class="ob-two ob-two--top">
         <div>
           <div class="ob-eyebrow">Welcome</div>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
@@ -912,9 +927,8 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
             <li><span class="tick">✓</span> Always tweakable — change anything later in Settings</li>
           </ul>
-          {{password_step}}
         </div>
-        <div class="ob-center">
+        <div class="ob-aside">
           <svg class="sonar" width="240" height="240" viewBox="0 0 240 240" aria-hidden="true">
             <g fill="none" stroke="var(--moss)" stroke-width="1">
               <circle cx="120" cy="120" r="30"><animate attributeName="r" values="30;110" dur="5s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.7;0" dur="5s" repeatCount="indefinite"/></circle>
@@ -927,6 +941,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
               <line x1="122" y1="106" x2="122" y2="134"/><line x1="128" y1="113" x2="128" y2="127"/>
             </g>
           </svg>
+          {{password_step}}
         </div>
       </div>
     </section>
@@ -1047,12 +1062,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
          Continue was an <a href="#" role="button">: an anchor fires click on
          Enter but not on Space, so a keyboard user pressing Space on something
          announced as a button scrolled the page instead. -->
-    <div class="ob-nav-mid">
-      <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 6</p>
-      <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
-    </div>
+    <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 6</p>
+    <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
     <button type="button" class="bnb-btn primary" id="ob-next">Continue →</button>
     <button type="submit" class="bnb-btn primary ob-nosubmit">Save setup</button>
+    <!-- What "use the defaults" does about the password, said where the choice
+         is made. Shown only on step 1 of a station that has none; the wording
+         follows what is typed. It changes nothing the wizard saves. -->
+    <p class="bnb-meta ob-skip-note" id="ob-skip-note" role="note" hidden></p>
   </div>
   </form>
 </main>
@@ -1076,6 +1093,24 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   var announce = document.getElementById('ob-announce');
   var NAMES = ['Welcome', 'Location', 'Microphone', 'Accuracy', 'Alerts', 'Done'];
 
+  // "Use the defaults and finish" finishes with both password boxes as they are:
+  // blank keeps the station open (the dashboard keeps saying so), anything typed
+  // must be long enough and typed twice, and is saved. Say which, beside the button.
+  var skipNote = document.getElementById('ob-skip-note');
+  var pw1 = document.getElementById('ob-password-1');
+  var pw2 = document.getElementById('ob-password-2');
+  function refreshSkipNote() {
+    if (!skipNote) { return; }
+    var show = step === 1 && pw1;
+    skipNote.hidden = !show;
+    if (!show) { return; }
+    skipNote.textContent = (pw1.value || (pw2 && pw2.value))
+      ? 'Finishing now saves the password you typed.'
+      : 'Finishing now with no password leaves this station open to anyone who can reach it. Set one any time under Settings \u2192 Access.';
+  }
+  if (pw1) { pw1.addEventListener('input', refreshSkipNote); }
+  if (pw2) { pw2.addEventListener('input', refreshSkipNote); }
+
   function render(moveFocus) {
     stepsEls.forEach(function (s) {
       var on = +s.dataset.step === step;
@@ -1095,6 +1130,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       else { p.removeAttribute('aria-current'); }
     });
     cur.textContent = step;
+    refreshSkipNote();
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
     next.textContent = step === total ? 'Finish & save →' : 'Continue →';
     // Step changes were entirely silent to assistive tech: the content of the
