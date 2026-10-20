@@ -318,6 +318,27 @@ by design:
 > the upstream origin on the first fetch and succeeds — it is a fallback, not a
 > failure. Re-running the workflow simply moves that fetch back onto our host.
 
+## The V2.4 mirror (`models-v2.4`)
+
+BirdNET V2.4 and its range filter v2 are fetched by the binary
+(`birdnet-behavior --install-model birdnet-v24`, `birdnet-v24-range-v2`) from the
+origins pinned in `crates/birdnet-integrations/src/model_catalog.rs`: Hugging Face
+for the model, `raw.githubusercontent.com` for the range filter. The
+**`publish-model.yml`** workflow with `classifier` set to `birdnet-v24` copies both
+into the release `models-v2.4` of this repository. It downloads from the pinned
+URLs, **fails unless sha256 and byte count match the catalogue**, writes
+`SHA256SUMS`, attaches a SLSA attestation and creates or updates the release
+(non-latest). The labels are not mirrored: the binary carries BirdNET-Pi's English
+names for V2.4's classes.
+
+It was run once, on 2026-10-20, from a feature branch. **Nothing fetches from the
+release yet**: the catalogue holds one URL per file. Using it means giving
+`CatalogEntry` a mirror-first, upstream-fallback pair and making
+`fetch_unless_installed` try them in order with the same digest check on either.
+Re-run the workflow from `main` once the branch that carries the `classifier` input
+has merged, so the attestation names `main`, and again only when a pinned digest in
+the catalogue changes.
+
 ## Rehearsing a release (dry run)
 
 `release.yml` has a `workflow_dispatch` entry. Triggering it from the

@@ -67,12 +67,21 @@ advisories it named.
   `docs/book/guides/parity.md` has the measured comparison.
 - **Where the default model files come from.** The binary fetches V2.4 from
   `huggingface.co/tphakala/BirdNET-v2.4` and the range filter from
-  `raw.githubusercontent.com` (`tphakala/birdnet-go`), each at a pinned revision
-  and checked against a SHA-256 compiled into it. A default install therefore
-  depends on one third party's hosting. `publish-model.yml` has a `classifier`
-  input that mirrors them into a `models-v2.4` release of this repository; **it
-  has not been run and nothing fetches from it**. Running it and making the
-  catalogue name the mirror first is yours to decide.
+  `raw.githubusercontent.com` (`tphakala/birdnet-go`), each at a pinned revision and
+  checked against a SHA-256 compiled into it, so a default install depends on one
+  third party's hosting. **You approved mirroring them, and `publish-model.yml` was
+  run on 2026-10-20** (run 39469063446, from this branch): the release `models-v2.4`
+  holds `birdnet-v24.onnx` (54,068,648 bytes), `birdnet-v24-range-v2.onnx`
+  (29,524,170) and `SHA256SUMS`. GitHub reports their digests as equal to the
+  catalogue's pins and to the files the tests ran on (compared in full); the
+  workflow's own sha256 and size check and its SLSA attestation step succeeded, but
+  I did not run `gh attestation verify`. **Nothing fetches from it yet.** The
+  catalogue has one URL per entry, so the dependency is unchanged until
+  `model_catalog.rs` names the mirror first with the upstream as the fallback (the
+  V3.0 model already works that way, in the installer's shell). That change touches
+  the install path of every new station and was not made here. Two follow-ups:
+  re-run the workflow from `main` after this merges, so the attestation names `main`
+  and not a feature branch; then wire the fallback in the catalogue.
 - **Publishing BirdNET-Pi's default range filter (MData v1) as ONNX.** It is
   hosted nowhere. `tools/model-convert` converts it and v2 (max difference 3.7e-6
   from TFLite over 1,344 calls); the catalogue carries v2 only. Hosting v1, and
@@ -228,8 +237,8 @@ geomodel variant of the new range-filter tests.
    runs in pull-request mode (`--in-diff`), which mutates only changed lines.
 2. Do the settings in section 1; close #228, #200, #199 and #263 when it merges.
 3. Decide the defaults in section 2, in this order: the V2.4 default (the only
-   one that changes what a new user sees), the model hosting, the multi-station
-   decisions.
+   one that changes what a new user sees), wiring the model mirror, the
+   multi-station decisions.
 4. Read the open items below; each is real and none was started unless it says so.
 
 ## 5. Open items
