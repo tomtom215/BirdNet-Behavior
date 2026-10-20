@@ -87,8 +87,11 @@ renders the full `--doctor` output, `GET /admin/doctor.json` returns the
 `--doctor-json` document, and `GET /admin/support-bundle` downloads the
 support bundle. `birdnet-web` reaches the binary's checks through
 `birdnet_web::diagnostics::Diagnostics` hooks, installed by `src/app.rs`
-from `helpers::diagnostics::hooks`. These routes are read-only: a `GET`
-never implies `--fix`. Gates:
+from `helpers::diagnostics::hooks`. The support bundle is redacted: passwords,
+tokens and URL credentials are masked, and the station's `LATITUDE` and
+`LONGITUDE` are shown to one decimal place (about 11 km), in the configuration
+section and wherever the journal printed them (`src/support.rs`, 145f95e4).
+These routes are read-only: a `GET` never implies `--fix`. Gates:
 `crates/birdnet-web/tests/the_diagnostics_are_reachable_from_the_browser.rs`,
 `tests/the_station_can_diagnose_itself_from_a_browser.rs`.
 
