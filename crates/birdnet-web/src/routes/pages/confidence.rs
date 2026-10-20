@@ -105,18 +105,23 @@ fn whole_percent(fraction: f64) -> u32 {
     (fraction.clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
+/// The station's cut-off as a whole percent. A cut-off that is not a number is no
+/// cut-off at all; the shipped default stands in rather than "0 %", which would
+/// call everything sure.
+#[must_use]
+pub fn cutoff_percent(floor: f64) -> u32 {
+    whole_percent(if floor.is_nan() {
+        default_floor()
+    } else {
+        floor
+    })
+}
+
 /// The lowest whole percent that is *not* borderline for a station whose
 /// cut-off is `floor` (a fraction).
 #[must_use]
 pub fn borderline_edge(floor: f64) -> u32 {
-    // A cut-off that is not a number is no cut-off at all; the shipped default
-    // stands in rather than "0 %", which would call everything sure.
-    let floor = if floor.is_nan() {
-        default_floor()
-    } else {
-        floor
-    };
-    (whole_percent(floor) + BORDERLINE_MARGIN).min(SURE)
+    (cutoff_percent(floor) + BORDERLINE_MARGIN).min(SURE)
 }
 
 /// The tier of a detection scoring `confidence` (a fraction) at a station whose

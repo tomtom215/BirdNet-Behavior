@@ -81,7 +81,7 @@ static HEATMAP_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Hour × day-of-week</div><h3>Activity grid</h3></div></div>
-  <p class="bnb-meta hm-chart-note">Darker cells mean more birds heard that hour. Mornings light up first — the dawn chorus — with a smaller evening lift. Quiet on the left of each row is the middle of the night.</p>
+  <p class="bnb-meta hm-chart-note">A stronger colour means more birds heard that hour (the key under the grid runs from none to most). Mornings light up first — the dawn chorus — with a smaller evening lift. Quiet on the left of each row is the middle of the night.</p>
   <div id="heatmap-grid" hx-get="/pages/heatmap-grid?days=7" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading heatmap...</p>
   </div>
@@ -89,7 +89,7 @@ static HEATMAP_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">All days combined</div><h2 class="sh-h">Detections by hour</h2></div><a class="action" href="/patterns?tab=dawn">See who sings when →</a></div>
-  <p class="bnb-meta hm-hourly-note">Totals for every hour. Dawn (5–8 am) and dusk (6–9 pm) bars are amber; the rest green.</p>
+  <p class="bnb-meta hm-hourly-note">Totals for every hour. Dawn (5–8 am) and dusk (6–9 pm) bars are green; the rest are grey.</p>
   <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading chart...</p>
   </div>
@@ -369,27 +369,33 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     svg
 }
 
-/// Map a 0.0–1.0 intensity to an on-brand, theme-aware heat colour.
+/// Map a 0.0–1.0 intensity to the app's one "how much" colour: the sequential
+/// ramp `--heat-lo` → `--heat-mid` → `--heat-hi`, interpolated in `OKLab`.
 ///
-/// Mirrors the documented `.bnb-heat-*` ramp: the warm **dawn** hue deepens
-/// over the neutral surface as activity climbs, then tips toward the **rare**
-/// hue for the busiest cells. Uses `color-mix(in oklch, …)` so the ramp tracks
-/// the active light/dark theme instead of baking in fixed sRGB values (the old
-/// blue→red rainbow ignored the palette and looked identical in both themes).
+/// The ramp is one hue family (sand, orange, brick in light; brown, amber, gold
+/// in dark) whose lightness only ever moves one way, so a cell reads as "more"
+/// by value alone and the scale survives greyscale and colour blindness. Its
+/// stops are held by `tests/the_chart_palette_can_be_told_apart.rs`: the lowest is
+/// at least 8 ΔE from an empty cell, the highest is 3:1 against the card.
+///
+/// This used to mix `--dawn` over the surface and then `--rare` over `--dawn`.
+/// In light that read beige to red; in dark, where the surface is blue-grey and
+/// `--dawn` is neon amber, the low end was purple, the middle salmon and the top
+/// orange (lightness went up, down and up again), and a key that said "darker
+/// means more" was wrong in one theme. `in oklab`, not `in oklch`: mixing hues
+/// the short way round the wheel turned the low cells pink.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn heat_color(t: f64) -> String {
+pub(crate) fn heat_color(t: f64) -> String {
     let t = t.clamp(0.0, 1.0);
     if t < 0.001 {
         return "var(--surface-2)".to_string(); // empty cell
     }
-    if t < 0.6 {
-        // surface-2 → dawn (12% … 100% mix)
-        let pct = (t / 0.6).mul_add(88.0, 12.0).round() as i32;
-        format!("color-mix(in oklch, var(--dawn) {pct}%, var(--surface-2))")
+    if t < 0.5 {
+        let pct = (t / 0.5 * 100.0).round() as i32;
+        format!("color-mix(in oklab, var(--heat-mid) {pct}%, var(--heat-lo))")
     } else {
-        // dawn → rare for the hottest cells
-        let s = ((t - 0.6) / 0.4 * 100.0).round() as i32;
-        format!("color-mix(in oklch, var(--rare) {s}%, var(--dawn))")
+        let pct = ((t - 0.5) / 0.5 * 100.0).round() as i32;
+        format!("color-mix(in oklab, var(--heat-hi) {pct}%, var(--heat-mid))")
     }
 }
 
@@ -447,11 +453,14 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
         };
         let x = 20 + hour * bar_w;
         let y = chart_h - bar_h as usize;
-        // Dawn/dusk hours: 5-8 and 18-21 get a lighter color
+        // One hue for the hours the page is about (dawn 5-8, dusk 18-21), a
+        // neutral for the rest. It was amber against green, which is the pair a
+        // reader who cannot tell red from green cannot tell apart, and amber is
+        // 2.35:1 on the card with nothing printed on the bar to carry it.
         let color = if (5..=8).contains(&hour) || (18..=21).contains(&hour) {
-            "var(--dawn)"
+            "var(--chart-1)"
         } else {
-            "var(--moss)"
+            "var(--chart-other)"
         };
         let _ = write!(
             svg,
@@ -480,20 +489,34 @@ mod tests {
         assert_eq!(heat_color(0.0), "var(--surface-2)");
     }
 
+    /// The ramp is the three `--heat-*` stops and nothing else, so what is
+    /// painted is what the palette test graded: the busiest cell is exactly
+    /// `--heat-hi`, the halfway one exactly `--heat-mid`, the least one drawn
+    /// exactly `--heat-lo`. And it is interpolated in `OKLab`, never `OKLCH`, which
+    /// took the short way round the hue wheel and turned the low end pink.
     #[test]
-    fn heat_color_full() {
-        // Hottest cells tip toward the rare hue, theme-aware via color-mix.
-        let c = heat_color(1.0);
-        assert!(c.contains("color-mix"));
-        assert!(c.contains("var(--rare)"));
-    }
-
-    #[test]
-    fn heat_color_mid() {
-        // Mid intensity is a dawn-over-surface mix (not the old sRGB rainbow).
-        let c = heat_color(0.5);
-        assert!(c.contains("color-mix"));
-        assert!(c.contains("var(--dawn)"));
+    fn heat_color_is_the_three_stops_in_oklab() {
+        assert_eq!(
+            heat_color(1.0),
+            "color-mix(in oklab, var(--heat-hi) 100%, var(--heat-mid))"
+        );
+        assert_eq!(
+            heat_color(0.5),
+            "color-mix(in oklab, var(--heat-hi) 0%, var(--heat-mid))"
+        );
+        assert_eq!(
+            heat_color(0.25),
+            "color-mix(in oklab, var(--heat-mid) 50%, var(--heat-lo))"
+        );
+        assert_eq!(
+            heat_color(0.01),
+            "color-mix(in oklab, var(--heat-mid) 2%, var(--heat-lo))"
+        );
+        for t in [0.01, 0.2, 0.5, 0.8, 1.0] {
+            let c = heat_color(t);
+            assert!(!c.contains("oklch"), "{c}");
+            assert!(!c.contains("--dawn") && !c.contains("--rare"), "{c}");
+        }
     }
 
     #[test]

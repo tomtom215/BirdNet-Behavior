@@ -17,6 +17,10 @@
 // Re-run when the page loads, when htmx swaps a fragment in, when a <details>
 // opens (it measured 0 while closed), and when the SVG's own size changes.
 // Opt out with `data-no-text-fit` on the <svg>.
+//
+// A second, independent module at the end of this file is the chart readout
+// (`svg[data-readout]`): it shares the file because every page that has a chart
+// already loads this one, not because the two have anything to do with each other.
 (function () {
   "use strict";
 
@@ -191,4 +195,106 @@
   } else {
     scan();
   }
+})();
+
+// ── Chart readout ────────────────────────────────────────────────────────────
+//
+// A stacked chart has no axis a finger can rest on: the thickness of a band on
+// one day is the number, and nothing printed it. An <svg data-readout> names its
+// columns and what each held (data-names = "Robin|Jay|…", data-cols =
+// "Tue 14 Oct:8,5,3;Wed 15 Oct:…"), and this prints the column under the
+// pointer or the finger beneath the chart, with a hairline on the chart where it
+// is. No library. The same facts are in the table under the chart, which is also
+// what a keyboard or a screen reader uses, so the chart itself takes no focus.
+(function () {
+  "use strict";
+
+  function bind(svg) {
+    if (svg.__readout) return;
+    svg.__readout = true;
+    var names = (svg.getAttribute("data-names") || "").split("|");
+    var cols = (svg.getAttribute("data-cols") || "")
+      .split(";")
+      .filter(Boolean)
+      .map(function (c) {
+        var at = c.lastIndexOf(":");
+        return {
+          label: c.slice(0, at),
+          n: c
+            .slice(at + 1)
+            .split(",")
+            .map(Number),
+        };
+      });
+    var wrap = svg.closest(".viz-chart");
+    var out = wrap && wrap.querySelector(".viz-readout");
+    var cursor = svg.querySelector(".sg-cursor");
+    if (!cols.length || !out) return;
+    var x0 = Number(svg.getAttribute("data-x0")) || 0;
+    var x1 = Number(svg.getAttribute("data-x1")) || 1;
+    var vbw = svg.viewBox.baseVal.width || 1;
+    var idle = out.textContent;
+
+    function show(i) {
+      i = Math.max(0, Math.min(cols.length - 1, i));
+      var c = cols[i];
+      var total = 0;
+      var parts = [];
+      c.n.forEach(function (v, k) {
+        total += v;
+        if (v > 0) parts.push([names[k] || "", v]);
+      });
+      parts.sort(function (a, b) {
+        return b[1] - a[1];
+      });
+      var text = c.label + " — " + total + (total === 1 ? " detection" : " detections");
+      if (parts.length) {
+        text +=
+          ": " +
+          parts
+            .slice(0, 4)
+            .map(function (p) {
+              return p[0] + " " + p[1];
+            })
+            .join(", ") +
+          (parts.length > 4 ? ", and " + (parts.length - 4) + " more" : "");
+      }
+      out.textContent = text;
+      if (cursor) {
+        var x = x0 + (cols.length > 1 ? (i / (cols.length - 1)) * (x1 - x0) : 0);
+        cursor.setAttribute("x1", x);
+        cursor.setAttribute("x2", x);
+        cursor.setAttribute("visibility", "visible");
+      }
+    }
+
+    function hide() {
+      out.textContent = idle;
+      if (cursor) cursor.setAttribute("visibility", "hidden");
+    }
+
+    function fromPointer(e) {
+      var r = svg.getBoundingClientRect();
+      if (!r.width) return;
+      var x = ((e.clientX - r.left) / r.width) * vbw;
+      show(Math.round(((x - x0) / (x1 - x0 || 1)) * (cols.length - 1)));
+    }
+
+    svg.addEventListener("pointermove", fromPointer);
+    svg.addEventListener("pointerdown", fromPointer);
+    svg.addEventListener("pointerleave", function (e) {
+      // A finger lifted off a touch screen leaves the last column readable.
+      if (e.pointerType === "mouse") hide();
+    });
+  }
+
+  function scan(root) {
+    var list = (root || document).querySelectorAll("svg[data-readout]");
+    for (var i = 0; i < list.length; i++) bind(list[i]);
+  }
+
+  scan();
+  document.addEventListener("htmx:afterSettle", function (e) {
+    scan(e.target);
+  });
 })();

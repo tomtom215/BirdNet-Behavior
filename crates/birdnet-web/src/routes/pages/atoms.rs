@@ -86,42 +86,38 @@ pub(crate) fn species_color(name: &str) -> String {
     format!("oklch(62% 0.13 {})", species_hue(name))
 }
 
-/// Colour for series `index` of `total` in a multi-series chart.
+/// Colour for series `index` in a multi-series chart: a reference to a chart
+/// token, so the theme chooses the value.
 ///
-/// Assigned by **rank within the chart** rather than by hashing the name, which
-/// is what makes the colours separable: the hues are spread evenly around the
-/// circle, so N series are always N maximally-distant hues instead of N
-/// independent samples that may collide (see [`species_color`] for the
-/// measured collision rates).
+/// Assigned by **rank within the chart**, never by hashing the name: a hash puts
+/// pairs of species 2-3 degrees apart (see [`species_color`] for the measured
+/// collision rates). Eight slots, `--chart-1` ... `--chart-8`, in the order
+/// `app.css` defines them. The order is the palette: it is the one that opens
+/// with the brand's green and keeps every neighbouring pair apart for a reader
+/// who cannot tell red from green. So it is never cycled: the ninth series and
+/// every one after it is `--chart-other`, a neutral that says "everything else".
+/// The values, per theme, are graded by
+/// `tests/the_chart_palette_can_be_told_apart.rs`.
 ///
-/// Two further properties the hash could not provide:
-///
-/// * **Alternating lightness.** Consecutive series step between two lightness
-///   levels, so adjacent bands differ in *value* as well as hue. That is what
-///   keeps them distinguishable in greyscale and under deuteranopia, where hue
-///   alone conveys nothing.
-///
-/// Even spacing rather than a golden-angle walk. A first draft stepped
-/// `index * 5 % total` to push early indices apart, which silently degenerates
-/// whenever `total` shares a factor with the step: at `total == 5` every series
-/// got hue 0, i.e. one colour for the whole chart. Even spacing has no such
-/// case and is optimal anyway — for N colours on a circle, `360/N` apart is the
-/// largest achievable minimum separation.
-///
-/// The trade is that a species' colour is stable *within* a chart but not
-/// across charts with different membership. For a legend-bearing comparison
-/// that is the right way round: telling this band from that one matters more
-/// than recognising a colour from another page, and the chips (which do keep a
-/// stable colour) carry that continuity.
+/// This used to compute `oklch({68|52}% 0.14 {index * 360 / total})`. At eight
+/// series two of the eight left sRGB (the browser painted something else),
+/// three sat under 3:1 against the card, and the dark theme used the same
+/// lightness, which is above the dark band. `total` is kept so the call sites
+/// read the same; it no longer changes the colour. (It used to spread the hues
+/// over `total`, so adding a ninth species to a chart repainted the first eight.)
+/// A species' slot still follows its rank in *this* chart; the legend, the band's
+/// `<title>` and the table name it, so the colour is never the only carrier.
 #[must_use]
-pub(crate) fn series_color(index: usize, total: usize) -> String {
-    let n = total.max(1);
-    let hue = (index % n) * 360 / n;
-    // Alternate between a lighter and a darker level so adjacent series differ
-    // in value, not only in hue.
-    let lightness = if index.is_multiple_of(2) { 68 } else { 52 };
-    format!("oklch({lightness}% 0.14 {hue})")
+pub(crate) fn series_color(index: usize, _total: usize) -> String {
+    if index < CHART_SLOTS {
+        format!("var(--chart-{})", index + 1)
+    } else {
+        "var(--chart-other)".to_string()
+    }
 }
+
+/// How many categorical chart colours the stylesheet defines.
+pub(crate) const CHART_SLOTS: usize = 8;
 
 /// Circular avatar chip: the species' **photograph**, over its banding code in
 /// its own hue. `size` is one of `""` (default 28px), `"sm"`, or `"lg"`.
@@ -295,10 +291,17 @@ pub(crate) fn sparkline(data: &[i64], width: f64, height: f64, accent: Option<&s
         width
     };
     let area = format!("{path} L{last_x:.1},{height} L0,{height} Z");
-    let stroke = accent.unwrap_or("var(--moss)");
+    let stroke = accent.unwrap_or("var(--chart-1)");
+    // Two marks that let a line be read as a quantity rather than a rule: the
+    // floor it is measured from (a hairline at zero, so a series pinned at its
+    // own maximum reads as "steady", not as a divider that lost its row), and a
+    // dot where it ends (so the eye finds *now*).
+    let end_y = y_of(*data.last().unwrap_or(&0));
+    let end_x = if n > 1 { last_x } else { width };
 
     format!(
-        r#"<svg class="bnb-spark" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" aria-hidden="true"><path class="area" d="{area}" fill="{stroke}" fill-opacity="0.10"/><path class="line" d="{path}" stroke="{stroke}" fill="none" stroke-width="1.4"/></svg>"#,
+        r#"<svg class="bnb-spark" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" aria-hidden="true"><line class="floor" x1="0" y1="{fy:.1}" x2="{width:.1}" y2="{fy:.1}" stroke="var(--hairline)" stroke-width="1"/><path class="area" d="{area}" fill="{stroke}" fill-opacity="0.10"/><path class="line" d="{path}" stroke="{stroke}" fill="none" stroke-width="1.4"/><circle class="end" cx="{end_x:.1}" cy="{end_y:.1}" r="1.9" fill="{stroke}"/></svg>"#,
+        fy = height - 0.5,
     )
 }
 
@@ -329,68 +332,27 @@ mod tests {
         assert!(a.starts_with("oklch("));
     }
 
-    /// Chart series must be separable — the property the hash palette lacked.
-    ///
-    /// Asserts the minimum pairwise hue separation is the best achievable for
-    /// N colours (`360/N`), across every chart size the UI actually renders,
-    /// and that consecutive series differ in lightness as well as hue so the
-    /// palette survives greyscale and colour-vision deficiency.
+    /// A series is a reference to the chart palette, in slot order, and the
+    /// ninth and later are the neutral. Nothing is computed here any more: the
+    /// values, in both themes, are graded by
+    /// `tests/the_chart_palette_can_be_told_apart.rs`, and a colour that is
+    /// computed per call is a colour that skips that grading.
     #[test]
-    fn series_colours_are_maximally_separated() {
-        fn hue_of(css: &str) -> i64 {
-            css.trim_end_matches(')')
-                .rsplit(' ')
-                .next()
-                .and_then(|h| h.parse().ok())
-                .unwrap_or(-1)
+    fn series_are_chart_slots_in_order_and_never_cycle() {
+        for (i, want) in (1..=8).enumerate() {
+            assert_eq!(series_color(i, 8), format!("var(--chart-{want})"));
         }
-        fn lightness_of(css: &str) -> i64 {
-            css.split('(')
-                .nth(1)
-                .and_then(|r| r.split('%').next())
-                .and_then(|l| l.parse().ok())
-                .unwrap_or(-1)
+        for i in 8..20 {
+            assert_eq!(series_color(i, 20), "var(--chart-other)", "series {i}");
         }
-
-        for total in 2..=16_usize {
-            let hues: Vec<i64> = (0..total)
-                .map(|i| hue_of(&series_color(i, total)))
-                .collect();
-            assert!(hues.iter().all(|h| *h >= 0), "hue must parse: {hues:?}");
-
-            let mut min_sep = 360;
-            for i in 0..total {
-                for j in (i + 1)..total {
-                    let d = (hues[i] - hues[j]).abs() % 360;
-                    min_sep = min_sep.min(d.min(360 - d));
-                }
-            }
-            let ideal = 360 / i64::try_from(total).unwrap();
-            assert_eq!(
-                min_sep, ideal,
-                "at {total} series the closest pair is {min_sep}° apart; the best \
-                 achievable is {ideal}°. The hash palette this replaced put \
-                 Northern Cardinal and American Robin 2° apart."
-            );
+        // The total does not move a colour: the old computation spread the hues
+        // over `total`, so adding one series repainted all the others.
+        for i in 0..8 {
+            assert_eq!(series_color(i, 3), series_color(i, 8));
         }
-
-        // Adjacent series differ in value, not only in hue — what keeps the
-        // palette readable in greyscale and under deuteranopia.
-        assert_ne!(
-            lightness_of(&series_color(0, 8)),
-            lightness_of(&series_color(1, 8))
-        );
-    }
-
-    /// The degenerate case the first draft had.
-    ///
-    /// `index * 5 % total` collapsed to a single hue whenever `total` was a
-    /// multiple of 5 — a five-species chart drawn entirely in one colour.
-    #[test]
-    fn a_five_series_chart_is_not_one_colour() {
-        let colours: std::collections::BTreeSet<String> =
-            (0..5).map(|i| series_color(i, 5)).collect();
-        assert_eq!(colours.len(), 5, "every series needs its own colour");
+        let distinct: std::collections::BTreeSet<String> =
+            (0..8).map(|i| series_color(i, 8)).collect();
+        assert_eq!(distinct.len(), 8, "every slot is its own colour");
     }
 
     /// The bar and the pill use the one tier function; their classes agree for
@@ -469,6 +431,26 @@ mod tests {
         assert!(sparkline(&[], 56.0, 16.0, None).is_empty());
         let s = sparkline(&[1, 3, 2, 5], 56.0, 16.0, None);
         assert!(s.contains("<svg") && s.contains("class=\"line\""));
+    }
+
+    /// A line alone is a rule, and a flat one is indistinguishable from a divider
+    /// that lost its row (five of the fifteen rows on /species were exactly that).
+    /// It carries the floor it is measured from and a dot where it ends, and the
+    /// dot sits on the last sample, not on the first or in the middle.
+    #[test]
+    fn a_sparkline_has_a_floor_and_ends_in_a_dot() {
+        let s = sparkline(&[0, 4, 1, 3], 60.0, 20.0, Some("var(--chart-2)"));
+        assert!(s.contains("class=\"floor\""), "{s}");
+        let dot = s.split("class=\"end\" cx=\"").nth(1).expect("an end dot");
+        let cx: f64 = dot.split('"').next().unwrap().parse().unwrap();
+        assert!(
+            (cx - 60.0).abs() < 0.01,
+            "the dot is at x = {cx}, not the last column"
+        );
+        assert!(
+            dot.contains("var(--chart-2)"),
+            "the dot takes the line's colour"
+        );
     }
 
     /// Pull the `d` attribute of the `class="line"` path.

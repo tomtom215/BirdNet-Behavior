@@ -226,9 +226,38 @@ async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
     // (40.0 N, -74.0 W) sun over every station on Earth.
     let (sunrise, sunset) = match solar {
         Some(pair) => pair,
-        None => return ok_html(render_polar_svg(&ribbons, None)),
+        None => return ok_html(with_ring_key(render_polar_svg(&ribbons, None), &ribbons)),
     };
-    ok_html(render_polar_svg(&ribbons, Some((sunrise, sunset))))
+    ok_html(with_ring_key(
+        render_polar_svg(&ribbons, Some((sunrise, sunset))),
+        &ribbons,
+    ))
+}
+
+/// The chart and the key that says which ring is which bird.
+///
+/// The polar clock draws up to eight rings and named none of them: the only
+/// list was behind a "See the numbers" disclosure on a different card, with
+/// avatars in the species' own hashed hues (not the ring colours), so a reader
+/// could see that some bird was loud at 05:00 and not which. Outermost ring
+/// first, as drawn, with the hour each peaks.
+fn with_ring_key(svg: String, ribbons: &[ChorusRibbon]) -> String {
+    let mut key = String::from(r#"<div class="dc-polar-col">"#);
+    key.push_str(&svg);
+    key.push_str(
+        r#"<p class="bnb-meta dc-key-note">Rings, outermost first. Each ring swells at the hours that bird sings most.</p><div class="viz-legend dc-key">"#,
+    );
+    for ribbon in ribbons {
+        let _ = write!(
+            key,
+            r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch" data-style="background:{c}"></span>{n} <span class="mono">peaks {p}</span></span>"#,
+            c = ribbon.color,
+            n = escape_html(&ribbon.name),
+            p = fmt_hour(f64::from(ribbon.peak_hour)),
+        );
+    }
+    key.push_str("</div></div>");
+    key
 }
 
 /// Render the polar chorus clock.
@@ -385,10 +414,16 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], solar: Option<(f64, f64)>) -> Stri
     for (i, ribbon) in ribbons.iter().enumerate() {
         let base_r = RING_MAX - (i as f64 + 1.0) * ring_step;
         let path = ribbon_path(CX, CY, base_r, &ribbon.hours, ring_step * 1.1);
+        // Solid, with a seam where it meets the ring beside it: what is painted
+        // is the palette colour that was graded, not that colour at 55 % over
+        // whatever is behind it. The name is on the ring for a pointer and in the
+        // key under the chart for everyone.
         let _ = write!(
             s,
-            r#"<path d="{path}" fill="{c}" fill-opacity="0.55" stroke="{c}" stroke-opacity="0.85" stroke-width="0.8"/>"#,
+            r#"<path d="{path}" fill="{c}" stroke="var(--card-top)" stroke-width="1" stroke-linejoin="round" vector-effect="non-scaling-stroke"><title>{n} — peaks {p}</title></path>"#,
             c = ribbon.color,
+            n = escape_html(&ribbon.name),
+            p = fmt_hour(f64::from(ribbon.peak_hour)),
         );
     }
 

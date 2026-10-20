@@ -137,6 +137,27 @@
   --info-soft:   oklch(94% 0.03 245);
   --info-ink:    oklch(36% 0.10 245);
 
+  /* Chart colours: their own set, not the UI's. --moss, --dawn and --rare mean
+     accepted, attention and alert elsewhere, and --moss in dark is a text colour
+     that glows when it is a bar. Eight categorical slots in a fixed order (never
+     cycled; a ninth series is --chart-other), and a three-stop sequential ramp.
+     Held by tests/the_chart_palette_can_be_told_apart.rs: lightness band, chroma
+     floor, neighbours apart for a reader who cannot tell red from green, 3:1
+     against the card. --chart-7 is amber and sits at 2.35:1 on white by design;
+     see design-tokens.md. */
+  --chart-1:     oklch(56% 0.12 150);
+  --chart-2:     oklch(58% 0.14 250);
+  --chart-3:     oklch(60% 0.18 15);
+  --chart-4:     oklch(54% 0.16 298);
+  --chart-5:     oklch(64% 0.16 42);
+  --chart-6:     oklch(62% 0.105 196);
+  --chart-7:     oklch(74% 0.15 78);
+  --chart-8:     oklch(62% 0.16 355);
+  --chart-other: oklch(62% 0.012 80);
+  --heat-lo:     oklch(90% 0.07 90);
+  --heat-mid:    oklch(74% 0.15 65);
+  --heat-hi:     oklch(46% 0.15 32);
+
   --paper:       oklch(96% 0.012 75);
   --night:       oklch(28% 0.04 270);
 
@@ -310,6 +331,23 @@
   --info-soft:   oklch(27% 0.06 245);
   --info-ink:    oklch(88% 0.07 245);
 
+  /* The same eight hues stepped into the dark band (lightness 0.48-0.67), so
+     nothing needs a filter to show. The chord diagram used to be brightened by
+     20-30 % after its colour had been chosen, and the other charts took the
+     light theme's chroma at 68 % lightness: both are why dark charts glowed. */
+  --chart-1:     oklch(64% 0.12 150);
+  --chart-2:     oklch(62% 0.13 250);
+  --chart-3:     oklch(62% 0.16 15);
+  --chart-4:     oklch(60% 0.15 298);
+  --chart-5:     oklch(65% 0.14 42);
+  --chart-6:     oklch(64% 0.109 196);
+  --chart-7:     oklch(66% 0.12 78);
+  --chart-8:     oklch(64% 0.14 355);
+  --chart-other: oklch(62% 0.014 250);
+  --heat-lo:     oklch(36% 0.06 70);
+  --heat-mid:    oklch(62% 0.13 65);
+  --heat-hi:     oklch(86% 0.14 92);
+
   --card-top:    oklch(20% 0.010 250);
   --card-bottom: oklch(17% 0.010 250);
   --sheen:       oklch(100% 0 0 / .04);
@@ -342,7 +380,6 @@
 :root[data-theme="dark"] .streamgraph-band,
 :root[data-theme="dark"] .ridge-band,
 :root[data-theme="dark"] .mosaic-bar { filter: saturate(1.25) brightness(1.30); }
-:root[data-theme="dark"] .chord-ribbon { filter: saturate(1.20) brightness(1.20); }
 :root[data-theme="dark"] .display { text-shadow: 0 0 28px var(--glow); }
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
@@ -528,10 +565,15 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 
 .bnb-dotgrid { background-image: radial-gradient(circle at center, var(--border) 0.7px, transparent 0.8px); background-size: 18px 18px; }
 
-/* Sparkline */
-.bnb-spark .line { stroke: var(--moss); stroke-width: 1.4; fill: none; }
-.bnb-spark .area { fill: var(--moss); opacity: 0.10; }
-.bnb-spark .pt   { fill: var(--moss); }
+/* Sparkline. The rules, not the SVG's presentation attributes, set the colour
+   (a stylesheet rule always beats an attribute), so this is where it is the
+   chart palette's first slot. The dot at the end sits on the box's edge. */
+.bnb-spark { overflow: visible; }
+.bnb-spark .line  { stroke: var(--chart-1); stroke-width: 1.4; fill: none; }
+.bnb-spark .area  { fill: var(--chart-1); opacity: 0.10; }
+.bnb-spark .pt    { fill: var(--chart-1); }
+.bnb-spark .end   { fill: var(--chart-1); }
+.bnb-spark .floor { stroke: var(--hairline); stroke-width: 1; fill: none; }
 
 /* Time-of-day heat ramp (dawn hue) */
 .bnb-heat-0 { background: var(--surface-2); }
@@ -3538,6 +3580,8 @@ a.spp-inherit    { color: inherit; }
 /* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
       tsh- prefix avoids the timeseries_dash.rs tsd-* partial classes. ────── */
 .tsh-h1          { font-size: var(--fs-h1); margin-bottom: var(--space-4); }
+.tsh-h1 em       { color: var(--moss-ink); }
+.tsh-eyebrow     { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
 .tsh-lede        { color: var(--text-muted); margin-bottom: 1.5rem; font-size: var(--fs-base); }
 .tsh-row         { margin-bottom: 1rem; }
 .tsh-badge       { font-size: var(--fs-sm); color: var(--accent); margin-left: 0.5rem; }
@@ -4168,6 +4212,28 @@ a.sr-about       { color: var(--fg-3); }
 .viz-legend-item  { display: inline-flex; align-items: center; gap: 5px; }
 .viz-swatch       { width: 9px; height: 9px; display: inline-block; border-radius: 2px; }
 .viz-swatch.round { border-radius: 50%; }
+
+/* A chart with a readout and a table behind it (the streamgraph): the number for
+   the column under the pointer is printed beneath the chart, in a box that is
+   always two lines tall so that reading a day never moves the page. */
+.viz-stream   { touch-action: pan-y; cursor: crosshair; }
+/* On a phone a 760-unit chart in a 340 px card is 100 px tall and its labels are
+   a third of their size. It keeps a readable width and scrolls sideways inside
+   its card instead (a tap reads a day; the browser keeps the drag). */
+@media (max-width: 600px) {
+  .viz-stream { min-width: 560px; touch-action: auto; }
+}
+.viz-readout  { min-height: 2.9em; margin-top: var(--space-8); font-variant-numeric: tabular-nums; }
+.viz-table    { margin-top: var(--space-12); }
+.viz-table > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--fg-2); width: fit-content; }
+.viz-table-scroll { overflow-x: auto; margin-top: var(--space-8); }
+.viz-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.viz-table th[scope="row"] { text-align: left; font-weight: var(--fw-regular); }
+.viz-table .viz-swatch { margin-right: var(--space-4); vertical-align: baseline; }
+/* The dawn chorus: the ring chart, then which ring is which bird. */
+.dc-polar-col { display: flex; flex-direction: column; align-items: center; gap: var(--space-12); width: 100%; }
+.dc-key-note  { text-align: center; }
+.dc-key       { justify-content: center; max-width: 640px; }
 
 /* SVG bar charts (charts.rs) — all-static; colours are SVG fill attributes. */
 .cht-empty        { color: var(--text-muted); }

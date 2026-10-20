@@ -396,7 +396,12 @@ fn the_counts_on_the_page_are_the_stylesheets_counts() {
     if std::env::var_os("BNB_BLESS_DOC").is_some() {
         let blessed = with_count(&with_count(&md, "light", light), "dark", dark);
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-        std::fs::write(&path, blessed).expect("rewrite design-tokens.md");
+        // Written beside and renamed over, because the other tests in this file
+        // read the page at the same moment, and a half-written page reads as one
+        // with no token rows in it.
+        let tmp = path.with_extension("md.tmp");
+        std::fs::write(&tmp, blessed).expect("write the new page");
+        std::fs::rename(&tmp, &path).expect("replace design-tokens.md");
         return;
     }
     assert_eq!(

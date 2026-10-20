@@ -25,8 +25,8 @@ Two principles govern them:
 ## At a glance
 
 The stylesheet's light block declares
-<!--count-light-->123<!--/count--> tokens, and the dark block overrides
-<!--count-dark-->39<!--/count--> of them. Those two numbers are checked against
+<!--count-light-->135<!--/count--> tokens, and the dark block overrides
+<!--count-dark-->51<!--/count--> of them. Those two numbers are checked against
 `app.css` by the test below, so they cannot go stale; every other number on this
 page that describes the present is read from the stylesheet the same way.
 
@@ -318,6 +318,67 @@ a literal.
 | `--z-toast` | `60` | The toast region. |
 | `--z-skip` | `100` | The skip-to-content link, above everything when focused. |
 
+## Chart colours
+
+A chart does not borrow UI colours. The brand greens, ambers and reds mean
+*accepted*, *attention* and *alert* elsewhere on the page, and the dark theme's
+`--moss` is a 78 % lime chosen to read as text on near-black, which on a bar or a
+band glows beside the grey text it labels. Charts have their own set, defined
+once for each theme and graded by arithmetic, not by eye
+(`tests/the_chart_palette_can_be_told_apart.rs`, and `tools/visual-qa/tokens.mjs`
+on the colours a real page paints).
+
+**Categorical** (`--chart-1` … `--chart-8`): which species, which source. Assign
+them in this order and never cycle: a ninth series is `--chart-other`, a neutral,
+and means "everything else". The order is part of the palette, not a preference.
+It is the best of the 20 orderings (of the 5 040 that keep green first) that clear
+the gates in both themes: it opens with the brand colour and keeps every
+neighbouring pair apart for a reader who cannot tell red from green
+(OKLab ΔE of at least 8 under the Machado protan and deutan simulations; the
+worst pair measures 12.2) and for a reader who can (at least 15; the worst is
+17.4). The dark column is the same eight hues stepped to
+the dark band (OKLCH lightness 0.48–0.67), not an automatic flip, so no mark
+needs a `filter` to show.
+
+Amber (`--chart-7`) is 2.35:1 against a white card. Darkened to 3:1 it is brown, so
+it stays amber and every chart that draws it names the band in a legend, in the
+band's tooltip and in a table; that exemption is listed by slot in the test, with
+the reason.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--chart-1` | `oklch(56% 0.12 150)` | `oklch(64% 0.12 150)` | Series 1, and the colour of any chart with one series: moss. |
+| `--chart-2` | `oklch(58% 0.14 250)` | `oklch(62% 0.13 250)` | Series 2: blue. |
+| `--chart-3` | `oklch(60% 0.18 15)` | `oklch(62% 0.16 15)` | Series 3: rose. |
+| `--chart-4` | `oklch(54% 0.16 298)` | `oklch(60% 0.15 298)` | Series 4: violet. |
+| `--chart-5` | `oklch(64% 0.16 42)` | `oklch(65% 0.14 42)` | Series 5: orange. |
+| `--chart-6` | `oklch(62% 0.105 196)` | `oklch(64% 0.109 196)` | Series 6: teal. |
+| `--chart-7` | `oklch(74% 0.15 78)` | `oklch(66% 0.12 78)` | Series 7: amber (see above). |
+| `--chart-8` | `oklch(62% 0.16 355)` | `oklch(64% 0.14 355)` | Series 8: magenta. |
+| `--chart-other` | `oklch(62% 0.012 80)` | `oklch(62% 0.014 250)` | "Everything else": a neutral, never a ninth hue. |
+
+**Sequential** (`--heat-lo`, `--heat-mid`, `--heat-hi`): how much. One hue family
+(sand, orange, brick in light; brown, amber, gold in dark) with lightness that
+only goes one way, so a cell is darker the more it holds on paper and brighter the
+more it holds on night, and the ramp means the same thing in both. The lowest step
+is held at least 8 ΔE from an empty cell (`--surface-2`), or a cell with one
+detection reads as none, and the highest step is held 3:1 against the card.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--heat-lo` | `oklch(90% 0.07 90)` | `oklch(36% 0.06 70)` | The least a cell can hold and still be drawn. |
+| `--heat-mid` | `oklch(74% 0.15 65)` | `oklch(62% 0.13 65)` | Halfway. |
+| `--heat-hi` | `oklch(46% 0.15 32)` | `oklch(86% 0.14 92)` | The most. |
+
+Every chart reads these and nothing else: `tests/the_chart_palette_can_be_told_apart.rs`
+scans the chart renderers for a mark painted in `--moss`, `--dawn`, `--rare`, `--info` or
+`--accent-rgb`, or in a colour literal. The exceptions are named in the test, with a
+reason: the sun and moon glyphs on the day strip and the polar clock are the sun and the
+moon. A heat cell interpolates `--heat-lo` → `--heat-mid` → `--heat-hi` in OKLab and is
+drawn at full strength with no `fill-opacity`, so what is painted is what was graded. The
+one place that keeps its own ramp is the History calendar, which prints a day number on
+each cell and so uses a lighter, capped tint of `--moss` that keeps that number at 4.5:1.
+
 ## Legacy aliases
 
 A handful of tokens from before the v3 redesign are kept as **aliases** of the
@@ -357,7 +418,7 @@ change should move. The clusters that remain, and why:
 | Cluster | Why it is not a token |
 |---|---|
 | Species identity hues (`--sp`, set per bird) | Data, computed per species at render time. |
-| Chart ramps (heatmap cells, the streamgraph and ridgeline bands, the chord ribbons) | A colour encoding values; each is derived from `--moss` / `--dawn` with `color-mix()` or set per data point. |
+| The migration ridgeline's bands (one hue per species, computed from the name) | Identity as data: the same bird is the same colour on every page. Everything else a chart draws reads `--chart-*` or `--heat-*`. |
 | Loops: skeleton shimmer 1.4 s, pulse 1.6 s, blink 1.2 s, the 0.6 s fresh-row fade | Ambient animation with its own tempo, not interaction feedback. |
 | `black` in a `mask-image` | An alpha mask has no colour of its own; only its alpha is read. |
 | Heading sizes above 16 px other than the steps above (gauge and tile numerals, an icon glyph, a 404 code) | Per-surface display type, sized to its one container. |
@@ -382,11 +443,11 @@ element's computed style before, and after, and diff).
   lockstep), add it to this page in the same commit, and prefer extending a hue
   family (`-soft` / `-ink`) over inventing a new hue.
 - **A token whose value differs between the themes also goes in `print.css`.**
-- **Never hard-code a colour or pad** in a component — read the token, so a
-  future theme or density change stays a one-line edit.
 - **Mix a tint in `oklab`, never `oklch`.** `color-mix(in oklch, var(--moss) 16%, var(--surface))`
   interpolates *hue*, and a neutral has none (light `--surface` is `oklch(100% 0 0)`, so hue 0;
   dark is 250): the amber tint came out pink (hue 10), the moss one brown (24), and in dark the
   warning toast was magenta (344). `in oklab` mixes the colour's coordinates and has no hue to
   carry. A test refuses a new `in oklch`, and `tools/visual-qa/tokens.mjs` reads the hue of what
   each tinted surface paints.
+- **Never hard-code a colour or pad** in a component — read the token, so a
+  future theme or density change stays a one-line edit.

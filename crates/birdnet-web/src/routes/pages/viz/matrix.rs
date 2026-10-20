@@ -35,7 +35,7 @@ pub fn cooccurrence_matrix(labels: &[String], m: &[Vec<f64>]) -> String {
     );
     svg.push_str(&svg_a11y(
         "Species co-occurrence matrix",
-        "A grid of species pairs; a darker cell means those two species were detected in the same five-minute window more often.",
+        "A grid of species pairs; a stronger-coloured cell means those two species were detected in the same five-minute window more often.",
     ));
 
     // Column labels (rotated) + row labels.
@@ -71,13 +71,16 @@ pub fn cooccurrence_matrix(labels: &[String], m: &[Vec<f64>]) -> String {
                 );
                 continue;
             }
-            let op = 0.06 + v.clamp(0.0, 1.0) * 0.9;
+            // A tint of the chart's one hue over the empty-cell colour, not the
+            // hue at partial opacity: the cell is then a colour that can be
+            // graded, and the same one on a light card and a dark one.
+            let mix = (6.0 + v.clamp(0.0, 1.0) * 94.0).round() as i64;
             let a = escape_html(&labels[i]);
             let b = escape_html(&labels[j]);
             let pct = (v * 100.0).round() as i64;
             let _ = write!(
                 svg,
-                r#"<rect x="{x}" y="{y}" width="{w}" height="{w}" rx="3" fill="var(--moss)" fill-opacity="{op:.2}"><title>{a} × {b} — {pct}%</title></rect>"#,
+                r#"<rect x="{x}" y="{y}" width="{w}" height="{w}" rx="3" fill="color-mix(in oklab, var(--chart-1) {mix}%, var(--surface-2))"><title>{a} × {b} — {pct}%</title></rect>"#,
                 w = cell - 3,
             );
         }
@@ -105,7 +108,12 @@ mod tests {
         assert!(svg.contains("<svg"));
         assert!(svg.contains("BLJA"));
         assert!(svg.contains("NOCA"));
-        assert!(svg.contains("fill-opacity"));
+        // A tint of the chart hue, not the hue at partial opacity.
+        assert!(
+            svg.contains("color-mix(in oklab, var(--chart-1) 53%, var(--surface-2))"),
+            "{svg}"
+        );
+        assert!(!svg.contains("fill-opacity"));
         // Accessible name + description (role="img" needs an alt; the bare
         // aria-label was replaced by the richer <title>/<desc> pair).
         assert!(svg.contains("<title>Species co-occurrence matrix</title>"));

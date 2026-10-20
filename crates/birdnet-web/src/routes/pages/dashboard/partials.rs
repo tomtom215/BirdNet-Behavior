@@ -483,14 +483,18 @@ pub(super) async fn confidence_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::confidence_distribution)
+        state.with_read_db(|conn| {
+            let buckets = birdnet_db::sqlite::confidence_distribution(conn)?;
+            let floor = crate::routes::pages::confidence::station_floor(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((buckets, floor))
+        })
     })
     .await;
     match result {
-        Ok(Ok(buckets)) => (
+        Ok(Ok((buckets, floor))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_confidence_chart(&buckets),
+            render_confidence_chart(&buckets, floor),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
