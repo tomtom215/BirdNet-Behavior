@@ -74,6 +74,8 @@ else
     printf 'default' > "${dest}/edit-url.txt"
 fi
 cp docs/book-theme/version-id.js "${dest}/version-id.js"
+printf '%s' "${MDBOOK_OUTPUT__HTML__ADDITIONAL_CSS-}" > "${dest}/additional-css.txt"
+cp docs/book-theme/a11y.css "${dest}/a11y.css"
 printf '<html></html>\n' > "${dest}/index.html"
 STUB
 chmod +x "${SANDBOX}/bin/mdbook"
@@ -88,7 +90,7 @@ git init -q -b main .
 git config user.email t@example.invalid
 git config user.name t
 mkdir -p docs/book-theme scripts
-for f in version-switcher.js version-switcher.css a11y.js; do
+for f in version-switcher.js version-switcher.css a11y.js a11y.css; do
     printf '/* %s */\n' "$f" > "docs/book-theme/$f"
 done
 # The link checker is a stub too: it records what it was asked to check.
@@ -167,6 +169,13 @@ expect "the root is served at the site root" \
     "$(read_file "${OUT}/site-url.txt")" "/BirdNet-Behavior/"
 expect "the version switcher on /dev/ is told it is dev, one level down" \
     "$(read_file "${OUT}/dev/version-id.js")" 'window.bnbDocs = { version: "dev", depth: 1 };'
+for t in v0.17.1 dev; do
+    expect "/${t}/ gets the current accessibility stylesheet, after the tag's own custom.css" \
+        "$(read_file "${OUT}/${t}/additional-css.txt")" \
+        '["docs/book-theme/custom.css","docs/book-theme/a11y.css","docs/book-theme/version-switcher.css"]'
+    expect "/${t}/ has a11y.css in its source tree to serve" \
+        "$(exists "${OUT}/${t}/a11y.css")" yes
+done
 expect "\"Suggest an edit\" is left on for /dev/" \
     "$(read_file "${OUT}/dev/edit-url.txt")" default
 expect "\"Suggest an edit\" is off for a release" \

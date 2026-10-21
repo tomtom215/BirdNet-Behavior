@@ -24,7 +24,7 @@ git-repository-icon = "fab-github"
 # every edit link to `docs/book/docs/book/…`; `scripts/check-book-links.py`
 # now fails on an edit link that names no file in the repository.
 edit-url-template = "https://github.com/tomtom215/BirdNet-Behavior/edit/main/{path}"
-additional-css = ["docs/book-theme/custom.css"]
+additional-css = ["docs/book-theme/custom.css", "docs/book-theme/a11y.css"]
 # Applies to the published site and to the in-app `/help/*` tree alike.
 additional-js = ["docs/book-theme/a11y.js"]
 smart-punctuation = true

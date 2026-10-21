@@ -23,8 +23,9 @@
 # manuals are the in-app `/help/*` tree in those binaries, which `build.rs`
 # renders from the same sources at build time.
 #
-# Every build — including old tags — gets the *current* switcher assets, so
-# the switcher behaves the same on every version. Each tree is link-checked.
+# Every build — including old tags — gets the *current* switcher and
+# accessibility assets (a11y.js, a11y.css), so they behave the same on every
+# version; custom.css is the one stylesheet read from the tag itself. Each tree is link-checked.
 #
 # Requires: git with tags and origin/main fetched (`fetch-depth: 0`), mdbook on
 # PATH (or $MDBOOK), python3. Self-test: scripts/test-build-versioned-docs.sh.
@@ -85,7 +86,7 @@ render() {
     local theme="$src/docs/book-theme"
     mkdir -p "$theme"
     cp "$repo/docs/book-theme/version-switcher.js" "$repo/docs/book-theme/version-switcher.css" \
-        "$repo/docs/book-theme/a11y.js" "$theme/"
+        "$repo/docs/book-theme/a11y.js" "$repo/docs/book-theme/a11y.css" "$theme/"
     # The switcher learns which version it is on, and how far the book root is
     # below the site root, from this file rather than from the URL.
     printf 'window.bnbDocs = { version: "%s", depth: %d };\n' "$label" "$depth" \
@@ -102,7 +103,7 @@ render() {
         cd "$src"
         env "${edit[@]}" \
         MDBOOK_OUTPUT__HTML__SITE_URL="$url" \
-        MDBOOK_OUTPUT__HTML__ADDITIONAL_CSS='["docs/book-theme/custom.css","docs/book-theme/version-switcher.css"]' \
+        MDBOOK_OUTPUT__HTML__ADDITIONAL_CSS='["docs/book-theme/custom.css","docs/book-theme/a11y.css","docs/book-theme/version-switcher.css"]' \
         MDBOOK_OUTPUT__HTML__ADDITIONAL_JS='["docs/book-theme/a11y.js","docs/book-theme/version-id.js","docs/book-theme/version-switcher.js"]' \
             "$MDBOOK" build -d "$dest"
     )

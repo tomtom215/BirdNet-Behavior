@@ -80,24 +80,3 @@
   text-decoration: underline;
   text-underline-offset: 0.15em;
 }
-
-/* Code in the dark themes: mdBook's navy palette draws a highlighted attribute
-   (`stroke`, `fill` in the design-token tables) in #cc6666 on #262932, 3.91:1
-   against the 4.5:1 WCAG 1.4.3 asks (axe `color-contrast`, 16 nodes on one page).
-   Lifted to 5.2:1; the hue is kept so it still reads as an attribute. */
-.navy .hljs-attribute, .coal .hljs-attribute {
-  color: #e07f7f;
-}
-
-/* Touch targets (WCAG 2.5.8, 24 px): the toolbar's buttons are 50 px tall but
-   its links (print, repository, edit) are drawn 22 px tall on a phone, and the
-   current sidebar entry is 21 px tall at any width. */
-.menu-bar .right-buttons a,
-.menu-bar .left-buttons a {
-  min-height: 2.4rem;
-  display: inline-flex;
-  align-items: center;
-}
-.sidebar .chapter li a {
-  padding-block: 0.2rem;
-}
