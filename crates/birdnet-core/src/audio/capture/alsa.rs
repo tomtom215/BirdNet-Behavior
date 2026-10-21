@@ -145,7 +145,7 @@ pub fn list_capture_devices_in(root: &Path) -> Vec<CaptureDevice> {
         let id = id.trim().to_owned();
         let (driver, name) = tail
             .split_once(" - ")
-            .map_or((tail.trim(), tail.trim()), |(d, n)| (d.trim(), n.trim()));
+            .map_or_else(|| (tail.trim(), tail.trim()), |(d, n)| (d.trim(), n.trim()));
         by_card.push((
             card,
             id,

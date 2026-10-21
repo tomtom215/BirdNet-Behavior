@@ -68,7 +68,13 @@ fn unquote(cell: &str) -> String {
 
 /// A row of the form `key | where | why not`: `where` is `—` exactly when
 /// there is a reason, and the reason is a sentence.
-fn check_home_or_reason(kind: &str, name: &str, home: &str, reason: &str, problems: &mut Vec<String>) {
+fn check_home_or_reason(
+    kind: &str,
+    name: &str,
+    home: &str,
+    reason: &str,
+    problems: &mut Vec<String>,
+) {
     let no_home = home == "—";
     if no_home {
         if reason.chars().count() < MIN_REASON {
@@ -97,12 +103,18 @@ fn every_config_key_has_a_place_in_the_browser_or_a_reason() {
     let mut problems = Vec::new();
     for r in &rows {
         if r.len() != 3 {
-            problems.push(format!("a config-key row has {} cells, not 3: {r:?}", r.len()));
+            problems.push(format!(
+                "a config-key row has {} cells, not 3: {r:?}",
+                r.len()
+            ));
             continue;
         }
         let key = unquote(&r[0]);
         check_home_or_reason("config key", &key, &r[1], &r[2], &mut problems);
-        if by_key.insert(key.clone(), (r[1].clone(), r[2].clone())).is_some() {
+        if by_key
+            .insert(key.clone(), (r[1].clone(), r[2].clone()))
+            .is_some()
+        {
             problems.push(format!("config key {key} appears twice"));
         }
     }
@@ -120,7 +132,11 @@ fn every_config_key_has_a_place_in_the_browser_or_a_reason() {
         "these configuration keys are read by the station and have neither a place in the \
          browser nor a written reason in {DOC} (add a row to `## Configuration-file keys`; \
          if the browser cannot change it, say why in a sentence):\n  {}",
-        missing.iter().map(|k| format!("| `{k}` | — | <why> |")).collect::<Vec<_>>().join("\n  ")
+        missing
+            .iter()
+            .map(|k| format!("| `{k}` | — | <why> |"))
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
     assert!(
         stale.is_empty(),
@@ -153,9 +169,8 @@ fn flags_from_help() -> BTreeMap<String, Option<String>> {
             }
             current = long;
         } else if let (Some(flag), Some(rest)) = (&current, trimmed.strip_prefix("[env: ")) {
-            if let Some(name) = rest.split('=').next() {
-                flags.insert(flag.clone(), Some(name.to_owned()));
-            }
+            let name = rest.split('=').next().unwrap_or(rest);
+            flags.insert(flag.clone(), Some(name.to_owned()));
         }
     }
     flags.remove("--help");
@@ -183,7 +198,11 @@ fn every_command_line_flag_has_a_place_in_the_browser_or_a_reason() {
         }
     }
     let actual = flags_from_help();
-    assert!(actual.len() >= 100, "--help parsed to {} flags", actual.len());
+    assert!(
+        actual.len() >= 100,
+        "--help parsed to {} flags",
+        actual.len()
+    );
     let missing: Vec<_> = actual.keys().filter(|f| !listed.contains_key(*f)).collect();
     let stale: Vec<_> = listed.keys().filter(|f| !actual.contains_key(*f)).collect();
     assert!(
@@ -192,11 +211,17 @@ fn every_command_line_flag_has_a_place_in_the_browser_or_a_reason() {
          {DOC} (add a row to `## Command-line flags`):\n  {}",
         missing
             .iter()
-            .map(|f| format!("| `{f}` | `{}` | — | <why> |", actual[*f].as_deref().unwrap_or("—")))
+            .map(|f| format!(
+                "| `{f}` | `{}` | — | <why> |",
+                actual[*f].as_deref().unwrap_or("—")
+            ))
             .collect::<Vec<_>>()
             .join("\n  ")
     );
-    assert!(stale.is_empty(), "{DOC} has rows for flags that no longer exist: {stale:?}");
+    assert!(
+        stale.is_empty(),
+        "{DOC} has rows for flags that no longer exist: {stale:?}"
+    );
     for (flag, env) in &actual {
         assert_eq!(
             &listed[flag], env,
@@ -212,8 +237,17 @@ fn the_table_says_when_each_saved_setting_applies_exactly_as_the_pages_do() {
     let rows = table(&doc, "Saved settings");
     let mut listed: BTreeMap<String, String> = BTreeMap::new();
     for r in &rows {
-        assert_eq!(r.len(), 3, "a saved-setting row has {} cells, not 3: {r:?}", r.len());
-        assert!(listed.insert(unquote(&r[0]), r[2].clone()).is_none(), "{} twice", r[0]);
+        assert_eq!(
+            r.len(),
+            3,
+            "a saved-setting row has {} cells, not 3: {r:?}",
+            r.len()
+        );
+        assert!(
+            listed.insert(unquote(&r[0]), r[2].clone()).is_none(),
+            "{} twice",
+            r[0]
+        );
         assert!(
             r[1] == "—" || !r[1].is_empty(),
             "{}: the \"changed at\" cell is empty",
@@ -222,8 +256,14 @@ fn the_table_says_when_each_saved_setting_applies_exactly_as_the_pages_do() {
     }
     let all = every();
     let actual: BTreeMap<&str, &str> = all.iter().map(|e| (e.key, e.applies.badge())).collect();
-    let missing: Vec<_> = actual.keys().filter(|k| !listed.contains_key(**k)).collect();
-    let stale: Vec<_> = listed.keys().filter(|k| !actual.contains_key(k.as_str())).collect();
+    let missing: Vec<_> = actual
+        .keys()
+        .filter(|k| !listed.contains_key(**k))
+        .collect();
+    let stale: Vec<_> = listed
+        .keys()
+        .filter(|k| !actual.contains_key(k.as_str()))
+        .collect();
     assert!(
         missing.is_empty(),
         "these saved settings are not in {DOC}'s `## Saved settings` table:\n  {}",
@@ -233,7 +273,10 @@ fn the_table_says_when_each_saved_setting_applies_exactly_as_the_pages_do() {
             .collect::<Vec<_>>()
             .join("\n  ")
     );
-    assert!(stale.is_empty(), "{DOC} lists saved settings that no longer exist: {stale:?}");
+    assert!(
+        stale.is_empty(),
+        "{DOC} lists saved settings that no longer exist: {stale:?}"
+    );
     for (key, badge) in &actual {
         assert_eq!(
             &listed[*key], badge,
@@ -245,16 +288,23 @@ fn the_table_says_when_each_saved_setting_applies_exactly_as_the_pages_do() {
 /// Every control name the pages can render: scanned from the web crate's
 /// markup, plus the settings form's own key list and the table-driven fields.
 fn control_names() -> BTreeSet<String> {
-    let mut names: BTreeSet<String> = birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS
-        .iter()
-        .map(|k| (*k).to_owned())
-        .collect();
-    names.extend(birdnet_web::routes::admin::settings::extra::EXTRA_SETTINGS.iter().map(|e| e.key.to_owned()));
+    let mut names: BTreeSet<String> =
+        birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS
+            .iter()
+            .map(|k| (*k).to_owned())
+            .collect();
+    names.extend(
+        birdnet_web::routes::admin::settings::extra::EXTRA_SETTINGS
+            .iter()
+            .map(|e| e.key.to_owned()),
+    );
     let mut files: Vec<PathBuf> = Vec::new();
     collect(&root().join("crates/birdnet-web/src"), &mut files);
     collect(&root().join("crates/birdnet-web/templates"), &mut files);
     for f in files {
-        let Ok(text) = fs::read_to_string(&f) else { continue };
+        let Ok(text) = fs::read_to_string(&f) else {
+            continue;
+        };
         for attr in ["name=\"", "id=\""] {
             let mut rest = text.as_str();
             while let Some(i) = rest.find(attr) {
@@ -269,7 +319,9 @@ fn control_names() -> BTreeSet<String> {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -287,12 +339,24 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 fn every_control_the_table_points_at_exists() {
     let doc = doc();
     let controls = control_names();
-    assert!(controls.len() > 100, "the scan found only {} names", controls.len());
+    assert!(
+        controls.len() > 100,
+        "the scan found only {} names",
+        controls.len()
+    );
     let mut missing = Vec::new();
-    for heading in ["Configuration-file keys", "Command-line flags", "Saved settings"] {
+    for heading in [
+        "Configuration-file keys",
+        "Command-line flags",
+        "Saved settings",
+    ] {
         for r in table(&doc, heading) {
             // The "changed at" cell: the second cell, or the third for flags.
-            let cell = if heading == "Command-line flags" { &r[2] } else { &r[1] };
+            let cell = if heading == "Command-line flags" {
+                &r[2]
+            } else {
+                &r[1]
+            };
             let mut rest = cell.as_str();
             while let Some(i) = rest.find('`') {
                 let after = &rest[i + 1..];
@@ -300,8 +364,11 @@ fn every_control_the_table_points_at_exists() {
                 let token = &after[..j];
                 rest = &after[j + 1..];
                 let lowercase_name = !token.is_empty()
-                    && token.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-                let is_field = lowercase_name && (token.contains('_') || token == "latitude" || token == "longitude");
+                    && token
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+                let is_field = lowercase_name
+                    && (token.contains('_') || token == "latitude" || token == "longitude");
                 if is_field && !controls.contains(token) {
                     missing.push(format!("{heading} / {}: `{token}`", r[0]));
                 }

@@ -1268,7 +1268,7 @@ async fn onboarding_done(State(state): State<AppState>, req: Request) -> Respons
             let sources = state.with_read_db(AudioSourceStore::list);
             let body = render_done_page(
                 &crate::routes::admin::classifier::render_panel(&snapshot),
-                &done_microphone(sources.as_deref().map_err(ToString::to_string)),
+                &done_microphone(&sources.as_deref().map_err(ToString::to_string)),
                 pending_restart(state),
             );
             (
@@ -1309,7 +1309,7 @@ fn pending_restart(state: &AppState) -> bool {
 
 /// The microphone line on the done page: what the station will listen with, or
 /// that it could not be read.
-fn done_microphone(sources: Result<&[AudioSource], String>) -> String {
+fn done_microphone(sources: &Result<&[AudioSource], String>) -> String {
     match sources {
         Err(_) => r#"<p class="bnb-meta ob-password-error" role="alert">The station could not read its audio sources. <a href="/admin/doctor">Diagnostics</a> says why.</p>"#.to_owned(),
         Ok([]) => r#"<p class="bnb-meta">No microphone yet, so nothing will be detected. <a href="/station/capture">Add one in Settings → Capture</a>.</p>"#.to_owned(),
@@ -2128,7 +2128,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 
 /// The page after Finish. Same chrome as the wizard, one screen.
 static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
-    r##"<!DOCTYPE html>
+    r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -2183,7 +2183,7 @@ static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 </main>
 {{setup_script}}
 </body>
-</html>"##,
+</html>"#,
 );
 
 #[cfg(test)]

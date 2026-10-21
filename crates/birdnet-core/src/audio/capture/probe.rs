@@ -224,7 +224,9 @@ impl std::fmt::Display for LevelError {
 }
 
 /// Whether `device` is shaped like an ALSA card name (`plughw:CARD=Device,DEV=0`,
-/// `hw:1,0`) and nothing `arecord -D` would read as something else. The value
+/// `hw:1,0`).
+///
+/// Nothing `arecord -D` would read as something else gets through. The value
 /// is passed as one argument, never to a shell; this keeps it to a card name
 /// and not an arbitrary PCM definition.
 #[must_use]
@@ -246,12 +248,19 @@ pub fn is_card_name(device: &str) -> bool {
 #[must_use]
 pub fn level_of_s16le(bytes: &[u8]) -> Option<Level> {
     let samples: Vec<f64> = bytes
-        .chunks_exact(2)
-        .map(|c| f64::from(i16::from_le_bytes([c[0], c[1]])) / 32768.0)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| f64::from(i16::from_le_bytes(*c)) / 32768.0)
         .collect();
     if samples.len() < 200 {
         return None;
     }
+    // At most a few hundred thousand samples (two seconds), far inside f64's 52 bits.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a two-second recording is a few hundred thousand samples"
+    )]
     let n = samples.len() as f64;
     let rms = (samples.iter().map(|s| s * s).sum::<f64>() / n).sqrt();
     let peak = samples.iter().fold(0.0_f64, |m, s| m.max(s.abs()));

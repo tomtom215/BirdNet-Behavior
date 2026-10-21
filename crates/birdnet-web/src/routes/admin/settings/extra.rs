@@ -99,13 +99,21 @@ impl Group {
             Self::Mqtt => {
                 "Publish every detection to an MQTT broker, such as the Mosquitto add-on of Home Assistant, so automations can react to a bird. Leave the address empty to switch it off."
             }
-            Self::AlertLimits => "Keep alerts useful: cap how many a destination gets, and say whether the station may tell you about its own faults.",
+            Self::AlertLimits => {
+                "Keep alerts useful: cap how many a destination gets, and say whether the station may tell you about its own faults."
+            }
             Self::Filters => {
                 "Optional filters that drop or hold back detections that are probably not what they seem. All are off until you turn them on, because they change how many rows the station records."
             }
-            Self::Backups => "The station keeps a copy of its database beside it. How often it makes one.",
-            Self::Storage => "What happens to audio when the disk fills, and how much raw audio is kept for checking.",
-            Self::Online => "Services on the internet the station can use, and who else may show it. Nothing is contacted until you give the station a key, and no other site can put the station in a frame until you list it.",
+            Self::Backups => {
+                "The station keeps a copy of its database beside it. How often it makes one."
+            }
+            Self::Storage => {
+                "What happens to audio when the disk fills, and how much raw audio is kept for checking."
+            }
+            Self::Online => {
+                "Services on the internet the station can use, and who else may show it. Nothing is contacted until you give the station a key, and no other site can put the station in a frame until you list it."
+            }
         }
     }
 }
@@ -131,7 +139,8 @@ pub struct Extra {
 }
 
 const ON_OFF: &[(&str, &str)] = &[("", "Not set (off)"), ("true", "On"), ("false", "Off")];
-const ON_OFF_DEFAULT_ON: &[(&str, &str)] = &[("", "Not set (on)"), ("true", "On"), ("false", "Off")];
+const ON_OFF_DEFAULT_ON: &[(&str, &str)] =
+    &[("", "Not set (on)"), ("true", "On"), ("false", "Off")];
 
 /// Every extra, in the order it is drawn.
 pub const EXTRA_SETTINGS: &[Extra] = &[
@@ -142,7 +151,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Mqtt,
         label: "Broker address",
         help: "The name or address of the MQTT broker, for example homeassistant.local. Leave empty for no MQTT.",
-        kind: Kind::Text { placeholder: "homeassistant.local" },
+        kind: Kind::Text {
+            placeholder: "homeassistant.local",
+        },
         category: SettingsCategory::Notifications,
     },
     Extra {
@@ -187,7 +198,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Mqtt,
         label: "Broker trust file (PEM)",
         help: "Only for a broker with a certificate of its own: the path of a file on the station holding the certificate of the authority that signed it (or the broker's own, if self-signed). Setting it turns the secure connection on.",
-        kind: Kind::Text { placeholder: "/etc/birdnet/mqtt-ca.pem" },
+        kind: Kind::Text {
+            placeholder: "/etc/birdnet/mqtt-ca.pem",
+        },
         category: SettingsCategory::Notifications,
     },
     Extra {
@@ -196,7 +209,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Mqtt,
         label: "Client certificate (PEM)",
         help: "Only for a broker that demands a certificate from the station (mutual TLS): the path of the station's certificate file. Needs the private key below; setting it turns the secure connection on. The files stay on the station: nothing is uploaded through this page.",
-        kind: Kind::Text { placeholder: "/etc/birdnet/mqtt-client.pem" },
+        kind: Kind::Text {
+            placeholder: "/etc/birdnet/mqtt-client.pem",
+        },
         category: SettingsCategory::Notifications,
     },
     Extra {
@@ -205,7 +220,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Mqtt,
         label: "Client private key (PEM)",
         help: "The private key that belongs to the client certificate. A path, not the key itself. `birdnet-behavior --doctor` checks the pair without connecting.",
-        kind: Kind::Text { placeholder: "/etc/birdnet/mqtt-client-key.pem" },
+        kind: Kind::Text {
+            placeholder: "/etc/birdnet/mqtt-client-key.pem",
+        },
         category: SettingsCategory::Notifications,
     },
     Extra {
@@ -214,7 +231,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Mqtt,
         label: "Topic prefix",
         help: "Messages are published under this name. Empty means birdnet.",
-        kind: Kind::Text { placeholder: "birdnet" },
+        kind: Kind::Text {
+            placeholder: "birdnet",
+        },
         category: SettingsCategory::Notifications,
     },
     Extra {
@@ -288,7 +307,10 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Filters,
         label: "Keep dropping recordings for this long after a noise (seconds)",
         help: "A dog does not bark once. With the noise filter on, also drop the recordings that follow a noise for this many seconds, up to 300. 0 or empty drops only the recording it was heard in.",
-        kind: Kind::Float { min: 0.0, max: 300.0 },
+        kind: Kind::Float {
+            min: 0.0,
+            max: 300.0,
+        },
         category: SettingsCategory::Detection,
     },
     Extra {
@@ -315,7 +337,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Filters,
         label: "Extra birds allowed at night",
         help: "Genus or scientific names, separated by commas, for example migrating thrushes calling overhead.",
-        kind: Kind::Text { placeholder: "Catharus, Turdus iliacus" },
+        kind: Kind::Text {
+            placeholder: "Catharus, Turdus iliacus",
+        },
         category: SettingsCategory::Detection,
     },
     Extra {
@@ -324,7 +348,10 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Filters,
         label: "Extra seconds of sound before each call in saved clips",
         help: "Adds lead-in to the saved clip, up to 30. Empty or 0 saves the usual clip.",
-        kind: Kind::Float { min: 0.0, max: 30.0 },
+        kind: Kind::Float {
+            min: 0.0,
+            max: 30.0,
+        },
         category: SettingsCategory::Detection,
     },
     // ── Backups ─────────────────────────────────────────────────────────
@@ -334,7 +361,11 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Backups,
         label: "Back up the database",
         help: "How often the station makes a copy of its database. Copies beside the database protect against a damaged file, not against losing the card or the whole device; copying them elsewhere is on the Data tab.",
-        kind: Kind::Choice(&[("", "Weekly (the default)"), ("weekly", "Weekly"), ("daily", "Daily")]),
+        kind: Kind::Choice(&[
+            ("", "Weekly (the default)"),
+            ("weekly", "Weekly"),
+            ("daily", "Daily"),
+        ]),
         category: SettingsCategory::System,
     },
     // ── Storage ─────────────────────────────────────────────────────────
@@ -353,7 +384,10 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Storage,
         label: "Keep one raw recording in every",
         help: "Raw recordings are normally deleted once analysed. Keeping one in N lets you check what the microphone really hears, at the cost of disk. 0 or empty keeps none.",
-        kind: Kind::Int { min: 0, max: 100_000 },
+        kind: Kind::Int {
+            min: 0,
+            max: 100_000,
+        },
         category: SettingsCategory::System,
     },
     // ── Online services ─────────────────────────────────────────────────
@@ -449,7 +483,9 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         group: Group::Online,
         label: "Sites that may show this station in a frame",
         help: "Empty (the default): no other site can. To put the station in a Home Assistant card, list that site's address, such as http://homeassistant.local:8123, several separated by commas. Only the sites you list; there is no way to allow every site.",
-        kind: Kind::Text { placeholder: "http://homeassistant.local:8123" },
+        kind: Kind::Text {
+            placeholder: "http://homeassistant.local:8123",
+        },
         category: SettingsCategory::System,
     },
 ];
@@ -531,7 +567,10 @@ fn control(e: &Extra, stored: &str) -> String {
             // chosen, so saving the page does not silently replace it.
             let known = options.iter().any(|(val, _)| *val == stored);
             if !known {
-                let _ = write!(s, r#"<option value="{v}" selected>{v} (not a choice this page offers)</option>"#);
+                let _ = write!(
+                    s,
+                    r#"<option value="{v}" selected>{v} (not a choice this page offers)</option>"#
+                );
             }
             for (val, words) in options {
                 let sel = if *val == stored { " selected" } else { "" };
@@ -544,7 +583,7 @@ fn control(e: &Extra, stored: &str) -> String {
 }
 
 /// `C:\certs\ca.pem`: a drive letter, a colon and a slash.
-fn is_windows_path(raw: &str) -> bool {
+const fn is_windows_path(raw: &str) -> bool {
     let b = raw.as_bytes();
     b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
@@ -565,9 +604,15 @@ fn problem(e: &Extra, raw: &str) -> Option<String> {
                 ));
             }
             match e.key {
-                "mqtt_host" if raw.contains("://") || raw.contains(char::is_whitespace) || raw.contains('/') => Some(
-                    format!("{label} is a name or address such as homeassistant.local, without mqtt:// or a path. You entered “{raw}”."),
-                ),
+                "mqtt_host"
+                    if raw.contains("://")
+                        || raw.contains(char::is_whitespace)
+                        || raw.contains('/') =>
+                {
+                    Some(format!(
+                        "{label} is a name or address such as homeassistant.local, without mqtt:// or a path. You entered “{raw}”."
+                    ))
+                }
                 "ebird_region"
                     if !(2..=16).contains(&raw.len())
                         || !raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') =>
@@ -586,7 +631,11 @@ fn problem(e: &Extra, raw: &str) -> Option<String> {
                         "{label} is the full path of a file on the station, such as /etc/birdnet/mqtt-ca.pem. You entered “{raw}”."
                     ))
                 }
-                "mqtt_topic_prefix" if raw.contains(['#', '+']) || raw.starts_with('/') || raw.contains(char::is_whitespace) => {
+                "mqtt_topic_prefix"
+                    if raw.contains(['#', '+'])
+                        || raw.starts_with('/')
+                        || raw.contains(char::is_whitespace) =>
+                {
                     Some(format!(
                         "{label} cannot contain spaces, # or +, or start with a slash. You entered “{raw}”."
                     ))
@@ -633,10 +682,12 @@ fn problem(e: &Extra, raw: &str) -> Option<String> {
 }
 
 /// Everything wrong with the extras in a submission, phrased for the person who
-/// typed them. Checks what was **submitted**, not what changed: a bad value
-/// already stored is exactly what the person came to the page to fix.
+/// typed them.
+///
+/// Checks what was **submitted**, not what changed: a bad value already stored
+/// is exactly what the person came to the page to fix.
 #[must_use]
-pub fn problems(submitted: &HashMap<String, String>) -> Vec<String> {
+pub fn problems<S: std::hash::BuildHasher>(submitted: &HashMap<String, String, S>) -> Vec<String> {
     let mut out: Vec<String> = EXTRA_SETTINGS
         .iter()
         .filter_map(|e| submitted.get(e.key).and_then(|raw| problem(e, raw)))
@@ -658,9 +709,9 @@ pub fn problems(submitted: &HashMap<String, String>) -> Vec<String> {
 /// from what is stored (or, with nothing stored, from what the page showed,
 /// which for every extra is empty).
 #[must_use]
-pub fn changed(
-    submitted: &HashMap<String, String>,
-    existing: &HashMap<String, String>,
+pub fn changed<S: std::hash::BuildHasher>(
+    submitted: &HashMap<String, String, S>,
+    existing: &HashMap<String, String, S>,
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     EXTRA_SETTINGS
         .iter()
@@ -670,7 +721,9 @@ pub fn changed(
                 Kind::Float { .. } => birdnet_core::config::locale::normalize_decimal(raw.trim()),
                 _ => raw.trim().to_owned(),
             };
-            let same = existing.get(e.key).map_or(v.is_empty(), |stored| *stored == v);
+            let same = existing
+                .get(e.key)
+                .map_or(v.is_empty(), |stored| *stored == v);
             (!same).then_some((e.key, v, e.category))
         })
         .collect()
@@ -695,7 +748,12 @@ mod tests {
                 "{} is also a hand-written field",
                 e.key
             );
-            assert_eq!(e.key.to_ascii_uppercase(), e.config_key.replace("BIRDNET_", ""), "{}: the settings key is the config key in lower case", e.key);
+            assert_eq!(
+                e.key.to_ascii_uppercase(),
+                e.config_key.replace("BIRDNET_", ""),
+                "{}: the settings key is the config key in lower case",
+                e.key
+            );
         }
     }
 
@@ -704,12 +762,20 @@ mod tests {
     #[test]
     fn each_kind_accepts_its_range_and_refuses_the_edge_outside_it() {
         let port = find("mqtt_port").unwrap();
-        assert!(problem(port, "1883").is_none() && problem(port, "1").is_none() && problem(port, "65535").is_none());
+        assert!(
+            problem(port, "1883").is_none()
+                && problem(port, "1").is_none()
+                && problem(port, "65535").is_none()
+        );
         for bad in ["0", "65536", "-1", "18 83", "1883.5", "abc"] {
             assert!(problem(port, bad).is_some_and(|m| m.contains(bad)), "{bad}");
         }
         let noise = find("noise_threshold").unwrap();
-        assert!(problem(noise, "0.6").is_none() && problem(noise, "0,6").is_none() && problem(noise, "1").is_none());
+        assert!(
+            problem(noise, "0.6").is_none()
+                && problem(noise, "0,6").is_none()
+                && problem(noise, "1").is_none()
+        );
         for bad in ["1.01", "-0.1", "75", "dog", "NaN"] {
             assert!(problem(noise, bad).is_some(), "{bad}");
         }
@@ -752,7 +818,10 @@ mod tests {
     fn problems_read_the_submission_not_the_difference() {
         let existing = one("mqtt_port", "99999");
         let submitted = one("mqtt_port", "99999");
-        assert!(changed(&submitted, &existing).is_empty(), "unchanged writes nothing");
+        assert!(
+            changed(&submitted, &existing).is_empty(),
+            "unchanged writes nothing"
+        );
         assert_eq!(problems(&submitted).len(), 1, "but it is still refused");
     }
 
@@ -792,21 +861,43 @@ mod tests {
 
     #[test]
     fn every_group_renders_every_one_of_its_controls() {
-        for group in [Group::Mqtt, Group::AlertLimits, Group::Filters, Group::Backups, Group::Storage, Group::Online] {
+        for group in [
+            Group::Mqtt,
+            Group::AlertLimits,
+            Group::Filters,
+            Group::Backups,
+            Group::Storage,
+            Group::Online,
+        ] {
             let mut html = String::new();
             render_group(&mut html, group, &HashMap::new());
             let (id, _) = group.card();
             assert!(html.contains(&format!(r#"id="set-{id}""#)));
             for e in in_group(group) {
                 assert!(html.contains(&format!(r#"name="{}""#, e.key)), "{}", e.key);
-                assert!(html.contains(&format!(r#"<label for="{}">"#, e.key)), "{}", e.key);
+                assert!(
+                    html.contains(&format!(r#"<label for="{}">"#, e.key)),
+                    "{}",
+                    e.key
+                );
             }
         }
-        let grouped: usize = [Group::Mqtt, Group::AlertLimits, Group::Filters, Group::Backups, Group::Storage, Group::Online]
-            .into_iter()
-            .map(|g| in_group(g).count())
-            .sum();
-        assert_eq!(grouped, EXTRA_SETTINGS.len(), "an extra belongs to no group");
+        let grouped: usize = [
+            Group::Mqtt,
+            Group::AlertLimits,
+            Group::Filters,
+            Group::Backups,
+            Group::Storage,
+            Group::Online,
+        ]
+        .into_iter()
+        .map(|g| in_group(g).count())
+        .sum();
+        assert_eq!(
+            grouped,
+            EXTRA_SETTINGS.len(),
+            "an extra belongs to no group"
+        );
     }
 
     // ── the fields added for the parity rows (P-2, P-9, P-10) ───────────────
@@ -815,9 +906,23 @@ mod tests {
     /// with, so what the page accepts is what the station will use.
     #[test]
     fn the_embed_list_is_refused_with_the_parsers_own_words() {
-        assert!(problems(&one("embed_origins", "http://homeassistant.local:8123, https://*.ui.nabu.casa")).is_empty());
-        assert!(problems(&one("embed_origins", "")).is_empty(), "empty is the default: nobody");
-        for bad in ["*", "https://ha.example/x", "homeassistant.local", "https://*.com"] {
+        assert!(
+            problems(&one(
+                "embed_origins",
+                "http://homeassistant.local:8123, https://*.ui.nabu.casa"
+            ))
+            .is_empty()
+        );
+        assert!(
+            problems(&one("embed_origins", "")).is_empty(),
+            "empty is the default: nobody"
+        );
+        for bad in [
+            "*",
+            "https://ha.example/x",
+            "homeassistant.local",
+            "https://*.com",
+        ] {
             let found = problems(&one("embed_origins", bad));
             assert_eq!(found.len(), 1, "{bad:?} was accepted");
             assert!(found[0].contains("scheme://host"), "{bad:?}: {}", found[0]);
@@ -828,16 +933,32 @@ mod tests {
     #[test]
     fn a_client_certificate_needs_its_key_and_both_are_paths() {
         let both = HashMap::from([
-            ("mqtt_client_cert".to_owned(), "/etc/birdnet/c.pem".to_owned()),
-            ("mqtt_client_key".to_owned(), "/etc/birdnet/k.pem".to_owned()),
+            (
+                "mqtt_client_cert".to_owned(),
+                "/etc/birdnet/c.pem".to_owned(),
+            ),
+            (
+                "mqtt_client_key".to_owned(),
+                "/etc/birdnet/k.pem".to_owned(),
+            ),
         ]);
         assert!(problems(&both).is_empty());
-        assert!(problems(&one("mqtt_client_cert", "/etc/birdnet/c.pem")).iter().any(|p| p.contains("go together")));
-        assert!(problems(&one("mqtt_client_key", "/etc/birdnet/k.pem")).iter().any(|p| p.contains("go together")));
+        assert!(
+            problems(&one("mqtt_client_cert", "/etc/birdnet/c.pem"))
+                .iter()
+                .any(|p| p.contains("go together"))
+        );
+        assert!(
+            problems(&one("mqtt_client_key", "/etc/birdnet/k.pem"))
+                .iter()
+                .any(|p| p.contains("go together"))
+        );
         assert!(problems(&HashMap::new()).is_empty(), "neither is fine");
         for bad in ["c.pem", "-----BEGIN CERTIFICATE-----", "relative/c.pem"] {
             assert!(
-                problems(&one("mqtt_ca_file", bad)).iter().any(|p| p.contains("full path")),
+                problems(&one("mqtt_ca_file", bad))
+                    .iter()
+                    .any(|p| p.contains("full path")),
                 "{bad:?} was accepted as a path"
             );
         }
@@ -852,7 +973,13 @@ mod tests {
         assert!(problems(&one("birdweather_threshold", "0,85")).is_empty());
         assert_eq!(problems(&one("birdweather_threshold", "85")).len(), 1);
         assert!(problems(&one("birdweather_location_accuracy", "250")).is_empty());
-        assert_eq!(problems(&one("birdweather_location_accuracy", "50001")).len(), 1);
-        assert_eq!(problems(&one("birdweather_location_accuracy", "2.5km")).len(), 1);
+        assert_eq!(
+            problems(&one("birdweather_location_accuracy", "50001")).len(),
+            1
+        );
+        assert_eq!(
+            problems(&one("birdweather_location_accuracy", "2.5km")).len(),
+            1
+        );
     }
 }

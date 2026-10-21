@@ -257,7 +257,7 @@ pub fn start_disk_manager(
 /// `purge`, because that is the behaviour the key's absence has: `--doctor`
 /// flags the value (`check_full_disk` in `birdnet_core::config::validate`),
 /// which is where a typo should be fixed.
-pub(crate) fn resolve_full_disk_action(
+pub fn resolve_full_disk_action(
     config: Option<&birdnet_core::config::Config>,
 ) -> birdnet_core::audio::capture::FullDiskAction {
     use birdnet_core::audio::capture::FullDiskAction;
@@ -418,7 +418,7 @@ pub fn start_live_spectrogram(
 /// machine is called `birdnet`. BirdNET-Pi's `avahi-alias` does publish a
 /// second name; this does not. The line used to say "discoverable as
 /// birdnet.local", which the file does not do.
-fn avahi_written_message() -> &'static str {
+const fn avahi_written_message() -> &'static str {
     "Avahi service file written: the station is advertised on the local network as a web \
      service. Its address is http://<this machine's name>.local while avahi-daemon runs; \
      this file does not publish a name of its own"

@@ -13,7 +13,7 @@ use super::super::applies::{Applies, applies_for, every};
 
 /// The pseudo-setting the page loader adds: the keys whose saved value is newer
 /// than the running station and not yet in force, comma-joined. Never stored.
-pub(crate) const PENDING_KEY: &str = "__pending_restart";
+pub const PENDING_KEY: &str = "__pending_restart";
 
 /// Insert a badge before the closing tag of each field's label.
 ///
@@ -119,7 +119,9 @@ mod tests {
         );
         let mut unbadged = Vec::new();
         for key in all_form_keys() {
-            let n = html.matches(&format!(r#"data-applies-for="{key}""#)).count();
+            let n = html
+                .matches(&format!(r#"data-applies-for="{key}""#))
+                .count();
             assert!(n <= 1, "{key} has {n} badges");
             if n == 0 {
                 unbadged.push(key);

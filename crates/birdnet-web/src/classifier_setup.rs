@@ -309,7 +309,7 @@ impl ClassifierSetup {
         snap
     }
 
-    fn empty(phase: Phase) -> Snapshot {
+    const fn empty(phase: Phase) -> Snapshot {
         Snapshot {
             phase,
             name: String::new(),
@@ -490,7 +490,7 @@ mod tests {
         // The engine started with them.
         let model = dir.path().join("birdnet-v24.onnx");
         let started = Layout {
-            model: Some(model.clone()),
+            model: Some(model),
             range_filter: Some(dir.path().join("birdnet-v24-range-v2.onnx")),
             started: true,
             ..layout(dir.path())
@@ -548,13 +548,8 @@ mod tests {
     #[test]
     fn an_install_runs_both_files_and_reports_while_it_does() {
         use std::sync::mpsc;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let s = setup(layout(dir.path()));
         static HOLD: Mutex<Option<mpsc::Receiver<()>>> = Mutex::new(None);
         static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
-        let (release, gate) = mpsc::channel::<()>();
-        *HOLD.lock().expect("hold") = Some(gate);
-        SEEN.lock().expect("seen").clear();
 
         fn stand_in(
             id: &str,
@@ -583,6 +578,12 @@ mod tests {
             }
             Ok(())
         }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = setup(layout(dir.path()));
+        let (release, gate) = mpsc::channel::<()>();
+        *HOLD.lock().expect("hold") = Some(gate);
+        SEEN.lock().expect("seen").clear();
 
         s.begin_install(stand_in).expect("starts");
         wait_until("the first file to be half fetched", || {

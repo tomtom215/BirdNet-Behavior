@@ -11,6 +11,8 @@
 //! when the detection engine is up with a classifier. Files on disk that this
 //! start did not load are "Installed — restart to start listening", not green.
 
+use std::fmt::Write as _;
+
 use axum::Router;
 use axum::extract::State;
 use axum::http::header;
@@ -46,9 +48,8 @@ async fn boot() -> Response {
 }
 
 /// The script that drives the panel and the restart buttons.
-pub(crate) static CONTROLS_SCRIPT: crate::seal::Sealed = crate::seal::Sealed::new(
-    r#"<script src="/static/setup-controls.js" defer></script>"#,
-);
+pub(crate) static CONTROLS_SCRIPT: crate::seal::Sealed =
+    crate::seal::Sealed::new(r#"<script src="/static/setup-controls.js" defer></script>"#);
 
 /// The panel inside the element the script swaps it in and out of, with the
 /// script. For the Capture tab; the setup wizard embeds the same two parts.
@@ -103,10 +104,11 @@ async fn install(
             };
             let mut html = render_panel(&setup.snapshot(state.detection_daemon_running()));
             if let Some(note) = note {
-                html.push_str(&format!(
+                let _ = write!(
+                    html,
                     r#"<p class="cls-note" role="alert">{}</p>"#,
                     escape_html(note)
-                ));
+                );
             }
             no_store(Html(html))
         })
@@ -148,9 +150,10 @@ pub fn render_panel(snap: &Snapshot) -> String {
             } else {
                 format!("Install ({})", megabytes(snap.download_bytes))
             };
-            actions.push_str(&format!(
+            let _ = write!(
+                actions,
                 r#"<button type="button" class="bnb-btn primary" data-cls-install>{label}</button>"#
-            ));
+            );
         }
         Phase::NeedsRestart => {
             actions.push_str(

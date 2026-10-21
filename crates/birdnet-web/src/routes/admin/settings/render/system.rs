@@ -11,7 +11,7 @@ use super::get_setting;
 ///
 /// Shared by the settings page and the setup wizard, so the two offer the same
 /// languages with the same coverage figures.
-pub(crate) fn language_options(stored: &str, names: &NameLocalizer) -> String {
+pub fn language_options(stored: &str, names: &NameLocalizer) -> String {
     let chosen = find_language(stored.trim()).map_or(ENGLISH, |l| l.code);
     let mut options = String::new();
     for language in LANGUAGES {
@@ -87,11 +87,11 @@ fn choice_options(stored: &str, choices: &[(&str, &str)], default: &str) -> Stri
         .map_or(default, |(value, _)| *value);
     choices
         .iter()
-        .map(|(value, label)| {
+        .fold(String::new(), |mut out, (value, label)| {
             let selected = if *value == chosen { " selected" } else { "" };
-            format!(r#"<option value="{value}"{selected}>{label}</option>"#)
+            let _ = write!(out, r#"<option value="{value}"{selected}>{label}</option>"#);
+            out
         })
-        .collect()
 }
 
 /// The `<option>`s of the spectrogram colour-map picker, the stored one chosen.
@@ -106,11 +106,11 @@ fn spectrogram_colormap_options(stored: &str) -> String {
         .map_or("viridis", |(value, _)| *value);
     choices
         .iter()
-        .map(|(value, label)| {
+        .fold(String::new(), |mut out, (value, label)| {
             let selected = if *value == chosen { " selected" } else { "" };
-            format!(r#"<option value="{value}"{selected}>{label}</option>"#)
+            let _ = write!(out, r#"<option value="{value}"{selected}>{label}</option>"#);
+            out
         })
-        .collect()
 }
 
 /// The `<option>`s of the spectrogram dynamic-range picker (dB).
@@ -122,20 +122,25 @@ fn spectrogram_range_options(stored: &str) -> String {
         .ok()
         .filter(|n| RANGES_DB.contains(n))
         .unwrap_or(DEFAULT_RANGE_DB);
-    RANGES_DB
-        .iter()
-        .map(|db| {
-            let selected = if *db == chosen { " selected" } else { "" };
-            let note = if *db == DEFAULT_RANGE_DB {
-                " (default)"
-            } else {
-                ""
-            };
-            format!(r#"<option value="{db}"{selected}>{db} dB{note}</option>"#)
-        })
-        .collect()
+    RANGES_DB.iter().fold(String::new(), |mut out, db| {
+        let selected = if *db == chosen { " selected" } else { "" };
+        let note = if *db == DEFAULT_RANGE_DB {
+            " (default)"
+        } else {
+            ""
+        };
+        let _ = write!(
+            out,
+            r#"<option value="{db}"{selected}>{db} dB{note}</option>"#
+        );
+        out
+    })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one settings section: a long run of fields that reads best in the order the page shows them"
+)]
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &NameLocalizer) {
     // Default 0 = keep audio forever, which is what every station does
     // today; age-based retention is strictly opt-in.
@@ -165,7 +170,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     );
     let temp_options = choice_options(
         &get_setting(s, "temperature_unit"),
-        &[("celsius", "Celsius (°C)"), ("fahrenheit", "Fahrenheit (°F)")],
+        &[
+            ("celsius", "Celsius (°C)"),
+            ("fahrenheit", "Fahrenheit (°F)"),
+        ],
         "celsius",
     );
     let colormap_options = spectrogram_colormap_options(&get_setting(s, "spectrogram_colormap"));

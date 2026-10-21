@@ -382,13 +382,13 @@ pub(crate) fn render_section_form(
   </div>
 </form></div>"#,
     );
-    finish(out, settings)
+    finish(&out, settings)
 }
 
 /// The finished markup: every field badged with when it applies, and the
 /// banner for saved changes still waiting for a restart in front.
-fn finish(out: String, settings: &HashMap<String, String>) -> String {
-    let badged = badges::add_applies_badges(&out);
+fn finish(out: &str, settings: &HashMap<String, String>) -> String {
+    let badged = badges::add_applies_badges(out);
     let banner = badges::pending_banner(settings, &badged);
     let script = crate::routes::admin::classifier::CONTROLS_SCRIPT.as_str();
     format!("{banner}{badged}{script}")
@@ -398,12 +398,12 @@ pub(super) fn render_settings_form(
     settings: &HashMap<String, String>,
     names: &NameLocalizer,
 ) -> String {
+    use super::extra::Group;
     let mut out = String::with_capacity(16_384);
     out.push_str(
         r##"<form hx-post="/admin/settings" hx-target="#settings-feedback"
                hx-swap="innerHTML" hx-indicator="#save-spinner">"##,
     );
-    use super::extra::Group;
     audio::render(&mut out, settings);
     location::render(&mut out, settings);
     detection::render(&mut out, settings);
@@ -430,7 +430,7 @@ pub(super) fn render_settings_form(
   </div>
 </form>"#,
     );
-    finish(out, settings)
+    finish(&out, settings)
 }
 
 #[cfg(test)]
