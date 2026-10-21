@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The temporal and distribution charts, redrawn on a shared chart kit.**
+  `static/chart-kit.js` gives every chart a tooltip for a pointer, a finger and the
+  keyboard (one tab stop, arrow keys, an `aria-live` reading), puts one series in the
+  foreground with the rest at `--chart-dim`, and plays an entrance that reduced motion
+  (the OS, or Settings → Display → Motion) switches off. On it: the activity
+  streamgraph (smooth edges that cannot overshoot a count, direct labels only where the
+  whole name fits, every other species as one more band so the thickness is the day's
+  real total), Today's hourly strip (night shaded, a now marker, the three busiest
+  species in each hour's tooltip, temperature on its own labelled strip), the
+  hour-by-weekday grid (average per day, totals beside it, the busiest cell named),
+  detections by hour, the Trends charts (the 7-day average over thin daily columns, the
+  30 days before as a ghost, the busiest and quietest day named), a 53-week calendar of
+  the year on the Year in review and on every species page, the weekly report, the
+  life-list curve and the confidence distribution. A day the station was not recording
+  (read from the recording-effort ledger) is hatched and says so rather than drawing a
+  silent day, and an hour or day still to come says "Not yet". Today's hour totals now
+  come from the database, not from counting the first 1,000 rows of the day. Gates:
+  `tools/visual-qa/charts.mjs` (hover, keyboard, dim, reduced motion, no replay, theme)
+  and `charts-edge.mjs` (an empty station, one detection, sixty species with 70-character
+  names, 1.6 million detections in an hour, a 365-day range). `docs/design/charts.md`
+  states the rules and how to add a chart. The screenshot fixture is now a year with
+  weather, seasons, flocks and days the station was off.
+
 - **birdnet-go parity: P-2, P-9, P-10, P-11, P-12, P-14, P-15, P-21, P-22.**
   A per-species minimum interval between detections (`species_intervals`, migration 56,
   Admin → Capture); MQTT client-certificate TLS (`MQTT_CLIENT_CERT`/`KEY`, `--doctor`
@@ -52,7 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leave modes, with a dry run, a disk-space check (a copy that would push the disk
   past the purge threshold is refused), a path check that never follows a name out
   of the tree, a progress bar and a resumable second run. Imported detections play
-  from `/recordings/...`. CLI: `--import-birdnet-pi-clips PATH --clips-mode MODE`.
+  from `/api/v2/recordings/...`. CLI: `--import-birdnet-pi-clips PATH --clips-mode MODE`.
+  Imported rows keep BirdNET-Pi's ISO `Week` and are marked by `import_batch_id`;
+  this station stores its own 48-week-year week, so the guide says that grouping
+  imported and new rows by week mixes two calendars.
   Written against a synthetic tree in BirdNET-Pi's real layout, with one clip
   already deleted by its cleanup and one that belongs to another row.
 - **Notification triggers are independent.** `APPRISE_TRIGGER` / `notify_trigger`
