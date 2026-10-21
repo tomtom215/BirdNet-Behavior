@@ -143,7 +143,11 @@ fn a_session_from_the_first_boot_still_verifies_on_the_second() {
             ),
         )
         .expect("login answers");
-        assert!(status_of(&head).contains("303"), "login: {head}");
+        assert!(
+            status_of(&head).contains("303"),
+            "login: {}",
+            head.escape_debug()
+        );
         let set_cookie = header_of(&head, "set-cookie").expect("a session cookie");
         let pair = set_cookie.split(';').next().unwrap().to_owned();
         assert!(pair.starts_with("bnb-session="), "{pair}");
@@ -151,7 +155,8 @@ fn a_session_from_the_first_boot_still_verifies_on_the_second() {
         let head = get(port, "/admin/overview", Some(&pair)).expect("admin page");
         assert!(
             status_of(&head).contains("200"),
-            "signed in on boot 1: {head}"
+            "signed in on boot 1: {}",
+            head.escape_debug()
         );
         pair
         // `_first` is killed here.

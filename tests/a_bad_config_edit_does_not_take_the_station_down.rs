@@ -97,7 +97,11 @@ fn a_file_with_an_error_starts_on_the_last_good_copy_or_web_only_and_says_so() {
     {
         let _first = boot(&config_path, port).expect("a good file starts");
         let (_, body) = get(port, "/api/v2/health").expect("health");
-        assert!(body.contains(r#""boot_anomalies":[]"#), "{body}");
+        assert!(
+            body.contains(r#""boot_anomalies":[]"#),
+            "{}",
+            body.escape_debug()
+        );
     }
     let last_good = dir.path().join("birdnet.conf.last-good");
     assert!(
@@ -115,7 +119,8 @@ fn a_file_with_an_error_starts_on_the_last_good_copy_or_web_only_and_says_so() {
         let (_, body) = get(port, "/api/v2/health").expect("health");
         assert!(
             body.contains(r#""boot_anomalies":["config_reverted"]"#),
-            "the station must say it is running on the last good file: {body}"
+            "the station must say it is running on the last good file: {}",
+            body.escape_debug()
         );
     }
 
@@ -126,7 +131,8 @@ fn a_file_with_an_error_starts_on_the_last_good_copy_or_web_only_and_says_so() {
     let (_, body) = get(port, "/api/v2/health").expect("health");
     assert!(
         body.contains(r#""boot_anomalies":["config_rejected"]"#),
-        "the station must say it rejected the file: {body}"
+        "the station must say it rejected the file: {}",
+        body.escape_debug()
     );
     assert!(
         !last_good.exists(),
