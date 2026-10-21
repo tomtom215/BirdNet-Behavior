@@ -22,6 +22,12 @@ Labels used below: **VALIDATED** = I ran it and saw it; **CONJECTURED** = inferr
 | `silence_probe.py` | Why the builds disagree on digital silence / zero-padded tails: graph facts, float16-rounded ONNX copies, input experiments, in-model FFT leakage. |
 | `compare_runs.py` | Diffs two `run_matrix.py` outputs (used for the cross-runtime check). |
 | `regenerate.sh`, `requirements-primary.txt`, `requirements-crosscheck.txt` | End-to-end regeneration with pinned versions. |
+| `fixtures_extended.json`, `build_extended_manifest.py`, `search_extended.py` | The second set: 106 further recordings (archive.org *radio aporee* by title keyword, ESC-50, LibriVox, generated), recipes, licences, sha256 pins. `fetch_fixtures.py --manifest fixtures_extended.json` rebuilds them (`--strict` checks the pins). Audio never committed. |
+| `run_extended.py` | BirdNET-Pi on the second set: `x0_pi_default` (with windows), `x1_pi_v2_iso`, `x2_pi_v2_48wk`. Goldens in `golden/extended/`, plus `service_rows.json`, the rows the real daemon stored. |
+| `compare_ext.py` | Window-level agreement with Wilson and clip-cluster bootstrap intervals (seeded). |
+| `range_calendar.py`, `chunking_ref.py`, `species_lists_ref.py`, `file_names_ref.py`, `resampler_golden.py` | Goldens for `tests/v24_range_filter_every_week_matches_birdnet_pi.rs`, `chunking_matches_birdnet_pi.rs`, `species_lists_match_birdnet_pi.rs`, `file_names_match_birdnet_pi.rs`, `resampler_matches_resampy_parity.rs`. |
+| `defaults_audit.py` | Every default of the three projects with file:line; each cell is a regex that must match its cited line. |
+| `birdnet_go_estimate.py` | birdnet-go's rules applied to this project's scores (an estimate, birdnet-go is not run). |
 | `fixtures/synthetic_noise_silence_9s.wav` | The only audio kept in the tree (0.86 MB, CC0, generated). |
 | `golden/` | Small outputs (1.9 MB): see below. |
 
@@ -182,3 +188,9 @@ Results (**VALIDATED** unless marked):
 ## Not covered
 
 Only the V2.4 FP16 model (not `BirdNET_6K_GLOBAL_MODEL`, Perch, `BirdNET-Go_classifier`); `BirdNET_v2.4_int8_arm_dfttrunc.onnx` was not run; only `DATABASE_LANG=en`; RTSP/arecord capture, reporting, DB writes and `extract_detection` are not exercised; no clips are > 30 s; the real PINTO0309 `tflite_runtime` 2.17.1 build was not run.
+
+## Re-derivation log (2026-10-21, `88985a3` BirdNET-Pi, tree at `ea2d439` plus the resampler fix)
+
+* `regenerate.sh`'s Python half re-run from scratch (fresh venv from `requirements-primary.txt`, fixtures re-fetched): all 14 clip sha256 reproduce; the 41 `golden/matrix/*.json` are byte-identical to the committed ones, and the sha256 of every `.npy` equals `arrays.sha256`.
+* `compare_rust.py` on the committed code before the fix: chunking 13/13 clips, decision sets 12/13 clips (53/54 windows), top-1 52/54, privacy masks 13/14 clips (52/54 windows), largest |logit| gap 1.7502. After the resampler fix (`280f7fc`): decision sets 13/13 clips (54/54), top-1 53/54, privacy unchanged, largest gap 1.5487.
+* The 12/13 miss was **not** the model: BirdNET-Pi's FP16 model and the FP32 ONNX differ by 0.002 on identical input for that window, and `resample()` shifted the audio by 0.689 sample. The previous write-up of `docs/book/guides/parity.md` called the 44.1 kHz clip's gap "the model's sensitivity ..., not a fault in either resampler"; that was wrong for that clip (the 22.05 kHz clip's remaining 1.5 logit is the model's sensitivity, and is decomposed in `docs/book/guides/parity.md`).

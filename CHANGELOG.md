@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A new station can be set up from the browser alone.** The setup wizard has
+  a Model step (install the 54 MB classifier with a progress bar), a microphone
+  picker listing the sound cards with a level test, and plain-language presets;
+  the last page restarts the station, which on a hand-started binary re-runs
+  itself. Each Settings field says whether it applies immediately or after a
+  restart, and a banner lists changes still waiting. About thirty more settings
+  have a form, and `docs/book/reference/where-to-change-it.md` lists every key
+  with its page or the reason it is file-only; a test fails for a key with
+  neither. Fifteen numeric settings are range-checked at the form, the API and
+  `--doctor`; `RECORDING_LENGTH` is read as `SEGMENT_DURATION`.
+
+- **Moving from BirdNET-Pi is a browser flow, and a settings file is read key by
+  key.** `Data > Move from BirdNET-Pi` now takes your `birdnet.conf` and shows
+  every line of it as a table (imported, converted, needs a look, set in
+  `birdnet.conf` only, not carried, left as it is, or refused) before it changes
+  anything; Apply writes through the same validation as the settings page and one
+  audit row names only the keys. The mapping lives in one table
+  (`birdnet_migrate::conf::RULES`) that the importer, `--doctor` ("BirdNET-Pi's X
+  is our Y", or plainly "no equivalent") and the generated table in
+  `docs/book/guides/migration.md` all read, and tests hold the three in step.
+  Secrets (BirdWeather ID, Apprise URLs, passwords, RTSP and Flickr credentials,
+  the heartbeat URL) are shown only as "(hidden, N characters)" and never logged;
+  `APPRISE_NOTIFY_*`, `PRIVACY_THRESHOLD`, the weekly report switch and
+  `CUSTOM_IMAGE` are converted, and BirdNET-Pi's habit of notifying on every stored
+  detection is written down as an explicit `notify_confidence = 0` rather than
+  silently becoming this station's 0.80. Also `--import-birdnet-pi-conf PATH`
+  (a dry run unless `--apply-import`), and the species lists (include, exclude,
+  whitelist) from the same page.
+- **Your BirdNET-Pi recordings come with the detections.** The same page imports
+  the clip tree (`By_Date` or `Extracted/By_Date`), in copy, hard-link, move or
+  leave modes, with a dry run, a disk-space check (a copy that would push the disk
+  past the purge threshold is refused), a path check that never follows a name out
+  of the tree, a progress bar and a resumable second run. Imported detections play
+  from `/recordings/...`. CLI: `--import-birdnet-pi-clips PATH --clips-mode MODE`.
+  Written against a synthetic tree in BirdNET-Pi's real layout, with one clip
+  already deleted by its cleanup and one that belongs to another row.
+- **Notification triggers are independent.** `APPRISE_TRIGGER` / `notify_trigger`
+  accepts a list (`each,new-species,new-species-daily`) and `off`; the three
+  BirdNET-Pi flags (every detection, first of a species ever, first of a species
+  each day) can be set in any combination, one message with every reason joined.
+  Tested against a transcription of BirdNET-Pi's `notifications.py` over all eight
+  flag combinations. The settings page offers the five common choices and keeps a
+  list it cannot name as "Several rules".
+- **`FULL_DISK=keep` is honoured.** The setting `full_disk_action` (`purge` by
+  default, as before; `keep` for BirdNET-Pi's "keep everything, stop recording")
+  makes the recordings disk manager stop deleting and raise a recording hold
+  instead; capture stops, resumes once usage is 2 points under the threshold,
+  and the hold is the `birdnet_recording_held` metric and a Station health
+  condition. A migrated "keep" station never has a clip deleted.
+
 - **A complete design-token system, and gates that hold it.** `app.css` gains the
   scales it was missing, all additive (no existing token was renamed or
   re-valued, except the elevation and fluid heading sizes noted under Changed):
@@ -422,6 +472,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`APPRISE_TRIGGER=off` means off.** It used to be read as "each". A station
+  that set `off` and was notified about every detection should expect silence now.
+  The settings form also refuses a trigger word it does not know.
+- **Hints that described another setting are corrected**: `PURGE_THRESHOLD`
+  (percent of disk, not a count), the notification cooldown, the names lists, the
+  body and title templates, and the avahi line, which claimed the station was
+  "discoverable as birdnet.local" when all it had done was write a file.
+
 - **The shell has depth and arrives with motion.** Elevation is mixed from a tint
   (warm brown on paper, cool near-black on night) instead of pure black; two soft
   washes sit behind the page; the top bar and phone tab bar are glass; buttons,
@@ -773,6 +831,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   67,545).
 
 ### Fixed
+
+- **A recording that is not 48 kHz no longer reaches the model a fraction of a sample early.**
+  The resampling library delays its output by `128 x ratio - 1` samples and the
+  code removed only the whole-sample part, so 44.1 kHz audio arrived 0.69 sample
+  early (0.38 at 22.05 kHz, 0.67 for the 32 kHz V3.0 model, 1.0 at 32 to 48 kHz).
+  Against BirdNET-Pi's own resampler the model's input differed by 28 % RMS on a
+  quiet 44.1 kHz clip and 19 % on a spoken-word one, and a borderline call
+  (0.7113 there, 0.6564 here) fell under the 0.7 bar; it is now 0.7097. The input
+  now differs by 0.2 % RMS in the median (at most 2.8 %). V2.4 on a recorder
+  that writes 48 kHz was not affected; V3.0 resamples every recording to 32 kHz and was. `docs/book/guides/parity.md` (re-measured on 120 recordings,
+  with the remaining differences and their causes), `tools/parity/README.md`.
+- **A failed read of the audio sources no longer draws an empty station.** The
+  Capture tab said "0 mics, 0 streams" with two add forms, and the add/remove
+  counters printed 0, when the sources could not be read; they now say they could
+  not be loaded. The same for the Listen default and for the wizard's own reads.
+
+- **A bird that has lived here all year is not "new this season" on the first
+  day of the next one** (P-20). `classify` called the first detection after a
+  season boundary new even when the bird had been recorded the day before it; a
+  7-day carry-over (the figure birdnet-go uses) now applies. Seen failing: a
+  scratch probe printed `new_this_season: true` for a resident detected the day
+  before the boundary, and the boundary tests fail when the carry-over is
+  removed or its edge moved by a day. `charts.rs` has its own definition of
+  "new this season" which this does not change.
+
+- **A failed read is no longer printed as a fact (second sweep).** A parse of the
+  tree (`tests/a_failed_read_is_not_defaulted_into_a_fact.rs`) classifies every
+  read whose error is defaulted in its own closure. The real ones now say they
+  could not look: the species page's best recording, per-species thresholds, the
+  last backup, the live source picker, `/stream` (503, not 404), the Today pill and
+  outage banner, the BirdWeather and rule tests, share links, the Migration cards,
+  and sign-in, which blamed the password for an unreadable users table. A
+  blacklisted image is no longer served when the blacklist cannot be read.
+- **No blocking filesystem call on a runtime worker.** The database gate covers
+  `std::fs` now: 42 calls in 28 async functions moved to `tokio::fs` or the
+  blocking pool (avatars, recordings, spectrograms, HLS, backups, TLS reload, the
+  maintenance loop).
+- **Smaller:** the service worker honours `SKIP_WAITING` only from its own origin;
+  a blank invite label is no label; the range-filter list shows 25 species and
+  appends the next 25 in place (about 1,800 px on a phone, measured, from 4,900); the unlinked
+  `/pages/quarantine-pending-count` is gone; test passwords are built at run time
+  (62 literals CodeQL would follow into a `password` parameter); the six
+  `TODO(O-nn-followup)` comments are resolved or recorded in `docs/TECH_DEBT.md`,
+  and a test refuses a new one; 24 `#[allow]` attributes that silenced nothing are
+  deleted and 19 more trimmed to the lints they still silence.
 
 - **The frequency shift is a shift in hertz.** `--freq-shift-hz` was a ratio, documented
   as a shift: with ffmpeg 6.1.1 an 8 kHz tone at -3000 came out at 7 500 Hz (not
