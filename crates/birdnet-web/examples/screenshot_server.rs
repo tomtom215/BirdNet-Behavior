@@ -171,7 +171,7 @@ fn mix(mut x: u64) -> u64 {
 /// A uniform in `[0, 1)` from `(day, salt)`.
 fn hashed_unit(day: i64, salt: u64) -> f64 {
     (mix((day as u64)
-        .wrapping_mul(0x1000_0000_1B3)
+        .wrapping_mul(0x0100_0000_01B3)
         .wrapping_add(salt))
         >> 11) as f64
         / (1u64 << 53) as f64
@@ -684,7 +684,7 @@ fn seed(conn: &Connection, today_days: i64) {
                         weather.temp_c + diurnal,
                         weather.precip_mm / 24.0,
                         weather.wind_kt,
-                        ((days_ago * 37) % 360) as i64,
+                        (days_ago * 37) % 360,
                         1013.0 - weather.precip_mm,
                         if weather.precip_mm > 1.0 { 90 } else { 30 },
                         if weather.precip_mm > 1.0 { 61 } else { 1 },

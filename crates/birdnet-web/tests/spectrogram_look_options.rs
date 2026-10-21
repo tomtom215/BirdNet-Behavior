@@ -27,6 +27,12 @@ use tower::ServiceExt as _;
 /// Two seconds of a falling tone over a little noise, at 48 kHz: a surface with
 /// a loud ridge, a quiet floor and everything between, so the colour map and
 /// the range both have something to act on.
+#[allow(
+    clippy::many_single_char_names,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "synthesising a waveform: n, t, f, s, v are the signal's own names, the values are small and in range, and the sample is meant to be quantised to i16"
+)]
 fn chirp_wav() -> Vec<u8> {
     let rate: u32 = 48_000;
     let n = (rate * 2) as usize;
@@ -156,6 +162,10 @@ fn has(px: &[[u8; 3]], rgb: [u8; 3]) -> bool {
     px.contains(&rgb)
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a count of pixels, far below 2^52; the share is a ratio of two of them"
+)]
 fn floor_share(px: &[[u8; 3]], floor: [u8; 3]) -> f64 {
     px.iter().filter(|p| **p == floor).count() as f64 / px.len() as f64
 }

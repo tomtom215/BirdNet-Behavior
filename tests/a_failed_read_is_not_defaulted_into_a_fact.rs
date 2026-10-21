@@ -196,14 +196,13 @@ impl<'ast> Visit<'ast> for MentionsRead<'_> {
         if c.args.iter().any(|a| is_conn_arg(a, self.conns)) {
             self.found = true;
         }
-        if let syn::Expr::Path(p) = &*c.func {
-            if let Some(last) = p.path.segments.last() {
-                if READ_PRIMITIVES.contains(&last.ident.to_string().as_str()) {
-                    self.found = true;
-                }
-                // `AudioSourceStore::list` passed as a path to a primitive is a
-                // read, but that is the primitive's own call; nothing to add.
-            }
+        // `AudioSourceStore::list` passed as a path to a primitive is a read,
+        // but that is the primitive's own call; nothing to add.
+        if let syn::Expr::Path(p) = &*c.func
+            && let Some(last) = p.path.segments.last()
+            && READ_PRIMITIVES.contains(&last.ident.to_string().as_str())
+        {
+            self.found = true;
         }
         syn::visit::visit_expr_call(self, c);
     }
@@ -263,13 +262,13 @@ impl Sweep<'_> {
     fn func(&self) -> String {
         self.funcs.last().cloned().unwrap_or_default()
     }
-    fn push(&mut self, kind: &str, tokens: String, at: LineColumn, detail: String) {
+    fn push(&mut self, kind: &str, tokens: &str, at: LineColumn, detail: String) {
         self.out.push(Hit {
             detail,
             file: self.file.to_string(),
             func: self.func(),
             kind: kind.to_string(),
-            snippet: squash(&tokens),
+            snippet: squash(tokens),
             line: at.line,
         });
     }
@@ -278,12 +277,12 @@ impl Sweep<'_> {
         self.seen += 1;
         let saved = self.conns.clone();
         for input in &sig.inputs {
-            if let syn::FnArg::Typed(t) = input {
-                if type_is_connection(&self.src_lines, &t.ty) {
-                    let mut v = Vec::new();
-                    pat_idents(&t.pat, &mut v);
-                    self.conns.extend(v);
-                }
+            if let syn::FnArg::Typed(t) = input
+                && type_is_connection(&self.src_lines, &t.ty)
+            {
+                let mut v = Vec::new();
+                pat_idents(&t.pat, &mut v);
+                self.conns.extend(v);
             }
         }
         saved
@@ -327,7 +326,7 @@ impl<'ast> Visit<'ast> for Sweep<'_> {
         let name = m.method.to_string();
         if DEFAULTERS.contains(&name.as_str()) && mentions_read(&m.receiver, &self.conns) {
             let t = text_of(&self.src_lines, m.span());
-            self.push(&name, t, m.method.span().start(), String::new());
+            self.push(&name, &t, m.method.span().start(), String::new());
         }
         let prim = READ_PRIMITIVES.contains(&name.as_str());
         self.visit_expr(&m.receiver);
@@ -342,10 +341,10 @@ impl<'ast> Visit<'ast> for Sweep<'_> {
         syn::visit::visit_expr_if(self, i);
     }
     fn visit_local(&mut self, l: &'ast syn::Local) {
-        if let Some(init) = &l.init {
-            if init.diverge.is_some() {
-                self.check_let(&l.pat, &init.expr, l.span().start());
-            }
+        if let Some(init) = &l.init
+            && init.diverge.is_some()
+        {
+            self.check_let(&l.pat, &init.expr, l.span().start());
         }
         syn::visit::visit_local(self, l);
     }
@@ -355,7 +354,7 @@ impl<'ast> Visit<'ast> for Sweep<'_> {
                 if pat_is_err(&arm.pat) {
                     self.push(
                         "match-err",
-                        format!(
+                        &format!(
                             "match {} {{ Err .. }}",
                             text_of(&self.src_lines, m.expr.span())
                         ),
@@ -386,7 +385,7 @@ impl Sweep<'_> {
         if pat_is_ok(pat) && mentions_read(expr, &self.conns) {
             self.push(
                 "let-ok",
-                format!("let Ok(..) = {}", text_of(&self.src_lines, expr.span())),
+                &format!("let Ok(..) = {}", text_of(&self.src_lines, expr.span())),
                 at,
                 String::new(),
             );
@@ -569,7 +568,7 @@ fn pair(f: &str, k: &str) -> (String, String) {
 /// The shapes the sweep exists for. Each is a read whose failure became a value.
 #[test]
 fn the_sweep_flags_each_shape() {
-    let src = r#"
+    let src = r"
         fn closure_param(s: &S) -> Vec<u8> { s.with_read_db(|conn| list(conn).unwrap_or_default()) }
         fn function_param(conn: &Connection) -> Option<u8> { count(conn).ok() }
         fn if_let(conn: &Connection) { if let Ok(n) = count(conn) { use_it(n); } }
@@ -579,7 +578,7 @@ fn the_sweep_flags_each_shape() {
             tokio::task::spawn_blocking(move || s.with_read_db(|c| n(c))).await.unwrap_or(0)
         }
         fn map_or(conn: &Connection) -> bool { count(conn).map_or(true, |n| n > 0) }
-    "#;
+    ";
     // Sorted as the sweep sorts: by function name.
     assert_eq!(
         hits_in(src),
@@ -599,7 +598,7 @@ fn the_sweep_flags_each_shape() {
 /// about the read and not about every `unwrap_or`.
 #[test]
 fn the_sweep_passes_what_is_not_a_defaulted_read() {
-    let src = r#"
+    let src = r"
         // Propagated, not defaulted.
         fn propagated(conn: &Connection) -> Result<u8, E> { let n = count(conn)?; Ok(n) }
         // A request parameter: nothing was read.
@@ -611,7 +610,7 @@ fn the_sweep_passes_what_is_not_a_defaulted_read() {
         // Test code is not shipped code.
         #[cfg(test)] mod tests { fn t(conn: &Connection) { count(conn).ok(); } }
         #[test] fn also_a_test(conn: &Connection) { count(conn).ok(); }
-    "#;
+    ";
     assert_eq!(hits_in(src), Vec::<(String, String)>::new());
     // The same read, defaulted, is caught: the cases above pass for their own
     // reasons and not because the sweep sees nothing.

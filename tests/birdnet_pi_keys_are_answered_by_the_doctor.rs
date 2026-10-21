@@ -160,9 +160,10 @@ fn what_the_importer_hides_the_support_bundle_hides() {
     ] {
         let rule = RULES.iter().find(|r| r.pi_key == rule_key).expect("rule");
         assert!(rule.secret, "{rule_key} should be marked secret");
-        let ours = match rule.target {
-            Target::Setting { key, .. } | Target::ConfigFile { key, .. } => key,
-            _ => panic!("{rule_key} has no target"),
+        let (Target::Setting { key: ours, .. } | Target::ConfigFile { key: ours, .. }) =
+            rule.target
+        else {
+            panic!("{rule_key} has no target")
         };
         let hidden_by_key = redact::is_secret_key(ours);
         let hidden_by_value = redact::redact_value(sample) != sample;

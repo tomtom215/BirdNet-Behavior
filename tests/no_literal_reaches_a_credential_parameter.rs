@@ -282,30 +282,30 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             if matches!(&*init.expr, syn::Expr::Closure(_)) {
                 self.closures.insert(i.ident.to_string());
             }
-            if self.literal_derived(&init.expr) {
-                if let Some(top) = self.tainted.last_mut() {
-                    top.insert(i.ident.to_string());
-                }
+            if self.literal_derived(&init.expr)
+                && let Some(top) = self.tainted.last_mut()
+            {
+                top.insert(i.ident.to_string());
             }
         }
         syn::visit::visit_local(self, l);
     }
     fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(p) = &*c.func {
-            if let Some(seg) = p.path.segments.last() {
-                let args: Vec<&syn::Expr> = c.args.iter().collect();
-                let bare = p.path.segments.len() == 1;
-                if bare && self.closures.contains(&seg.ident.to_string()) {
-                    syn::visit::visit_expr_call(self, c);
-                    return;
-                }
-                self.check_call(
-                    &seg.ident.to_string(),
-                    bare,
-                    &args,
-                    seg.ident.span().start().line,
-                );
+        if let syn::Expr::Path(p) = &*c.func
+            && let Some(seg) = p.path.segments.last()
+        {
+            let args: Vec<&syn::Expr> = c.args.iter().collect();
+            let bare = p.path.segments.len() == 1;
+            if bare && self.closures.contains(&seg.ident.to_string()) {
+                syn::visit::visit_expr_call(self, c);
+                return;
             }
+            self.check_call(
+                &seg.ident.to_string(),
+                bare,
+                &args,
+                seg.ident.span().start().line,
+            );
         }
         syn::visit::visit_expr_call(self, c);
     }

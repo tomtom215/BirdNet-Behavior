@@ -368,6 +368,10 @@ fn every_exemption_still_excuses_a_line() {
 /// The counterpart: each shape the sweep looks for is flagged when it is
 /// planted, so a green run above is not a sweep that matches nothing.
 #[test]
+#[allow(
+    clippy::literal_string_with_formatting_args,
+    reason = "the strings are Rust source the sweep reads, planted to be flagged or not; their braces are the point and nothing formats them"
+)]
 fn the_sweep_flags_each_shape_it_claims_to_find() {
     let planted = [
         r#"let a = format!("{t:.0}°C");"#,
@@ -396,10 +400,10 @@ fn the_sweep_flags_each_shape_it_claims_to_find() {
     }
     // And what is not a time is left alone.
     for line in [
-        r#"let a = escape_html(&d.com_name);"#,
-        r#"let a = escape_html(&d.date);"#,
+        r"let a = escape_html(&d.com_name);",
+        r"let a = escape_html(&d.date);",
         r#"let a = format!("{pct:.0}%");"#,
-        r#"let a = escape_html(timeout);"#,
+        r"let a = escape_html(timeout);",
         "// a comment about °C and {h:02}:{m:02}",
     ] {
         assert!(

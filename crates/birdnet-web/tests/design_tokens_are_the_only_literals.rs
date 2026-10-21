@@ -264,24 +264,24 @@ fn has_px_literal(v: &str) -> bool {
         let rest = &v[i..];
         if depth == 0 && (rest.starts_with("var(") || rest.starts_with("color-mix(")) {
             // skip the whole function
-            let mut d = 0_i32;
-            let mut j = i;
-            while j < b.len() {
-                match b[j] {
-                    b'(' => d += 1,
+            let mut nest = 0_i32;
+            let mut end = i;
+            while end < b.len() {
+                match b[end] {
+                    b'(' => nest += 1,
                     b')' => {
-                        d -= 1;
-                        if d == 0 {
-                            j += 1;
+                        nest -= 1;
+                        if nest == 0 {
+                            end += 1;
                             break;
                         }
                     }
                     _ => {}
                 }
-                j += 1;
+                end += 1;
             }
             outside.push(' ');
-            i = j;
+            i = end;
             continue;
         }
         match b[i] {

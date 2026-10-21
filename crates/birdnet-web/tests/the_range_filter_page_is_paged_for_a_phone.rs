@@ -99,7 +99,7 @@ async fn the_list_is_one_page_of_rows_and_not_a_hundred() {
     );
     // The control names the size of the step, and carries both ways to take it.
     assert!(page.contains(&format!("Show the next {PAGE}")), "{page}");
-    assert!(page.contains(r#"hx-target="#), "{page}");
+    assert!(page.contains("hx-target="), "{page}");
     assert!(page.contains("offset=25&amp;more=1"), "{page}");
     assert!(page.contains(r#"id="occ-list""#), "{page}");
 }

@@ -45,19 +45,19 @@ async fn send(state: &AppState, req: Request<Body>) -> (StatusCode, String) {
 
 /// A multipart body: `(field, optional file name, content)`.
 fn multipart(parts: &[(&str, Option<&str>, &str)]) -> Body {
+    use std::fmt::Write as _;
     let mut out = String::new();
     for (name, file, content) in parts {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\""
-        ));
+        );
         if let Some(file) = file {
-            out.push_str(&format!(
-                "; filename=\"{file}\"\r\nContent-Type: text/plain"
-            ));
+            let _ = write!(out, "; filename=\"{file}\"\r\nContent-Type: text/plain");
         }
-        out.push_str(&format!("\r\n\r\n{content}\r\n"));
+        let _ = write!(out, "\r\n\r\n{content}\r\n");
     }
-    out.push_str(&format!("--{BOUNDARY}--\r\n"));
+    let _ = write!(out, "--{BOUNDARY}--\r\n");
     Body::from(out)
 }
 
