@@ -35,6 +35,45 @@ use render::UploadPreview;
 /// Shared migration state (one active job at a time).
 type MigrationState = Arc<Mutex<Option<ProgressHandle>>>;
 
+/// Take the one import slot, or `None` while an import still owns it.
+///
+/// Decided and claimed under one lock, with the new handle already in a stage
+/// that counts as running: a handle left in `Pending` between "claimed" and
+/// "the worker's first update" was read as "not running", so two requests in
+/// that window both started, shared one temporary file name, and each could
+/// clear the other's temporaries.
+fn claim_slot(slot: &MigrationState) -> Option<ProgressHandle> {
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.as_ref().is_some_and(|p| !p.snapshot().is_terminal()) {
+        return None;
+    }
+    let progress = ProgressHandle::new();
+    progress.set_stage(MigrationStage::Detecting, "Starting…");
+    *guard = Some(progress.clone());
+    Some(progress)
+}
+
+/// Run an import's work on the calling (blocking) thread; if it panics, the
+/// stage becomes `Failed` instead of staying wherever it was.
+///
+/// Without this a panic in the worker left the stage non-terminal for good: the
+/// page polled a bar that never moved, and every later import was refused as
+/// "still running" until the station restarted.
+pub(super) fn run_guarded(progress: &ProgressHandle, work: impl FnOnce()) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
+        tracing::error!("an import worker panicked");
+        progress.fail(
+            "The import stopped unexpectedly. The station's log has the details. Nothing is \
+             running now, so you can start it again.",
+        );
+    }
+}
+
+/// The message for a refused second import.
+pub(super) const ALREADY_RUNNING: &str = "Another import is still running. Wait for it to finish.";
+
 /// An uploaded file that has been validated and is waiting for the operator to
 /// say "yes, import it".
 ///
@@ -800,7 +839,7 @@ async fn upload_confirm_handler(
         file_name,
         options,
         rows_hint,
-        token: _,
+        token: staged_token,
     }) = staged_now
     else {
         return Ok(Html(render::upload_error(
@@ -809,48 +848,57 @@ async fn upload_confirm_handler(
         )));
     };
 
+    let Some(progress) = claim_slot(&migration_state) else {
+        // The upload stays staged: refusing the click must not cost the file.
+        *staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Staged {
+            tmp,
+            file_name,
+            options,
+            rows_hint,
+            token: staged_token,
+        });
+        return Ok(Html(render::upload_error(ALREADY_RUNNING)));
+    };
     let tmp_path = tmp.path().to_path_buf();
     let dest_path = state.db_path().to_path_buf();
-    let progress = ProgressHandle::new();
-    {
-        let mut guard = migration_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(progress.clone());
-    }
 
     tokio::task::spawn_blocking(move || {
-        let _keep_tmp = tmp; // keeps the temp file alive until migration finishes
-        progress.update(MigrationProgress {
-            stage: MigrationStage::Importing,
-            rows_imported: 0,
-            rows_total: rows_hint,
-            message: format!("Importing {file_name}…"),
-            error: None,
+        let worker_progress = progress.clone();
+        run_guarded(&worker_progress, move || {
+            let _keep_tmp = tmp; // keeps the temp file alive until migration finishes
+            progress.update(MigrationProgress {
+                stage: MigrationStage::Importing,
+                rows_imported: 0,
+                rows_total: rows_hint,
+                message: format!("Importing {file_name}…"),
+                error: None,
+            });
+            match birdnet_migrate::birdnet_pi::run_migration_with_options(
+                &tmp_path, &dest_path, false, &progress, &options, station,
+            ) {
+                Ok(summary) => {
+                    tracing::info!(
+                        file = %file_name,
+                        imported = summary.imported_rows,
+                        skipped = summary.skipped_rows,
+                        "upload migration completed"
+                    );
+                    // Same rebuild the server-path `run_handler` does: the import
+                    // wrote back-dated history straight to SQLite, so the DuckDB
+                    // analytics copy must be rebuilt or the incremental startup sync
+                    // skips every imported row as "older than the latest already
+                    // synced" — uploaded history would silently never reach the
+                    // behavioural / time-series analytics.
+                    rebuild_analytics_after_import(&state, &progress);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "upload migration failed");
+                    progress.fail(e.to_string());
+                }
+            }
         });
-        match birdnet_migrate::birdnet_pi::run_migration_with_options(
-            &tmp_path, &dest_path, false, &progress, &options, station,
-        ) {
-            Ok(summary) => {
-                tracing::info!(
-                    file = %file_name,
-                    imported = summary.imported_rows,
-                    skipped = summary.skipped_rows,
-                    "upload migration completed"
-                );
-                // Same rebuild the server-path `run_handler` does: the import
-                // wrote back-dated history straight to SQLite, so the DuckDB
-                // analytics copy must be rebuilt or the incremental startup sync
-                // skips every imported row as "older than the latest already
-                // synced" — uploaded history would silently never reach the
-                // behavioural / time-series analytics.
-                rebuild_analytics_after_import(&state, &progress);
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "upload migration failed");
-                progress.fail(e.to_string());
-            }
-        }
     });
 
     // O-18: sticky warn toast so the user knows the import is in flight even
@@ -874,41 +922,40 @@ async fn run_handler(
     let station = state.run_blocking(station_coords).await;
     let source_path = PathBuf::from(form.source_path);
     let dest_path = state.db_path().to_path_buf();
-    let progress = ProgressHandle::new();
-    {
-        let mut guard = migration_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(progress.clone());
-    }
+    let Some(progress) = claim_slot(&migration_state) else {
+        return Ok(Html(render::upload_error(ALREADY_RUNNING)));
+    };
     tokio::task::spawn_blocking(move || {
-        progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
-        match birdnet_migrate::birdnet_pi::run_migration_with_options(
-            &source_path,
-            &dest_path,
-            false,
-            &progress,
-            &options,
-            station,
-        ) {
-            Ok(s) => {
-                tracing::info!(
-                    imported = s.imported_rows,
-                    skipped = s.skipped_rows,
-                    "migration completed"
-                );
-                // The import wrote back-dated history straight to SQLite. Rebuild
-                // the DuckDB analytics copy so that history reaches the
-                // behavioural / time-series analytics with its original
-                // timestamps — the incremental startup sync would skip every
-                // imported row as "older than the latest already synced".
-                rebuild_analytics_after_import(&state, &progress);
+        let worker_progress = progress.clone();
+        run_guarded(&worker_progress, move || {
+            progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
+            match birdnet_migrate::birdnet_pi::run_migration_with_options(
+                &source_path,
+                &dest_path,
+                false,
+                &progress,
+                &options,
+                station,
+            ) {
+                Ok(s) => {
+                    tracing::info!(
+                        imported = s.imported_rows,
+                        skipped = s.skipped_rows,
+                        "migration completed"
+                    );
+                    // The import wrote back-dated history straight to SQLite. Rebuild
+                    // the DuckDB analytics copy so that history reaches the
+                    // behavioural / time-series analytics with its original
+                    // timestamps — the incremental startup sync would skip every
+                    // imported row as "older than the latest already synced".
+                    rebuild_analytics_after_import(&state, &progress);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "migration failed");
+                    progress.fail(e.to_string());
+                }
             }
-            Err(e) => {
-                tracing::error!(error = %e, "migration failed");
-                progress.fail(e.to_string());
-            }
-        }
+        });
     });
     // O-18: sticky warn toast so the user knows the import is in flight even
     // after navigating away from the progress card.
@@ -1019,5 +1066,70 @@ mod tests {
     fn render_import_started_has_progress_poll() {
         let html = render::import_started();
         assert!(html.contains("/admin/migrate/progress"));
+    }
+
+    // ---- one import at a time, and a panic ends one --------------------------
+
+    use super::{ALREADY_RUNNING, MigrationState, claim_slot, run_guarded};
+    use birdnet_migrate::progress::{MigrationStage, ProgressHandle};
+    use std::sync::{Arc, Barrier, Mutex};
+
+    #[test]
+    fn of_many_simultaneous_requests_exactly_one_gets_the_slot() {
+        for _ in 0..50 {
+            let slot: MigrationState = Arc::new(Mutex::new(None));
+            let barrier = Arc::new(Barrier::new(8));
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    let (slot, barrier) = (Arc::clone(&slot), Arc::clone(&barrier));
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        claim_slot(&slot).is_some()
+                    })
+                })
+                .collect();
+            let winners = threads
+                .into_iter()
+                .map(|t| t.join().expect("thread"))
+                .filter(|won| *won)
+                .count();
+            assert_eq!(winners, 1, "{ALREADY_RUNNING}");
+        }
+    }
+
+    #[test]
+    fn a_claimed_slot_counts_as_running_before_the_worker_has_said_anything() {
+        let slot: MigrationState = Arc::new(Mutex::new(None));
+        let first = claim_slot(&slot).expect("free");
+        let stage = first.snapshot().stage;
+        assert!(
+            !matches!(stage, MigrationStage::Pending) && !first.snapshot().is_terminal(),
+            "{stage:?}: a request in this window was read as 'not running'"
+        );
+        assert!(claim_slot(&slot).is_none());
+        // The counterpart: once it finishes, the next import may start.
+        first.set_stage(MigrationStage::Complete, "done");
+        assert!(claim_slot(&slot).is_some());
+    }
+
+    #[test]
+    fn a_worker_that_panics_leaves_a_failed_import_not_a_running_one() {
+        let slot: MigrationState = Arc::new(Mutex::new(None));
+        let progress = claim_slot(&slot).expect("free");
+        let worker = progress.clone();
+        std::thread::spawn(move || run_guarded(&worker, || panic!("boom")))
+            .join()
+            .expect("the guard catches it");
+        let snap = progress.snapshot();
+        assert_eq!(snap.stage, MigrationStage::Failed);
+        assert!(snap.error.as_deref().is_some_and(|e| e.contains("stopped")));
+        assert!(
+            claim_slot(&slot).is_some(),
+            "later imports must not be refused until a restart"
+        );
+        // And a worker that does not panic is left exactly as it set itself.
+        let ok = ProgressHandle::new();
+        run_guarded(&ok, || ok.set_stage(MigrationStage::Complete, "fine"));
+        assert_eq!(ok.snapshot().stage, MigrationStage::Complete);
     }
 }

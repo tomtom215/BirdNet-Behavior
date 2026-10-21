@@ -272,6 +272,15 @@ fn err(message: &str) -> Html<String> {
     ))
 }
 
+/// The `hx-vals` attribute value for the Bring-them-across button: a JSON
+/// object, built by a serialiser and then escaped for a single-quoted HTML
+/// attribute. (It was a format string, so a folder name holding `"` or `\`
+/// made the JSON invalid and the button posted nothing.)
+fn hx_vals(source: &str, mode: &str) -> String {
+    let json = serde_json::json!({ "clips_source": source, "clips_mode": mode }).to_string();
+    escape_html(&json).replace('\'', "&#39;")
+}
+
 /// `POST /admin/migrate/clips/preview`: the dry run.
 pub(super) async fn preview_handler(
     State(state): State<AppState>,
@@ -318,10 +327,9 @@ pub(super) async fn preview_handler(
                     html,
                     r##"<div class="actions center"><button class="btn btn-primary"
                       hx-post="/admin/migrate/clips/run"
-                      hx-vals='{{"clips_source": "{src}", "clips_mode": "{mode}"}}'
+                      hx-vals='{vals}'
                       hx-target="#clips-result" hx-swap="innerHTML"{confirm}>Bring them across</button></div></div>"##,
-                    src = escape_html(&source).replace('\'', "&#39;"),
-                    mode = escape_html(&mode_word),
+                    vals = hx_vals(&source, &mode_word),
                 );
             }
             Html(html)
@@ -335,18 +343,9 @@ pub(super) async fn run_handler(
     migration_state: Arc<Mutex<Option<ProgressHandle>>>,
     Form(form): Form<ClipForm>,
 ) -> Html<String> {
-    let progress = ProgressHandle::new();
-    {
-        let mut guard = migration_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if guard.as_ref().is_some_and(|p| {
-            !p.snapshot().is_terminal() && p.snapshot().stage != MigrationStage::Pending
-        }) {
-            return err("Another import is still running. Wait for it to finish.");
-        }
-        *guard = Some(progress.clone());
-    }
+    let Some(progress) = super::claim_slot(&migration_state) else {
+        return err(super::ALREADY_RUNNING);
+    };
     let setup_state = state.clone();
     let setup_form = ClipForm {
         clips_source: form.clips_source.clone(),
@@ -364,52 +363,87 @@ pub(super) async fn run_handler(
     };
     let mode = setup.options.mode;
     tokio::task::spawn_blocking(move || {
-        progress.update(MigrationProgress {
-            stage: MigrationStage::Importing,
-            rows_imported: 0,
-            rows_total: 0,
-            message: "Looking for the recordings…".to_owned(),
-            error: None,
+        let worker_progress = progress.clone();
+        super::run_guarded(&worker_progress, move || {
+            progress.update(MigrationProgress {
+                stage: MigrationStage::Importing,
+                rows_imported: 0,
+                rows_total: 0,
+                message: "Looking for the recordings…".to_owned(),
+                error: None,
+            });
+            let factory_state = setup_state.clone();
+            let wanted = move || -> Box<dyn Iterator<Item = Wanted>> {
+                Box::new(Pager::new(factory_state.clone()))
+            };
+            match clips::run(&setup.options, &wanted, Some(&progress)) {
+                Ok(report) => {
+                    tracing::info!(
+                        done = report.done,
+                        already_there = report.already_there,
+                        missing = report.missing,
+                        failed = report.failed,
+                        "BirdNET-Pi recordings brought across"
+                    );
+                    let verb = describe(mode);
+                    let message = format!(
+                        "{} recording{} {verb} ({}); {} were already here, {} not found, {} failed.",
+                        report.done,
+                        if report.done == 1 { "" } else { "s" },
+                        clips::human_bytes(report.bytes),
+                        report.already_there,
+                        report.missing,
+                        report.failed,
+                    );
+                    progress.update(MigrationProgress {
+                        stage: MigrationStage::Complete,
+                        rows_imported: report.done,
+                        rows_total: report.done,
+                        message,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "bringing the recordings across failed");
+                    progress.fail(e.to_string());
+                }
+            }
         });
-        let factory_state = setup_state.clone();
-        let wanted = move || -> Box<dyn Iterator<Item = Wanted>> {
-            Box::new(Pager::new(factory_state.clone()))
-        };
-        match clips::run(&setup.options, &wanted, Some(&progress)) {
-            Ok(report) => {
-                tracing::info!(
-                    done = report.done,
-                    already_there = report.already_there,
-                    missing = report.missing,
-                    failed = report.failed,
-                    "BirdNET-Pi recordings brought across"
-                );
-                let verb = describe(mode);
-                let message = format!(
-                    "{} recording{} {verb} ({}); {} were already here, {} not found, {} failed.",
-                    report.done,
-                    if report.done == 1 { "" } else { "s" },
-                    clips::human_bytes(report.bytes),
-                    report.already_there,
-                    report.missing,
-                    report.failed,
-                );
-                progress.update(MigrationProgress {
-                    stage: MigrationStage::Complete,
-                    rows_imported: report.done,
-                    rows_total: report.done,
-                    message,
-                    error: None,
-                });
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "bringing the recordings across failed");
-                progress.fail(e.to_string());
-            }
-        }
     });
     toast::with(
         Html(super::render::clips_started()),
         Toast::warn("Bringing the recordings across — see progress below.").sticky(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hx_vals;
+
+    /// What the browser does with the attribute: decode the entities, parse JSON.
+    fn as_the_browser_reads_it(attr: &str) -> serde_json::Value {
+        let decoded = attr
+            .replace("&#x27;", "'")
+            .replace("&#39;", "'")
+            .replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+        serde_json::from_str(&decoded).expect("valid JSON")
+    }
+
+    #[test]
+    fn a_folder_with_quotes_and_backslashes_still_posts_what_was_checked() {
+        for source in [
+            "/home/pi/BirdSongs",
+            "/srv/it's \"quoted\" \\ folder <b>&",
+            "/tmp/trailing\\",
+        ] {
+            let attr = hx_vals(source, "copy");
+            assert!(!attr.contains('\''), "would end the attribute: {attr}");
+            let v = as_the_browser_reads_it(&attr);
+            assert_eq!(v["clips_source"], source);
+            assert_eq!(v["clips_mode"], "copy");
+        }
+    }
 }
