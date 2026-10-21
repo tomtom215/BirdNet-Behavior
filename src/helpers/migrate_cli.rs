@@ -30,7 +30,7 @@ fn settings_of(conn: &rusqlite::Connection) -> std::collections::HashMap<String,
         .unwrap_or_default()
 }
 
-fn order(v: Verdict) -> u8 {
+const fn order(v: Verdict) -> u8 {
     match v {
         Verdict::Refused => 0,
         Verdict::Attention => 1,
@@ -289,7 +289,8 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
     let probe = if dest.is_dir() {
         dest.clone()
     } else {
-        dest.parent().map_or(dest.clone(), Path::to_path_buf)
+        dest.parent()
+            .map_or_else(|| dest.clone(), Path::to_path_buf)
     };
     let room = birdnet_core::audio::capture::disk_usage(&probe)
         .ok()
@@ -443,12 +444,12 @@ mod tests {
         )
         .expect_err("refused");
         assert!(matches!(err, ApplyError::Refused(_)));
-        assert!(settings(&db).get("sensitivity").is_none());
+        assert!(!settings(&db).contains_key("sensitivity"));
         // And the command on a conf the planner refuses sets nothing for that key.
         std::fs::write(pi.join("birdnet.conf"), "CONFIDENCE=75\n").unwrap();
         let code = run_import_conf(&cli_for(&pi, true), Some(&config_for(&db)));
         assert_eq!(code, 0, "nothing to set is not a failure");
-        assert!(settings(&db).get("confidence_threshold").is_none());
+        assert!(!settings(&db).contains_key("confidence_threshold"));
     }
 
     #[test]
