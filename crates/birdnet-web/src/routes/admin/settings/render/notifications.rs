@@ -44,17 +44,10 @@ fn trigger_options(stored: &str) -> String {
         let _ = write!(
             out,
             r#"<option value="{v}" selected>Several rules: {v}</option>"#,
-            v = escape(&current)
+            v = crate::routes::pages::escape_html(&current)
         );
     }
     out
-}
-
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 #[allow(clippy::too_many_lines)]
