@@ -432,6 +432,7 @@ pub(crate) fn submission_problems(form: &SettingsForm) -> Vec<String> {
     problems.extend(choice_problems(form));
     problems.extend(birdweather_token_problem(form));
     problems.extend(language_problem(form));
+    problems.extend(stream_url_problems(form));
     problems.extend(super::extra::problems(&form.extra));
     problems
 }
@@ -478,6 +479,47 @@ fn language_problem(form: &SettingsForm) -> Option<String> {
     Some(format!(
         "{lang:?} is not a language species names are available in. Choose one from the list."
     ))
+}
+
+/// A network audio address or a heartbeat address that cannot be requested,
+/// explained.
+///
+/// Both are typed by the owner (or imported from another station's
+/// `birdnet.conf`) and then requested for as long as the station runs. A
+/// stream address must start with a scheme the capture code knows; a heartbeat
+/// address is requested with plain HTTP(S). The messages name the field and
+/// never the value: both usually carry a key or a camera password.
+fn stream_url_problems(form: &SettingsForm) -> Vec<String> {
+    use birdnet_core::audio::capture::StreamProtocol;
+    let mut problems = Vec::new();
+    for (field, value) in [("rtsp_url", &form.rtsp_url), ("rtsp_urls", &form.rtsp_urls)] {
+        let bad = value.as_deref().is_some_and(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|piece| !piece.is_empty())
+                .any(|piece| StreamProtocol::of(piece).is_none())
+        });
+        if bad {
+            problems.push(format!(
+                "An address in {field} does not start with a scheme this station can read \
+                 ({}). Check each address, comma-separated, begins like rtsp://camera/stream.",
+                StreamProtocol::SCHEMES
+            ));
+        }
+    }
+    if let Some(url) = form.heartbeat_url.as_deref().map(str::trim)
+        && !url.is_empty()
+    {
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            problems.push(
+                "The heartbeat address must start with http:// or https:// — it is requested \
+                 with an ordinary web request."
+                    .to_owned(),
+            );
+        }
+    }
+    problems
 }
 
 /// Save submitted settings and return an HTMX feedback partial.
@@ -2337,5 +2379,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_stream_or_heartbeat_address_that_cannot_be_requested_is_refused_without_echoing_it() {
+        let mut form = empty_form();
+        form.rtsp_urls = Some("rtsp://cam:hunter2@10.0.0.5/s, ftp://10.0.0.6/s".to_owned());
+        form.heartbeat_url = Some("file:///etc/passwd".to_owned());
+        let problems = submission_problems(&form);
+        let all = problems.join(" | ");
+        assert!(all.contains("rtsp_urls"), "{all}");
+        assert!(
+            all.contains("heartbeat address must start with http"),
+            "{all}"
+        );
+        assert!(!all.contains("hunter2") && !all.contains("passwd"), "{all}");
+    }
+
+    #[test]
+    fn ordinary_stream_and_heartbeat_addresses_are_accepted() {
+        let mut form = empty_form();
+        form.rtsp_urls = Some(
+            "rtsp://cam:pw@10.0.0.5:554/s, RTSPS://cam/s,https://icecast/stream.mp3, srt://h:1"
+                .to_owned(),
+        );
+        form.heartbeat_url = Some("https://hc-ping.com/abc-123".to_owned());
+        assert!(submission_problems(&form).is_empty());
+        // Blank clears the setting and is not a problem.
+        form.rtsp_urls = Some(String::new());
+        form.heartbeat_url = Some("  ".to_owned());
+        assert!(submission_problems(&form).is_empty());
     }
 }
