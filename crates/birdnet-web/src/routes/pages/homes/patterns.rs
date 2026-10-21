@@ -64,6 +64,19 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/patterns", get(patterns_page))
 }
 
+/// The "When active" tab: its own heading, then the soundscape terrain as the lead card, then
+/// the charts the tab always had. The terrain card goes in front of the first card the
+/// heatmap page draws, so the heading and its range control stay where they were.
+fn when_content() -> String {
+    const FIRST_CARD: &str = r#"<div class="bnb-card pad">"#;
+    let page = crate::routes::pages::heatmap::content();
+    let terrain = crate::routes::pages::terrain::content();
+    page.find(FIRST_CARD).map_or_else(
+        || format!("{page}{terrain}"),
+        |at| format!("{}{terrain}{}", &page[..at], &page[at..]),
+    )
+}
+
 /// `?tab=` selector for the Patterns home.
 #[derive(Deserialize)]
 struct TabParam {
@@ -79,7 +92,7 @@ async fn patterns_page(Query(q): Query<TabParam>, headers: HeaderMap) -> Html<St
         "trends" => crate::routes::pages::timeseries_dash::content(),
         "behavior" => crate::routes::pages::behavioral::content(),
         // "when" and the unknown-key clamp.
-        _ => crate::routes::pages::heatmap::content(),
+        _ => when_content(),
     };
     // The provenance note sits above the tabs, not inside one: every Patterns
     // tab is a location- or hour-dependent reading, so a merged history changes
@@ -115,5 +128,17 @@ mod tests {
                 "behavior"
             ]
         );
+    }
+
+    /// The terrain is the "When active" tab's lead card: once, after the heading and before
+    /// the charts the tab always had.
+    #[test]
+    fn the_terrain_leads_the_when_tab_once() {
+        let html = when_content();
+        assert_eq!(html.matches(r#"id="terrain""#).count(), 1);
+        let head = html.find("When the yard is alive").expect("the tab's heading");
+        let terrain = html.find(r#"id="terrain""#).expect("the terrain card");
+        let stream = html.find("Activity streamgraph").expect("the streamgraph card");
+        assert!(head < terrain && terrain < stream, "heading, terrain, then the old charts");
     }
 }

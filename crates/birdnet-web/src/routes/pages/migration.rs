@@ -903,7 +903,10 @@ mod tests {
         )
         .expect("tiles");
         assert!(!html.contains("-151 d"), "{html}");
-        assert!(html.contains("last year was only partly recorded"), "{html}");
+        assert!(
+            html.contains("last year was only partly recorded"),
+            "{html}"
+        );
 
         // Counterpart: a station that was running all of last year still
         // reports a genuinely early arrival.
@@ -946,8 +949,14 @@ mod tests {
             ("White-breasted Nuthatch", "2026-01-03"),
         ]);
         let html = stats_fragment(&conn, "2026-10-21", &english()).expect("tiles");
-        assert!(!html.contains("-35"), "a resident is not 355 days early: {html}");
-        assert!(html.contains("last year was only partly recorded"), "{html}");
+        assert!(
+            !html.contains("-35"),
+            "a resident is not 355 days early: {html}"
+        );
+        assert!(
+            html.contains("last year was only partly recorded"),
+            "{html}"
+        );
         // Counterpart: the same two birds on a station that recorded from the first week of
         // last year have a first date that means the start of the calendar, which is still
         // not an arrival, so the tile says there is nothing to compare rather than "-1 d".
@@ -959,7 +968,10 @@ mod tests {
         ]);
         let html = stats_fragment(&conn, "2026-10-21", &english()).expect("tiles");
         assert!(!html.contains("-1 d") && !html.contains("-2 d"), "{html}");
-        assert!(html.contains("no bird has arrived in both years yet"), "{html}");
+        assert!(
+            html.contains("no bird has arrived in both years yet"),
+            "{html}"
+        );
         // And a real arrival on that station is still reported.
         let conn = station(&[
             ("Northern Cardinal", "2025-01-02"),
@@ -968,17 +980,35 @@ mod tests {
             ("Barn Swallow", "2026-04-01"),
         ]);
         let html = stats_fragment(&conn, "2026-10-21", &english()).expect("tiles");
-        assert!(html.contains("-9 d") && html.contains("Barn Swallow"), "{html}");
+        assert!(
+            html.contains("-9 d") && html.contains("Barn Swallow"),
+            "{html}"
+        );
     }
 
     #[test]
     fn last_year_coverage_depends_on_the_first_recorded_day() {
         assert_eq!(last_year_coverage(None, 2026), LastYear::NotRecorded);
-        assert_eq!(last_year_coverage(Some("2026-02-01"), 2026), LastYear::NotRecorded);
-        assert_eq!(last_year_coverage(Some("2025-10-26"), 2026), LastYear::PartlyRecorded);
-        assert_eq!(last_year_coverage(Some("2025-01-15"), 2026), LastYear::PartlyRecorded);
-        assert_eq!(last_year_coverage(Some("2025-01-14"), 2026), LastYear::Whole);
-        assert_eq!(last_year_coverage(Some("2024-06-01"), 2026), LastYear::Whole);
+        assert_eq!(
+            last_year_coverage(Some("2026-02-01"), 2026),
+            LastYear::NotRecorded
+        );
+        assert_eq!(
+            last_year_coverage(Some("2025-10-26"), 2026),
+            LastYear::PartlyRecorded
+        );
+        assert_eq!(
+            last_year_coverage(Some("2025-01-15"), 2026),
+            LastYear::PartlyRecorded
+        );
+        assert_eq!(
+            last_year_coverage(Some("2025-01-14"), 2026),
+            LastYear::Whole
+        );
+        assert_eq!(
+            last_year_coverage(Some("2024-06-01"), 2026),
+            LastYear::Whole
+        );
     }
 
     /// A zero is only printed where there was a last year to be expecting from.
@@ -1023,7 +1053,10 @@ mod tests {
         let card = card_content(&conn, "missing", "2026-05-01", &english()).expect("card");
         assert_eq!(card.0, "Missing");
         assert_eq!(card.1, "Overdue Warbler");
-        assert!(card.2.contains("2025-04-20") && card.2.contains("+1 more"), "{card:?}");
+        assert!(
+            card.2.contains("2025-04-20") && card.2.contains("+1 more"),
+            "{card:?}"
+        );
 
         // Nothing overdue: said as such.
         let (_, head, sub) = missing_card(&[], &english());
@@ -1058,11 +1091,13 @@ mod tests {
     #[test]
     fn the_cut_keeps_the_most_seasonal_not_the_earliest() {
         let bird = |name: &str, peak_week: usize, height: f64| {
+            // A spike over a thin tail of ordinary weeks: the shape of a bird that passes through.
             let mut c = [0.0; 52];
-            for (w, v) in c.iter_mut().enumerate() {
-                let d = (w as f64 - peak_week as f64).abs();
-                *v = (height * (-(d / 2.0).powi(2)).exp()).round();
+            for d in 1..=2 {
+                c[peak_week - d] = 2.0;
+                c[peak_week + d] = 2.0;
             }
+            c[peak_week] = height;
             (name.to_owned(), c)
         };
         let mut all: Vec<(String, [f64; 52])> = (0..12)
@@ -1074,7 +1109,10 @@ mod tests {
         let picked = pick_ridges(all, 12);
         assert_eq!(picked.len(), 12);
         let names: Vec<&str> = picked.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"Fall Warbler") && names.contains(&"Fall Thrush"), "{names:?}");
+        assert!(
+            names.contains(&"Fall Warbler") && names.contains(&"Fall Thrush"),
+            "{names:?}"
+        );
         // And they read left to right: the fall birds come last.
         assert_eq!(names[names.len() - 1], "Fall Thrush");
 
@@ -1085,13 +1123,17 @@ mod tests {
         three[10] = 30.0;
         three[11] = 9.0;
         three[12] = 4.0;
-        assert!(seasonal_ratio(&three).is_none(), "heard in fewer than four weeks");
+        assert!(
+            seasonal_ratio(&three).is_none(),
+            "heard in fewer than four weeks"
+        );
         let mut quiet = [0.0; 52];
-        for w in 5..10 {
-            quiet[w] = 1.0;
-        }
+        quiet[5..10].fill(1.0);
         quiet[7] = 4.0;
-        assert!(seasonal_ratio(&quiet).is_none(), "its busiest week is under five detections");
+        assert!(
+            seasonal_ratio(&quiet).is_none(),
+            "its busiest week is under five detections"
+        );
     }
 
     /// The six-week look-ahead must not empty itself in December.

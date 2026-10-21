@@ -833,6 +833,18 @@ const DATA_FILES: &[(&str, &str)] = &[(
     "colour-map stops are the data a spectrogram is drawn from, not styling",
 )];
 
+/// Directories of third-party code we ship verbatim, excused from the literal scan.
+///
+/// * `static/vendor/`: libraries vendored as minified, hash-pinned bundles (see each one's
+///   README: version, source URL, sha256, how it was verified and rebuilt). They are not ours to
+///   restyle: three.js's `Color` class builds `rgb(...)` strings in its own code (the one literal
+///   the scan found in it). Nothing of ours may live here: our own scripts,
+///   `terrain.js` included, sit in `static/` and are scanned like any other file.
+const VENDORED_DIRS: &[(&str, &str)] = &[(
+    "static/vendor/",
+    "third-party, hash-pinned, not ours (tests/vendored_three_is_pinned_and_small.rs holds the pin)",
+)];
+
 fn source_files() -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else {
@@ -869,6 +881,9 @@ fn raw_colours_outside_the_stylesheet_only_ever_go_down() {
             .to_string_lossy()
             .replace('\\', "/");
         if DATA_FILES.iter().any(|(f, _)| *f == rel) {
+            continue;
+        }
+        if VENDORED_DIRS.iter().any(|(d, _)| rel.starts_with(d)) {
             continue;
         }
         let text = std::fs::read_to_string(&p).unwrap_or_default();
@@ -915,6 +930,42 @@ fn raw_colours_outside_the_stylesheet_only_ever_go_down() {
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A vendored-directory exemption names a directory that exists, is under `static/vendor/` and
+/// nothing wider, and every library in it carries a README with its pin: the exemption is for
+/// third-party code that says where it came from, and cannot excuse a first-party script.
+#[test]
+fn the_vendored_exemption_covers_pinned_third_party_code_and_nothing_of_ours() {
+    for (dir, why) in VENDORED_DIRS {
+        assert!(
+            dir.starts_with("static/vendor/") && dir.ends_with('/'),
+            "VENDORED_DIRS excuses `{dir}` ({why}): only a directory under static/vendor/ may be excused"
+        );
+        let d = root().join(dir);
+        assert!(d.is_dir(), "VENDORED_DIRS excuses `{dir}`, and there is no such directory");
+        for lib in std::fs::read_dir(&d).expect("vendor dir").flatten() {
+            if !lib.path().is_dir() {
+                continue;
+            }
+            let readme = std::fs::read_to_string(lib.path().join("README.md")).unwrap_or_default();
+            let lower = readme.to_ascii_lowercase();
+            assert!(
+                lower.contains("sha256") || lower.contains("sha-256"),
+                "{} is vendored without a README recording its sha256",
+                lib.path().display()
+            );
+        }
+    }
+    // Ours is never excused: the scan still reaches the terrain's own script.
+    assert!(
+        !VENDORED_DIRS.iter().any(|(d, _)| "static/terrain.js".starts_with(d)),
+        "terrain.js must be scanned"
+    );
+    assert!(
+        source_files().iter().any(|p| p.ends_with("static/terrain.js")),
+        "the file walk no longer reaches static/terrain.js"
+    );
 }
 
 /// A data-file exemption names a file that exists, so the list cannot outlive

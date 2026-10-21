@@ -645,7 +645,6 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/activity-streamgraph",
         "/pages/migration-ridgeline",
         "/pages/migration-stats",
-        "/pages/migration-diversity",
         "/pages/dawn-polar",
         "/pages/dawn-list",
         "/pages/analytics-dawn-sequence",

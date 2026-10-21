@@ -56,6 +56,7 @@ pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod station_health;
 pub(crate) mod station_issues;
+pub mod terrain;
 pub mod timeseries_dash;
 pub(crate) mod toast;
 pub mod today;
@@ -150,6 +151,7 @@ pub fn router() -> Router<AppState> {
         .merge(year_in_review::router())
         .merge(migration::router())
         .merge(dawn_chorus::router())
+        .merge(terrain::router())
         .merge(homes::router())
         .merge(cmdk::router())
         .merge(help::router())
@@ -432,6 +434,29 @@ pub(crate) fn solar_times_local(conn: &rusqlite::Connection) -> Option<(f64, f64
     let sunrise = wrap_hour(f64::from(solar.sunrise_utc_min?) / 60.0 + offset_h);
     let sunset = wrap_hour(f64::from(solar.sunset_utc_min?) / 60.0 + offset_h);
     Some((sunrise, sunset))
+}
+
+/// Civil dawn and civil dusk today at the station, in **local** fractional hours: the
+/// moments the sun is 6° below the horizon, before sunrise and after sunset. The dawn
+/// chorus starts in this light, so the Dawn chorus tab draws it beside sunrise.
+///
+/// `None` without a configured location; each half is `None` in a latitude and season
+/// where the sun never gets that far down (a midsummer night in the north), which is a
+/// fact about the sky and not a missing value. The same location, date and offset as
+/// [`solar_times_local`].
+pub(crate) fn civil_twilight_local(
+    conn: &rusqlite::Connection,
+) -> Option<(Option<f64>, Option<f64>)> {
+    let location = station_location(conn)?;
+    let date = today_date_string();
+    let year: u32 = date.get(0..4)?.parse().ok()?;
+    let month: u32 = date.get(5..7)?.parse().ok()?;
+    let day: u32 = date.get(8..10)?.parse().ok()?;
+    let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
+    #[allow(clippy::cast_precision_loss)]
+    let offset_h = local_utc_offset_secs() as f64 / 3600.0;
+    let local = |m: Option<u32>| m.map(|m| wrap_hour(f64::from(m) / 60.0 + offset_h));
+    Some((local(solar.civil_dawn_utc_min), local(solar.civil_dusk_utc_min)))
 }
 
 /// Fold an hour-of-day into `[0, 24)` after a UTC→local shift.

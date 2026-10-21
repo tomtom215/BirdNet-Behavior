@@ -1,5 +1,25 @@
-//! Polar charts: the dawn-chorus circadian plot and the acoustic co-occurrence
-//! chord diagram, plus the small geometry helpers they share.
+//! The chord diagram of who is heard with whom, and the small geometry it is built from.
+//!
+//! One ring, one arc per species, one ribbon per link. What each mark says:
+//!
+//! * a ribbon's **width** and its **colour** (the sequential sun ramp, seven steps) are the
+//!   same number, how much of their time the two species share, so the eye needs only one of
+//!   them and the colour-blind reader has the other;
+//! * an arc's **length** is the total of the ribbons that end on it, so the arcs are a
+//!   measure of how much of the picture each species owns, and no arc has a stretch with
+//!   nothing on it;
+//! * the **order** around the ring is chosen to cross the fewest ribbons
+//!   ([`super::cograph::chord_order`]), so groups that sing together sit together;
+//! * names stand upright on either side of the ring, spread apart where the arcs are close
+//!   (a name written along a short arc ran into its neighbour's), and joined to their arc
+//!   by a hairline;
+//! * the middle is empty. The old picture wrote a caption there, over the ribbons.
+//!
+//! The ring is complete with no script. `static/chart-kit.js` adds what a picture cannot:
+//! point at a species and only its ribbons stay in the foreground, point at a ribbon and
+//! only it and its two species do, and the keyboard walks the species and then the links.
+//! That uses two things of the kit: `data-ck-f` on a mark (the focus its reading brings)
+//! and the space-separated tokens of `data-ck-s` (what a mark belongs to).
 //!
 //! Geometry-heavy SVG generation; the lint allows cover the pervasive, benign
 //! `f64`/`i32` coordinate arithmetic.
@@ -9,44 +29,42 @@
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::many_single_char_names,
-    clippy::suboptimal_flops
+    clippy::similar_names
 )]
+#![allow(clippy::items_after_statements)]
 
+use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
 
+use super::cograph::{CoGraph, Link, chord_order, share_step};
+use super::kit::{slot_class, text_width, tip};
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::series_color;
 use crate::routes::pages::escape_html;
 
-/// (x, y) on a circle centred at (`cx`, `cy`).
-fn polar(cx: f64, cy: f64, r: f64, ang: f64) -> (f64, f64) {
+/// Radius of the ring the species' arcs stand on.
+const RING: f64 = 176.0;
+/// Thickness of an arc.
+const ARC: f64 = 10.0;
+/// Empty angle between two neighbouring arcs, in radians.
+const GAP: f64 = 0.05;
+/// How far past the arc a name's leader goes before it turns to meet the name.
+const LEADER: f64 = 20.0;
+/// Font size of a name, in SVG units.
+const NAME_FONT: f64 = 12.0;
+/// Height one line of names takes, so two names on one side never touch.
+const NAME_LINE: f64 = 17.0;
+/// Longest a name is written (in characters) before it ends in an ellipsis; the full name
+/// is in the reading the arc gives.
+const NAME_CHARS: usize = 26;
+
+/// (x, y) on a circle centred at (`cx`, `cy`), at `ang` radians from the 3 o'clock axis.
+pub fn polar(cx: f64, cy: f64, r: f64, ang: f64) -> (f64, f64) {
     (cx + r * ang.cos(), cy + r * ang.sin())
 }
 
-/// Ribbon path: two short arcs on the inner circle (centred on each species'
-/// arc midpoint, of `w_i`/`w_j` radians) joined by quadratic curves through
-/// the centre — the classic chord "ribbon".
-fn chord_ribbon_path(
-    cx: f64,
-    cy: f64,
-    r: f64,
-    mid_i: f64,
-    w_i: f64,
-    mid_j: f64,
-    w_j: f64,
-) -> String {
-    let (xi0, yi0) = polar(cx, cy, r, mid_i - w_i / 2.0);
-    let (xi1, yi1) = polar(cx, cy, r, mid_i + w_i / 2.0);
-    let (xj0, yj0) = polar(cx, cy, r, mid_j - w_j / 2.0);
-    let (xj1, yj1) = polar(cx, cy, r, mid_j + w_j / 2.0);
-    format!(
-        "M{xi0:.1},{yi0:.1} A{r:.1},{r:.1} 0 0 1 {xi1:.1},{yi1:.1} Q{cx:.1},{cy:.1} {xj0:.1},{yj0:.1} A{r:.1},{r:.1} 0 0 1 {xj1:.1},{yj1:.1} Q{cx:.1},{cy:.1} {xi0:.1},{yi0:.1} Z"
-    )
-}
-
 /// Annular band between `r_in` and `r_out` spanning the angular range [a0, a1].
-fn arc_band_path(cx: f64, cy: f64, r_in: f64, r_out: f64, a0: f64, a1: f64) -> String {
-    let large = i32::from(a1 - a0 > std::f64::consts::PI);
+pub fn arc_band_path(cx: f64, cy: f64, r_in: f64, r_out: f64, a0: f64, a1: f64) -> String {
+    let large = i32::from(a1 - a0 > PI);
     let (xi0, yi0) = polar(cx, cy, r_in, a0);
     let (xi1, yi1) = polar(cx, cy, r_in, a1);
     let (xo0, yo0) = polar(cx, cy, r_out, a0);
@@ -56,209 +74,356 @@ fn arc_band_path(cx: f64, cy: f64, r_in: f64, r_out: f64, a0: f64, a1: f64) -> S
     )
 }
 
-/// Width of one character of a ring label, in SVG units: the 12-unit face
-/// measures about 6.4 on a name's average, and a label must not be drawn narrower
-/// than it really is, so this is a little over.
-const LABEL_CHAR_WIDTH: f64 = 6.8;
-
-/// Clear space kept between two neighbouring names along the ring.
-const LABEL_GAP: f64 = 8.0;
-
-/// Passes `spread_labels` makes at most. Pushing apart in pairs settles a crowded
-/// stretch gradually, like heat spreading along a rod: the test's ten names, with
-/// four of them jammed together, settle in 66 passes. A pass is a handful of
-/// additions, so the bound is generous; it is there to end the loop when the names
-/// are longer than the ring, where no arrangement leaves every pair its room.
-const MAX_SPREAD_PASSES: usize = 1_000;
-
-/// Where each name goes on the ring: its arc's middle, moved only as far as it
-/// takes for neighbouring names not to overlap.
-///
-/// A species heard with few others has a short arc, and a name written along a
-/// short arc reaches into the next one's. `mids` are the arc middles in ring order
-/// and `half_widths` the half-length of each name along the ring. `radius` is how
-/// far from the centre the name's inner edge is: a name is a straight run of text
-/// standing on the ring's tangent, so what limits it is where its inner corners
-/// are, `atan(half / radius)` either side of its middle rather than
-/// `half / radius`, and the line under the name makes that edge the nearer one.
-///
-/// Each pair that is too close is pushed apart by half the shortfall each, repeated
-/// until none is, so a crowded stretch spreads out around its own middle instead of
-/// marching round the ring. When the names together are longer than the ring there
-/// is no answer, and the bound on the passes ends the loop with the names spread as
-/// evenly as the passes got them.
-fn spread_labels(mids: &[f64], half_widths: &[f64], radius: f64) -> Vec<f64> {
-    let n = mids.len();
-    let mut at = mids.to_vec();
-    let gap = LABEL_GAP / radius;
-    for _ in 0..MAX_SPREAD_PASSES {
-        let mut moved = false;
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let want = (half_widths[i] / radius).atan() + (half_widths[j] / radius).atan() + gap;
-            let have = at[j] - at[i] + if j == 0 { std::f64::consts::TAU } else { 0.0 };
-            if have < want - 1e-9 {
-                let push = (want - have) / 2.0;
-                at[i] -= push;
-                at[j] += push;
-                moved = true;
-            }
-        }
-        if !moved {
-            break;
-        }
-    }
-    at
+/// How deep a ribbon between two points `delta` radians apart dips towards the centre,
+/// as the fraction of the radius its control points sit at: a ribbon between neighbours
+/// stays near the rim, one between opposite species passes close to the middle. (The old
+/// ribbons all bent through the centre, which is where they became one tangle.)
+pub fn dip(delta: f64) -> f64 {
+    let d = (delta.rem_euclid(TAU)).min(TAU - delta.rem_euclid(TAU));
+    0.62 * (1.0 - d / PI).clamp(0.0, 1.0)
 }
 
-/// Acoustic-network chord diagram — the co-occurrence matrix drawn as ribbons.
-///
-/// Each species gets an outer arc proportional to its total connectedness;
-/// ribbons join pairs with strength ≥ 0.20, gradient-filled between the two
-/// species' colours, weakest drawn first so strong links sit on top. Labels
-/// ride tangent to the arc and flip on the left half so they never read upside
-/// down. `m` is the same symmetric 0–1 matrix the matrix view consumes.
-#[must_use]
-pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
-    let n = labels.len();
-    if n < 2 || m.len() < n {
-        return EMPTY.to_string();
-    }
-    let sums: Vec<f64> = (0..n)
-        .map(|i| (0..n).filter(|&j| j != i).map(|j| m[i][j]).sum())
-        .collect();
-    let total: f64 = sums.iter().sum();
-    if total <= 0.0 {
-        return EMPTY.to_string();
-    }
+/// A ribbon: two short arcs of the ring, `(a0, a1)` and `(b0, b1)` in radians, joined by
+/// cubic curves.
+pub fn ribbon_path(cx: f64, cy: f64, r: f64, a: (f64, f64), b: (f64, f64)) -> String {
+    let mid = |e: (f64, f64)| f64::midpoint(e.0, e.1);
+    let k = dip(mid(a) - mid(b));
+    let p = |ang: f64| polar(cx, cy, r, ang);
+    let c = |ang: f64| polar(cx, cy, r * k, ang);
+    let (xa0, ya0) = p(a.0);
+    let (xa1, ya1) = p(a.1);
+    let (xb0, yb0) = p(b.0);
+    let (xb1, yb1) = p(b.1);
+    let (c1x, c1y) = c(a.1);
+    let (c2x, c2y) = c(b.0);
+    let (c3x, c3y) = c(b.1);
+    let (c4x, c4y) = c(a.0);
+    format!(
+        "M{xa0:.1},{ya0:.1} A{r:.1},{r:.1} 0 0 1 {xa1:.1},{ya1:.1} C{c1x:.1},{c1y:.1} {c2x:.1},{c2y:.1} {xb0:.1},{yb0:.1} A{r:.1},{r:.1} 0 0 1 {xb1:.1},{yb1:.1} C{c3x:.1},{c3y:.1} {c4x:.1},{c4y:.1} {xa0:.1},{ya0:.1} Z"
+    )
+}
 
-    let size = 720.0_f64;
-    let cx = size / 2.0;
-    let cy = size / 2.0;
-    let r = size / 2.0 - 110.0;
-    let r_outer = r + 14.0;
-    let pi = std::f64::consts::PI;
-
-    // Arc ranges, proportional to connectedness, starting at the top.
-    let mut acc = 0.0_f64;
-    let mut arcs: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(n); // (a0, a1, mid, span)
-    for &s in &sums {
-        let a0 = (acc / total) * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
-        acc += s;
-        let a1 = (acc / total) * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
-        arcs.push((a0, a1, f64::midpoint(a0, a1), a1 - a0));
+/// Move a column of labels apart until none is closer than `gap` to the next, staying inside
+/// `lo..=hi` when there is room for them there. Input and output are in the same order
+/// (`ys` ascending); a column already spaced is returned unchanged.
+pub fn spread_column(ys: &[f64], gap: f64, lo: f64, hi: f64) -> Vec<f64> {
+    let mut out = ys.to_vec();
+    let n = out.len();
+    if n == 0 {
+        return out;
     }
-
-    // Upper-triangular pairs above threshold, weakest first.
-    let mut ribbons: Vec<(usize, usize, f64)> = Vec::new();
-    for (i, row) in m.iter().enumerate().take(n) {
-        for (j, &v) in row.iter().enumerate().take(n).skip(i + 1) {
-            if v >= 0.20 {
-                ribbons.push((i, j, v));
+    // Push down, then, if the last ran off the bottom, pull the whole column back up.
+    for i in 1..n {
+        if out[i] < out[i - 1] + gap {
+            out[i] = out[i - 1] + gap;
+        }
+    }
+    if out[n - 1] > hi {
+        out[n - 1] = hi.max(out[0]);
+        for i in (0..n - 1).rev() {
+            if out[i] > out[i + 1] - gap {
+                out[i] = out[i + 1] - gap;
             }
         }
     }
-    ribbons.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    // Pushing up can run past the top when the column is longer than the room; then the
+    // names are spread from the top down and some stand below `hi`: there is no answer
+    // that is inside both, and being inside the picture's top matters more than its bottom
+    // margin (which has slack).
+    if out[0] < lo {
+        out[0] = lo;
+        for i in 1..n {
+            if out[i] < out[i - 1] + gap {
+                out[i] = out[i - 1] + gap;
+            }
+        }
+    }
+    out
+}
 
-    // The top and bottom 36 units are cropped from the viewBox: the outermost labels
-    // sit tangent to the ring, so they need ~40 units beyond it, not the 110 the ring
-    // was inset by, and the rest was a band of blank card above and below the chart.
+/// A name as written on the ring: whole if it fits, else its start and an ellipsis.
+fn fit_name(name: &str) -> String {
+    if name.chars().count() <= NAME_CHARS {
+        name.to_owned()
+    } else {
+        let head: String = name.chars().take(NAME_CHARS - 1).collect();
+        format!("{}…", head.trim_end())
+    }
+}
+
+/// `v` in `0..=1` as a percentage for a reading: whole numbers, and "<1%" for what rounds to
+/// nothing but is not nothing.
+pub fn pct(v: f64) -> String {
+    let p = v * 100.0;
+    if p > 0.0 && p < 1.0 {
+        "<1%".to_owned()
+    } else {
+        format!("{:.0}%", p.round())
+    }
+}
+
+/// One species on the ring.
+struct Node {
+    /// Index into [`CoGraph::names`].
+    idx: usize,
+    a0: f64,
+    a1: f64,
+}
+
+impl Node {
+    const fn mid(&self) -> f64 {
+        f64::midpoint(self.a0, self.a1)
+    }
+}
+
+/// Where each drawn link ends on each species' arc, found by laying a node's ends out in
+/// the order of where their partners stand, so ribbons leaving one arc do not cross each
+/// other before they have left it.
+///
+/// Returns, for every link in `links`, `(end on a, end on b)` as `(a0, a1)` radians.
+fn link_ends(nodes: &[Node], links: &[Link], scale: f64) -> Vec<((f64, f64), (f64, f64))> {
+    let at = |idx: usize| nodes.iter().position(|n| n.idx == idx);
+    let mut ends: Vec<((f64, f64), (f64, f64))> = vec![((0.0, 0.0), (0.0, 0.0)); links.len()];
+    for node in nodes {
+        let mut here: Vec<(usize, f64)> = Vec::new(); // (link index, partner's angle offset)
+        for (li, l) in links.iter().enumerate() {
+            let partner = if l.a == node.idx {
+                l.b
+            } else if l.b == node.idx {
+                l.a
+            } else {
+                continue;
+            };
+            let Some(pi) = at(partner) else { continue };
+            // Clockwise distance from this arc's middle to the partner's. The partner just
+            // counter-clockwise is the largest, and goes at the counter-clockwise end.
+            let delta = (nodes[pi].mid() - node.mid()).rem_euclid(TAU);
+            here.push((li, delta));
+        }
+        here.sort_by(|x, y| y.1.total_cmp(&x.1).then(x.0.cmp(&y.0)));
+        let mut cursor = node.a0;
+        for (li, _) in here {
+            let w = links[li].v * scale;
+            let e = (cursor, cursor + w);
+            cursor += w;
+            if links[li].a == node.idx {
+                ends[li].0 = e;
+            } else {
+                ends[li].1 = e;
+            }
+        }
+    }
+    ends
+}
+
+/// The acoustic network as a chord diagram: the `max_links` strongest links among the species
+/// in `g`, as ribbons on a ring. A species with none of them is not on the ring (it is in the
+/// ranked list and the table, which hold every pair).
+#[must_use]
+pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
+    let links = g.top_links(max_links);
+    if links.is_empty() || !g.is_square() {
+        return EMPTY.to_string();
+    }
+
+    // The species with at least one link drawn, in the order that crosses the fewest.
+    let mut present: Vec<usize> = (0..g.n())
+        .filter(|&i| links.iter().any(|l| l.a == i || l.b == i))
+        .collect();
+    present.sort_unstable();
+    let order = chord_order(&present, &links);
+
+    let weight_of = |i: usize| -> f64 {
+        links
+            .iter()
+            .filter(|l| l.a == i || l.b == i)
+            .map(|l| l.v)
+            .sum()
+    };
+    let total: f64 = order.iter().map(|&i| weight_of(i)).sum();
+    let scale = (TAU - GAP * order.len() as f64) / total;
+
+    let mut nodes: Vec<Node> = Vec::with_capacity(order.len());
+    let mut cursor = -PI / 2.0 + GAP / 2.0;
+    for &idx in &order {
+        let span = weight_of(idx) * scale;
+        nodes.push(Node {
+            idx,
+            a0: cursor,
+            a1: cursor + span,
+        });
+        cursor += span + GAP;
+    }
+    let ends = link_ends(&nodes, &links, scale);
+
+    // The picture: names stand either side of the ring, so the width is the ring and the
+    // longest name twice over.
+    let names: Vec<String> = g.names.iter().map(|n| fit_name(n)).collect();
+    let name_w = order
+        .iter()
+        .map(|&i| text_width(&names[i], NAME_FONT))
+        .fold(0.0, f64::max);
+    let margin = LEADER + 14.0 + name_w;
+    let w = 2.0 * (RING + ARC + margin);
+    let h = 2.0 * (RING + ARC + 26.0);
+    let (cx, cy) = (w / 2.0, h / 2.0);
+
     let mut svg = format!(
-        r#"<svg viewBox="0 36 {size:.0} {h:.0}" width="100%" role="img" class="viz-svg-chord">"#,
-        h = size - 72.0,
+        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" role="img" class="viz-svg-chord" data-ck="marks" data-ck-dim="series" data-ck-start="0" data-ck-id="chord" data-ck-label="Left and right arrows step through the species and then the links; a species brings its own ribbons forward">"#,
     );
     svg.push_str(&svg_a11y(
         "Acoustic co-occurrence network",
-        "Species arranged on a ring; a thicker ribbon joins two species that were heard together in the same five-minute window more often.",
+        &format!(
+            "{} species on a ring joined by the {} strongest links; a wider, darker ribbon joins two species that were heard together in the same five-minute block more of the time. The strongest is {} with {}.",
+            nodes.len(),
+            links.len(),
+            g.names[links[0].a],
+            g.names[links[0].b],
+        ),
     ));
 
-    // Gradient defs (one per ribbon, oriented midpoint → midpoint).
-    svg.push_str("<defs>");
-    for (idx, &(i, j, _)) in ribbons.iter().enumerate() {
-        let (x1, y1) = polar(cx, cy, r, arcs[i].2);
-        let (x2, y2) = polar(cx, cy, r, arcs[j].2);
+    // Ribbons, the weakest first so the strongest lie on top. `links` is strongest first,
+    // and its rank is its index; the mark's reading index counts after the arcs.
+    let first_link_i = nodes.len();
+    for (li, l) in links.iter().enumerate().rev() {
+        let (ea, eb) = ends[li];
+        let a_name = &g.names[l.a];
+        let b_name = &g.names[l.b];
+        let data_tip = tip(
+            &format!("{a_name} × {b_name}"),
+            &[
+                (
+                    "Of the five-minute blocks either was heard in",
+                    &pct(g.share[l.a][l.b]),
+                    None,
+                ),
+                (
+                    "Heard together",
+                    &format!("{} blocks", g.blocks[l.a][l.b]),
+                    None,
+                ),
+            ],
+            None,
+        );
         let _ = write!(
             svg,
-            r#"<linearGradient id="chord-{idx}" gradientUnits="userSpaceOnUse" x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}"><stop offset="0%" stop-color="{ci}"/><stop offset="100%" stop-color="{cj}"/></linearGradient>"#,
-            ci = series_color(i, labels.len()),
-            cj = series_color(j, labels.len()),
+            r#"<path class="chord-ribbon ck-q{step}" d="{d}" data-tip="{data_tip}" data-ck-i="{i}" data-ck-s="{ta} {tb} r{li}" data-ck-f="r{li}"/>"#,
+            step = share_step(l.v),
+            d = ribbon_path(cx, cy, RING - 2.0, ea, eb),
+            i = first_link_i + li,
+            ta = l.a,
+            tb = l.b,
         );
     }
-    svg.push_str("</defs>");
 
-    // Ribbons.
-    for (idx, &(i, j, v)) in ribbons.iter().enumerate() {
-        let w_i = if sums[i] > 0.0 {
-            (v / sums[i]) * arcs[i].3
+    // Arcs, a hit band beyond each so a finger has something to land on, the leader and
+    // the name.
+    let mut sides: [Vec<(usize, f64, f64)>; 2] = [Vec::new(), Vec::new()]; // (node, natural y, x)
+    for (ni, node) in nodes.iter().enumerate() {
+        let m = node.mid();
+        let (px, py) = polar(cx, cy, RING + ARC + LEADER, m);
+        sides[usize::from(px < cx)].push((ni, py, px));
+    }
+    let lo = 12.0;
+    let hi = h - 12.0;
+    let mut label_at: Vec<(f64, f64, bool)> = vec![(0.0, 0.0, false); nodes.len()]; // (x, y, left)
+    for (side, col) in sides.iter_mut().enumerate() {
+        col.sort_by(|x, y| x.1.total_cmp(&y.1));
+        let ys: Vec<f64> = col.iter().map(|c| c.1).collect();
+        let spread = spread_column(&ys, NAME_LINE, lo, hi);
+        for (k, &(ni, _, px)) in col.iter().enumerate() {
+            let left = side == 1;
+            let x = if left { px - 8.0 } else { px + 8.0 };
+            label_at[ni] = (x, spread[k], left);
+        }
+    }
+
+    for (ni, node) in nodes.iter().enumerate() {
+        let i = node.idx;
+        let name = &g.names[i];
+        // The arc's reading: how much of the picture it owns and who its strongest partners are.
+        let mut partners: Vec<(usize, f64)> = links
+            .iter()
+            .filter_map(|l| {
+                if l.a == i {
+                    Some((l.b, l.v))
+                } else if l.b == i {
+                    Some((l.a, l.v))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        partners.sort_by(|x, y| y.1.total_cmp(&x.1).then(x.0.cmp(&y.0)));
+        let rows: Vec<(String, String)> = partners
+            .iter()
+            .take(4)
+            .map(|&(p, _)| (g.names[p].clone(), pct(g.share[i][p])))
+            .collect();
+        let row_refs: Vec<(&str, &str, Option<&str>)> = rows
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str(), None))
+            .collect();
+        let more = partners.len().saturating_sub(4);
+        let note = if more > 0 {
+            format!(
+                "and {more} more link{} drawn. Share of the blocks either was heard in.",
+                if more == 1 { "" } else { "s" }
+            )
         } else {
-            0.0
+            "Share of the blocks either was heard in.".to_owned()
         };
-        let w_j = if sums[j] > 0.0 {
-            (v / sums[j]) * arcs[j].3
-        } else {
-            0.0
-        };
-        let path = chord_ribbon_path(cx, cy, r, arcs[i].2, w_i, arcs[j].2, w_j);
-        let op = v.mul_add(0.40, 0.45);
+        let data_tip = tip(name, &row_refs, Some(&note));
+        // Who this arc belongs to: itself and its partners (reading a species keeps them), and
+        // the id of each ribbon that ends here (reading a ribbon keeps its two arcs and no
+        // third species that is merely linked to both).
+        let tokens: String = std::iter::once(i.to_string())
+            .chain(partners.iter().map(|p| p.0.to_string()))
+            .chain(
+                links
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| l.a == i || l.b == i)
+                    .map(|(li, _)| format!("r{li}")),
+            )
+            .collect::<Vec<_>>()
+            .join(" ");
+        let slot = slot_class(i);
+
+        let band = arc_band_path(cx, cy, RING, RING + ARC, node.a0 + 0.004, node.a1 - 0.004);
         let _ = write!(
             svg,
-            r#"<path class="chord-ribbon" d="{path}" fill="url(#chord-{idx})" fill-opacity="{op:.2}" stroke="{ci}" stroke-opacity="0.5" stroke-width="0.7"><title>{a} × {b} — {pct}%</title></path>"#,
-            ci = series_color(i, labels.len()),
-            a = escape_html(&labels[i]),
-            b = escape_html(&labels[j]),
-            pct = (v * 100.0).round() as i64,
+            r#"<path class="chord-arc {slot}" d="{band}" data-tip="{data_tip}" data-ck-i="{ni}" data-ck-s="{tokens}" data-ck-f="{i}"/>"#,
         );
-    }
-
-    // Outer species arcs.
-    for (i, &(a0, a1, _, _)) in arcs.iter().enumerate() {
-        let path = arc_band_path(cx, cy, r + 3.0, r_outer, a0 + 0.005, a1 - 0.005);
+        let hit = arc_band_path(
+            cx,
+            cy,
+            RING + ARC,
+            RING + ARC + LEADER + 10.0,
+            node.a0,
+            node.a1,
+        );
         let _ = write!(
             svg,
-            r#"<path d="{path}" fill="{c}" stroke="var(--card-top)" stroke-width="1" vector-effect="non-scaling-stroke"/>"#,
-            c = series_color(i, labels.len()),
+            r#"<path class="ck-hit" d="{hit}" data-tip="{data_tip}" data-ck-i="{ni}" data-ck-f="{i}"/>"#,
         );
-    }
 
-    // Labels ride the arc (tangent), flipped on the left half, each moved along
-    // the ring only as far as its neighbours' names need (see `spread_labels`).
-    let half_widths: Vec<f64> = labels
-        .iter()
-        .map(|l| l.chars().count() as f64 * LABEL_CHAR_WIDTH / 2.0)
-        .collect();
-    let mids: Vec<f64> = arcs.iter().map(|a| a.2).collect();
-    // The inner edge of a name: its anchor is at `r_outer + 22`, and the line under
-    // it reaches 14 units further in.
-    let label_angles = spread_labels(&mids, &half_widths, r_outer + 22.0 - 14.0);
-    for (i, &mid) in label_angles.iter().enumerate() {
-        let label_r = r_outer + 22.0;
-        let deg = mid.to_degrees() + 90.0;
-        // `deg` is the arc's tangent, which reads upright only in the upper half of
-        // the ring (screen y grows downward, so that is angles in (π, 2π)). The old
-        // test flipped the left half instead — which turned the labels in the
-        // upper-left quadrant upside down, and left the ones in the lower-right
-        // quadrant tilted past vertical.
-        let flip = mid.rem_euclid(std::f64::consts::TAU) < pi;
-        let final_deg = if flip { deg + 180.0 } else { deg };
-        let radius = if flip { label_r + 8.0 } else { label_r };
-        let (tx, ty) = polar(cx, cy, radius, mid);
-        let rho_bar = sums[i] / (n as f64 - 1.0).max(1.0);
+        let (lx, ly, left) = label_at[ni];
+        let m = node.mid();
+        let (ax, ay) = polar(cx, cy, RING + ARC + 3.0, m);
+        let (kx, ky) = polar(cx, cy, RING + ARC + LEADER, m);
+        let tx = if left { lx + 5.0 } else { lx - 5.0 };
         let _ = write!(
             svg,
-            r#"<g transform="translate({tx:.1},{ty:.1}) rotate({final_deg:.1})"><text text-anchor="middle" font-size="12" font-weight="500" fill="var(--fg)">{name}</text><text class="mono" y="12" text-anchor="middle" font-size="9.5" fill="var(--fg-3)">ρ̄ {rho_bar:.2}</text></g>"#,
-            name = escape_html(&labels[i]),
+            r#"<g data-ck-s="{tokens}"><polyline class="chord-leader" points="{ax:.1},{ay:.1} {kx:.1},{ky:.1} {tx:.1},{ly:.1}"/></g>"#,
+        );
+        let anchor = if left { "end" } else { "start" };
+        let _ = write!(
+            svg,
+            r#"<text class="chord-name" x="{lx:.1}" y="{ly:.1}" text-anchor="{anchor}" dominant-baseline="central" data-tip="{data_tip}" data-ck-i="{ni}" data-ck-s="{tokens}" data-ck-f="{i}">{name}</text>"#,
+            name = escape_html(&names[i]),
         );
     }
-
-    // Centre caption.
-    let _ = write!(
-        svg,
-        // A --surface halo behind the caption: it sits over the ribbons, and grey on a
-        // translucent coloured ribbon is not readable.
-        r#"<text x="{cx:.1}" y="{y0:.1}" text-anchor="middle" class="display" font-size="15" fill="var(--fg-3)" stroke="var(--surface)" stroke-width="4" paint-order="stroke" stroke-linejoin="round">5-minute</text><text x="{cx:.1}" y="{y1:.1}" text-anchor="middle" class="display" font-size="15" fill="var(--fg-3)" stroke="var(--surface)" stroke-width="4" paint-order="stroke" stroke-linejoin="round">co-occurrence</text>"#,
-        y0 = cy - 6.0,
-        y1 = cy + 12.0,
-    );
 
     svg.push_str("</svg>");
     svg
@@ -268,152 +433,206 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
 mod tests {
     use super::*;
 
+    /// `n` species named `Species k`, every pair of `pairs` linked at the strength given.
+    fn graph(n: usize, pairs: &[(usize, usize, f64)]) -> CoGraph {
+        let mut s = vec![vec![0.0; n]; n];
+        for &(a, b, v) in pairs {
+            s[a][b] = v;
+            s[b][a] = v;
+        }
+        CoGraph {
+            names: (0..n).map(|i| format!("Species {i}")).collect(),
+            share: s
+                .iter()
+                .map(|r| r.iter().map(|v| v * 0.4).collect())
+                .collect(),
+            strength: s,
+            blocks: vec![vec![12; n]; n],
+        }
+    }
+
+    /// Every pair, strengths varied so the arcs differ in length.
+    fn complete(n: usize) -> CoGraph {
+        let mut pairs = Vec::new();
+        for a in 0..n {
+            for b in a + 1..n {
+                let k = u8::try_from((a * 7 + b * 3) % 10).unwrap_or(0);
+                pairs.push((a, b, 0.25 + f64::from(k) / 14.0));
+            }
+        }
+        graph(n, &pairs)
+    }
+
     #[test]
     fn chord_empty_and_basic() {
-        assert!(chord_diagram(&[], &[]).contains("Not enough data"));
-        // All-zero matrix has no connectedness → empty.
-        let labels = vec!["Blue Jay".to_string(), "Northern Cardinal".to_string()];
-        assert!(chord_diagram(&labels, &[vec![0.0, 0.0], vec![0.0, 0.0]]).contains("Not enough"));
-        // A real link renders ribbons + arcs + the centre caption.
-        let m = vec![vec![0.0, 0.8], vec![0.8, 0.0]];
-        let svg = chord_diagram(&labels, &m);
+        assert!(chord_diagram(&CoGraph::default(), 12).contains("Not enough data"));
+        assert!(chord_diagram(&graph(2, &[]), 12).contains("Not enough"));
+        let svg = chord_diagram(&graph(2, &[(0, 1, 0.8)]), 12);
         assert!(svg.contains("<svg"));
         assert!(svg.contains("chord-ribbon"));
-        assert!(svg.contains("co-occurrence"));
-        assert!(svg.contains("Blue Jay"));
+        assert!(svg.contains("Species 0") && svg.contains("Species 1"));
         // Accessible name + description replace the bare aria-label.
         assert!(svg.contains("<title>Acoustic co-occurrence network</title>"));
-        assert!(svg.contains("<desc>Species arranged on a ring;"));
+        assert!(svg.contains("<desc>2 species on a ring"));
         assert!(!svg.contains("aria-label"));
     }
 
-    /// No species name is ever drawn upside down, wherever its arc falls.
-    ///
-    /// Observed failing against the old flip rule (`mid` in (π/2, 3π/2) or
-    /// below -π/2): with ten species the labels in the upper-left quadrant came
-    /// out rotated about 90-180 degrees, i.e. reading upside down, and the ones
-    /// in the lower-right quadrant were past vertical.
+    /// The old diagram wrote "5-minute co-occurrence" in the middle, over the ribbons, and
+    /// had to give it a halo to be readable. The middle is empty now.
     #[test]
-    fn chord_labels_are_never_upside_down() {
-        let n = 10;
-        let labels: Vec<String> = (0..n).map(|i| format!("Species {i}")).collect();
-        // Symmetric, every pair above the 0.20 ribbon threshold, strengths varied so
-        // the arcs differ in length and the labels land all the way round the ring.
-        let m: Vec<Vec<f64>> = (0..n)
-            .map(|i| {
-                (0..n)
-                    .map(|j| {
-                        if i == j {
-                            return 0.0;
-                        }
-                        let k = u8::try_from((i.min(j) * 7 + i.max(j) * 3) % 10).unwrap_or(0);
-                        0.25 + f64::from(k) / 14.0
-                    })
-                    .collect()
-            })
-            .collect();
-        let svg = chord_diagram(&labels, &m);
-        let mut checked = 0;
-        for chunk in svg.split("rotate(").skip(1) {
-            let deg: f64 = chunk
-                .split(')')
-                .next()
-                .and_then(|d| d.parse().ok())
-                .expect("rotate() holds a number");
-            let norm = (deg + 180.0).rem_euclid(360.0) - 180.0;
-            assert!(
-                norm.abs() <= 90.0 + 1e-6,
-                "a label rotated {deg} degrees (normalised {norm}) reads upside down"
-            );
-            checked += 1;
-        }
-        assert_eq!(
-            checked, n,
-            "one rotate() per species, or the gate is vacuous"
+    fn nothing_is_written_over_the_ribbons() {
+        let svg = chord_diagram(&complete(6), 12);
+        assert!(
+            !svg.contains("co-occurrence</text>"),
+            "the centre caption is back"
         );
-    }
-
-    /// One drawn label: where it sits, how it is turned, and what it says.
-    struct Placed {
-        x: f64,
-        y: f64,
-        deg: f64,
-        name: String,
-    }
-
-    /// The ring's labels, read back out of the SVG.
-    fn placed_labels(svg: &str) -> Vec<Placed> {
-        svg.split(r#"<g transform="translate("#)
-            .skip(1)
-            .map(|chunk| {
-                let (xy, rest) = chunk
-                    .split_once(") rotate(")
-                    .expect("translate then rotate");
-                let (x, y) = xy.split_once(',').expect("x,y");
-                let (deg, rest) = rest.split_once(")\">").expect("rotate then the text");
-                let name = rest
-                    .split_once(r#"fill="var(--fg)">"#)
-                    .and_then(|(_, t)| t.split_once("</text>"))
-                    .expect("the name")
-                    .0;
-                Placed {
-                    x: x.parse().expect("x"),
-                    y: y.parse().expect("y"),
-                    deg: deg.parse().expect("deg"),
-                    name: name.to_owned(),
-                }
-            })
-            .collect()
-    }
-
-    /// Whether two labels, each a turned rectangle, share any area. The width is
-    /// the text's width at 12 px (a generous 6.8 px a character, wider than the
-    /// face really is) and the height covers the name and the line under it.
-    fn labels_overlap(a: &Placed, b: &Placed) -> bool {
-        /// A label's box: its middle, the two unit directions of its sides, and
-        /// the half-length along the first and the half-height along the second.
-        struct Turned {
-            middle: (f64, f64),
-            along: (f64, f64),
-            across: (f64, f64),
-            half_len: f64,
-            half_height: f64,
+        let size = svg
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("viewBox");
+        let mut it = size
+            .split_whitespace()
+            .map(|v| v.parse::<f64>().expect("number"));
+        let (w, h) = (it.next().expect("w"), it.next().expect("h"));
+        // No text is anywhere near the middle of the ring.
+        for chunk in svg.split("<text ").skip(1) {
+            let at = |name: &str| -> f64 {
+                let k = chunk.find(&format!("{name}=\"")).expect("attr") + name.len() + 2;
+                chunk[k..]
+                    .split('"')
+                    .next()
+                    .expect("value")
+                    .parse()
+                    .expect("number")
+            };
+            let (x, y) = (at("x"), at("y"));
+            let d = (x - w / 2.0).hypot(y - h / 2.0);
+            assert!(d > RING, "a label at ({x}, {y}) is inside the ring ({d})");
         }
-        let turned = |l: &Placed| {
-            let t = l.deg.to_radians();
-            let (along, across) = ((t.cos(), t.sin()), (-t.sin(), t.cos()));
-            Turned {
-                // Local (0, 2) is the middle of the name line and the one beneath it.
-                middle: (l.x + 2.0 * across.0, l.y + 2.0 * across.1),
-                along,
-                across,
-                half_len: l.name.chars().count() as f64 * 6.8 / 2.0,
-                half_height: 12.0,
-            }
-        };
-        let (ra, rb) = (turned(a), turned(b));
-        let gap = (rb.middle.0 - ra.middle.0, rb.middle.1 - ra.middle.1);
-        [ra.along, ra.across, rb.along, rb.across]
-            .iter()
-            .all(|axis| {
-                // How far the box reaches along `axis` from its middle.
-                let reach = |r: &Turned| {
-                    (r.along.0 * axis.0 + r.along.1 * axis.1).abs() * r.half_len
-                        + (r.across.0 * axis.0 + r.across.1 * axis.1).abs() * r.half_height
-                };
-                (gap.0 * axis.0 + gap.1 * axis.1).abs() < reach(&ra) + reach(&rb)
-            })
     }
 
-    /// Species that are heard with few others have short arcs, and a name
-    /// written along a short arc ran into its neighbour's: Red-winged Blackbird
-    /// into Black-capped Chickadee, Downy Woodpecker into White-breasted
-    /// Nuthatch, on the documentation's own co-occurrence picture.
-    ///
-    /// Observed failing before the labels were spread apart: three pairs of the
-    /// ten overlapped.
+    /// A ribbon's width and its colour are one number: the strongest link gets the darkest
+    /// step and the weakest a paler one, in the same order as their widths.
     #[test]
-    fn chord_labels_do_not_run_into_each_other() {
+    fn width_and_colour_say_the_same_thing() {
+        let g = graph(4, &[(0, 1, 1.0), (2, 3, 0.1)]);
+        let svg = chord_diagram(&g, 12);
+        let class_of = |tipped: &str| -> usize {
+            let at = svg.find(tipped).expect("ribbon");
+            let before = &svg[..at];
+            let c = before.rfind("ck-q").expect("a step class") + 4;
+            before[c..=c].parse().expect("a digit")
+        };
+        let strong = class_of("Species 0 × Species 1");
+        let weak = class_of("Species 2 × Species 3");
+        assert_eq!(strong, 7);
+        assert!(weak < strong, "weak {weak} strong {strong}");
+    }
+
+    /// Both ends of a ribbon are as wide as the link is strong, on one scale for the whole
+    /// ring, and an arc is exactly as long as the ribbons that end on it: no species owns a
+    /// stretch of ring with nothing on it, and none has ribbons running off its end.
+    #[test]
+    fn an_arc_is_the_sum_of_the_ribbons_that_end_on_it() {
+        let g = complete(7);
+        let links = g.top_links(100);
+        let order = chord_order(&(0..7).collect::<Vec<_>>(), &links);
+        let weight_of = |i: usize| -> f64 {
+            links
+                .iter()
+                .filter(|l| l.a == i || l.b == i)
+                .map(|l| l.v)
+                .sum()
+        };
+        let total: f64 = order.iter().map(|&i| weight_of(i)).sum();
+        let scale = (TAU - GAP * 7.0) / total;
+        let mut nodes = Vec::new();
+        let mut cursor = 0.0;
+        for &idx in &order {
+            let span = weight_of(idx) * scale;
+            nodes.push(Node {
+                idx,
+                a0: cursor,
+                a1: cursor + span,
+            });
+            cursor += span + GAP;
+        }
+        let ends = link_ends(&nodes, &links, scale);
+        for node in &nodes {
+            let mut mine: Vec<(f64, f64)> = links
+                .iter()
+                .zip(&ends)
+                .filter_map(|(l, e)| {
+                    if l.a == node.idx {
+                        Some(e.0)
+                    } else if l.b == node.idx {
+                        Some(e.1)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            mine.sort_by(|x, y| x.0.total_cmp(&y.0));
+            assert!(
+                (mine[0].0 - node.a0).abs() < 1e-9,
+                "ends start at the arc's start"
+            );
+            assert!(
+                (mine[mine.len() - 1].1 - node.a1).abs() < 1e-9,
+                "ends fill the arc to its end"
+            );
+            for pair in mine.windows(2) {
+                assert!(
+                    (pair[0].1 - pair[1].0).abs() < 1e-9,
+                    "ends tile the arc without a gap"
+                );
+            }
+        }
+        for (l, e) in links.iter().zip(&ends) {
+            let (wa, wb) = (e.0.1 - e.0.0, e.1.1 - e.1.0);
+            assert!((wa - wb).abs() < 1e-9, "both ends of a ribbon are as wide");
+            assert!(
+                (wa - l.v * scale).abs() < 1e-9,
+                "a ribbon is as wide as it is strong"
+            );
+        }
+    }
+
+    /// A ribbon between neighbours must not dive through the middle: the control points of
+    /// the old quadratic curve were always the centre, which is what made the picture one
+    /// knot. Neighbours stay near the rim, opposites pass near the middle.
+    #[test]
+    fn a_ribbon_between_neighbours_stays_near_the_rim() {
+        assert!(dip(0.2) > 0.5, "neighbours: {}", dip(0.2));
+        assert!(dip(PI) < 0.01, "opposite: {}", dip(PI));
+        assert!(
+            (dip(0.3) - dip(TAU - 0.3)).abs() < 1e-12,
+            "either way round"
+        );
+        // Narrower the further apart, never wider.
+        let mut last = f64::MAX;
+        for k in 1..=10 {
+            let d = dip(PI * f64::from(k) / 10.0);
+            assert!(d <= last + 1e-12);
+            last = d;
+        }
+        // The path is a closed figure of two arcs and two curves.
+        let p = ribbon_path(300.0, 300.0, 170.0, (0.0, 0.1), (2.0, 2.2));
+        assert_eq!(p.matches('A').count(), 2);
+        assert_eq!(p.matches('C').count(), 2);
+        assert!(p.ends_with('Z'));
+    }
+
+    /// Names stand either side of the ring, and where arcs are close they are spread apart:
+    /// the old tangent names ran into their neighbours (Red-winged Blackbird into
+    /// Black-capped Chickadee) on the documentation's own picture.
+    ///
+    /// Observed failing against a placement that wrote every name at its arc's own height
+    /// (the first assertion's `unspread` variant of this very test, run by hand: four pairs
+    /// of the ten closer than a line), and holding for the spread one.
+    #[test]
+    fn names_never_touch() {
         let names = [
             "Red-winged Blackbird",
             "Black-capped Chickadee",
@@ -426,51 +645,197 @@ mod tests {
             "Song Sparrow",
             "American Goldfinch",
         ];
-        // Connectedness: a few busy species and several heard with little else.
-        let weight = [0.14, 0.11, 0.15, 0.09, 0.19, 0.31, 0.29, 0.37, 0.32, 0.20];
-        let labels: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
-        let m: Vec<Vec<f64>> = (0..names.len())
-            .map(|i| {
-                (0..names.len())
-                    .map(|j| {
-                        if i == j {
-                            0.0
-                        } else {
-                            weight[i] * weight[j] * 9.0
-                        }
-                    })
-                    .collect()
+        let weight: [f64; 10] = [0.14, 0.11, 0.15, 0.09, 0.19, 0.31, 0.29, 0.37, 0.32, 0.20];
+        let n = names.len();
+        let mut g = graph(
+            n,
+            &(0..n)
+                .flat_map(|a| (a + 1..n).map(move |b| (a, b)))
+                .map(|(a, b)| (a, b, (weight[a] * weight[b] * 9.0).min(1.0)))
+                .collect::<Vec<_>>(),
+        );
+        g.names = names.iter().map(|s| (*s).to_owned()).collect();
+        let svg = chord_diagram(&g, 100);
+
+        struct Placed {
+            x: f64,
+            y: f64,
+            end: bool,
+            name: String,
+        }
+        let placed: Vec<Placed> = svg
+            .split("<text class=\"chord-name\" ")
+            .skip(1)
+            .map(|chunk| {
+                let at = |name: &str| -> String {
+                    let k = chunk.find(&format!("{name}=\"")).expect("attr") + name.len() + 2;
+                    chunk[k..].split('"').next().expect("value").to_owned()
+                };
+                Placed {
+                    x: at("x").parse().expect("x"),
+                    y: at("y").parse().expect("y"),
+                    end: at("text-anchor") == "end",
+                    name: chunk
+                        .split_once('>')
+                        .expect("text")
+                        .1
+                        .split('<')
+                        .next()
+                        .expect("name")
+                        .to_owned(),
+                }
             })
             .collect();
-        let placed = placed_labels(&chord_diagram(&labels, &m));
-        assert_eq!(placed.len(), names.len());
+        assert_eq!(
+            placed.len(),
+            n,
+            "one name per species, or the gate is vacuous"
+        );
+        let rect = |p: &Placed| {
+            let w = text_width(&p.name, NAME_FONT);
+            let (x0, x1) = if p.end {
+                (p.x - w, p.x)
+            } else {
+                (p.x, p.x + w)
+            };
+            (x0, x1, p.y - NAME_FONT / 2.0, p.y + NAME_FONT / 2.0)
+        };
         let mut hits = Vec::new();
         for i in 0..placed.len() {
             for j in i + 1..placed.len() {
-                if labels_overlap(&placed[i], &placed[j]) {
+                let (a, b) = (rect(&placed[i]), rect(&placed[j]));
+                if a.0 < b.1 && b.0 < a.1 && a.2 < b.3 && b.2 < a.3 {
                     hits.push(format!("{} / {}", placed[i].name, placed[j].name));
                 }
             }
         }
-        assert!(hits.is_empty(), "labels overlap: {hits:?}");
+        assert!(hits.is_empty(), "names overlap: {hits:?}");
+        // And they are inside the picture.
+        let vb: Vec<f64> = svg
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("viewBox")
+            .split_whitespace()
+            .map(|v| v.parse().expect("number"))
+            .collect();
+        for p in &placed {
+            let r = rect(p);
+            assert!(
+                r.0 >= 0.0 && r.1 <= vb[0] && r.2 >= 0.0 && r.3 <= vb[1],
+                "{} is outside the picture",
+                p.name
+            );
+        }
     }
 
-    /// The counterpart: where nothing needs moving, nothing moves. Six equal
-    /// arcs put every name at the middle of its own arc.
+    /// The column spreader: nothing moves when nothing needs to, and a crowd keeps its
+    /// order and its gaps.
     #[test]
-    fn chord_labels_stay_on_their_arcs_when_there_is_room() {
-        let labels: Vec<String> = (0..6).map(|i| format!("Species {i}")).collect();
-        let m: Vec<Vec<f64>> = (0..6)
-            .map(|i| (0..6).map(|j| if i == j { 0.0 } else { 0.5 }).collect())
+    fn spreading_leaves_the_room_alone_and_separates_a_crowd() {
+        assert_eq!(
+            spread_column(&[10.0, 40.0, 90.0], 17.0, 0.0, 200.0),
+            vec![10.0, 40.0, 90.0]
+        );
+        let s = spread_column(&[50.0, 51.0, 52.0, 53.0], 17.0, 0.0, 200.0);
+        for w in s.windows(2) {
+            assert!(w[1] - w[0] >= 17.0 - 1e-9, "{s:?}");
+        }
+        // A crowd at the bottom edge is pulled up into the picture, not pushed out of it.
+        let s = spread_column(&[190.0, 195.0, 199.0], 17.0, 0.0, 200.0);
+        assert!(s[2] <= 200.0 && s[0] >= 0.0, "{s:?}");
+        assert!(spread_column(&[], 17.0, 0.0, 10.0).is_empty());
+    }
+
+    /// Hovering a species must leave exactly the ribbons that touch it, and hovering a
+    /// ribbon exactly that ribbon and its two species. The kit lights a mark when its
+    /// `data-ck-s` tokens contain every token of the focus the reading names, so check the
+    /// rule with the same function the browser applies.
+    #[test]
+    fn the_focus_tokens_isolate_a_species_and_a_ribbon() {
+        let g = graph(5, &[(0, 1, 0.9), (0, 2, 0.5), (3, 4, 0.7), (1, 3, 0.3)]);
+        let svg = chord_diagram(&g, 100);
+        let marks: Vec<(String, Vec<String>)> = svg
+            .split('<')
+            .filter_map(|el| {
+                let kind = if el.starts_with("path class=\"chord-ribbon") {
+                    "ribbon"
+                } else if el.starts_with("path class=\"chord-arc") {
+                    "arc"
+                } else {
+                    return None;
+                };
+                let tokens = el
+                    .split("data-ck-s=\"")
+                    .nth(1)?
+                    .split('"')
+                    .next()?
+                    .split(' ')
+                    .map(str::to_owned)
+                    .collect();
+                Some((kind.to_owned(), tokens))
+            })
             .collect();
-        let placed = placed_labels(&chord_diagram(&labels, &m));
-        for (k, p) in placed.iter().enumerate() {
-            let want =
-                -std::f64::consts::FRAC_PI_2 + (k as f64 + 0.5) * std::f64::consts::TAU / 6.0;
-            let got = (p.y - 360.0).atan2(p.x - 360.0);
-            let off = (got - want + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                - std::f64::consts::PI;
-            assert!(off.abs() < 1e-3, "label {k} sits {off} rad from its arc");
+        let lit = |focus: &[&str], kind: &str| -> usize {
+            marks
+                .iter()
+                .filter(|(k, t)| k == kind && focus.iter().all(|f| t.iter().any(|x| x == f)))
+                .count()
+        };
+        // Species 0 has two ribbons; species 3 has two; species 2 has one.
+        assert_eq!(lit(&["0"], "ribbon"), 2);
+        assert_eq!(lit(&["3"], "ribbon"), 2);
+        assert_eq!(lit(&["2"], "ribbon"), 1);
+        // A ribbon is lit only by its own two species together.
+        assert_eq!(lit(&["0", "1"], "ribbon"), 1);
+        assert_eq!(lit(&["0", "4"], "ribbon"), 0);
+    }
+
+    /// Reading a ribbon keeps its two species and nobody else, even a third species that is
+    /// heard with both of them (a triangle): an arc lists its partners so that reading a
+    /// species keeps them, and that list must not make the third species look like an end
+    /// of a ribbon it only borders.
+    ///
+    /// Observed failing against the focus `"{a} {b}"` this ribbon used to name: the arc of the
+    /// third species held both tokens and stayed in the foreground (three arcs, not two).
+    #[test]
+    fn reading_a_ribbon_does_not_keep_a_species_that_is_only_linked_to_both_ends() {
+        let g = graph(3, &[(0, 1, 0.9), (0, 2, 0.8), (1, 2, 0.7)]);
+        let svg = chord_diagram(&g, 100);
+        let attr = |el: &str, name: &str| -> Vec<String> {
+            el.split(&format!("{name}=\""))
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .map(|t| t.split(' ').map(str::to_owned).collect())
+                .unwrap_or_default()
+        };
+        let ribbons: Vec<(Vec<String>, Vec<String>)> = svg
+            .split('<')
+            .filter(|el| el.starts_with("path class=\"chord-ribbon"))
+            .map(|el| (attr(el, "data-ck-s"), attr(el, "data-ck-f")))
+            .collect();
+        let arcs: Vec<Vec<String>> = svg
+            .split('<')
+            .filter(|el| el.starts_with("path class=\"chord-arc"))
+            .map(|el| attr(el, "data-ck-s"))
+            .collect();
+        assert_eq!((ribbons.len(), arcs.len()), (3, 3));
+        let holds = |tokens: &[String], focus: &[String]| focus.iter().all(|f| tokens.contains(f));
+        for (tokens, focus) in &ribbons {
+            let ends: Vec<&String> = tokens.iter().filter(|t| t.chars().all(|c| c.is_ascii_digit())).collect();
+            assert_eq!(ends.len(), 2, "a ribbon belongs to two species: {tokens:?}");
+            let lit_ribbons = ribbons.iter().filter(|(t, _)| holds(t, focus)).count();
+            let lit_arcs: Vec<usize> = arcs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| holds(t, focus))
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(lit_ribbons, 1, "only itself: {focus:?}");
+            assert_eq!(lit_arcs.len(), 2, "its two species, not three: {focus:?} lit arcs {lit_arcs:?}");
+            for e in ends {
+                assert!(lit_arcs.contains(&e.parse::<usize>().expect("species")), "an end of the ribbon stays lit");
+            }
         }
     }
 }

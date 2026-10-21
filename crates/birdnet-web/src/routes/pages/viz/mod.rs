@@ -5,11 +5,12 @@
 //!
 //! - `kit` — what every chart shares: scales, round numbers, monotone curves, dates and
 //!   the `data-*` contract `static/chart-kit.js` reads (see `docs/design/charts.md`).
-//! - `matrix` — the co-occurrence intensity grid.
+//! - `cograph` — the co-occurrence graph the next three draw, and the order they draw it in.
+//! - `matrix` — the co-occurrence ladder matrix, ranked list and the figure that holds them.
 //! - `timeline` — Cartesian time-series charts (streamgraph, accumulation
 //!   curve, migration ridgeline, the 24-hour day strip).
-//! - `radial` — polar charts (the dawn-chorus circadian plot, the acoustic
-//!   co-occurrence chord diagram) and the geometry helpers they share.
+//! - `radial` — the acoustic co-occurrence chord diagram and its geometry.
+//! - `ridge` — the migration ridgeline and the species-per-week lane under it.
 //!
 //! Colours come from `super::atoms::species_color` so a species keeps the same
 //! hue across every screen.
@@ -20,18 +21,24 @@
 #[cfg(feature = "analytics")]
 pub(crate) mod funnel;
 pub(crate) mod bars;
+#[cfg(feature = "analytics")]
+pub(crate) mod bursts;
+pub(crate) mod cograph;
+#[cfg(feature = "analytics")]
+pub(crate) mod flow;
 pub(crate) mod heat;
 pub(crate) mod kit;
 pub(crate) mod matrix;
 pub(crate) mod radial;
+pub(crate) mod ridge;
 pub(crate) mod timeline;
 #[cfg(feature = "analytics")]
 pub(crate) mod trend;
 
 #[cfg(feature = "analytics")]
-pub(crate) use funnel::sequence_funnel;
-pub(crate) use matrix::cooccurrence_matrix;
-pub(crate) use radial::chord_diagram;
+pub(crate) use funnel::{Morning, Voice, morning_order};
+pub(crate) use cograph::CoGraph;
+pub(crate) use matrix::{LINK_CHOICES, co_figure, cooccurrence_matrix};
 #[cfg(feature = "analytics")]
 pub(crate) use trend::{TrendOpts, TrendPoint, trend_chart};
 pub(crate) use timeline::{accumulation_curve, day_strip, streamgraph};

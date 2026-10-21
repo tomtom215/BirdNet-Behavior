@@ -79,7 +79,23 @@ pub(super) async fn analytics_sessions_partial(
     }
 }
 
-/// The bursts table: sessions of two or more detections, newest first.
+/// A `DuckDB` timestamp (`2026-10-21 06:23:55`, with an optional fraction and either a space
+/// or a `T`) as its date and the seconds after midnight.
+#[cfg(feature = "analytics")]
+fn split_timestamp(ts: &str) -> Option<(String, u32)> {
+    let (date, time) = ts.split_once([' ', 'T'])?;
+    if date.len() != 10 {
+        return None;
+    }
+    let mut parts = time.split(':');
+    let h: u32 = parts.next()?.parse().ok()?;
+    let m: u32 = parts.next()?.parse().ok()?;
+    let sec: u32 = parts.next()?.split('.').next()?.parse().ok()?;
+    (h < 24 && m < 60 && sec < 61).then(|| (date.to_owned(), h * 3600 + m * 60 + sec))
+}
+
+/// The bursts as a timeline, then the table of them: sessions of two or more detections,
+/// newest first.
 ///
 /// A "burst of singing" made of one detection lasting 0s is not a burst.
 /// Sessionisation groups a species' detections by a `gap_minutes` gap, so a
@@ -92,6 +108,11 @@ pub(super) async fn analytics_sessions_partial(
 /// "Showing 20 of N sessions" counted the filtered-out singletons in N — and N
 /// could never pass `limit`, because only the newest `limit` sessions are
 /// fetched.
+///
+/// The timeline draws the newest seven days that have a burst, each burst where it began and
+/// as long as it lasted (`viz::bursts`); the table under it lists the newest twenty with the
+/// same numbers. A burst whose timestamps do not parse is left off the timeline and stays in
+/// the table, so nothing is silently dropped from the numbers.
 #[cfg(feature = "analytics")]
 fn render_bursts(
     sessions: &[birdnet_behavioral::types::ActivitySession],
@@ -99,7 +120,9 @@ fn render_bursts(
     limit: u32,
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
+    use super::viz::bursts::{Burst, burst_timeline};
     const SHOWN: usize = 20;
+    const DAYS: usize = 7;
     let bursts: Vec<_> = sessions.iter().filter(|s| s.detection_count > 1).collect();
     if bursts.is_empty() {
         let seen = sessions.len();
@@ -107,8 +130,56 @@ fn render_bursts(
             r#"<p class="bh-muted">No bursts yet. {seen} single detections have been grouped so far, but none is part of a run — a burst needs at least two detections of one species within {gap_minutes} minutes of each other.</p>"#
         );
     }
-    let mut html = String::from(
-        r"<table><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>",
+
+    // Colours by how many bursts a species had in what is shown, busiest first; past the
+    // eighth they share the neutral.
+    let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for b in &bursts {
+        *tally.entry(b.species.as_str()).or_insert(0) += 1;
+    }
+    let mut ranked: Vec<(&str, usize)> = tally.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let slot_of = |species: &str| {
+        ranked
+            .iter()
+            .position(|(n, _)| *n == species)
+            .map_or(super::atoms::CHART_SLOTS, |i| {
+                i.min(super::atoms::CHART_SLOTS)
+            })
+    };
+    let mut legend: Vec<(String, usize)> = ranked
+        .iter()
+        .take(super::atoms::CHART_SLOTS)
+        .enumerate()
+        .map(|(i, (n, _))| (names.name_of_stored(n).to_owned(), i))
+        .collect();
+    if ranked.len() > super::atoms::CHART_SLOTS {
+        legend.push(("Other species".to_owned(), super::atoms::CHART_SLOTS));
+    }
+    let drawn: Vec<Burst> = bursts
+        .iter()
+        .filter_map(|s| {
+            let (date, start) = split_timestamp(&s.start_time)?;
+            let (end_date, end) = split_timestamp(&s.end_time)?;
+            Some(Burst {
+                species: names.name_of_stored(&s.species).to_owned(),
+                slot: slot_of(&s.species),
+                end_secs: if end_date == date {
+                    end.max(start)
+                } else {
+                    86_399
+                },
+                start_secs: start,
+                date,
+                detections: s.detection_count,
+            })
+        })
+        .collect();
+
+    let mut html = String::new();
+    html.push_str(&burst_timeline(&drawn, &legend, DAYS));
+    html.push_str(
+        r#"<details class="pt-disc"><summary>See the numbers — the bursts</summary><div class="viz-table-scroll"><table><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>"#,
     );
     for s in bursts.iter().take(SHOWN) {
         let duration = format_duration(s.duration_secs);
@@ -121,7 +192,7 @@ fn render_bursts(
             d = duration,
         );
     }
-    html.push_str("</tbody></table>");
+    html.push_str("</tbody></table></div>");
     if bursts.len() > SHOWN {
         let scope = if u32::try_from(sessions.len()).is_ok_and(|n| n >= limit) {
             format!(" found among the latest {limit} sessions")
@@ -134,6 +205,7 @@ fn render_bursts(
             n = bursts.len(),
         );
     }
+    html.push_str("</details>");
     html
 }
 
@@ -176,32 +248,7 @@ pub(super) async fn analytics_retention_partial(
                     r#"<p class="bh-muted">No retention data yet.</p>"#.to_string(),
                 );
             }
-            let mut html = String::from(
-                r"<table><thead><tr><th>Species</th><th>Classification</th><th>Weeks heard</th><th>Day 1</th><th>Day 7</th><th>Day 30</th></tr></thead><tbody>",
-            );
-            for r in &retention {
-                // How often a species is here is a description, not a grade, so
-                // none of these is red: this drew a migrant — a normal thing for
-                // a bird to be — in the colour of a fault.
-                let (label, cls) = match r.classification {
-                    birdnet_behavioral::types::ResidencyType::Resident => ("Resident", "moss"),
-                    birdnet_behavioral::types::ResidencyType::Regular => ("Regular", ""),
-                    birdnet_behavioral::types::ResidencyType::Migrant => ("Migrant", "dawn"),
-                    birdnet_behavioral::types::ResidencyType::Rarity => ("Rarity", "dawn"),
-                };
-                let _ = write!(
-                    html,
-                    r#"<tr><td>{sp}</td><td><span class="bnb-pill {cls}">{label}</span></td><td class="mono">{wk} of {of}</td><td>{d1}</td><td>{d7}</td><td>{d30}</td></tr>"#,
-                    sp = escape_html(names.name_of_stored(&r.species)),
-                    // The class is read from this, so it is shown beside it.
-                    wk = r.weeks_present,
-                    of = r.station_weeks,
-                    d1 = find_rate(&r.retention_rates, 1),
-                    d7 = find_rate(&r.retention_rates, 7),
-                    d30 = find_rate(&r.retention_rates, 30),
-                );
-            }
-            html.push_str("</tbody></table>");
+            let html = render_retention(&retention, &names);
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("return visits", &e),
@@ -211,6 +258,129 @@ pub(super) async fn analytics_retention_partial(
             super::error_states::failed_partial("which birds came back")
         }
     }
+}
+
+/// The rate of `days` in `rates`, as a number in `0..=1`.
+#[cfg(feature = "analytics")]
+fn rate_at(rates: &[birdnet_behavioral::types::RetentionRate], days: u32) -> Option<f64> {
+    rates.iter().find(|r| r.days == days).map(|r| r.rate)
+}
+
+/// The day intervals the retention table shows, with how each is said.
+#[cfg(feature = "analytics")]
+const RETURN_AFTER: [(u32, &str); 6] = [
+    (1, "1 d"),
+    (2, "2 d"),
+    (3, "3 d"),
+    (7, "1 wk"),
+    (14, "2 wk"),
+    (30, "1 mo"),
+];
+
+/// Who keeps coming back, as a ledger of how often each species returns: for every species the
+/// share of the days it was heard that it was heard again after a day, two, three, a week, a
+/// fortnight and a month, each a cell on the sequential ramp that also prints its number, and
+/// the weeks it was heard of the weeks the station listened, as a bar. The species are in
+/// groups by how much of the station's time they were present (resident, regular, migrant,
+/// rarity), which is what the classification is and what the groups say under their names.
+///
+/// The ledger is a table, so it is also its own alternative: every number is a cell, read by
+/// row and column, and the ramp only helps the eye find the pattern (a resident is a row of
+/// full cells; a bird passing through is a row that fades).
+#[cfg(feature = "analytics")]
+fn render_retention(
+    retention: &[birdnet_behavioral::types::SpeciesRetention],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
+    use birdnet_behavioral::types::ResidencyType;
+    // How often a species is here is a description, not a grade, so none of these is red: this
+    // drew a migrant — a normal thing for a bird to be — in the colour of a fault.
+    let groups = [
+        (
+            ResidencyType::Resident,
+            "Resident",
+            "moss",
+            "heard in more than 70% of the weeks",
+        ),
+        (
+            ResidencyType::Regular,
+            "Regular",
+            "",
+            "heard in 30 to 70% of them",
+        ),
+        (
+            ResidencyType::Migrant,
+            "Migrant",
+            "dawn",
+            "heard in fewer: passing through",
+        ),
+        (
+            ResidencyType::Rarity,
+            "Rarity",
+            "dawn",
+            "every detection within one week",
+        ),
+    ];
+    let mut html = String::from(
+        r#"<div class="viz-table-scroll rt-scroll"><table class="rt-table"><thead><tr><th scope="col">Species</th><th scope="col">Weeks heard</th>"#,
+    );
+    for (_, label) in RETURN_AFTER {
+        let _ = write!(html, r#"<th scope="col" class="rt-h">{label}</th>"#);
+    }
+    html.push_str("</tr></thead>");
+    for (class, label, cls, said) in groups {
+        let rows: Vec<_> = retention
+            .iter()
+            .filter(|r| r.classification == class)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let _ = write!(
+            html,
+            r#"<tbody><tr class="rt-group"><th scope="colgroup" colspan="{span}"><span class="bnb-pill {cls}">{label}</span> <span class="bnb-meta">{count} · {said}</span></th></tr>"#,
+            span = RETURN_AFTER.len() + 2,
+            count = rows.len(),
+        );
+        for r in rows {
+            let _ = write!(
+                html,
+                r#"<tr><th scope="row" class="rt-name">{sp}</th><td class="rt-weeks"><span class="rt-bar" aria-hidden="true"><i data-style="width:{w:.0}%"></i></span><span class="mono rt-wk">{wk} of {of}</span></td>"#,
+                sp = escape_html(names.name_of_stored(&r.species)),
+                w = f64::from(r.weeks_present) / f64::from(r.station_weeks.max(1)) * 100.0,
+                wk = r.weeks_present,
+                of = r.station_weeks,
+            );
+            for (days, _) in RETURN_AFTER {
+                match rate_at(&r.retention_rates, days) {
+                    Some(rate) => {
+                        // Seven even steps from 0 to 100%: a rate is a proportion, so (unlike a
+                        // count) its ramp is linear.
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let step = ((rate * 7.0).ceil() as usize).clamp(1, 7);
+                        let class = if rate <= 0.0 {
+                            "rt-zero".to_owned()
+                        } else {
+                            format!("ck-m{step}")
+                        };
+                        let _ = write!(
+                            html,
+                            r#"<td class="rt-cell {class}">{:.0}%</td>"#,
+                            rate * 100.0
+                        );
+                    }
+                    None => html.push_str(r#"<td class="rt-cell rt-none">—</td>"#),
+                }
+            }
+            html.push_str("</tr>");
+        }
+        html.push_str("</tbody>");
+    }
+    html.push_str("</table></div>");
+    html.push_str(
+        r#"<div class="ck-scale rt-key"><span class="ck-steps" aria-hidden="true"><i class="ck-sw ck-m1"></i><i class="ck-sw ck-m2"></i><i class="ck-sw ck-m3"></i><i class="ck-sw ck-m4"></i><i class="ck-sw ck-m5"></i><i class="ck-sw ck-m6"></i><i class="ck-sw ck-m7"></i></span><span class="bnb-meta">0% to 100% of the days a species was heard that it was heard again that much later.</span></div>"#,
+    );
+    html
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -308,9 +478,7 @@ pub(super) async fn analytics_next_partial(
                 .iter()
                 .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
                 .collect();
-            let mut html = String::new();
-            render_neighbours(&mut html, "Before", &display, &before, &names);
-            render_neighbours(&mut html, "After", &display, &after, &names);
+            let html = render_neighbour_figure(&display, &before, &after, &names);
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("what sings next", &e),
@@ -320,6 +488,76 @@ pub(super) async fn analytics_next_partial(
             super::error_states::failed_partial("what the station expects to hear next")
         }
     }
+}
+
+/// The follow-on card: a flow with the species in the middle (wide screens), the same
+/// neighbours as ranked bars (narrow ones, where a flow's names would be drawn too small), and
+/// the tables, which hold every number, under a disclosure.
+///
+/// Each of `before` and `after` is `(species, probability, sessions)` rows.
+#[cfg(feature = "analytics")]
+fn render_neighbour_figure(
+    trigger: &str,
+    before: &[(&str, f64, u64)],
+    after: &[(&str, f64, u64)],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
+    use super::viz::flow::{Neighbour, neighbours_flow};
+    let to_neighbours = |rows: &[(&str, f64, u64)]| -> Vec<Neighbour> {
+        rows.iter()
+            .map(|&(species, probability, frequency)| Neighbour {
+                name: names.name_of_stored(species).to_owned(),
+                probability,
+                frequency,
+                is_trigger: species == trigger,
+            })
+            .collect()
+    };
+    let (b, a) = (to_neighbours(before), to_neighbours(after));
+    let shown = names.name_of_stored(trigger);
+    let mut html = String::from(r#"<div class="fl-fig">"#);
+    html.push_str(&neighbours_flow(shown, &b, &a));
+    html.push_str(r#"<div class="fl-lists">"#);
+    for (side, rows) in [("Before", &b), ("After", &a)] {
+        let _ = write!(
+            html,
+            r#"<h3 class="fl-list-h">{side} <b>{}</b></h3>"#,
+            escape_html(shown)
+        );
+        if rows.is_empty() {
+            html.push_str(r#"<p class="bh-muted">Nothing yet.</p>"#);
+            continue;
+        }
+        html.push_str(r#"<ol class="co-rank">"#);
+        let pmax = rows
+            .iter()
+            .map(|n| n.probability)
+            .fold(f64::MIN_POSITIVE, f64::max);
+        for n in rows {
+            let _ = write!(
+                html,
+                r#"<li class="co-rank-row"><span class="co-rank-names">{name}{again}</span><span class="co-rank-bar"><i class="ck-sw ck-q{step}" data-style="width:{w:.0}%"></i></span><b class="co-rank-v">{pct:.0}%</b></li>"#,
+                name = escape_html(&n.name),
+                again = if n.is_trigger {
+                    r#" <span class="bnb-meta">(calls again)</span>"#
+                } else {
+                    ""
+                },
+                step = super::viz::cograph::share_step(n.probability / pmax),
+                w = (n.probability / pmax * 100.0).max(3.0),
+                pct = n.probability * 100.0,
+            );
+        }
+        html.push_str("</ol>");
+    }
+    html.push_str("</div>");
+    html.push_str(
+        r#"<details class="pt-disc"><summary>See the numbers — before and after</summary><div>"#,
+    );
+    render_neighbours(&mut html, "Before", trigger, before, names);
+    render_neighbours(&mut html, "After", trigger, after, names);
+    html.push_str("</div></details></div>");
+    html
 }
 
 /// One "Before"/"After" table of the follow-on card: `(species, probability,
@@ -563,6 +801,55 @@ fn funnel_step_counts(
         .collect()
 }
 
+/// How many of the newest mornings the running order draws a dot and a line for.
+#[cfg(feature = "analytics")]
+const MORNINGS_DRAWN: usize = 45;
+
+/// The voices and mornings the running-order picture draws.
+///
+/// `events` are the engine's `sequence_match_events`, newest morning first: for each, the
+/// moment each step of the run fired. The typical time of a voice is the median over every
+/// morning it was part of a run, however many there are; only the newest [`MORNINGS_DRAWN`]
+/// are drawn. A timestamp that does not parse ends that morning's run at the step before it.
+#[cfg(feature = "analytics")]
+fn morning_inputs(
+    sequence: &[String],
+    step_counts: &[u64],
+    events: &[birdnet_behavioral::types::PatternMatchEvents],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> (Vec<super::viz::Voice>, Vec<super::viz::Morning>) {
+    let mut per_step: Vec<Vec<u32>> = vec![Vec::new(); sequence.len()];
+    let mut mornings = Vec::new();
+    for e in events {
+        let times: Vec<u32> = e
+            .step_times
+            .iter()
+            .take(sequence.len())
+            .map_while(|t| split_timestamp(t).map(|(_, secs)| secs))
+            .collect();
+        for (k, &t) in times.iter().enumerate() {
+            per_step[k].push(t);
+        }
+        if !times.is_empty() && mornings.len() < MORNINGS_DRAWN {
+            mornings.push(super::viz::Morning {
+                date: e.date.clone(),
+                times,
+            });
+        }
+    }
+    let voices = sequence
+        .iter()
+        .zip(step_counts)
+        .zip(per_step.iter_mut())
+        .map(|((name, &reached), seen)| super::viz::Voice {
+            name: names.name_of_stored(name).to_owned(),
+            reached,
+            typical_secs: super::viz::funnel::median(seen),
+        })
+        .collect();
+    (voices, mornings)
+}
+
 /// Render the dawn-sequence card body from the derived sequence, its per-day
 /// occurrence counts (`sequence_count`) and step timings (`sequence_match_events`).
 #[cfg(feature = "analytics")]
@@ -587,18 +874,17 @@ fn render_dawn_sequence(
     let mut html =
         format!(r#"<p class="bh-after">Your dawn tends to open <strong>{chain}</strong>.</p>"#);
 
-    // Lead with the picture (the Patterns idiom): the funnel of how many
-    // mornings reach each step of the run. Omitted — never an empty chart — when
-    // nothing reached even the first step.
+    // Lead with the picture (the Patterns idiom): the running order, one lane per voice with
+    // the mornings as dots on the clock. Omitted — never an empty chart — when nothing reached
+    // even the first step.
     let step_counts = funnel_step_counts(funnel, sequence.len());
     if step_counts.first().is_some_and(|c| *c > 0) {
-        let steps: Vec<(String, u64)> = sequence
-            .iter()
-            .map(|s| names.name_of_stored(s).to_owned())
-            .zip(step_counts)
-            .collect();
-        html.push_str(r#"<p class="bnb-meta">Mornings reaching each step:</p>"#);
-        html.push_str(&super::viz::sequence_funnel(&steps));
+        let (voices, mornings) = morning_inputs(sequence, &step_counts, events, names);
+        html.push_str(&super::viz::morning_order(
+            &voices,
+            &mornings,
+            (DAWN_HOUR_START, DAWN_HOUR_END),
+        ));
     }
 
     if total_occ == 0 {
@@ -783,14 +1069,6 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     }
-}
-
-#[cfg(feature = "analytics")]
-fn find_rate(rates: &[birdnet_behavioral::types::RetentionRate], days: u32) -> String {
-    rates
-        .iter()
-        .find(|r| r.days == days)
-        .map_or_else(|| "—".to_string(), |r| format!("{:.0}%", r.rate * 100.0))
 }
 
 #[cfg(all(test, feature = "analytics"))]

@@ -331,14 +331,19 @@ async fn terrain_js() -> impl IntoResponse {
     )
 }
 
-/// The ETag of the vendored library: the first sixteen hex digits of its SHA-256, quoted. The
+/// The `ETag` of the vendored library: the first sixteen hex digits of its SHA-256, quoted. The
 /// bytes never change inside a build, so it is computed once.
 fn three_etag() -> &'static str {
     use sha2::Digest as _;
+    use std::fmt::Write as _;
     static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         let digest = sha2::Sha256::digest(THREE_JS);
-        let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
-        format!("\"{hex}\"")
+        let mut hex = String::from("\"");
+        for b in digest.iter().take(8) {
+            let _ = write!(hex, "{b:02x}");
+        }
+        hex.push('"');
+        hex
     });
     ETAG.as_str()
 }
