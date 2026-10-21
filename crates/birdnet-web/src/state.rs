@@ -243,6 +243,9 @@ struct AppStateInner {
     /// The data volume's last probe (`crate::data_volume`): writable, still
     /// mounted, how full. `None` until the watch has run once.
     data_volume: std::sync::RwLock<Option<crate::data_volume::DataVolumeStatus>>,
+    /// A disk reading to use in place of `df` (see [`AppState::pin_disk_usage`]).
+    /// `None` in a running station, which always asks the filesystem.
+    pinned_disk_usage: std::sync::RwLock<Option<birdnet_core::audio::capture::DiskUsage>>,
     /// Whether the admin-password bootstrap at start failed (DD-19): a
     /// station that could not write its own admin credential.
     admin_bootstrap_failed: AtomicBool,
@@ -381,6 +384,7 @@ impl AppState {
                 live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
+                pinned_disk_usage: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
@@ -650,6 +654,7 @@ impl AppState {
                 live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
+                pinned_disk_usage: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
@@ -717,6 +722,7 @@ impl AppState {
                 live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
+                pinned_disk_usage: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
@@ -1796,6 +1802,25 @@ impl AppState {
         if let Ok(mut guard) = self.inner.data_volume.write() {
             *guard = Some(status);
         }
+    }
+
+    /// Make the Health tab and the header badge grade this disk reading instead
+    /// of asking the filesystem (a test states the fullness it assumes; nothing
+    /// in a running station calls this).
+    ///
+    /// The data disk is what is pinned. The temporary-folder reading is dropped
+    /// while it is set, so the host's `/tmp` cannot add an issue of its own.
+    /// Without this, a test of the badge's other inputs passes or fails
+    /// according to how full the machine it runs on happens to be.
+    pub fn pin_disk_usage(&self, usage: birdnet_core::audio::capture::DiskUsage) {
+        if let Ok(mut guard) = self.inner.pinned_disk_usage.write() {
+            *guard = Some(usage);
+        }
+    }
+
+    /// The reading [`Self::pin_disk_usage`] set, if any.
+    pub(crate) fn pinned_disk_usage(&self) -> Option<birdnet_core::audio::capture::DiskUsage> {
+        self.inner.pinned_disk_usage.read().ok().and_then(|g| *g)
     }
 
     /// Install the station's occurrence filter, as the web crate may read it

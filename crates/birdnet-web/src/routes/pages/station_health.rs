@@ -114,7 +114,8 @@ async fn gather(state: &AppState) -> Snapshot {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
         let sys = system_info::sample();
-        let (disk, scratch) = super::station_issues::disks(state.db_path());
+        let (disk, scratch) =
+            super::station_issues::pinned_or(&state, || super::station_issues::disks(state.db_path()));
 
         let read = state.with_read_db(|conn| {
             let listed = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;

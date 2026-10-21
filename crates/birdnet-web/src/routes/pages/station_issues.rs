@@ -391,6 +391,18 @@ pub(super) fn disks(db_path: &std::path::Path) -> (Option<DiskUsage>, Option<Dis
     (disk, scratch)
 }
 
+/// The disk readings the Health surfaces grade: the ones a test pinned with
+/// [`AppState::pin_disk_usage`] (and no scratch reading beside them), otherwise
+/// whatever `read` asks the filesystem.
+pub(super) fn pinned_or(
+    state: &AppState,
+    read: impl FnOnce() -> (Option<DiskUsage>, Option<DiskUsage>),
+) -> (Option<DiskUsage>, Option<DiskUsage>) {
+    state
+        .pinned_disk_usage()
+        .map_or_else(read, |pinned| (Some(pinned), None))
+}
+
 /// The directory holding the database: the station's data directory.
 pub(super) fn data_dir_of(db_path: &std::path::Path) -> std::path::PathBuf {
     db_path
@@ -490,7 +502,7 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
                 .map_err(|e| e.to_string())?;
         Ok::<_, String>((enabled.len(), names, queued, recorded_integrity(conn)))
     });
-    let (disk, scratch) = disks_cached(state.db_path());
+    let (disk, scratch) = pinned_or(state, || disks_cached(state.db_path()));
     let capture = state
         .capture_status()
         .map(|handle| birdnet_core::audio::capture::read_capture_status(&handle).sources)
