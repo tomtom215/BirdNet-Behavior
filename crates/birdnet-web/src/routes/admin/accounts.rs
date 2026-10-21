@@ -333,13 +333,16 @@ async fn create_user(
                 }
             };
 
+            // A blank box is no label. The form posts `label=` when the field is
+            // left empty, and stored as `Some("")` it beat the `unwrap_or(username)`
+            // that names the row, so the account list showed a nameless viewer.
+            let label = form
+                .label
+                .as_deref()
+                .map(str::trim)
+                .filter(|label| !label.is_empty());
             let result = state.with_db(|conn| {
-                conn.create_user(
-                    form.username.trim(),
-                    &pwd_argon2,
-                    Role::Viewer,
-                    form.label.as_deref(),
-                )
+                conn.create_user(form.username.trim(), &pwd_argon2, Role::Viewer, label)
             });
 
             match result {
@@ -985,7 +988,8 @@ mod tests {
         assert!(!html.contains(">Remove<"));
 
         // With a real hash on the row it is a reset again.
-        let hash = accounts::hash_password("a-real-password-here").unwrap();
+        let hash =
+            accounts::hash_password(&format!("a-real-password-{}", std::process::id())).unwrap();
         state
             .with_db(|conn| conn.set_password(users[0].id, &hash))
             .unwrap();
@@ -1004,7 +1008,8 @@ mod tests {
         let rotate = |refuse: bool| async move {
             let (dir, state) = fixture();
             let admin = state.with_db(UserStore::list_users).unwrap().remove(0);
-            let hash = accounts::hash_password("a-real-password-here").unwrap();
+            let hash = accounts::hash_password(&format!("a-real-password-{}", std::process::id()))
+                .unwrap();
             state
                 .with_db(|conn| {
                     conn.set_password(admin.id, &hash)?;

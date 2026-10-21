@@ -37,10 +37,6 @@ pub fn router() -> Router<AppState> {
         .route("/quarantine", get(quarantine_page))
         .route("/pages/quarantine-list", get(quarantine_list_partial))
         .route("/pages/quarantine-stats", get(quarantine_stats_partial))
-        .route(
-            "/pages/quarantine-pending-count",
-            get(quarantine_pending_count_partial),
-        )
 }
 
 /// The state-changing half, mounted behind the admin auth middleware.
@@ -212,43 +208,6 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
             super::error_states::failed_partial("the quarantine totals")
         }
     }
-}
-
-/// Tiny partial used by the nav badge to show pending count.
-///
-/// Three answers, because there are three facts: nothing waiting (no badge),
-/// `n` waiting (the count), and *could not count* — which is a `?`, not a
-/// missing badge, since a missing badge is how "nothing waits" looks.
-async fn quarantine_pending_count_partial(State(state): State<AppState>) -> impl IntoResponse {
-    let counted = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::quarantine_pending_count)
-    })
-    .await;
-
-    let html = match counted {
-        Ok(Ok(count)) if count > 0 => format!(
-            r#"<span class="qz-pending-badge">
-               {count}
-            </span>"#
-        ),
-        Ok(Ok(_)) => String::new(),
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "quarantine badge: the pending count could not be read");
-            unknown_pending_badge()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "quarantine badge: task failed");
-            unknown_pending_badge()
-        }
-    };
-
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-/// The badge for a count that could not be read.
-fn unknown_pending_badge() -> String {
-    r#"<span class="qz-pending-badge" role="img" aria-label="The number of sightings waiting for review could not be read" title="The number of sightings waiting for review could not be read">?</span>"#
-        .to_string()
 }
 
 // ---------------------------------------------------------------------------

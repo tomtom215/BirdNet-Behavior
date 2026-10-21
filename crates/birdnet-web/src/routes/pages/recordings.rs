@@ -231,10 +231,12 @@ async fn fetch_clips(
     offset: u32,
 ) -> ClipsData {
     let state = state.clone();
-    let present = recording_basenames(&state.recording_dir());
     // The typed search also covers the station's own language.
     let also = super::name_search::also_species(state.names(), search.as_deref());
     tokio::task::spawn_blocking(move || {
+        // One `read_dir` of the whole recordings directory: with the queries, on the
+        // blocking pool, not a runtime worker.
+        let present = recording_basenames(&state.recording_dir());
         state.with_read_db(|conn| {
             assemble_clips(
                 birdnet_db::sqlite::recent_clips(
@@ -571,13 +573,21 @@ pub(super) fn base_name(file: &str) -> String {
 /// honest streaming sonogram, a source picker, and the live-detection trickle.
 async fn live_view(state: &AppState, source: Option<&str>) -> String {
     let state_q = state.clone();
-    let sources = tokio::task::spawn_blocking(move || {
-        state_q.with_read_db(|conn| AudioSourceStore::list(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
+    // A source list that could not be read is not a station with no microphone:
+    // the picker would say "no source yet" to an operator whose microphone is
+    // recording.
+    let sources = tokio::task::spawn_blocking(move || state_q.with_read_db(AudioSourceStore::list))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|read| read.map_err(|e| e.to_string()));
 
-    let options = super::listen::source_options_for(&sources, source);
+    let options = match &sources {
+        Ok(sources) => super::listen::source_options_for(sources, source),
+        Err(e) => {
+            tracing::warn!(error = %e, "live view: the audio sources could not be listed");
+            super::listen::unreadable_options()
+        }
+    };
     let trickle_skel = super::skeletons::feed_rows(6);
 
     format!(

@@ -19,7 +19,7 @@
 //!
 //! The second half is the sites an earlier sweep classified and left: the
 //! Today pills and review nudge, the merged-history note, the Recordings grid,
-//! the live feed's badges, the microphone-health panel, the review-queue badge,
+//! the live feed's badges, the microphone-health panel,
 //! and the two admin writes that report their outcome honestly or not at all.
 
 use axum::body::Body;
@@ -662,26 +662,6 @@ async fn the_microphone_panel_does_not_vanish_when_its_history_could_not_be_read
     let (_, body) = get(&station(&[], nothing), uri).await;
     assert!(!body.contains("Microphone health"), "{body}");
     assert!(!body.contains("noise-floor history"), "{body}");
-}
-
-// ── the review-queue badge ──────────────────────────────────────────────────
-
-#[tokio::test]
-async fn the_review_badge_does_not_disappear_when_the_queue_could_not_be_read() {
-    let uri = "/pages/quarantine-pending-count";
-    let (status, body) = get(&station(&["quarantine"], nothing), uri).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        body.contains("could not be read"),
-        "a failed count was drawn as no badge: {body:?}"
-    );
-
-    // Counterparts: nothing pending is no badge; one pending is a "1".
-    let (_, body) = get(&station(&[], nothing), uri).await;
-    assert!(body.trim().is_empty(), "{body:?}");
-    let (_, body) = get(&station(&[], one_pending_review), uri).await;
-    assert!(body.contains("qz-pending-badge"), "{body:?}");
-    assert!(!body.contains("could not be read"), "{body:?}");
 }
 
 // ── admin writes that went through ──────────────────────────────────────────

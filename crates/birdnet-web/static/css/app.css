@@ -4725,6 +4725,7 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-area        { stroke: none; }
 .ck-ring        { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
 .ck-hit         { fill: none; pointer-events: all; }
+.ck-future      { fill: none; stroke: var(--chart-grid-strong); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .ck-peak        { fill: none; stroke: var(--chart-annot); stroke-width: 2px; pointer-events: none; }
 .ck-pill        { fill: var(--chart-annot); }
 .ck-pill-t      { fill: var(--chart-gap); }
@@ -5954,6 +5955,9 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .mic-list { display: grid; gap: var(--space-12); margin: 0; padding: 0; border: 0; }
 .mic-or { margin: var(--space-16) 0 var(--space-8); }
 .mic-manual { display: grid; gap: var(--space-8); }
+/* `display: grid` above beats the UA rule for [hidden], so a field the page script
+   hides (the stream address, the device name) stayed on screen until chosen. */
+.mic-manual[hidden] { display: none; }
 .mic-manual input[type="text"] { width: 100%; max-width: 36rem; }
 .mic-test { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-8); }
 .mic-level { font-family: var(--font-mono); color: var(--fg-2); }
@@ -5963,3 +5967,170 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
    on a wall display. */
 .td-picture-img { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: var(--r-md); }
 .td-picture-wait { margin: 0; }
+
+/* charts2 ─────────────────────────────────────────────────────────────────────
+   The relational, radial and behavioural charts: the chord diagram and ladder
+   matrix of who is heard with whom, the dawn-chorus rings, the migration ridges,
+   the behaviour tab's pictures and the soundscape terrain. Colour, weight, gap
+   and radius are tokens and nothing else (tests/design_tokens_are_the_only_literals.rs);
+   the kit's classes (.ck-q1..7, .ck-c1..8, .ck-scale, …) carry the colour of a mark.
+   Written in routes/pages/viz/{radial,matrix,ridge,…}.rs. */
+
+/* Who sings with whom: a ring on a wide screen, a ladder on a narrow one. The ring's
+   names need about 760 units of width; below 1000 px they would be drawn under the
+   legibility floor, and a ladder is as readable at 340 px as at 900. */
+.co-fig { display: flex; flex-direction: column; gap: var(--space-12); width: 100%; }
+.co-controls { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-10); flex-wrap: wrap; }
+.co-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-24); align-items: start; }
+.co-chord { display: none; min-width: 0; }
+.co-chord .viz-svg-chord { max-width: 800px; }
+.co-ladder { min-width: 0; }
+.viz-svg-ladder { display: block; width: 100%; max-width: 480px; height: auto; margin-inline: auto; }
+.co-aside-h { margin: 0 0 var(--space-10); font-family: var(--font-display); font-size: var(--fs-lead); font-weight: var(--fw-regular); letter-spacing: var(--track-tight); }
+@media (min-width: 1000px) {
+  .co-main { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); }
+  .co-chord { display: block; }
+  .co-ladder { display: none; }
+}
+.co-rank { list-style: none; margin: 0 0 var(--space-12); padding: 0; display: grid; gap: var(--space-10); }
+.co-rank-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "n v" "b b"; gap: var(--space-4) var(--space-8); font-size: var(--fs-md); }
+.co-rank-names { grid-area: n; min-width: 0; overflow-wrap: anywhere; }
+.co-rank-x { color: var(--fg-3); }
+.co-rank-v { grid-area: v; font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
+.co-rank-bar { grid-area: b; display: block; height: 5px; background: var(--chart-track); border-radius: var(--r-pill); overflow: hidden; }
+.co-rank-bar i { display: block; height: 100%; border-radius: var(--r-pill); }
+.co-legend .ck-scale { align-items: flex-start; flex-wrap: nowrap; gap: var(--space-10); }
+.co-legend .ck-steps { flex: none; margin-top: var(--space-4); }
+.co-legend .ck-scale-note { margin: var(--space-6) 0 0; }
+
+.chord-ribbon { fill: var(--c); fill-opacity: .9; stroke: var(--chart-gap); stroke-width: 1px; vector-effect: non-scaling-stroke; cursor: pointer; }
+.chord-arc { fill: var(--c); cursor: pointer; }
+.chord-name { fill: var(--fg); font-size: var(--fs-sm); font-weight: var(--fw-medium); cursor: default; }
+.chord-leader { fill: none; stroke: var(--chart-axis); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.ladder-name { fill: var(--fg); font-size: var(--fs-sm); }
+.viz-svg-chord [data-ck-i].ck-on:not(.ck-hit).chord-arc { stroke: var(--chart-annot); }
+
+/* The dawn chorus: rings, and beside them which ring is which bird. */
+.dc-polar-card { display: block; min-height: 0; }
+.dc-polar-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-16); align-items: center; justify-items: stretch; }
+.dc-polar-plot { min-width: 0; }
+.dc-polar-col .dc-polar-svg { display: block; max-width: 640px; max-height: none; height: auto; margin-inline: auto; }
+.dc-key-col { min-width: 0; display: flex; flex-direction: column; gap: var(--space-12); }
+.dc-key-col .dc-key-note { text-align: left; margin: 0; }
+.dc-key-col .dc-key { flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; max-width: none; gap: var(--space-2); margin: 0; }
+.dc-leg { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; padding: var(--space-6) var(--space-8); }
+.dc-leg-name { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-md); }
+.dc-leg-peak { white-space: nowrap; }
+.dc-suntimes { list-style: none; margin: 0; padding: var(--space-10) 0 0; border-top: var(--bw) solid var(--hairline); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) var(--space-12); }
+.dc-suntimes li { white-space: nowrap; }
+.dc-sw { display: inline-block; width: 10px; height: 10px; border-radius: var(--r-pill); margin-right: var(--space-6); vertical-align: -1px; }
+.dc-sw.day { background: var(--dawn); }
+.dc-sw.twilight { background: color-mix(in oklab, var(--dawn) 50%, var(--chart-gap)); }
+@media (min-width: 900px) {
+  .dc-polar-col { grid-template-columns: minmax(0, 620px) minmax(280px, 1fr); gap: var(--space-32); }
+}
+.dc-ring { fill: var(--c); stroke: var(--chart-gap); stroke-width: 1px; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.dc-polar-svg .ck-hit { cursor: pointer; }
+.dc-sky { stroke: none; }
+.dc-sky-night { fill: var(--night); fill-opacity: .85; }
+.dc-sky-twilight { fill: color-mix(in oklab, var(--dawn) 50%, var(--chart-gap)); }
+.dc-sky-day { fill: var(--dawn); }
+.dc-sun { fill: var(--chart-annot); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
+.dc-moon { stroke: var(--chart-axis); fill: none; }
+.dc-moon.is-now { stroke: var(--chart-annot); }
+.dc-ctr-k { fill: var(--chart-label); font-size: var(--fs-2xs); letter-spacing: .12em; }
+.dc-ctr-t { fill: var(--fg); font-size: var(--fs-lead); font-weight: var(--fw-medium); }
+.dc-ctr-s { fill: var(--chart-label); font-size: var(--fs-2xs); }
+.dc-now-halo { stroke: var(--chart-gap); stroke-width: 4px; vector-effect: non-scaling-stroke; opacity: .85; pointer-events: none; }
+.dc-now { stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.dc-now-dot { fill: var(--chart-annot); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
+@keyframes dc-bloom { from { transform: scale(.84); opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .dc-ring { transform-box: view-box; transform-origin: 50% 50%; animation: dc-bloom var(--dur-slower) var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 55ms); }
+}
+.dc-list-slot { min-height: 120px; }
+.dc-strip-note { margin: var(--space-4) 0 var(--space-12); }
+.dc-strips-svg { display: block; width: 100%; height: auto; }
+.dc-dawn-band { fill: var(--chart-track); opacity: .7; }
+.dc-sun-line { stroke: var(--dawn); stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.dc-strip-name { fill: var(--fg); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+.dc-strip-sub { fill: var(--chart-label); font-size: var(--fs-2xs); }
+.dc-bar { fill: var(--c); fill-opacity: .62; }
+.dc-bar.is-peak { fill-opacity: 1; }
+.dc-table th, .dc-table td { white-space: nowrap; }
+.dc-table th[scope="row"] { position: sticky; left: 0; background: var(--surface); }
+.dc-foot { margin-top: var(--space-8); }
+
+/* Migration: the ridgeline and the species-per-week lane under it. */
+.rd-svg { display: block; width: 100%; height: auto; }
+.rd-band-spring { fill: color-mix(in oklab, var(--chart-1) 9%, var(--chart-gap)); }
+.rd-band-fall { fill: color-mix(in oklab, var(--chart-5) 11%, var(--chart-gap)); }
+.rd-band-name { font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+.rd-band-weeks, .rd-month, .rd-notyet { font-size: var(--fs-2xs); }
+.rd-mask { fill: var(--chart-gap); stroke: none; }
+.rd-area { stroke: none; }
+.rd-line { stroke: var(--c); }
+.rd-ridge { cursor: crosshair; }
+.rd-name { fill: var(--fg); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+.rd-sub { fill: var(--chart-label); font-size: var(--fs-2xs); }
+.rd-bar { fill-opacity: .9; }
+.rd-bar-spring { fill: var(--chart-1); }
+.rd-bar-fall { fill: var(--chart-5); }
+.rd-bar-other { fill: var(--chart-other); }
+.rd-peak-kinds { font-size: var(--fs-xs); }
+.rd-today { stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.rd-today-t { font-size: var(--fs-2xs); }
+.rd-key { margin-top: var(--space-12); }
+.rd-note { margin: var(--space-6) 0 0; max-width: 78ch; }
+.rd-table th, .rd-table td { white-space: nowrap; }
+.rd-table th[scope="row"] { position: sticky; left: 0; background: var(--surface); }
+.rd-kinds th, .rd-kinds td { border-top: var(--bw-strong) solid var(--chart-grid-strong); }
+
+/* Behavior: bursts, who keeps coming back, who is heard before and after, the running order. */
+.bt-svg, .mo-svg { display: block; width: 100%; height: auto; }
+.bt-day { fill: var(--fg-2); font-size: var(--fs-xs); }
+.bt-hr, .mo-hr { font-size: var(--fs-2xs); }
+.bt-bar { fill: var(--c); cursor: pointer; }
+.bt-key { margin-top: var(--space-8); }
+.rt-scroll { margin-top: var(--space-8); }
+.rt-table { width: 100%; border-collapse: separate; border-spacing: 0 var(--space-2); font-size: var(--fs-md); }
+.rt-table th, .rt-table td { padding: var(--space-4) var(--space-6); text-align: left; border: 0; background: none; }
+.rt-table thead th { font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--chart-label); text-align: center; }
+.rt-table thead th:first-child, .rt-table thead th:nth-child(2) { text-align: left; }
+.rt-group th { padding-top: var(--space-16); font-weight: var(--fw-regular); }
+.rt-name { font-weight: var(--fw-regular); white-space: nowrap; }
+.rt-weeks { white-space: nowrap; }
+.rt-bar { display: inline-block; width: 56px; height: 6px; margin-right: var(--space-8); vertical-align: middle; overflow: hidden; background: var(--chart-track); border-radius: var(--r-pill); }
+.rt-bar i { display: block; height: 100%; background: var(--seq-moss-5); border-radius: var(--r-pill); }
+.rt-wk { font-size: var(--fs-xs); color: var(--fg-2); }
+.rt-cell { min-width: 44px; text-align: center; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--c, var(--chart-track)); border-radius: var(--r-xs); }
+.rt-table td.rt-cell { text-align: center; }
+.rt-zero { background: var(--chart-track); color: var(--fg-3); }
+.rt-none { color: var(--fg-3); }
+.rt-key { margin-top: var(--space-10); }
+.fl-fig { display: flex; flex-direction: column; gap: var(--space-12); }
+.fl-sankey { display: none; }
+.fl-lists { display: grid; gap: var(--space-4); }
+.fl-list-h { margin: var(--space-8) 0 var(--space-4); font-size: var(--fs-base); font-weight: var(--fw-regular); }
+@media (min-width: 720px) {
+  .fl-sankey { display: block; }
+  .fl-lists { display: none; }
+}
+.fl-svg { display: block; width: 100%; max-width: 760px; height: auto; margin-inline: auto; }
+.fl-flow { fill: var(--c); fill-opacity: .88; stroke: none; cursor: pointer; }
+.fl-node { fill: var(--chart-axis); cursor: pointer; }
+.fl-name { fill: var(--fg); font-size: var(--fs-sm); cursor: default; }
+.fl-pct { fill: var(--chart-label); font-size: var(--fs-xs); }
+.fl-head { font-size: var(--fs-xs); }
+.fl-trigger { fill: var(--fg); font-size: var(--fs-md); font-weight: var(--fw-medium); }
+.mo-name { fill: var(--fg); font-size: var(--fs-md); font-weight: var(--fw-medium); }
+.mo-count { font-size: var(--fs-xs); }
+.mo-line { fill: none; stroke: var(--chart-axis); stroke-width: 1px; vector-effect: non-scaling-stroke; opacity: .45; stroke-linejoin: round; }
+.mo-line.is-now { stroke: var(--chart-annot); stroke-width: 2px; opacity: 1; }
+.mo-dot { fill: var(--c); fill-opacity: .62; }
+.mo-dot.is-now { fill-opacity: 1; stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
+.mo-typical { stroke: var(--chart-annot); stroke-width: 2px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.mo-typ-t, .mo-now-t { font-size: var(--fs-2xs); }
+.mo-note { margin: var(--space-6) 0 0; }
+
+/* /charts2 */

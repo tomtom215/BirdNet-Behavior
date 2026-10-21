@@ -178,7 +178,7 @@ async fn species_image_file(
                 break;
             }
             let candidate = custom_dir.join(format!("{key}.{ext}"));
-            if let Ok(bytes) = std::fs::read(&candidate) {
+            if let Ok(bytes) = tokio::fs::read(&candidate).await {
                 let content_type = match *ext {
                     "png" => "image/png",
                     "webp" => "image/webp",
@@ -226,19 +226,46 @@ async fn species_image_file(
     // only hits carry no URL and are covered by the cache purge in
     // `add_blacklist`. A blacklisted hit also evicts the cached file so the
     // re-fetch is refused rather than re-served from disk next time.
-    let blacklisted = !image.url.is_empty() && {
+    //
+    // A blacklist that cannot be read fails *closed*. An entry is the operator
+    // withdrawing a picture — a wrong bird, an unlicensed photo, something that
+    // should not be on the station's pages — and serving it because the database
+    // happened not to answer would undo that decision at exactly the moment
+    // nobody is looking. The cost of refusing is a placeholder avatar for as long
+    // as the fault lasts, and the same database already gates the request above:
+    // `has_been_heard` answers "no" when it cannot answer.
+    let blacklisted = if image.url.is_empty() {
+        Ok(false)
+    } else {
         let (name, url) = (scientific_name.clone(), image.url.clone());
         state
             .run_blocking(move |s| {
-                s.with_read_db(|conn| {
-                    birdnet_db::sqlite::is_image_blacklisted(conn, &name, &url).unwrap_or(false)
-                })
+                s.with_read_db(|conn| birdnet_db::sqlite::is_image_blacklisted(conn, &name, &url))
             })
             .await
     };
-    if blacklisted {
-        cache.remove(&scientific_name);
-        return image_error(StatusCode::NOT_FOUND, "image blacklisted");
+    match blacklisted {
+        Ok(false) => {}
+        Ok(true) => {
+            cache.remove(&scientific_name);
+            return image_error(StatusCode::NOT_FOUND, "image blacklisted");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, species = %scientific_name, "image blacklist could not be read; not serving the picture");
+            // Not `image_error`: that answer is cacheable for five minutes, and a
+            // fault that clears in one should not leave a browser holding a refusal.
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                json!({ "error": "image blacklist unavailable" })
+                    .to_string()
+                    .into_bytes(),
+            )
+                .into_response();
+        }
     }
 
     // Provider resolved but the species genuinely has no cached image bytes.
@@ -246,7 +273,7 @@ async fn species_image_file(
         return image_error(StatusCode::NOT_FOUND, "no image available");
     };
 
-    let Ok(bytes) = std::fs::read(&path) else {
+    let Ok(bytes) = tokio::fs::read(&path).await else {
         return image_error(StatusCode::NOT_FOUND, "cached file not readable");
     };
 

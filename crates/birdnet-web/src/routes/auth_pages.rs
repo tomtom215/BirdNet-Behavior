@@ -132,46 +132,57 @@ async fn login_submit(
             // Authenticate. The order matters: DB first, env-fallback second,
             // so an operator who has rotated their password in the UI doesn't
             // hit the env-fallback path with stale credentials.
-            let Some(auth_user_id) = authenticate(
+            let auth_user_id = match authenticate(
                 state,
                 &form.username,
                 &form.password,
                 configured_env.as_ref(),
-            ) else {
-                // Wrong credentials, or no admin password configured at all.
-                // Bypass the gate when basic-auth would also have let the
-                // request through (no CADDY_USER + no DB admin password).
-                // The same fail-closed test as the middleware's bypass: a password
-                // whose bootstrap write failed, or a database that did not answer,
-                // is not "no password".
-                if configured_env.is_none()
-                    && !crate::auth_middleware::admin_password_configured(state)
-                {
-                    // The same name check as the middleware's bypass: a session minted
-                    // here under a rebound name would carry the attacker straight past
-                    // it on the next request.
-                    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
-                    if !crate::open_admin_host::may_open_bypass(host) {
-                        return crate::open_admin_host::refused(host.unwrap_or(""));
-                    }
-                    return open_bypass_redirect(state, &next, &device, secure);
+            ) {
+                Authenticated::As(id) => id,
+                Authenticated::Unavailable => {
+                    // Not a guess, so not charged to the throttle: five of these
+                    // would otherwise lock someone out of their own garden over a
+                    // fault that was never theirs.
+                    state.login_throttle().succeeded(attempt);
+                    let query = format!("?error=lookup&next={}", urlencode_path(&next));
+                    return Redirect::to(&format!("/login{query}")).into_response();
                 }
-                // The target carries the *submitted* username, not a verified one:
-                // "someone tried to sign in as admin sixty times last night" is the
-                // whole point, and a name that does not exist is as interesting as one
-                // that does. There is no actor id because there is no actor — that is
-                // why `audit_log.user_id` is nullable.
-                crate::audit::audit_user_id(
-                    state,
-                    None,
-                    "auth.login.fail",
-                    Some(&form.username),
-                    None,
-                );
-                // Already counted by `begin`; dropping the attempt keeps it.
-                drop(attempt);
-                let query = format!("?error=1&next={}", urlencode_path(&next));
-                return Redirect::to(&format!("/login{query}")).into_response();
+                Authenticated::Rejected => {
+                    // Wrong credentials, or no admin password configured at all.
+                    // Bypass the gate when basic-auth would also have let the
+                    // request through (no CADDY_USER + no DB admin password).
+                    // The same fail-closed test as the middleware's bypass: a password
+                    // whose bootstrap write failed, or a database that did not answer,
+                    // is not "no password".
+                    if configured_env.is_none()
+                        && !crate::auth_middleware::admin_password_configured(state)
+                    {
+                        // The same name check as the middleware's bypass: a session minted
+                        // here under a rebound name would carry the attacker straight past
+                        // it on the next request.
+                        let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+                        if !crate::open_admin_host::may_open_bypass(host) {
+                            return crate::open_admin_host::refused(host.unwrap_or(""));
+                        }
+                        return open_bypass_redirect(state, &next, &device, secure);
+                    }
+                    // The target carries the *submitted* username, not a verified one:
+                    // "someone tried to sign in as admin sixty times last night" is the
+                    // whole point, and a name that does not exist is as interesting as one
+                    // that does. There is no actor id because there is no actor — that is
+                    // why `audit_log.user_id` is nullable.
+                    crate::audit::audit_user_id(
+                        state,
+                        None,
+                        "auth.login.fail",
+                        Some(&form.username),
+                        None,
+                    );
+                    // Already counted by `begin`; dropping the attempt keeps it.
+                    drop(attempt);
+                    let query = format!("?error=1&next={}", urlencode_path(&next));
+                    return Redirect::to(&format!("/login{query}")).into_response();
+                }
             };
             state.login_throttle().succeeded(attempt);
 
@@ -230,22 +241,32 @@ fn authenticate(
     username: &str,
     password: &str,
     configured_env: Option<&(String, String)>,
-) -> Option<i64> {
+) -> Authenticated {
     // Path 1: DB lookup.
-    if let Ok(user) = state.with_read_db(|conn| conn.find_user_by_name(username)) {
-        if user.disabled_at.is_some() {
-            return None;
-        }
-        let verifies = accounts::verify_password(&user.pwd_argon2, password).unwrap_or(false);
-        if verifies {
-            // Best-effort: rotate a legacy hash forward on successful
-            // sign-in so the next basic-auth-free path doesn't have to.
-            if accounts::is_legacy_password_hash(&user.pwd_argon2)
-                && let Ok(new_hash) = accounts::hash_password(password)
-            {
-                let _ = state.with_db(|conn| conn.set_password(user.id, &new_hash));
+    match state.with_read_db(|conn| conn.find_user_by_name(username)) {
+        Ok(user) => {
+            if user.disabled_at.is_some() {
+                return Authenticated::Rejected;
             }
-            return Some(user.id);
+            let verifies = accounts::verify_password(&user.pwd_argon2, password).unwrap_or(false);
+            if verifies {
+                // Best-effort: rotate a legacy hash forward on successful
+                // sign-in so the next basic-auth-free path doesn't have to.
+                if accounts::is_legacy_password_hash(&user.pwd_argon2)
+                    && let Ok(new_hash) = accounts::hash_password(password)
+                {
+                    let _ = state.with_db(|conn| conn.set_password(user.id, &new_hash));
+                }
+                return Authenticated::As(user.id);
+            }
+        }
+        // The table answered: there is no such user. Fall through to the env path.
+        Err(accounts::AccountsError::NotFound(_)) => {}
+        // The table did not answer. That is not a wrong password, and saying so
+        // sends someone to retype one that was never wrong.
+        Err(e) => {
+            tracing::error!(error = %e, "sign-in: the user could not be looked up");
+            return Authenticated::Unavailable;
         }
     }
 
@@ -256,13 +277,28 @@ fn authenticate(
         && constant_time_eq(username.as_bytes(), u.as_bytes())
         && constant_time_eq(password.as_bytes(), p.as_bytes())
     {
-        return state
-            .with_read_db(|conn| conn.find_user_by_name("admin"))
-            .map(|admin| admin.id)
-            .ok();
+        return match state.with_read_db(|conn| conn.find_user_by_name("admin")) {
+            Ok(admin) => Authenticated::As(admin.id),
+            Err(accounts::AccountsError::NotFound(_)) => Authenticated::Rejected,
+            Err(e) => {
+                tracing::error!(error = %e, "sign-in: the seed admin could not be looked up");
+                Authenticated::Unavailable
+            }
+        };
     }
 
-    None
+    Authenticated::Rejected
+}
+
+/// The outcome of [`authenticate`]: three facts, because a station that could not
+/// read its users is not a station whose user typed a wrong password.
+enum Authenticated {
+    /// The credentials verified; the user's id.
+    As(i64),
+    /// They did not, or the account is disabled.
+    Rejected,
+    /// The users could not be read, so nothing can be said about the credentials.
+    Unavailable,
 }
 
 /// What we record about the device a session was minted on.
@@ -521,6 +557,8 @@ enum LoginError {
     Credentials,
     /// The credentials verified, but the session could not be persisted.
     SessionWrite,
+    /// The station could not read its users, so it could not check anything.
+    Lookup,
 }
 
 impl LoginError {
@@ -529,6 +567,7 @@ impl LoginError {
     fn from_code(code: &str) -> Self {
         match code {
             "session" => Self::SessionWrite,
+            "lookup" => Self::Lookup,
             _ => Self::Credentials,
         }
     }
@@ -542,6 +581,11 @@ impl LoginError {
                 "Your sign-in was correct, but the station could not start your \
                  session. Wait a moment and try again — if it keeps happening, \
                  the station may be out of disk space."
+            }
+            Self::Lookup => {
+                "The station could not look up your account, so it could not check \
+                 those details. Nothing says they are wrong. Wait a moment and try \
+                 again — if it keeps happening, check the station."
             }
         }
     }

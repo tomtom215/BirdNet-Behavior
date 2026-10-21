@@ -594,12 +594,26 @@ async fn test_rule(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
-    let rule = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::alert_rules::get_rule(conn, id).ok().flatten())
+    let read = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| birdnet_db::alert_rules::get_rule(conn, id))
     })
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rule = match read {
+        Ok(Some(rule)) => rule,
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        // htmx swaps no 4xx/5xx body, and 404 would say the rule is gone: a
+        // read that failed is answered in the result slot, where the test's
+        // outcome is read.
+        Err(e) => {
+            tracing::warn!(error = %e, rule = id, "rule test: the rule could not be read");
+            return Ok(Html(
+                "<div class=\"rule-error\">The rule could not be read, so it was not tested. \
+                 This is a fault in the station, not in the rule.</div>"
+                    .to_owned(),
+            ));
+        }
+    };
 
     let message = match plan_test(&rule.action) {
         TestPlan::NothingToSend(msg) => {

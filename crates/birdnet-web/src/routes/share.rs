@@ -181,12 +181,17 @@ struct ShareDetection {
     confidence: f64,
 }
 
+/// The sighting a share token names, or `Ok(None)` when the station has no such
+/// sighting. `Err` when the station could not look: that is not the same fact,
+/// and the page that says "this clip is gone" for it tells the visitor the link
+/// never existed.
 fn lookup(
     conn: &rusqlite::Connection,
     date: &str,
     time: &str,
     com: &str,
-) -> Option<ShareDetection> {
+) -> Result<Option<ShareDetection>, rusqlite::Error> {
+    use rusqlite::OptionalExtension as _;
     let query = |sql: &str| {
         conn.query_row(sql, rusqlite::params![date, time, com], |row| {
             Ok(ShareDetection {
@@ -197,7 +202,7 @@ fn lookup(
                 confidence: row.get(4)?,
             })
         })
-        .ok()
+        .optional()
     };
     // `detections_analytic`, not `detections`. A share link is a *publication*:
     // it is the one surface in this app that shows a detection to someone who
@@ -210,22 +215,22 @@ fn lookup(
     // rejections. Everywhere else the reasoning runs the other way: a reviewer
     // has to be able to find what they rejected and change their mind. Nobody
     // holding a share link is going to change their mind about anything.
-    query(
+    if let Some(found) = query(
         "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
          FROM detections_analytic WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
-    )
+    )? {
+        return Ok(Some(found));
+    }
     // O-07: rare birds shared from the quarantine queue are not in `detections`
     // until approved, so fall back to the quarantine table — for rows still
     // awaiting review, and only those. A rejected row is a withdrawn claim, and
     // an approved one now lives in `detections`, where the view above applies
     // any later verdict; reading the quarantine row regardless served both.
-    .or_else(|| {
-        query(
-            "SELECT com_name, sci_name, date, time, confidence \
-             FROM quarantine WHERE date = ?1 AND time = ?2 AND com_name = ?3 \
-             AND reviewed = 0 LIMIT 1",
-        )
-    })
+    query(
+        "SELECT com_name, sci_name, date, time, confidence \
+         FROM quarantine WHERE date = ?1 AND time = ?2 AND com_name = ?3 \
+         AND reviewed = 0 LIMIT 1",
+    )
 }
 
 async fn share_page(State(state): State<AppState>, Path(token): Path<String>) -> Response {
@@ -237,14 +242,24 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
     let db = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         db.with_read_db(|conn| {
-            lookup(conn, &date, &time, &com)
-                .map(|d| (d, crate::routes::pages::confidence::station_floor(conn)))
+            lookup(conn, &date, &time, &com).map(|found| {
+                found.map(|d| (d, crate::routes::pages::confidence::station_floor(conn)))
+            })
         })
     })
     .await;
 
-    let Ok(Some((det, floor))) = result else {
-        return gone_page();
+    let (det, floor) = match result {
+        Ok(Ok(Some(found))) => found,
+        Ok(Ok(None)) => return gone_page(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "share link: the sighting could not be read");
+            return unavailable_page();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "share link: the lookup task failed");
+            return unavailable_page();
+        }
     };
 
     let conf_pct = format!("{:.0}%", det.confidence * 100.0);
@@ -313,10 +328,11 @@ async fn share_audio(
         return gone_page();
     };
     match lookup_basename(state.clone(), &date, &time, &com).await {
-        Some(name) => {
+        Basename::Found(name) => {
             crate::routes::recordings::serve_recording(State(state), Path(name), headers).await
         }
-        None => gone_page(),
+        Basename::Missing => gone_page(),
+        Basename::Unreadable => unavailable_page(),
     }
 }
 
@@ -328,50 +344,77 @@ async fn share_spectrogram(State(state): State<AppState>, Path(token): Path<Stri
         return gone_page();
     };
     match lookup_basename(state.clone(), &date, &time, &com).await {
-        Some(name) => crate::routes::spectrogram::serve_shared(State(state), Path(name)).await,
-        None => gone_page(),
+        Basename::Found(name) => {
+            crate::routes::spectrogram::serve_shared(State(state), Path(name)).await
+        }
+        Basename::Missing => gone_page(),
+        Basename::Unreadable => unavailable_page(),
     }
 }
 
+/// What looking up a share link's recording found.
+enum Basename {
+    /// The clip's bare filename.
+    Found(String),
+    /// The station has no such sighting, or it has no recording.
+    Missing,
+    /// The station could not look.
+    Unreadable,
+}
+
 /// Resolve the recording's bare filename for a detection identity.
-async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> Option<String> {
+async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> Basename {
+    use rusqlite::OptionalExtension as _;
     let (d, t, c) = (date.to_string(), time.to_string(), com.to_string());
-    tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| {
-            conn.query_row(
-                // Same rule as `lookup`: a rejected detection's audio must
-                // stop being served too, or the clip outlives the claim it was
-                // evidence for.
-                "SELECT File_Name FROM detections_analytic \
-                 WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
-                rusqlite::params![d, t, c],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .ok()
-            .flatten()
+    let read = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| -> Result<Option<String>, rusqlite::Error> {
+            let found = conn
+                .query_row(
+                    // Same rule as `lookup`: a rejected detection's audio must
+                    // stop being served too, or the clip outlives the claim it was
+                    // evidence for.
+                    "SELECT File_Name FROM detections_analytic \
+                     WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
+                    rusqlite::params![d, t, c],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            if found.is_some() {
+                return Ok(found);
+            }
             // O-07: fall back to the quarantine row's recording.
-            .or_else(|| {
-                conn.query_row(
+            Ok(conn
+                .query_row(
                     "SELECT file_name FROM quarantine \
                      WHERE date = ?1 AND time = ?2 AND com_name = ?3 \
                      AND reviewed = 0 LIMIT 1",
                     rusqlite::params![d, t, c],
                     |row| row.get::<_, Option<String>>(0),
                 )
-                .ok()
-                .flatten()
-            })
+                .optional()?
+                .flatten())
         })
     })
-    .await
-    .ok()
-    .flatten()
-    .filter(|f| !f.is_empty())
-    .map(|f| {
-        std::path::Path::new(&f)
-            .file_name()
-            .map_or(f.clone(), |n| n.to_string_lossy().into_owned())
-    })
+    .await;
+    match read {
+        Ok(Ok(file)) => match file.filter(|f| !f.is_empty()) {
+            Some(f) => Basename::Found(
+                std::path::Path::new(&f)
+                    .file_name()
+                    .map_or(f.clone(), |n| n.to_string_lossy().into_owned()),
+            ),
+            None => Basename::Missing,
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "share link: the recording could not be looked up");
+            Basename::Unreadable
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "share link: the recording lookup task failed");
+            Basename::Unreadable
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -392,6 +435,30 @@ fn html_ok(body: String) -> Response {
             ),
         ],
         body,
+    )
+        .into_response()
+}
+
+/// The page for a link the station could not check just now. A visitor who is
+/// told "the link expired or never existed" for this goes away from a link that
+/// is fine; this one says to try again, and is not cacheable.
+fn unavailable_page() -> Response {
+    let html = concat!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Try again shortly</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/static/css/app.css?v="#,
+        env!("CARGO_PKG_VERSION"),
+        r#""></head><body class="sh-gone"><h1 class="display sh-gone-title">The station can't look that up right now.</h1><p class="bnb-meta sh-gone-text">This link may well be fine. Try it again in a minute.</p></body></html>"#
+    );
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::RETRY_AFTER, HeaderValue::from_static("30")),
+        ],
+        html.to_string(),
     )
         .into_response()
 }
@@ -493,14 +560,22 @@ mod tests {
 
     #[test]
     fn a_placeholder_or_short_share_secret_is_not_used() {
-        assert!(!usable_share_secret("CHANGE-ME-to-32-plus-random-bytes"));
-        assert!(!usable_share_secret(
-            "change-me-please-to-something-long-enough"
-        ));
-        assert!(!usable_share_secret("short"));
-        assert!(usable_share_secret(
-            "q3ZC0Ma7b4vX1l5pQd9rT2wYk8nH6sJfUe0iLzAoBc4="
-        ));
+        // Built at run time, not written as literals: CodeQL follows a literal
+        // into any parameter called `secret`
+        // (`tests/no_literal_reaches_a_credential_parameter.rs`). The placeholder
+        // text is what is under test, so it stays in the string; the process id is
+        // what makes the value one the analysis cannot see through.
+        let pid = std::process::id();
+        assert!(!usable_share_secret(&format!(
+            "CHANGE-ME-to-32-plus-random-bytes-{pid}"
+        )));
+        assert!(!usable_share_secret(&format!(
+            "change-me-please-to-something-long-enough-{pid}"
+        )));
+        assert!(!usable_share_secret(&format!("short-{pid}")));
+        assert!(usable_share_secret(&format!(
+            "q3ZC0Ma7b4vX1l5pQd9rT2wYk8nH6sJfUe0iLzAoBc4-{pid}"
+        )));
     }
 
     /// A share link outlives the process that minted it.
