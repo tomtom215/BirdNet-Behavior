@@ -202,7 +202,9 @@ pub(crate) fn current_model_week() -> u32 {
 /// model's probability for the species, the threshold in force, and whether the
 /// station therefore admits it. The station's coordinates are returned to one
 /// decimal place (about 11 km): that says which region's birds the question was
-/// about, and the endpoint is as open as the rest of the read API.
+/// about. It adds no precision of its own to the open read API; it does not hide
+/// the location, which the public pages already show more exactly (sunrise and
+/// sunset times, and each detection's own latitude and longitude).
 async fn species_occurrence(
     State(state): State<AppState>,
     Query(q): Query<OccurrenceQuery>,
@@ -288,7 +290,8 @@ async fn species_occurrence(
 }
 
 /// A coordinate to one decimal place: about 11 km, enough to say which
-/// region's birds were meant and no more than a public endpoint should say.
+/// region's birds were meant. Not a privacy measure by itself: see
+/// [`species_occurrence`].
 pub(crate) fn round_to_tenth(degrees: f64) -> f64 {
     (degrees * 10.0).round() / 10.0
 }

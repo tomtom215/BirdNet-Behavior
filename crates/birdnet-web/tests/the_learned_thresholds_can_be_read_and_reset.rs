@@ -52,6 +52,23 @@ fn row(name: &str, level: u8, expires_in_ms: i64) -> LearnedThreshold {
     }
 }
 
+/// One visible detection of `name`. The public reads list a learned row only
+/// while its species still has one (`a_detection_the_owner_hid_is_not_confirmed_by_the_public_reads.rs`),
+/// so a fixture that learned a species and never heard it would be asserting
+/// a state the station cannot reach.
+fn hear(state: &AppState, name: &str) {
+    state
+        .with_db(|c| {
+            c.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, \
+                 Sens, Overlap, File_Name, chunk_offset_secs)
+                 VALUES ('2026-10-21', '06:30:12', ?1, 'Bird', 0.9, 0.7, 43, 1.25, 0.0, 'x.wav', 0)",
+                [name],
+            )
+        })
+        .unwrap();
+}
+
 /// A station with three learned rows (two in force, one lapsed), a daemon
 /// handle, and the write API on.
 fn station() -> (tempfile::TempDir, AppState, Arc<DynamicThresholdHandle>) {
@@ -71,6 +88,9 @@ fn station() -> (tempfile::TempDir, AppState, Arc<DynamicThresholdHandle>) {
             )
         })
         .unwrap();
+    for name in ["Pica pica", "Strix aluco", "Turdus merula"] {
+        hear(&state, name);
+    }
     let handle = Arc::new(DynamicThresholdHandle::new(config()));
     state.set_dynamic_threshold_handle(Arc::clone(&handle));
     (dir, state, handle)
@@ -313,6 +333,7 @@ async fn without_a_floor_no_effective_threshold_is_claimed() {
         birdnet_db::dynamic_thresholds::replace_all(c, &[row("Strix aluco", 3, 10 * HOUR_MS)])
     })
     .unwrap();
+    hear(&bare, "Strix aluco");
     let (_, v) = call(
         &bare,
         "GET",

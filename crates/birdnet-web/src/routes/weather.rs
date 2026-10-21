@@ -11,11 +11,16 @@
 //! | `GET /api/v2/weather/hourly/{date}/{hour}` | one hour |
 //! | `GET /api/v2/weather/detection?date&time&sci_name` | the hour a detection was heard in |
 //!
-//! There is no `sun` or `moon`: they are not weather, and a public sunrise time is
-//! the station's longitude to within a minute of arc — the same data this API is
-//! careful not to give out (`species/occurrence` rounds the position to a tenth
-//! of a degree). There is no `daily` for the same reason (its content is
-//! sunrise and sunset).
+//! There is no `sun` or `moon`: they are not weather, so they are out of this
+//! API's scope. That is a choice of scope and **not** a way of keeping the
+//! station's position private, and nothing here should be read as saying so: the
+//! Today and Dawn-chorus pages print sunrise, sunset and twilight times, which
+//! give the longitude to within a minute of arc, a detection's own page prints
+//! its latitude and longitude to four decimals, and the CSV exports carry them.
+//! (`species/occurrence` rounds the position to a tenth of a degree so that
+//! *that* endpoint adds no precision of its own; it does not hide it either.)
+//! There is no `daily` for the same scope reason (its content is sunrise and
+//! sunset).
 //!
 //! # What is stored, and what is said about it
 //!
@@ -31,11 +36,19 @@
 //!
 //! Open like the other reads. A row carries no position; it is the weather the
 //! provider gave for wherever the station is, which the response does not say.
+//! Thirty days of hourly values for one place is itself a fingerprint of where
+//! that place is, so the absence of a coordinate field is not privacy.
+//!
+//! Whether to hide the station's location from the public pages (rounding or
+//! dropping the per-detection coordinates and the sun times, or a setting for
+//! it) is an owner decision that has not been made; until it is, none of this
+//! documentation claims the location is withheld.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
 use birdnet_db::weather::{WeatherRow, WeatherStore as _};
+use rusqlite::OptionalExtension as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -225,8 +238,19 @@ async fn for_detection(
     }
     state
         .run_blocking(move |state| {
+            // The analytic view, not the table: a detection the owner rejected (or
+            // an import they excluded) is not on the public pages, so it must not
+            // answer here either. Reading `detections` made the 200-versus-404
+            // difference a way to ask whether a hidden detection existed.
             let instant = match state.with_read_db(|c| {
-                birdnet_db::sqlite::detected_at_utc_for(c, &date, &time, &sci)
+                c.query_row(
+                    "SELECT detected_at_utc FROM detections_analytic \
+                     WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 LIMIT 1",
+                    rusqlite::params![date, time, sci],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map(Option::flatten)
             }) {
                 Ok(Some(i)) => i,
                 Ok(None) => {

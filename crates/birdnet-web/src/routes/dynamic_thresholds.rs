@@ -18,7 +18,13 @@
 //!   `DELETE`, because the token-gated surface is a table of exact paths.
 //!
 //! The reads are public, like `species/occurrence`: they say which species the
-//! station has confirmed present, which its public detections already say.
+//! station has confirmed present, which its public detections already say —
+//! **only while that is true.** A learned row is not purged when the owner later
+//! rejects or deletes the detections it was learned from, so the public reads
+//! list only the species that still have a detection in the analytic view
+//! ([`public_snapshot`]); a species whose every detection is gone is as absent
+//! here as it is on the public pages. The owner's own page and the reset see
+//! every stored row.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -162,6 +168,44 @@ pub fn snapshot(state: &AppState, now_ms: i64) -> Result<Snapshot, birdnet_db::s
     Ok(Snapshot { rows, config })
 }
 
+/// [`snapshot`] for the public reads: only the species the station can still
+/// be said to have heard.
+///
+/// A learned level outlives the detections it was learned from — rejecting,
+/// deleting or excluding them does not touch `dynamic_thresholds` — and the
+/// public list would go on naming a species the public detection pages no
+/// longer show. The rule is the smallest that keeps the claim true: a row is
+/// shown while `detections_analytic` (the view every public count reads, which
+/// drops rejected and excluded rows) holds at least one detection of the
+/// species. One indexed existence probe per stored row, not a scan of the
+/// table; the stored rows are a few dozen.
+///
+/// # Errors
+///
+/// The database error, as for [`snapshot`].
+pub fn public_snapshot(
+    state: &AppState,
+    now_ms: i64,
+) -> Result<Snapshot, birdnet_db::sqlite::DbError> {
+    let mut snap = snapshot(state, now_ms)?;
+    if snap.rows.is_empty() {
+        return Ok(snap);
+    }
+    let heard = state.with_read_db(|conn| {
+        let mut probe =
+            conn.prepare("SELECT EXISTS(SELECT 1 FROM detections_analytic WHERE Sci_Name = ?1)")?;
+        let mut heard = std::collections::HashSet::new();
+        for l in &snap.rows {
+            if probe.query_row([&l.row.sci_name], |r| r.get::<_, bool>(0))? {
+                heard.insert(l.row.sci_name.clone());
+            }
+        }
+        Ok::<_, rusqlite::Error>(heard)
+    })?;
+    snap.rows.retain(|l| heard.contains(&l.row.sci_name));
+    Ok(snap)
+}
+
 /// Four decimals: the configuration is stored as `f32`, and `0.3` widened to
 /// `f64` prints as `0.30000001192092896`. The judging path uses the widened value;
 /// what is shown to a person (or a script) is the number they typed.
@@ -254,7 +298,7 @@ async fn list(
     state
         .run_blocking(move |state| {
             let now_ms = epoch_ms();
-            let snap = match snapshot(state, now_ms) {
+            let snap = match public_snapshot(state, now_ms) {
                 Ok(s) => s,
                 Err(e) => return unavailable("dynamic thresholds not readable", &e),
             };
@@ -288,7 +332,7 @@ async fn list(
 async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     state
         .run_blocking(move |state| {
-            let snap = match snapshot(state, epoch_ms()) {
+            let snap = match public_snapshot(state, epoch_ms()) {
                 Ok(s) => s,
                 Err(e) => return unavailable("dynamic thresholds not readable", &e),
             };
@@ -328,7 +372,7 @@ async fn one(
 ) -> (StatusCode, Json<Value>) {
     state
         .run_blocking(move |state| {
-            let snap = match snapshot(state, epoch_ms()) {
+            let snap = match public_snapshot(state, epoch_ms()) {
                 Ok(s) => s,
                 Err(e) => return unavailable("dynamic thresholds not readable", &e),
             };
