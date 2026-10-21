@@ -96,8 +96,13 @@ ARCH="$(basename "${CANDIDATE_TARBALL}" | sed -E 's/^birdnet-behavior-[0-9][^-]*
 
 # Total detections as the running station reports them.
 detections() {
-    curl -fsS "http://${LISTEN}/api/v2/stats" 2>/dev/null \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["total_detections"])' 2>/dev/null
+    # Fetched, then parsed, not piped: curl's own status is checked, so a failed
+    # fetch stops here instead of reaching python3 as empty input, and OpenSSF
+    # Scorecard's Pinned-Dependencies check does not read `curl | python3` as a
+    # download handed to an interpreter.
+    local body
+    body="$(curl -fsS "http://${LISTEN}/api/v2/stats" 2>/dev/null)" || return 1
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["total_detections"])' <<<"${body}" 2>/dev/null
 }
 
 # Highest applied schema version, read from the database file.
