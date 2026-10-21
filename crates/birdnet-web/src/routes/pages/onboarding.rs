@@ -1314,7 +1314,7 @@ fn done_microphone(sources: Result<&[AudioSource], String>) -> String {
         Err(_) => r#"<p class="bnb-meta ob-password-error" role="alert">The station could not read its audio sources. <a href="/admin/doctor">Diagnostics</a> says why.</p>"#.to_owned(),
         Ok([]) => r#"<p class="bnb-meta">No microphone yet, so nothing will be detected. <a href="/station/capture">Add one in Settings → Capture</a>.</p>"#.to_owned(),
         Ok(rows) => format!(
-            r#"<p class="bnb-meta">Listening with: {}.</p>"#,
+            r#"<p class="bnb-meta">Set to listen with: {}. Whether it is hearing anything is shown on <a href="/station">Station health</a>.</p>"#,
             escape_html(&mic_summary(rows))
         ),
     }
@@ -1400,6 +1400,10 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .ob-card .ic { width:34px; height:34px; flex-shrink:0; border-radius:8px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--fg-2); }
   .ob-card .t { font-weight:500; font-size:14px; }
   .ob-card .s { font-size:12px; color:var(--fg-3); }
+  /* The chosen card is tinted, and --fg-3 on that tint is under 4.5:1 in the dark theme. */
+  .ob-card.sel .s { color:var(--fg-2); }
+  /* A link inside a sentence is told from its words by more than its colour (WCAG 1.4.1). */
+  .bnb-meta a, .ob-p a { text-decoration:underline; text-underline-offset:2px; }
   .vu { display:flex; align-items:flex-end; gap:2px; height:26px; margin-left:auto; }
   .vu i { width:3px; background:var(--moss); border-radius:1px; animation:vu 1.1s ease-in-out infinite; }
   @keyframes vu { 0%,100% { height:20%; } 50% { height:95%; } }
@@ -2142,6 +2146,7 @@ static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .ob-h { font-family:var(--font-display); font-size:46px; line-height:1.08; letter-spacing:-0.02em; margin:8px 0 12px; }
   .ob-h em { font-style:italic; color:var(--moss-ink); }
   .ob-p { color:var(--fg-2); font-size:15px; max-width:42ch; }
+  .bnb-meta a, .ob-p a { text-decoration:underline; text-underline-offset:2px; }
   .ob-mt-16 { margin-top:16px; }
   .ob-password-error { color:var(--rare); background:var(--rare-soft); border:0.5px solid var(--rare); border-radius:var(--r-sm); padding:8px 12px; margin:10px 0 0; font-size:13px; }
   @media (max-width:520px) {
@@ -2184,6 +2189,29 @@ static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both of the wizard's style blocks (the steps, and the done page) carry
+    /// their own rules, because neither loads the app stylesheet. A link inside
+    /// a sentence must be underlined in each, or axe's `link-in-text-block`
+    /// fails on whichever page lacks the rule: it did, on the steps, then on the
+    /// done page once that gained a link.
+    #[test]
+    fn every_wizard_style_block_underlines_links_inside_sentences() {
+        let src = include_str!("onboarding.rs");
+        let src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let blocks = src.matches("  .ob-p { color:var(--fg-2);").count();
+        let underlined = src
+            .matches(".bnb-meta a, .ob-p a { text-decoration:underline;")
+            .count();
+        assert_eq!(
+            blocks, 2,
+            "the wizard has two style blocks; update this test if that changed"
+        );
+        assert_eq!(
+            underlined, blocks,
+            "each style block needs the in-text link rule"
+        );
+    }
 
     /// The page script shows a field by clearing its `hidden` attribute. A class
     /// rule that sets `display` outranks the browser's own `[hidden]` rule, so

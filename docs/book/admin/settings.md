@@ -10,7 +10,7 @@ When you have saved something that is still waiting for a restart, a banner at t
 
 ### The bird-identifying model
 
-At the top of **Settings → System**, the **Bird-identifying model** panel says whether the classifier the station needs is installed. If it is missing, **Install** downloads it (checked against a pinned SHA-256, with a progress bar and a free-space check first) and the panel then offers the restart that loads it. This is the same installer as `--install-model`; the program, not the browser, does the download.
+At the top of **Settings → Capture** (and as step 2 of the setup wizard), the **Bird-identifying model** panel says whether the classifier the station needs is installed. If it is missing, **Install** downloads it (checked against a pinned SHA-256, with a progress bar and a free-space check first) and the panel then offers the restart that loads it. This is the same installer as `--install-model`; the program, not the browser, does the download.
 
 ### Numbers the page refuses
 

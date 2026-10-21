@@ -45,7 +45,7 @@ The cost is real and worth measuring before you commit to it: check the daemon's
 
 ## Installing one
 
-The station carries a small catalogue of classifiers it knows how to fetch and verify. To see it:
+The station carries a small catalogue of classifiers it knows how to fetch and verify. The default one (BirdNET V2.4 and its local species filter) can be installed from the browser: **Settings → Capture → Bird-identifying model → Install**, or step 2 of the setup wizard. The others below are installed from the command line. To see the catalogue:
 
 ```bash
 birdnet-behavior --install-model list
