@@ -63,6 +63,8 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "clip_retention_days",
     "image_cache_dir",
     "custom_image_dir",
+    "dashboard_image",
+    "dashboard_image_title",
     "max_files_per_species",
     "purge_threshold",
     "raw_spectrogram",
@@ -214,6 +216,12 @@ pub struct SettingsForm {
     /// `magma`, `inferno`, `grey` or `grey_inverted`.
     pub spectrogram_colormap: Option<String>,
     /// Dynamic range of the spectrograms in dB: `60`, `80` (the default), `100`
+    /// Absolute path of a picture shown on the Today page (a site photograph
+    /// or a camera snapshot another program keeps current). BirdNET-Pi's
+    /// `CUSTOM_IMAGE`; not the per-species `custom_image_dir`.
+    pub dashboard_image: Option<String>,
+    /// The title shown over that picture (`CUSTOM_IMAGE_TITLE`).
+    pub dashboard_image_title: Option<String>,
     /// or `120`. Cells further than this below the loudest are drawn as the floor.
     pub spectrogram_range_db: Option<String>,
     /// Seconds of audio saved around each detection (BirdNET-Pi:

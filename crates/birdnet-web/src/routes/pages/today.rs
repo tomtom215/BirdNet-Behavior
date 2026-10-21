@@ -167,9 +167,12 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
                 .apply(TODAY_PAGE_HTML.as_str())
                 .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
         });
+    // The owner's picture: empty until one is set on the Settings page.
+    let picture = crate::routes::dashboard_image::block_for(&state).await;
     let body = arranged
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())
+        .replace("{{picture_block}}", &picture)
         .replace("{{hero_phrase}}", hero_phrase)
         .replace("{{hero_aside}}", &hero_aside)
         .replace("{{rail_extra}}", &rail_extra)

@@ -75,6 +75,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     let days = get_setting(s, "clip_retention_days");
     let imgcache = get_setting(s, "image_cache_dir");
     let customimg = get_setting(s, "custom_image_dir");
+    let dash_image = get_setting(s, "dashboard_image");
+    let dash_title = get_setting(s, "dashboard_image_title");
     let maxfiles = get_setting(s, "max_files_per_species");
     let purge = get_setting(s, "purge_threshold");
     let raw_spec = get_setting(s, "raw_spectrogram");
@@ -258,7 +260,29 @@ fn spectrogram_range_options(stored: &str) -> String {
         <label for="custom_image_dir">Custom Species Image Directory</label>
         <input id="custom_image_dir" name="custom_image_dir" value="{customimg}"
                placeholder="/home/pi/BirdNet-Behavior/custom_images">
-        <p class="hint">Override Wikipedia images with custom photos (BirdNET-Pi: CUSTOM_IMAGE). Files: sci_name.jpg</p>
+        <p class="hint">Replace one species' picture with your own photograph. Files are named
+          after the species: <code>sci_name.jpg</code> (lower case, underscores). This is not
+          BirdNET-Pi's <code>CUSTOM_IMAGE</code>: for a picture of the site, use the next two fields.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="dashboard_image">Today page picture (file)</label>
+        <input id="dashboard_image" name="dashboard_image" value="{dash_image}"
+               placeholder="/home/pi/camera/latest.jpg" autocomplete="off" spellcheck="false">
+        <p class="hint">Full path of a PNG, JPEG, GIF or WebP file, shown on the Today page
+          (BirdNET-Pi: CUSTOM_IMAGE). Something else keeps it current, for example a
+          camera snapshot saved every minute; the page checks it every ten seconds and
+          shows a new frame as soon as the file changes. Up to 8 MB; anything that is
+          not a picture is refused. Leave blank for no picture.</p>
+      </div>
+      <div>
+        <label for="dashboard_image_title">Picture title</label>
+        <input id="dashboard_image_title" name="dashboard_image_title" value="{dash_title}"
+               placeholder="The feeder" maxlength="120">
+        <p class="hint">The heading over the picture (BirdNET-Pi: CUSTOM_IMAGE_TITLE).
+          Also its description for screen readers. The block can be moved or hidden under
+          Today page layout.</p>
       </div>
     </div>
   </section>

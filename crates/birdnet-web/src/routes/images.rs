@@ -161,7 +161,9 @@ async fn species_image_file(
     State(state): State<AppState>,
     Path(scientific_name): Path<String>,
 ) -> impl IntoResponse {
-    // Check custom image directory first (BirdNET-Pi: CUSTOM_IMAGE).
+    // Check the custom image directory first: one file per species. (Not
+    // BirdNET-Pi's `CUSTOM_IMAGE`, which is one picture of the site; that is
+    // `routes/dashboard_image.rs`.)
     if let Some(custom_dir) = state.custom_image_dir() {
         let key = scientific_name.to_lowercase().replace(' ', "_");
         // Reject path separators / traversal in the URL-decoded species segment

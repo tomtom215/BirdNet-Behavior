@@ -149,7 +149,7 @@ async fn the_editor_saves_a_change_and_the_page_follows_it() {
     let stored = st.with_db(|conn| birdnet_db::settings::get(conn, "today_layout"));
     assert_eq!(
         stored.expect("stored"),
-        "-hero,nudge,daystrip,log,top-species,best,station"
+        "-hero,nudge,daystrip,picture,log,top-species,best,station"
     );
     assert!(
         at(&today(&st).await, HERO).is_none(),

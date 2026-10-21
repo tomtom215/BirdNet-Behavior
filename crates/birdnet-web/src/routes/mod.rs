@@ -9,6 +9,7 @@ pub mod analytics;
 pub mod api_write;
 pub mod auth_pages;
 pub mod charts;
+pub mod dashboard_image;
 pub mod detections;
 pub mod export;
 pub mod feeds;
@@ -94,6 +95,7 @@ pub fn public_routes() -> Router<AppState> {
         .merge(redirects::router())
         .merge(feeds::router())
         .merge(share::router())
+        .merge(dashboard_image::router())
         .merge(auth_pages::router())
         .merge(static_files::router())
         // Friendly branded 404 for any unmatched path (e.g. a mistyped page URL).

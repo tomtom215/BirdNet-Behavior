@@ -344,6 +344,18 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::System,
     ),
     (
+        "dashboard_image",
+        // Read from the settings table by the Today page's picture block each
+        // time it renders and polls.
+        Wiring::OwnedBy("the Today picture block"),
+        SettingsCategory::System,
+    ),
+    (
+        "dashboard_image_title",
+        Wiring::OwnedBy("the Today picture block"),
+        SettingsCategory::System,
+    ),
+    (
         "max_files_per_species",
         Wiring::Bridged("MAX_FILES_SPECIES"),
         SettingsCategory::System,

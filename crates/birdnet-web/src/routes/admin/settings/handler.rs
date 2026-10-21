@@ -329,6 +329,20 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
              entered “{raw}”."
         ));
     }
+    if let Some(problem) = form
+        .dashboard_image
+        .as_deref()
+        .and_then(crate::routes::dashboard_image::path_problem)
+    {
+        problems.push(problem);
+    }
+    if let Some(problem) = form
+        .dashboard_image_title
+        .as_deref()
+        .and_then(crate::routes::dashboard_image::title_problem)
+    {
+        problems.push(problem);
+    }
     if let Some(raw) = given(&form.info_site)
         && !v::is_info_site(&raw)
     {
@@ -992,6 +1006,16 @@ pub(crate) fn build_settings_items(
         SettingsCategory::System
     );
     push!(
+        form.dashboard_image,
+        "dashboard_image",
+        SettingsCategory::System
+    );
+    push!(
+        form.dashboard_image_title,
+        "dashboard_image_title",
+        SettingsCategory::System
+    );
+    push!(
         form.max_files_per_species,
         "max_files_per_species",
         SettingsCategory::System
@@ -1526,6 +1550,8 @@ mod tests {
             email_smtp_pass: None,
             spectrogram_colormap: None,
             spectrogram_range_db: None,
+            dashboard_image: None,
+            dashboard_image_title: None,
             email_from: None,
             email_to: None,
             email_from_name: None,

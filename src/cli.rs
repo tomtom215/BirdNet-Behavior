@@ -971,7 +971,8 @@ pub struct Cli {
     /// Directory containing custom species images (checked before Wikipedia cache).
     ///
     /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g.
-    /// `turdus_merula.jpg`. `BirdNET-Pi` equivalent: `CUSTOM_IMAGE` directory.
+    /// `turdus_merula.jpg`. There is no `BirdNET-Pi` equivalent: its `CUSTOM_IMAGE` is one
+    /// picture for the Overview page, which is the `dashboard_image` setting here.
     #[arg(long, env = "BIRDNET_CUSTOM_IMAGE_DIR")]
     pub custom_image_dir: Option<PathBuf>,
 

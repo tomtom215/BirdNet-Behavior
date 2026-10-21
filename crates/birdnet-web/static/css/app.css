@@ -5945,3 +5945,9 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .mic-manual input[type="text"] { width: 100%; max-width: 36rem; }
 .mic-test { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-8); }
 .mic-level { font-family: var(--font-mono); color: var(--fg-2); }
+
+/* The owner's picture on the Today page (routes/dashboard_image.rs): a site
+   photograph or a camera frame, scaled to the card and never past its own size
+   on a wall display. */
+.td-picture-img { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: var(--r-md); }
+.td-picture-wait { margin: 0; }
