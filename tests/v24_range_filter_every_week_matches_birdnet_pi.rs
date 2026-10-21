@@ -45,7 +45,7 @@ fn hex(bytes: &[u8]) -> String {
 fn iso_week(year: u32, month: u32, day: u32) -> u32 {
     let days = days_from_civil(year, month, day);
     // 1970-01-01 was a Thursday. Monday = 1 ... Sunday = 7.
-    let weekday = i64::from((days + 3).rem_euclid(7) as i32) + 1;
+    let weekday = (days + 3).rem_euclid(7) + 1;
     let yday = days - days_from_civil(year, 1, 1) + 1;
     let week = (yday - weekday + 10) / 7;
     let weeks_in = |y: u32| -> i64 {

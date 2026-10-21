@@ -26,6 +26,12 @@
 //! The list is pinned both ways: a combination that stops differing, or a new one
 //! that starts, fails.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::collections::BTreeSet;
 use std::io::Write as _;
 

@@ -19,6 +19,8 @@
 //! the distance to the ideal band-limited answer (a resampler that agreed with
 //! resampy only by sharing its fault would fail this one).
 
+#![allow(clippy::cast_precision_loss)]
+
 use birdnet_core::audio::resample::resample;
 use std::f64::consts::TAU;
 
@@ -77,7 +79,7 @@ fn a_resampled_recording_lands_where_birdnet_pi_puts_it() {
         eprintln!(
             "{from} Hz -> {to_rate}: max |ours - resampy| {vs_pi:.2e}, max |ours - ideal| {vs_ideal:.2e}"
         );
-        assert!(len == pi.len());
+        assert_eq!(len, pi.len());
         // The signal's peak is about 0.8. What is left after the delay is
         // removed is rubato's 1/128-sample residual (0.0085 sample at
         // 44.1 kHz, 0.0117 at 32 kHz, 0.017 at 22.05 kHz), which scales with

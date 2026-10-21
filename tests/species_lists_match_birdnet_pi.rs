@@ -14,6 +14,8 @@
 //! side can start doing something else without this test saying so. Every
 //! scenario not in `KNOWN_DIFFERENCES` must agree exactly.
 
+#![allow(clippy::cast_possible_truncation)]
+
 mod common;
 
 use std::collections::{BTreeMap, HashMap};
@@ -137,7 +139,11 @@ fn the_lists_keep_what_birdnet_pis_keep_except_where_this_file_says_otherwise() 
     );
     let week = u32::try_from(golden["iso_week"].as_u64().unwrap()).unwrap();
     let scenarios = golden["scenarios"].as_object().expect("scenarios");
-    assert_eq!(scenarios.len(), 27, "the golden holds twenty-seven scenarios");
+    assert_eq!(
+        scenarios.len(),
+        27,
+        "the golden holds twenty-seven scenarios"
+    );
     let known: BTreeMap<&str, (&[&str], &[&str])> = KNOWN_DIFFERENCES
         .iter()
         .map(|&(n, pi, us)| (n, (pi, us)))
