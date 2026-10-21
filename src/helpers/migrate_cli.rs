@@ -379,16 +379,69 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
             for n in &r.failed_sample {
                 println!("  failed: {n}");
             }
+            let locked_ok = report_protection(&db_path, &options, mode);
             if options.dry_run {
                 println!("\nThis changed nothing. Run again with --apply-import to do it.");
             }
-            i32::from(r.failed > 0)
+            i32::from(r.failed > 0 || !locked_ok)
         }
         Err(e) => {
             eprintln!("{e}");
             1
         }
     }
+}
+
+/// BirdNET-Pi's protected clips: found beside the recordings, counted in a
+/// preview and locked on `--apply-import`, so this station's cleanup keeps them.
+/// Returns false when the locking was asked for and failed.
+fn report_protection(db_path: &Path, options: &Options, mode: Mode) -> bool {
+    if mode == Mode::Leave {
+        return true;
+    }
+    let Some(list) = clips::find_protected_list(&options.source) else {
+        println!(
+            "\nNo list of protected clips (BirdNET-Pi/scripts/disk_check_exclude.txt) was found \
+             beside the recordings, so no clip is locked."
+        );
+        return true;
+    };
+    let names = match clips::read_protected_list(&list) {
+        Ok(names) => names,
+        Err(e) => {
+            eprintln!("\nThe protected clips could not be read: {e}");
+            return false;
+        }
+    };
+    let opened = if options.dry_run {
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    } else {
+        rusqlite::Connection::open(db_path)
+    };
+    let counted = opened
+        .and_then(|conn| {
+            conn.busy_timeout(std::time::Duration::from_secs(10))?;
+            clips::protect_imported(&conn, &names, !options.dry_run)
+        })
+        .map_err(|e| e.to_string());
+    match counted {
+        Ok(p) if options.dry_run => println!(
+            "\n{} protected clip(s) would be locked ({} on BirdNET-Pi's list, from {}).",
+            p.newly_locked,
+            p.listed,
+            list.display()
+        ),
+        Ok(p) => println!(
+            "\n{} protected clip(s) locked ({} on BirdNET-Pi's list, {} of them match imported \
+             detections); this station's cleanup will not delete a locked clip.",
+            p.newly_locked, p.listed, p.matched
+        ),
+        Err(e) => {
+            eprintln!("\nThe protected clips could not be locked: {e}");
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -594,5 +647,49 @@ mod tests {
             0
         );
         assert!(!clip.exists(), "moved");
+    }
+
+    /// BirdNET-Pi's protected clip is counted by the check and locked by the
+    /// run; the other clip is not. The check opens the database read-only.
+    #[test]
+    fn protected_clips_are_counted_then_locked() {
+        let work = tempfile::tempdir().expect("dir");
+        let (db, tree, _clip) = clip_fixture(work.path(), "0");
+        let species = tree.join("Extracted/By_Date/2020-01-01/Eurasian_Magpie");
+        let protected = "Eurasian_Magpie-90-2020-01-01-birdnet-06:00:00.wav";
+        // A second imported clip that is not protected.
+        let other = "Eurasian_Magpie-90-2020-01-01-birdnet-06:05:00.wav";
+        std::fs::write(species.join(other), b"RIFFaudio2").unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, \
+             Sens, Overlap, File_Name, chunk_offset_secs, import_batch_id) \
+             VALUES ('2020-01-01', '06:05:00', 'Pica pica', 'Eurasian Magpie', 0.9, 0.7, 1, 1.25, \
+             0.0, ?1, 0, 1)",
+            [other],
+        )
+        .unwrap();
+        let scripts = work.path().join("BirdNET-Pi/scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(
+            scripts.join("disk_check_exclude.txt"),
+            format!("##start\n2020-01-01/Eurasian_Magpie/{protected}\n##end\n"),
+        )
+        .unwrap();
+        let locked = || {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::sqlite::locked_file_names(&conn).unwrap()
+        };
+
+        let mut check = clips_cli(&tree, "copy");
+        check.apply_import = false;
+        assert_eq!(run_import_clips(&check, Some(&config_for(&db))), 0);
+        assert!(locked().is_empty(), "the check locked something");
+
+        assert_eq!(
+            run_import_clips(&clips_cli(&tree, "copy"), Some(&config_for(&db))),
+            0
+        );
+        assert_eq!(locked(), [protected]);
     }
 }

@@ -854,6 +854,150 @@ pub fn protected_names(text: &str) -> Vec<String> {
     out
 }
 
+/// Where BirdNET-Pi keeps the list of clips its owner protected, found from the
+/// clip tree the import was pointed at.
+///
+/// BirdNET-Pi writes it to `~/BirdNET-Pi/scripts/disk_check_exclude.txt`, which
+/// is not under `BirdSongs`; the standard install has both in one home
+/// directory, so the folders above `By_Date` are searched for
+/// `BirdNET-Pi/scripts/` (and for `scripts/` itself, for a tree pointed at from
+/// inside the BirdNET-Pi folder). `None` when no list is found, which is what a
+/// station with nothing protected looks like too.
+#[must_use]
+pub fn find_protected_list(source: &Path) -> Option<PathBuf> {
+    let root = find_by_date(source).unwrap_or_else(|_| source.to_path_buf());
+    root.ancestors().skip(1).take(4).find_map(|up| {
+        [
+            up.join("BirdNET-Pi/scripts/disk_check_exclude.txt"),
+            up.join("scripts/disk_check_exclude.txt"),
+        ]
+        .into_iter()
+        .find(|c| c.is_file())
+    })
+}
+
+/// The most a protected-clips list may be: a name and a path per clip, tens of
+/// thousands of clips, and not more.
+const MAX_PROTECTED_LIST_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Read BirdNET-Pi's protected-clips list and return the file names on it.
+///
+/// `path` is the list itself (`disk_check_exclude.txt`), or the BirdNET-Pi
+/// folder that holds it (in its own folder or its `scripts/`).
+///
+/// # Errors
+///
+/// In words: the file is missing, unreadable or too big to be one.
+pub fn read_protected_list(path: &Path) -> Result<Vec<String>, String> {
+    use std::io::Read as _;
+    let file_path = if path.is_dir() {
+        [
+            path.join("scripts/disk_check_exclude.txt"),
+            path.join("disk_check_exclude.txt"),
+        ]
+        .into_iter()
+        .find(|c| c.is_file())
+        .ok_or_else(|| format!("{} holds no disk_check_exclude.txt", path.display()))?
+    } else {
+        path.to_path_buf()
+    };
+    let file = fs::File::open(&file_path).map_err(|e| format!("{}: {e}", file_path.display()))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("{}: {e}", file_path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file", file_path.display()));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_PROTECTED_LIST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("{}: {e}", file_path.display()))?;
+    if bytes.len() as u64 > MAX_PROTECTED_LIST_BYTES {
+        return Err(format!(
+            "{} is bigger than a list of protected clips is",
+            file_path.display()
+        ));
+    }
+    Ok(protected_names(&String::from_utf8_lossy(&bytes)))
+}
+
+/// What marking the protected clips did, or in a preview would do.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Protection {
+    /// File names on BirdNET-Pi's protected list.
+    pub listed: usize,
+    /// Imported detections whose clip is on it.
+    pub matched: u64,
+    /// Of those, the ones not locked yet (locked by this call when it applied).
+    pub newly_locked: u64,
+}
+
+/// Lock the imported detections whose clip BirdNET-Pi's owner had protected.
+///
+/// BirdNET-Pi's `disk_check_exclude.txt` keeps a clip out of its purge and its
+/// per-species cap (`disk_check.sh`, `disk_species_clean.sh`). The equivalent
+/// here is a **locked** detection (`is_locked = 1`): the disk manager re-reads
+/// the locked file names each cycle and never removes those clips, and the bulk
+/// species actions skip them. Only rows an import brought in
+/// (`import_batch_id` set) are touched, by exact `File_Name`; a name that
+/// matches none (the history is not imported yet) is not an error and is
+/// reported as the difference between `listed` and what matched, so the same
+/// call can be repeated after the history is in.
+///
+/// With `apply` false nothing is written and `newly_locked` is what would be.
+///
+/// # Errors
+///
+/// The query failed.
+pub fn protect_imported(
+    conn: &rusqlite::Connection,
+    names: &[String],
+    apply: bool,
+) -> rusqlite::Result<Protection> {
+    conn.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS bnb_protected(name TEXT PRIMARY KEY) WITHOUT ROWID; \
+         DELETE FROM bnb_protected;",
+    )?;
+    let result = (|| {
+        {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut insert =
+                    tx.prepare("INSERT OR IGNORE INTO bnb_protected(name) VALUES (?1)")?;
+                for name in names {
+                    insert.execute([name])?;
+                }
+            }
+            tx.commit()?;
+        }
+        // One scan of the detections, not one per name: a station with years
+        // of history and a few thousand protected clips would otherwise read
+        // every row for every name.
+        let (matched, unlocked): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN COALESCE(is_locked, 0) = 0 THEN 1 ELSE 0 END), 0) \
+             FROM detections \
+             WHERE import_batch_id IS NOT NULL AND File_Name IN (SELECT name FROM bnb_protected)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if apply && unlocked > 0 {
+            conn.execute(
+                "UPDATE detections SET is_locked = 1 \
+                 WHERE import_batch_id IS NOT NULL AND COALESCE(is_locked, 0) = 0 \
+                   AND File_Name IN (SELECT name FROM bnb_protected)",
+                [],
+            )?;
+        }
+        Ok(Protection {
+            listed: names.len(),
+            matched: u64::try_from(matched).unwrap_or(0),
+            newly_locked: u64::try_from(unlocked).unwrap_or(0),
+        })
+    })();
+    let _ = conn.execute_batch("DROP TABLE IF EXISTS bnb_protected;");
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

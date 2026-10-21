@@ -232,6 +232,7 @@ handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocki
 handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(move |s| already_sent(s, now_secs)).await { Err .. }
 decoration	crates/birdnet-web/src/display.rs	load	ok	birdnet_db::settings::get(conn, key).ok()
 setting-default	crates/birdnet-web/src/routes/admin/migration/clip_import.rs	setup	ok	birdnet_db::settings::get_or(conn, key, "") .ok()
+handled	crates/birdnet-web/src/routes/admin/migration/clip_import.rs	run_handler	match-err	match setup_state .with_db(|conn| clips::protect_imported(conn, &setup.protected, true)) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/migration/conf_import.rs	apply_with_file	match-err	match apply(conn, assignments) { Err .. }
 omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
 not-a-read	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| { conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0)) }

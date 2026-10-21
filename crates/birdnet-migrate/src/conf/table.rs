@@ -394,7 +394,8 @@ pub const RULES: &[Rule] = &[
         "A different rule: BirdNET-Pi keeps the N most **confident** clips of a species, plus \
          everything from the last 8 days and every protected one. This station keeps the N \
          **newest** clips of a species, and never a locked one. A BirdNET-Pi \"protected\" \
-         clip is a locked one here, but the move does not carry the protection across: lock the clips you want to keep once they are imported.",
+         clip is a locked one here, and bringing the recordings across locks the imported clips \
+         on BirdNET-Pi's protected list (see step 3, your recordings).",
     ),
     // ---- notifications -------------------------------------------------
     set(

@@ -588,3 +588,104 @@ async fn pasted_text_is_held_to_the_size_of_a_settings_file() {
     .await;
     assert!(!html.contains("more keys than"));
 }
+
+// ---- the clips BirdNET-Pi's owner protected --------------------------------
+
+async fn bring_across(state: &AppState, body: &str) -> String {
+    post_form(state, "/admin/migrate/clips/run", body).await;
+    for _ in 0..100 {
+        let req = Request::builder()
+            .uri("/admin/migrate/progress?for=clips")
+            .body(Body::empty())
+            .expect("request");
+        let (_, html) = send(state, req).await;
+        if html.contains("bar-msg ok") || html.contains("bar-msg err") {
+            return html;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the clip import did not finish");
+}
+
+fn locked(state: &AppState) -> Vec<String> {
+    state.with_db(|conn| {
+        let mut v = birdnet_db::sqlite::locked_file_names(conn).expect("locked");
+        v.sort();
+        v
+    })
+}
+
+/// The list sits where the standard install keeps it, beside `BirdSongs`: the
+/// preview says how many will be locked, the run locks them, and a clip that is
+/// not on the list is left alone.
+#[tokio::test]
+async fn clips_birdnet_pi_protected_are_locked_when_they_are_brought_across() {
+    let (_d, state) = station();
+    let home = tempfile::tempdir().expect("home");
+    let songs = home.path().join("BirdSongs");
+    let rows = pi_tree(&songs);
+    import_rows(&state, &rows);
+    let protected_name = &rows[0].2;
+    let scripts = home.path().join("BirdNET-Pi/scripts");
+    std::fs::create_dir_all(&scripts).expect("scripts");
+    std::fs::write(
+        scripts.join("disk_check_exclude.txt"),
+        format!(
+            "##start\n{d}/Eurasian_Blackbird/{protected_name}\n{d}/Eurasian_Blackbird/{protected_name}.png\n##end\n",
+            d = rows[0].0
+        ),
+    )
+    .expect("list");
+    let form = format!(
+        "clips_source={}&clips_mode=copy",
+        encode(&songs.display().to_string())
+    );
+
+    let checked = post_form(&state, "/admin/migrate/clips/preview", &form).await;
+    assert!(
+        checked.contains("<strong>1 protected clip will be locked</strong>"),
+        "{checked}"
+    );
+    assert!(locked(&state).is_empty(), "the preview locked something");
+
+    let finished = bring_across(&state, &form).await;
+    assert!(finished.contains("1 protected clip locked"), "{finished}");
+    assert_eq!(locked(&state), std::slice::from_ref(protected_name));
+}
+
+/// The counterpart: no list beside the recordings says so and locks nothing; a
+/// list named in the form is read from where it is.
+#[tokio::test]
+async fn the_protected_list_can_be_named_and_its_absence_is_said() {
+    let (_d, state) = station();
+    let pi = tempfile::tempdir().expect("pi");
+    let rows = pi_tree(pi.path());
+    import_rows(&state, &rows);
+    let source = encode(&pi.path().display().to_string());
+
+    let none = post_form(
+        &state,
+        "/admin/migrate/clips/preview",
+        &format!("clips_source={source}&clips_mode=copy"),
+    )
+    .await;
+    assert!(
+        none.contains("No list of protected clips was found"),
+        "{none}"
+    );
+
+    let elsewhere = tempfile::tempdir().expect("elsewhere");
+    let file = elsewhere.path().join("disk_check_exclude.txt");
+    std::fs::write(&file, format!("##start\n{}/x/{}\n", rows[1].0, rows[1].2)).expect("list");
+    let named = format!(
+        "clips_source={source}&clips_mode=copy&pi_folder={}",
+        encode(&file.display().to_string())
+    );
+    let checked = post_form(&state, "/admin/migrate/clips/preview", &named).await;
+    assert!(
+        checked.contains("1 protected clip will be locked"),
+        "{checked}"
+    );
+    bring_across(&state, &named).await;
+    assert_eq!(locked(&state), [rows[1].2.clone()]);
+}

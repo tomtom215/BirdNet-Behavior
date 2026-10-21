@@ -41,6 +41,11 @@ pub(super) struct ClipForm {
     clips_source: String,
     /// `copy`, `hardlink`, `move` or `leave`.
     clips_mode: String,
+    /// BirdNET-Pi's folder, or its `disk_check_exclude.txt`, when the list of
+    /// clips its owner protected is not where the standard install keeps it.
+    /// Blank: look for it beside the recordings.
+    #[serde(default)]
+    pi_folder: String,
 }
 
 /// The imported detections that name a clip, read a page at a time so a
@@ -93,6 +98,33 @@ impl Iterator for Pager {
 /// The question the dry run and the run both ask, answered once.
 struct Setup {
     options: Options,
+    /// File names on BirdNET-Pi's list of protected clips; empty when there is
+    /// none, or when nothing is being brought across.
+    protected: Vec<String>,
+    /// Whether a list was found at all, for the sentence the page prints.
+    protected_found: bool,
+}
+
+/// BirdNET-Pi's protected-clips list: from the folder the person named, else
+/// from beside the recordings.
+fn protected_list(
+    source: &std::path::Path,
+    pi_folder: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let pi_folder = pi_folder.trim();
+    if !pi_folder.is_empty() {
+        let path = PathBuf::from(pi_folder);
+        if !path.is_absolute() {
+            return Err(format!(
+                "{} is not a full path. Start it with a slash.",
+                path.display()
+            ));
+        }
+        return clips::read_protected_list(&path).map(Some);
+    }
+    clips::find_protected_list(source)
+        .map(|found| clips::read_protected_list(&found))
+        .transpose()
 }
 
 fn setup(state: &AppState, form: &ClipForm, dry_run: bool) -> Result<Setup, String> {
@@ -144,7 +176,14 @@ fn setup(state: &AppState, form: &ClipForm, dry_run: bool) -> Result<Setup, Stri
         })
         .flatten()
         .map(|(date, _)| date);
+    let list = if mode == Mode::Leave {
+        None
+    } else {
+        protected_list(&source, &form.pi_folder)?
+    };
     Ok(Setup {
+        protected_found: list.is_some(),
+        protected: list.unwrap_or_default(),
         options: Options {
             source,
             dest,
@@ -245,6 +284,12 @@ pub(super) fn form(default_source: &str) -> String {
              placeholder="/home/pi/BirdSongs" autocomplete="off" spellcheck="false">
       <p class="hint">A folder on this device: <code>~/BirdSongs</code>, or the <code>Extracted</code> or
         <code>By_Date</code> folder inside it. If BirdNET-Pi runs on another machine, copy the folder here first.</p>
+      <label for="clips-pi" class="mt-sm">Where BirdNET-Pi is installed <span class="muted">(optional)</span></label>
+      <input type="text" id="clips-pi" name="pi_folder" value=""
+             placeholder="/home/pi/BirdNET-Pi" autocomplete="off" spellcheck="false">
+      <p class="hint">Only to find the clips you protected in BirdNET-Pi
+        (<code>scripts/disk_check_exclude.txt</code>); they are locked here so this station's cleanup keeps them.
+        Left blank, it is looked for beside the recordings.</p>
       <label for="clips-mode" class="mt-sm">What to do with them</label>
       <select id="clips-mode" name="clips_mode">
         <option value="copy" selected>Copy them (BirdNET-Pi keeps its own)</option>
@@ -272,12 +317,54 @@ fn err(message: &str) -> Html<String> {
     ))
 }
 
+/// The sentence about BirdNET-Pi's protected clips, and (when `apply`) the locking.
+///
+/// BirdNET-Pi keeps a list of clips its owner protected from its purge. Here
+/// the same thing is a locked detection, which the disk manager and the bulk
+/// actions leave alone. Without this the imported protected clips arrive as
+/// ordinary ones and the first cleanup may delete them.
+fn protection_line(state: &AppState, setup: &Setup, apply: bool) -> Result<String, String> {
+    if setup.options.mode == Mode::Leave {
+        return Ok(String::new());
+    }
+    if !setup.protected_found {
+        return Ok(r#"<p class="hint">No list of protected clips was found beside the recordings, so none will be locked. If you protected clips in BirdNET-Pi, put its folder in <em>Where BirdNET-Pi is installed</em> above.</p>"#.to_owned());
+    }
+    let names = &setup.protected;
+    let p = state
+        .with_db(|conn| clips::protect_imported(conn, names, apply))
+        .map_err(|e| format!("The protected clips could not be checked: {e}"))?;
+    let unmatched = p
+        .listed
+        .saturating_sub(usize::try_from(p.matched).unwrap_or(usize::MAX));
+    let tail = if unmatched > 0 {
+        format!(
+            " {unmatched} name{} on BirdNET-Pi's list match no imported detection (import the history first, then run this again).",
+            if unmatched == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        r#"<p class="hint"><strong>{} protected clip{} will be locked</strong> so this station's cleanup never deletes {}; {} on BirdNET-Pi's list.{tail}</p>"#,
+        p.newly_locked,
+        if p.newly_locked == 1 { "" } else { "s" },
+        if p.newly_locked == 1 { "it" } else { "them" },
+        p.listed,
+    ))
+}
+
 /// The `hx-vals` attribute value for the Bring-them-across button: a JSON
 /// object, built by a serialiser and then escaped for a single-quoted HTML
 /// attribute. (It was a format string, so a folder name holding `"` or `\`
 /// made the JSON invalid and the button posted nothing.)
-fn hx_vals(source: &str, mode: &str) -> String {
-    let json = serde_json::json!({ "clips_source": source, "clips_mode": mode }).to_string();
+fn hx_vals(source: &str, mode: &str, pi_folder: &str) -> String {
+    let json = serde_json::json!({
+        "clips_source": source,
+        "clips_mode": mode,
+        "pi_folder": pi_folder,
+    })
+    .to_string();
     escape_html(&json).replace('\'', "&#39;")
 }
 
@@ -294,27 +381,29 @@ pub(super) async fn preview_handler(
             let wanted = move || -> Box<dyn Iterator<Item = Wanted>> {
                 Box::new(Pager::new(factory_state.clone()))
             };
-            clips::run(&setup.options, &wanted, None)
-                .map(|report| {
-                    (
-                        report,
-                        mode,
-                        form.clips_source.clone(),
-                        form.clips_mode.clone(),
-                    )
-                })
-                .map_err(|e: ClipError| e.to_string())
+            let report =
+                clips::run(&setup.options, &wanted, None).map_err(|e: ClipError| e.to_string())?;
+            let protection = protection_line(state, &setup, false)?;
+            Ok::<_, String>((
+                report,
+                mode,
+                form.clips_source.clone(),
+                form.clips_mode.clone(),
+                form.pi_folder,
+                protection,
+            ))
         })
         .await;
     match result {
         Err(message) => err(&message),
-        Ok((report, mode, source, mode_word)) => {
+        Ok((report, mode, source, mode_word, pi_folder, protection)) => {
             use std::fmt::Write as _;
             let mut html = String::from(r#"<div class="card result-card ok">"#);
             html.push_str(
                 r#"<div class="result-title ok">What bringing the recordings across would do</div><p class="hint"><strong>Nothing has been changed yet.</strong></p>"#,
             );
             html.push_str(&report_html(&report, mode, true));
+            html.push_str(&protection);
             if mode == Mode::Leave || report.done == 0 {
                 html.push_str(r#"<p class="hint">There is nothing to bring across.</p></div>"#);
             } else {
@@ -329,7 +418,7 @@ pub(super) async fn preview_handler(
                       hx-post="/admin/migrate/clips/run"
                       hx-vals='{vals}'
                       hx-target="#clips-result" hx-swap="innerHTML"{confirm}>Bring them across</button></div></div>"##,
-                    vals = hx_vals(&source, &mode_word),
+                    vals = hx_vals(&source, &mode_word, &pi_folder),
                 );
             }
             Html(html)
@@ -350,6 +439,7 @@ pub(super) async fn run_handler(
     let setup_form = ClipForm {
         clips_source: form.clips_source.clone(),
         clips_mode: form.clips_mode.clone(),
+        pi_folder: form.pi_folder.clone(),
     };
     let prepared = state
         .run_blocking(move |state| setup(state, &setup_form, false))
@@ -386,8 +476,28 @@ pub(super) async fn run_handler(
                         "BirdNET-Pi recordings brought across"
                     );
                     let verb = describe(mode);
+                    // The recordings are in place; now the locks. A failure
+                    // here does not undo the copy, and says so.
+                    let locked = if mode == Mode::Leave || !setup.protected_found {
+                        String::new()
+                    } else {
+                        match setup_state
+                            .with_db(|conn| clips::protect_imported(conn, &setup.protected, true))
+                        {
+                            Ok(p) => format!(
+                                " {} protected clip{} locked.",
+                                p.newly_locked,
+                                if p.newly_locked == 1 { "" } else { "s" }
+                            ),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "could not lock the protected clips");
+                                " The clips you protected in BirdNET-Pi could not be locked; run this again."
+                                    .to_owned()
+                            }
+                        }
+                    };
                     let message = format!(
-                        "{} recording{} {verb} ({}); {} were already here, {} not found, {} failed.",
+                        "{} recording{} {verb} ({}); {} were already here, {} not found, {} failed.{locked}",
                         report.done,
                         if report.done == 1 { "" } else { "s" },
                         clips::human_bytes(report.bytes),
@@ -439,11 +549,12 @@ mod tests {
             "/srv/it's \"quoted\" \\ folder <b>&",
             "/tmp/trailing\\",
         ] {
-            let attr = hx_vals(source, "copy");
+            let attr = hx_vals(source, "copy", "/home/pi/BirdNET-Pi");
             assert!(!attr.contains('\''), "would end the attribute: {attr}");
             let v = as_the_browser_reads_it(&attr);
             assert_eq!(v["clips_source"], source);
             assert_eq!(v["clips_mode"], "copy");
+            assert_eq!(v["pi_folder"], "/home/pi/BirdNET-Pi");
         }
     }
 }
