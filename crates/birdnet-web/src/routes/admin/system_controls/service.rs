@@ -97,14 +97,46 @@ pub fn request_restart(support: RestartSupport) -> RestartOutcome {
     // works even with every capability dropped.
     let pid = std::process::id().to_string();
     tracing::info!(%pid, "restart requested; SIGTERM self, systemd Restart=always brings us back");
+    let reexec_requested = !support.under_systemd;
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let _ = birdnet_core::process::run_with_timeout(
-            std::process::Command::new("kill").args(["-TERM", &pid]),
-            std::time::Duration::from_secs(5),
-        );
+        let mut kill = std::process::Command::new("kill");
+        kill.args(["-TERM", &pid]);
+        send_term(&mut kill, reexec_requested);
     });
     outcome
+}
+
+/// Run the `kill` that signals this process, and say whether it went out.
+///
+/// The re-exec request is made before the signal because the shutdown the
+/// signal starts reads it. If the signal then does not go (`kill` missing from
+/// the image, refused, timed out), nothing is shutting down, and a request left
+/// standing would make the next *unrelated* graceful shutdown start the program
+/// again instead of exiting — so the request is taken back (`reexec_requested`
+/// says there is one to take back; under systemd there is not).
+fn send_term(kill: &mut std::process::Command, reexec_requested: bool) -> bool {
+    let sent = match birdnet_core::process::run_with_timeout(
+        kill,
+        std::time::Duration::from_secs(5),
+    ) {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            tracing::error!(
+                status = %output.status,
+                "restart: kill -TERM on this process failed, so no restart is under way"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "restart: could not run kill, so no restart is under way");
+            false
+        }
+    };
+    if !sent && reexec_requested {
+        crate::restart::cancel_reexec();
+    }
+    sent
 }
 
 /// The HTML fragment the dashboard's restart button swaps in.
@@ -267,7 +299,48 @@ fn check_systemd_service_active(service: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestartOutcome, RestartSupport, restart_fragment, restart_outcome};
+    use super::{RestartOutcome, RestartSupport, restart_fragment, restart_outcome, send_term};
+
+    /// The re-exec request is made before the SIGTERM, so a SIGTERM that does
+    /// not go out must take it back; one that does must not. One test, because
+    /// the flag is process-wide and a second test toggling it would race this.
+    ///
+    /// The "signal" is a harmless command: `true` succeeds, a program that does
+    /// not exist cannot be spawned, and `false` runs and fails.
+    #[test]
+    fn a_signal_that_did_not_go_out_does_not_leave_a_restart_requested() {
+        use std::process::Command;
+        crate::restart::request_reexec();
+        let mut missing = Command::new("/nonexistent/birdnet-kill");
+        assert!(!send_term(&mut missing, true));
+        assert!(
+            !crate::restart::reexec_requested(),
+            "kill could not be run, yet the next shutdown would re-exec"
+        );
+
+        crate::restart::request_reexec();
+        let mut fails = Command::new("false");
+        assert!(!send_term(&mut fails, true));
+        assert!(!crate::restart::reexec_requested(), "kill exited non-zero");
+
+        // Counterparts: a signal that went out leaves the request standing (the
+        // shutdown it starts needs it), and under systemd, where no request was
+        // made, a failure does not touch the flag.
+        crate::restart::request_reexec();
+        let mut ok = Command::new("true");
+        assert!(send_term(&mut ok, true));
+        assert!(
+            crate::restart::reexec_requested(),
+            "a sent signal cancelled it"
+        );
+        let mut missing = Command::new("/nonexistent/birdnet-kill");
+        assert!(!send_term(&mut missing, false));
+        assert!(
+            crate::restart::reexec_requested(),
+            "a failure with no request of ours cancelled someone else's"
+        );
+        crate::restart::cancel_reexec();
+    }
 
     /// The decision, both ways, without anything signalling itself.
     ///

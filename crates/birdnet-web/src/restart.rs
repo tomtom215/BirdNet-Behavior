@@ -25,7 +25,16 @@ pub fn request_reexec() {
     REEXEC.store(true, Ordering::SeqCst);
 }
 
-/// Whether [`request_reexec`] has been called.
+/// Take back a [`request_reexec`] whose SIGTERM was never sent.
+///
+/// The request has to be made *before* the signal (the shutdown it starts reads
+/// the flag), so a signal that then fails to go out would leave the flag set for
+/// the next, unrelated graceful shutdown to act on.
+pub fn cancel_reexec() {
+    REEXEC.store(false, Ordering::SeqCst);
+}
+
+/// Whether [`request_reexec`] has been called (and not taken back).
 #[must_use]
 pub fn reexec_requested() -> bool {
     REEXEC.load(Ordering::SeqCst)
