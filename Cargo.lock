@@ -679,6 +679,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "getrandom 0.4.3",
+ "h2",
  "hmac",
  "hyper",
  "hyper-util",

@@ -89,6 +89,11 @@ getrandom.workspace = true
 tower.workspace = true
 # Captures the request span in `a_share_link_never_reaches_the_request_log`.
 tracing-subscriber.workspace = true
+# A real HTTP/2 client for `the_csrf_guard_holds_over_http2`: hyper's own
+# client would add nothing the test needs, and `h2` lets it send a request
+# with `:authority` and no `Host` header, as a browser does. Already in the
+# lockfile (hyper's server needs it).
+h2 = "0.4"
 
 [lints]
 workspace = true

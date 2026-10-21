@@ -82,6 +82,7 @@ async fn login_submit(
     client: Option<Extension<ClientIp>>,
     vouched_by: Option<Extension<crate::client_ip::VouchedBy>>,
     scheme: Option<Extension<crate::request_scheme::RequestScheme>>,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
@@ -160,9 +161,11 @@ async fn login_submit(
                         // The same name check as the middleware's bypass: a session minted
                         // here under a rebound name would carry the attacker straight past
                         // it on the next request.
-                        let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
-                        if !crate::open_admin_host::may_open_bypass(host) {
-                            return crate::open_admin_host::refused(host.unwrap_or(""));
+                        // Over HTTP/2 the name is in the URI, not a `Host` header; reading
+                        // only the header made this check pass for every such request.
+                        let host = crate::open_admin_host::authority_of(&headers, &uri);
+                        if !crate::open_admin_host::may_open_bypass(host.as_deref()) {
+                            return crate::open_admin_host::refused(host.as_deref().unwrap_or(""));
                         }
                         return open_bypass_redirect(state, &next, &device, secure);
                     }

@@ -327,7 +327,7 @@ pub async fn security_headers_middleware(
 pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
     if is_state_changing(req.method())
         && !is_bearer_api_request(req.uri().path(), req.headers())
-        && !is_same_origin(req.headers())
+        && !is_same_origin(req.headers(), req.uri())
     {
         return (
             StatusCode::FORBIDDEN,
@@ -376,21 +376,34 @@ fn is_state_changing(method: &Method) -> bool {
 /// True if the request is safe from a CSRF standpoint: either it carries no
 /// browser origin information (a non-browser client — the CLI, a script, or
 /// `curl` — which a remote site cannot coerce into a cross-site request), or
-/// its `Origin`/`Referer` authority matches the `Host` it was sent to.
-pub(crate) fn is_same_origin(headers: &HeaderMap) -> bool {
-    let Some(host) = header_str(headers, &header::HOST) else {
-        // No Host header to compare against; nothing we can verify.
+/// its `Origin`/`Referer` authority matches the authority it was sent to.
+///
+/// The authority is the `Host` header, or — over HTTP/2, where there is no
+/// `Host` header and hyper surfaces `:authority` on the URI — the URI's own
+/// authority; the same rule [`crate::open_admin_host::request_authority`]
+/// applies when it decides whether the open-admin bypass may be granted, so the
+/// two cannot disagree about which name a request was sent to. A request that
+/// names an `Origin` or `Referer` but no authority at all cannot be checked, and
+/// is refused rather than waved through: the previous "nothing we can verify"
+/// made this guard a no-op on every HTTP/2 connection.
+pub(crate) fn is_same_origin(headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
+    // `Origin` is authoritative when present, even if it is not valid text: a
+    // value that cannot be read cannot be shown to match.
+    let claimed = if headers.contains_key(header::ORIGIN) {
+        header_str(headers, &header::ORIGIN)
+    } else if headers.contains_key(header::REFERER) {
+        header_str(headers, &header::REFERER)
+    } else {
+        // Neither present: not a browser-driven cross-site submission (a
+        // browser always attaches Origin to a cross-origin POST).
         return true;
     };
-    if let Some(origin) = header_str(headers, &header::ORIGIN) {
-        return authority_matches(origin, host);
-    }
-    if let Some(referer) = header_str(headers, &header::REFERER) {
-        return authority_matches(referer, host);
-    }
-    // Neither Origin nor Referer present: not a browser-driven cross-site
-    // submission (a browser always attaches Origin to a cross-origin POST).
-    true
+    let Some(claimed) = claimed else {
+        return false;
+    };
+    let authority = header_str(headers, &header::HOST)
+        .or_else(|| uri.authority().map(axum::http::uri::Authority::as_str));
+    authority.is_some_and(|authority| authority_matches(claimed, authority))
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &header::HeaderName) -> Option<&'a str> {
@@ -691,50 +704,121 @@ mod tests {
         h
     }
 
+    fn uri(s: &str) -> axum::http::Uri {
+        s.parse().unwrap()
+    }
+
+    /// An HTTP/1.1 request target: no authority in the URI.
+    fn h1() -> axum::http::Uri {
+        uri("/admin/settings")
+    }
+
     #[test]
     fn no_browser_headers_is_allowed() {
-        // No Host at all.
-        assert!(is_same_origin(&HeaderMap::new()));
+        // No Host at all, and nothing claiming a browser origin.
+        assert!(is_same_origin(&HeaderMap::new(), &h1()));
         // Host but neither Origin nor Referer (curl / CLI / a script).
-        assert!(is_same_origin(&hmap(&[(header::HOST, "localhost:8502")])));
+        assert!(is_same_origin(
+            &hmap(&[(header::HOST, "localhost:8502")]),
+            &h1()
+        ));
+        // The same over HTTP/2: authority in the URI, nothing claimed.
+        assert!(is_same_origin(
+            &HeaderMap::new(),
+            &uri("https://localhost:8503/admin/settings")
+        ));
     }
 
     #[test]
     fn matching_origin_is_allowed() {
-        assert!(is_same_origin(&hmap(&[
-            (header::HOST, "localhost:8502"),
-            (header::ORIGIN, "http://localhost:8502"),
-        ])));
+        assert!(is_same_origin(
+            &hmap(&[
+                (header::HOST, "localhost:8502"),
+                (header::ORIGIN, "http://localhost:8502"),
+            ]),
+            &h1()
+        ));
     }
 
     #[test]
     fn cross_site_origin_is_blocked() {
-        assert!(!is_same_origin(&hmap(&[
-            (header::HOST, "localhost:8502"),
-            (header::ORIGIN, "http://evil.test"),
-        ])));
+        assert!(!is_same_origin(
+            &hmap(&[
+                (header::HOST, "localhost:8502"),
+                (header::ORIGIN, "http://evil.test"),
+            ]),
+            &h1()
+        ));
+    }
+
+    #[test]
+    fn over_http2_the_authority_comes_from_the_uri() {
+        let target = uri("https://pi.local:8503/admin/settings");
+        assert!(is_same_origin(
+            &hmap(&[(header::ORIGIN, "https://pi.local:8503")]),
+            &target
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[(header::ORIGIN, "https://evil.example")]),
+            &target
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[(header::REFERER, "https://evil.example/x")]),
+            &target
+        ));
+    }
+
+    #[test]
+    fn a_browser_origin_with_no_authority_to_compare_it_to_is_refused() {
+        // Neither a Host header nor an absolute-form URI: fail closed.
+        assert!(!is_same_origin(
+            &hmap(&[(header::ORIGIN, "https://evil.example")]),
+            &h1()
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[(header::REFERER, "https://evil.example/x")]),
+            &h1()
+        ));
+        // Not even a matching-looking one is trusted without an authority.
+        assert!(!is_same_origin(&hmap(&[(header::ORIGIN, "null")]), &h1()));
+    }
+
+    #[test]
+    fn an_unreadable_origin_is_not_an_absent_one() {
+        let mut h = hmap(&[(header::HOST, "localhost:8502")]);
+        h.insert(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
+        assert!(!is_same_origin(&h, &h1()));
     }
 
     #[test]
     fn referer_is_used_when_origin_absent() {
-        assert!(is_same_origin(&hmap(&[
-            (header::HOST, "pi.local:8502"),
-            (header::REFERER, "http://pi.local:8502/admin/settings"),
-        ])));
-        assert!(!is_same_origin(&hmap(&[
-            (header::HOST, "pi.local:8502"),
-            (header::REFERER, "http://evil.test/x"),
-        ])));
+        assert!(is_same_origin(
+            &hmap(&[
+                (header::HOST, "pi.local:8502"),
+                (header::REFERER, "http://pi.local:8502/admin/settings"),
+            ]),
+            &h1()
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[
+                (header::HOST, "pi.local:8502"),
+                (header::REFERER, "http://evil.test/x"),
+            ]),
+            &h1()
+        ));
     }
 
     #[test]
     fn origin_takes_precedence_over_referer() {
         // A present, valid Origin is authoritative; the mismatched Referer is
         // not consulted.
-        assert!(is_same_origin(&hmap(&[
-            (header::HOST, "localhost:8502"),
-            (header::ORIGIN, "http://localhost:8502"),
-            (header::REFERER, "http://evil.test/x"),
-        ])));
+        assert!(is_same_origin(
+            &hmap(&[
+                (header::HOST, "localhost:8502"),
+                (header::ORIGIN, "http://localhost:8502"),
+                (header::REFERER, "http://evil.test/x"),
+            ]),
+            &h1()
+        ));
     }
 }

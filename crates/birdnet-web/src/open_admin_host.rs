@@ -104,12 +104,18 @@ fn may_open_bypass_with(authority: Option<&str>, allowed: &[String]) -> bool {
 /// The `Host` a request names: the header, or for HTTP/2 the URI authority.
 #[must_use]
 pub fn request_authority<B>(request: &axum::http::Request<B>) -> Option<String> {
-    request
-        .headers()
+    authority_of(request.headers(), request.uri())
+}
+
+/// [`request_authority`] for a handler that holds the parts rather than the
+/// request.
+#[must_use]
+pub fn authority_of(headers: &axum::http::HeaderMap, uri: &axum::http::Uri) -> Option<String> {
+    headers
         .get(axum::http::header::HOST)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned)
-        .or_else(|| request.uri().authority().map(|a| a.as_str().to_owned()))
+        .or_else(|| uri.authority().map(|a| a.as_str().to_owned()))
 }
 
 /// What a refused request is told. `403`, because the condition is the
