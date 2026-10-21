@@ -121,7 +121,7 @@ The rule is BirdNET-Pi's, written for V2.4, where a window of speech puts a huma
 
 ## What is not the same, whatever you do
 
-With the defaults above, a default station still differs from BirdNET-Pi's in the ways below. Each was measured this session; `tools/parity/defaults_audit.py` prints the full table of defaults with the file and line of every cell (it refuses to run if a cited line no longer holds the cited text).
+With the defaults above, a default station still differs from BirdNET-Pi's in the ways below. Each was measured this session; `tools/parity/defaults_audit.py` prints the full table of defaults with the file and line of every cell (a copy is in `tools/parity/golden/defaults_table.md`) (it refuses to run if a cited line no longer holds the cited text).
 
 | | BirdNET-Pi | birdnet-go (from its source, not run) | This project |
 |---|---|---|---|
