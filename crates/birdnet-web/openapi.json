@@ -210,6 +210,38 @@
         }
       }
     },
+    "/display": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's display defaults",
+        "description": "The clock format and temperature unit the station's pages use when a reader has not chosen their own. Revalidated on every use (`Cache-Control: private, no-cache`), because an owner who changes the default expects the next page to follow it. Read by `static/display-format.js`; stored values are always 24-hour and Celsius whatever these say.",
+        "operationId": "displayDefaults",
+        "responses": {
+          "200": {
+            "description": "The station's two display defaults.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "time_format": {
+                      "type": "string",
+                      "description": "`24h` or `12h`."
+                    },
+                    "temperature_unit": {
+                      "type": "string",
+                      "description": "`celsius` or `fahrenheit`."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/stats": {
       "get": {
         "tags": [
