@@ -211,7 +211,12 @@ async fn a_signed_in_viewer_is_told_to_fetch_an_admin_rather_than_filling_in_six
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(header::ORIGIN, "http://localhost")
                 .header(header::HOST, "localhost")
-                .body(Body::from("username=watcher&password=viewer-pass-1"))
+                // The password the viewer was created with above - built the same
+                // way, at run time (3abfa0e changed one side and left this literal).
+                .body(Body::from(format!(
+                    "username=watcher&password=viewer-pass-{}",
+                    std::process::id()
+                )))
                 .unwrap(),
         )
         .await
@@ -367,7 +372,8 @@ async fn an_open_station_asks_for_a_password_and_the_first_browser_owns_it() {
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location:?}");
-    assert_eq!(location.as_deref(), Some("/"));
+    // The wizard ends on its "done" page (25843ca), not on `/`.
+    assert_eq!(location.as_deref(), Some("/onboarding/done"));
     let cookie = cookie.expect("the browser that set the password leaves signed in");
     assert!(cookie.starts_with("bnb-session="), "{cookie}");
     assert_eq!(setting(&state, "latitude").as_deref(), Some("51.48"));
@@ -438,7 +444,7 @@ async fn a_refused_password_saves_nothing_and_says_why() {
     let (status, location, cookie) =
         post_form_with_cookie(&state, "/onboarding/save", "latitude=51.48&longitude=-0.13").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location.as_deref(), Some("/"));
+    assert_eq!(location.as_deref(), Some("/onboarding/done"));
     assert!(cookie.is_none());
     assert_eq!(setting(&state, "latitude").as_deref(), Some("51.48"));
 }

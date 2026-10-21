@@ -2573,6 +2573,8 @@ mod tests {
         let pid = std::process::id();
         let passwords = [format!("first-owner-{pid}"), format!("second-owner-{pid}")];
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        // Collected on purpose: both threads must be running before either is joined.
+        #[allow(clippy::needless_collect)]
         let handles: Vec<_> = passwords
             .iter()
             .cloned()

@@ -171,7 +171,10 @@ impl Station {
             body.len()
         );
         for (k, v) in headers {
-            req.push_str(&format!("{k}: {v}\r\n"));
+            {
+                use std::fmt::Write as _;
+                let _ = write!(req, "{k}: {v}\r\n");
+            }
         }
         req.push_str("\r\n");
         req.push_str(body);

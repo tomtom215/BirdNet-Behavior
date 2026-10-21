@@ -220,7 +220,11 @@ mod tests {
     /// fixed synthetic spectrogram, a label, and every colour map.
     fn pixel_hashes() -> Vec<(&'static str, u64)> {
         let spec: Vec<Vec<f32>> = (0..32)
-            .map(|r| (0..96).map(|c| ((r * 7 + c * 13) % 97) as f32).collect())
+            .map(|r| {
+                (0..96)
+                    .map(|c| f32::from(u8::try_from((r * 7 + c * 13) % 97).unwrap()))
+                    .collect()
+            })
             .collect();
         let label = SpectrogramLabel {
             species: "Parus major".to_owned(),
@@ -250,11 +254,11 @@ mod tests {
     #[test]
     fn the_pixels_are_what_the_etags_revision_names() {
         let expected: [(&str, u64); 5] = [
-            ("viridis", 317209647005015307),
-            ("magma", 4364708519087716287),
-            ("inferno", 5989941986992592300),
-            ("grey", 16976510620029363965),
-            ("grey_inverted", 15880343174023650506),
+            ("viridis", 317_209_647_005_015_307),
+            ("magma", 4_364_708_519_087_716_287),
+            ("inferno", 5_989_941_986_992_592_300),
+            ("grey", 16_976_510_620_029_363_965),
+            ("grey_inverted", 15_880_343_174_023_650_506),
         ];
         let got = pixel_hashes();
         assert_eq!(

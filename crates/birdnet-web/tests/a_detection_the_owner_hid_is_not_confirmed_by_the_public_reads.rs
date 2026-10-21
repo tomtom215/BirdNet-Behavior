@@ -155,8 +155,8 @@ async fn a_learned_threshold_is_public_only_while_the_species_has_a_visible_dete
     assert_eq!(names, ["Pica pica"], "{list}");
     assert_eq!(list["total"], 1);
 
-    let (_, stats) = get(&state, "/api/v2/dynamic-thresholds/stats").await;
-    assert_eq!(stats["total_count"], 1, "{stats}");
+    let (_, counted) = get(&state, "/api/v2/dynamic-thresholds/stats").await;
+    assert_eq!(counted["total_count"], 1, "{counted}");
 
     let (status, _) = get(&state, "/api/v2/dynamic-thresholds/Strix%20aluco").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "the rejected owl is named");

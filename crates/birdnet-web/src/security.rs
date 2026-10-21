@@ -328,13 +328,13 @@ pub async fn security_headers_middleware(
     // and `frame-ancestors` alone decides. A browser too old to read
     // `frame-ancestors` then falls back to allowing the frame, which is why the
     // list is empty unless somebody asks for it.
-    if !framed_by_listed {
+    if framed_by_listed {
+        parts.headers.remove(header::X_FRAME_OPTIONS);
+    } else {
         parts.headers.insert(
             header::X_FRAME_OPTIONS,
             HeaderValue::from_static("SAMEORIGIN"),
         );
-    } else {
-        parts.headers.remove(header::X_FRAME_OPTIONS);
     }
     parts.headers.insert(
         header::REFERRER_POLICY,

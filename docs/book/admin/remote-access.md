@@ -257,7 +257,7 @@ Each account on **Settings → Access** is an **admin** or a **viewer**.
 
 - An **admin** can do everything the sign-in protects.
 - A **viewer** can open every page behind the sign-in, the settings forms included, but can change nothing: every save, delete, lock, review or other change is refused (`403`). The settings forms show a viewer every stored password, token and key masked.
-- A viewer is also refused the few pages that would hand over credentials or the whole database: the full backup and the backup files, the support bundle, the alert-rules export (webhook URLs carry their tokens), and an audio source's own settings (an RTSP URL carries its password). The source's status pill stays visible.
+- A viewer is also refused the few pages that would hand over credentials or the whole database: the full backup and the backup files, the support bundle, the alert-rules export (webhook URLs carry their tokens), an audio source's own settings (an RTSP URL carries its password), the `birdnet.conf` lines the BirdNET-Pi import offers to download, and Diagnostics (`/admin/doctor`, which prints the MQTT broker and the certificate and model paths). The source's status pill stays visible, and the model panel on the Capture tab shows a viewer what is wrong without the file path.
 
 ## Cross-origin requests (CORS)
 
