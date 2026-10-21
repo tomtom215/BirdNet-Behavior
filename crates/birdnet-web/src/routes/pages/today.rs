@@ -299,7 +299,7 @@ fn firstrun_checklist(
     // whether it hears anything (DD-14). Until a password exists every
     // `/admin/*` page is open to anyone on the network, and nothing on the
     // first screen said so.
-    let password_row = if password_set {
+    let admin_row = if password_set {
         r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Admin password</div><div class="d">settings are yours to change</div></div><span class="v">set</span></div>"#.to_string()
     } else {
         r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">No admin password</div><div class="d">anyone on the network can change settings — set one in the <a href="/onboarding">setup wizard</a> or <a href="/station/access">Settings → Access</a></div></div><span class="v">open</span></div>"#.to_string()
@@ -401,7 +401,7 @@ fn firstrun_checklist(
         r#"<div class="bnb-card pad">
       <div class="bnb-eyebrow td-check-eb">Getting ready</div>
       <div class="x-check">
-        {password_row}
+        {admin_row}
         <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
         {model_row}
         <div class="x-check-row">{disk_mark_html}<div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>

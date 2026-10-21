@@ -1,9 +1,9 @@
 //! No literal reaches a parameter that CodeQL reads as a cryptographic value.
 //!
 //! `rust/hard-coded-cryptographic-value` is a taint query keyed on parameter
-//! *names*. A string literal (a `const` too, `""` too) that reaches an argument
-//! of any function whose parameter is called `password`, `nonce`, `iv`, or
-//! `salt` is an alert, whatever the function does, tests included. It does not
+//! *names*. A literal (a string, a `bool`, an integer; a `const` too, `""` too)
+//! that reaches an argument of any function whose parameter is called
+//! `password`, `nonce`, `iv`, or `salt` is an alert, whatever the function does, tests included. It does not
 //! care that the value is a test fixture, and it follows a literal through a
 //! `let` and through a helper that returns a string made from it.
 //!
@@ -164,7 +164,20 @@ impl Scan<'_> {
     /// Is this expression a string made from a literal?
     fn literal_derived(&self, e: &syn::Expr) -> bool {
         match e {
-            syn::Expr::Lit(l) => matches!(l.lit, syn::Lit::Str(_) | syn::Lit::ByteStr(_)),
+            // Not only strings: a `bool` literal handed to `station(password: bool, ..)` and
+            // an integer handed to `hashed_unit(day, salt)` were alerts too (the rule is
+            // keyed on the parameter's name, not on what the value is), so a bool, integer
+            // or char literal counts as much as a string.
+            syn::Expr::Lit(l) => matches!(
+                l.lit,
+                syn::Lit::Str(_)
+                    | syn::Lit::ByteStr(_)
+                    | syn::Lit::CStr(_)
+                    | syn::Lit::Bool(_)
+                    | syn::Lit::Int(_)
+                    | syn::Lit::Char(_)
+                    | syn::Lit::Byte(_)
+            ),
             syn::Expr::Path(p) => p.path.get_ident().is_some_and(|i| {
                 let n = i.to_string();
                 self.consts.contains(&n) || self.is_tainted_local(&n)
@@ -490,7 +503,13 @@ fn the_scan_flags_each_shape() {
         fn mix(nonce: &str) {}
         const PW: &str = "x";
         fn pw(tag: &str) -> String { format!("{tag}-1") }
+        fn gate(password: bool, dir: &str) {}
+        fn unit(day: u32, salt: u32) {}
         fn t() {
+            gate(true, "d");
+            let on = false;
+            gate(on, "d");
+            unit(3, 1);
             hash_password("direct");
             hash_password(PW);
             let local = "bound";
@@ -504,6 +523,9 @@ fn the_scan_flags_each_shape() {
     assert_eq!(
         hits_in(src),
         vec![
+            pair("gate", "true"),
+            pair("gate", "on"),
+            pair("unit", "1"),
             pair("hash_password", "\"direct\""),
             pair("hash_password", "PW"),
             pair("hash_password", "local"),
@@ -524,7 +546,12 @@ fn the_scan_passes_a_value_built_at_run_time() {
     let src = r#"
         fn hash_password(password: &str) {}
         fn station(password: bool) {}
+        fn unit(day: u32, salt: u32) {}
         fn t() {
+            let stream = std::env::args().count() as u32;
+            unit(7, stream);
+            let with_password = std::env::args().count() > 1;
+            station(with_password);
             hash_password(&format!("pw-{}", std::process::id()));
             let built = format!("pw-{}", std::process::id());
             hash_password(&built);

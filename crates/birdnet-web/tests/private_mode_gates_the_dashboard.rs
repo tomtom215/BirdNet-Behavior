@@ -35,13 +35,13 @@ fn admin_password() -> String {
 }
 const CLIP: &str = "Eurasian_Blackbird-91-2026-09-08-birdnet-06:10:00.wav";
 
-/// A station with one detection and its clip on disk. `password` gives the
+/// A station with one detection and its clip on disk. `with_password` gives the
 /// seed admin a real hash so the gates observe an authorisation decision
 /// rather than the fresh-station bypass.
-fn station(password: bool, tmp: &std::path::Path) -> AppState {
+fn station(with_password: bool, tmp: &std::path::Path) -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
     birdnet_db::migration::migrate(&conn).expect("migrate schema");
-    if password {
+    if with_password {
         let hash = birdnet_db::accounts::hash_password(&admin_password()).expect("hash");
         conn.execute(
             "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
@@ -356,8 +356,8 @@ async fn a_private_station_with_no_password_keeps_its_admin_panel_closed() {
 #[tokio::test]
 async fn with_private_mode_off_nothing_changes() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    for password in [false, true] {
-        let state = station(password, tmp.path());
+    for with_password in [false, true] {
+        let state = station(with_password, tmp.path());
         let link = share_link(&state);
         let app = birdnet_web::server::build_router(state);
         for path in [
@@ -372,7 +372,7 @@ async fn with_private_mode_off_nothing_changes() {
             let code = status(&app, path).await;
             assert!(
                 code.is_success(),
-                "GET {path} answered {code} with private mode off (password: {password}); \
+                "GET {path} answered {code} with private mode off (with_password: {with_password}); \
                  the open contract must be untouched"
             );
         }

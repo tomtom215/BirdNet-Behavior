@@ -168,11 +168,11 @@ fn mix(mut x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// A uniform in `[0, 1)` from `(day, salt)`.
-fn hashed_unit(day: i64, salt: u64) -> f64 {
+/// A uniform in `[0, 1)` from `(day, stream)`.
+fn hashed_unit(day: i64, stream: u64) -> f64 {
     (mix((day as u64)
         .wrapping_mul(0x0100_0000_01B3)
-        .wrapping_add(salt))
+        .wrapping_add(stream))
         >> 11) as f64
         / (1u64 << 53) as f64
 }
