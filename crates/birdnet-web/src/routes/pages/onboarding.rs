@@ -565,8 +565,9 @@ fn render_mic_body(
             // Unlabelled sources take the device id as their heading, so repeating
             // it on the detail line would print `plughw:CARD=PRO,DEV=0` twice.
             let label = friendly_label(s);
+            let device = shown_device(s);
             let detail = match label {
-                Some(_) => format!("{} · {}", s.device_id, detail_for(s)),
+                Some(_) => format!("{device} · {}", detail_for(s)),
                 None => detail_for(s),
             };
             let _ = write!(
@@ -577,7 +578,7 @@ fn render_mic_body(
                     r#"<div class="s mono">{detail}</div></div></div>"#,
                 ),
                 icon = icon,
-                name = escape_html(label.unwrap_or(&s.device_id)),
+                name = escape_html(label.unwrap_or(&device)),
                 kind = escape_html(kind_label(s.kind)),
                 detail = escape_html(&detail),
             );
@@ -742,6 +743,16 @@ fn mic_notice(error: &str) -> Option<&'static str> {
 ///
 /// A label of `""` or `"   "` is the admin form's "no label" state, not a name,
 /// so it is treated as absent rather than rendered as a blank heading.
+/// The source's address as the wizard may print it.
+///
+/// The wizard adds an RTSP stream with no label, so its address is what names
+/// the card and the summary — and an address is `rtsp://user:password@camera/…`.
+/// `redact_value`, the helper the settings page and the settings API use, keeps
+/// the host and path (what makes a camera recognisable) and drops the password.
+fn shown_device(s: &AudioSource) -> String {
+    birdnet_core::config::redact::redact_value(&s.device_id)
+}
+
 fn friendly_label(s: &AudioSource) -> Option<&str> {
     s.label.as_deref().map(str::trim).filter(|l| !l.is_empty())
 }
@@ -755,7 +766,7 @@ fn mic_summary(sources: &[AudioSource]) -> String {
         [] => "None configured — no birds will be detected".to_string(),
         [one] => format!(
             "{} · {}",
-            friendly_label(one).unwrap_or(&one.device_id),
+            friendly_label(one).map_or_else(|| shown_device(one), str::to_owned),
             detail_for(one)
         ),
         many => format!("{} sources configured", many.len()),
@@ -1024,6 +1035,13 @@ async fn onboarding_save(
                     scheme.as_deref(),
                     &headers,
                 );
+            }
+            // Lost the race: a password was set between the page's check and this
+            // write. Nothing of this submission is saved, and the sign-in page is
+            // where the person who set it goes next.
+            Err(FirstPasswordError::AlreadySet) => {
+                tracing::warn!("onboarding: the admin password was set by another submission");
+                return Redirect::to("/login").into_response();
             }
             Err(e) => {
                 tracing::error!(error = %e, "onboarding: could not set the admin password");
@@ -1322,19 +1340,27 @@ fn done_microphone(sources: &Result<&[AudioSource], String>) -> String {
 
 /// Hash `password` onto the seed admin row and record it. Returns the
 /// admin's id, for the session the wizard mints next.
-fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, String> {
-    let hash = accounts::hash_password(password).map_err(|e| e.to_string())?;
+fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, FirstPasswordError> {
+    let hash =
+        accounts::hash_password(password).map_err(|e| FirstPasswordError::Failed(e.to_string()))?;
     let admin_id = state
         .with_db(|conn| {
             let admin = conn.find_user_by_name("admin")?;
-            conn.set_password(admin.id, &hash)?;
+            // Conditional on the row still having no real hash, in one statement:
+            // two first-run submissions that both saw "no password" would
+            // otherwise both write, the last one silently replacing the first
+            // person's choice while that person's session was already minted.
+            if !conn.set_password_if_unset(admin.id, &hash)? {
+                return Ok(None);
+            }
             // Sessions minted during the open window (any `POST /login`
             // succeeds while there is no password) end here; the wizard mints
             // the owner's own session after this returns.
             accounts::SessionStore::revoke_others(conn, admin.id, "")?;
-            Ok::<i64, accounts::AccountsError>(admin.id)
+            Ok::<Option<i64>, accounts::AccountsError>(Some(admin.id))
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| FirstPasswordError::Failed(e.to_string()))?
+        .ok_or(FirstPasswordError::AlreadySet)?;
     // No actor: there is no account yet that could be one. The target is the
     // row that just acquired a password.
     crate::audit::audit_user_id(
@@ -1346,6 +1372,25 @@ fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, Str
     );
     tracing::info!("admin password set from the setup wizard; /admin is now gated");
     Ok(admin_id)
+}
+
+/// Why [`set_first_admin_password`] did not set a password.
+#[derive(Debug)]
+enum FirstPasswordError {
+    /// Somebody else's submission got there first: the account has a password
+    /// now, and it is not this one.
+    AlreadySet,
+    /// The hash or the write failed.
+    Failed(String),
+}
+
+impl std::fmt::Display for FirstPasswordError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadySet => f.write_str("the admin account already has a password"),
+            Self::Failed(e) => f.write_str(e),
+        }
+    }
 }
 
 static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
@@ -2477,5 +2522,96 @@ mod tests {
             html.contains("{{not_a_real_key}}"),
             "unknown key was dropped"
         );
+    }
+    /// A camera address is `rtsp://user:password@host/…`, and the wizard adds a
+    /// stream without a label, so the address is the card's heading and the
+    /// summary's name. Neither may print the password; both keep the host.
+    #[test]
+    fn the_wizard_does_not_print_a_cameras_password() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let secret = format!("camsecret{}", std::process::id());
+        let url = format!("rtsp://viewer:{secret}@camera.local:554/stream1");
+        conn.insert(&NewAudioSource::defaults(
+            "unlabelled",
+            SourceKind::Rtsp,
+            url.clone(),
+        ))
+        .unwrap();
+        let mut labelled = NewAudioSource::defaults("labelled", SourceKind::Rtsp, url);
+        labelled.label = Some("Garden camera".to_owned());
+        conn.insert(&labelled).unwrap();
+
+        let all = AudioSourceStore::list(&conn).unwrap();
+        let body = render_mic_body(&all, &[], None, None);
+        assert!(
+            !body.contains(&secret),
+            "the card printed the password: {body}"
+        );
+        assert!(
+            body.contains("camera.local"),
+            "the host that makes the camera recognisable is kept: {body}"
+        );
+        for one in &all {
+            let summary = mic_summary(std::slice::from_ref(one));
+            assert!(!summary.contains(&secret), "{}: {summary}", one.id);
+        }
+        assert!(
+            mic_summary(&all[..1]).contains("camera.local"),
+            "an unlabelled stream is still named by its host"
+        );
+    }
+
+    /// Two first-run submissions that both saw "no password": exactly one
+    /// writes. Before, both did, the last silently replacing the first — whose
+    /// session had already been minted and then pointed at a password nobody
+    /// would ever type.
+    #[test]
+    fn two_first_run_submissions_do_not_both_set_the_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().join("birds.db")).unwrap();
+        let pid = std::process::id();
+        let passwords = [format!("first-owner-{pid}"), format!("second-owner-{pid}")];
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = passwords
+            .iter()
+            .cloned()
+            .map(|pw| {
+                let (state, barrier) = (state.clone(), std::sync::Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    set_first_admin_password(&state, &pw).map(|_| pw)
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let winners: Vec<&String> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(
+            winners.len(),
+            1,
+            "exactly one submission sets it: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r, Err(FirstPasswordError::AlreadySet))),
+            "the other is told it lost: {results:?}"
+        );
+        let stored = state
+            .with_read_db(|c| c.find_user_by_name("admin"))
+            .unwrap()
+            .pwd_argon2;
+        assert!(
+            accounts::verify_password(&stored, winners[0]).unwrap(),
+            "the stored password is the winner's"
+        );
+        // The counterpart to the race: with a password set, a later submission
+        // does not replace it either.
+        let later = format!("third-owner-{pid}");
+        assert!(matches!(
+            set_first_admin_password(&state, &later),
+            Err(FirstPasswordError::AlreadySet)
+        ));
     }
 }

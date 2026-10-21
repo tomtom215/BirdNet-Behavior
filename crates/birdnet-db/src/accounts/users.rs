@@ -158,6 +158,19 @@ pub trait UserStore {
     /// Returns [`AccountsError::NotFound`] if the user does not exist.
     fn set_password(&self, id: i64, pwd_argon2: &str) -> Result<(), AccountsError>;
 
+    /// Give the user a password **only if it still has none**: the stored hash
+    /// is empty or one of the legacy placeholders ([`is_legacy_password_hash`]).
+    /// One `UPDATE` carries the condition, so of two callers that both saw "no
+    /// password" the first writes and the second changes nothing — the
+    /// check-then-write in the caller was the race.
+    ///
+    /// Returns whether this call wrote the hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountsError::NotFound`] if the user does not exist.
+    fn set_password_if_unset(&self, id: i64, pwd_argon2: &str) -> Result<bool, AccountsError>;
+
     /// Mark the user as disabled (sets `disabled_at = datetime('now')`).
     /// The seed `admin` row cannot be disabled — attempting to do so
     /// returns [`AccountsError::Invalid`] so the UI can show a sensible
@@ -239,6 +252,23 @@ impl UserStore for Connection {
             return Err(AccountsError::NotFound(format!("user id={id}")));
         }
         Ok(())
+    }
+
+    fn set_password_if_unset(&self, id: i64, pwd_argon2: &str) -> Result<bool, AccountsError> {
+        // The same two shapes as `is_legacy_password_hash`, in SQL so the test
+        // and the write are one statement.
+        let n = self.execute(
+            "UPDATE users SET pwd_argon2 = ?1 \
+             WHERE id = ?2 AND (pwd_argon2 = '' OR pwd_argon2 LIKE 'PLAINTEXT-PLACEHOLDER:%')",
+            params![pwd_argon2, id],
+        )?;
+        if n == 1 {
+            return Ok(true);
+        }
+        // Nothing changed: either the user is not there or it already has a
+        // password. Say which.
+        self.find_user(id)?;
+        Ok(false)
     }
 
     fn disable_user(&self, id: i64) -> Result<(), AccountsError> {
@@ -457,6 +487,41 @@ mod tests {
         let legacy = format!("PLAINTEXT-PLACEHOLDER:{password}");
         assert!(verify_password(&legacy, &password).unwrap());
         assert!(!verify_password(&legacy, &wrong).unwrap());
+    }
+
+    /// The SQL condition and `is_legacy_password_hash` must agree: a hash one
+    /// calls a placeholder and the other calls real would make the first-run
+    /// password either unsettable or overwritable.
+    #[test]
+    fn set_password_if_unset_writes_once_and_only_over_a_placeholder() {
+        let conn = open_db();
+        let admin = conn.find_user_by_name("admin").unwrap();
+        assert!(
+            is_legacy_password_hash(&admin.pwd_argon2),
+            "the seed has none"
+        );
+
+        let first = hash_password(&format!("first-{}", std::process::id())).unwrap();
+        let second = hash_password(&format!("second-{}", std::process::id())).unwrap();
+        assert!(conn.set_password_if_unset(admin.id, &first).unwrap());
+        assert!(
+            !conn.set_password_if_unset(admin.id, &second).unwrap(),
+            "the second writer finds a password and changes nothing"
+        );
+        assert_eq!(conn.find_user(admin.id).unwrap().pwd_argon2, first);
+
+        // The legacy placeholder shape counts as "none", as the helper says.
+        conn.execute(
+            "UPDATE users SET pwd_argon2 = 'PLAINTEXT-PLACEHOLDER:x' WHERE id = ?1",
+            params![admin.id],
+        )
+        .unwrap();
+        assert!(conn.set_password_if_unset(admin.id, &second).unwrap());
+
+        assert!(matches!(
+            conn.set_password_if_unset(9999, &first),
+            Err(AccountsError::NotFound(_))
+        ));
     }
 
     #[test]
