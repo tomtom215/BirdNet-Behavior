@@ -29,7 +29,7 @@ users**, with deep analytics underneath for enthusiasts.
   classes in one stylesheet; the few dynamic values use a `data-style`
   attribute promoted by a nonce'd `<style>` block. Do not propose inline styles.
 - **One hand-written stylesheet** (`crates/birdnet-web/static/css/app.css`,
-  ~4.6k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
+  ~5.9k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
   installs are supported). No CDNs, no runtime-fetched web fonts, no new JS
   dependencies.
 - **Performance-conscious for a Pi** and **fully responsive** (a phone
@@ -47,6 +47,15 @@ users**, with deep analytics underneath for enthusiasts.
   - `--moss` (calm green) = primary / accent / **success** / "live" / recording.
   - `--dawn` (amber) = **warning** / "today" highlights.
   - `--rare` (red) = **danger** / **rare-bird** accent.
+- **Scales (all tokens; see `docs/book/reference/design-tokens.md`):** radius,
+  spacing, type (fluid display steps), line heights, motion (durations, curves
+  including a spring, `--stagger`, `--lift`/`--press-scale` zeroed under reduced
+  motion), layers, the focus ring, density-following control heights, layered
+  surfaces (`--surface-sunken/-raised/-overlay/-glass`), page washes and a
+  warm-tinted shadow family (`--shadow-tint`, xs to xl, hover, press, inset,
+  field). **Charts read only** the categorical `--chart-1..8`, the sequential
+  `--seq-*` / `--seq-moss-*`, the diverging `--div-*` and the data ink
+  `--chart-grid/-axis/-label/-annot/-tip-*`.
 - **Type:** **Inter Tight** (UI, weights 400/500/600) + **Instrument Serif**
   (large *display* headings, italic used for emotional emphasis — e.g. the hero
   "The yard is *singing*"). Monospace for tabular numbers and timestamps.
@@ -224,6 +233,33 @@ users**, with deep analytics underneath for enthusiasts.
     Hover is not a channel. Anything living only in a `title` attribute does
     not exist on a phone, and a `title` on a control is not a reliable
     accessible name.
+
+11. **The token system and the shell's polish.** *Done and measured; what is
+    open is listed.* Before: 135 light tokens and 51 dark overrides, no
+    sequential or diverging ramp, no data-ink tokens, shadows pure black, 42 raw
+    border radii, 329 `gap`/`padding`/`margin` declarations in pixels, 23 raw
+    font sizes, 10 raw durations, and a gate that held colours and weights only.
+    After: 241 and 90 (`design-tokens.md` carries both numbers, generated);
+    0 raw radii, 0 on-ladder gaps (126 declarations remain at the time of
+    writing, all optical gaps off the ladder), 0 raw durations or curves, shadows and layers by token, 17
+    named display font sizes, and `tests/design_tokens_are_the_only_literals.rs`
+    now refuses a raw shadow, radius, duration, curve, layer or on-ladder gap
+    with a named exemption list. The tokenisation was proved pure with
+    `style-snapshot.mjs` (129 pages, 48,054 elements; the only differences were
+    `<main>`'s auto margin flipping between runs of the *same* stylesheet).
+    The ramps and the layers around the content are graded by arithmetic
+    (`chart-ramps.mjs`, `surface-layers.mjs`). The visual pass is surfaces
+    with tinted depth, a glass nav, atmosphere washes, pressable controls,
+    cut-in fields, softer alerts, toasts, dialogs and a palette that arrive with a
+    spring, and a View Transition between pages.
+    **Open:** the 13 empty-state class vocabularies and three loading idioms
+    (item 2) are unchanged in markup, only restyled; the spacing between page
+    sections is not yet one token on every page; the View Transition and the
+    scroll-driven nav shadow are progressive enhancements (a browser without them
+    simply does not animate). Observed in Chromium 141 only: a navigation ran a
+    view transition (`pagereveal` carried one) with motion allowed and none under
+    `prefers-reduced-motion`; Firefox and WebKit were not tried. The chart sections
+    are being rewritten by the chart pass.
 
 ## What I want from you, per screen (deliverables)
 

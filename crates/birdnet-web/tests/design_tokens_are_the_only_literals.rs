@@ -26,6 +26,16 @@
 //!    literals it holds now and no more. The number can only go down; when a
 //!    file improves, lower it here (the test says so).
 //!
+//! 5. **No raw shadow, radius, duration, curve, layer or on-ladder gap** outside a
+//!    token definition. A `box-shadow` is `var(--shadow-*)`, `--ring` or a ring
+//!    drawn from `--bw*`; a radius is `var(--r-*)`; a time is `var(--dur-*)`; a
+//!    curve is `var(--ease-*)` or a CSS keyword; a `z-index` is `var(--z-*)`, 0,
+//!    1 or -1; a `gap`, `padding` or `margin` written as a pixel count that the
+//!    `--space-*` ladder has a rung for is that rung; a `font-size` is
+//!    `var(--fs-*)` or an entry in [`FONT_SIZE_EXEMPT`] with a reason. Optical
+//!    gaps off the ladder (5, 7, 9, 11, 13 px) are not flagged: the design-token
+//!    page says why they stay.
+//!
 //! Each rule has a counterpart that feeds it a violation and requires it to be
 //! found, because a scanner that finds nothing is indistinguishable from a
 //! stylesheet that has nothing to find.
@@ -204,6 +214,194 @@ fn violations(css: &str) -> Vec<String> {
                 d.context
             ));
         }
+        out.extend(scale_violations(&d));
+    }
+    out
+}
+
+/// The pixel ladder `--space-N` has a rung for.
+const SPACE_RUNGS: &[u32] = &[2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64];
+
+/// Display sizes that are one-off glyphs and numerals and have no step on the
+/// type scale: a 404's code, a gauge numeral, a recap's closing line. Each is
+/// named so that a new one is a decision, not an accident.
+const FONT_SIZE_EXEMPT: &[(&str, &str, &str)] = &[
+    (".yir-tile-value", "40px", "the year-in-review tile numeral"),
+    (".yir-close-line", "30px", "the year-in-review closing line"),
+    (".rp-stat .v", "40px", "the weekly recap numeral"),
+    (
+        ".rp-day .dc",
+        "17px",
+        "a calendar day's count, sized to its cell",
+    ),
+    (".he-pct", "26px", "the hour-of-day gauge numeral"),
+    (".pm-404-code", "48px", "the 404 code"),
+    (".sh-gone-title", "48px", "the share page's gone title"),
+    (".sp-count b", "38px", "the species count numeral"),
+    (".sp-life-stat .v", "48px", "the life-list statistic"),
+    (".pt-kpi .val", "30px", "the patterns KPI numeral"),
+    (".x-daystats .v", "25px", "the day-stats numeral"),
+    (".st-vital .v", "30px", "the station vital's numeral"),
+    (".login-card__head .login-h1", "38px", "the sign-in title"),
+    (
+        ".bkr-update-ver",
+        "18px",
+        "the backups page's version glyph",
+    ),
+    (".st-status .ico", "18px", "the status icon glyph"),
+    (".bnb-cmdk__icon", "18px", "the palette's search glyph"),
+    (".bnb-tabbar__slot .glyph", "18px", "the tab bar's glyph"),
+];
+
+/// Whether `v` is only `var(...)`/`color-mix(...)`/keywords/numbers with no
+/// length literal: that is, geometry that came from a token.
+fn has_px_literal(v: &str) -> bool {
+    let mut depth = 0_i32;
+    let mut outside = String::new();
+    let mut i = 0;
+    let b = v.as_bytes();
+    while i < b.len() {
+        let rest = &v[i..];
+        if depth == 0 && (rest.starts_with("var(") || rest.starts_with("color-mix(")) {
+            // skip the whole function
+            let mut d = 0_i32;
+            let mut j = i;
+            while j < b.len() {
+                match b[j] {
+                    b'(' => d += 1,
+                    b')' => {
+                        d -= 1;
+                        if d == 0 {
+                            j += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            outside.push(' ');
+            i = j;
+            continue;
+        }
+        match b[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        outside.push(b[i] as char);
+        i += 1;
+    }
+    outside
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .any(|w| {
+            w.strip_suffix("px").is_some_and(|n| {
+                n.trim_start_matches('-')
+                    .parse::<f32>()
+                    .is_ok_and(|x| x != 0.0)
+            })
+        })
+}
+
+/// The pixel words of a value, outside any function: `8px`, `-2px`.
+fn px_words(v: &str) -> Vec<u32> {
+    if v.contains("calc(") || v.contains("clamp(") || v.contains("min(") || v.contains("max(") {
+        return Vec::new();
+    }
+    v.split_whitespace()
+        .filter_map(|w| w.strip_suffix("px"))
+        .filter(|n| !n.starts_with('-'))
+        .filter_map(|n| n.parse::<u32>().ok())
+        .collect()
+}
+
+/// Rule 5 for one declaration.
+fn scale_violations(d: &Decl) -> Vec<String> {
+    let mut out = Vec::new();
+    if d.context.contains("@keyframes") || d.prop.starts_with("--") {
+        return out;
+    }
+    let v = d.value.as_str();
+    let ctx = &d.context;
+    match d.prop.as_str() {
+        "box-shadow" | "text-shadow" if has_px_literal(v) => out.push(format!(
+            "`{}: {v}` under `{ctx}` writes shadow geometry: use a --shadow-* token",
+            d.prop
+        )),
+        "border-radius"
+        | "border-top-left-radius"
+        | "border-top-right-radius"
+        | "border-bottom-left-radius"
+        | "border-bottom-right-radius"
+            if has_px_literal(v) =>
+        {
+            out.push(format!(
+                "`{}: {v}` under `{ctx}`: use a --r-* token",
+                d.prop
+            ));
+        }
+        "z-index" => {
+            let t = v.trim();
+            if !(t.starts_with("var(") || matches!(t, "0" | "1" | "-1" | "auto")) {
+                out.push(format!("`z-index: {t}` under `{ctx}`: use a --z-* token"));
+            }
+        }
+        "transition"
+        | "transition-duration"
+        | "transition-delay"
+        | "animation"
+        | "animation-duration"
+        | "animation-delay"
+        | "transition-timing-function"
+        | "animation-timing-function" => {
+            if !v.contains("!important") && !ctx.contains("prefers-reduced-motion") {
+                let bad = v.split(|c: char| c.is_whitespace() || c == ',').any(|w| {
+                    (w.ends_with("ms") || w.ends_with('s'))
+                        && w.trim_end_matches("ms")
+                            .trim_end_matches('s')
+                            .parse::<f32>()
+                            .is_ok_and(|x| x != 0.0)
+                });
+                if bad {
+                    out.push(format!(
+                        "`{}: {v}` under `{ctx}`: use a --dur-* token",
+                        d.prop
+                    ));
+                }
+            }
+            if v.contains("cubic-bezier(") {
+                out.push(format!(
+                    "`{}: {v}` under `{ctx}`: use a --ease-* token",
+                    d.prop
+                ));
+            }
+        }
+        "font-size" => {
+            let t = v.trim();
+            if t.ends_with("px")
+                && !t.contains('(')
+                && !FONT_SIZE_EXEMPT
+                    .iter()
+                    .any(|(sel, size, _)| ctx.ends_with(sel) && *size == t)
+            {
+                out.push(format!(
+                    "`font-size: {t}` under `{ctx}`: use a --fs-* token, or name it in FONT_SIZE_EXEMPT"
+                ));
+            }
+        }
+        "gap" | "row-gap" | "column-gap" | "padding" | "padding-top" | "padding-right"
+        | "padding-bottom" | "padding-left" | "margin" | "margin-top" | "margin-right"
+        | "margin-bottom" | "margin-left" => {
+            for px in px_words(v) {
+                if SPACE_RUNGS.contains(&px) {
+                    out.push(format!(
+                        "`{}: {v}` under `{ctx}`: {px}px is a rung of the ladder, use var(--space-{px})",
+                        d.prop
+                    ));
+                }
+            }
+        }
+        _ => {}
     }
     out
 }
@@ -252,7 +450,9 @@ fn the_scanner_sees_each_kind_of_violation_and_only_those() {
             "no violation mentioned `{needle}`: {v:#?}"
         );
     }
-    assert_eq!(v.len(), 6, "{v:#?}");
+    // Eight, not six: the 3px radius is also a raw radius (rule 5) and the
+    // shadow's 1px ring is also raw shadow geometry.
+    assert_eq!(v.len(), 8, "{v:#?}");
 
     let clean = "
         :root { --x: oklch(50% 0.1 20); --y: #fff; }
@@ -275,6 +475,84 @@ fn a_violation_seeded_into_the_real_stylesheet_is_found() {
     );
     let v = violations(&css);
     assert_eq!(v.len(), 3, "{v:#?}");
+    assert!(v.iter().all(|m| m.contains(".seeded")), "{v:#?}");
+}
+
+/// The counterpart for rule 5: each kind of raw scale literal is found, the
+/// tokenised spelling of the same thing is not, and an optical gap off the
+/// ladder is left alone.
+#[test]
+fn the_scale_rules_see_each_kind_of_literal_and_only_those() {
+    let bad = "
+        .a { box-shadow: 0 2px 4px red; }
+        .b { border-radius: 8px; }
+        .c { z-index: 40; }
+        .d { transition: color .2s ease; }
+        .e { transition: color var(--dur-fast) cubic-bezier(.2, 0, 0, 1); }
+        .f { gap: 12px; }
+        .g { padding: 6px 12px; }
+        .h { font-size: 19px; }
+    ";
+    let v = violations(bad);
+    for needle in [
+        "shadow geometry",
+        "use a --r-* token",
+        "use a --z-* token",
+        "use a --dur-* token",
+        "use a --ease-* token",
+        "use var(--space-12)",
+        "use var(--space-6)",
+        "use a --fs-* token",
+    ] {
+        assert!(
+            v.iter().any(|m| m.contains(needle)),
+            "no violation mentioned `{needle}`: {v:#?}"
+        );
+    }
+
+    let clean = "
+        .a { box-shadow: var(--shadow-sm), 0 0 0 var(--bw-strong) var(--moss); }
+        .b { border-radius: var(--r-base) var(--r-base) 0 0; }
+        .c { z-index: var(--z-sticky); }
+        .d { z-index: 1; }
+        .e { transition: color var(--dur-fast) ease, transform var(--dur-base) var(--ease-out); }
+        .f { gap: var(--space-12); padding: 5px 9px; margin: 0 -3px; }
+        .g { font-size: var(--fs-md); }
+        .h { padding: calc(100% - 6px); }
+        @keyframes k { 70% { box-shadow: 0 0 0 7px transparent; } }
+        @media (prefers-reduced-motion: reduce) { * { animation-duration: .001ms !important; } }
+    ";
+    assert_eq!(violations(clean), Vec::<String>::new());
+}
+
+/// Every name in the font-size exemption list is a real declaration, so the list
+/// cannot outlive the sizes it excuses.
+#[test]
+fn every_font_size_exemption_still_excuses_something() {
+    let css = read("static/css/app.css");
+    let decls = declarations(&css);
+    for (sel, size, why) in FONT_SIZE_EXEMPT {
+        assert!(
+            decls.iter().any(|d| d.prop == "font-size"
+                && d.value.trim() == *size
+                && d.context.ends_with(sel)),
+            "FONT_SIZE_EXEMPT names `{sel}` at {size} ({why}), and no such declaration is left: \
+             delete the entry"
+        );
+    }
+}
+
+/// The same for rule 5: one seeded violation of each scale rule, appended to
+/// the real stylesheet, is reported and nothing else is.
+#[test]
+fn a_scale_violation_seeded_into_the_real_stylesheet_is_found() {
+    let css = format!(
+        "{}\n.seeded {{ gap: 12px; border-radius: 8px; z-index: 40; transition: color .2s ease; \
+         box-shadow: 0 2px 4px var(--shadow-tint); font-size: 19px; }}\n",
+        read("static/css/app.css")
+    );
+    let v = violations(&css);
+    assert_eq!(v.len(), 6, "{v:#?}");
     assert!(v.iter().all(|m| m.contains(".seeded")), "{v:#?}");
 }
 
@@ -541,6 +819,20 @@ const ALLOWED: &[(&str, usize)] = &[
     ("src/routes/admin/species/render.rs", 1),
 ];
 
+/// Files whose colour literals are data, not styling, and so are not counted:
+/// a table of colours *is* the product of the file, and a token would be the
+/// wrong thing to put in it.
+///
+/// * `spectrogram/colormap.rs`: the perceptual colour maps a spectrogram is
+///   painted with (viridis-style stops). A spectrogram is an image the server
+///   draws pixel by pixel with these values; they are never written to a
+///   stylesheet and a theme must not change them, or the same clip would look
+///   different by day and by night.
+const DATA_FILES: &[(&str, &str)] = &[(
+    "src/routes/spectrogram/colormap.rs",
+    "colour-map stops are the data a spectrogram is drawn from, not styling",
+)];
+
 fn source_files() -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else {
@@ -571,6 +863,14 @@ fn source_files() -> Vec<PathBuf> {
 fn raw_colours_outside_the_stylesheet_only_ever_go_down() {
     let mut found: BTreeMap<String, usize> = BTreeMap::new();
     for p in source_files() {
+        let rel = p
+            .strip_prefix(root())
+            .unwrap_or(&p)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if DATA_FILES.iter().any(|(f, _)| *f == rel) {
+            continue;
+        }
         let text = std::fs::read_to_string(&p).unwrap_or_default();
         // Test modules quote the very literals they forbid.
         let text = text.split("#[cfg(test)]").next().unwrap_or_default();
@@ -615,6 +915,18 @@ fn raw_colours_outside_the_stylesheet_only_ever_go_down() {
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A data-file exemption names a file that exists, so the list cannot outlive
+/// the files it excuses.
+#[test]
+fn every_data_file_exemption_names_a_real_file() {
+    for (file, why) in DATA_FILES {
+        assert!(
+            root().join(file).is_file(),
+            "DATA_FILES excuses `{file}` ({why}), and there is no such file: delete the entry"
+        );
+    }
 }
 
 #[test]

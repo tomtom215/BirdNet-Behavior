@@ -33,6 +33,7 @@ function names(css) {
 }
 const toks = names(strip(fs.readFileSync(CSS, 'utf8')));
 const kind = (n) => {
+  if (/^--(accent-bar|halo-w|icon-|shadow-key|shadow-up)/.test(n)) return 'other';
   if (/^--(shadow-(xs|sm|md|lg|xl|hover|press|inset|field|glow)|ring|ring-soft|ring-danger)$/.test(n)) return 'shadow';
   if (/^--r-/.test(n)) return 'radius';
   if (/^--space-/.test(n)) return 'space';

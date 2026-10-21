@@ -15,12 +15,14 @@ Two principles govern them:
   a hue stays the same "colour" as its lightness changes, and light/dark themes
   can be derived by moving lightness rather than re-picking hex values. The
   format is `oklch(L C H)` — lightness %, chroma, hue degrees — with an optional
-  `/ alpha`. The one family written as hex is the categorical chart palette,
-  because a colour-blind-safety check can only be run on the exact values that
+  `/ alpha`. Every colour in the stylesheet, the categorical chart palette included,
+  is written that way, so a colour-blind-safety check runs on the exact values that
   ship (see [Chart colours](#chart-colours)).
-- **The token set is closed.** New UI is built by composing existing tokens into
-  new *classes*, **not** by adding tokens. Adding a token is a deliberate,
-  reviewed design decision (see [Adding or changing a token](#adding-or-changing-a-token)).
+- **The token set grows by decision, not by accident.** New UI is built by composing
+  existing tokens into new *classes*. Adding a token is a deliberate, reviewed design
+  decision (see [Adding or changing a token](#adding-or-changing-a-token)), and the
+  gates below refuse a raw colour, shadow, radius, duration, curve, layer or on-ladder
+  gap where a token exists.
 
 ## At a glance
 
@@ -39,6 +41,20 @@ page that describes the present is read from the stylesheet the same way.
 | Every colour token has a value in both themes, or is named as theme-invariant | `tests/design_tokens_are_the_only_literals.rs` |
 | The contrast ratios the tokens claim, measured in a browser in both themes | `tools/visual-qa/tokens.mjs` |
 | A token refactor changes no element's computed style | `tools/visual-qa/style-snapshot.mjs` |
+| No raw shadow, radius, duration, curve, layer or on-ladder gap outside a token definition | `tests/design_tokens_are_the_only_literals.rs` (rule 5) |
+| The sequential, diverging and data-ink tokens, graded in both themes | `tools/visual-qa/chart-ramps.mjs` |
+| The page washes, the translucent nav, surface order and the focus ring, graded | `tools/visual-qa/surface-layers.mjs` |
+| The generated tables, every hand-written row's values and both counts equal `app.css` | `tools/visual-qa/token-doc.mjs --check` |
+
+### Every token, drawn
+
+Both pictures are rendered from the stylesheet the station serves, so they are the
+tokens and not a drawing of them. `tools/visual-qa/token-swatches.mjs` regenerates
+them; a token added to `app.css` appears without the script changing.
+
+![Every design token in the light theme](../images/design-tokens__light.png)
+
+![Every design token in the dark theme](../images/design-tokens__dark.png)
 
 ## Themes
 
@@ -714,22 +730,26 @@ change should move. The clusters that remain, and why:
 |---|---|
 | Species identity hues (`--sp`, set per bird) | Data, computed per species at render time. |
 | The migration ridgeline's bands (one hue per species, computed from the name) | Identity as data: the same bird is the same colour on every page. Everything else a chart draws reads `--chart-*` or `--heat-*`. |
-| Loops: skeleton shimmer 1.4 s, pulse 1.6 s, blink 1.2 s, the 0.6 s fresh-row fade | Ambient animation with its own tempo, not interaction feedback. |
 | `black` in a `mask-image` | An alpha mask has no colour of its own; only its alpha is read. |
-| Heading sizes above 16 px other than the steps above (gauge and tile numerals, an icon glyph, a 404 code) | Per-surface display type, sized to its one container. |
-| Padding and the 2 px, 5 px, 7 px and 8 px bar radii | Optical adjustments to one component. A `gap` or a vertical margin that matches a `--space-N` rung uses it. |
+| The sizes of one-off display glyphs and numerals (gauge and tile numerals, a 404 code, the palette's search glyph) | Per-surface display type sized to its one container. Each is named, with a reason, in `FONT_SIZE_EXEMPT` in `tests/design_tokens_are_the_only_literals.rs`; a new one is a decision. |
+| Optical gaps off the `--space-N` ladder (3, 5, 7, 9, 11, 13 px and the odd paddings) | Adjustments to one component's own balance. The rule is the other way round: a pixel count that has a rung is that rung, and the test fails on one that is not. |
+| The geometry of a keyframe (`@keyframes`) | Animation frames are not a design choice a theme moves. The durations and curves that drive them are tokens. |
+| A colour map's stops (`routes/spectrogram/colormap.rs`) | Data, not styling: a spectrogram is an image drawn pixel by pixel, and a theme must not change it. Named in `DATA_FILES` in the same test. |
 | Colours inside the admin pages' own `<style>` blocks, and in the SVG a chart renderer writes | Counted, not forbidden: `tests/design_tokens_are_the_only_literals.rs` holds each file to the number it has now, so none can grow. |
 
 ## Adding or changing a token
 
-The token set is deliberately closed (see the v3 spine
-[protect list](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/design/handover/v3_spine/IMPLEMENTATION_PLAN.md) —
-"OKLCH token set: zero new tokens"). The structural tokens on this page — type,
-weights, tracking, the hairline, the fixed gaps, motion, layers, focus, scrim and
-the pill radius — were each added in a reviewed pass because each replaced a
-cluster of ad-hoc literals rather than introducing a new idea; a refactor of that
-kind is proven pure with `tools/visual-qa/style-snapshot.mjs` (snapshot every
-element's computed style before, and after, and diff).
+The token set was closed by the v3 spine
+([protect list](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/design/handover/v3_spine/IMPLEMENTATION_PLAN.md):
+"OKLCH token set: zero new tokens"), and was then opened once, on purpose, by a pass
+that measured what the stylesheet actually wrote (the numbers are in
+[Known problems](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/DESIGN_BRIEF.md))
+and added the ramps, the layered surfaces, the tinted shadows, the rest of the motion,
+layer and radius ladders and the focus and density tokens. Each replaced a cluster of
+ad-hoc literals or described a thing the stylesheet could not yet say, rather than
+introducing a new idea. A refactor of the first kind is proven pure with
+`tools/visual-qa/style-snapshot.mjs` (snapshot every element's computed style before,
+and after, from the same running fixture, and diff).
 
 - **Build new UI from existing tokens.** Compose them into new CSS *classes*;
   that is the additive path and needs no token change.

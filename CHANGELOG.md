@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A complete design-token system, and gates that hold it.** `app.css` gains the
+  scales it was missing, all additive (no existing token was renamed or
+  re-valued, except the elevation and fluid heading sizes noted under Changed):
+  two seven-step sequential ramps (`--seq-N`, `--seq-moss-N`), a seven-step
+  diverging ramp (`--div-neg-3` .. `--div-pos-3`), data ink and mark anatomy
+  for charts (`--chart-grid/-axis/-label/-annot/-track/-gap/-crosshair`, tooltip
+  surface, `--chart-stroke/-gap-w/-bar-r/-dim`), layered surfaces and page
+  washes, a warm/cool-tinted shadow family, the rest of the radius, spacing, type,
+  line-height, motion (a spring curve, `--stagger`, `--lift`/`--press-scale` zeroed
+  under reduced motion), layer, focus-ring and density tokens. 241 tokens in the
+  light block (was 135), 90 dark overrides (was 51), every one documented in
+  `docs/book/reference/design-tokens.md`, whose tables and counts are now generated
+  from the stylesheet (`tools/visual-qa/token-doc.mjs`) and drawn as swatches in
+  both themes (`token-swatches.mjs`). New gates: `chart-ramps.mjs` and
+  `surface-layers.mjs` (no browser; lightness monotone, 7-13 dE steps, a first step
+  8 dE clear of an empty cell, diverging poles 15 dE apart under protanopia and
+  deuteranopia, ink contrast, page washes leaving text 4.5:1, focus ring 3:1;
+  each seen failing with `MUTATE=`), and rule 5 of
+  `tests/design_tokens_are_the_only_literals.rs`, which refuses a raw shadow,
+  radius, duration, curve, layer or on-ladder gap (the stylesheet was 404
+  violations red against it before the tokenisation commit; spectrogram colour
+  maps are a named data exemption). `style-snapshot.mjs` also records
+  z-index, easing, delay, backdrop-filter, text-shadow, outline and transform.
 - **BirdNET V2.4 is installable, and measured against BirdNET-Pi.**
   `--install-model birdnet-v24` fetches birdnet-go's published FP32 ONNX of the
   network BirdNET-Pi and birdnet-go run, with its labels;
@@ -384,6 +407,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The shell has depth and arrives with motion.** Elevation is mixed from a tint
+  (warm brown on paper, cool near-black on night) instead of pure black; two soft
+  washes sit behind the page; the top bar and phone tab bar are glass; buttons,
+  chips and segmented controls press; fields are cut in and a closed select draws
+  its own chevron; toasts, dialogs and the command palette arrive with a spring;
+  empty and failure states stand on a soft stage; the review nudge and the
+  Station banner are gradient callouts, not saturated slabs; native parts follow
+  the page's theme (a dark page no longer opens a white select menu); the theme
+  button's two characters are drawn icons; page titles scale to 56 px and the
+  hero to 72 px (fluid); navigation cross-fades (View Transitions) and the first
+  screenful rises in order. All of it is off under `prefers-reduced-motion` and
+  the operator's Motion = Reduced (the motion gate: 0 running animations on 43
+  pages under either; 29 on 5 under neither).
+- **Raw spacing, radius, duration and font-size literals in `app.css` are
+  tokens.** 292 declarations, proved identical with the computed-style snapshot
+  (129 pages, 48,054 elements; the only differences were `<main>`'s auto margin
+  flipping between runs of the same stylesheet). Five small marks' 1, 5 and 7 px
+  radii snapped to the ladder.
 - **A new install runs BirdNET V2.4, not the V3.0 preview.** `install.sh` and a new
   Docker volume install V2.4 and its v2 range filter; `--classifier birdnet-v3` or
   `BIRDNET_CLASSIFIER=birdnet-v3` chooses the V3.0 preview. A running station never
