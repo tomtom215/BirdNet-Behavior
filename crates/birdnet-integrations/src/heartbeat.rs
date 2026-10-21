@@ -132,12 +132,13 @@ mod tests {
     /// not requested.
     #[tokio::test]
     async fn a_metadata_address_is_refused_not_pinged() {
-        for url in [
-            "http://169.254.169.254/latest/meta-data/",
-            "http://[fe80::1]/x",
-            "http://0xa9.0xfe.0xa9.0xfe/x",
+        for (host, path) in [
+            ("169.254.169.254", "/latest/meta-data/"),
+            ("[fe80::1]", "/x"),
+            ("0xa9.0xfe.0xa9.0xfe", "/x"),
         ] {
-            let err = HeartbeatClient::new(url)
+            let url = format!("http://{host}{path}");
+            let err = HeartbeatClient::new(&url)
                 .unwrap()
                 .ping()
                 .await
