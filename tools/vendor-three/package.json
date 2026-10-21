@@ -1,0 +1,13 @@
+{
+  "name": "birdnet-vendor-three",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build recipe for static/vendor/three/three.module.min.js: the pieces of three.js the Soundscape terrain uses, tree-shaken into one ES module. See README.md in that directory and tools/vendor-three/build.sh.",
+  "type": "module",
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
