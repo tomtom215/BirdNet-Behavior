@@ -870,8 +870,9 @@ fn check_full_disk(config: &Config, out: &mut Vec<Finding>) {
     }
 }
 
-/// The words `APPRISE_TRIGGER` (and the Notification trigger setting) takes,
-/// alone or in a list: `each`, `new-species`, `new-species-daily`, or `off`.
+/// The words `APPRISE_TRIGGER` (and the Notification trigger setting) take.
+///
+/// Alone or in a list: `each`, `new-species`, `new-species-daily`, or `off`.
 /// The underscore spellings and the aliases `detection`, `none` and `never` are
 /// read too.
 pub const TRIGGER_WORDS: [&str; 9] = [
