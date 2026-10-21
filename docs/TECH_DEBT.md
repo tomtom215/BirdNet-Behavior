@@ -122,7 +122,7 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   dropped stream are untested through `concat`. That is a change to the capture
   path with its own gates, not an edit to find in a debt sweep.
 
-## TD-6 Nine more page partials are routed and nothing links to them
+## TD-6 Ten more page partials are routed and nothing links to them
 
 * **Where:** `/pages/disk-status` (`routes/pages/health.rs`), `/pages/history-dates`
   (`history.rs`), `/pages/today-lock` and `/pages/today-unlock` (`today.rs`), and
@@ -133,7 +133,7 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   the Quarantine page and the Today strip show the same number). A scan for every
   `/pages/…` path registered with `.route(` that appears nowhere else in
   `crates/birdnet-web/{src,templates,static}` outside a comment or a test found these
-  nine. It counts a path in a Rust string, a template attribute or a script, so a
+  ten (the heading said nine; the list names ten, recounted 2026-10-21). It counts a path in a Rust string, a template attribute or a script, so a
   URL built from pieces (`"/pages/" + name`) is invisible to it.
 * **Why they are open:** unlike the badge, each is covered by tests (the dashboard
   partials by a dozen) and several are named as parity features in
