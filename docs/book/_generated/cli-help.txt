@@ -175,6 +175,24 @@ Options:
 
           Opens the database read-only and changes nothing, so it is safe to run on a live station. The rewrite itself runs on the next normal start, which first copies the database to `<db>.pre-migration-<version>.backup`.
 
+      --import-birdnet-pi-conf <PATH>
+          Read a BirdNET-Pi installation's settings and show what each becomes here.
+
+          Give the BirdNET-Pi folder (`~/BirdNET-Pi`) or its `birdnet.conf`. Reads that file and, beside it, `apprise.txt`, `body.txt` and the three species list files, and prints every key with what it becomes, what is converted on the way and what has no equivalent. Changes nothing unless `--apply-import` is also given, which writes the settings through the same checks as the Settings page. The same as Station, Data, in the browser. Credentials are never printed.
+
+      --import-birdnet-pi-clips <PATH>
+          Bring BirdNET-Pi's recordings across, for the detections already imported.
+
+          Give BirdNET-Pi's clip folder: `~/BirdSongs`, or the `Extracted` or `By_Date` folder inside it. Looks only; add `--apply-import` to do it, and `--clips-mode` to choose copy, link or move. Refuses a copy that would take the disk past the purge threshold.
+
+      --clips-mode <MODE>
+          What `--import-birdnet-pi-clips` does with each recording: `copy` (BirdNET-Pi keeps its own), `hardlink` (no extra space; same disk only), `move` (BirdNET-Pi loses them) or `leave` (count them, change nothing)
+
+          [default: copy]
+
+      --apply-import
+          Do what `--import-birdnet-pi-conf` and `--import-birdnet-pi-clips` show. Without it they change nothing
+
       --fix
           Attempt safe automatic repairs, then run the diagnostic.
 
@@ -393,7 +411,7 @@ Options:
           [env: BIRDNET_HEARTBEAT_URL=]
 
       --notify-trigger <NOTIFY_TRIGGER>
-          Notification trigger mode: "each", "new-species", "new-species-daily"
+          Notification trigger: "each", "new-species", "new-species-daily", or "off"; several may be listed, separated by commas ("each,new-species"). `BirdNET-Pi`'s three `APPRISE_NOTIFY_*` switches are this list
 
           [env: BIRDNET_NOTIFY_TRIGGER=]
           [default: each]
@@ -621,7 +639,7 @@ Options:
       --disk-purge-threshold <DISK_PURGE_THRESHOLD>
           Disk-usage percentage at which recordings start being purged.
 
-          The safety net that keeps a 24/7 station from filling its card: once the data disk crosses this, clips are deleted from the most-recorded species first (lowest confidence, then oldest, within it), no species is taken below `--purge-species-floor`, and locked clips are never touched. `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
+          The safety net that keeps a 24/7 station from filling its card: once the data disk crosses this, clips are deleted from the most-recorded species first (lowest confidence, then oldest, within it), no species is taken below `--purge-species-floor`, and locked clips are never touched. `BirdNET-Pi` equivalent: `PURGE_THRESHOLD`. What happens at the threshold is the config key `FULL_DISK` (`purge`, the default, or `keep`, which stops recording and deletes nothing), as in BirdNET-Pi.
 
           `0` leaves the resolution to the config file / admin settings, then the 95 % default — the flag is only "set" when given, so it never silently overrides a value chosen in the UI.
 
@@ -661,14 +679,14 @@ Options:
       --custom-image-dir <CUSTOM_IMAGE_DIR>
           Directory containing custom species images (checked before Wikipedia cache).
 
-          Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g. `turdus_merula.jpg`. `BirdNET-Pi` equivalent: `CUSTOM_IMAGE` directory.
+          Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g. `turdus_merula.jpg`. There is no `BirdNET-Pi` equivalent: its `CUSTOM_IMAGE` is one picture for the Overview page, which is the `dashboard_image` setting here.
 
           [env: BIRDNET_CUSTOM_IMAGE_DIR=]
 
       --apprise-config <APPRISE_CONFIG>
           Path to Apprise config file (alternative/addition to --apprise-url).
 
-          When set, uses the `apprise` CLI tool with `-c <file>` for notifications. `BirdNET-Pi` equivalent: `APPRISE_CONFIG_FILE` config option.
+          When set, uses the `apprise` CLI tool with `-c <file>` for notifications. `BirdNET-Pi` equivalent: its `apprise.txt`, which importing a BirdNET-Pi `birdnet.conf` brings across (Station, Data, or `--import-birdnet-pi-conf`).
 
           [env: BIRDNET_APPRISE_CONFIG=]
 
@@ -719,6 +737,16 @@ Options:
           For a broker behind a private CA — or a self-signed one, whose own certificate works here as a trust anchor. Config key: `MQTT_CA_FILE`.
 
           [env: BIRDNET_MQTT_CA_FILE=]
+
+      --mqtt-client-cert <MQTT_CLIENT_CERT>
+          PEM file with this station's client certificate, for a broker that requires mutual TLS. Needs `--mqtt-client-key`; implies `--mqtt-tls`. Config key: `MQTT_CLIENT_CERT`
+
+          [env: BIRDNET_MQTT_CLIENT_CERT=]
+
+      --mqtt-client-key <MQTT_CLIENT_KEY>
+          PEM file with the private key for `--mqtt-client-cert`. Config key: `MQTT_CLIENT_KEY`
+
+          [env: BIRDNET_MQTT_CLIENT_KEY=]
 
       --mqtt-tls-server-name <MQTT_TLS_SERVER_NAME>
           Hostname to validate the broker's certificate against.
