@@ -1,0 +1,37 @@
+golden clips 106; cut identically 106; chunking differs/missing 0
+windows compared 900 (ordinary 870, padded 16, constant 14); slope 0.75; privacy rank 10
+all windows
+  top-1 label the same                         874/900 =  97.1%  Wilson [ 95.8, 98.0]  clips-bootstrap [ 94.4, 98.9]
+  decision set the same at 0.3                 891/900 =  99.0%  Wilson [ 98.1, 99.5]  clips-bootstrap [ 98.1, 99.7]
+  decision set the same at 0.5                 898/900 =  99.8%  Wilson [ 99.2, 99.9]  clips-bootstrap [ 99.4,100.0]
+  decision set the same at 0.7                 899/900 =  99.9%  Wilson [ 99.4,100.0]  clips-bootstrap [ 99.7,100.0]
+  decision set the same at 0.9                 899/900 =  99.9%  Wilson [ 99.4,100.0]  clips-bootstrap [ 99.6,100.0]
+  privacy mask the same                        886/900 =  98.4%  Wilson [ 97.4, 99.1]  clips-bootstrap [ 95.9,100.0]
+ordinary windows
+  top-1 label the same                         859/870 =  98.7%  Wilson [ 97.8, 99.3]  clips-bootstrap [ 97.9, 99.4]
+  decision set the same at 0.3                 862/870 =  99.1%  Wilson [ 98.2, 99.5]  clips-bootstrap [ 98.1, 99.8]
+  decision set the same at 0.5                 869/870 =  99.9%  Wilson [ 99.4,100.0]  clips-bootstrap [ 99.6,100.0]
+  decision set the same at 0.7                 869/870 =  99.9%  Wilson [ 99.4,100.0]  clips-bootstrap [ 99.6,100.0]
+  decision set the same at 0.9                 870/870 = 100.0%  Wilson [ 99.6,100.0]  clips-bootstrap [100.0,100.0]
+  privacy mask the same                        866/870 =  99.5%  Wilson [ 98.8, 99.8]  clips-bootstrap [ 98.7,100.0]
+padded + constant windows
+  top-1 label the same                         15/30 =  50.0%  Wilson [ 33.2, 66.8]  clips-bootstrap [ 25.0, 85.7]
+  decision set the same at 0.3                 29/30 =  96.7%  Wilson [ 83.3, 99.4]  clips-bootstrap [ 85.7,100.0]
+  decision set the same at 0.5                 29/30 =  96.7%  Wilson [ 83.3, 99.4]  clips-bootstrap [ 85.7,100.0]
+  decision set the same at 0.7                 30/30 = 100.0%  Wilson [ 88.6,100.0]  clips-bootstrap [100.0,100.0]
+  decision set the same at 0.9                 29/30 =  96.7%  Wilson [ 83.3, 99.4]  clips-bootstrap [ 85.7,100.0]
+  privacy mask the same                        20/30 =  66.7%  Wilson [ 48.8, 80.8]  clips-bootstrap [ 37.5,100.0]
+decision set the same, windows where either side has a label at or above T (the windows that can store a row)
+  T=0.3  305/314 =  97.1%  Wilson [ 94.6, 98.5]  clips-bootstrap [ 94.2, 99.1]
+  T=0.5  187/189 =  98.9%  Wilson [ 96.2, 99.7]  clips-bootstrap [ 97.1,100.0]
+  T=0.7  114/115 =  99.1%  Wilson [ 95.2, 99.8]  clips-bootstrap [ 96.8,100.0]
+  T=0.9  41/42 =  97.6%  Wilson [ 87.7, 99.6]  clips-bootstrap [ 90.3,100.0]
+(window, label) pairs reaching T on either side, ordinary windows: those reaching it on one side only
+  T=0.3  8/339 discordant =   2.4%  Wilson [1.2,4.6]
+  T=0.5  1/187 discordant =   0.5%  Wilson [0.1,3.0]
+  T=0.7  1/114 discordant =   0.9%  Wilson [0.2,4.8]
+  T=0.9  0/41 discordant =   0.0%  Wilson [0.0,8.6]
+|raw-logit gap| on labels in both top 10s (BirdNET-Pi FP16 TFLite vs this project's FP32 ONNX)
+  ordinary  n= 8564  p50 0.0088 [0.0078,0.0101]  p90 0.0392 [0.0308,0.0527]  p99 0.3387 [0.1237,0.6783]  max 1.336
+  padded    n=  148  p50 0.0834 [0.0548,0.1311]  p90 0.3002 [0.2252,0.4534]  p99 0.5980 [0.4078,0.7771]  max 0.777
+  constant  n=   28  p50 0.3206 [0.3206,0.3206]  p90 0.3682 [0.3682,0.3682]  p99 0.3682 [0.3682,0.3682]  max 0.368
