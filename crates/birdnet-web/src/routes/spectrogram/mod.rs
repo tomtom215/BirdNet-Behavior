@@ -267,9 +267,11 @@ async fn serve_spectrogram(
     let file_path = rec_dir.join(&filename);
 
     // Confirm the resolved path stays within the recording directory.
-    match file_path.canonicalize() {
+    match tokio::fs::canonicalize(&file_path).await {
         Ok(canonical) => {
-            let rec_canonical = rec_dir.canonicalize().unwrap_or_else(|_| rec_dir.clone());
+            let rec_canonical = tokio::fs::canonicalize(&rec_dir)
+                .await
+                .unwrap_or_else(|_| rec_dir.clone());
             if !canonical.starts_with(&rec_canonical) {
                 return (StatusCode::FORBIDDEN, "path traversal denied").into_response();
             }

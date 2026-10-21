@@ -167,13 +167,18 @@ async fn doctor_page(State(state): State<AppState>) -> Html<String> {
         None => None,
     };
 
-    let config = state.config_path().map_or_else(no_config_body, |path| {
-        let shown = path.display().to_string();
-        match Config::load_from(path) {
-            Ok(config) => findings_body(&shown, &validate::validate(&config)),
-            Err(e) => load_error_body(&shown, &e.to_string()),
+    // Reading and parsing the file is blocking I/O.
+    let config = match state.config_path().map(std::path::Path::to_path_buf) {
+        None => no_config_body(),
+        Some(path) => {
+            let shown = path.display().to_string();
+            match tokio::task::spawn_blocking(move || Config::load_from(&path)).await {
+                Ok(Ok(config)) => findings_body(&shown, &validate::validate(&config)),
+                Ok(Err(e)) => load_error_body(&shown, &e.to_string()),
+                Err(e) => load_error_body(&shown, &e.to_string()),
+            }
         }
-    });
+    };
 
     // Both arms open the card. The no-report arm used to emit only
     // `{config}{CLI_NOTE}</section>`: `card_open()` — which carries the page's

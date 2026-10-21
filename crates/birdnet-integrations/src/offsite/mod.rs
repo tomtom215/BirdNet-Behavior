@@ -130,7 +130,7 @@ pub enum OffsiteError {
     S3(s3::S3Error),
     /// The SFTP destination refused.
     Sftp(sftp::SftpError),
-    /// The encryption task could not be run.
+    /// A blocking task of the upload (the encryption, the hash) could not be run.
     Join(String),
 }
 
@@ -141,7 +141,7 @@ impl std::fmt::Display for OffsiteError {
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::S3(e) => write!(f, "{e}"),
             Self::Sftp(e) => write!(f, "{e}"),
-            Self::Join(e) => write!(f, "the encryption task failed: {e}"),
+            Self::Join(e) => write!(f, "a background task of the upload failed: {e}"),
         }
     }
 }
@@ -295,7 +295,7 @@ pub async fn run(
     // The ciphertext is a copy; remove it whether or not the upload worked, or
     // a station with an unreachable destination fills its own disk with the
     // backups it could not send.
-    let _ = std::fs::remove_file(&ciphertext);
+    let _ = tokio::fs::remove_file(&ciphertext).await;
 
     let (pruned, kept) = result?;
     Ok(OffsiteReport {
@@ -329,7 +329,12 @@ async fn send_and_prune(
     match &config.destination {
         Destination::S3(t) => {
             let client = s3::client()?;
-            let (digest, len) = s3::file_sha256(ciphertext)?;
+            // Reads the whole file to hash it, which on a backup is megabytes: off
+            // the runtime's workers.
+            let hashed = ciphertext.to_path_buf();
+            let (digest, len) = tokio::task::spawn_blocking(move || s3::file_sha256(&hashed))
+                .await
+                .map_err(|e| OffsiteError::Join(e.to_string()))??;
             t.put_object(&client, name, ciphertext, &digest, len)
                 .await?;
 

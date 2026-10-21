@@ -112,8 +112,8 @@ impl HlsStream {
         self.dir.join("playlist.m3u8")
     }
 
-    fn ready(&self) -> bool {
-        playlist_ready(&self.playlist())
+    async fn ready(&self) -> bool {
+        playlist_ready(&self.playlist()).await
     }
 }
 
@@ -146,7 +146,7 @@ fn find_by_token(token: &str) -> Option<Arc<HlsStream>> {
 static CREATING: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// End a stream: forget it, stop its encoder and delete its segments.
-fn end(stream: &HlsStream, why: &str) {
+async fn end(stream: &HlsStream, why: &str) {
     {
         let mut streams = lock(&STREAMS);
         if streams
@@ -159,15 +159,22 @@ fn end(stream: &HlsStream, why: &str) {
         }
     }
     lock(&stream.encoder).take();
-    let _ = std::fs::remove_dir_all(&stream.dir);
+    // Deleting a directory of segments is a syscall per file: not on a runtime
+    // worker.
+    let _ = tokio::fs::remove_dir_all(&stream.dir).await;
     tracing::info!(source = %stream.key.0, why, "HLS stream ended");
 }
 
-/// Whether a playlist lists at least [`READY_SEGMENTS`] segments.
-fn playlist_ready(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|text| {
-        text.lines().filter(|l| l.starts_with("#EXTINF")).count() >= READY_SEGMENTS
-    })
+/// Whether the playlist at `path` lists at least [`READY_SEGMENTS`] segments.
+async fn playlist_ready(path: &Path) -> bool {
+    tokio::fs::read_to_string(path)
+        .await
+        .is_ok_and(|text| lists_enough_segments(&text))
+}
+
+/// Whether a playlist's text lists at least [`READY_SEGMENTS`] segments.
+fn lists_enough_segments(text: &str) -> bool {
+    text.lines().filter(|l| l.starts_with("#EXTINF")).count() >= READY_SEGMENTS
 }
 
 /// 128 random bits as 32 hex digits.
@@ -330,9 +337,11 @@ async fn join_or_start(
         ));
     };
     let root = std::env::temp_dir().join("birdnet-hls");
-    sweep_abandoned(&root, ABANDONED_AFTER);
+    // A `read_dir` and a `stat` per entry: off the runtime's workers.
+    let sweeping = root.clone();
+    let _ = tokio::task::spawn_blocking(move || sweep_abandoned(&sweeping, ABANDONED_AFTER)).await;
     let dir = root.join(&token);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         tracing::error!(error = %e, dir = %dir.display(), "HLS: cannot create the segment directory");
         return Err(Box::new(
             (
@@ -349,7 +358,7 @@ async fn join_or_start(
     {
         Ok(encoder) => encoder,
         Err(response) => {
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = tokio::fs::remove_dir_all(&dir).await;
             return Err(response);
         }
     };
@@ -391,7 +400,7 @@ async fn start(
 
     let deadline = Instant::now() + READY_WAIT;
     let ready = loop {
-        if stream.ready() {
+        if stream.ready().await {
             break true;
         }
         if Instant::now() >= deadline || lock(&stream.encoder).is_none() {
@@ -435,11 +444,11 @@ async fn watch(stream: std::sync::Weak<HlsStream>, every: Duration, idle: Durati
             .as_mut()
             .is_none_or(|e| !matches!(e.child.try_wait(), Ok(None)));
         if exited {
-            end(&stream, "ffmpeg exited");
+            end(&stream, "ffmpeg exited").await;
             return;
         }
         if lock(&stream.last_activity).elapsed() >= idle {
-            end(&stream, "nobody is listening");
+            end(&stream, "nobody is listening").await;
             return;
         }
     }
@@ -474,7 +483,7 @@ async fn heartbeat(Query(q): Query<HeartbeatQuery>, body: axum::body::Bytes) -> 
         let leaving =
             q.disconnect.as_deref() == Some("true") || q.status.as_deref() == Some("disconnect");
         if leaving {
-            leave(&stream, session.as_deref());
+            leave(&stream, session.as_deref()).await;
         } else {
             stream.see(session.as_deref());
         }
@@ -483,7 +492,7 @@ async fn heartbeat(Query(q): Query<HeartbeatQuery>, body: axum::body::Bytes) -> 
 }
 
 /// A session leaves; the stream ends if no session is left.
-fn leave(stream: &HlsStream, session: Option<&str>) {
+async fn leave(stream: &HlsStream, session: Option<&str>) {
     let left = {
         let mut sessions = lock(&stream.sessions);
         if let Some(session) = session {
@@ -493,7 +502,7 @@ fn leave(stream: &HlsStream, session: Option<&str>) {
         sessions.is_empty()
     };
     if left {
-        end(stream, "the last listener left");
+        end(stream, "the last listener left").await;
     }
 }
 
@@ -516,7 +525,7 @@ async fn stop(
     if let Some(stream) = find_by_key(&(source_id, shift))
         && session.is_some()
     {
-        leave(&stream, session.as_deref());
+        leave(&stream, session.as_deref()).await;
     }
     Json(json!({ "status": "stopped" })).into_response()
 }
@@ -525,10 +534,10 @@ async fn stop(
 /// upstream's `{"streams": [...], "count": N}`.
 async fn status() -> Response {
     let streams: Vec<Arc<HlsStream>> = lock(&STREAMS).by_key.values().cloned().collect();
-    let mut rows: Vec<serde_json::Value> = streams
-        .iter()
-        .map(|s| describe(s, "active", s.ready(), false))
-        .collect();
+    let mut rows: Vec<serde_json::Value> = Vec::with_capacity(streams.len());
+    for s in &streams {
+        rows.push(describe(s, "active", s.ready().await, false));
+    }
     rows.sort_by(|a, b| a["source"].as_str().cmp(&b["source"].as_str()));
     Json(json!({ "count": rows.len(), "streams": rows })).into_response()
 }
@@ -595,23 +604,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_playlist_is_ready_at_two_segments() {
+    #[tokio::test]
+    async fn a_playlist_is_ready_at_two_segments() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("playlist.m3u8");
-        assert!(!playlist_ready(&p), "no playlist yet");
+        assert!(!playlist_ready(&p).await, "no playlist yet");
         std::fs::write(
             &p,
             "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nseg00000.ts\n",
         )
         .unwrap();
-        assert!(!playlist_ready(&p), "one segment");
+        assert!(!playlist_ready(&p).await, "one segment");
         std::fs::write(
             &p,
             "#EXTM3U\n#EXTINF:2.0,\nseg00000.ts\n#EXTINF:2.0,\nseg00001.ts\n",
         )
         .unwrap();
-        assert!(playlist_ready(&p));
+        assert!(playlist_ready(&p).await);
     }
 
     #[test]
@@ -724,7 +733,7 @@ mod tests {
         assert!(!watcher.is_finished(), "ended while it was being fetched");
         assert!(find_by_token(&stream.token).is_some());
         assert_eq!(slots.available_permits(), 0, "the encoder holds its slot");
-        end(&stream, "test over");
+        end(&stream, "test over").await;
         assert_ended(&stream, &slots);
     }
 
@@ -783,7 +792,7 @@ mod tests {
         assert!(not_ours.exists(), "a name no token has was swept");
         assert!(short.exists(), "a hex name too short for a token was swept");
         assert!(owned.exists(), "this process's own quiet stream was swept");
-        end(&quiet, "test over");
+        end(&quiet, "test over").await;
         assert_ended(&quiet, &slots);
     }
 
