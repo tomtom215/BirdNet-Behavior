@@ -142,18 +142,13 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   outside this repository (a kiosk, an embed), is a decision about what the
   interface promises, not something to settle by deleting what a grep did not find.
 
-## TD-7 BirdNET-Pi's protected clips are parsed and nothing uses the result
+## TD-7 BirdNET-Pi's protected clips are parsed and nothing uses the result (closed 2026-10-21)
 
-* **Where:** `crates/birdnet-migrate/src/clips.rs:714`, `pub fn protected_names`.
-* **What it does:** it reads BirdNET-Pi's `disk_check_exclude.txt` (a `##start` line,
-  then one `Date/Species/File_Name` per protected clip, each followed by the same line
-  with `.png`) and returns the file names. It has a test
-  (`the_protected_list_gives_names_not_pictures`). **Nothing calls it**: `git grep
-  protected_names` finds the definition and that test. The clip import therefore brings a
-  protected clip across as an ordinary one, which `MAX_FILES_SPECIES` and the disk purge
-  may delete; the migration guide says to lock such clips again by hand
-  (`docs/book/guides/migration.md:151` and `:204`).
-* **Evidence:** PROVEN by `git grep protected_names HEAD` on 2026-10-21 (two hits).
-* **Why it is open:** wiring it means choosing where the import locks a row (the
-  detection that owns the clip, by `File_Name`) and what to do with a name that matches
-  none; it is `A-23` in `FEATURE_GAP_ANALYSIS.md`.
+* **Closed by:** commit `486e775`. `protected_names` is now called through `clips::read_protected_list` and
+  `protect_imported` (`crates/birdnet-migrate/src/clips.rs`), from the browser's clip import
+  (`routes/admin/migration/clip_import.rs`) and the CLI (`src/helpers/migrate_cli.rs`): an imported clip on
+  BirdNET-Pi's `disk_check_exclude.txt` gets `is_locked = 1`, which the disk manager honours. Evidence:
+  `git grep protected_names` finds those callers; `protected_clips_are_locked` (4 tests) and
+  `a_protected_clip_survives_the_purge` (2, with an unlocked control) were run by their author.
+* **Still open about it:** the new "Where BirdNET-Pi is installed" field was not rendered in a browser, and
+  the CLI has no flag for that folder (it discovers the list beside the recordings).

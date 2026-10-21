@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The cross-site-request check now covers HTTP/2.** Browsers speak HTTP/2 to the
+  station's TLS listener, which sends no `Host` header, and the check treated "no `Host`"
+  as "nothing to compare" and let the request through. It now takes the authority from the
+  `Host` header or the request address, and refuses a request that carries an `Origin` or
+  `Referer` it cannot compare. Found by review; the new test drives a real HTTP/2 client
+  and failed on the old code (a cross-origin POST, a cross-site `Referer` and a forged
+  sign-in all got through).
+- **`EMBED_ORIGINS` applies only to the dashboard, the wall display and the recordings
+  page.** Sign-in, onboarding, restore, `/admin/*` and `/station/*` can never be framed,
+  and wildcards over shared suffixes (`*.co.uk`, `*.github.io`, `*.pages.dev`,
+  `*.ui.nabu.casa`) are refused (a hand-kept list, not the Public Suffix List). The old text
+  said the session cookie is withheld from framed pages; that holds only for cross-*site*
+  embedders: a Home Assistant on the same host and another port is same-site, so a
+  signed-in administrator who is same-site with a listed embedder sees the framed
+  dashboard's admin controls.
+- **A viewer account can no longer read** the BirdNET-Pi import's settings lines (they
+  carry credentials), Diagnostics, the process id, or file paths in the model panel. The
+  setup wizard no longer prints a camera's password, and the first admin password can be
+  set only once (two simultaneous first-run submissions no longer both succeed).
+- **BirdWeather's position blur fails closed and cannot be averaged away.** A mistyped
+  `BIRDWEATHER_THRESHOLD` used to discard a valid `BIRDWEATHER_LOCATION_ACCURACY`, and an
+  unusable radius (`5km`, `60000`) posted the exact position. Now a bad radius turns
+  uploads off, the two settings are read independently, `--doctor` reports both, and the
+  offset is one fixed point per station (a seed in `birdweather-blur-seed` beside the
+  database) so many posts cannot be averaged back. It is not hidden from anyone who learns
+  the offset, and changing the radius or losing the seed draws a new one.
+- **Imports and installs are harder to abuse.** The settings-import lines download uses a
+  random 128-bit token, works once and expires after ten minutes; credential-named keys,
+  unknown keys and address user-info are not shown in the preview; the heartbeat address
+  goes through the outbound-address guard; a model install stops at the pinned size, uses
+  a unique exclusive staging file and re-checks the length; Settings refuses a stream
+  address with no known scheme and a heartbeat address that is not http(s).
+- **The public MQTT status no longer carries file paths or the broker address**, a mangled
+  private key is never quoted in an error, and learned-threshold and weather-by-detection
+  reads no longer confirm a detection the owner rejected.
+
 - **"Look up my approximate location" no longer asks over plain HTTP.** It asked
   `http://ip-api.com/json/`, whose free tier has no TLS, so anyone on the path could
   rewrite the coordinates and timezone it filled in, and the station's public IP
@@ -239,6 +275,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into "any origin".
 
 ### Upgrade notes
+
+- **Two microphones at one site** now each record the same bird: the duplicate-prediction
+  interval is keyed by source as well as species. A one-source station is unchanged.
 
 What a station that upgrades from `0.17.1` notices without doing anything; each item
 is described under *Changed* or *Fixed*.
@@ -525,6 +564,31 @@ is described under *Changed* or *Fixed*.
   lockfile.
 
 ### Fixed
+
+- **Importing BirdNET-Pi clips is safer.** A move (`--clips-mode move`) is refused when this
+  station's retention would delete the clips; copies keep their age; every copy is synced to
+  disk, and so is its directory, before the original is removed; only one import runs at a
+  time and a crashed import or classifier-install worker ends as Failed instead of blocking
+  every later one; applying an import writes the Apprise file only after the settings are
+  saved. BirdNET-Pi's protected clips arrive locked, so this station's cleanup keeps them.
+- **The duplicate-prediction interval is per source.** A call at a second camera is no longer
+  dropped as a repeat of the first; a one-source station is unchanged, and an earlier
+  recording arriving late (a restart backlog) no longer rewinds the gate.
+- **Start-up notices** say when `APPRISE_TRIGGER=off|none|never`, `RECORDING_LENGTH` or
+  `FULL_DISK=keep` in an existing config now takes effect, and warn that `FULL_DISK=keep`
+  is ignored when `--watch-dir` is the recordings directory. The held-recording message and
+  Station Health say recording resumes 2 points below the purge threshold, and a raised
+  threshold applies after a restart.
+- **Smaller:** a sign-in attempt made while users are unreadable no longer clears an address's
+  failure count; a failed restart signal no longer leaves a re-exec pending; the dashboard
+  picture is streamed and cannot hang on a swapped-in FIFO; spectrogram ETags include a
+  renderer revision; a learned-threshold reset matches the species whatever its case and is
+  applied while the station is idle; `MQTT_TLS`, `MQTT_RETAIN` and `MQTT_HA_DISCOVERY`
+  accept `1`, `yes` and `on`; a viewer's navigation omits Diagnostics.
+- **Supply chain (Scorecard):** `docker.yml` has a read-only workflow token with writes granted
+  per job; `mutation.yml` installs its one Python package from a hashed requirements file;
+  `upgrade-e2e.sh` no longer pipes `curl` into `python3`; `certifi` is 2026.10.19 in the tool
+  requirements (an advisory) and `osv.yml` now scans those files too.
 
 - **A viewer is no longer offered the Diagnostics link.** The viewer deny list refuses
   `/admin/doctor`, so the admin nav's Diagnostics entry and the classifier panel's
