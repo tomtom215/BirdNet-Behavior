@@ -2,7 +2,7 @@
 
 The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) persists everything you change into the SQLite settings table.
 
-### When a change takes effect
+## When a change takes effect
 
 Every field on the page carries a small badge: **Applies immediately** (the part of the station that uses it reads the stored value again on its own, typically within about half a minute) or **Applies after restart** (the value is read once, when the station starts). The badge is drawn from one table in the code, and a test fails if a field on the page lacks one, so the page cannot disagree with itself.
 

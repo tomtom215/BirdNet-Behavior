@@ -163,7 +163,7 @@ These are not options the import can hide. The mapping table below says it key b
 - **When the disk is full**, `FULL_DISK=purge` removes the oldest clips of the most-recorded species first, never below five clips of a species and never a locked one (BirdNET-Pi removed about a day's worth of the oldest files at a time). `FULL_DISK=keep` stops recording and deletes nothing, as in BirdNET-Pi, and records again by itself once there is room. While it is stopped the station logs an error, sends an alert if notifications are set up, and lists it at `/api/v2/health/conditions` (`birdnet_recording_held` is 1 in the metrics).
 - **Privacy.** BirdNET-Pi's `PRIVACY_THRESHOLD` is a percentage of the species list; here it is a confidence, and the rule BirdNET-Pi applies is `PRIVACY_RANK`. The import converts it (`max(10, 60 × value)`) and sets the confidence rule to 0.
 - **Position.** BirdWeather uploads carry this station's position, as before. A position of exactly 0, 0 (what BirdNET-Pi writes when it cannot find one) is not copied.
-- **The network name.** The station advertises itself on the local network as a web service named "<name> on <host>" while `avahi-daemon` runs; its address is `http://<this machine's name>.local`. BirdNET-Pi's `avahi-alias` published a second name, `birdnet.local`; this does not.
+- **The network name.** The station advertises itself on the local network as a web service named `<name> on <host>` while `avahi-daemon` runs; its address is `http://<this machine's name>.local`. BirdNET-Pi's `avahi-alias` published a second name, `birdnet.local`; this does not.
 
 ## The mapping table
 
