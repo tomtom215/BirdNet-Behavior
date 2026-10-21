@@ -22,9 +22,13 @@
 //! spare.
 //!
 //! **Leave a half-written file where the loader will find it.** The download
-//! lands on a `.part` path the station never looks at and is renamed into
-//! place only after its digest matches. A power cut mid-download leaves
-//! rubbish with a name nothing reads, which the next install overwrites.
+//! lands on a `<name>.<pid>.<n>.part` path the station never looks at (unique
+//! to the process and the call, opened with `create_new`, so two installs never
+//! write into one file) and is renamed into place only after its digest matches
+//! and its length is the length received. It is stopped at the file's pinned
+//! size, so an origin that never stops cannot fill the disk for the length of
+//! the timeout. A power cut mid-download leaves rubbish with a name nothing
+//! reads; the next install removes it once its process is gone.
 //!
 //! # Where this differs from the binary updater, and why
 //!
@@ -81,6 +85,14 @@ const FREE_SPACE_MARGIN: u64 = 512 * 1024 * 1024;
 
 /// Bytes read from the network at a time.
 const CHUNK: usize = 1024 * 1024;
+
+/// The most a labels file may be. They are a few hundred kilobytes; the cap
+/// only stops a hostile origin from streaming for the length of the timeout.
+const LABELS_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The most a download with no pinned size may be (the test helper's).
+#[cfg(test)]
+const UNPINNED_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// What an installed file is for, which decides what the operator is told to
 /// configure it with.
@@ -295,6 +307,12 @@ pub enum InstallError {
         /// What arrived.
         actual: String,
     },
+    /// The server sent more bytes than the file is pinned to. The download was
+    /// stopped and deleted.
+    TooLarge {
+        /// The most the file may be.
+        limit: u64,
+    },
     /// A filesystem operation failed.
     Io(std::io::Error),
 }
@@ -328,6 +346,12 @@ impl fmt::Display for InstallError {
                 "sha256 mismatch: expected {expected}, got {actual}. The download has \
                  been deleted. Either it was corrupted in transit or the file at that \
                  URL is not the one this build was built against"
+            ),
+            Self::TooLarge { limit } => write!(
+                f,
+                "the server sent more than the {} MiB this file is pinned to, so the \
+                 download was stopped and deleted",
+                limit / (1024 * 1024)
             ),
             Self::Io(e) => write!(f, "filesystem error: {e}"),
         }
@@ -438,6 +462,55 @@ pub struct Progress {
     pub total: u64,
 }
 
+/// The staging name for a download of `dest`: `<name>.<pid>.<n>.part`.
+///
+/// Unique to this process and this call, so two installs of the same file (the
+/// command line while the browser's is running, or two browsers) cannot write
+/// into one file and produce a stream digest that verified over a file with a
+/// hole in it.
+fn part_path(dest: &Path) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = dest
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    dest.with_file_name(format!("{name}.{}.{n}.part", std::process::id()))
+}
+
+/// Remove staging files an earlier run left for `dest`: the old fixed
+/// `<stem>.part`, and `<name>.<pid>.<n>.part` whose process is gone. One whose
+/// process is alive may be an install in flight, and is left alone.
+fn clear_stale_parts(dest: &Path) {
+    let legacy = dest.with_extension("part");
+    if legacy.exists() {
+        let _ = fs::remove_file(&legacy);
+    }
+    let (Some(dir), Some(name)) = (dest.parent(), dest.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let file = file.to_string_lossy();
+        let Some(rest) = file
+            .strip_prefix(&prefix)
+            .and_then(|r| r.strip_suffix(".part"))
+        else {
+            continue;
+        };
+        let Some(pid) = rest.split('.').next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        let alive = pid == std::process::id() || Path::new(&format!("/proc/{pid}")).exists();
+        if !alive {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Download one file, hashing as it streams, and rename it into place only
 /// once the digest matches.
 #[cfg(test)]
@@ -447,28 +520,36 @@ fn fetch_verified(
     expected: &'static str,
     dest: &Path,
 ) -> Result<(), InstallError> {
-    fetch_verified_with(client, url, expected, dest, 0, &mut |_| {})
+    fetch_verified_with(
+        client,
+        url,
+        expected,
+        dest,
+        0,
+        UNPINNED_MAX_BYTES,
+        &mut |_| {},
+    )
 }
 
 /// `fetch_verified`, reporting each megabyte received to `progress`.
 ///
 /// `fallback_total` is used when the server sends no `Content-Length`.
+/// `max_bytes` is the most the file may be (its pinned size): a server that
+/// sends more is stopped at that many bytes, not allowed to stream for the
+/// length of the timeout into the disk.
 fn fetch_verified_with(
     client: &reqwest::blocking::Client,
     url: &str,
     expected: &'static str,
     dest: &Path,
     fallback_total: u64,
+    max_bytes: u64,
     progress: &mut dyn FnMut(&Progress),
 ) -> Result<(), InstallError> {
-    let part = dest.with_extension("part");
-    // A previous attempt that died mid-stream leaves one of these. It has a
-    // name nothing loads, so it is rubbish rather than a hazard — but it is
-    // still stale bytes, and appending to them would produce a file that
-    // matches no digest at all.
-    if part.exists() {
-        fs::remove_file(&part)?;
-    }
+    // A previous attempt that died mid-stream leaves staging files. They have
+    // names nothing loads, so they are rubbish rather than a hazard.
+    clear_stale_parts(dest);
+    let part = part_path(dest);
 
     let mut resp = client
         .get(url)
@@ -481,7 +562,16 @@ fn fetch_verified_with(
         )));
     }
 
-    let mut file = fs::File::create(&part)?;
+    if resp.content_length().is_some_and(|len| len > max_bytes) {
+        return Err(InstallError::TooLarge { limit: max_bytes });
+    }
+
+    // `create_new`: the name is unique to this call, so a file already there is
+    // something else's and must not be written into.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK];
     let name = dest
@@ -494,27 +584,45 @@ fn fetch_verified_with(
         done,
         total,
     });
-    loop {
-        let n = resp
-            .read(&mut buf)
-            .map_err(|e| InstallError::Network(format!("read failed: {e}")))?;
-        if n == 0 {
-            break;
+    // Everything from here until the rename removes the staging file on failure.
+    let streamed = (|| -> Result<(), InstallError> {
+        loop {
+            let n = resp
+                .read(&mut buf)
+                .map_err(|e| InstallError::Network(format!("read failed: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            if done + n as u64 > max_bytes {
+                return Err(InstallError::TooLarge { limit: max_bytes });
+            }
+            hasher.update(&buf[..n]);
+            file.write_all(&buf[..n])?;
+            done += n as u64;
+            progress(&Progress {
+                file: name.clone(),
+                done,
+                total,
+            });
         }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])?;
-        done += n as u64;
-        progress(&Progress {
-            file: name.clone(),
-            done,
-            total,
-        });
-    }
-    file.flush()?;
-    // The rename below is only atomic with respect to a crash if the bytes are
-    // actually on the device first.
-    file.sync_all()?;
+        file.flush()?;
+        // The rename below is only atomic with respect to a crash if the bytes are
+        // actually on the device first.
+        file.sync_all()?;
+        // The digest covers the bytes that were streamed; the file must be exactly
+        // those bytes.
+        if file.metadata()?.len() != done {
+            return Err(InstallError::Io(std::io::Error::other(
+                "the staging file is not the length that was received",
+            )));
+        }
+        Ok(())
+    })();
     drop(file);
+    if let Err(e) = streamed {
+        let _ = fs::remove_file(&part);
+        return Err(e);
+    }
 
     let actual = {
         use std::fmt::Write as _;
@@ -574,7 +682,7 @@ fn fetch_unless_installed(
     expected: &'static str,
     dest: &Path,
 ) -> Result<bool, InstallError> {
-    fetch_unless_installed_with(client, url, expected, dest, &mut |_| {})
+    fetch_unless_installed_with(client, url, expected, dest, UNPINNED_MAX_BYTES, &mut |_| {})
 }
 
 /// `fetch_unless_installed`, reporting progress when it does fetch.
@@ -583,12 +691,13 @@ fn fetch_unless_installed_with(
     url: &str,
     expected: &'static str,
     dest: &Path,
+    max_bytes: u64,
     progress: &mut dyn FnMut(&Progress),
 ) -> Result<bool, InstallError> {
     if already_installed(dest, expected) {
         return Ok(false);
     }
-    fetch_verified_with(client, url, expected, dest, 0, progress)?;
+    fetch_verified_with(client, url, expected, dest, 0, max_bytes, progress)?;
     Ok(true)
 }
 
@@ -607,15 +716,21 @@ fn write_verified(bytes: &[u8], expected: &'static str, dest: &Path) -> Result<(
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(InstallError::Integrity { expected, actual });
     }
-    let part = dest.with_extension("part");
-    if part.exists() {
-        fs::remove_file(&part)?;
-    }
-    let mut file = fs::File::create(&part)?;
-    file.write_all(bytes)?;
-    file.flush()?;
-    file.sync_all()?;
+    clear_stale_parts(dest);
+    let part = part_path(dest);
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_all());
     drop(file);
+    if let Err(e) = written {
+        let _ = fs::remove_file(&part);
+        return Err(e.into());
+    }
     fs::rename(&part, dest)?;
     Ok(())
 }
@@ -734,6 +849,7 @@ pub fn install_with_progress(
             entry.model_sha256,
             &model_path,
             entry.model_bytes,
+            entry.model_bytes,
             progress,
         )?;
         tracing::info!(id = entry.id, path = %model_path.display(), "classifier verified and installed");
@@ -742,7 +858,7 @@ pub fn install_with_progress(
     let labels_path = match (entry.labels_url, entry.labels_embedded, entry.labels_sha256) {
         (Some(url), None, Some(sha)) => {
             let path = dest_dir.join(labels_file_name(entry).unwrap_or_default());
-            fetch_unless_installed_with(&client, url, sha, &path, progress)?;
+            fetch_unless_installed_with(&client, url, sha, &path, LABELS_MAX_BYTES, progress)?;
             Some(path)
         }
         (None, Some(text), Some(sha)) => {
@@ -1042,6 +1158,21 @@ mod tests {
         format!("http://127.0.0.1:{port}/model.onnx")
     }
 
+    /// No staging file of any name is left in `dir`. (Staging names are unique
+    /// per call now, so looking for one fixed name would pass for any leak.)
+    fn assert_no_part_files(dir: &std::path::Path, after: &str) {
+        let left: Vec<String> = std::fs::read_dir(dir)
+            .expect("read dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".part"))
+            .collect();
+        assert!(
+            left.is_empty(),
+            "staging files left after {after}: {left:?}"
+        );
+    }
+
     fn test_client() -> reqwest::blocking::Client {
         reqwest::blocking::Client::builder()
             .user_agent("test")
@@ -1087,10 +1218,7 @@ mod tests {
             !dest.exists(),
             "a mismatched download must never be installed"
         );
-        assert!(
-            !dest.with_extension("part").exists(),
-            "the staging file must not survive a mismatch"
-        );
+        assert_no_part_files(dir.path(), "a mismatch");
         assert!(err.to_string().contains("has been deleted"), "{err}");
     }
 
@@ -1120,10 +1248,7 @@ mod tests {
         fetch_verified(&test_client(), &url, leaked, &dest).expect("a matching digest installs");
         assert!(dest.exists(), "a verified download must be installed");
         assert_eq!(std::fs::read(&dest).expect("read"), BODY);
-        assert!(
-            !dest.with_extension("part").exists(),
-            "the staging file must be renamed away, not left beside the real one"
-        );
+        assert_no_part_files(dir.path(), "a verified install");
     }
 
     /// Installing again is cheap and safe: a file that already hashes to the
@@ -1182,7 +1307,7 @@ mod tests {
         .expect_err("an unreachable host must fail");
         assert!(matches!(err, InstallError::Network(_)), "{err:?}");
         assert!(!dest.exists());
-        assert!(!dest.with_extension("part").exists());
+        assert_no_part_files(dir.path(), "this case");
     }
 
     /// The two entries this build ships, pinned. Changing a URL or a digest
@@ -1300,7 +1425,7 @@ mod tests {
             .into_boxed_str(),
         );
         let mut seen: Vec<super::Progress> = Vec::new();
-        super::fetch_verified_with(&test_client(), &url, digest, &dest, 0, &mut |p| {
+        super::fetch_verified_with(&test_client(), &url, digest, &dest, 0, u64::MAX, &mut |p| {
             seen.push(p.clone());
         })
         .expect("a matching digest installs");
@@ -1368,5 +1493,176 @@ mod tests {
         );
         std::fs::write(labels.expect("labels"), "x\n").expect("labels");
         assert!(super::looks_installed(v24, dir.path()));
+    }
+
+    /// A server that never stops. `chunks` of 64 KiB are written after the
+    /// header; the count of bytes it managed to write is returned on join.
+    /// `claimed_length` puts a `Content-Length` in the header (a lie).
+    fn serve_endless(
+        claimed_length: Option<u64>,
+        chunks: usize,
+    ) -> (String, std::thread::JoinHandle<u64>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let mut written = 0_u64;
+            if let Ok((mut sock, _)) = listener.accept() {
+                use std::io::{Read as _, Write as _};
+                let mut scratch = [0u8; 1024];
+                let _ = sock.read(&mut scratch);
+                let header = claimed_length.map_or_else(
+                    || "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_owned(),
+                    |n| {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {n}\r\nConnection: close\r\n\r\n"
+                        )
+                    },
+                );
+                let _ = sock.write_all(header.as_bytes());
+                let block = [7u8; 64 * 1024];
+                for _ in 0..chunks {
+                    if sock.write_all(&block).is_err() {
+                        break;
+                    }
+                    written += block.len() as u64;
+                }
+            }
+            written
+        });
+        (format!("http://127.0.0.1:{port}/model.onnx"), handle)
+    }
+
+    const ANY_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    /// A hostile or compromised origin cannot make the station stream for the
+    /// whole timeout: the download stops at the pinned size, and nothing is left.
+    #[test]
+    fn a_server_that_streams_past_the_pinned_size_is_stopped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        // No Content-Length: only the byte count can stop it. 3200 x 64 KiB is
+        // 200 MiB on offer against a 2 MiB pin.
+        let (url, server) = serve_endless(None, 3200);
+        let err = super::fetch_verified_with(
+            &test_client(),
+            &url,
+            ANY_DIGEST,
+            &dest,
+            0,
+            2 * 1024 * 1024,
+            &mut |_| {},
+        )
+        .expect_err("more than the pinned size must be refused");
+        assert!(
+            matches!(err, InstallError::TooLarge { limit } if limit == 2 * 1024 * 1024),
+            "{err:?}"
+        );
+        assert!(!dest.exists());
+        assert_no_part_files(dir.path(), "an oversize stream");
+        let offered = server.join().expect("server thread");
+        assert!(
+            offered < 64 * 1024 * 1024,
+            "the client kept reading: the server wrote {offered} of 200 MiB"
+        );
+    }
+
+    /// A `Content-Length` over the pin is refused before a byte is stored.
+    #[test]
+    fn a_length_over_the_pinned_size_is_refused_before_any_file_is_made() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        let (url, server) = serve_endless(Some(10 * 1024 * 1024 * 1024), 4);
+        let err = super::fetch_verified_with(
+            &test_client(),
+            &url,
+            ANY_DIGEST,
+            &dest,
+            0,
+            1024 * 1024,
+            &mut |_| {},
+        )
+        .expect_err("a 10 GiB claim against a 1 MiB pin");
+        assert!(matches!(err, InstallError::TooLarge { .. }), "{err:?}");
+        assert_no_part_files(dir.path(), "an oversize Content-Length");
+        let _ = server.join();
+    }
+
+    /// The counterpart: a file exactly the pinned size installs. Only *more*
+    /// than the pin is refused.
+    #[test]
+    fn a_file_of_exactly_the_pinned_size_installs() {
+        const BODY: &[u8] = b"exactly this many bytes, pinned";
+        let digest: &'static str = Box::leak(
+            {
+                use sha2::Digest as _;
+                use std::fmt::Write as _;
+                let mut hex = String::new();
+                for b in &sha2::Sha256::digest(BODY) {
+                    let _ = write!(hex, "{b:02x}");
+                }
+                hex
+            }
+            .into_boxed_str(),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        let url = serve_once(BODY);
+        super::fetch_verified_with(
+            &test_client(),
+            &url,
+            digest,
+            &dest,
+            0,
+            BODY.len() as u64,
+            &mut |_| {},
+        )
+        .expect("the pinned size is allowed");
+        assert_eq!(std::fs::read(&dest).expect("read"), BODY);
+        assert_no_part_files(dir.path(), "an install");
+    }
+
+    /// Two installs of one file never share a staging file.
+    #[test]
+    fn two_downloads_of_one_file_stage_under_different_names() {
+        let dest = std::path::Path::new("/m/birdnet-v24.onnx");
+        let (a, b) = (super::part_path(dest), super::part_path(dest));
+        assert_ne!(a, b);
+        for p in [&a, &b] {
+            let name = p.file_name().expect("name").to_string_lossy();
+            assert!(name.starts_with("birdnet-v24.onnx."), "{name}");
+            assert!(name.contains(&std::process::id().to_string()), "{name}");
+            assert!(name.ends_with(".part"), "{name}");
+        }
+        // Opening a name that is taken fails instead of writing into it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let taken = dir.path().join("x.part");
+        std::fs::write(&taken, b"another install's bytes").expect("write");
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&taken);
+        assert!(opened.is_err());
+    }
+
+    /// Cleaning up after a dead install leaves a live one alone.
+    #[test]
+    fn a_dead_installs_staging_file_is_cleared_and_a_live_ones_is_not() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("m.onnx");
+        // 4_000_000_000 is above any pid_max, so no such process exists.
+        let dead = dir.path().join("m.onnx.4000000000.0.part");
+        let live = dir
+            .path()
+            .join(format!("m.onnx.{}.9.part", std::process::id()));
+        let legacy = dir.path().join("m.part");
+        let other = dir.path().join("other.onnx.4000000000.0.part");
+        for f in [&dead, &live, &legacy, &other] {
+            std::fs::write(f, b"x").expect("write");
+        }
+        super::clear_stale_parts(&dest);
+        assert!(!dead.exists(), "a dead process's staging file");
+        assert!(!legacy.exists(), "the old fixed name");
+        assert!(live.exists(), "this process's may be in flight");
+        assert!(other.exists(), "another file's staging is not ours");
     }
 }
