@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **"Look up my approximate location" no longer asks over plain HTTP.** It asked
+  `http://ip-api.com/json/`, whose free tier has no TLS, so anyone on the path could
+  rewrite the coordinates and timezone it filled in, and the station's public IP
+  address crossed the network in clear. It asks `https://ipwho.is/` (free, no key,
+  1,000 requests a day per address) and, only if that fails, `https://get.geojs.io/`;
+  the client refuses `http://` outright, redirects included. The answer is read
+  defensively: a coordinate that is missing, not finite, out of range or exactly
+  0.0, 0.0 is a failed lookup, and a timezone that is not shaped like an IANA name is
+  dropped. The wizard now says which services it asks and what they are told (the
+  station's public IP address, as before). A failed lookup still shows the same
+  message. Gates: the unit tests in `routes/admin/settings/handler.rs`.
 - **The support bundle no longer carries the station's exact coordinates.**
   `LATITUDE` and `LONGITUDE` are shown to one decimal (about 11 km) in the
   configuration and wherever the journal printed them (BirdWeather's start-up line,

@@ -665,93 +665,218 @@ pub async fn save_settings(
 // ---------------------------------------------------------------------------
 
 /// Response body for the detect-location endpoint.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LocationResult {
     /// Latitude in decimal degrees.
     pub lat: f64,
     /// Longitude in decimal degrees.
     pub lon: f64,
-    /// Nearest city name returned by ip-api.com; empty when unavailable.
+    /// Nearest city name reported by the provider; empty when unavailable.
     pub city: String,
-    /// Country name returned by ip-api.com; empty when unavailable.
+    /// Country name reported by the provider; empty when unavailable.
     pub country: String,
-    /// IANA timezone name (e.g. `"America/New_York"`) reported by ip-api.com.
+    /// IANA timezone name (e.g. `"America/New_York"`) reported by the provider.
     /// Empty when the service omits it. Surfaced so first-run onboarding can
     /// store it for display and the doctor's clock check (the OS clock remains
     /// the source of truth for wall-clock times — see `doctor::clock`).
     pub timezone: String,
 }
 
-/// Detect the station's approximate location using the public ip-api.com service.
+/// One IP-geolocation service: where to ask and how to read the answer.
+struct GeoProvider {
+    /// Host name, for the log; never sent anywhere.
+    name: &'static str,
+    /// An `https://` URL that answers with the caller's own address located.
+    url: &'static str,
+    /// Reads the response body.
+    parse: fn(&[u8]) -> Result<LocationResult, String>,
+}
+
+/// The services asked, in order, until one answers. Both are free, need no key
+/// and are reached over TLS; each is told the station's public IP address by
+/// the request itself, which is the whole of what it learns. The second is
+/// asked only when the first fails.
+///
+/// * `ipwho.is` — 1,000 requests a day per client address, commercial use
+///   allowed, <https://ipwhois.io/documentation>.
+/// * `get.geojs.io` — "No rate limits (yet)", <https://www.geojs.io/>.
+///
+/// `BirdNET-Pi` asked `ip-api.com`, whose free tier has no TLS: the
+/// coordinates this fills in could be rewritten on the way, and the station's
+/// address went across the network in clear.
+const GEO_PROVIDERS: [GeoProvider; 2] = [
+    GeoProvider {
+        name: "ipwho.is",
+        url: "https://ipwho.is/",
+        parse: parse_ipwhois,
+    },
+    GeoProvider {
+        name: "get.geojs.io",
+        url: "https://get.geojs.io/v1/ip/geo.json",
+        parse: parse_geojs,
+    },
+];
+
+/// Longest response read from a provider; a real answer is under 1 KiB.
+const GEO_MAX_BODY: usize = 64 * 1024;
+
+/// A coordinate from a JSON number or a numeric string (`geojs` sends strings).
+fn coordinate(v: Option<&serde_json::Value>, limit: f64) -> Option<f64> {
+    let n = match v? {
+        serde_json::Value::Number(n) => n.as_f64()?,
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok()?,
+        _ => return None,
+    };
+    (n.is_finite() && n.abs() <= limit).then_some(n)
+}
+
+/// A provider's free text made safe to store and show: control characters
+/// dropped, at most `max` characters.
+fn clean_text(v: Option<&serde_json::Value>, max: usize) -> String {
+    v.and_then(serde_json::Value::as_str)
+        .map(|s| s.chars().filter(|c| !c.is_control()).take(max).collect())
+        .map(|s: String| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// A timezone name only if it has the shape of an IANA one
+/// (`Area/Location`, ASCII letters, digits and `_+-/`); the settings table
+/// keeps it and the doctor reads it, so a provider's free text is not stored.
+fn clean_timezone(v: Option<&serde_json::Value>) -> String {
+    let t = clean_text(v, 64);
+    let shaped = !t.is_empty()
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '+' | '-'));
+    if shaped { t } else { String::new() }
+}
+
+/// The location in a decoded answer, or why it is not one. A coordinate that
+/// is missing, not finite or out of range is a failed lookup, and so is
+/// 0.0, 0.0: no provider's answer for a real station, and what an unknown
+/// address is reported as.
+fn located(
+    root: &serde_json::Value,
+    city: Option<&serde_json::Value>,
+    country: Option<&serde_json::Value>,
+    timezone: Option<&serde_json::Value>,
+) -> Result<LocationResult, String> {
+    let lat = coordinate(root.get("latitude"), 90.0);
+    let lon = coordinate(root.get("longitude"), 180.0);
+    match (lat, lon) {
+        (Some(lat), Some(lon)) if lat != 0.0 || lon != 0.0 => Ok(LocationResult {
+            lat,
+            lon,
+            city: clean_text(city, 100),
+            country: clean_text(country, 100),
+            timezone: clean_timezone(timezone),
+        }),
+        _ => Err("no usable coordinates in the response".into()),
+    }
+}
+
+/// `https://ipwho.is/`: `{"success": true, "latitude": 37.77, "longitude":
+/// -122.41, "city": ..., "country": ..., "timezone": {"id": "America/..."}}`,
+/// and `{"success": false, "message": ...}` for a refusal.
+fn parse_ipwhois(body: &[u8]) -> Result<LocationResult, String> {
+    let root: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("invalid location response: {e}"))?;
+    if root.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err("the provider reported a failure".into());
+    }
+    located(
+        &root,
+        root.get("city"),
+        root.get("country"),
+        root.get("timezone").and_then(|t| t.get("id")),
+    )
+}
+
+/// `https://get.geojs.io/v1/ip/geo.json`: `{"latitude": "37.751", "longitude":
+/// "-97.822", "country": ..., "timezone": "America/Chicago"}`. Coordinates are
+/// strings; there is no city for most addresses and no success flag.
+fn parse_geojs(body: &[u8]) -> Result<LocationResult, String> {
+    let root: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("invalid location response: {e}"))?;
+    located(
+        &root,
+        root.get("city"),
+        root.get("country"),
+        root.get("timezone"),
+    )
+}
+
+/// The client for a provider: TLS only (a redirect to `http://` is refused
+/// too), no more than five seconds.
+fn geo_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .https_only(true)
+        .build()
+}
+
+/// Ask one provider. The body is read at most [`GEO_MAX_BODY`] bytes deep and
+/// only for a 2xx status.
+async fn ask_provider(
+    client: &reqwest::Client,
+    url: &str,
+    parse: fn(&[u8]) -> Result<LocationResult, String>,
+) -> Result<LocationResult, String> {
+    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("the provider answered {}", resp.status()));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > GEO_MAX_BODY {
+            return Err("the response is larger than any location answer".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    parse(&body)
+}
+
+/// Detect the station's approximate location from its public IP address.
 ///
 /// Returns `{"lat": ..., "lon": ..., "city": ..., "country": ..., "timezone": ...}`
-/// on success, or `500` with an error message on failure.
+/// on success, or `502` with an error message on failure. The request tells a
+/// third-party service (see [`GEO_PROVIDERS`]) the station's public IP address
+/// and nothing else; the wizard says so next to the button and the manual
+/// repeats it.
 ///
 /// BirdNET-Pi equivalent: `birdnet_analysis.sh` calls `curl ipinfo.io` on startup
 /// to auto-populate `LATITUDE` / `LONGITUDE` when not configured.
 ///
 /// # Errors
 ///
-/// Returns `(StatusCode, String)` on HTTP client build failure, network errors,
-/// JSON decode failure, or when ip-api.com returns a non-success status.
+/// Returns `(StatusCode, String)` on HTTP client build failure, or when every
+/// provider failed (no route, a non-2xx status, an answer that is not JSON or
+/// has no usable coordinates).
 pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, String)> {
-    #[derive(serde::Deserialize)]
-    struct IpApiResponse {
-        lat: f64,
-        lon: f64,
-        #[serde(default)]
-        city: String,
-        #[serde(default)]
-        country: String,
-        #[serde(default)]
-        timezone: String,
-        status: String,
+    let client = geo_client().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut last = String::from("no provider configured");
+    for provider in &GEO_PROVIDERS {
+        match ask_provider(&client, provider.url, provider.parse).await {
+            Ok(found) => {
+                tracing::info!(
+                    lat = found.lat,
+                    lon = found.lon,
+                    city = %found.city,
+                    provider = provider.name,
+                    "auto-detected location"
+                );
+                return Ok(Json(found));
+            }
+            Err(e) => {
+                tracing::warn!(provider = provider.name, error = %e, "location lookup failed");
+                last = e;
+            }
+        }
     }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let resp = client
-        .get("http://ip-api.com/json/")
-        .send()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("location lookup failed: {e}"),
-            )
-        })?;
-
-    let data: IpApiResponse = resp.json().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("invalid location response: {e}"),
-        )
-    })?;
-
-    if data.status != "success" {
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            "ip-api.com returned non-success status".into(),
-        ));
-    }
-
-    tracing::info!(
-        lat = data.lat,
-        lon = data.lon,
-        city = %data.city,
-        "auto-detected location via ip-api.com"
-    );
-
-    Ok(Json(LocationResult {
-        lat: data.lat,
-        lon: data.lon,
-        city: data.city,
-        country: data.country,
-        timezone: data.timezone,
-    }))
+    Err((
+        StatusCode::BAD_GATEWAY,
+        format!("location lookup failed: {last}"),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1258,6 +1383,219 @@ pub(crate) fn build_settings_items(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    // -- IP geolocation ---------------------------------------------------
+
+    /// What `https://ipwho.is/` answered (captured 2026-10-21, trimmed to the
+    /// members this code could read, the address replaced by a documentation one).
+    const IPWHOIS_BODY: &str = r#"{"ip":"203.0.113.7","success":true,"type":"IPv4",
+        "continent":"North America","country":"United States","country_code":"US",
+        "region":"California","city":"San Francisco","latitude":37.774926,
+        "longitude":-122.4194208,"timezone":{"id":"America/Los_Angeles","abbr":"PDT",
+        "is_dst":true,"offset":-25200,"utc":"-07:00"}}"#;
+
+    /// What `https://get.geojs.io/v1/ip/geo.json` answered (same capture).
+    const GEOJS_BODY: &str = r#"{"accuracy":1000,"area_code":"0","asn":396982,
+        "continent_code":"NA","country":"United States","country_code":"US",
+        "ip":"203.0.113.7","latitude":"37.751","longitude":"-97.822",
+        "organization":"AS396982 Google LLC","timezone":"America\/Chicago"}"#;
+
+    #[test]
+    fn ipwhois_is_read_into_a_location() {
+        let got = parse_ipwhois(IPWHOIS_BODY.as_bytes()).expect("a real answer parses");
+        assert_eq!(
+            got,
+            LocationResult {
+                lat: 37.774_926,
+                lon: -122.419_420_8,
+                city: "San Francisco".into(),
+                country: "United States".into(),
+                timezone: "America/Los_Angeles".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn geojs_strings_are_read_into_a_location() {
+        let got = parse_geojs(GEOJS_BODY.as_bytes()).expect("a real answer parses");
+        assert_eq!(
+            got,
+            LocationResult {
+                lat: 37.751,
+                lon: -97.822,
+                city: String::new(),
+                country: "United States".into(),
+                timezone: "America/Chicago".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_refusal_or_a_missing_coordinate_is_a_failed_lookup() {
+        for body in [
+            r#"{"success":false,"message":"Invalid IP address"}"#,
+            r#"{"success":true,"longitude":10.0}"#,
+            r#"{"success":true,"latitude":10.0}"#,
+            // `success` is the provider's word; absent is not true.
+            r#"{"latitude":10.0,"longitude":10.0}"#,
+            r#"{"success":"true","latitude":10.0,"longitude":10.0}"#,
+            "<html>Just a moment...</html>",
+            "",
+        ] {
+            assert!(parse_ipwhois(body.as_bytes()).is_err(), "{body}");
+        }
+        for body in [
+            r#"{"country":"X"}"#,
+            r#"{"latitude":null,"longitude":null}"#,
+            "[]",
+        ] {
+            assert!(parse_geojs(body.as_bytes()).is_err(), "{body}");
+        }
+    }
+
+    /// Both sides of the range check: the edges are places, one step past is
+    /// not, and neither is a value that is not a number at all.
+    #[test]
+    fn coordinates_are_finite_and_in_range() {
+        let at = |lat: &str, lon: &str| {
+            parse_geojs(format!(r#"{{"latitude":{lat},"longitude":{lon}}}"#).as_bytes())
+        };
+        assert!(at("90", "180").is_ok());
+        assert!(at("-90", "-180").is_ok());
+        assert!(at(r#""90.0""#, r#""-180.0""#).is_ok());
+        for (lat, lon) in [
+            ("90.0001", "0.5"),
+            ("-90.0001", "0.5"),
+            ("0.5", "180.0001"),
+            ("0.5", "-180.0001"),
+            ("91", "181"),
+            (r#""NaN""#, "1"),
+            ("1", r#""inf""#),
+            (r#""-inf""#, "1"),
+            (r#""north""#, "1"),
+            ("true", "1"),
+            ("1e999", "1"),
+        ] {
+            assert!(at(lat, lon).is_err(), "{lat}, {lon}");
+        }
+    }
+
+    #[test]
+    fn a_provider_that_does_not_know_the_address_is_not_a_location() {
+        let at = |lat: &str, lon: &str| {
+            parse_geojs(format!(r#"{{"latitude":{lat},"longitude":{lon}}}"#).as_bytes())
+        };
+        assert!(at("0", "0").is_err());
+        assert!(at(r#""0.0""#, r#""0.0""#).is_err());
+        // One coordinate on the equator or the meridian is a real place.
+        assert!(at("0", "10").is_ok());
+        assert!(at("10", "0").is_ok());
+    }
+
+    #[test]
+    fn free_text_from_a_provider_is_cleaned_before_it_is_kept() {
+        let body = serde_json::json!({
+            "success": true, "latitude": 1.5, "longitude": 2.5,
+            "city": format!("  Mü\u{7}nchen\n{}", "x".repeat(300)),
+            "country": "Germany",
+            "timezone": {"id": "Europe/Berlin; rm -rf /"},
+        })
+        .to_string();
+        let got = parse_ipwhois(body.as_bytes()).expect("the coordinates are good");
+        assert!(got.city.starts_with("München"), "{:?}", got.city);
+        assert!(got.city.chars().count() <= 100);
+        assert!(!got.city.chars().any(char::is_control));
+        // A timezone with the wrong shape is dropped; the location is kept.
+        assert_eq!(got.timezone, "");
+        assert_eq!((got.lat, got.lon), (1.5, 2.5));
+        for ok in [
+            "America/Argentina/Buenos_Aires",
+            "Etc/GMT+5",
+            "UTC",
+            "Asia/Ho_Chi_Minh",
+        ] {
+            let body = format!(r#"{{"latitude":1,"longitude":2,"timezone":"{ok}"}}"#);
+            assert_eq!(parse_geojs(body.as_bytes()).unwrap().timezone, ok);
+        }
+    }
+
+    /// The reason this code was changed: no provider is asked in clear text.
+    #[test]
+    fn every_provider_is_reached_over_tls() {
+        assert!(!GEO_PROVIDERS.is_empty());
+        for p in &GEO_PROVIDERS {
+            assert!(p.url.starts_with("https://"), "{} is {}", p.name, p.url);
+        }
+    }
+
+    /// A one-answer web server on a loopback port: `raw` is sent, whatever is
+    /// asked. Returns its address.
+    async fn serve_once(raw: Vec<u8>) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0_u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(&raw).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        addr
+    }
+
+    fn http_response(status: &str, body: &[u8]) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn plain_client() -> reqwest::Client {
+        reqwest::Client::builder().no_proxy().build().unwrap()
+    }
+
+    /// Counterpart pair: the station's client will not speak `http://` (so
+    /// neither the first request nor a redirect can drop to clear text), while
+    /// the very same server and answer are read by a client that may.
+    #[tokio::test]
+    async fn the_station_client_refuses_http_and_a_plain_one_reads_the_answer() {
+        let addr = serve_once(http_response("200 OK", GEOJS_BODY.as_bytes())).await;
+        let url = format!("http://{addr}/");
+        let refused = ask_provider(&geo_client().unwrap(), &url, parse_geojs).await;
+        assert!(refused.is_err(), "{refused:?}");
+
+        let addr = serve_once(http_response("200 OK", GEOJS_BODY.as_bytes())).await;
+        let got = ask_provider(&plain_client(), &format!("http://{addr}/"), parse_geojs)
+            .await
+            .expect("the fixture server answers");
+        assert_eq!(got.timezone, "America/Chicago");
+    }
+
+    #[tokio::test]
+    async fn a_failing_or_oversized_answer_is_a_failed_lookup() {
+        let addr = serve_once(http_response(
+            "429 Too Many Requests",
+            GEOJS_BODY.as_bytes(),
+        ))
+        .await;
+        let e = ask_provider(&plain_client(), &format!("http://{addr}/"), parse_geojs)
+            .await
+            .unwrap_err();
+        assert!(e.contains("429"), "{e}");
+
+        let big = vec![b' '; GEO_MAX_BODY + 1];
+        let addr = serve_once(http_response("200 OK", &big)).await;
+        let e = ask_provider(&plain_client(), &format!("http://{addr}/"), parse_geojs)
+            .await
+            .unwrap_err();
+        assert!(e.contains("larger"), "{e}");
+    }
 
     /// The form's ranges and `birdnet-core`'s must not drift.
     ///

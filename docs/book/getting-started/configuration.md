@@ -132,8 +132,10 @@ consent: Apprise, BirdWeather, MQTT, SMTP e-mail, the heartbeat ping, and the
 weather poll (`api.open-meteo.com` by default; `api.met.no`, `api.weather.com`
 or `api.pirateweather.net` for the other `WEATHER_PROVIDER`s — itself opt-in via
 `BNB_WEATHER_ENABLED=1`).
-The location button on the settings page calls `ip-api.com`, and only when you
-press it.
+The location button calls `ipwho.is` (and `get.geojs.io` if that does not
+answer), over TLS and only when you press it. The request tells that service
+this station's public IP address, which is how it finds the area; no station
+data is sent. You review the coordinates before saving them.
 
 ### Offline mode
 

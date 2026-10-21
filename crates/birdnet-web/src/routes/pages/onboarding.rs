@@ -1631,7 +1631,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
           <p class="ob-p">Your coordinates let BirdNET weight species by what's actually likely in your area, and compute sunrise / sunset for the dawn-chorus window.</p>
           <div class="ob-mt-18">
             <button class="bnb-btn" type="button" id="ob-detect"><span aria-hidden="true">⌖</span> Look up my approximate location</button>
-            <p class="bnb-meta ob-mt-6">This asks ip-api.com what area this station's public IP address is in. Skip it and type the coordinates yourself if you would rather not.</p>
+            <p class="bnb-meta ob-mt-6">This tells ipwho.is (or, if it does not answer, get.geojs.io) this station's public IP address, over an encrypted connection, and asks what area it is in. Skip it and type the coordinates yourself if you would rather not.</p>
           </div>
           <div class="ob-latlon">
             <div class="ob-field"><label for="ob-lat">Latitude</label><input id="ob-lat" name="latitude" type="text" placeholder="e.g. 42.3601" inputmode="decimal" value="{{latitude}}"></div>
@@ -2050,7 +2050,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   refreshSummary();
 
   // Auto-detect coordinates + timezone via the existing settings endpoint
-  // (same-origin fetch; the endpoint itself queries ip-api.com server-side).
+  // (same-origin fetch; the endpoint itself queries ipwho.is server-side).
   var detect = document.getElementById('ob-detect');
   var pill = pillEl;
   if (detect) {
