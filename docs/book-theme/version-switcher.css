@@ -28,3 +28,13 @@
   color: var(--links);
   text-decoration: underline;
 }
+
+/* A phone's menu bar has room for three buttons on the left, two or three on
+   the right and one more control. With the selector in it, mdBook's title —
+   which shrinks before anything else does — was left 33 px wide and read "B…"
+   at 390 px (measured, `menu-title` width, light and dark). The page's own
+   heading names the page; the title is the part to give up. */
+@media (max-width: 600px) {
+    .menu-title { display: none; }
+    .right-buttons { margin-inline-start: auto; }
+}
