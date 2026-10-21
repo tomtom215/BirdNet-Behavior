@@ -57,8 +57,9 @@ Nothing publishes to crates.io automatically, and the project has never been
 published; the nine names (`birdnet-behavior` and the eight `birdnet-*` library
 crates) were unclaimed on 2026-10-15. What is ready: every crate packages
 (`cargo package --workspace`, run by the `crates are publishable` job and by
-`validate`), every package is under 2.1 MB, the internal dependencies carry
-versions, every tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE` and the
+`validate`), every package is under 3 MB compressed (the largest is `birdnet-web`, 2.6 MiB;
+`cargo package` reports it, and crates.io's limit is 10 MiB), the internal
+dependencies carry versions, every tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE` and the
 workspace `homepage` (`scripts/check-crate-licences.py` reads the tarballs in both
 of those places), and `cargo package --workspace --no-default-features` also
 *builds* all nine from their tarballs (it was run once; the bundled-DuckDB build
@@ -119,10 +120,21 @@ it would do (`cargo publish --workspace --dry-run`) and at these:
   and downloads ONNX Runtime. A package build does not render the in-app manual
   (`build.rs` skips it: a build script may not write into the registry source), so
   `/help` shows its "docs unavailable" panel until `BNB_HELP_DIR` points at a
-  rendered copy such as a release archive's `help/`.
+  rendered copy such as a release archive's `help/`. It also embeds neither DuckDB
+  extension (the release workflow fetches `behavioral` and `icu` and sets
+  `BIRDNET_BUNDLED_EXTENSION_FILE` / `BIRDNET_BUNDLED_ICU_FILE`; a package build
+  has no such files), so the first analytics query `INSTALL`s them into
+  `~/.duckdb`: it needs the network once and a writable home, and under the
+  shipped systemd unit (`ProtectHome=read-only`) it would fail the way v0.13.1 did.
+  `README.md` says this to the reader; `--doctor` still describes the extension as
+  "embedded in release binaries" on such a build.
 - **docs.rs** builds the two crates whose default features pull in the bundled
   engine without it (`no-default-features` in their `[package.metadata.docs.rs]`);
-  that was reasoned from docs.rs's offline builds, not tried. Each library crate's
+  that was reasoned from docs.rs's offline builds, not tried (one part was read:
+  `ort-sys`'s build script returns early when `DOCS_RS` is set, in
+  `build/main.rs`). Those two crates, and `birdnet-behavioral` and
+  `birdnet-timeseries`, whose `analytics` feature is off by default, therefore
+  show a reduced API there. Each library crate's
   `documentation` is `https://docs.rs/<name>`, the binary's is the operator manual,
   and all nine share the manual as `homepage`.
 - **`birdnet-core`'s tarball contains the bird-name table** (`data/l18n/`:
@@ -254,10 +266,19 @@ hand — see "What is NOT automated" for what this means for a docs fix.
 What "a manual per release" does and does not promise today:
 
 - **It does not wait for the release.** `docs.yml` is triggered by the stable tag
-  push itself, not by `release.yml`. A tag that `validate` rejects, or whose
-  later jobs fail, still moves the site root to that tag's manual, and so does a
-  tag on a commit that is not on `main`. To take a bad tag back, delete it and
-  run *Docs* from the Actions tab: the site is rebuilt from the tags that exist.
+  push itself, not by `release.yml`. Two things are refused first, by
+  `scripts/check-release-tag.sh` (the gate `docker.yml` also applies): a tag on a
+  commit that is not on `main`, and a tag whose `Cargo.toml` names another version.
+  What is *not* refused is a tag that `validate` rejects for another reason (an
+  unannotated tag, a missing changelog heading) or whose build, upgrade or publish
+  jobs later fail: that tag still moves the site root to its manual. To take it
+  back, delete the tag and run *Docs* from the Actions tab: the site is rebuilt
+  from the tags that exist.
+- **The built site is loaded in a browser before it deploys.**
+  `scripts/check-docs-site.mjs` checks the version switcher on the root, on every
+  version and on `/dev/`, each page's banner, switching between versions, the 404
+  page for an unknown version, search results, and the phone menu bar. It was
+  watched failing against the switcher assets from before it existed.
 - **It is rebuilt, not archived.** Every run re-renders every release from its
   tag with today's tooling: the mdBook version pinned in `docs.yml`, the version
   switcher and accessibility assets, and `check-book-links.py` from the checkout.
@@ -374,6 +395,12 @@ Copy-paste this into the release PR or issue and tick it off:
     not carry a dependency refresh. Confirm the diff is only the member version
     lines before committing.
 [ ] CHANGELOG.md: [Unreleased] rolled into ## [X.Y.Z] - YYYY-MM-DD
+[ ] CHANGELOG.md: the new section is under about 119,000 bytes (`validate` warns above
+    120,000). Over that, `github-release` keeps whole `###` sections that fit and
+    drops the rest behind a link: simulated on 2026-10-21 with the then-136,654-byte
+    Unreleased section, it kept `### Added`, `### Changed` and `### Fixed`
+    (116,868 bytes) and cut `### Security`, the section a reader most needs.
+    Trim, or order the sections so the one that must be read comes first.
 [ ] CHANGELOG.md: fresh empty [Unreleased] section added
 [ ] CHANGELOG.md: link references at the foot updated
 [ ] Local gate: cargo fmt --check --all
