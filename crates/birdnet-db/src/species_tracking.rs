@@ -15,8 +15,10 @@
 //!
 //! * **new ever** — nothing before this date. The life list.
 //! * **new this year** — nothing since the tracking year began. The year list.
-//! * **new this season** — nothing since the season began. The phenology
-//!   signal this project's analytics already exist to measure.
+//! * **new this season** — nothing since the season began, and nothing in the
+//!   [`SEASON_CARRYOVER_DAYS`] before it either: a resident the season turned
+//!   over is not an arrival. The phenology signal this project's analytics
+//!   already exist to measure.
 //! * **returning after an absence** — there *is* something before, and the gap
 //!   is at least the configured number of days. A resident is not returning;
 //!   a bird absent since last autumn is.
@@ -214,11 +216,36 @@ fn classify(
     SpeciesStatus {
         new_ever: first_ever == Some(on_date),
         new_this_year: first_year == Some(on_date),
-        new_this_season: first_season == Some(on_date),
+        new_this_season: first_season == Some(on_date)
+            && !carried_over(previous, windows.season_start),
         returning_after_absence: windows.absence_days > 0
             && days_since_previous.is_some_and(|d| d >= i64::from(windows.absence_days)),
         days_since_previous,
     }
+}
+
+/// Days before a season begins within which a detection means the species was
+/// already there when it did.
+///
+/// birdnet-go's `DefaultSeasonalTrackingWindowDays`, whose `3582fc843` fixed
+/// the same defect: without it every species heard in the first days of a
+/// season is "new this season", because the season has only just started for
+/// all of them. Inclusive at both ends of what counts as "before": a detection
+/// on the last day of the old season, or seven days earlier, carries the
+/// species over; eight days earlier does not.
+pub const SEASON_CARRYOVER_DAYS: i64 = 7;
+
+/// Whether the species was already present when the season began.
+///
+/// `previous` is the latest detection before the date being classified. The
+/// caller only asks when the species has none *within* the season so far
+/// (`first_season` is that day), which makes `previous`, when it exists,
+/// strictly before `season_start` and so the species' last sighting before the
+/// boundary: no second query is needed.
+fn carried_over(previous: Option<&str>, season_start: &str) -> bool {
+    previous
+        .and_then(|p| days_between(p, season_start))
+        .is_some_and(|d| (1..=SEASON_CARRYOVER_DAYS).contains(&d))
 }
 
 /// Whole days from `from` to `to`, both `YYYY-MM-DD`.
@@ -658,6 +685,104 @@ mod tests {
             "the tracking year begins after this date, so nothing can be new in it"
         );
         assert!(!s.new_this_season);
+    }
+
+    /// A season boundary is not a fresh start for the birds already there.
+    ///
+    /// A blackbird heard on 20 and 21 December has not "arrived for the
+    /// winter" on the 21st: the season turned over it. Reported as news, every
+    /// resident on the list would carry the badge on the first day of every
+    /// season, which is the defect birdnet-go fixed in `3582fc843`.
+    #[test]
+    fn a_resident_heard_the_day_before_the_boundary_is_not_new_this_season() {
+        let conn = db();
+        seen(&conn, "Turdus merula", "2026-12-20");
+        seen(&conn, "Turdus merula", "2026-12-21");
+        let s = status(
+            &conn,
+            "2026-12-21",
+            windows("2026-01-01", "2026-12-21", 30),
+            "Turdus merula",
+        );
+        assert!(
+            !s.new_this_season,
+            "it was heard the day before the season began: {s:?}"
+        );
+        assert_eq!(s.days_since_previous, Some(1));
+        assert!(!s.is_notable(), "a resident is not news: {s:?}");
+    }
+
+    /// The carry-over lasts the whole season, not only the boundary day: a bird
+    /// heard on the 20th and next on the 24th was around when the season began.
+    #[test]
+    fn the_carry_over_outlives_the_first_day_of_the_season() {
+        let conn = db();
+        seen(&conn, "Turdus merula", "2026-12-20");
+        seen(&conn, "Turdus merula", "2026-12-24");
+        let s = status(
+            &conn,
+            "2026-12-24",
+            windows("2026-01-01", "2026-12-21", 30),
+            "Turdus merula",
+        );
+        assert!(!s.new_this_season, "carried over from before 21 Dec: {s:?}");
+    }
+
+    /// The edge of the carry-over window, on both sides.
+    ///
+    /// Seven days before the boundary counts as "already there" (birdnet-go's
+    /// `DefaultSeasonalTrackingWindowDays`); eight does not. Without the second
+    /// half a rule of "heard at any time before" would pass the first.
+    #[test]
+    fn the_carry_over_window_is_seven_days_inclusive() {
+        let conn = db();
+        seen(&conn, "Turdus merula", "2026-12-14"); // 7 days before 21 Dec
+        seen(&conn, "Turdus merula", "2026-12-22");
+        seen(&conn, "Erithacus rubecula", "2026-12-13"); // 8 days before
+        seen(&conn, "Erithacus rubecula", "2026-12-22");
+        let w = windows("2026-01-01", "2026-12-21", 30);
+        assert!(
+            !status(&conn, "2026-12-22", w, "Turdus merula").new_this_season,
+            "heard 7 days before the boundary is carried over"
+        );
+        assert!(
+            status(&conn, "2026-12-22", w, "Erithacus rubecula").new_this_season,
+            "heard 8 days before the boundary is a bird that has come back"
+        );
+    }
+
+    /// A bird that was never there before the boundary is still news on it.
+    #[test]
+    fn a_first_detection_on_the_boundary_day_is_still_new_this_season() {
+        let conn = db();
+        seen(&conn, "Fringilla montifringilla", "2026-12-21");
+        let s = status(
+            &conn,
+            "2026-12-21",
+            windows("2026-01-01", "2026-12-21", 30),
+            "Fringilla montifringilla",
+        );
+        assert!(s.new_this_season);
+    }
+
+    /// Detections the station has set aside are not "heard before the boundary".
+    #[test]
+    fn a_rejected_detection_before_the_boundary_does_not_carry_a_bird_over() {
+        let conn = db();
+        seen(&conn, "Turdus merula", "2026-12-20");
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-12-20'",
+            [],
+        )
+        .expect("reject");
+        seen(&conn, "Turdus merula", "2026-12-21");
+        let s = status(
+            &conn,
+            "2026-12-21",
+            windows("2026-01-01", "2026-12-21", 30),
+            "Turdus merula",
+        );
+        assert!(s.new_this_season, "the only real detection is today's: {s:?}");
     }
 
     /// The headline picks the strongest claim, not the first flag set.
