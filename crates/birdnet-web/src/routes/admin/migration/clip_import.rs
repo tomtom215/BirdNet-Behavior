@@ -331,9 +331,15 @@ fn protection_line(state: &AppState, setup: &Setup, apply: bool) -> Result<Strin
         return Ok(r#"<p class="hint">No list of protected clips was found beside the recordings, so none will be locked. If you protected clips in BirdNET-Pi, put its folder in <em>Where BirdNET-Pi is installed</em> above.</p>"#.to_owned());
     }
     let names = &setup.protected;
-    let p = state
-        .with_db(|conn| clips::protect_imported(conn, names, apply))
-        .map_err(|e| format!("The protected clips could not be checked: {e}"))?;
+    // A preview only reads the detections: its temp table lives in the
+    // connection's own temporary database, which a read-only connection may
+    // write. Only applying sets `is_locked`, and that takes the writer.
+    let p = if apply {
+        state.with_db(|conn| clips::protect_imported(conn, names, true))
+    } else {
+        state.with_read_db(|conn| clips::protect_imported(conn, names, false))
+    }
+    .map_err(|e| format!("The protected clips could not be checked: {e}"))?;
     let unmatched = p
         .listed
         .saturating_sub(usize::try_from(p.matched).unwrap_or(usize::MAX));
