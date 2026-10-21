@@ -31,9 +31,15 @@
 //! implements the wrong one. `.github/dependabot.yml` groups them so they
 //! arrive as one pull request.
 //!
-//! rubato's filter delays its output by `128 * ratio` samples; `process_all`
-//! trims that, so a sound lands where it went in (see the impulse test). The
-//! module once did not, and every resampled recording ran that much late.
+//! rubato's filter delays its output by `128 * ratio - 1` samples (measured, not
+//! documented by rubato), and `process_all` trims only `floor(128 * ratio)`. The
+//! module once trimmed nothing, and every resampled recording ran that much late
+//! (see the impulse test); it then trimmed the integer part and left every
+//! recording whose rate is not 48 kHz early by up to a sample (0.69 at
+//! 44.1 -> 48 kHz), which moved a borderline BirdNET-Pi comparison across the
+//! confidence threshold. [`resample`] now makes the delay a whole number by
+//! prepending zeros and drops the surplus, so a sound lands where it went in to
+//! within 0.05 sample (see the tone test).
 
 use std::fmt;
 
@@ -94,15 +100,59 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
         FixedAsync::Input,
     )
     .map_err(|e| ResampleError::Process(e.to_string()))?;
+
+    // The filter delays the signal by `128 * ratio - 1` output samples
+    // (measured: `a_tone_comes_back_with_no_fractional_sample_delay`), which is
+    // a whole number only for some ratios, while `process_all` can trim only
+    // `output_delay()`, the integer part of `128 * ratio`. Left there, every
+    // recording whose rate is not 48 kHz came out early by a fraction of a
+    // sample (0.69 at 44.1 -> 48 kHz).
+    //
+    // Prepending `lead` zeros delays the signal by `lead * ratio` more output
+    // samples. Choosing `lead` so that `(128 + lead) * ratio` is a whole
+    // number makes the total delay a whole number too, and the surplus over
+    // what `process_all` trimmed is dropped from the front below. `lead` is
+    // below twice the ratio's reduced denominator; the zeros are the silence
+    // the filter would have been fed anyway. `tail` zeros give the filter room
+    // to produce the frames that the dropped ones displaced.
+    let divisor = gcd(from_rate, to_rate);
+    let (num, den) = (u64::from(to_rate / divisor), u64::from(from_rate / divisor));
+    let trimmed = resampler.output_delay() as u64;
+    let mut lead = (den - 128 % den) % den;
+    while (128 + lead) * num / den < trimmed + 1 {
+        lead += den;
+    }
+    let delay = (128 + lead) * num / den - 1;
+    let extra = (delay - trimmed) as usize;
+    let tail = (1.0 / ratio).ceil() as usize + 1;
+
+    let mut padded = Vec::with_capacity(lead as usize + samples.len() + tail);
+    padded.resize(lead as usize, 0.0_f32);
+    padded.extend_from_slice(samples);
+    padded.resize(padded.len() + tail, 0.0);
+
     // `process_all` resets the filter, trims its start-up delay and returns
     // exactly `ceil(ratio * len)` frames, so the output lines up with the input
-    // instead of running `128 * ratio` samples late and short.
-    let adapter = InterleavedSlice::new(samples, 1, samples.len())
+    // instead of running late and short.
+    let adapter = InterleavedSlice::new(&padded, 1, padded.len())
         .map_err(|e| ResampleError::Process(e.to_string()))?;
     let out = resampler
-        .process_all(&adapter, samples.len(), None)
-        .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?;
-    Ok(out.take_data())
+        .process_all(&adapter, padded.len(), None)
+        .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?
+        .take_data();
+    // `ceil(n * to / from)` in integers: in f64 `88_200 * (48_000 / 44_100.0)` is
+    // 96_000.000000000015 and the ceiling is one sample too long.
+    let wanted =
+        (samples.len() as u64 * u64::from(to_rate)).div_ceil(u64::from(from_rate)) as usize;
+    Ok(out.into_iter().skip(extra).take(wanted).collect())
+}
+
+/// Greatest common divisor (Euclid); both arguments are non-zero here.
+const fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 #[cfg(test)]
@@ -211,6 +261,62 @@ mod tests {
         }
     }
 
+    /// Delay of the output against the input, in OUTPUT samples, measured on a
+    /// sine of `freq` Hz: the phase of the middle half of `resample`'s output
+    /// against the same sine evaluated at the output times. Positive = late.
+    fn measured_delay(from: u32, to: u32, freq: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let n = from as usize * 2;
+        let x: Vec<f32> = (0..n)
+            .map(|i| (TAU * freq * i as f64 / f64::from(from)).sin() as f32)
+            .collect();
+        let y = resample(&x, from, to).unwrap();
+        let (mut re, mut im) = (0.0_f64, 0.0_f64);
+        for (k, v) in y.iter().enumerate().take(3 * y.len() / 4).skip(y.len() / 4) {
+            let w = TAU * freq * k as f64 / f64::from(to);
+            re += f64::from(*v) * w.cos();
+            im += f64::from(*v) * w.sin();
+        }
+        // y = A sin(w k - phi):  sum y cos ~ -sin(phi), sum y sin ~ cos(phi).
+        (-re).atan2(im) / (TAU * freq / f64::from(to))
+    }
+
+    /// The output is not just near where it should be, it is *there*: a tone
+    /// comes out with no fractional-sample delay. rubato's filter delays the
+    /// signal by `128 * ratio - 1` output samples, an integer only for some
+    /// ratios, and `process_all` trims `floor(128 * ratio)`; the module used to
+    /// stop there and left every non-48 kHz recording early by
+    /// `1 - frac(128 * ratio)` samples: 0.69 at 44.1 -> 48 kHz, 0.38 at
+    /// 22.05 -> 48 kHz, 0.67 at 48 -> 32 kHz, 1.0 at 32 -> 48 kHz. BirdNET-Pi's
+    /// resampler (resampy) leaves none, and on a very quiet recording that
+    /// shift alone moved one window's top score from 0.711 to 0.656, across the
+    /// 0.7 line (`tools/parity`, clip `ij_mono_44k1_12s`). The impulse test
+    /// below could not see it: it allows one whole output sample.
+    #[test]
+    fn a_tone_comes_back_with_no_fractional_sample_delay() {
+        for (from, to) in [
+            (44_100_u32, 48_000_u32),
+            (22_050, 48_000),
+            (48_000, 32_000),
+            (32_000, 48_000),
+            (16_000, 48_000),
+            (96_000, 48_000),
+            (11_025, 48_000),
+            (88_200, 48_000),
+            (48_000, 44_100),
+            (48_000, 22_050),
+            (48_000, 16_000),
+        ] {
+            for freq in [1_000.0, 4_000.0] {
+                let d = measured_delay(from, to, freq);
+                assert!(
+                    d.abs() < 0.05,
+                    "{from} -> {to} Hz, {freq} Hz tone: delayed by {d:+.3} output samples"
+                );
+            }
+        }
+    }
+
     /// The output is the length the ratio says, with nothing trimmed from the
     /// end to pay for the delay.
     #[test]
@@ -222,8 +328,22 @@ mod tests {
             (48_000, 32_000, 48_001),
         ] {
             let y = resample(&vec![0.1_f32; n], from, to).unwrap();
-            let expected = (f64::from(to) / f64::from(from) * n as f64).ceil() as usize;
+            let expected = (n as u64 * u64::from(to)).div_ceil(u64::from(from)) as usize;
             assert_eq!(y.len(), expected, "{from} -> {to} Hz, {n} samples");
+        }
+    }
+
+    /// Inputs shorter than the filter (a clip of a few samples, or none) come
+    /// back at the length the ratio says and do not panic: the padding added to
+    /// align the output must never leak into the length.
+    #[test]
+    fn tiny_inputs_keep_the_length_the_ratio_says() {
+        for (from, to) in [(44_100_u32, 48_000_u32), (48_000, 32_000), (22_050, 48_000)] {
+            for n in [0_usize, 1, 2, 7, 300] {
+                let y = resample(&vec![0.25_f32; n], from, to).unwrap();
+                let expected = (n as u64 * u64::from(to)).div_ceil(u64::from(from)) as usize;
+                assert_eq!(y.len(), expected, "{from} -> {to} Hz, {n} samples");
+            }
         }
     }
 
