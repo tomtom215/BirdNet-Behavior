@@ -365,31 +365,47 @@ impl ClassifierSetup {
             .name("classifier-install".to_owned())
             .spawn(move || {
                 let publish = |job: Job| {
-                    if let Ok(mut inner) = shared.lock() {
-                        inner.job = Some(job);
-                    }
+                    shared
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .job = Some(job);
                 };
-                let grand_total = ids.iter().map(|e| e.model_bytes).sum::<u64>();
-                let mut before = 0_u64;
-                for (i, entry) in ids.iter().enumerate() {
-                    let step = i + 1;
-                    let result = run(entry.id, &dest, &mut |p: &Progress| {
-                        publish(Job::Running {
-                            step,
-                            steps: ids.len(),
-                            file: p.file.clone(),
-                            before,
-                            done: p.done,
-                            grand_total,
+                // A panic in the installer (or in a progress callback) must end
+                // the job as Failed. Left alone, the unwound thread leaves the
+                // job Running for good: the page shows a bar that never moves
+                // and every later attempt is refused as "already running"
+                // until the station restarts.
+                let work = std::panic::AssertUnwindSafe(|| {
+                    let grand_total = ids.iter().map(|e| e.model_bytes).sum::<u64>();
+                    let mut before = 0_u64;
+                    for (i, entry) in ids.iter().enumerate() {
+                        let step = i + 1;
+                        let result = run(entry.id, &dest, &mut |p: &Progress| {
+                            publish(Job::Running {
+                                step,
+                                steps: ids.len(),
+                                file: p.file.clone(),
+                                before,
+                                done: p.done,
+                                grand_total,
+                            });
                         });
-                    });
-                    if let Err(why) = result {
-                        publish(Job::Failed(why));
-                        return;
+                        if let Err(why) = result {
+                            publish(Job::Failed(why));
+                            return;
+                        }
+                        before += entry.model_bytes;
                     }
-                    before += entry.model_bytes;
+                    publish(Job::Idle);
+                });
+                if std::panic::catch_unwind(work).is_err() {
+                    tracing::error!("the classifier install thread panicked");
+                    publish(Job::Failed(
+                        "the download stopped unexpectedly; the station's log has the details. \
+                         You can try again."
+                            .to_owned(),
+                    ));
                 }
-                publish(Job::Idle);
             });
         if let Err(e) = spawned {
             self.set_job(Job::Failed(format!("could not start the download: {e}")));
@@ -399,9 +415,10 @@ impl ClassifierSetup {
     }
 
     fn set_job(&self, job: Job) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.job = Some(job);
-        }
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .job = Some(job);
     }
 }
 
@@ -635,5 +652,28 @@ mod tests {
             s.snapshot(false).phase == Phase::NeedsRestart
         });
         assert!(s.snapshot(false).failure.is_none());
+    }
+
+    /// An installer that panics ends the job as Failed, and a retry is allowed.
+    #[test]
+    fn a_panicking_install_is_a_failed_install_not_a_running_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let s = setup(layout(dir.path()));
+        s.begin_install(|_, _, _| panic!("boom")).expect("starts");
+        wait_until("the failure", || s.snapshot(false).phase == Phase::Failed);
+        assert!(
+            s.snapshot(false)
+                .failure
+                .as_deref()
+                .is_some_and(|f| f.contains("stopped unexpectedly"))
+        );
+        s.begin_install(|_, dest, _| {
+            put_default(dest);
+            Ok(())
+        })
+        .expect("not refused as already running");
+        wait_until("the retry", || {
+            s.snapshot(false).phase == Phase::NeedsRestart
+        });
     }
 }
