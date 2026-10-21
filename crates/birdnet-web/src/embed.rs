@@ -96,7 +96,7 @@ impl EmbedOrigins {
 
     /// Whether anything may frame the station.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.origins.is_empty()
     }
 

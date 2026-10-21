@@ -350,7 +350,7 @@ fn thresholds_response(state: &AppState) -> Response {
 
 /// Return the HTMX partial fragment listing all current per-species confidence thresholds.
 pub async fn thresholds_partial(State(state): State<AppState>) -> Response {
-    state.run_blocking(|state| thresholds_response(state)).await
+    state.run_blocking(thresholds_response).await
 }
 
 /// Per-species threshold submission.
@@ -468,7 +468,9 @@ pub async fn delete_threshold(
 // Minimum-interval handlers
 // ---------------------------------------------------------------------------
 
-/// The longest per-species interval the form accepts: one day. Anything longer
+/// The longest per-species interval the form accepts: one day.
+///
+/// Anything longer
 /// is a unit slip (milliseconds, or minutes typed into a seconds field), and a
 /// species held for more than a day is not "recorded again" in any useful sense.
 pub const MAX_SPECIES_INTERVAL_SECS: i64 = 86_400;
@@ -495,7 +497,7 @@ fn intervals_response(state: &AppState) -> Response {
 
 /// Return the HTMX partial listing every per-species minimum interval.
 pub async fn intervals_partial(State(state): State<AppState>) -> Response {
-    state.run_blocking(|state| intervals_response(state)).await
+    state.run_blocking(intervals_response).await
 }
 
 /// Per-species interval submission.

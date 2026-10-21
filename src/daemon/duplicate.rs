@@ -94,6 +94,7 @@ impl DuplicateGate {
     /// directory in whatever order the filesystem returns, so on a restart with
     /// a backlog an *earlier* recording routinely arrives after a later one. A
     /// signed `at - last < interval` test would admit every one of those.
+    #[cfg(test)]
     pub(super) fn admit(&mut self, sci_name: &str, at_secs: i64) -> DuplicateVerdict {
         self.admit_with(sci_name, at_secs, None)
     }

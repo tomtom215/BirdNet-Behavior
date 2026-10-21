@@ -121,11 +121,13 @@ fn at_stamp(at: &str) -> String {
 /// `GET /api/v2/weather/latest`.
 async fn latest(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     state
-        .run_blocking(|state| match state.with_read_db(|c| c.latest()) {
-            Ok(Some(row)) => (StatusCode::OK, Json(row_json(&row))),
-            Ok(None) => not_cached("any hour"),
-            Err(e) => unreadable(&e),
-        })
+        .run_blocking(
+            |state| match state.with_read_db(birdnet_db::weather::WeatherStore::latest) {
+                Ok(Some(row)) => (StatusCode::OK, Json(row_json(&row))),
+                Ok(None) => not_cached("any hour"),
+                Err(e) => unreadable(&e),
+            },
+        )
         .await
 }
 

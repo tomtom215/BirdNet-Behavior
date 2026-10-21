@@ -94,8 +94,11 @@ pub struct Learned {
     pub active: bool,
     /// Multiplier the level applies to the base threshold.
     pub multiplier: f64,
-    /// The threshold the species is held to now, when the base is known.
-    pub effective_threshold: f64,
+    /// The threshold the species is held to now. `None` when no floor is known
+    /// (a process with no detection daemon): the tracker clamps to its floor, so
+    /// a threshold computed without it could be lower than the station really
+    /// applies.
+    pub effective_threshold: Option<f64>,
     /// The base before the level: the operator's threshold for the species, or
     /// the station's.
     pub base_threshold: f64,
@@ -144,11 +147,8 @@ pub fn snapshot(state: &AppState, now_ms: i64) -> Result<Snapshot, birdnet_db::s
             };
             // The tracker's own rule (`Adjustment::apply`): multiply, never
             // below the floor, never above the base.
-            let mut effective = base_threshold * multiplier;
-            if let Some(min) = min {
-                effective = effective.max(min);
-            }
-            let effective_threshold = effective.min(base_threshold);
+            let effective_threshold =
+                min.map(|min| (base_threshold * multiplier).max(min).min(base_threshold));
             Learned {
                 row,
                 active,
@@ -185,7 +185,7 @@ fn row_json(state: &AppState, l: &Learned) -> Value {
         "active": l.active,
         "base_threshold": r4(l.base_threshold),
         "base_is": if l.base_is_species { "species" } else { "station" },
-        "effective_threshold": if l.active { json!(r4(l.effective_threshold)) } else { Value::Null },
+        "effective_threshold": l.effective_threshold.filter(|_| l.active).map(r4),
     })
 }
 
@@ -336,16 +336,18 @@ async fn one(
                 .rows
                 .iter()
                 .find(|l| l.row.sci_name.eq_ignore_ascii_case(species.trim()));
-            match found {
-                Some(l) => (StatusCode::OK, Json(row_json(state, l))),
-                None => (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({
-                        "error": "nothing is stored for that species; it has no learned level \
-                                  (or the level was reset). Species are named by scientific name."
-                    })),
-                ),
-            }
+            found.map_or_else(
+                || {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({
+                            "error": "nothing is stored for that species; it has no learned level \
+                                      (or the level was reset). Species are named by scientific name."
+                        })),
+                    )
+                },
+                |l| (StatusCode::OK, Json(row_json(state, l))),
+            )
         })
         .await
 }

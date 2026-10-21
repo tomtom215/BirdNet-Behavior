@@ -55,7 +55,7 @@ pub fn birdweather_location(
 /// # Errors
 ///
 /// A sentence naming the key and what is wrong with its value.
-pub(crate) fn birdweather_options(
+fn birdweather_options(
     threshold: Option<&str>,
     accuracy: Option<&str>,
 ) -> Result<(Option<f32>, f64), String> {
@@ -64,7 +64,7 @@ pub(crate) fn birdweather_options(
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let bar = match blank(threshold) {
+    let floor = match blank(threshold) {
         None => None,
         Some(text) => {
             let v = birdnet_core::config::locale::parse_decimal(&text).map_err(|_| {
@@ -94,7 +94,7 @@ pub(crate) fn birdweather_options(
             v
         }
     };
-    Ok((bar, metres))
+    Ok((floor, metres))
 }
 
 /// Create a `BirdWeather` client from CLI flags and/or config file values.
@@ -160,9 +160,9 @@ pub fn create_birdweather_client(
                 None => client,
             };
             let client = client.with_location_accuracy(accuracy_m);
-            if let Some(bar) = client.min_confidence() {
+            if let Some(floor) = client.min_confidence() {
                 tracing::info!(
-                    bar,
+                    floor,
                     "BirdWeather: only detections at or above this confidence are uploaded"
                 );
             }

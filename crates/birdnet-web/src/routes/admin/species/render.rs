@@ -259,7 +259,7 @@ pub fn render_intervals_partial(intervals: &[birdnet_db::sqlite::SpeciesInterval
         );
     } else {
         out.push_str(
-            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species</th><th scope="col">Minimum interval</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
+            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species and interval</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
         );
         for i in intervals {
             let esc = escape_html(&i.sci_name);
@@ -267,8 +267,7 @@ pub fn render_intervals_partial(intervals: &[birdnet_db::sqlite::SpeciesInterval
             let _ = write!(
                 out,
                 r##"<tr>
-  <td>{esc}</td>
-  <td class="cell-center">{shown}</td>
+  <td>{esc}<br><span class="muted-sm">at least {shown} apart</span></td>
   <td class="cell-right">
     <form hx-post="/admin/species/intervals/delete" hx-target="#intervals-section" hx-swap="innerHTML" class="inline-form">
       <input type="hidden" name="sci_name" value="{esc}">

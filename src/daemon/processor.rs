@@ -3866,10 +3866,7 @@ mod tests {
             let dlon = (p["lon"].as_f64().unwrap() + 0.13).abs()
                 * 111_195.0
                 * 51.48_f64.to_radians().cos();
-            assert!(
-                (dlat * dlat + dlon * dlon).sqrt() <= 301.5,
-                "outside 300 m: {p}"
-            );
+            assert!(dlat.hypot(dlon) <= 301.5, "outside 300 m: {p}");
         }
     }
 

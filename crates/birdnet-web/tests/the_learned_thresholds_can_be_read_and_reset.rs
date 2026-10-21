@@ -31,7 +31,7 @@ fn now_ms() -> i64 {
     .unwrap()
 }
 
-fn config() -> DynamicThresholdConfig {
+const fn config() -> DynamicThresholdConfig {
     DynamicThresholdConfig {
         enabled: true,
         trigger: 0.8,
@@ -301,6 +301,40 @@ async fn an_unknown_species_is_404_and_an_unreadable_table_is_not_an_empty_list(
     }
 }
 
+/// With no daemon there is no floor to clamp to, so no "threshold now" is
+/// claimed: a number computed without the floor could be lower than the one the
+/// station applies.
+#[tokio::test]
+async fn without_a_floor_no_effective_threshold_is_claimed() {
+    let (_d, state, _h) = station();
+    let dir = tempfile::tempdir().unwrap();
+    let bare = AppState::new(dir.path().join("birds.db")).unwrap();
+    bare.with_db(|c| {
+        birdnet_db::dynamic_thresholds::replace_all(c, &[row("Strix aluco", 3, 10 * HOUR_MS)])
+    })
+    .unwrap();
+    let (_, v) = call(
+        &bare,
+        "GET",
+        "/api/v2/dynamic-thresholds/Strix%20aluco",
+        None,
+        "",
+    )
+    .await;
+    assert_eq!(v["level"], 3);
+    assert!(v["effective_threshold"].is_null(), "{v}");
+    // The counterpart: with a daemon's configuration it is a number.
+    let (_, w) = call(
+        &state,
+        "GET",
+        "/api/v2/dynamic-thresholds/Strix%20aluco",
+        None,
+        "",
+    )
+    .await;
+    assert!(w["effective_threshold"].is_number(), "{w}");
+}
+
 #[tokio::test]
 async fn without_a_daemon_the_list_says_so() {
     let dir = tempfile::tempdir().unwrap();
@@ -510,7 +544,7 @@ async fn the_admin_card_lists_what_was_learned_and_resets_one_species() {
     for expect in [
         "Strix aluco",
         "Pica pica",
-        "3 of 3",
+        "level 3 of 3",
         "lapsed",
         "Reset all",
         "floor 30%",

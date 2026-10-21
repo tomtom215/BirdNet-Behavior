@@ -68,13 +68,9 @@ pub fn render_learned_partial(
     if snap.rows.is_empty() {
         out.push_str(r#"<p class="empty-note mb">Nothing has been learned yet.</p>"#);
     } else {
-        out.push_str(
-            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species</th><th scope="col">Level</th><th scope="col">Threshold now</th><th scope="col">Last confirmed</th><th scope="col">Lapses</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
-        );
         for l in &snap.rows {
             render_row(&mut out, l, now_ms, name_of);
         }
-        out.push_str("</tbody></table>");
         out.push_str(
             r##"<form hx-post="/admin/species/learned/reset-all" hx-target="#learned-section" hx-swap="innerHTML" hx-confirm="Forget everything the station has learned? Every species starts again from its own threshold." class="add-row">
     <button type="submit" class="btn btn-danger">Reset all</button>
@@ -93,40 +89,39 @@ fn render_row(out: &mut String, l: &Learned, now_ms: i64, name_of: &dyn Fn(&str)
     } else {
         format!(r#"{shown} <span class="muted-sm">{sci}</span>"#)
     };
-    let (threshold, lapses) = if l.active {
-        (
-            format!(
-                "{} <span class=\"muted-sm\">from {} &times;{:.2}</span>",
-                pct(l.effective_threshold),
-                pct(l.base_threshold),
-                l.multiplier
-            ),
-            format!("in {}", span(l.row.expires_at_ms - now_ms)),
+    let threshold = if !l.active {
+        format!(
+            "{} (lapsed {} ago)",
+            pct(l.base_threshold),
+            span(now_ms - l.row.expires_at_ms)
+        )
+    } else if let Some(t) = l.effective_threshold {
+        format!(
+            "{} now, from {} &times;{:.2}; lapses in {}",
+            pct(t),
+            pct(l.base_threshold),
+            l.multiplier,
+            span(l.row.expires_at_ms - now_ms)
         )
     } else {
-        (
-            format!(
-                "{} <span class=\"muted-sm\">lapsed</span>",
-                pct(l.base_threshold)
-            ),
-            format!("{} ago", span(now_ms - l.row.expires_at_ms)),
+        // No floor is known here, so no number is claimed.
+        format!(
+            "&times;{:.2} of {}, floor unknown; lapses in {}",
+            l.multiplier,
+            pct(l.base_threshold),
+            span(l.row.expires_at_ms - now_ms)
         )
     };
     let _ = write!(
         out,
-        r##"<tr>
-  <td>{name}</td>
-  <td class="cell-center">{level} of {max}</td>
-  <td class="cell-center">{threshold}</td>
-  <td class="cell-center">{ago} ago</td>
-  <td class="cell-center">{lapses}</td>
-  <td class="cell-right">
-    <form hx-post="/admin/species/learned/reset" hx-target="#learned-section" hx-swap="innerHTML" class="inline-form">
-      <input type="hidden" name="sci_name" value="{sci}">
-      <button type="submit" class="btn btn-danger del-btn">Reset</button>
-    </form>
-  </td>
-</tr>"##,
+        r##"<div class="st-list-row"><div class="lr-main">
+  <div>{name}</div>
+  <div class="lr-sub">level {level} of {max} &middot; {threshold} &middot; confirmed {ago} ago</div>
+  <form hx-post="/admin/species/learned/reset" hx-target="#learned-section" hx-swap="innerHTML" class="inline-form">
+    <input type="hidden" name="sci_name" value="{sci}">
+    <button type="submit" class="btn btn-danger del-btn">Reset {sci}</button>
+  </form>
+</div></div>"##,
         level = l.row.level,
         max = birdnet_core::detection::dynamic_threshold::MAX_LEVEL,
         ago = span(now_ms - l.row.last_confirmed_ms),
@@ -160,7 +155,7 @@ fn card(state: &AppState) -> Response {
 
 /// `GET /admin/species/learned`.
 pub async fn learned_partial(State(state): State<AppState>) -> Response {
-    state.run_blocking(|state| card(state)).await
+    state.run_blocking(card).await
 }
 
 /// Form for resetting one species.
@@ -179,7 +174,7 @@ pub async fn reset_one(
     state
         .run_blocking(move |state| {
             let sci = form.sci_name.trim().to_owned();
-            apply(state, &request_user, Reset::Species(sci))
+            apply(state, &request_user, &Reset::Species(sci))
         })
         .await
 }
@@ -190,11 +185,11 @@ pub async fn reset_everything(
     request_user: crate::auth_middleware::RequestUser,
 ) -> Response {
     state
-        .run_blocking(move |state| apply(state, &request_user, Reset::All))
+        .run_blocking(move |state| apply(state, &request_user, &Reset::All))
         .await
 }
 
-fn apply(state: &AppState, user: &crate::auth_middleware::RequestUser, which: Reset) -> Response {
+fn apply(state: &AppState, user: &crate::auth_middleware::RequestUser, which: &Reset) -> Response {
     use crate::routes::pages::toast::{Toast, not_applied};
     if matches!(&which, Reset::Species(s) if s.is_empty()) {
         return not_applied(&Toast::error("Choose a species to reset."));

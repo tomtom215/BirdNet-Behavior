@@ -90,6 +90,19 @@ Both files are re-checked once a minute and re-read when they change on disk,
 so a `certbot renew` in the small hours is serving within a minute, from the
 next handshake — **no restart, no cron hook.**
 
+### What the browser shows
+
+**Station → Access → Secure connection** says which of the three modes the
+station is in. In `self-signed` mode it shows when the certificate runs to (read
+from the certificate's own record, not the configured length) and offers the
+station's **local CA certificate** for download, so you can add it to a phone or
+computer once instead of clicking through the browser warning every time. The
+CA's private key is never served. The page has no upload or generate button, on
+purpose: the page used to fix a plain-HTTP station is itself plain HTTP, so a form
+for a private key would send the key across the network in the clear; the
+certificate and key are files on the station, and `self-signed` already generates
+and renews its own.
+
 ### Checking it before you rely on it
 
 `--doctor` does exactly what startup does, early enough to be useful:

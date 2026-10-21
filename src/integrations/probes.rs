@@ -28,7 +28,7 @@ pub fn notification_probes(
 ///
 /// A probe exists when the integration was *asked for*, whether or not the
 /// rest of its configuration is usable: an eBird key with no coordinates, or an
-/// unknown weather provider, answers with the real reason ("EBIRD_API_KEY is
+/// unknown weather provider, answers with the real reason ("`EBIRD_API_KEY` is
 /// set but the station has no coordinates") instead of a button that is greyed
 /// out for a reason nothing says.
 #[must_use]
