@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use birdnet_migrate::clips::{self, Mode, Options, Wanted};
 use birdnet_migrate::conf::{Row, Verdict};
 use birdnet_web::routes::admin::migration::conf_import::{
-    ApplyError, Bundle, Prepared, apply, apprise_file_path, config_lines_text, prepare,
+    ApplyError, Bundle, Prepared, apply_with_file, apprise_file_path, config_lines_text, prepare,
+    stage_private,
 };
 
 use crate::cli::Cli;
@@ -160,17 +161,12 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
             return 1;
         }
     };
-    if let Some(text) = &prepared.apprise_file {
-        let target = apprise_file_path(&data_dir);
-        if let Err(e) = write_private(&target, text) {
-            eprintln!(
-                "{} could not be written: {e}. Nothing was changed.",
-                target.display()
-            );
-            return 1;
-        }
-    }
-    match apply(&conn, &prepared.assignments) {
+    let apprise_target = apprise_file_path(&data_dir);
+    let file = prepared
+        .apprise_file
+        .as_deref()
+        .map(|text| (apprise_target.as_path(), text));
+    match apply_with_file(&conn, &prepared.assignments, file) {
         Ok(applied) => {
             println!(
                 "\nDone: {} setting(s) saved. {} take effect after the station restarts.",
@@ -179,7 +175,7 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
             );
             if let Some(text) = config_lines_text(&prepared) {
                 let target = data_dir.join("birdnet-from-birdnet-pi.conf");
-                match write_private(&target, &text) {
+                match stage_private(&target, &text).and_then(|f| f.install()) {
                     Ok(()) => println!(
                         "Some keys are read only from birdnet.conf; their lines, with the real \
                          values, are in {} (private; add them to /etc/birdnet/birdnet.conf).",
@@ -197,23 +193,24 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
             }
             1
         }
+        Err(ApplyError::FileNotPlaced { applied, error }) => {
+            eprintln!(
+                "\nThe {} setting(s) were saved, but the Apprise file could not be put in place \
+                 ({error}), so notifications will not be sent until it is. Run the import again \
+                 once that folder is writable.",
+                applied.changed.len()
+            );
+            1
+        }
+        Err(e @ ApplyError::FileNotWritten(_)) => {
+            eprintln!("\nThe Apprise file could not be written, so nothing was changed: {e}");
+            1
+        }
         Err(e) => {
             eprintln!("\nNothing was changed: {e}");
             1
         }
     }
-}
-
-fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    options.open(path)?.write_all(text.as_bytes())
 }
 
 /// Reads the imported rows a page at a time over its own connection.
@@ -243,6 +240,29 @@ impl Iterator for Pager {
         }
         self.page.pop_front()
     }
+}
+
+/// The first day whose clips this station's retention keeps: clips for
+/// detections dated before it are deleted by the next cleanup. `None` when the
+/// retention is off (0, the default: audio is kept forever) or the date is not
+/// one.
+fn retention_cutoff(retention_days: f64, today: &str) -> Option<String> {
+    if !retention_days.is_finite() || retention_days < 1.0 {
+        return None;
+    }
+    birdnet_core::civil::shift_datetime(today, "00:00:00", -retention_days.floor() * 86_400.0)
+        .map(|(date, _)| date)
+}
+
+/// Today's date on the station's clock, `YYYY-MM-DD`.
+fn today_local() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let (y, m, d) = birdnet_core::civil::civil_from_days(
+        (now + birdnet_db::clock::local_utc_offset_secs()).div_euclid(86_400),
+    );
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// `--import-birdnet-pi-clips PATH`.
@@ -286,6 +306,20 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
         .get("purge_threshold")
         .and_then(|v| v.trim().parse::<f64>().ok())
         .unwrap_or(95.0);
+    // The retention the station will run with: the Settings table once the
+    // first start has seeded it, else the flag / config file, as `app.rs` reads
+    // it. Without the real value `--clips-mode move` could not tell that the
+    // next cleanup would delete what it just took out of BirdNET-Pi.
+    let retention_days = settings
+        .get("clip_retention_days")
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .or_else(|| (cli.clip_retention_days > 0).then(|| f64::from(cli.clip_retention_days)))
+        .or_else(|| {
+            config
+                .and_then(|c| c.get_parsed::<u32>("CLIP_RETENTION_DAYS").ok())
+                .map(f64::from)
+        })
+        .unwrap_or(0.0);
     let probe = if dest.is_dir() {
         dest.clone()
     } else {
@@ -305,7 +339,7 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
         mode,
         dry_run: !cli.apply_import,
         room,
-        retention_cutoff: None,
+        retention_cutoff: retention_cutoff(retention_days, &today_local()),
     };
     let wanted = || -> Box<dyn Iterator<Item = Wanted>> {
         match open() {
@@ -359,6 +393,7 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
 mod tests {
     use super::*;
     use crate::helpers::test_support::default_cli;
+    use birdnet_web::routes::admin::migration::conf_import::apply;
 
     fn cli_for(conf_dir: &Path, apply: bool) -> Cli {
         let mut cli = default_cli();
@@ -457,5 +492,105 @@ mod tests {
         let work = tempfile::tempdir().expect("dir");
         let code = run_import_conf(&cli_for(work.path(), false), None);
         assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn the_retention_cutoff_is_the_first_day_kept() {
+        assert_eq!(
+            retention_cutoff(30.0, "2026-03-31").as_deref(),
+            Some("2026-03-01")
+        );
+        assert_eq!(retention_cutoff(0.0, "2026-03-31"), None);
+        assert_eq!(retention_cutoff(f64::NAN, "2026-03-31"), None);
+    }
+
+    /// A station database with one imported detection from 2020 and the clip
+    /// BirdNET-Pi has for it. Returns (database, clip tree root, clip path).
+    fn clip_fixture(work: &Path, retention_days: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let db = work.join("station/birds.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let conn = birdnet_db::sqlite::open_or_create(&db).expect("db");
+        conn.execute(
+            "INSERT INTO import_batches (source_kind) VALUES ('birdnet-pi')",
+            [],
+        )
+        .expect("batch");
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, \
+             Sens, Overlap, File_Name, chunk_offset_secs, import_batch_id) \
+             VALUES ('2020-01-01', '06:00:00', 'Pica pica', 'Eurasian Magpie', 0.9, 0.7, 1, 1.25, \
+             0.0, 'Eurasian_Magpie-90-2020-01-01-birdnet-06:00:00.wav', 0, 1)",
+            [],
+        )
+        .expect("detection");
+        birdnet_db::settings::set(
+            &conn,
+            "clip_retention_days",
+            retention_days,
+            birdnet_db::settings::SettingsCategory::System,
+        )
+        .expect("setting");
+        let tree = work.join("BirdSongs");
+        let species = tree.join("Extracted/By_Date/2020-01-01/Eurasian_Magpie");
+        std::fs::create_dir_all(&species).unwrap();
+        let clip = species.join("Eurasian_Magpie-90-2020-01-01-birdnet-06:00:00.wav");
+        std::fs::write(&clip, b"RIFFaudio").unwrap();
+        (db, tree, clip)
+    }
+
+    fn clips_cli(tree: &Path, mode: &str) -> Cli {
+        let mut cli = default_cli();
+        cli.import_birdnet_pi_clips = Some(tree.to_path_buf());
+        cli.clips_mode = mode.to_owned();
+        cli.apply_import = true;
+        cli
+    }
+
+    /// `--clips-mode move` would take BirdNET-Pi's only copy of a 2020 clip
+    /// into a station that deletes clips older than 30 days.
+    #[test]
+    fn move_is_refused_when_the_retention_would_delete_what_it_moved() {
+        let work = tempfile::tempdir().expect("dir");
+        let (db, tree, clip) = clip_fixture(work.path(), "30");
+        let code = run_import_clips(&clips_cli(&tree, "move"), Some(&config_for(&db)));
+        assert_eq!(code, 1);
+        assert!(clip.exists(), "the original was removed");
+        assert!(
+            !work
+                .path()
+                .join("station/recordings")
+                .read_dir()
+                .map_or(false, |mut d| d.next().is_some()),
+            "something was written"
+        );
+    }
+
+    /// The counterpart: copy of the same clip runs, and so does a move when
+    /// the station keeps clips forever.
+    #[test]
+    fn copy_and_an_unlimited_retention_still_work() {
+        let work = tempfile::tempdir().expect("dir");
+        let (db, tree, clip) = clip_fixture(work.path(), "30");
+        assert_eq!(
+            run_import_clips(&clips_cli(&tree, "copy"), Some(&config_for(&db))),
+            0
+        );
+        assert!(clip.exists());
+        assert!(
+            work.path()
+                .join("station/recordings")
+                .read_dir()
+                .unwrap()
+                .next()
+                .is_some()
+        );
+
+        let work = tempfile::tempdir().expect("dir");
+        let (db, tree, clip) = clip_fixture(work.path(), "0");
+        assert_eq!(
+            run_import_clips(&clips_cli(&tree, "move"), Some(&config_for(&db))),
+            0
+        );
+        assert!(!clip.exists(), "moved");
     }
 }

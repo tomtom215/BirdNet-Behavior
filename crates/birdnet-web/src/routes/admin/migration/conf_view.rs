@@ -256,7 +256,7 @@ fn list_html(l: &ListPlan) -> String {
 
 /// The preview, with its Apply button.
 #[must_use]
-pub(super) fn preview(p: &Prepared, token: u64) -> String {
+pub(super) fn preview(p: &Prepared, token: &str) -> String {
     let mut out = String::from(r#"<div class="card result-card ok">"#);
     out.push_str(
         r#"<div class="result-title ok">What importing these files would do</div>
@@ -270,6 +270,14 @@ pub(super) fn preview(p: &Prepared, token: u64) -> String {
                 out,
                 r#"<p class="hint">These keys are in the file more than once; the last line of each is used: {}.</p>"#,
                 escape_html(&plan.repeated_keys.join(", "))
+            );
+        }
+        if plan.beyond_limit > 0 {
+            let _ = write!(
+                out,
+                r#"<p class="hint"><strong>This file has {} more keys than a birdnet.conf has; only the first {} were read.</strong> Check that it is the right file.</p>"#,
+                plan.beyond_limit,
+                birdnet_migrate::conf::MAX_ENTRIES
             );
         }
         let mut rows: Vec<&Row> = plan.rows.iter().collect();
@@ -347,7 +355,7 @@ pub(super) fn preview(p: &Prepared, token: u64) -> String {
         out,
         r##"<p class="hint">Applying sets {n} setting{s} through the same checks as the Settings page; if any value would be refused, none are written.</p>
 <div class="actions center">
-  <button class="btn btn-primary" hx-post="/admin/migrate/conf/apply" hx-vals='{{"token": {token}}}'
+  <button class="btn btn-primary" hx-post="/admin/migrate/conf/apply" hx-vals='{{"token": "{token}"}}'
           hx-target="#conf-import-result" hx-swap="innerHTML">Apply these settings</button>
 </div></div>"##,
         n = p.assignments.len(),
@@ -358,7 +366,7 @@ pub(super) fn preview(p: &Prepared, token: u64) -> String {
 
 /// The result of applying.
 #[must_use]
-pub(super) fn applied(a: &Applied, token: u64, has_lines: bool, file_written: bool) -> String {
+pub(super) fn applied(a: &Applied, token: &str, has_lines: bool, file_written: bool) -> String {
     let mut out = String::from(r#"<div class="card result-card ok"><div class="result-title ok">"#);
     if a.changed.is_empty() {
         out.push_str("Nothing needed changing: this station already had these settings.</div>");

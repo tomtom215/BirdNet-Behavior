@@ -93,10 +93,15 @@ fn token_of(html: &str) -> String {
         .find("&quot;token&quot;: ")
         .or_else(|| html.find("\"token\": "))
         .expect("an Apply button with a token");
+    // `"token": "<32 hex>"`: take what is between the first pair of quotes
+    // after the colon, whichever way the attribute was escaped.
     html[at..]
+        .split_once(':')
+        .expect("a colon")
+        .1
         .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(char::is_ascii_digit)
+        .skip_while(|c| !c.is_ascii_hexdigit())
+        .take_while(char::is_ascii_hexdigit)
         .collect()
 }
 
@@ -517,4 +522,65 @@ async fn the_data_page_offers_the_three_steps() {
     ] {
         assert!(html.contains(needle), "the Data page lacks {needle}");
     }
+}
+
+async fn get(state: &AppState, uri: &str) -> (StatusCode, String) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("request");
+    send(state, req).await
+}
+
+/// The download of the lines for `birdnet.conf` holds real credentials: its
+/// token cannot be counted to, and the file is handed over once.
+#[tokio::test]
+async fn the_lines_for_birdnet_conf_download_once_under_a_token_nobody_can_guess() {
+    let (_d, state) = station();
+    let html = preview(&state, &[("conf_files", Some("birdnet.conf"), CONF)]).await;
+    let done = apply(&state, &token_of(&html)).await;
+    let at = done
+        .find("/admin/migrate/conf/lines?token=")
+        .expect("a download link");
+    let link: String = done[at..]
+        .chars()
+        .take_while(|c| *c != '"' && *c != '\'')
+        .collect();
+    let token = link.rsplit('=').next().expect("token");
+    assert_eq!(token.len(), 32, "{link}");
+    assert!(token.chars().all(|c| c.is_ascii_hexdigit()), "{link}");
+
+    for guess in ["1", "2", "3", "0", "00000000000000000000000000000000"] {
+        let (status, body) = get(&state, &format!("/admin/migrate/conf/lines?token={guess}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{guess}: {body}");
+    }
+    let (status, body) = get(&state, &link).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("FLICKR_API_KEY=flickrSECRET"), "{body}");
+    let (again, _) = get(&state, &link).await;
+    assert_eq!(again, StatusCode::NOT_FOUND, "a second download");
+}
+
+/// Pasted text is held to the same size as an uploaded file, and a file with far
+/// more keys than a `birdnet.conf` has says so instead of printing a row each.
+#[tokio::test]
+async fn pasted_text_is_held_to_the_size_of_a_settings_file() {
+    let (_d, state) = station();
+    let huge = "A=1\n".repeat(200_000);
+    let html = preview(&state, &[("conf_text", None, &huge)]).await;
+    assert!(html.contains("not one"), "{}", &html[..html.len().min(400)]);
+    assert!(!html.contains("Apply these settings"));
+
+    let many: String = (0..5_000).map(|i| format!("KEY_{i}=v\n")).collect();
+    let html = preview(&state, &[("conf_text", None, &many)]).await;
+    assert!(html.contains("more keys than a birdnet.conf has"), "capped");
+    assert!(html.matches("<tr>").count() <= 1_100, "a row per key");
+    // The counterpart: an ordinary file is not mentioned.
+    let html = preview(
+        &state,
+        &[("conf_text", None, "LATITUDE=52.0\nLONGITUDE=5.0\n")],
+    )
+    .await;
+    assert!(!html.contains("more keys than"));
 }

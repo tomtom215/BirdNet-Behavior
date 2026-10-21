@@ -114,8 +114,9 @@ impl Bundle {
     ///
     /// Only the known names are read, each at most [`MAX_FILE_BYTES`], from the
     /// directory itself or its `scripts/` folder (where BirdNET-Pi links its
-    /// lists). `path` may be that directory or a `.conf` file in it. This is
-    /// not a general file reader: a path that names anything else is refused.
+    /// lists). `path` may be that directory or a file called, exactly,
+    /// `birdnet.conf`. This is not a general file reader: a path that names
+    /// anything else (`/etc/shadow.conf`, a key file, a log) is refused.
     ///
     /// # Errors
     ///
@@ -130,14 +131,14 @@ impl Bundle {
         }
         let (dir, conf_file) = if path.is_dir() {
             (path.to_path_buf(), None)
-        } else if path.is_file() && path.extension().is_some_and(|e| e == "conf") {
+        } else if path.is_file() && path.file_name().is_some_and(|n| n == "birdnet.conf") {
             (
                 path.parent().map(Path::to_path_buf).unwrap_or_default(),
                 Some(path.to_path_buf()),
             )
         } else {
             return Err(format!(
-                "{} is not a folder, or a birdnet.conf file, on this device.",
+                "{} is not a folder, or a file called birdnet.conf, on this device.",
                 path.display()
             ));
         };
@@ -193,15 +194,32 @@ fn looks_like_birdnet_conf(text: &str) -> bool {
 }
 
 fn read_small(path: &Path) -> Result<String, String> {
-    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(format!(
-            "{} is {} bytes; a BirdNET-Pi settings file is a few kilobytes, so this is not one.",
-            path.display(),
-            meta.len()
-        ));
+    use std::io::Read as _;
+    let too_big = |len: u64| {
+        format!(
+            "{} is {len} bytes; a BirdNET-Pi settings file is a few kilobytes, so this is not one.",
+            path.display()
+        )
+    };
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // The kind and the size of what was *opened*, not of what the name was a
+    // moment ago, and a read that stops at the limit however big it turns out.
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file.", path.display()));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(too_big(meta.len()));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_big(bytes.len() as u64));
+    }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -369,6 +387,17 @@ pub enum ApplyError {
     Refused(Vec<String>),
     /// The current settings or the write failed.
     Database(String),
+    /// The file the settings point at could not be written. Nothing was
+    /// changed.
+    FileNotWritten(String),
+    /// The settings were saved, but the file they point at could not be put in
+    /// place. The settings are in force; the file is not.
+    FileNotPlaced {
+        /// What was saved.
+        applied: Applied,
+        /// Why the file is not there.
+        error: String,
+    },
 }
 
 impl std::fmt::Display for ApplyError {
@@ -376,7 +405,11 @@ impl std::fmt::Display for ApplyError {
         match self {
             Self::NotASetting(k) => write!(f, "{k} is not a setting of this station"),
             Self::Refused(problems) => write!(f, "{}", problems.join(" ")),
-            Self::Database(e) => write!(f, "{e}"),
+            Self::Database(e) | Self::FileNotWritten(e) => write!(f, "{e}"),
+            Self::FileNotPlaced { error, .. } => write!(
+                f,
+                "the settings were saved but the file they point at was not put in place: {error}"
+            ),
         }
     }
 }
@@ -390,6 +423,132 @@ pub struct Applied {
     pub changed: Vec<&'static str>,
     /// Of those, the ones that take effect only after a restart.
     pub need_restart: Vec<&'static str>,
+}
+
+/// The Settings form's own validation, over the whole submission.
+fn validate(assignments: &[(String, String)]) -> Result<SettingsForm, ApplyError> {
+    let form = form_of(assignments)?;
+    let problems = submission_problems(&form);
+    if problems.is_empty() {
+        Ok(form)
+    } else {
+        Err(ApplyError::Refused(problems))
+    }
+}
+
+/// A file written beside its destination under a temporary name, ready to be
+/// renamed into place.
+#[derive(Debug)]
+pub struct StagedFile {
+    temp: PathBuf,
+    target: PathBuf,
+}
+
+/// Write `text` next to `target`, readable by the service user alone from the
+/// moment it exists (`0600` at creation, never widened and narrowed), under a
+/// temporary name nobody else has: [`StagedFile::install`] moves it into place.
+///
+/// # Errors
+///
+/// The directory is missing or not writable.
+pub fn stage_private(target: &Path, text: &str) -> std::io::Result<StagedFile> {
+    use std::io::Write as _;
+    let name = target
+        .file_name()
+        .map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned());
+    let mut salt = [0_u8; 8];
+    let salt = if crate::random::fill(&mut salt).is_ok() {
+        u64::from_le_bytes(salt)
+    } else {
+        u64::from(std::process::id())
+    };
+    let temp = target.with_file_name(format!(".{name}.{}.{salt:016x}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let written = (|| {
+        let mut file = options.open(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(StagedFile {
+        temp,
+        target: target.to_path_buf(),
+    })
+}
+
+impl StagedFile {
+    /// Put the file where it is going.
+    ///
+    /// # Errors
+    ///
+    /// The rename failed; the temporary file is removed.
+    pub fn install(self) -> std::io::Result<()> {
+        let renamed = std::fs::rename(&self.temp, &self.target);
+        if renamed.is_err() {
+            let _ = std::fs::remove_file(&self.temp);
+        }
+        renamed
+    }
+
+    /// Throw the file away.
+    pub fn discard(self) {
+        let _ = std::fs::remove_file(&self.temp);
+    }
+}
+
+/// [`apply`], and the file the settings point at, in the order that tells the
+/// truth if something fails: validate everything, write the file under a
+/// temporary name, save the settings, and only then move the file into place.
+///
+/// A refusal or a failed save leaves this station exactly as it was, the file
+/// that was already there included. (The first version wrote the file first and
+/// then reported "nothing was changed" when the save failed.)
+///
+/// # Errors
+///
+/// Those of [`apply`], plus [`ApplyError::FileNotWritten`] (nothing changed) and
+/// [`ApplyError::FileNotPlaced`] (the settings are saved; the file is not there).
+pub fn apply_with_file(
+    conn: &rusqlite::Connection,
+    assignments: &[(String, String)],
+    file: Option<(&Path, &str)>,
+) -> Result<Applied, ApplyError> {
+    validate(assignments)?;
+    let staged = match file {
+        Some((target, text)) => Some(
+            stage_private(target, text)
+                .map_err(|e| ApplyError::FileNotWritten(format!("{}: {e}", target.display())))?,
+        ),
+        None => None,
+    };
+    let applied = match apply(conn, assignments) {
+        Ok(applied) => applied,
+        Err(e) => {
+            if let Some(staged) = staged {
+                staged.discard();
+            }
+            return Err(e);
+        }
+    };
+    if let Some(staged) = staged {
+        let target = staged.target.display().to_string();
+        if let Err(e) = staged.install() {
+            return Err(ApplyError::FileNotPlaced {
+                applied,
+                error: format!("{target}: {e}"),
+            });
+        }
+    }
+    Ok(applied)
 }
 
 /// Write `assignments` through the Settings form's own path.
@@ -409,11 +568,7 @@ pub fn apply(
     conn: &rusqlite::Connection,
     assignments: &[(String, String)],
 ) -> Result<Applied, ApplyError> {
-    let form = form_of(assignments)?;
-    let problems = submission_problems(&form);
-    if !problems.is_empty() {
-        return Err(ApplyError::Refused(problems));
-    }
+    let form = validate(assignments)?;
     ensure_settings_table(conn).map_err(|e| ApplyError::Database(e.to_string()))?;
     let existing: HashMap<String, String> = list(conn, None)
         .map_err(|e| ApplyError::Database(e.to_string()))?
@@ -441,7 +596,7 @@ pub fn apply(
 
 /// A preview waiting for its confirmation.
 pub(super) struct Staged {
-    pub(super) token: u64,
+    pub(super) token: String,
     pub(super) at: Instant,
     pub(super) prepared: Prepared,
 }
@@ -449,14 +604,67 @@ pub(super) struct Staged {
 /// One slot, as the database upload has one.
 pub(super) type StagedConf = Arc<Mutex<Option<Staged>>>;
 
-/// The lines for `birdnet.conf` from the last applied import, for download.
-pub(super) type ConfigLines = Arc<Mutex<Option<(u64, String)>>>;
+/// The lines for `birdnet.conf` from the last applied import, waiting to be
+/// downloaded once.
+pub(super) struct StagedLines {
+    token: String,
+    at: Instant,
+    text: String,
+}
 
-/// Source of tokens. Monotonic, not secret: the route is behind admin RBAC.
-static TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// The slot the download link reads.
+pub(super) type ConfigLines = Arc<Mutex<Option<StagedLines>>>;
 
-pub(super) fn next_token() -> u64 {
-    TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// How long the lines wait to be downloaded. They hold real credentials.
+pub(super) const LINES_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Keep `text` for download under `token`.
+pub(super) fn stage_lines(slot: &ConfigLines, token: String, text: String, now: Instant) {
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(StagedLines {
+        token,
+        at: now,
+        text,
+    });
+}
+
+/// Hand over the lines for `token`, once.
+///
+/// The slot is emptied by the first download, or by the first look after
+/// [`LINES_TTL`], whoever looks: a second request for the same token, or one
+/// for any other, finds nothing.
+pub(super) fn take_lines(slot: &ConfigLines, token: &str, now: Instant) -> Option<String> {
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fresh = guard
+        .as_ref()
+        .is_some_and(|l| now.saturating_duration_since(l.at) <= LINES_TTL);
+    if !fresh {
+        *guard = None;
+        return None;
+    }
+    if guard.as_ref().is_some_and(|l| l.token == token) {
+        return guard.take().map(|l| l.text);
+    }
+    None
+}
+
+/// A token nobody can guess: 128 bits from the operating system, in hex.
+///
+/// Names a staged preview and a staged download. The routes are for an
+/// administrator, but a counter that starts at 1 is a token that can be typed
+/// in, and what it names holds credentials.
+pub(super) fn new_token() -> Option<String> {
+    use std::fmt::Write as _;
+    let mut bytes = [0_u8; 16];
+    crate::random::fill(&mut bytes).ok()?;
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    Some(out)
 }
 
 /// The lines to put in `birdnet.conf`, as a file.
@@ -745,7 +953,7 @@ mod tests {
                 "{printed}"
             );
         }
-        let html = super::super::conf_view::preview(&prepared, 7);
+        let html = super::super::conf_view::preview(&prepared, "t7");
         assert!(
             !html.contains("TOKEN-ABC") && !html.contains("bwSECRET"),
             "the preview shows a credential"
@@ -783,7 +991,172 @@ mod tests {
         let text = config_lines_text(&prepared).expect("lines");
         assert!(text.contains("FLICKR_API_KEY=flkSECRET"));
         assert!(text.contains("IMAGE_PROVIDER=FLICKR"));
-        let html = super::super::conf_view::preview(&prepared, 1);
+        let html = super::super::conf_view::preview(&prepared, "t1");
         assert!(!html.contains("flkSECRET"));
+    }
+
+    // ---- tokens -------------------------------------------------------------
+
+    #[test]
+    fn a_token_is_128_random_bits_in_hex_and_never_repeats() {
+        let a = new_token().expect("randomness");
+        let b = new_token().expect("randomness");
+        assert_eq!(a.len(), 32, "{a}");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "{a}");
+        assert_ne!(a, b);
+        // Not a counter dressed as hex: all 128 bits vary, so across a handful
+        // of tokens neither half is constant and none is a small number.
+        let many: Vec<String> = (0..16).map(|_| new_token().expect("randomness")).collect();
+        for half in [0..16, 16..32] {
+            let distinct: std::collections::HashSet<&str> =
+                many.iter().map(|t| &t[half.clone()]).collect();
+            assert!(distinct.len() > 8, "half {half:?} barely varies: {many:?}");
+        }
+        assert!(many.iter().all(|t| !t.starts_with("0000000000")));
+    }
+
+    #[test]
+    fn the_lines_are_handed_over_once_and_only_to_their_token() {
+        let slot: ConfigLines = Arc::default();
+        let now = Instant::now();
+        stage_lines(&slot, "abc".into(), "FLICKR_API_KEY=k\n".into(), now);
+        assert_eq!(take_lines(&slot, "wrong", now), None);
+        assert_eq!(
+            take_lines(&slot, "abc", now).as_deref(),
+            Some("FLICKR_API_KEY=k\n"),
+            "a wrong guess must not have spent the slot"
+        );
+        assert_eq!(take_lines(&slot, "abc", now), None, "a second download");
+    }
+
+    #[test]
+    fn the_lines_expire() {
+        let slot: ConfigLines = Arc::default();
+        let then = Instant::now();
+        stage_lines(&slot, "abc".into(), "X=1\n".into(), then);
+        let late = then + LINES_TTL + Duration::from_secs(1);
+        assert_eq!(take_lines(&slot, "abc", late), None);
+        // And the expired text is gone, not merely refused: a look at "any
+        // token" after the TTL empties the slot.
+        assert!(slot.lock().unwrap().is_none());
+        // The counterpart: just inside the TTL it is still there.
+        stage_lines(&slot, "abc".into(), "X=1\n".into(), then);
+        assert!(take_lines(&slot, "abc", then + LINES_TTL).is_some());
+    }
+
+    // ---- the Apprise file and the order of writing --------------------------
+
+    fn dir_listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_refused_import_writes_no_file_and_leaves_the_old_one() {
+        let work = tempfile::tempdir().unwrap();
+        let target = work.path().join("apprise-from-birdnet-pi.txt");
+        std::fs::write(&target, "old://one\n").unwrap();
+        let c = conn();
+        let err = apply_with_file(
+            &c,
+            &[("confidence_threshold".to_owned(), "75".to_owned())],
+            Some((&target, "new://two\n")),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ApplyError::Refused(_)), "{err}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old://one\n");
+        assert_eq!(dir_listing(work.path()), ["apprise-from-birdnet-pi.txt"]);
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_old_file_and_no_temporary() {
+        let work = tempfile::tempdir().unwrap();
+        let target = work.path().join("apprise-from-birdnet-pi.txt");
+        std::fs::write(&target, "old://one\n").unwrap();
+        let c = conn();
+        c.execute_batch(
+            "CREATE TRIGGER nope BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+        let err = apply_with_file(
+            &c,
+            &[("confidence_threshold".to_owned(), "0.5".to_owned())],
+            Some((&target, "new://two\n")),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ApplyError::Database(_)), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "old://one\n",
+            "the save failed, so 'nothing was changed' has to be true of the file too"
+        );
+        assert_eq!(dir_listing(work.path()), ["apprise-from-birdnet-pi.txt"]);
+    }
+
+    #[test]
+    fn a_good_import_installs_the_file_privately_and_saves_the_settings() {
+        let work = tempfile::tempdir().unwrap();
+        let target = work.path().join("apprise-from-birdnet-pi.txt");
+        let c = conn();
+        let applied = apply_with_file(
+            &c,
+            &[("confidence_threshold".to_owned(), "0.5".to_owned())],
+            Some((&target, "new://two\n")),
+        )
+        .unwrap();
+        assert_eq!(applied.changed, ["confidence_threshold"]);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new://two\n");
+        assert_eq!(dir_listing(work.path()), ["apprise-from-birdnet-pi.txt"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_written_changes_nothing() {
+        let c = conn();
+        let err = apply_with_file(
+            &c,
+            &[("confidence_threshold".to_owned(), "0.5".to_owned())],
+            Some((
+                Path::new("/nonexistent-dir-for-test/apprise.txt"),
+                "x://y\n",
+            )),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ApplyError::FileNotWritten(_)), "{err}");
+        assert_eq!(stored(&c, "confidence_threshold"), None);
+    }
+
+    // ---- what a path may name ------------------------------------------------
+
+    #[test]
+    fn a_single_file_must_be_called_birdnet_conf() {
+        let work = tempfile::tempdir().unwrap();
+        let other = work.path().join("shadow.conf");
+        std::fs::write(&other, "LATITUDE=1\nroot=secret\n").unwrap();
+        let err = Bundle::from_dir(&other).unwrap_err();
+        assert!(err.contains("called birdnet.conf"), "{err}");
+        // The counterpart: the real name is read.
+        let real = work.path().join("birdnet.conf");
+        std::fs::write(&real, "LATITUDE=1\n").unwrap();
+        assert!(Bundle::from_dir(&real).unwrap().conf.is_some());
+    }
+
+    #[test]
+    fn a_file_over_the_limit_is_refused_however_it_is_reached() {
+        let work = tempfile::tempdir().unwrap();
+        let big = work.path().join("birdnet.conf");
+        std::fs::write(&big, "A=1\n".repeat(200_000)).unwrap();
+        let err = Bundle::from_dir(&big).unwrap_err();
+        assert!(err.contains("not one"), "{err}");
     }
 }
