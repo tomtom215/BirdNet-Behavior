@@ -61,7 +61,14 @@ impl HeartbeatClient {
     ///
     /// Returns `HeartbeatError::Http` if the HTTP client cannot be built.
     pub fn new(url: &str) -> Result<Self, HeartbeatError> {
-        let client = reqwest::Client::builder()
+        // The guarded builder: the address is typed by an operator (or imported
+        // from another station's `birdnet.conf`), and it is requested on a
+        // schedule for as long as the station runs. A link-local or cloud
+        // metadata address is refused, by name resolution and on every
+        // redirect hop; a LAN or loopback monitor (Uptime Kuma next door) is
+        // not. No proxy is used, as for webhooks: through one the proxy would
+        // resolve the name and the guard would see nothing.
+        let client = crate::egress_guard::guarded_client_builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
             .map_err(|e| HeartbeatError::Http(crate::http_error_text(e)))?;
@@ -78,6 +85,12 @@ impl HeartbeatClient {
     ///
     /// Returns `HeartbeatError` on network or server failure.
     pub async fn ping(&self) -> Result<(), HeartbeatError> {
+        // A literal host never reaches the guarded resolver, so it is checked
+        // here. An unparseable URL is left for the request to report.
+        if let Ok(parsed) = reqwest::Url::parse(&self.url) {
+            crate::egress_guard::check_url(&parsed)
+                .map_err(|refused| HeartbeatError::Http(refused.to_string()))?;
+        }
         let resp = self
             .client
             .get(&self.url)
@@ -113,6 +126,50 @@ mod tests {
     fn heartbeat_client_stores_url() {
         let client = HeartbeatClient::new("https://hc-ping.com/abc-123").unwrap();
         assert_eq!(client.url(), "https://hc-ping.com/abc-123");
+    }
+
+    /// A heartbeat address typed (or imported) as a cloud metadata address is
+    /// not requested.
+    #[tokio::test]
+    async fn a_metadata_address_is_refused_not_pinged() {
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[fe80::1]/x",
+            "http://0xa9.0xfe.0xa9.0xfe/x",
+        ] {
+            let err = HeartbeatClient::new(url)
+                .unwrap()
+                .ping()
+                .await
+                .expect_err("must be refused");
+            assert!(
+                err.to_string().contains("outbound-address guard"),
+                "{url}: {err}"
+            );
+        }
+    }
+
+    /// The counterpart: a monitor on the same box or LAN is pinged, so the
+    /// guard is not a blanket refusal.
+    #[tokio::test]
+    async fn a_loopback_monitor_is_pinged() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 1024];
+            let n = sock.read(&mut buf).unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        HeartbeatClient::new(&format!("http://127.0.0.1:{port}/ping/key-123"))
+            .unwrap()
+            .ping()
+            .await
+            .expect("a loopback monitor answers");
+        assert!(server.join().unwrap().starts_with("GET /ping/key-123 "));
     }
 
     #[test]
