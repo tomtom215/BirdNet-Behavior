@@ -43,10 +43,9 @@ Examples of unacceptable behaviour include:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may
-be reported to the maintainer. GitHub's private vulnerability reporting, which an
-earlier version of this section named as the private channel, is switched off for
-this repository (see [SECURITY.md](SECURITY.md)), so do what that file says for a
-private report: open an issue that contains no detail of the conduct (title it
+be reported to the maintainer. GitHub's private reporting is switched off for
+this repository (see [SECURITY.md](SECURITY.md)), so for a private report do what
+that file says: open an issue that contains no detail of the conduct (title it
 "Conduct report — please contact me"), and say how the maintainer can reach you
 privately. The details go there, not in the issue. No email address is published
 in this repository. All complaints will be
