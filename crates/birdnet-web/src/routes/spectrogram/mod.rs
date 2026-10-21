@@ -100,6 +100,19 @@ static SPECTROGRAM_CACHE: LazyLock<Mutex<SpectrogramCache>> =
 /// preview and the full-size image for one file are different renders. So is
 /// the `look`: a station that changes its colour map or dynamic range must get
 /// the next image in the new one, not the cached image in the old one.
+/// Which version of the renderer drew an image; part of every `ETag`.
+///
+/// The tag names the *inputs* of a render, and a build that draws the same
+/// inputs differently (another colour table, a new font, a changed
+/// normalisation) would otherwise be told "304, keep yours" by a browser that
+/// still holds an image from the build before the upgrade, and keep showing
+/// stale pixels until the file's mtime moved. Raise it whenever the pixels
+/// change; `render::tests::the_pixels_are_what_the_etags_revision_names` fails
+/// when the colour maps, the overlay or the orientation change, and says so.
+/// It does not see a change to the audio-to-dB stage in `birdnet-core`, which
+/// has to be remembered.
+const RENDER_REVISION: u32 = 1;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
     filename: String,
@@ -131,7 +144,7 @@ impl CacheKey {
         feed(self.filename.as_bytes());
         let mtime = self.mtime.map_or(0, |d| d.as_nanos());
         format!(
-            "\"{mtime:x}-{}-{}-{label_hash:016x}\"",
+            "\"{mtime:x}-{}-{}-{label_hash:016x}-r{RENDER_REVISION}\"",
             self.look.tag(),
             u8::from(self.thumb)
         )
@@ -564,6 +577,17 @@ mod tests {
         assert_eq!(c.get(&magma).unwrap(), Bytes::from_static(b"magma"));
         assert_eq!(c.get(&narrow).unwrap(), Bytes::from_static(b"narrow"));
         assert_eq!(c.len(), 6);
+    }
+
+    /// The tag carries the renderer's revision, so an upgrade that changes the
+    /// pixels cannot be answered `304` from a copy drawn before it.
+    #[test]
+    fn the_etag_names_the_renderers_revision() {
+        let tag = key("x.wav").etag();
+        assert!(
+            tag.ends_with(&format!("-r{RENDER_REVISION}\"")),
+            "{tag} has no renderer revision"
+        );
     }
 
     #[test]

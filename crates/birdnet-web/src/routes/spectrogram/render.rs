@@ -136,6 +136,25 @@ fn encode_spectrogram_png_labeled(
     label: Option<&SpectrogramLabel>,
     colormap: Colormap,
 ) -> Result<Vec<u8>, String> {
+    let (width, height, pixels) = render_pixels(spec, label, colormap)?;
+    // Encode to PNG using a minimal hand-rolled writer to avoid adding a heavy dependency.
+    let mut output = Vec::new();
+    write_png_rgba(&mut output, width, height, &pixels)
+        .map_err(|e| format!("PNG encode error: {e}"))?;
+    Ok(output)
+}
+
+/// The RGBA pixels of a spectrogram, as `(width, height, pixels)`: the
+/// normalisation, the vertical flip, the colour map and the text overlay.
+///
+/// Split from the PNG encoding so that what the reader *sees* can be pinned
+/// byte for byte (`the_pixels_are_what_the_etags_revision_names`) without
+/// depending on the deflate implementation.
+fn render_pixels(
+    spec: &[Vec<f32>],
+    label: Option<&SpectrogramLabel>,
+    colormap: Colormap,
+) -> Result<(u32, u32, Vec<u8>), String> {
     if spec.is_empty() || spec[0].is_empty() {
         return Err("empty spectrogram".to_string());
     }
@@ -183,17 +202,67 @@ fn encode_spectrogram_png_labeled(
         let text = format!("{} ({}%) {}", lbl.species, lbl.confidence_pct, lbl.time);
         draw_text(&mut pixels, width, height, 4, 4, &text);
     }
-
-    // Encode to PNG using a minimal hand-rolled writer to avoid adding a heavy dependency.
-    let mut output = Vec::new();
-    write_png_rgba(&mut output, width, height, &pixels)
-        .map_err(|e| format!("PNG encode error: {e}"))?;
-    Ok(output)
+    Ok((width, height, pixels))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::downsample_width;
+    use super::{Colormap, SpectrogramLabel, downsample_width, render_pixels};
+
+    /// FNV-1a over the pixel bytes.
+    fn fnv(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// The part of a render that is integer-exact and platform-independent: a
+    /// fixed synthetic spectrogram, a label, and every colour map.
+    fn pixel_hashes() -> Vec<(&'static str, u64)> {
+        let spec: Vec<Vec<f32>> = (0..32)
+            .map(|r| (0..96).map(|c| ((r * 7 + c * 13) % 97) as f32).collect())
+            .collect();
+        let label = SpectrogramLabel {
+            species: "Parus major".to_owned(),
+            confidence_pct: 91,
+            time: "06:30:12".to_owned(),
+        };
+        Colormap::ALL
+            .iter()
+            .map(|m| {
+                let (_, _, px) = render_pixels(&spec, Some(&label), *m).unwrap();
+                (m.as_str(), fnv(&px))
+            })
+            .collect()
+    }
+
+    /// The `ETag` names the inputs of a render (`mtime`, label, look) and a
+    /// *revision of the renderer*, because the same inputs under a build that
+    /// draws differently must not be answered `304` from a browser's copy of the
+    /// old picture. A change to the colour tables, the font, the flip or the
+    /// normalisation changes these hashes; when this test fails, that is the
+    /// signal to raise `RENDER_REVISION` in `spectrogram/mod.rs` and then update
+    /// the numbers here, in the same commit.
+    ///
+    /// What it does not see: the audio-to-dB stage (mel filters, windowing) ahead
+    /// of these pixels is floating point and not pinned here, so a change to
+    /// `birdnet-core`'s spectrogram needs `RENDER_REVISION` raised by hand.
+    #[test]
+    fn the_pixels_are_what_the_etags_revision_names() {
+        let expected: [(&str, u64); 5] = [
+            ("viridis", 317209647005015307),
+            ("magma", 4364708519087716287),
+            ("inferno", 5989941986992592300),
+            ("grey", 16976510620029363965),
+            ("grey_inverted", 15880343174023650506),
+        ];
+        let got = pixel_hashes();
+        assert_eq!(
+            got, expected,
+            "the picture a reader sees changed: raise RENDER_REVISION (spectrogram/mod.rs) \
+             and update these hashes"
+        );
+    }
 
     #[test]
     fn downsample_width_max_pools_time_and_keeps_rows() {
