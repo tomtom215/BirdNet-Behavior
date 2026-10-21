@@ -100,46 +100,6 @@ pub fn load_all(conn: &Connection) -> Result<Vec<LearnedThreshold>, DbError> {
     Ok(rows)
 }
 
-/// The stored levels of species that still have a detection the analytics show.
-///
-/// A learned level is a public fact about a species at this site ("it was heard
-/// with high confidence, often enough to lower its bar"). The public read
-/// routes answer from it, and a detection an owner later **rejected** is not one
-/// the rest of the public pages count (`detections_analytic` leaves it out): the
-/// level would keep saying a species was confirmed that the owner has since
-/// said was not there. This returns only the rows whose species has at least
-/// one detection in `detections_analytic`, which is the same visibility rule the
-/// species pages use. The tracker's own table is not touched; this is a read
-/// filter for the public surfaces.
-///
-/// # Errors
-///
-/// Returns [`DbError`] on query failure.
-pub fn load_visible(conn: &Connection) -> Result<Vec<LearnedThreshold>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT d.sci_name, d.level, d.confirmations, d.expires_at_ms,
-                d.first_learned_ms, d.last_confirmed_ms
-           FROM dynamic_thresholds d
-          WHERE EXISTS (SELECT 1 FROM detections_analytic a WHERE a.Sci_Name = d.sci_name)
-          ORDER BY d.sci_name",
-    )?;
-    let rows = stmt
-        .query_map([], |r| {
-            let level: i64 = r.get(1)?;
-            let confirmations: i64 = r.get(2)?;
-            Ok(LearnedThreshold {
-                sci_name: r.get(0)?,
-                level: u8::try_from(level).unwrap_or(0),
-                confirmations: u32::try_from(confirmations).unwrap_or(0),
-                expires_at_ms: r.get(3)?,
-                first_learned_ms: r.get(4)?,
-                last_confirmed_ms: r.get(5)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
 /// Delete one species' stored level, returning how many rows went (0 or 1).
 ///
 /// The name is matched without regard to ASCII case, as the read route is: a
@@ -189,45 +149,6 @@ mod tests {
     /// The table, the read route and the tracker must agree on what a name is:
     /// `turdus merula` is `Turdus merula`. The counterpart is that a different
     /// species is untouched.
-    /// A species whose every detection was rejected is no longer a species the
-    /// public pages may call confirmed; one with a surviving detection is.
-    #[test]
-    fn a_level_is_visible_only_while_a_detection_for_it_is_not_rejected() {
-        let conn = db();
-        replace_all(
-            &conn,
-            &[
-                row("Turdus merula", 2, 5000),
-                row("Strix aluco", 1, 9000),
-                row("Pica pica", 1, 9000),
-            ],
-        )
-        .expect("write");
-        let add = |sci: &str, time: &str, verdict: Option<&str>| {
-            conn.execute(
-                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, review_verdict)
-                 VALUES ('2026-05-01', ?2, ?1, ?1, 0.9, ?3)",
-                params![sci, time, verdict],
-            )
-            .expect("insert");
-        };
-        add("Turdus merula", "06:00:00", None);
-        add("Strix aluco", "06:00:00", Some("rejected"));
-        // A second, kept detection of the blackbird, and a rejected one: the
-        // species stays while any detection stands.
-        add("Turdus merula", "07:00:00", Some("rejected"));
-        // Pica pica has no detection at all.
-        let seen: Vec<String> = load_visible(&conn)
-            .unwrap()
-            .into_iter()
-            .map(|r| r.sci_name)
-            .collect();
-        assert_eq!(seen, ["Turdus merula"], "{seen:?}");
-        // The counterpart: the unfiltered read still has all three, so the
-        // tracker's own persistence is untouched.
-        assert_eq!(load_all(&conn).unwrap().len(), 3);
-    }
-
     #[test]
     fn deleting_one_ignores_the_case_of_the_name() {
         let conn = db();
