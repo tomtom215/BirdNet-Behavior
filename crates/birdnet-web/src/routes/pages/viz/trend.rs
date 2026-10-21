@@ -96,7 +96,7 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
 
     let w = 640.0_f64;
-    let (pad_l, pad_r, pad_t, pad_b) = (kit::axis_margin(widest), 12.0, 14.0, 24.0);
+    let (pad_l, pad_r, pad_t, pad_b) = (kit::axis_margin(widest, w), 12.0, 14.0, 24.0);
     let h = 200.0_f64;
     let plot_w = w - pad_l - pad_r;
     let plot_h = h - pad_t - pad_b;
@@ -163,7 +163,7 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     let mut svg = String::with_capacity(10 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="Daily trend, scrolls sideways on a narrow screen"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block viz-trend ck-wide ck-in" data-ck-id="{id}" data-ck-label="Left and right read each day."{attrs} data-ck-ys="{ys}">"#,
+        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block viz-trend ck-in" data-ck-id="{id}" data-ck-label="Left and right read each day."{attrs} data-ck-ys="{ys}">"#,
         id = escape_html(o.id),
         attrs = kit::cols_attrs(&cols, &series, x_at(0), x_at(n - 1), false, o.unit, None),
         ys = escape_html(&serde_json::Value::Array(ys).to_string()),

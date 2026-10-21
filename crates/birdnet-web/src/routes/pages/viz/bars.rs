@@ -108,8 +108,8 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
         .iter()
         .map(|&v| kit::text_width(&kit::compact(v), 10.0))
         .fold(0.0_f64, f64::max);
-    let (pad_l, pad_r) = (kit::axis_margin(widest), 6.0);
     let w = o.width;
+    let (pad_l, pad_r) = (kit::axis_margin(widest, w), 6.0);
     let plot_w = w - pad_l - pad_r;
     let plot_h = o.plot_h;
     let slot = plot_w / 24.0;
@@ -149,9 +149,8 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
     let mut svg = String::with_capacity(12 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="{scroll_label}"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-wide ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{peak}" data-ck-label="Left and right move from hour to hour.">"#,
+        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{peak}" data-ck-label="Left and right move from hour to hour.">"#,
         id = escape_html(o.id),
-        scroll_label = escape_html(&format!("{}, scrolls sideways on a narrow screen", o.name)),
     );
     svg.push_str(&svg_a11y(o.name, o.desc));
     let g = kit::id_safe(&format!("g-{}", o.id));
@@ -426,8 +425,8 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     let top = kit::count_ceiling(max as f64);
     let rules = kit::count_ticks(top, 4);
     let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
-    let (pad_l, pad_r) = (kit::axis_margin(widest), 8.0);
     let (w, plot_h) = (o.width, o.plot_h);
+    let (pad_l, pad_r) = (kit::axis_margin(widest, w), 8.0);
     let plot_w = w - pad_l - pad_r;
     let slot = plot_w / n as f64;
     let bar_w = (slot * 0.66).min(24.0);
@@ -455,10 +454,9 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     let mut svg = String::with_capacity(6 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="{scroll_label}"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-wide ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{last}" data-ck-label="Left and right move from day to day.">"#,
+        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{last}" data-ck-label="Left and right move from day to day.">"#,
         id = escape_html(o.id),
         last = n - 1,
-        scroll_label = escape_html(&format!("{}, scrolls sideways on a narrow screen", o.name)),
     );
     svg.push_str(&svg_a11y(o.name, o.desc));
     svg.push_str(&kit::gradient_defs(&g, std::slice::from_ref(&cls)));

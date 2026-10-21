@@ -400,8 +400,10 @@ pub fn streamgraph(
     // The reading as a line of text too, idle until a pointer is on the chart.
     let _ = write!(
         svg,
-        r#"<p class="bnb-meta viz-readout">The bar at the left is {nice} detection{s} in a day. The busiest day had {max_total}. Move across the chart, or use the arrow keys, to read a day.</p>"#,
+        r#"<p class="bnb-meta viz-readout">The bar at the left is {nice_s} detection{s} in a day. The busiest day had {max_s}. Move across the chart, or use the arrow keys, to read a day.</p>"#,
         s = if nice == 1 { "" } else { "s" },
+        nice_s = kit::thousands(nice),
+        max_s = kit::thousands(max_total),
     );
 
     // Legend: buttons, because hovering or pressing one puts that species in the
@@ -482,7 +484,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
     let w = 720.0_f64;
     let h = 210.0_f64;
-    let (pad_l, pad_r, pad_b) = (kit::axis_margin(widest), 12.0, 26.0);
+    let (pad_l, pad_r, pad_b) = (kit::axis_margin(widest, w), 12.0, 26.0);
     // Headroom for the total, written above the curve's end (see the test).
     let pad_t = 26.0;
     let plot_h = h - pad_b - pad_t;
@@ -510,7 +512,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let mut svg = String::new();
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="Species accumulation, scrolls sideways on a narrow screen"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block ck-wide ck-in" data-ck-id="life-accumulation" data-ck-label="Left and right read each month."{attrs} data-ck-ys="{ys}">"#,
+        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block ck-in" data-ck-id="life-accumulation" data-ck-label="Left and right read each month."{attrs} data-ck-ys="{ys}">"#,
         attrs = kit::cols_attrs(&cols, &[("Species so far".to_string(), "var(--chart-1)".to_string())], x_at(0), x_at(n - 1), false, "species", None),
         ys = escape_html(&serde_json::Value::Array(ys).to_string()),
     );
@@ -812,6 +814,8 @@ mod tests {
         let svg = streamgraph(&series, Some("2026-10-21"), None);
         assert!(svg.contains("<svg") && svg.contains("1.6M"), "peak is compacted: {svg}");
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+        // A seven-digit count is read with its separators, in the sentence under the chart too.
+        assert!(svg.contains("The busiest day had 1,601,770."), "{svg}");
         // The long name is never written into the plot whole: if it fits it is a label,
         // otherwise it is only in the legend and the tooltip.
         let plot = &svg[svg.find("<svg").unwrap()..svg.find("</svg>").unwrap()];

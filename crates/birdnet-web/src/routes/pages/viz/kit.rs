@@ -147,11 +147,13 @@ pub(crate) fn thousands(n: i64) -> String {
 }
 
 /// The room an axis's labels need on the left of a plot, given the width of the widest one at
-/// its drawn size. On a phone the drawing is scaled down and `chart-text.js` grows any label
-/// that would be smaller than 9.5 px, by up to about half again (a 700-unit chart held to 480 px
-/// wide): a margin cut to the label as drawn makes "500K" run off the edge and get cut to "500…".
-pub(crate) fn axis_margin(widest: f64) -> f64 {
-    widest * 1.55 + 8.0
+/// its drawn size and the width of the drawing. On a phone the drawing is scaled down to about
+/// 340 px and `chart-text.js` grows any label that would then be under 9.5 px, in proportion to
+/// how far it was scaled: a margin cut to the label as drawn makes "1.6M" run off the edge and
+/// get cut to "1…". So the margin allows for that growth (at most threefold).
+pub(crate) fn axis_margin(widest: f64, drawing_width: f64) -> f64 {
+    let growth = (0.95 * drawing_width / 340.0).clamp(1.0, 3.0);
+    widest * growth + 8.0
 }
 
 /// Rough width of `s` set at `font` units: the label planner's measure. Wide on
@@ -508,6 +510,17 @@ mod tests {
         assert_eq!(count_ticks(10.0, 4), vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
         assert_eq!(count_ticks(8.0, 4), vec![0.0, 2.0, 4.0, 6.0, 8.0]);
         assert_eq!(count_ceiling(7.0), 8.0);
+    }
+
+    /// The margin leaves room for a label that the phone grows: wider drawings are scaled down
+    /// further, so they need more, up to a ceiling; and it is never less than the label as drawn.
+    #[test]
+    fn the_axis_margin_allows_for_the_growth_a_phone_gives_a_label() {
+        let w = text_width("1.6M", 10.0);
+        assert!(axis_margin(w, 340.0) >= w + 8.0, "never less than the label");
+        assert!(axis_margin(w, 960.0) > axis_margin(w, 560.0), "a wider drawing is shrunk more");
+        assert!(axis_margin(w, 960.0) >= w * 2.5 + 8.0, "a 960 drawing on a 340 phone grows its text 2.7 times");
+        assert!((axis_margin(w, 5000.0) - (w * 3.0 + 8.0)).abs() < 1e-9, "and it stops at three");
     }
 
     #[test]

@@ -61,11 +61,13 @@ pub fn stat_row(n: usize) -> String {
     out
 }
 
-/// 24h day strip — a histogram-shaped placeholder plus a dot row underneath.
+/// 24h day strip — a histogram-shaped placeholder plus a dot row underneath, as tall as
+/// the chart that replaces it (`.bnb-skel-strip` holds its aspect ratio), so the page below
+/// does not jump when it arrives.
 #[must_use]
 pub const fn day_strip() -> &'static str {
-    r#"<div role="status" aria-busy="true" aria-label="Loading day strip">
-  <div class="bnb-skel-bars" data-style="--n:24;height:62px;">
+    r#"<div class="bnb-skel-strip" role="status" aria-busy="true" aria-label="Loading day strip">
+  <div class="bnb-skel-bars" data-style="--n:24;height:72%;">
     <span data-style="height:30%"></span><span data-style="height:42%"></span><span data-style="height:58%"></span><span data-style="height:70%"></span><span data-style="height:62%"></span><span data-style="height:48%"></span><span data-style="height:38%"></span><span data-style="height:32%"></span><span data-style="height:28%"></span><span data-style="height:26%"></span><span data-style="height:24%"></span><span data-style="height:22%"></span><span data-style="height:24%"></span><span data-style="height:28%"></span><span data-style="height:36%"></span><span data-style="height:42%"></span><span data-style="height:52%"></span><span data-style="height:60%"></span><span data-style="height:54%"></span><span data-style="height:44%"></span><span data-style="height:34%"></span><span data-style="height:26%"></span><span data-style="height:20%"></span><span data-style="height:18%"></span>
   </div>
   <div data-style="display:grid;grid-template-columns:repeat(4,1fr);margin-top:8px;">

@@ -15,7 +15,7 @@
 <div class="grid-2 tsh-row">
     <div class="bnb-card pad">
         <div class="section-header"><div><div class="bnb-eyebrow">last 30 complete days · 7-day average, against the 30 before</div><h2 class="sh-h">Detections per day</h2></div></div>
-        <div hx-get="/pages/ts-daily"
+        <div class="ts-slot" hx-get="/pages/ts-daily"
              hx-trigger="load"
              hx-swap="innerHTML">
             <span class="htmx-indicator">Loading trend…</span>
@@ -24,7 +24,7 @@
 
     <div class="bnb-card pad">
         <div class="section-header"><div><div class="bnb-eyebrow">last 30 days · against the 30 before</div><h2 class="sh-h">Species richness</h2></div></div>
-        <div hx-get="/pages/ts-diversity"
+        <div class="ts-slot" hx-get="/pages/ts-diversity"
              hx-trigger="load"
              hx-swap="innerHTML">
             <span class="htmx-indicator">Loading diversity…</span>

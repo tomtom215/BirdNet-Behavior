@@ -94,6 +94,8 @@ const tipState = (page, scope) =>
 
 async function waitChart(page, sel) {
   await page.waitForSelector(`${sel}`, { state: 'attached', timeout: 15000 });
+  // On screen: a pointer cannot hover what is below the fold (the Patterns page has a card above these).
+  await page.locator(sel).evaluate((e) => e.scrollIntoView({ block: 'center', inline: 'center' }));
   await page.waitForTimeout(1200); // past the entrance
 }
 
@@ -189,8 +191,8 @@ async function waitChart(page, sel) {
   const { page, context, errors } = await open('/patterns');
   const B = '#hourly-totals svg[data-ck="marks"]';
   const G = '#heatmap-grid svg[data-ck="marks"]';
-  await waitChart(page, B);
   await waitChart(page, G);
+  await waitChart(page, B);
 
   await page.locator(B).scrollIntoViewIfNeeded();
   const pos = await page.locator(`${B} .ck-hit[data-ck-i="6"]`).boundingBox();
@@ -217,6 +219,7 @@ async function waitChart(page, sel) {
   check('hours: keyboard steps hour by hour', a.on && b.on && a.text !== b.text, `${a.text} / ${b.text}`);
 
   // The grid: Down moves a whole day.
+  await page.locator(G).evaluate((e) => e.scrollIntoView({ block: 'center' }));
   await page.locator(G).focus();
   await page.waitForTimeout(250);
   const g0 = await tipState(page, G);
@@ -251,6 +254,30 @@ async function waitChart(page, sel) {
   await page.waitForTimeout(250);
   const t1 = await tipState(page, C);
   check('calendar: focus reads the busiest day; Right moves a week', t0.on && t1.on && t0.text !== t1.text, `${t0.text} -> ${t1.text}`);
+  await context.close();
+}
+
+// ── a finger ────────────────────────────────────────────────────────────────────
+{
+  console.log('Touch (a 390 px phone)');
+  const { page, context } = await open('/patterns', { width: 390, touch: true });
+  const H = '#hourly-totals svg[data-ck="marks"]';
+  await waitChart(page, H);
+  await page.locator(H).evaluate((e) => e.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(300);
+  const hit = await page.locator(`${H} .ck-hit[data-ck-i="6"]`).boundingBox();
+  await page.touchscreen.tap(hit.x + hit.width / 2, hit.y + hit.height * 0.7);
+  await page.waitForTimeout(400);
+  const t = await tipState(page, H);
+  check('touch: a tap on an hour reads it', t.on && /06:00/.test(t.text), JSON.stringify(t));
+  // The charts that scroll sideways inside their card must let a swipe scroll them; the others
+  // keep pan-y so a sideways drag moves the reading and a vertical one scrolls the page.
+  const ta = await page.evaluate(() => {
+    const get = (sel) => { const e = document.querySelector(sel); return e ? getComputedStyle(e).touchAction : 'missing'; };
+    return { stream: get('#activity-streamgraph svg[data-ck]'), grid: get('#heatmap-grid svg[data-ck]'), hours: get('#hourly-totals svg[data-ck]') };
+  });
+  check('touch: the sideways-scrolling streamgraph and grid accept a swipe', ta.stream === 'auto' && ta.grid === 'auto', JSON.stringify(ta));
+  check('touch: the hour bars keep pan-y so a drag reads and a swipe down scrolls', ta.hours === 'pan-y', JSON.stringify(ta));
   await context.close();
 }
 

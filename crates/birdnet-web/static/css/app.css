@@ -4692,6 +4692,9 @@ a.sr-about       { color: var(--fg-3); }
 .ck { position: relative; }
 svg[data-ck] { touch-action: pan-y; cursor: crosshair; outline-offset: 3px; border-radius: var(--r-xs); }
 svg[data-ck="marks"] { cursor: default; }
+/* The charts that scroll sideways inside their card on a phone must let a horizontal swipe scroll
+   them (a tap still reads a day: the kit listens to pointerdown, not to a drag). */
+@media (max-width: 600px) { svg[data-ck].viz-stream, svg[data-ck].hm-svg, svg[data-ck].cal-svg { touch-action: auto; } }
 
 /* The colour classes: one custom property, --c, that the marks, the gradients and
    the legend swatches all read, so a slot is named once. */
@@ -4796,14 +4799,17 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 .ck-keyline { display: inline-block; width: 18px; height: 3px; border-radius: var(--r-2xs); vertical-align: 3px; background: var(--c, var(--chart-1)); }
 .ck-keyghost { background: var(--chart-axis); opacity: .7; }
 .ck-keybar { display: inline-block; width: 6px; height: 11px; border-radius: var(--r-2xs); vertical-align: -1px; background: var(--chart-other); }
-/* A chart with 24 columns or a month of days keeps a width it can be read at on a phone and
-   scrolls inside its card (the wrapper is a focusable group, so a keyboard can scroll it). */
-@media (max-width: 600px) { svg.ck-wide { min-width: 480px; } }
 /* The calendar is a year wide: on a phone it keeps a readable size and scrolls inside its card. */
 .cal-svg { display: block; width: 100%; height: auto; min-width: 560px; }
 .cal-slot { min-height: 150px; }
 /* A kit chart fills its container even where that container is a flex row. */
 .viz-chart.ck { width: 100%; box-sizing: border-box; }
+/* The placeholder for Today's hour strip is as tall as the strip (960 by 236 units, the room a day with
+   a sun and a temperature takes), so the cards below it do not jump when the chart arrives. */
+.bnb-skel-strip { aspect-ratio: 960 / 236; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--space-8); }
+/* The Trends cards hold the room their chart and its key take while it loads. */
+.ts-slot { min-height: 15rem; }
+@media (max-width: 600px) { .ts-slot { min-height: 11rem; } }
 /* /charts */
 /* The dawn chorus: the ring chart, then which ring is which bird. */
 .dc-polar-col { display: flex; flex-direction: column; align-items: center; gap: var(--space-12); width: 100%; }
@@ -6043,7 +6049,7 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .dc-sky { stroke: none; }
 .dc-sky-night { fill: var(--night); fill-opacity: .85; }
 .dc-sky-twilight { fill: color-mix(in oklab, var(--dawn) 50%, var(--chart-gap)); }
-.dc-sky-day { fill: var(--dawn); }
+.dc-sky-day { fill: var(--seq-3); }
 .dc-sun { fill: var(--chart-annot); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
 .dc-moon { stroke: var(--chart-axis); fill: none; }
 .dc-moon.is-now { stroke: var(--chart-annot); }
