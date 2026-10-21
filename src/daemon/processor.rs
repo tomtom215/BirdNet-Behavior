@@ -311,8 +311,13 @@ impl birdnet_integrations::notification::DetectionCounter for PriorDetections<'_
         self.before_this_one(self.date, sci_name)
     }
 
-    /// The seven days ending on the detection's date — BirdNET-Pi's
-    /// `Date >= DATE('now', '-7 day')`, on the detection's own calendar.
+    /// The seven dates ending on the detection's own: its date and the six
+    /// before. **Not** BirdNET-Pi's window: its `Date >= DATE('<today>', '-7 day')`
+    /// is today and the seven dates before it, eight in all, although the message
+    /// it sends says "last 7d". This follows the message, so a species heard
+    /// seven days ago is a new species here a day earlier than it is there. Counted
+    /// on the detection's own calendar rather than the wall clock, so a backlog
+    /// processed late is judged by when it was heard.
     fn this_weeks_count_for(&self, sci_name: &str) -> u64 {
         let from = birdnet_core::civil::shift_datetime(self.date, "00:00:00", -6.0 * 86_400.0)
             .map_or_else(|| self.date.to_owned(), |(date, _)| date);
@@ -531,6 +536,31 @@ async fn post_soundscape_for_row(
     })
 }
 
+/// How often an idle processor looks for an operator's reset.
+const RESET_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The next detection event, applying the operator's threshold resets while
+/// waiting. `None` when the channel is closed.
+///
+/// The web side deletes the stored rows and then leaves a request for the
+/// tracker. Applied only when the next event arrived, a reset made at night, or
+/// at a quiet feeder, sat unapplied for hours, and any write the processor made
+/// in the meantime from its in-memory copy restored the rows the operator had
+/// just been told were gone. Polling bounds that to [`RESET_POLL`].
+fn wait_for_event(
+    event_rx: &mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
+    dynamic: &mut DynamicThresholdState,
+    state: &birdnet_web::state::AppState,
+) -> Option<birdnet_core::detection::daemon::DetectionEvent> {
+    loop {
+        match event_rx.recv_timeout(RESET_POLL) {
+            Ok(event) => return Some(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => dynamic.apply_resets(state),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
 #[allow(
     clippy::needless_pass_by_value,
@@ -588,7 +618,7 @@ pub(super) fn event_processor(
     }
 
     loop {
-        let Ok(event) = event_rx.recv() else {
+        let Some(event) = wait_for_event(&event_rx, &mut dynamic, &state) else {
             tracing::info!("event channel closed, stopping event processor");
             break;
         };
@@ -833,7 +863,8 @@ pub(super) fn event_processor(
         if let Some(at_secs) =
             crate::daemon::duplicate::detection_secs(&detection.date, &detection.time)
             && let crate::daemon::duplicate::DuplicateVerdict::Suppress { since_last_secs } =
-                duplicates.admit_with(
+                duplicates.admit_from(
+                    &derive_source_label(&event.source_file),
                     &detection.scientific_name,
                     at_secs,
                     species_intervals.get(&state, &detection.scientific_name),
@@ -1411,6 +1442,16 @@ pub(super) fn event_processor(
         // dropped notification: nothing failed, the operator asked for fewer.
         if let Some(ref bw) = birdweather
             && bw.wants(detection.confidence)
+            && let Some(bw_position) = bw.post_location().or_else(|| {
+                // A blur radius with no seed to blur by: the exact position is
+                // the one answer a privacy setting must never give.
+                tracing::error!(
+                    species = %detection.common_name,
+                    "BirdWeather upload skipped: the position blur has no seed (the system \
+                     random generator failed), and the exact position is not sent instead"
+                );
+                None
+            })
         {
             // The station's local wall clock with the offset in force — what
             // both references send. `Date`/`Time` labelled `Z` was a lie by
@@ -1425,9 +1466,8 @@ pub(super) fn event_processor(
                 let (start_secs, end_secs) = clip.detection_span();
                 birdweather_soundscape_upload(clip, &timestamp, start_secs, end_secs)
             });
-            // Blurred (or exact) once, here: the same position is on the
+            // Blurred (or exact) once, above: the same position is on the
             // parked copy if the post has to be replayed.
-            let bw_position = bw.post_location();
             let mut post = birdnet_integrations::birdweather::DetectionPost {
                 timestamp,
                 common_name: detection.common_name.clone(),
@@ -1765,6 +1805,52 @@ mod tests {
             rows.is_empty(),
             "a disabled feature must not learn: {rows:?}"
         );
+    }
+
+    /// L5: a reset is applied while the station is idle, not at the next
+    /// detection. The tracker has learned a species and the table holds it; the
+    /// operator's request arrives with no event behind it. Within a few seconds
+    /// the table must be rewritten from the (now empty) tracker. Against a
+    /// processor that only looks at its queue when an event arrives, the row is
+    /// still there at the deadline.
+    #[test]
+    fn a_reset_is_applied_while_the_station_is_idle() {
+        let (_tmp, state) = dyn_state(true);
+        let mut dynamic = DynamicThresholdState::new(tracker_with(true), &state);
+        dynamic.confirm("Turdus merula", 0.95, 1_000, &state);
+        assert_eq!(
+            state
+                .with_db(birdnet_db::dynamic_thresholds::load_all)
+                .unwrap()
+                .len(),
+            1,
+            "the precondition: a learned row to forget"
+        );
+        let handle = state.dynamic_threshold_handle().expect("registered");
+        let (tx, rx) = mpsc::channel();
+        let waiting_state = state.clone();
+        let waiter = std::thread::spawn(move || {
+            let got = wait_for_event(&rx, &mut dynamic, &waiting_state);
+            (got.is_none(), dynamic)
+        });
+        handle.request(birdnet_core::detection::dynamic_threshold::Reset::All);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let cleared = loop {
+            let rows = state
+                .with_db(birdnet_db::dynamic_thresholds::load_all)
+                .unwrap();
+            if rows.is_empty() || std::time::Instant::now() > deadline {
+                break rows.is_empty();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        // Release the waiter either way, so a failure reports instead of hanging.
+        drop(tx);
+        let (closed, _) = waiter.join().expect("the waiter did not panic");
+        assert!(cleared, "the reset was not applied to an idle processor");
+        // The counterpart: a closed channel ends the wait.
+        assert!(closed);
     }
 
     // ── ThresholdCache ─────────────────────────────────────────────────
@@ -3857,9 +3943,17 @@ mod tests {
             .iter()
             .filter(|p| p["lat"] != 51.48 || p["lon"] != -0.13)
             .count();
-        assert!(
-            moved >= 5,
+        assert_eq!(
+            moved, 6,
             "the blur left {moved} of 6 posts in place: {posts:?}"
+        );
+        // One fixed offset: a fresh draw per post can be averaged back to the
+        // station's address.
+        assert!(
+            posts
+                .windows(2)
+                .all(|w| w[0]["lat"] == w[1]["lat"] && w[0]["lon"] == w[1]["lon"]),
+            "the offset changed between posts: {posts:?}"
         );
         for p in &posts {
             let dlat = (p["lat"].as_f64().unwrap() - 51.48).abs() * 111_195.0;

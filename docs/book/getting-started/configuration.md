@@ -81,7 +81,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
 | `BIRDNET_CLIP_RETENTION_DAYS` | `--clip-retention-days` | `CLIP_RETENTION_DAYS` | `0` (keep forever) |
 | `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` (BirdNET-Pi calls it `PURGE_THRESHOLD`) |
-| — | — | `FULL_DISK` | `purge`. What happens at that threshold: `purge` deletes the oldest clips of the most-recorded species (never below `PURGE_SPECIES_FLOOR`, never a locked one); `keep` stops recording, deletes nothing and records again by itself once there is room, as BirdNET-Pi's `FULL_DISK=keep` does |
+| — | — | `FULL_DISK` | `purge`. What happens at that threshold: `purge` deletes the oldest clips of the most-recorded species (never below `PURGE_SPECIES_FLOOR`, never a locked one); `keep` stops recording, deletes nothing and records again by itself once usage is 2 points below the threshold, as BirdNET-Pi's `FULL_DISK=keep` does |
 | `BIRDNET_PURGE_SPECIES_FLOOR` | `--purge-species-floor` | `PURGE_SPECIES_FLOOR` | `5` (`0` = no floor) |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |

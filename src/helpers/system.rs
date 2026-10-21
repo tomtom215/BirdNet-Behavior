@@ -204,6 +204,11 @@ pub fn start_disk_manager(
     // monitor a directory nothing necessarily writes to.
     let recordings_dir = state.recording_dir();
     let already_monitored = cli.watch_dir.as_ref().is_some_and(|w| *w == recordings_dir);
+    if let Some(notice) =
+        super::startup_notices::keep_overridden_by_watch_dir(full_disk_action, already_monitored)
+    {
+        tracing::warn!("{notice}");
+    }
     if !already_monitored {
         // `disk_usage` shells out to `df`, which fails on a path that does not
         // exist — and the recordings dir is only created lazily by the first

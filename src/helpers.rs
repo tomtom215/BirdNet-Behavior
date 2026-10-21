@@ -34,6 +34,7 @@ pub mod resolve;
 mod secret_files;
 mod settings_overlay;
 pub mod startup_config;
+pub mod startup_notices;
 mod state;
 pub mod station_defaults;
 mod system;

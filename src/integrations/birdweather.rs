@@ -44,57 +44,167 @@ pub fn birdweather_location(
     })
 }
 
-/// The upload bar and the blur radius from their config values.
+/// The upload bar from its config value.
 ///
-/// Unset or empty is "none" (`None`, `0.0`): a station that has not asked for
-/// either uploads and positions exactly as before. A value that is not usable is
-/// an `Err` naming the key, and the caller falls back to "none" for **that**
-/// setting only, with a warning. Out-of-range is refused rather than clamped:
-/// `75` typed for 75 % clamps to 1 and would stop every upload.
+/// Unset or empty is "none" (`None`): a station that has not asked for a bar
+/// uploads everything it records. A value that is not usable is an `Err`
+/// naming the key. Out-of-range is refused rather than clamped: `75` typed for
+/// 75 % clamps to 1 and would stop every upload. The caller then uploads with
+/// **no** bar, which is the setting's own "off", and says so.
+///
+/// Independent of [`birdweather_accuracy`]: a bad value here must never decide
+/// what happens to the privacy setting (it did, once: see that function).
 ///
 /// # Errors
 ///
 /// A sentence naming the key and what is wrong with its value.
-fn birdweather_options(
-    threshold: Option<&str>,
-    accuracy: Option<&str>,
-) -> Result<(Option<f32>, f64), String> {
-    let blank = |v: Option<&str>| {
-        v.map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
+fn birdweather_threshold(threshold: Option<&str>) -> Result<Option<f32>, String> {
+    let Some(text) = threshold.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
     };
-    let floor = match blank(threshold) {
-        None => None,
-        Some(text) => {
-            let v = birdnet_core::config::locale::parse_decimal(&text).map_err(|_| {
-                format!("BIRDWEATHER_THRESHOLD={text:?} is not a number between 0 and 1")
-            })?;
-            if !(0.0..=1.0).contains(&v) {
-                return Err(format!(
-                    "BIRDWEATHER_THRESHOLD={text:?} is outside 0 to 1 (for 75 %, write 0.75)"
-                ));
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            Some(v as f32).filter(|c| *c > 0.0)
+    let v = birdnet_core::config::locale::parse_decimal(text)
+        .map_err(|_| format!("BIRDWEATHER_THRESHOLD={text:?} is not a number between 0 and 1"))?;
+    if !(0.0..=1.0).contains(&v) {
+        return Err(format!(
+            "BIRDWEATHER_THRESHOLD={text:?} is outside 0 to 1 (for 75 %, write 0.75)"
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(Some(v as f32).filter(|c| *c > 0.0))
+}
+
+/// The blur radius in metres from its config value; `0.0` for unset, blank or
+/// `0` (no blur, which is the setting's own default).
+///
+/// A value that is set and not usable is an `Err`, and **the caller must not
+/// build the client on it**. The setting is a privacy one: it keeps the
+/// station's address off a public map, and a station that typed `5km` or
+/// `60000` has said it wants that. Falling back to `0.0` ("exact") is the one
+/// outcome that contradicts what was asked, and it is what an earlier version
+/// did, because a bad *threshold* in the same call took the accuracy down with
+/// it. Clamping to the largest radius was considered for the too-big case and
+/// rejected: it is a guess about what was meant, and an unparseable value has
+/// no such guess, so one rule (refuse, say so, upload nothing) covers both.
+///
+/// # Errors
+///
+/// A sentence naming the key and what is wrong with its value.
+fn birdweather_accuracy(accuracy: Option<&str>) -> Result<f64, String> {
+    let Some(text) = accuracy.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(0.0);
+    };
+    let v = birdnet_core::config::locale::parse_decimal(text)
+        .map_err(|_| format!("BIRDWEATHER_LOCATION_ACCURACY={text:?} is not a number of metres"))?;
+    let max = birdnet_integrations::birdweather::MAX_LOCATION_ACCURACY_M;
+    if !(0.0..=max).contains(&v) {
+        return Err(format!(
+            "BIRDWEATHER_LOCATION_ACCURACY={text:?} is outside 0 to {max} metres"
+        ));
+    }
+    Ok(v)
+}
+
+/// What the station keeps beside its database to remember its blur offset.
+pub const BLUR_SEED_FILE: &str = "birdweather-blur-seed";
+
+/// The station's blur seed: read from `dir`, or drawn and written there once.
+///
+/// The seed is what makes the posted position the same on every upload and on
+/// every restart (see `birdnet_integrations::birdweather::fuzz_location` for
+/// what that hides). Written atomically with mode 0600. A file that exists but
+/// is not 64 hex characters is an error and is **not** regenerated: that would
+/// silently move the station on the map and hand an observer a second sample.
+///
+/// # Errors
+///
+/// The file cannot be read or written, is malformed, or the system generator
+/// failed.
+pub fn load_or_create_blur_seed(
+    dir: &std::path::Path,
+) -> std::io::Result<[u8; birdnet_integrations::birdweather::BLUR_SEED_LEN]> {
+    use birdnet_integrations::birdweather::BLUR_SEED_LEN;
+    use std::io::{Error, ErrorKind, Write as _};
+    let path = dir.join(BLUR_SEED_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let hex = text.trim();
+            let decoded = (hex.len() == BLUR_SEED_LEN * 2 && hex.is_ascii())
+                .then(|| {
+                    (0..BLUR_SEED_LEN)
+                        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
+                        .collect::<Option<Vec<u8>>>()
+                })
+                .flatten()
+                .and_then(|v| <[u8; BLUR_SEED_LEN]>::try_from(v).ok());
+            return decoded.ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "{} is not a {}-character hex seed",
+                        path.display(),
+                        BLUR_SEED_LEN * 2
+                    ),
+                )
+            });
         }
-    };
-    let metres = match blank(accuracy) {
-        None => 0.0,
-        Some(text) => {
-            let v = birdnet_core::config::locale::parse_decimal(&text).map_err(|_| {
-                format!("BIRDWEATHER_LOCATION_ACCURACY={text:?} is not a number of metres")
-            })?;
-            let max = birdnet_integrations::birdweather::MAX_LOCATION_ACCURACY_M;
-            if !(0.0..=max).contains(&v) {
-                return Err(format!(
-                    "BIRDWEATHER_LOCATION_ACCURACY={text:?} is outside 0 to {max} metres"
-                ));
-            }
-            v
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let seed = birdnet_integrations::birdweather::random_blur_seed()
+        .ok_or_else(|| Error::other("the system random generator failed"))?;
+    let hex = seed.iter().fold(String::new(), |mut out, b| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+        out
+    });
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{BLUR_SEED_FILE}.{}.tmp", std::process::id()));
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
         }
+        let mut file = opts.open(&tmp)?;
+        file.write_all(hex.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(seed)
+}
+
+/// Give a blurring client the station's persistent seed from `dir`.
+///
+/// A client without a blur radius is returned unchanged. When the seed file
+/// cannot be used the client keeps the random seed it drew for this process: the
+/// position is still blurred and still the same on every post until a restart,
+/// and the log says the offset will change then.
+#[must_use]
+pub fn with_persisted_blur_seed(
+    client: birdnet_integrations::birdweather::Client,
+    dir: Option<&std::path::Path>,
+) -> birdnet_integrations::birdweather::Client {
+    if client.location_accuracy() <= 0.0 {
+        return client;
+    }
+    let Some(dir) = dir else {
+        return client;
     };
-    Ok((floor, metres))
+    match load_or_create_blur_seed(dir) {
+        Ok(seed) => client.with_blur_seed(seed),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "BirdWeather: could not keep the position-blur seed; the blurred position stays \
+                 the same until the next restart and then changes"
+            );
+            client
+        }
+    }
 }
 
 /// Create a `BirdWeather` client from CLI flags and/or config file values.
@@ -140,18 +250,35 @@ pub fn create_birdweather_client(
                 .map(String::from)
         });
 
-    // The two BirdWeather-only settings (P-2). Read as literal `config.get`s,
-    // for `tests/every_config_key_is_known.rs`.
-    let (min_confidence, accuracy_m) = match birdweather_options(
-        config.and_then(|c| c.get("BIRDWEATHER_THRESHOLD")),
-        config.and_then(|c| c.get("BIRDWEATHER_LOCATION_ACCURACY")),
-    ) {
-        Ok(options) => options,
-        Err(why) => {
-            tracing::warn!("{why}; BirdWeather uploads are not affected by that setting");
-            (None, 0.0)
-        }
-    };
+    // The two BirdWeather-only settings (P-2), resolved independently. Read as
+    // literal `config.get`s, for `tests/every_config_key_is_known.rs`.
+    //
+    // A bad blur radius refuses the client: it is a privacy setting, and the
+    // only other outcomes are "exact" (what it was written to prevent) or a
+    // guess at what was meant. A bad threshold only loses the threshold.
+    let accuracy_m =
+        match birdweather_accuracy(config.and_then(|c| c.get("BIRDWEATHER_LOCATION_ACCURACY"))) {
+            Ok(metres) => metres,
+            Err(why) => {
+                tracing::error!(
+                    "BirdWeather uploads are OFF: {why}. Every upload would otherwise carry the \
+                 station's exact position onto a public map. Set the blur to a number of \
+                 metres from 0 to {} (0 or empty for no blur) and restart",
+                    birdnet_integrations::birdweather::MAX_LOCATION_ACCURACY_M
+                );
+                return None;
+            }
+        };
+    let min_confidence =
+        match birdweather_threshold(config.and_then(|c| c.get("BIRDWEATHER_THRESHOLD"))) {
+            Ok(floor) => floor,
+            Err(why) => {
+                tracing::warn!(
+                    "{why}; BirdWeather uploads carry no extra confidence bar until it is fixed"
+                );
+                None
+            }
+        };
 
     match birdnet_integrations::birdweather::Client::new(&token, lat, lon) {
         Ok(client) => {
@@ -196,21 +323,138 @@ pub fn create_birdweather_client(
 mod tests {
     #[test]
     fn the_birdweather_options_are_off_unless_set_and_refused_when_out_of_range() {
-        use super::birdweather_options as opts;
-        assert_eq!(opts(None, None), Ok((None, 0.0)));
-        assert_eq!(opts(Some(""), Some("  ")), Ok((None, 0.0)));
-        assert_eq!(opts(Some("0"), Some("0")), Ok((None, 0.0)), "0 is none");
-        assert_eq!(opts(Some("0,85"), Some("250")), Ok((Some(0.85), 250.0)));
-        assert!(opts(Some("75"), None).unwrap_err().contains("0.75"));
-        assert!(opts(Some("-0.1"), None).is_err());
-        assert!(opts(Some("high"), None).is_err());
-        assert!(opts(None, Some("-5")).is_err());
-        assert!(opts(None, Some("50001")).is_err());
-        assert!(opts(None, Some("1.5km")).is_err());
+        use super::{birdweather_accuracy as acc, birdweather_threshold as thr};
+        assert_eq!(thr(None), Ok(None));
+        assert_eq!(acc(None), Ok(0.0));
+        assert_eq!(thr(Some("")), Ok(None));
+        assert_eq!(acc(Some("  ")), Ok(0.0));
+        assert_eq!(thr(Some("0")), Ok(None), "0 is none");
+        assert_eq!(acc(Some("0")), Ok(0.0), "0 is none");
+        assert_eq!(thr(Some("0,85")), Ok(Some(0.85)));
+        assert_eq!(acc(Some("250")), Ok(250.0));
+        assert!(thr(Some("75")).unwrap_err().contains("0.75"));
+        assert!(thr(Some("-0.1")).is_err());
+        assert!(thr(Some("high")).is_err());
+        assert!(acc(Some("-5")).is_err());
+        assert!(acc(Some("50001")).is_err());
+        assert!(acc(Some("1.5km")).is_err());
+        assert!(acc(Some("50000")).is_ok(), "the cap itself is allowed");
+    }
+
+    /// The validator (in `birdnet-core`, which cannot see the integrations
+    /// crate) and the client must agree on the widest blur.
+    #[test]
+    fn the_validator_and_the_client_agree_on_the_widest_blur() {
         assert!(
-            opts(None, Some("50000")).is_ok(),
-            "the cap itself is allowed"
+            (birdnet_core::config::validate::BIRDWEATHER_MAX_ACCURACY_M
+                - birdnet_integrations::birdweather::MAX_LOCATION_ACCURACY_M)
+                .abs()
+                < f64::EPSILON
         );
+    }
+
+    fn client_with(extra: &[(&str, &str)]) -> Option<birdnet_integrations::birdweather::Client> {
+        let mut entries = vec![
+            ("BIRDWEATHER_TOKEN", "tok"),
+            ("LATITUDE", "51.48"),
+            ("LONGITUDE", "-0.13"),
+        ];
+        entries.extend_from_slice(extra);
+        create_birdweather_client(&default_cli(), Some(&config_with(&entries)))
+    }
+
+    /// H1. A bad `BIRDWEATHER_THRESHOLD` used to discard a valid
+    /// `BIRDWEATHER_LOCATION_ACCURACY` in the same call, and the station posted
+    /// its exact position. Each setting is resolved on its own now.
+    #[test]
+    fn a_bad_threshold_does_not_take_a_good_blur_with_it() {
+        let c = client_with(&[
+            ("BIRDWEATHER_THRESHOLD", "85"),
+            ("BIRDWEATHER_LOCATION_ACCURACY", "500"),
+        ])
+        .expect("a bad threshold alone does not stop uploads");
+        assert!((c.location_accuracy() - 500.0).abs() < f64::EPSILON);
+        assert_eq!(c.min_confidence(), None, "the bad bar is dropped");
+        let p = c.post_location().expect("seeded");
+        assert_ne!(p, (51.48, -0.13), "the exact position was posted");
+        // The counterpart: a good threshold with a good blur keeps both.
+        let both = client_with(&[
+            ("BIRDWEATHER_THRESHOLD", "0.85"),
+            ("BIRDWEATHER_LOCATION_ACCURACY", "500"),
+        ])
+        .unwrap();
+        assert_eq!(both.min_confidence(), Some(0.85));
+        assert!((both.location_accuracy() - 500.0).abs() < f64::EPSILON);
+    }
+
+    /// H1. A radius that is set and unusable never becomes "exact": no client,
+    /// so nothing is posted at all.
+    #[test]
+    fn a_bad_blur_radius_posts_nothing_rather_than_the_exact_position() {
+        for bad in ["60000", "5km", "-5", "nan", "1e9"] {
+            assert!(
+                client_with(&[("BIRDWEATHER_LOCATION_ACCURACY", bad)]).is_none(),
+                "{bad:?} built a client"
+            );
+            assert!(
+                client_with(&[
+                    ("BIRDWEATHER_THRESHOLD", "0.9"),
+                    ("BIRDWEATHER_LOCATION_ACCURACY", bad)
+                ])
+                .is_none(),
+                "{bad:?} with a good threshold built a client"
+            );
+        }
+        // Counterparts: no blur at all is a valid choice, and so is 0.
+        let exact = client_with(&[]).expect("no blur set");
+        assert_eq!(exact.post_location(), Some((51.48, -0.13)));
+        assert!(client_with(&[("BIRDWEATHER_LOCATION_ACCURACY", "0")]).is_some());
+        assert!(client_with(&[("BIRDWEATHER_LOCATION_ACCURACY", "50000")]).is_some());
+    }
+
+    #[test]
+    fn the_blur_seed_is_kept_beside_the_database_and_is_not_replaced() {
+        use super::{BLUR_SEED_FILE, load_or_create_blur_seed};
+        let dir = tempfile::tempdir().unwrap();
+        let first = load_or_create_blur_seed(dir.path()).unwrap();
+        assert_eq!(load_or_create_blur_seed(dir.path()).unwrap(), first);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(dir.path().join(BLUR_SEED_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // A damaged file is an error, not a quiet new seed that would move the
+        // station on the map.
+        std::fs::write(dir.path().join(BLUR_SEED_FILE), "not hex").unwrap();
+        assert!(load_or_create_blur_seed(dir.path()).is_err());
+    }
+
+    #[test]
+    fn a_restarted_station_posts_the_same_blurred_position() {
+        use super::with_persisted_blur_seed;
+        let dir = tempfile::tempdir().unwrap();
+        let post = || {
+            with_persisted_blur_seed(
+                client_with(&[("BIRDWEATHER_LOCATION_ACCURACY", "800")]).unwrap(),
+                Some(dir.path()),
+            )
+            .post_location()
+            .unwrap()
+        };
+        let before = post();
+        assert_eq!(before, post(), "the offset changed across a restart");
+        // The counterpart: without a kept seed, two starts disagree.
+        let unkept = || {
+            client_with(&[("BIRDWEATHER_LOCATION_ACCURACY", "800")])
+                .unwrap()
+                .post_location()
+                .unwrap()
+        };
+        assert_ne!(unkept(), unkept());
     }
 
     use super::{birdweather_location, create_birdweather_client};

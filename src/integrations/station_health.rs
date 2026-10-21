@@ -567,13 +567,13 @@ fn hold_condition(held: bool) -> Option<Condition> {
     held.then(|| Condition {
         key: "recording-held".to_owned(),
         title: "Recording is stopped: the disk is full".to_owned(),
-        body: "The disk reached the purge threshold and the station is set to keep \
-               every clip, so it has stopped recording and deleted nothing. Free space \
-               (move clips elsewhere, or delete some on the Recordings page), or \
-               raise the threshold, and recording resumes by itself. To let the \
-               station delete its oldest clips instead, change \"When the disk is \
-               full\" in the Settings."
-            .to_owned(),
+        body: format!(
+            "The disk reached the purge threshold and the station is set to keep \
+             every clip, so it has stopped recording and deleted nothing. {}. To let the \
+             station delete its oldest clips instead, change \"When the disk is \
+             full\" in the Settings.",
+            birdnet_core::audio::capture::disk::manager::hold_advice_relative()
+        ),
     })
 }
 
@@ -2394,6 +2394,10 @@ mod tests {
         assert!(c.title.contains("stopped"), "{}", c.title);
         assert!(c.body.contains("resumes by itself"), "{}", c.body);
         assert!(c.body.contains("deleted nothing"), "{}", c.body);
+        // M2: "raise the threshold and it resumes" was only true after a
+        // restart, and "free space" only past the margin; both are said.
+        assert!(c.body.contains("2 points below"), "{}", c.body);
+        assert!(c.body.contains("restart"), "{}", c.body);
     }
 
     #[test]

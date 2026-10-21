@@ -105,9 +105,15 @@ pub fn setting_bool(
         .unwrap_or(cli_value)
 }
 
-/// Parse the boolean spellings a config file or the settings form can carry.
-fn parse_bool(value: &str) -> Option<bool> {
-    match value.to_ascii_lowercase().as_str() {
+/// Parse the boolean spellings a config file or the settings form can carry:
+/// `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`, any case, surrounding space
+/// ignored. Anything else is `None`.
+///
+/// Public so a reader of a boolean key that has no command-line flag to go
+/// through [`setting_bool`] agrees with it. `get_parsed::<bool>` accepts only
+/// `true` and `false`, so `MQTT_HA_DISCOVERY=1` was silently ignored.
+pub fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
         "false" | "0" | "no" | "off" => Some(false),
         _ => None,

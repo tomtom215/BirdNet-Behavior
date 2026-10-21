@@ -133,6 +133,11 @@ async fn serve(
     // carried to the settings seed below, which must not copy them into the
     // database.
     let (config, secret_files) = helpers::resolve_secret_files(config);
+    // Keys in an existing config file that now do what they say; a station that
+    // upgraded with one set is doing something different from last week.
+    for notice in helpers::startup_notices::notices(config.as_ref()) {
+        tracing::info!("{notice}");
+    }
     match &config_decision {
         helpers::startup_config::ConfigDecision::Loaded => {}
         helpers::startup_config::ConfigDecision::Reverted { errors, last_good } => {
@@ -448,7 +453,28 @@ async fn serve(
 
     // Create integration clients.
     let apprise_client = integrations::create_apprise_client(&cli, config.as_ref());
-    let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
+    // The blur offset is kept beside the database so it is the same after a
+    // restart (see `fuzz_location` for what a fixed offset does and does not hide).
+    let birdweather_client = match integrations::create_birdweather_client(&cli, config.as_ref()) {
+        Some(client) => {
+            let data_dir = db_path.parent().map(std::path::Path::to_path_buf);
+            // A file read (and, once, a write): off the async workers. If the
+            // task dies the client is gone with it, which is the fail-closed
+            // answer for a client that was about to post a blurred position.
+            match tokio::task::spawn_blocking(move || {
+                integrations::with_persisted_blur_seed(client, data_dir.as_deref())
+            })
+            .await
+            {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    tracing::error!(error = %e, "BirdWeather uploads are OFF: the blur-seed task failed");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     let email_notifier = integrations::create_email_notifier(&state);
     // What "Test all channels" can reach (DD-24): the integrations this
     // binary built, wrapped as probes the web layer runs on demand.

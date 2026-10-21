@@ -31,7 +31,9 @@ mod test_support;
 
 pub use acoustic_health::spawn_acoustic_health;
 pub use apprise::{AppriseHandle, create_apprise_client};
-pub use birdweather::{LOCATION_FIX, birdweather_location, create_birdweather_client};
+pub use birdweather::{
+    LOCATION_FIX, birdweather_location, create_birdweather_client, with_persisted_blur_seed,
+};
 pub use deadman::{DEFAULT_DEADMAN_HOURS, spawn_detection_deadman};
 pub use ebird::spawn_ebird_poll;
 pub use effort::spawn_effort_recorder;

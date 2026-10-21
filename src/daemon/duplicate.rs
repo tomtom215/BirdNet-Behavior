@@ -44,17 +44,27 @@ pub(super) enum DuplicateVerdict {
     },
 }
 
-/// Remembers when each species was last admitted.
+/// Remembers when each species was last admitted **on each source**.
 ///
-/// Bounded by the model's label count (~11 500 short strings, low single-digit
-/// megabytes at absolute worst, and in practice the few dozen species a site
-/// actually hears), so entries are never evicted — an eviction policy would be
-/// a second thing to get wrong for no memory that matters.
+/// Keyed by (source, species), not species alone: two RTSP cameras at the two
+/// ends of a garden hear different birds, and a call at the second camera 20
+/// seconds after the first used to be dropped (no row, no clip, no
+/// notification) as a "repeat" of a bird that was somewhere else. For a station
+/// with one source the source is the same on every detection, so the key is the
+/// species and nothing changes. The cost is the other direction: two
+/// microphones that hear the *same* bird each record it once.
+///
+/// Bounded by the model's label count times the number of sources (~11 500
+/// short strings each at absolute worst, and in practice the few dozen species a
+/// site actually hears), so entries are never evicted — an eviction policy would
+/// be a second thing to get wrong for no memory that matters.
 #[derive(Debug)]
 pub(super) struct DuplicateGate {
     /// Zero disables the gate.
     interval_secs: i64,
-    /// Scientific name → timestamp of the last admitted detection, in seconds.
+    /// (source, scientific name) → timestamp of the last admitted detection,
+    /// in seconds. The two parts are joined by a unit separator, which neither
+    /// a stream id nor a species name contains.
     last_admitted: HashMap<String, i64>,
 }
 
@@ -99,8 +109,19 @@ impl DuplicateGate {
         self.admit_with(sci_name, at_secs, None)
     }
 
+    /// As [`Self::admit_from`], for the one source a single-source station has.
+    #[cfg(test)]
+    pub(super) fn admit_with(
+        &mut self,
+        sci_name: &str,
+        at_secs: i64,
+        species_interval_secs: Option<i64>,
+    ) -> DuplicateVerdict {
+        self.admit_from("local", sci_name, at_secs, species_interval_secs)
+    }
+
     /// As `admit`, for a species that may have an interval of
-    /// its own.
+    /// its own, heard on `source` (a stream id, or `local`).
     ///
     /// `species_interval_secs` is the operator's per-species minimum
     /// (`species_intervals`, migration 56). A positive value **replaces** the
@@ -110,8 +131,9 @@ impl DuplicateGate {
     /// use the global default"). `None`, zero or a negative number falls back
     /// to the station's interval, so a bad stored value can never switch the
     /// gate on for a species by accident.
-    pub(super) fn admit_with(
+    pub(super) fn admit_from(
         &mut self,
+        source: &str,
         sci_name: &str,
         at_secs: i64,
         species_interval_secs: Option<i64>,
@@ -123,7 +145,8 @@ impl DuplicateGate {
         if interval_secs <= 0 {
             return DuplicateVerdict::Admit;
         }
-        if let Some(&last) = self.last_admitted.get(sci_name) {
+        let key = format!("{source}\u{1f}{sci_name}");
+        if let Some(&last) = self.last_admitted.get(&key) {
             let gap = at_secs.saturating_sub(last).abs();
             if gap < interval_secs {
                 return DuplicateVerdict::Suppress {
@@ -131,7 +154,12 @@ impl DuplicateGate {
                 };
             }
         }
-        self.last_admitted.insert(sci_name.to_owned(), at_secs);
+        // Never moved backwards: a restart backlog is walked in directory order,
+        // so a recording from before the last admitted one arrives after it, and
+        // storing its earlier time would make the next in-order detection of the
+        // same song look far enough from the "last" one to be admitted again.
+        let slot = self.last_admitted.entry(key).or_insert(at_secs);
+        *slot = (*slot).max(at_secs);
         DuplicateVerdict::Admit
     }
 }
@@ -454,6 +482,55 @@ mod tests {
         assert_eq!(
             g.admit("Turdus merula", t("05:00:07")),
             DuplicateVerdict::Suppress { since_last_secs: 7 }
+        );
+    }
+
+    /// M6: two cameras are two places. A call at the second 20 s after the
+    /// first used to be dropped as a repeat.
+    #[test]
+    fn a_species_on_another_source_is_not_a_repeat() {
+        let mut g = DuplicateGate::new(3600);
+        let at = |g: &mut DuplicateGate, source: &str, hms: &str| {
+            g.admit_from(source, "Turdus merula", t(hms), None) == DuplicateVerdict::Admit
+        };
+        assert!(at(&mut g, "cam1", "05:00:00"));
+        assert!(at(&mut g, "cam2", "05:00:20"), "cam2 was shadowed by cam1");
+        // Each source still gates itself.
+        assert!(!at(&mut g, "cam1", "05:00:30"));
+        assert!(!at(&mut g, "cam2", "05:00:40"));
+    }
+
+    /// The counterpart that proves keying by source did not change a station
+    /// with one: the same sequence on a single source is gated exactly as it
+    /// is by `admit` (which has no source at all).
+    #[test]
+    fn a_single_source_station_is_gated_exactly_as_before() {
+        let times = ["05:00:00", "05:00:20", "05:30:00", "06:00:01", "06:00:30"];
+        let mut keyed = DuplicateGate::new(3600);
+        let mut unkeyed = DuplicateGate::new(3600);
+        for hms in times {
+            assert_eq!(
+                keyed.admit_from("cam1", "Turdus merula", t(hms), None),
+                unkeyed.admit("Turdus merula", t(hms)),
+                "{hms}"
+            );
+        }
+    }
+
+    /// L1: a recording from before the last admitted one (a restart backlog is
+    /// walked in directory order) must not pull the remembered time back, or
+    /// the same song is admitted again.
+    #[test]
+    fn an_earlier_recording_arriving_late_does_not_rewind_the_gate() {
+        let mut g = DuplicateGate::new(60);
+        assert!(admitted(&mut g, "Turdus merula", "05:10:00"));
+        // 05:00:00 is 10 minutes before: far enough to be admitted on its own...
+        assert!(admitted(&mut g, "Turdus merula", "05:00:00"));
+        // ...but 05:10:20 is 20 s after the song admitted at 05:10:00, and must
+        // still be a repeat of it. With the time rewound to 05:00:00 it was not.
+        assert!(
+            !admitted(&mut g, "Turdus merula", "05:10:20"),
+            "the late arrival moved the remembered time backwards"
         );
     }
 }

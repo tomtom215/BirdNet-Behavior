@@ -180,8 +180,11 @@ phrasing.
 BIRDNET_DUPLICATE_INTERVAL_SECS=30   # 0 = off
 ```
 
-Each species is then admitted at most once per interval; the first chunk wins,
-because that is when the bird started singing. Off by default, since turning it
+Each species is then admitted at most once per interval **on each source** (the
+microphone, or each RTSP camera); the first chunk wins, because that is when the
+bird started singing. Two cameras that hear a bird 20 seconds apart each record it:
+they are two places. A station with one source behaves as if the interval were
+per species. Off by default, since turning it
 on changes how many rows your station records and puts a visible step in every
 chart on the day you do it.
 
