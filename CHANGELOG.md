@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The relational, radial and behavioural Patterns charts, redrawn, and a soundscape terrain.**
+  *Who sings together* is a chord diagram whose species stand in the order that crosses the
+  fewest ribbons, with ribbon width and colour both the measured share of five-minute blocks,
+  names that cannot touch, a "Links shown" control, and, on a phone, a staircase matrix with
+  the same order and ramp (decided by measuring the ring's names against the 8.5 px floor).
+  The dawn rings put each hour's count at the middle of the hour (they were half an hour
+  early), read by the ring-hour, with a sky strip from the station's coordinates and a solid
+  now hand; *Each bird's day* lays the same species flat. The migration ridgeline is coloured
+  by the season a species peaks in, reads a week at a time and hatches weeks that have not
+  happened. The Behavior tab draws bursts of singing, a return-rate ledger by residency class,
+  a before-and-after flow and the morning running order. On *When active*, a soundscape
+  terrain: the last 30, 90 or 365 days by hour, as a flat grid, or raised in 3D on request
+  (three.js 0.186.1, vendored under `static/vendor/three/` with its hash and rebuild recipe,
+  loaded only when 3D is asked for, about 134 kB gzipped). `static/chart-kit.js` gains
+  `data-ck-s` token lists and `data-ck-f` focus, a `.ck-scroll-to` mark and `.ck-sticky` row
+  names for charts that scroll sideways. Gates: `tools/visual-qa/relational.mjs` and
+  `terrain.mjs`.
+
 - **The temporal and distribution charts, redrawn on a shared chart kit.**
   `static/chart-kit.js` gives every chart a tooltip for a pointer, a finger and the
   keyboard (one tab stop, arrow keys, an `aria-live` reading), puts one series in the
@@ -867,6 +885,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   67,545).
 
 ### Fixed
+
+- **Migration "Earliest vs last year" no longer prints −356 d.** A station that began recording
+  late last year compared a resident's first date this January with its first date last
+  December and called the difference an arrival. The tile now needs last year to have been
+  recorded from its start, ignores first dates in the first four weeks of a year, and says
+  "last year was only partly recorded" otherwise; "Still expected" and "Missing" no longer
+  print a placeholder or a zero they cannot know.
 
 - **A recording that is not 48 kHz no longer reaches the model a fraction of a sample early.**
   The resampling library delays its output by `128 x ratio - 1` samples and the

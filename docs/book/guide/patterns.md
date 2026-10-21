@@ -26,6 +26,8 @@ three deepest readings have their own pages, linked above.
 
 ## The soundscape terrain
 
+![The soundscape terrain in 3D: ninety days by hour, the newest day at the front](../images/terrain-3d.png)
+
 The **When active** tab leads with the station's last 30, 90 or 365 days as a
 landscape: the hours of the day across, the days down (the newest at the bottom),
 and the colour of each patch how much was heard in that hour of that day. It opens

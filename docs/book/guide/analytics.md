@@ -34,6 +34,8 @@ The **Who sings together** tab of [Patterns](./patterns.md) (`/patterns?tab=toge
 
 The **Behavior** tab of [Patterns](./patterns.md) (`/patterns?tab=behavior`) draws what the analytics engine computes; each picture keeps its numbers in a table.
 
+![The Behavior tab: bursts of singing, the return-rate ledger, neighbouring species and the morning running order](../images/behavior.png)
+
 - **Bursts of singing** — a lane per day with the hours along it and a bar for each burst, from the moment it began to the moment it ended; bursts of different species that overlap are stacked, never drawn over each other. The legend brings one species forward.
 - **Who keeps coming back** — species grouped as resident, regular, migrant and rarity (how much of the station's time they were present), with the weeks each was heard and how often it was heard again a day, two, three, a week, a fortnight and a month later, each a cell that also prints its number.
 - **Neighbouring species** — who is heard just before and just after the latest species, as a flow with that species in the middle (ranked bars on a phone); a ribbon's width is the share of sessions.

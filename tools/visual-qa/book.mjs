@@ -40,6 +40,7 @@ const PAGES = [
   ['migration.png', '/patterns?tab=migration', 'light'],
   ['dawn-chorus.png', '/patterns?tab=dawn', 'light'],
   ['correlation.png', '/patterns?tab=together', 'light'],
+  ['behavior.png', '/patterns?tab=behavior', 'light'],
   ['life-list.png', '/species?view=lifelist', 'light'],
   ['recordings.png', '/recordings', 'light'],
   ['gallery.png', '/species?view=photos', 'light'],

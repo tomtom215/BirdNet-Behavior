@@ -126,3 +126,8 @@ reduced motion three ways, no replay, theme), `legibility.mjs`, `layout.mjs`, `a
 long species names, sixty species, a 365-day range: every chart must render without
 overlap). `charts.mjs` supports `MUTATE=notip|nodim|motion|noreplay` to watch each check
 go red.
+
+The relational, radial and behavioural charts (the chord diagram and its phone ladder, the dawn
+rings, the migration ridgeline, the Behavior tab and the soundscape terrain) are described in
+[charts-relational.md](charts-relational.md), with their own gates (`relational.mjs`,
+`terrain.mjs`).

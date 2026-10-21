@@ -6,9 +6,11 @@ The **Dawn chorus** tab of [Patterns](./patterns.md) (`/patterns?tab=dawn`) show
 
 ## What you're looking at
 
-- **The polar clock** plots detection activity around a 24-hour dial (midnight at the top, noon at the bottom). Each species is a coloured ribbon whose thickness tracks how often it was heard at that hour, so the pre-dawn build-up and the morning peak read at a glance.
-- **Sunrise and sunset markers** are drawn from the station's coordinates, so the chorus lines up against actual first light rather than an arbitrary grid.
-- **The right rail** lists the contributing species with their peak hour and total count.
+- **The rings** plot detection activity around a 24-hour dial (midnight at the top, noon at the bottom). Each species is a coloured ring that swells outward at the hours it was heard, scaled to its own busiest hour so a quiet wren reads as clearly as a loud cardinal. Point at a ring (or tab to it and use the arrow keys: left and right move by the hour, up and down from ring to ring) and it comes forward and says the hour, the count, that hour's share of the bird's day and its busiest hour. A swell sits on the middle of its hour: a bird heard through 06:00-06:59 peaks at 06:30.
+- **The sky strip** round the rim is drawn from the station's coordinates: night, first light (civil dawn), daylight and last light, with the sun where the colour changes. The times are in the key beside the chart. Birds start singing in first light, so it is drawn beside sunrise.
+- **The middle** says the time now (the line from the centre is the same hand) and the window the rings are drawn from (60 days); the four arcs round it are the moon's phase.
+- **The key** beside the chart names every ring with its busiest hour; hover or focus a name to bring its ring forward, click to hold it.
+- **Each bird's day** lays the same species flat: one row each, a column per hour, the dawn window shaded and the sun's day a line. The numbers are in a table under it.
 
 ## Setting your location
 
