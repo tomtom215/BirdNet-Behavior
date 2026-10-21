@@ -482,7 +482,7 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         config_key: "EMBED_ORIGINS",
         group: Group::Online,
         label: "Sites that may show this station in a frame",
-        help: "Empty (the default): no other site can. To put the station in a Home Assistant card, list that site's address, such as http://homeassistant.local:8123, several separated by commas. Only the sites you list; there is no way to allow every site.",
+        help: "Empty (the default): no other site can. To put the station in a Home Assistant card, list that site's address, such as http://homeassistant.local:8123, several separated by commas. Only the sites you list; there is no way to allow every site. They can show the dashboard, the wall display and the live view; the sign-in and settings pages can never be framed.",
         kind: Kind::Text {
             placeholder: "http://homeassistant.local:8123",
         },
@@ -909,7 +909,7 @@ mod tests {
         assert!(
             problems(&one(
                 "embed_origins",
-                "http://homeassistant.local:8123, https://*.ui.nabu.casa"
+                "http://homeassistant.local:8123, https://abcd1234.ui.nabu.casa, https://*.example.com"
             ))
             .is_empty()
         );
@@ -922,6 +922,10 @@ mod tests {
             "https://ha.example/x",
             "homeassistant.local",
             "https://*.com",
+            // A wildcard over a suffix strangers register under: the docs' own
+            // example used to be one of these.
+            "https://*.ui.nabu.casa",
+            "https://*.co.uk",
         ] {
             let found = problems(&one("embed_origins", bad));
             assert_eq!(found.len(), 1, "{bad:?} was accepted");

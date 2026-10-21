@@ -2,7 +2,9 @@
 //! embedded by, validated, and the `frame-ancestors` source list they make.
 //!
 //! The station says `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`
-//! on every response, so no other page can put it in an `<iframe>`. That is the
+//! on every response, so no other page can put it in an `<iframe>` — unless the
+//! operator lists the origin (below), and then only for the few pages meant to
+//! be shown in a frame ([`allows_framing_of`]). That is the
 //! right default for a page that has an admin login behind it: a site that can
 //! frame the station can lay invisible controls over it ("clickjacking").
 //! It also means a Home Assistant dashboard cannot show the station's live
@@ -21,6 +23,30 @@
 //! anyone" is the one thing the default exists to prevent, and nothing a
 //! Home Assistant, a Grafana or a kiosk page needs requires it.
 //!
+//! # Wildcards over a suffix other people register under
+//!
+//! `*.example.com` covers one organisation's names, which is what a wildcard is
+//! for. `*.co.uk`, `*.github.io`, `*.pages.dev` and `*.ui.nabu.casa` cover
+//! everyone who registers a name under them — every Home Assistant Cloud
+//! customer is a subdomain of `ui.nabu.casa` — so each would let strangers
+//! frame the station. Such an entry is refused ([`shared_suffix`]) with the
+//! host to list instead. The list is a short hand-kept one of the multi-tenant
+//! suffixes people actually meet, plus the generic second levels of the country
+//! codes (`co.uk`, `com.au`, …); it is **not** the Public Suffix List, which this
+//! crate does not carry, so a suffix missing from it is not protected. An entry
+//! naming one host (`https://abcd1234.ui.nabu.casa`) is never affected: that is
+//! one tenant, and it is the right thing to list.
+//!
+//! # Which pages
+//!
+//! Only the pages a dashboard card or a wall display shows —
+//! `/` (Today), `/kiosk` and `/recordings` (the live view) — take the listed
+//! origins. `/admin/*`, `/station/*`, `/login`, `/logout`, `/onboarding`,
+//! `/restore` and every other page keep `frame-ancestors 'self'` and
+//! `X-Frame-Options: SAMEORIGIN` whatever is listed, so a listed site (or a
+//! script injected into it) cannot lay invisible controls over the sign-in form
+//! or the administration pages.
+//!
 //! An entry that does not parse refuses the **whole** value, and the station
 //! then embeds nowhere. Dropping the bad entry and keeping the rest would
 //! silently narrow what the operator typed; dropping all of it would silently
@@ -28,10 +54,16 @@
 //!
 //! # What embedding does and does not give you
 //!
-//! The frame shows the station as an anonymous visitor sees it. The session
-//! cookie is `SameSite=Lax`, which a browser withholds from a cross-site frame,
-//! so a sign-in does not carry into it — the same rule that stops the framing
-//! site from using the visitor's session, and a reason not to loosen it.
+//! For an embedder on another *site*, the frame shows the station as an
+//! anonymous visitor sees it: the session cookie is `SameSite=Lax`, which a
+//! browser withholds from a cross-site frame, so a sign-in does not carry into
+//! it. "Site" is the registrable domain, not the origin: an embedder on the same
+//! host with another port (`http://192.168.1.10:8123` framing
+//! `http://192.168.1.10:8502`, the usual Home Assistant set-up) or on a sibling
+//! subdomain is the **same site**, the cookie is sent, and a signed-in
+//! administrator sees the listed pages with their controls. That is why only the
+//! pages above take the list, and why the list should name only places you trust
+//! with your browser.
 
 use std::fmt::Write as _;
 
@@ -41,6 +73,25 @@ pub const MAX_ORIGINS: usize = 16;
 
 /// Longest single origin accepted, in bytes (a DNS name is at most 253).
 const MAX_ORIGIN_LEN: usize = 300;
+
+/// The pages a listed origin may frame: the dashboard, the wall display and the
+/// live view. Matched exactly, after the base path (if any) is removed.
+pub const FRAMEABLE_PATHS: [&str; 3] = ["/", "/kiosk", "/recordings"];
+
+/// Whether the origins an operator listed apply to `path`.
+///
+/// `path` is the request path as the router sees it (without the base path). An
+/// allow-list rather than a list of the pages to protect: a page added later is
+/// unframeable until somebody decides it should be.
+#[must_use]
+pub fn allows_framing_of(path: &str) -> bool {
+    let path = if path.len() > 1 {
+        path.trim_end_matches('/')
+    } else {
+        path
+    };
+    FRAMEABLE_PATHS.contains(&path)
+}
 
 /// The setting's key in the `settings` table, and the config key it is bridged
 /// onto.
@@ -192,11 +243,84 @@ fn normalise(raw: &str) -> Result<String, EmbedError> {
     if wildcard && is_ip(host) {
         return Err(refuse(raw, "puts a wildcard on an IP address"));
     }
+    if wildcard && shared_suffix(host) {
+        return Err(refuse(
+            raw,
+            "is a wildcard over a suffix that unrelated people register names under, so it \
+             would let strangers frame the station; list the one host instead, \
+             such as https://yourname.<that suffix>",
+        ));
+    }
     let star = if wildcard { "*." } else { "" };
     Ok(port.map_or_else(
         || format!("{scheme}://{star}{host}"),
         |p| format!("{scheme}://{star}{host}:{p}"),
     ))
+}
+
+/// Multi-tenant suffixes: names under each are registered by unrelated parties,
+/// so a wildcard over the suffix itself names all of them.
+///
+/// Hand-kept, not the Public Suffix List (see the module docs). Lower case, no
+/// leading dot. A host *under* one of these (`you.github.io`) is one tenant and
+/// is not matched.
+const SHARED_SUFFIXES: &[&str] = &[
+    "github.io",
+    "githubusercontent.com",
+    "gitlab.io",
+    "pages.dev",
+    "workers.dev",
+    "netlify.app",
+    "vercel.app",
+    "herokuapp.com",
+    "web.app",
+    "firebaseapp.com",
+    "appspot.com",
+    "azurewebsites.net",
+    "cloudfront.net",
+    "amazonaws.com",
+    "blogspot.com",
+    "wordpress.com",
+    "myshopify.com",
+    "fly.dev",
+    "onrender.com",
+    "glitch.me",
+    "repl.co",
+    "surge.sh",
+    "ngrok.io",
+    "ngrok-free.app",
+    "trycloudflare.com",
+    "duckdns.org",
+    "no-ip.org",
+    "ddns.net",
+    "dyndns.org",
+    "ts.net",
+    "nabu.casa",
+    "ui.nabu.casa",
+    "nip.io",
+    "sslip.io",
+    "xip.io",
+];
+
+/// The generic second-level labels country-code domains hang registrations
+/// under (`co.uk`, `com.au`, `ac.nz`, …).
+const GENERIC_SECOND_LEVELS: &[&str] = &[
+    "co", "com", "org", "net", "gov", "edu", "ac", "or", "ne", "go", "mil", "nom", "sch", "gob",
+];
+
+/// Whether `host` (the part after `*.`) is a suffix other people register names
+/// under: one of [`SHARED_SUFFIXES`], or a country code with a generic second
+/// level (`co.uk`).
+fn shared_suffix(host: &str) -> bool {
+    if SHARED_SUFFIXES.contains(&host) {
+        return true;
+    }
+    let mut labels = host.split('.');
+    matches!(
+        (labels.next(), labels.next(), labels.next()),
+        (Some(second), Some(cc), None)
+            if GENERIC_SECOND_LEVELS.contains(&second) && cc.len() == 2
+    )
 }
 
 /// `host[:port]` to `(host, Some(port))`. `None` for a bad port. A bracketed
@@ -276,7 +400,11 @@ mod tests {
             ok("https://abcd1234.ui.nabu.casa"),
             ["https://abcd1234.ui.nabu.casa"]
         );
-        assert_eq!(ok("https://*.ui.nabu.casa"), ["https://*.ui.nabu.casa"]);
+        assert_eq!(
+            ok("https://*.example.com"),
+            ["https://*.example.com"],
+            "a wildcard over one organisation's own domain is what a wildcard is for"
+        );
         assert_eq!(ok("http://192.168.1.10:8123"), ["http://192.168.1.10:8123"]);
         assert_eq!(ok("http://[::1]:3000"), ["http://[::1]:3000"]);
         assert_eq!(ok("https://grafana.lan"), ["https://grafana.lan"]);
@@ -310,6 +438,66 @@ mod tests {
             "https://example.com:*",
         ] {
             let _ = refused(bad);
+        }
+    }
+
+    /// A wildcard over a suffix strangers register under names all of them. Each
+    /// was accepted before: `*.co.uk` and `*.github.io` and `*.pages.dev` by the
+    /// label count alone, and the docs' own `*.ui.nabu.casa` example let every
+    /// Home Assistant Cloud customer frame the station.
+    #[test]
+    fn a_wildcard_over_a_shared_suffix_is_refused_and_one_tenant_is_not() {
+        for bad in [
+            "https://*.co.uk",
+            "https://*.com.au",
+            "https://*.ac.nz",
+            "https://*.github.io",
+            "https://*.pages.dev",
+            "https://*.ui.nabu.casa",
+            "https://*.nabu.casa",
+            "https://*.ts.net",
+            "http://*.duckdns.org:8123",
+            "https://*.nip.io",
+        ] {
+            let e = refused(bad);
+            assert!(e.reason.contains("list the one host"), "{bad}: {e}");
+        }
+        // The counterpart: one tenant, and a wildcard under a tenant, are fine.
+        for good in [
+            "https://abcd1234.ui.nabu.casa",
+            "https://you.github.io",
+            "https://*.you.github.io",
+            "https://*.home.example.co.uk",
+            "https://*.example.co.uk",
+            "https://*.tail1234.ts.net",
+            "https://*.example.org",
+            "https://*.co.example.com",
+        ] {
+            let _ = ok(good);
+        }
+    }
+
+    #[test]
+    fn only_the_dashboard_the_wall_display_and_the_live_view_take_the_list() {
+        for yes in ["/", "/kiosk", "/kiosk/", "/recordings"] {
+            assert!(allows_framing_of(yes), "{yes}");
+        }
+        for no in [
+            "/login",
+            "/logout",
+            "/onboarding",
+            "/onboarding/done",
+            "/restore",
+            "/admin",
+            "/admin/overview",
+            "/station",
+            "/station/capture",
+            "/recordings/x",
+            "/kioskx",
+            "/api/v2/stats",
+            "",
+        ] {
+            assert!(!allows_framing_of(no), "{no}");
         }
     }
 

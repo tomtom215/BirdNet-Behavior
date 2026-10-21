@@ -273,7 +273,10 @@ List origins by name; `*` is not supported. The station logs an error, ignores t
 
 By default no other website can show the station inside a frame: every page
 carries `Content-Security-Policy: frame-ancestors 'self'` and
-`X-Frame-Options: SAMEORIGIN`. That is the right default for a page with an
+`X-Frame-Options: SAMEORIGIN`. With sites listed (below), only the dashboard
+(`/`), the wall display (`/kiosk`) and the live view (`/recordings`) change; the
+sign-in, `/admin`, `/station`, the setup wizard and every other page keep that
+policy whatever you list. That is the right default for a page with an
 admin sign-in behind it, because a site that can frame the station can lay
 invisible controls over it to trick a visitor into clicking (clickjacking). It
 also means a Home Assistant card or a Grafana panel cannot show the live view.
@@ -286,7 +289,12 @@ EMBED_ORIGINS=http://homeassistant.local:8123, https://abcd1234.ui.nabu.casa
 ```
 
 - Each entry is a full origin, `http` or `https`, host and optional port, no
-  path. `https://*.ui.nabu.casa` covers every subdomain of a domain you name.
+  path. `https://*.example.com` covers every subdomain of a domain you own.
+  Name your own host under a shared service rather than the service: a wildcard
+  over `ui.nabu.casa`, `github.io`, `pages.dev`, `co.uk` and the like would let
+  everyone who registers a name there show the station, so those are refused
+  (from a short built-in list of such suffixes, not the full Public Suffix List:
+  a suffix that is not on it is not protected).
 - There is **no way to allow every site**. A bare `*`, a scheme alone and a
   wildcard over a whole top-level domain (`https://*.com`) are refused.
   tphakala/birdnet-go's `allowembedding` is a switch for all sites at once; here
@@ -300,10 +308,17 @@ EMBED_ORIGINS=http://homeassistant.local:8123, https://abcd1234.ui.nabu.casa
   in the policy changes.
 - Applies after a restart.
 
-What you get in the frame is the station as an anonymous visitor sees it. The
-sign-in cookie is `SameSite=Lax`, which a browser does not send from inside a
-frame on another site, so signing in does not carry into the frame — the same
-rule that stops the page framing the station from using your session.
+For a page on another *site*, what you get in the frame is the station as an
+anonymous visitor sees it: the sign-in cookie is `SameSite=Lax`, which a browser
+does not send from inside a frame on another site, so signing in does not carry
+into the frame. A *site* is the registrable domain, not the origin, so this does
+**not** hold for the usual set-up: Home Assistant at `http://192.168.1.10:8123`
+framing the station at `http://192.168.1.10:8502` (another port), or a sibling
+subdomain, is the same site. There the cookie is sent, and if you are signed in
+to the station in that browser the framed dashboard shows its administrator
+controls, which the embedding page could click for you if it were compromised.
+List only places you trust with your browser, and sign out of the station on a
+shared screen.
 
 ## A safer alternative: a private tunnel
 

@@ -212,7 +212,23 @@ pub async fn security_headers_middleware(
     // Read before the request is handed on: what the page may be framed by is
     // decided per response, so a station that has no list pays one lock and an
     // `Arc` clone for the default `frame-ancestors 'self'`.
+    //
+    // The listed origins apply to the few pages meant to be framed
+    // ([`crate::embed::allows_framing_of`]); everywhere else, the sign-in and
+    // `/admin` among them, the policy is `'self'` whatever was listed. The path
+    // is read before the request is handed on, and with the base path (if any)
+    // taken off, since the router matched without it.
     let embed = state.embed_origins();
+    let framed_by_listed = !embed.is_empty() && {
+        let base = crate::base_path::current().as_str();
+        let path = req.uri().path();
+        let path = if base.is_empty() {
+            path
+        } else {
+            path.strip_prefix(base).unwrap_or(path)
+        };
+        crate::embed::allows_framing_of(path)
+    };
     // One per-request CSP nonce, minted here so a single place owns the whole
     // dance: it is stamped onto every parser-inserted <script> of an HTML
     // response body (below) and mirrored into that response's script-src. No
@@ -295,7 +311,12 @@ pub async fn security_headers_middleware(
         .headers
         .entry(header::CONTENT_SECURITY_POLICY)
         .or_insert_with(|| {
-            HeaderValue::from_str(&content_security_policy(&nonce, &embed.frame_ancestors()))
+            let frame_ancestors = if framed_by_listed {
+                embed.frame_ancestors()
+            } else {
+                crate::embed::EmbedOrigins::none().frame_ancestors()
+            };
+            HeaderValue::from_str(&content_security_policy(&nonce, &frame_ancestors))
                 .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'"))
         });
     parts.headers.insert(
@@ -307,7 +328,7 @@ pub async fn security_headers_middleware(
     // and `frame-ancestors` alone decides. A browser too old to read
     // `frame-ancestors` then falls back to allowing the frame, which is why the
     // list is empty unless somebody asks for it.
-    if embed.is_empty() {
+    if !framed_by_listed {
         parts.headers.insert(
             header::X_FRAME_OPTIONS,
             HeaderValue::from_static("SAMEORIGIN"),
@@ -469,6 +490,11 @@ mod tests {
     /// A page served through the real middleware by a station whose embed list
     /// is `origins`; the headers a browser would decide on.
     async fn framing_headers(origins: &str) -> (Option<String>, Option<String>) {
+        framing_headers_at(origins, "/").await
+    }
+
+    /// The same for a page at `path`.
+    async fn framing_headers_at(origins: &str, path: &str) -> (Option<String>, Option<String>) {
         use axum::routing::get;
         use tower::ServiceExt as _;
         let state = crate::state::AppState::from_connection(
@@ -477,7 +503,7 @@ mod tests {
         );
         state.set_embed_origins(crate::embed::EmbedOrigins::parse(origins).expect("valid"));
         let app = axum::Router::new()
-            .route("/", get(|| async { axum::response::Html("<html></html>") }))
+            .fallback(get(|| async { axum::response::Html("<html></html>") }))
             .layer(axum::middleware::from_fn_with_state(
                 state,
                 security_headers_middleware,
@@ -485,7 +511,7 @@ mod tests {
         let res = app
             .oneshot(
                 Request::builder()
-                    .uri("/")
+                    .uri(path)
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -540,6 +566,51 @@ mod tests {
             assert!(csp.contains(kept), "lost {kept:?}: {csp}");
         }
         assert!(!csp.contains('*'), "{csp}");
+    }
+
+    /// The listed origins are for the pages meant to be framed. The sign-in form
+    /// and everything under `/admin` and `/station` keep `'self'` and the legacy
+    /// header whatever is listed: a listed site (or a script injected into it)
+    /// must not be able to lay invisible controls over them. Before this, the
+    /// list was added to every response.
+    #[tokio::test]
+    async fn the_list_does_not_reach_the_sign_in_or_the_admin_pages() {
+        for path in [
+            "/login",
+            "/logout",
+            "/onboarding",
+            "/onboarding/done",
+            "/restore",
+            "/admin",
+            "/admin/overview",
+            "/admin/accounts",
+            "/station",
+            "/station/capture",
+            "/species/Pica%20pica",
+        ] {
+            let (csp, xfo) = framing_headers_at("http://homeassistant.local:8123", path).await;
+            let csp = csp.expect("a CSP");
+            assert!(
+                csp.contains("frame-ancestors 'self';"),
+                "{path} can be framed by a listed origin: {csp}"
+            );
+            assert!(!csp.contains("homeassistant"), "{path}: {csp}");
+            assert_eq!(xfo.as_deref(), Some("SAMEORIGIN"), "{path}");
+        }
+    }
+
+    /// The counterpart: the pages a card or a wall display shows still take it.
+    #[tokio::test]
+    async fn the_dashboard_the_wall_display_and_the_live_view_still_take_the_list() {
+        for path in ["/", "/kiosk", "/recordings"] {
+            let (csp, xfo) = framing_headers_at("http://homeassistant.local:8123", path).await;
+            let csp = csp.expect("a CSP");
+            assert!(
+                csp.contains("frame-ancestors 'self' http://homeassistant.local:8123;"),
+                "{path}: {csp}"
+            );
+            assert_eq!(xfo, None, "{path}");
+        }
     }
 
     fn nonce_of(csp: &str) -> &str {
