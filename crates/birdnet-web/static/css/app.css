@@ -221,6 +221,10 @@
   --chart-bar-r:        4px;
   --chart-dim:          .35;
 
+  /* Two icons, drawn once as masks so they take the ink of whatever holds them. */
+  --icon-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z'/%3E%3C/svg%3E");
+  --icon-sun: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/%3E%3C/svg%3E");
+
   --paper:       oklch(96% 0.012 75);
   --night:       oklch(28% 0.04 270);
 
@@ -239,9 +243,9 @@
   /* A toggle's thumb stays white on its track in both themes. */
   --switch-thumb: oklch(100% 0 0);
 
-  --shadow-sm:   0 1px 2px oklch(0% 0 0 / .04), 0 0 0 0.5px oklch(0% 0 0 / .04);
-  --shadow-md:   0 4px 14px oklch(0% 0 0 / .06), 0 0 0 0.5px oklch(0% 0 0 / .04);
-  --shadow-lg:   0 18px 40px oklch(0% 0 0 / .08), 0 0 0 0.5px oklch(0% 0 0 / .05);
+  --shadow-sm:   0 1px 2px color-mix(in oklab, var(--shadow-tint) 7%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 8%, transparent);
+  --shadow-md:   0 2px 4px color-mix(in oklab, var(--shadow-tint) 5%, transparent), 0 8px 20px -4px color-mix(in oklab, var(--shadow-tint) 11%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 8%, transparent);
+  --shadow-lg:   0 4px 8px color-mix(in oklab, var(--shadow-tint) 5%, transparent), 0 20px 44px -8px color-mix(in oklab, var(--shadow-tint) 19%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent);
 
   --r-2xs: 3px; --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px;
   --r-pill: 999px;
@@ -320,8 +324,8 @@
   --fs-h3: 24px;
   --fs-stat: 32px;
   --fs-stat-lg: 44px;
-  --fs-h1: clamp(34px, 9vw, 46px);
-  --fs-hero: clamp(40px, 11vw, 60px);
+  --fs-h1: clamp(34px, 3.2vw + 22px, 56px);
+  --fs-hero: clamp(38px, 4.2vw + 22px, 72px);
   /* Above the hero: the oversize numeral or opening line of a page that has one
      thing to say. And the section title, fluid so it grows a little on a desk. */
   --fs-display: clamp(48px, 5vw + 24px, 84px);
@@ -413,7 +417,18 @@
   --shadow-xl: 0 6px 12px color-mix(in oklab, var(--shadow-tint) 6%, transparent), 0 32px 64px -12px color-mix(in oklab, var(--shadow-tint) 24%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent);
   --shadow-press: inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 16%, transparent);
   --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / .7);
+  --shadow-field: inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 8%, transparent);
   --text-glow: none;
+  /* The pieces a shadow is drawn from where the colour is the component's own: the
+     width of an accent bar down a card's left edge (3 px, 2 px on a list row), the
+     width of a halo round a dot, a one-pixel highlight along the top of a filled
+     button in that button's own text colour, and the faint shadow cast upward by
+     a bar fixed to the bottom of the screen. */
+  --accent-bar: 3px;
+  --accent-bar-sm: 2px;
+  --halo-w: 3px;
+  --shadow-key: inset 0 1px 0 color-mix(in oklab, currentColor 20%, transparent);
+  --shadow-up: 0 -10px 28px -20px color-mix(in oklab, var(--shadow-tint) 40%, transparent);
   --ring-danger: 0 0 0 4px color-mix(in oklab, var(--rare) 8%, transparent);
   --shadow-glow: 0 0 0 1px color-mix(in oklab, var(--moss) 30%, transparent), 0 6px 24px -6px color-mix(in oklab, var(--moss) 38%, transparent);
 
@@ -547,9 +562,9 @@
   --paper:       oklch(18% 0.010 250);
   --night:       oklch(8% 0.020 250);
 
-  --shadow-sm:   0 1px 2px oklch(0% 0 0 / .50), 0 0 0 0.5px oklch(100% 0 0 / .04);
-  --shadow-md:   0 8px 24px oklch(0% 0 0 / .55), 0 0 0 0.5px oklch(100% 0 0 / .06);
-  --shadow-lg:   0 24px 60px oklch(0% 0 0 / .65), 0 0 0 0.5px oklch(100% 0 0 / .07);
+  --shadow-sm:   0 1px 2px color-mix(in oklab, var(--shadow-tint) 55%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .06);
+  --shadow-md:   0 2px 6px color-mix(in oklab, var(--shadow-tint) 35%, transparent), 0 10px 28px -4px color-mix(in oklab, var(--shadow-tint) 70%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .08);
+  --shadow-lg:   0 4px 10px color-mix(in oklab, var(--shadow-tint) 35%, transparent), 0 24px 56px -8px color-mix(in oklab, var(--shadow-tint) 80%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09), inset 0 1px 0 oklch(100% 0 0 / .05);
 
   --surface-raised: oklch(20% 0.011 250);
   --surface-overlay: oklch(24% 0.012 250);
@@ -562,6 +577,7 @@
   --shadow-press: inset 0 1px 3px color-mix(in oklab, var(--shadow-tint) 70%, transparent);
   --text-glow: 0 0 28px var(--glow);
   --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / .06);
+  --shadow-field: inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 55%, transparent);
 
   --warning:     var(--dawn);
   --on-fill:     oklch(15% 0.02 150);
@@ -606,6 +622,28 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
+/* The page's atmosphere: two washes (green top left, warm top right) painted
+   once and fixed, so a page reads as a place and not a blank sheet. Under
+   everything (z-index -1, no pointer events), a few per cent of colour. */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(900px 520px at 6% -10%, var(--wash-a), transparent 70%),
+    radial-gradient(760px 460px at 98% -8%, var(--wash-b), transparent 70%);
+}
+/* Native parts (scrollbars, date pickers, the <audio> bar, a select's menu) follow
+   the theme the page is in, not the OS's, so a dark page never opens a white
+   menu. The meta tag above only says both are supported. */
+:root { color-scheme: light; accent-color: var(--moss); }
+:root[data-theme="dark"] { color-scheme: dark; }
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none; appearance: none; height: 14px; width: 14px; cursor: pointer;
+  background: var(--fg-3);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 3l8 8M11 3l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 3l8 8M11 3l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+input[type="search"]::-webkit-search-cancel-button:hover { background: var(--fg); }
+::selection { background: color-mix(in oklab, var(--moss) 28%, transparent); }
 a { color: var(--moss-ink); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
@@ -664,13 +702,20 @@ img { max-width: 100%; }
 .mono    { font-family: var(--font-mono); font-feature-settings: "ss02"; font-variant-numeric: tabular-nums; }
 .tabular { font-variant-numeric: tabular-nums; }
 em       { font-style: italic; }
+/* The italic in a display headline is the emotional word. A highlighter band
+   under its lower third (a few per cent of the brand green) lifts it off the line
+   without changing its colour or its measured contrast. */
+h1 em, .display em {
+  background: linear-gradient(transparent 74%, color-mix(in oklab, var(--moss-soft) 85%, transparent) 74%);
+  padding: 0 .05em; margin: 0 -.05em; border-radius: var(--r-3xs);
+}
 
 /* ── Atoms ────────────────────────────────────────────────────────────── */
 .bnb-card {
   background: var(--surface);
   border: var(--bw) solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
 }
 .bnb-card.flush { border-radius: 0; border-left: 0; border-right: 0; box-shadow: none; }
 .bnb-card.pad   { padding: var(--pad-3); }
@@ -690,10 +735,10 @@ em       { font-style: italic; }
   background: var(--surface-2); color: var(--fg-2);
   border: var(--bw) solid var(--border);
 }
-.bnb-pill.moss { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
-.bnb-pill.dawn { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
-.bnb-pill.rare { background: var(--rare-soft); color: var(--rare);     border-color: transparent; }
-.bnb-pill.info { background: var(--info-soft); color: var(--info-ink); border-color: transparent; }
+.bnb-pill.moss { background: var(--moss-soft); color: var(--moss-ink); border-color: color-mix(in oklab, var(--moss) 22%, transparent); }
+.bnb-pill.dawn { background: var(--dawn-soft); color: var(--dawn-ink); border-color: color-mix(in oklab, var(--dawn) 28%, transparent); }
+.bnb-pill.rare { background: var(--rare-soft); color: var(--rare);     border-color: color-mix(in oklab, var(--rare) 22%, transparent); }
+.bnb-pill.info { background: var(--info-soft); color: var(--info-ink); border-color: color-mix(in oklab, var(--info) 24%, transparent); }
 /* A pill that is a link is a target, and WCAG 2.5.8 asks 24px of it. The
    badge's own text sets 22.5px, so the floor is stated rather than inherited
    from whatever the font metrics happen to give. Non-link pills keep their
@@ -754,19 +799,22 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 
 .bnb-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-6);
-  padding: var(--space-6) var(--space-12); border-radius: var(--r-sm);
+  padding: var(--space-6) var(--space-12); border-radius: var(--r-control); min-height: var(--control-h);
   background: var(--surface); border: var(--bw) solid var(--border-2);
   color: var(--fg); font-size: var(--fs-md); font-weight: var(--fw-medium);
-  box-shadow: var(--shadow-sm); cursor: pointer; text-decoration: none;
-  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
+  box-shadow: var(--shadow-xs), var(--shadow-inset); cursor: pointer; text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
-.bnb-btn:hover { background: var(--surface-2); text-decoration: none; }
-.bnb-btn.primary { background: var(--fg); color: var(--bg); border-color: transparent; }
-.bnb-btn.primary:hover { background: var(--fg-2); }
+.bnb-btn:hover { background: var(--surface-2); border-color: color-mix(in oklab, var(--border-2) 65%, var(--fg-3)); box-shadow: var(--shadow-sm), var(--shadow-inset); text-decoration: none; }
+.bnb-btn:active { transform: scale(var(--press-scale)); box-shadow: var(--shadow-press); }
+.bnb-btn.primary { background: var(--fg); color: var(--bg); border-color: transparent; box-shadow: var(--shadow-sm), var(--shadow-key); }
+.bnb-btn.primary:hover { background: var(--fg-2); border-color: transparent; }
 .bnb-btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--fg); }
-.bnb-btn.ghost:hover { background: var(--surface-2); }
-.bnb-btn.moss { background: var(--moss); color: var(--on-moss); border-color: transparent; }
+.bnb-btn.ghost:hover { background: var(--surface-2); box-shadow: none; }
+.bnb-btn.moss { background: var(--moss); color: var(--on-moss); border-color: transparent; box-shadow: var(--shadow-sm), var(--shadow-key); }
 .bnb-btn.danger { color: var(--rare); border-color: color-mix(in oklab, var(--rare) 40%, var(--border)); }
+.bnb-btn.danger:hover { background: var(--rare-soft); border-color: color-mix(in oklab, var(--rare) 60%, var(--border)); }
 
 .bnb-photo {
   background: repeating-linear-gradient(45deg, var(--surface-2) 0 8px, var(--bg-2) 8px 16px);
@@ -807,6 +855,7 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
      makes it readable on the tint in both themes (DD-29). */
   color: color-mix(in oklab, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
   position: relative; overflow: hidden;
+  box-shadow: 0 0 0 var(--bw) color-mix(in oklab, var(--fg) 14%, transparent);
 }
 .bnb-avatar.sm { width: 24px; height: 24px; font-size: var(--fs-2xs); }
 .bnb-avatar.lg { width: 36px; height: 36px; font-size: var(--fs-xs); }

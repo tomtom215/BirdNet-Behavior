@@ -91,9 +91,15 @@ export const GROUPS = {
     ['--shadow-press', 'A control being pressed: it sinks into the page.'],
     ['--shadow-inset', 'The one-pixel light along the top edge of a raised surface.'],
     ['--text-glow', 'The halo behind display type on a dark page; none on paper.'],
+    ['--shadow-field', 'The inner shadow of a text field or a segmented track: it is cut into the page, not set on it.'],
   ],
   'shadows-shared': [
     ['--ring-danger', 'The faint red ring around a destructive dialog.'],
+    ['--accent-bar', 'The width of the accent bar down the left edge of a banner or a toast (an inset shadow in the banner\'s own colour).'],
+    ['--accent-bar-sm', 'The same on a list row.'],
+    ['--halo-w', 'The width of the halo round a status dot in a toast.'],
+    ['--shadow-key', 'A one-pixel highlight along the top of a filled button, in that button\'s own text colour.'],
+    ['--shadow-up', 'The faint shadow cast upward by a bar fixed to the bottom of the screen.'],
     ['--shadow-glow', 'A moss ring and a soft green halo: a live or selected thing that should be noticed.'],
   ],
   'radius-extra': [
@@ -152,6 +158,10 @@ export const GROUPS = {
     ['--focus-color', 'The keyboard focus ring.'],
     ['--focus-width', 'Its thickness (WCAG 2.4.13 asks for 2 px).'],
     ['--focus-offset', 'The gap between the control and its ring.'],
+  ],
+  icons: [
+    ['--icon-moon', 'The moon on the theme button, drawn as a mask so it takes the button\'s ink.'],
+    ['--icon-sun', 'The sun, shown on a dark page.'],
   ],
   density: [
     ['--control-h', 'The height of a button or a field. Follows density, floored at 28 px.'],
@@ -217,9 +227,34 @@ export function counts() {
   };
 }
 
+// Every hand-written row keeps its description and loses its typed values: the
+// value cells are rewritten from app.css, so the *only* thing a person writes on
+// the page is what a token is for. A row whose shape (one value or two) no longer
+// fits the stylesheet (a token gained or lost a dark override) is an error, not
+// something to guess at.
+function syncRows(md) {
+  const css = strip(fs.readFileSync(CSS, 'utf8'));
+  const light = block(css, ':root,\n:root[data-theme="light"]');
+  const dark = block(css, ':root[data-theme="dark"]');
+  return md.split('\n').map((line) => {
+    const m = line.match(/^\| `(--[\w-]+)` \| (.*)$/);
+    if (!m) return line;
+    const tok = m[1];
+    const cells = line.replace(/^\| /, '').replace(/ \|$/, '').split(' | ');
+    const l = light.get(tok) ?? dark.get(tok);
+    if (l === undefined) return line; // the Rust test reports a documented token that is not declared
+    const d = dark.get(tok);
+    const themed = d !== undefined && d !== l;
+    if (cells.length === 4 && themed) return `| \`${tok}\` | \`${l}\` | \`${d}\` | ${cells[3]} |`;
+    if (cells.length === 3 && !themed) return `| \`${tok}\` | \`${l}\` | ${cells[2]} |`;
+    if (cells.length === 2) return line; // an alias row: `--x` | `--y`
+    throw new Error(`${tok}: the row has ${cells.length} cells but the stylesheet ${themed ? 'overrides it in dark' : 'has one value'}`);
+  }).join('\n');
+}
+
 export function render(md) {
   const t = tables();
-  let out = md;
+  let out = syncRows(md);
   const c = counts();
   for (const k of ['light', 'dark']) {
     const re = new RegExp(`(<!--count-${k}-->)\\d+(<!--/count-->)`);

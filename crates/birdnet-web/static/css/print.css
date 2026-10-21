@@ -158,6 +158,7 @@
     --shadow-xl:   none;
     --shadow-press: none;
     --shadow-inset: none;
+    --shadow-field: none;
     --text-glow:   none;
     --shadow-tint: oklch(32% 0.045 65);
     --surface-raised: #ffffff;

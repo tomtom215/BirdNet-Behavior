@@ -25,8 +25,8 @@ Two principles govern them:
 ## At a glance
 
 The stylesheet's light block declares
-<!--count-light-->233<!--/count--> tokens, and the dark block overrides
-<!--count-dark-->89<!--/count--> of them. Those two numbers are checked against
+<!--count-light-->241<!--/count--> tokens, and the dark block overrides
+<!--count-dark-->90<!--/count--> of them. Those two numbers are checked against
 `app.css` by the test below, so they cannot go stale; every other number on this
 page that describes the present is read from the stylesheet the same way.
 
@@ -162,15 +162,19 @@ Two inks are fixed because the fill they sit on does not change between themes:
 
 ## Elevation — shadows
 
-Three elevations. Each layers a soft drop shadow with a hairline `0 0 0 0.5px`
-ring so a card reads as lifted on both themes; the dark theme deepens the
-shadow and switches the ring to a faint light edge.
+Three elevations (and the rest of the family under [More scales](#more-scales)).
+Each layers a tight contact shadow, a long soft one and a hairline `0 0 0 0.5px`
+ring so a card reads as lifted on both themes. The shadows are mixed from
+`--shadow-tint` (a warm brown on paper, a cool near-black on night), never from
+pure black, so a lifted card throws a shadow the colour of the page it sits on. The
+dark theme deepens them and switches the ring to a faint light edge, and the large
+one carries a one-pixel light along its top edge.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `--shadow-sm` | `0 1px 2px oklch(0% 0 0 / .04), 0 0 0 0.5px oklch(0% 0 0 / .04)` | `0 1px 2px oklch(0% 0 0 / .50), 0 0 0 0.5px oklch(100% 0 0 / .04)` | Subtle lift (cards, chips, inputs). |
-| `--shadow-md` | `0 4px 14px oklch(0% 0 0 / .06), 0 0 0 0.5px oklch(0% 0 0 / .04)` | `0 8px 24px oklch(0% 0 0 / .55), 0 0 0 0.5px oklch(100% 0 0 / .06)` | Popovers, hovered cards. |
-| `--shadow-lg` | `0 18px 40px oklch(0% 0 0 / .08), 0 0 0 0.5px oklch(0% 0 0 / .05)` | `0 24px 60px oklch(0% 0 0 / .65), 0 0 0 0.5px oklch(100% 0 0 / .07)` | Modals, the floating now-playing bar. |
+| `--shadow-sm` | `0 1px 2px color-mix(in oklab, var(--shadow-tint) 7%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `0 1px 2px color-mix(in oklab, var(--shadow-tint) 55%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .06)` | Subtle lift (cards, chips, inputs). |
+| `--shadow-md` | `0 2px 4px color-mix(in oklab, var(--shadow-tint) 5%, transparent), 0 8px 20px -4px color-mix(in oklab, var(--shadow-tint) 11%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `0 2px 6px color-mix(in oklab, var(--shadow-tint) 35%, transparent), 0 10px 28px -4px color-mix(in oklab, var(--shadow-tint) 70%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .08)` | Popovers, hovered cards. |
+| `--shadow-lg` | `0 4px 8px color-mix(in oklab, var(--shadow-tint) 5%, transparent), 0 20px 44px -8px color-mix(in oklab, var(--shadow-tint) 19%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent)` | `0 4px 10px color-mix(in oklab, var(--shadow-tint) 35%, transparent), 0 24px 56px -8px color-mix(in oklab, var(--shadow-tint) 80%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09), inset 0 1px 0 oklch(100% 0 0 / .05)` | Modals, the floating now-playing bar. |
 
 ## Focus & scrim
 
@@ -270,8 +274,8 @@ numeral, a 404 code) stay literal and are listed under
 | `--fs-h3` | `24px` | A sub-section title, or a numeral between a title and a statistic. |
 | `--fs-stat` | `32px` | A statistic's numeral, in the serif. |
 | `--fs-stat-lg` | `44px` | The large numeral of a four-up stat tile. |
-| `--fs-h1` | `clamp(34px, 9vw, 46px)` | A page title. Fluid, so a phone gets a title that fits rather than one that wraps four times. |
-| `--fs-hero` | `clamp(40px, 11vw, 60px)` | An editorial headline: Today, the species name, the weekly and yearly recaps. |
+| `--fs-h1` | `clamp(34px, 3.2vw + 22px, 56px)` | A page title. Fluid, so a phone gets a title that fits rather than one that wraps four times. |
+| `--fs-hero` | `clamp(38px, 4.2vw + 22px, 72px)` | An editorial headline: Today, the species name, the weekly and yearly recaps. |
 
 ## Typography — weights and tracking
 
@@ -544,12 +548,18 @@ paper and a cool one on night, never a grey smudge.
 | `--shadow-press` | `inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 16%, transparent)` | `inset 0 1px 3px color-mix(in oklab, var(--shadow-tint) 70%, transparent)` | A control being pressed: it sinks into the page. |
 | `--shadow-inset` | `inset 0 1px 0 oklch(100% 0 0 / .7)` | `inset 0 1px 0 oklch(100% 0 0 / .06)` | The one-pixel light along the top edge of a raised surface. |
 | `--text-glow` | `none` | `0 0 28px var(--glow)` | The halo behind display type on a dark page; none on paper. |
+| `--shadow-field` | `inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 55%, transparent)` | The inner shadow of a text field or a segmented track: it is cut into the page, not set on it. |
 <!--tokens:end-->
 
 <!--tokens:begin shadows-shared-->
 | Token | Value | Use |
 |---|---|---|
 | `--ring-danger` | `0 0 0 4px color-mix(in oklab, var(--rare) 8%, transparent)` | The faint red ring around a destructive dialog. |
+| `--accent-bar` | `3px` | The width of the accent bar down the left edge of a banner or a toast (an inset shadow in the banner's own colour). |
+| `--accent-bar-sm` | `2px` | The same on a list row. |
+| `--halo-w` | `3px` | The width of the halo round a status dot in a toast. |
+| `--shadow-key` | `inset 0 1px 0 color-mix(in oklab, currentColor 20%, transparent)` | A one-pixel highlight along the top of a filled button, in that button's own text colour. |
+| `--shadow-up` | `0 -10px 28px -20px color-mix(in oklab, var(--shadow-tint) 40%, transparent)` | The faint shadow cast upward by a bar fixed to the bottom of the screen. |
 | `--shadow-glow` | `0 0 0 1px color-mix(in oklab, var(--moss) 30%, transparent), 0 6px 24px -6px color-mix(in oklab, var(--moss) 38%, transparent)` | A moss ring and a soft green halo: a live or selected thing that should be noticed. |
 <!--tokens:end-->
 
@@ -643,6 +653,15 @@ paper and a cool one on night, never a grey smudge.
 | `--focus-color` | `var(--moss)` | The keyboard focus ring. |
 | `--focus-width` | `2px` | Its thickness (WCAG 2.4.13 asks for 2 px). |
 | `--focus-offset` | `2px` | The gap between the control and its ring. |
+<!--tokens:end-->
+
+### Icons
+
+<!--tokens:begin icons-->
+| Token | Value | Use |
+|---|---|---|
+| `--icon-moon` | `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z'/%3E%3C/svg%3E")` | The moon on the theme button, drawn as a mask so it takes the button's ink. |
+| `--icon-sun` | `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/%3E%3C/svg%3E")` | The sun, shown on a dark page. |
 <!--tokens:end-->
 
 ### Density
