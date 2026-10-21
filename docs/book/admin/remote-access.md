@@ -92,7 +92,7 @@ next handshake — **no restart, no cron hook.**
 
 ### What the browser shows
 
-**Station → Access → Secure connection** says which of the three modes the
+**Settings → Access → Secure connection** says which of the three modes the
 station is in. In `self-signed` mode it shows when the certificate runs to (read
 from the certificate's own record, not the configured length) and offers the
 station's **local CA certificate** for download, so you can add it to a phone or
@@ -281,7 +281,7 @@ admin sign-in behind it, because a site that can frame the station can lay
 invisible controls over it to trick a visitor into clicking (clickjacking). It
 also means a Home Assistant card or a Grafana panel cannot show the live view.
 
-To allow it, name the places that may, in `birdnet.conf` or under **Settings →
+To allow it, name the places that may, in `birdnet.conf` or under **Settings → General →
 Online services**:
 
 ```text

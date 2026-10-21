@@ -565,6 +565,17 @@ is described under *Changed* or *Fixed*.
 
 ### Fixed
 
+- **The manual and the product's own sentences name the screens the Settings section has.**
+  README, five manual pages, the `.env.example` comment and the settings page's own hint
+  still sent readers to "Station → Data", "Settings → Home Assistant & MQTT", "Settings →
+  Online services" and "Station → Access → Secure connection"; they now read
+  "Settings → Data", "Settings → Alerts → Home Assistant & MQTT", "Settings → General →
+  Online services" and "Settings → Access → Secure connection". The gate that checks them
+  no longer reads the word "Settings" inside a card called "Detection Settings" as the start
+  of a second path (it had reported 19 correct paths as wrong).
+- **Previewing the protected clips of a BirdNET-Pi import no longer takes the one writer
+  connection**, and the per-species minimum interval, the imported-settings apply, the clip
+  lock and the learned-threshold reset are listed in the writer ledger with their reasons.
 - **Importing BirdNET-Pi clips is safer.** A move (`--clips-mode move`) is refused when this
   station's retention would delete the clips; copies keep their age; every copy is synced to
   disk, and so is its directory, before the original is removed; only one import runs at a

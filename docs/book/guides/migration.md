@@ -1,6 +1,6 @@
 # Migrating from BirdNET-Pi
 
-You can move a BirdNET-Pi station here and keep what it had: its **settings**, its **detection history** and the **recordings** that go with it. Each is a step on the **Station → Data** page (`/station/data#import`), each can be done on its own, and each has a command-line twin. Nothing is written until you have seen what it would do and confirmed it, and BirdNET-Pi's files are never changed.
+You can move a BirdNET-Pi station here and keep what it had: its **settings**, its **detection history** and the **recordings** that go with it. Each is a step on the **Settings → Data** page (`/station/data#import`), each can be done on its own, and each has a command-line twin. Nothing is written until you have seen what it would do and confirmed it, and BirdNET-Pi's files are never changed.
 
 Three things are different from BirdNET-Pi on the first day, whatever you import. Read [What changes whether you like it or not](#what-changes-whether-you-like-it-or-not) once.
 
@@ -25,7 +25,7 @@ Three things are different from BirdNET-Pi on the first day, whatever you import
 
 ## Step 1 — your settings
 
-On **Station → Data**, under *Bring your BirdNET-Pi settings*, choose `birdnet.conf` and any of the other files (select several at once; they are recognised by their names), or paste the contents of `birdnet.conf`, or give the folder on this device. Press **Show me what would change**.
+On **Settings → Data**, under *Bring your BirdNET-Pi settings*, choose `birdnet.conf` and any of the other files (select several at once; they are recognised by their names), or paste the contents of `birdnet.conf`, or give the folder on this device. Press **Show me what would change**.
 
 You get a table with a row for every key in your file: what it is called there, your value, what it becomes here, and what happens to it. Credentials are shown only as their length. The rows are:
 

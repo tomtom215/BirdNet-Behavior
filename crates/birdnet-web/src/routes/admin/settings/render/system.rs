@@ -291,7 +291,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
         <label for="time_format">Clock</label>
         <select id="time_format" name="time_format">{time_options}</select>
         <p class="hint">How times are shown across the dashboard. Each browser can choose
-          its own on the Display card (Station &rarr; Settings); this is what a browser
+          its own on the Display card (Settings &rarr; General); this is what a browser
           that has not chosen shows. Feeds, exports and the API keep 24-hour ISO times.</p>
       </div>
       <div>

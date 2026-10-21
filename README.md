@@ -241,7 +241,7 @@ A single binary built from eight Rust workspace crates:
 
 ## Migrating from BirdNET-Pi
 
-Safe, non-destructive import — BirdNET-Pi's files are never modified, and nothing is written until you have seen what it would do and confirmed. Stop BirdNET-Pi, open **Station → Data** (`/station/data#import`; `/admin/migrate` redirects there) and move across: your detection history (`BirdDB.txt`; duplicate rows are skipped, so re-running is safe), and, *(unreleased: `v0.17.1` imports the history only)*, your settings (`birdnet.conf`) and the recordings that go with it, each a step of its own with a command-line twin.
+Safe, non-destructive import — BirdNET-Pi's files are never modified, and nothing is written until you have seen what it would do and confirmed. Stop BirdNET-Pi, open **Settings → Data** (`/station/data#import`; `/admin/migrate` redirects there) and move across: your detection history (`BirdDB.txt`; duplicate rows are skipped, so re-running is safe), and, *(unreleased: `v0.17.1` imports the history only)*, your settings (`birdnet.conf`) and the recordings that go with it, each a step of its own with a command-line twin.
 
 📖 [Migration guide](docs/book/guides/migration.md)
 

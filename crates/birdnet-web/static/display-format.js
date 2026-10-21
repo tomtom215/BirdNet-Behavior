@@ -6,7 +6,7 @@
 // force. With scripting off the canonical text stands.
 //
 // THE CHOICE
-//   Per browser, on the Display card (Station > Settings): `bnb-time`
+//   Per browser, on the Display card (Settings > General): `bnb-time`
 //   ('auto' | '24h' | '12h') and `bnb-temp` ('auto' | 'celsius' | 'fahrenheit'),
 //   in localStorage (guarded: blocked storage means "not remembered").
 //   'auto' follows the station's default (`time_format`, `temperature_unit`),

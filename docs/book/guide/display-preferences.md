@@ -16,7 +16,7 @@ BirdNet-Behavior adapts to how and where you watch it — a phone on the trail, 
 
 ### The station's default
 
-**Settings → System & Display → Clock** and **Temperature unit** set what a browser that has not chosen shows (`time_format` `24h` or `12h`, `temperature_unit` `celsius` or `fahrenheit`; served at `GET /api/v2/display`). The page is first printed in the canonical 24-hour, Celsius text and re-printed by `static/display-format.js`; the default is remembered for the tab in `sessionStorage`, so a 12-hour station flashes 24-hour text only on the first page of a tab, and with scripting off the canonical text stands. A test (`the_clock_and_temperature_are_printed_in_one_place`) fails on a page that prints a time or temperature by hand, and `tools/visual-qa/display-format.mjs` holds the browser's formatter to the same table of cases as the Rust one.
+**Settings → General → System & Display → Clock** and **Temperature unit** set what a browser that has not chosen shows (`time_format` `24h` or `12h`, `temperature_unit` `celsius` or `fahrenheit`; served at `GET /api/v2/display`). The page is first printed in the canonical 24-hour, Celsius text and re-printed by `static/display-format.js`; the default is remembered for the tab in `sessionStorage`, so a 12-hour station flashes 24-hour text only on the first page of a tab, and with scripting off the canonical text stands. A test (`the_clock_and_temperature_are_printed_in_one_place`) fails on a page that prints a time or temperature by hand, and `tools/visual-qa/display-format.mjs` holds the browser's formatter to the same table of cases as the Rust one.
 
 ## How it's applied (no flash on load)
 

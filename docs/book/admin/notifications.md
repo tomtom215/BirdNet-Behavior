@@ -191,7 +191,7 @@ BIRDNET_MQTT_CLIENT_KEY=/etc/birdnet/mqtt-client-key.pem
 Both are PEM files and both are needed; naming one without the other is refused
 before any connection is made, and so is a key that does not belong to the
 certificate. Setting a client certificate turns TLS on by itself. The same two
-fields are under **Settings → Home Assistant & MQTT**. Paths are to files on the
+fields are under **Settings → Alerts → Home Assistant & MQTT**. Paths are to files on the
 station, which is how birdnet-go's "managed" certificates are stored too; this
 station does not take an uploaded private key through the browser.
 

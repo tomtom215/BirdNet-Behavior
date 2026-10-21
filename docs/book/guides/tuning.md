@@ -189,7 +189,7 @@ on changes how many rows your station records and puts a visible step in every
 chart on the day you do it.
 
 **One species louder than the rest.** A tawny owl calling all night will drown
-the log long before a blackbird does. *Admin → Station → Capture → Per-Species
+the log long before a blackbird does. *Settings → Capture → Which birds count → Per-Species
 Minimum Interval* gives a single species its own interval in seconds (1 to
 86400), which **replaces** the station-wide one for that species and applies
 even when the station-wide one is off — the same behaviour as birdnet-go's
