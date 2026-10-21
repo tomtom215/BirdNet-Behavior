@@ -2767,7 +2767,7 @@
                               "number",
                               "null"
                             ],
-                            "description": "The threshold the species is held to now, for the station's own classifier (a classifier with a threshold of its own is judged by that instead). `null` once the level has lapsed."
+                            "description": "The threshold the species is held to now, for the station's own classifier (a classifier with a threshold of its own is judged by that instead). `null` once the level has lapsed, and in a process with no detection daemon (no floor is known there, so no number is claimed)."
                           }
                         }
                       }
@@ -3002,7 +3002,7 @@
                         "number",
                         "null"
                       ],
-                      "description": "The threshold the species is held to now, for the station's own classifier (a classifier with a threshold of its own is judged by that instead). `null` once the level has lapsed."
+                      "description": "The threshold the species is held to now, for the station's own classifier (a classifier with a threshold of its own is judged by that instead). `null` once the level has lapsed, and in a process with no detection daemon (no floor is known there, so no number is claimed)."
                     }
                   }
                 }

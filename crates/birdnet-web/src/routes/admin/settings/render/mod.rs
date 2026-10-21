@@ -13,6 +13,7 @@
 //! | `email`         | SMTP email alerts section                      |
 
 mod audio;
+mod badges;
 mod detection;
 mod email;
 mod location;
@@ -25,6 +26,9 @@ use std::fmt::Write as _;
 
 use birdnet_core::i18n::NameLocalizer;
 
+pub(crate) use badges::PENDING_KEY;
+pub(crate) use system::language_options;
+
 /// Every settings section on the full page, in the order it is rendered:
 /// `(anchor id, heading text)`.
 ///
@@ -35,14 +39,20 @@ use birdnet_core::i18n::NameLocalizer;
 /// never mentions, is not representable without the two disagreeing.
 /// `settings_index_matches_rendered_sections` asserts both directions against
 /// the real rendered HTML rather than trusting that.
-pub(crate) const SECTIONS: [(&str, &str); 9] = [
+pub(crate) const SECTIONS: &[(&str, &str)] = &[
     ("audio", "Audio Capture"),
     ("location", "Location &amp; Recording Schedule"),
     ("detection", "Detection Settings"),
+    ("filters", "Detection filters"),
     ("notifications", "Notifications"),
+    ("alert-limits", "Alert limits"),
+    ("mqtt", "Home Assistant &amp; MQTT"),
     ("species", "Species Filters"),
     ("system", "System &amp; Display"),
     ("auth", "Web Authentication"),
+    ("storage", "Storage"),
+    ("online", "Online services"),
+    ("backups", "Backups"),
     ("email", "Email Alerts"),
     // Rendered after the form, not inside it: its buttons each save at once,
     // and inside the form they would submit it.
@@ -69,7 +79,7 @@ fn section_index() -> String {
     </div>
     <ol class="set-index__list">"#,
     );
-    for (id, title) in SECTIONS {
+    for &(id, title) in SECTIONS {
         // `r##"…"##`: the href contains `"#`, which would close an `r#"…"#`.
         let _ = write!(out, r##"<li><a href="#set-{id}">{title}</a></li>"##);
     }
@@ -143,6 +153,7 @@ fn fixed_form_default(key: &str) -> &'static str {
         "night_inhibit" | "raw_spectrogram" => "false",
         "notify_trigger" => "each",
         "overlap" | "privacy_threshold" => "0.0",
+        "full_disk_action" => "purge",
         "purge_threshold" => "95",
         "recording_schedule" => "all-day",
         "segment_duration" => "15",
@@ -332,6 +343,8 @@ pub(crate) enum Section {
     Email,
     /// System, display, retention, auth.
     System,
+    /// One of the table-driven groups ([`super::extra`]).
+    Extra(super::extra::Group),
 }
 
 /// Render the chosen settings `sections` wrapped in one form that posts to
@@ -358,17 +371,27 @@ pub(crate) fn render_section_form(
             Section::Notifications => notifications::render(&mut out, settings),
             Section::Email => email::render(&mut out, settings),
             Section::System => system::render(&mut out, settings, names),
+            Section::Extra(group) => super::extra::render_group(&mut out, *group, settings),
         }
     }
     out.push_str(
         r#"<div class="save-row">
     <button type="submit" class="btn btn-primary">Save settings</button>
     <span id="save-spinner" class="htmx-indicator save-note">Saving…</span>
-    <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
+    <span class="save-note dim">Each setting says when it applies. The ones marked <em>after restart</em> wait until you restart the station.</span>
   </div>
 </form></div>"#,
     );
-    out
+    finish(out, settings)
+}
+
+/// The finished markup: every field badged with when it applies, and the
+/// banner for saved changes still waiting for a restart in front.
+fn finish(out: String, settings: &HashMap<String, String>) -> String {
+    let badged = badges::add_applies_badges(&out);
+    let banner = badges::pending_banner(settings, &badged);
+    let script = crate::routes::admin::classifier::CONTROLS_SCRIPT.as_str();
+    format!("{banner}{badged}{script}")
 }
 
 pub(super) fn render_settings_form(
@@ -380,12 +403,19 @@ pub(super) fn render_settings_form(
         r##"<form hx-post="/admin/settings" hx-target="#settings-feedback"
                hx-swap="innerHTML" hx-indicator="#save-spinner">"##,
     );
+    use super::extra::Group;
     audio::render(&mut out, settings);
     location::render(&mut out, settings);
     detection::render(&mut out, settings);
+    super::extra::render_group(&mut out, Group::Filters, settings);
     notifications::render(&mut out, settings);
+    super::extra::render_group(&mut out, Group::AlertLimits, settings);
+    super::extra::render_group(&mut out, Group::Mqtt, settings);
     species::render(&mut out, settings);
     system::render(&mut out, settings, names);
+    super::extra::render_group(&mut out, Group::Storage, settings);
+    super::extra::render_group(&mut out, Group::Online, settings);
+    super::extra::render_group(&mut out, Group::Backups, settings);
     email::render(&mut out, settings);
     out.push_str(
         r#"
@@ -395,12 +425,12 @@ pub(super) fn render_settings_form(
       Saving…
     </span>
     <span class="save-note dim">
-      Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.
+      Each setting says when it applies. The ones marked <em>after restart</em> wait until you restart the station.
     </span>
   </div>
 </form>"#,
     );
-    out
+    finish(out, settings)
 }
 
 #[cfg(test)]

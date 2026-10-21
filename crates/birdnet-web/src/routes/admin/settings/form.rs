@@ -67,6 +67,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "dashboard_image_title",
     "max_files_per_species",
     "purge_threshold",
+    "full_disk_action",
     "raw_spectrogram",
     "spectrogram_colormap",
     "spectrogram_range_db",
@@ -91,6 +92,17 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "email_min_confidence",
     "email_cooldown_secs",
 ];
+
+/// Every key the settings form and the settings API can write: the
+/// hand-written fields and the table-driven ones.
+#[must_use]
+pub fn all_form_keys() -> Vec<&'static str> {
+    SETTINGS_FORM_KEYS
+        .iter()
+        .copied()
+        .chain(super::extra::keys())
+        .collect()
+}
 
 /// Flat form payload from the admin settings POST.
 ///
@@ -215,6 +227,10 @@ pub struct SettingsForm {
     /// Disk-use threshold (percentage, 0–100) at which the oldest recordings are purged
     /// regardless of age.
     pub purge_threshold: Option<String>,
+    /// What a full recordings disk does: `purge` deletes the oldest clips
+    /// (the default); `keep` records nothing more and deletes nothing.
+    /// BirdNET-Pi's `FULL_DISK`.
+    pub full_disk_action: Option<String>,
     /// Suppress the species/confidence overlay on generated spectrograms.
     ///
     /// BirdNET-Pi's `RAW_SPECTROGRAM`, with one honest difference: theirs also
@@ -296,6 +312,12 @@ pub struct SettingsForm {
     pub email_min_confidence: Option<String>,
     /// Per-species email cooldown in seconds. Suppresses repeat emails within this window.
     pub email_cooldown_secs: Option<String>,
+    /// The table-driven settings ([`super::extra::EXTRA_SETTINGS`]): every
+    /// submitted name that is not a field above. Not listed in
+    /// [`SETTINGS_FORM_KEYS`]; [`all_form_keys`] adds them. A name that is in
+    /// neither is not saved (the page never sends one; the API refuses it).
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, String>,
 }
 
 impl std::fmt::Debug for SettingsForm {

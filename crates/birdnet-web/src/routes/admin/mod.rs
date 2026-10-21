@@ -38,6 +38,7 @@ pub mod classifier;
 pub mod data_source_test;
 pub mod doctor;
 pub mod eq_curve;
+pub mod https;
 pub mod images;
 pub mod logs;
 pub mod migration;
@@ -161,6 +162,7 @@ pub fn router() -> Router<AppState> {
         // Notification testing
         .merge(notification_test::router())
         .merge(data_source_test::router())
+        .merge(https::router())
         // Backup management
         .merge(backup::router())
         // System controls (clear data)

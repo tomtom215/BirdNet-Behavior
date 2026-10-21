@@ -4793,6 +4793,9 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 .ck-keyline { display: inline-block; width: 18px; height: 3px; border-radius: var(--r-2xs); vertical-align: 3px; background: var(--c, var(--chart-1)); }
 .ck-keyghost { background: var(--chart-axis); opacity: .7; }
 .ck-keybar { display: inline-block; width: 6px; height: 11px; border-radius: var(--r-2xs); vertical-align: -1px; background: var(--chart-other); }
+/* A chart with 24 columns or a month of days keeps a width it can be read at on a phone and
+   scrolls inside its card (the wrapper is a focusable group, so a keyboard can scroll it). */
+@media (max-width: 600px) { svg.ck-wide { min-width: 480px; } }
 /* The calendar is a year wide: on a phone it keeps a readable size and scrolls inside its card. */
 .cal-svg { display: block; width: 100%; height: auto; min-width: 560px; }
 .cal-slot { min-height: 150px; }
@@ -5987,6 +5990,7 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .co-ladder { min-width: 0; }
 .viz-svg-ladder { display: block; width: 100%; max-width: 480px; height: auto; margin-inline: auto; }
 .co-aside-h { margin: 0 0 var(--space-10); font-family: var(--font-display); font-size: var(--fs-lead); font-weight: var(--fw-regular); letter-spacing: var(--track-tight); }
+@media (max-width: 999px) { .co-controls { display: none; } }
 @media (min-width: 1000px) {
   .co-main { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); }
   .co-chord { display: block; }
@@ -6063,6 +6067,10 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 
 /* Migration: the ridgeline and the species-per-week lane under it. */
 .rd-svg { display: block; width: 100%; height: auto; }
+/* A year of weeks and a name column do not fit 340 px at a size anyone can read: on a phone the
+   picture keeps a readable width and scrolls inside its card (the calendar does the same). */
+.rd-scroll { overflow-x: auto; }
+@media (max-width: 719px) { .rd-svg { min-width: 720px; } }
 .rd-band-spring { fill: color-mix(in oklab, var(--chart-1) 9%, var(--chart-gap)); }
 .rd-band-fall { fill: color-mix(in oklab, var(--chart-5) 11%, var(--chart-gap)); }
 .rd-band-name { font-size: var(--fs-xs); font-weight: var(--fw-medium); }
@@ -6072,7 +6080,7 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .rd-line { stroke: var(--c); }
 .rd-ridge { cursor: crosshair; }
 .rd-name { fill: var(--fg); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
-.rd-sub { fill: var(--chart-label); font-size: var(--fs-2xs); }
+.rd-sub { fill: var(--chart-label); font-size: var(--fs-xs); }
 .rd-bar { fill-opacity: .9; }
 .rd-bar-spring { fill: var(--chart-1); }
 .rd-bar-fall { fill: var(--chart-5); }
@@ -6088,6 +6096,12 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 
 /* Behavior: bursts, who keeps coming back, who is heard before and after, the running order. */
 .bt-svg, .mo-svg { display: block; width: 100%; height: auto; }
+.bt-svg { max-width: 900px; margin-inline: auto; }
+.mo-svg { max-width: 640px; margin-inline: auto; }
+.bh-grid { column-count: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-18); align-items: start; }
+.bh-grid > .bnb-card { margin: 0; display: block; width: auto; min-width: 0; }
+.bh-grid > .bh-wide { grid-column: 1 / -1; }
+@media (max-width: 720px) { .bh-grid { grid-template-columns: minmax(0, 1fr); } }
 .bt-day { fill: var(--fg-2); font-size: var(--fs-xs); }
 .bt-hr, .mo-hr { font-size: var(--fs-2xs); }
 .bt-bar { fill: var(--c); cursor: pointer; }
@@ -6098,12 +6112,12 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .rt-table thead th { font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--chart-label); text-align: center; }
 .rt-table thead th:first-child, .rt-table thead th:nth-child(2) { text-align: left; }
 .rt-group th { padding-top: var(--space-16); font-weight: var(--fw-regular); }
-.rt-name { font-weight: var(--fw-regular); white-space: nowrap; }
+.rt-name { font-weight: var(--fw-regular); max-width: 11rem; }
 .rt-weeks { white-space: nowrap; }
-.rt-bar { display: inline-block; width: 56px; height: 6px; margin-right: var(--space-8); vertical-align: middle; overflow: hidden; background: var(--chart-track); border-radius: var(--r-pill); }
+.rt-bar { display: inline-block; width: 40px; height: 6px; margin-right: var(--space-8); vertical-align: middle; overflow: hidden; background: var(--chart-track); border-radius: var(--r-pill); }
 .rt-bar i { display: block; height: 100%; background: var(--seq-moss-5); border-radius: var(--r-pill); }
 .rt-wk { font-size: var(--fs-xs); color: var(--fg-2); }
-.rt-cell { min-width: 44px; text-align: center; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--c, var(--chart-track)); border-radius: var(--r-xs); }
+.rt-cell { min-width: 36px; text-align: center; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--c, var(--chart-track)); border-radius: var(--r-xs); }
 .rt-table td.rt-cell { text-align: center; }
 .rt-zero { background: var(--chart-track); color: var(--fg-3); }
 .rt-none { color: var(--fg-3); }
@@ -6127,10 +6141,38 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .mo-count { font-size: var(--fs-xs); }
 .mo-line { fill: none; stroke: var(--chart-axis); stroke-width: 1px; vector-effect: non-scaling-stroke; opacity: .45; stroke-linejoin: round; }
 .mo-line.is-now { stroke: var(--chart-annot); stroke-width: 2px; opacity: 1; }
-.mo-dot { fill: var(--c); fill-opacity: .62; }
+.mo-dot { fill: var(--c); fill-opacity: .55; }
 .mo-dot.is-now { fill-opacity: 1; stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
 .mo-typical { stroke: var(--chart-annot); stroke-width: 2px; vector-effect: non-scaling-stroke; pointer-events: none; }
 .mo-typ-t, .mo-now-t { font-size: var(--fs-2xs); }
 .mo-note { margin: var(--space-6) 0 0; }
+
+/* The soundscape terrain (static/terrain.js, templates/terrain.html). */
+.tr-card .section-header { align-items: flex-start; flex-wrap: wrap; gap: var(--space-12); }
+.tr-lede { margin: var(--space-4) 0 var(--space-12); max-width: 80ch; }
+.tr-controls { display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-20); margin-bottom: var(--space-12); }
+.tr-ctl { display: inline-flex; align-items: center; gap: var(--space-8); }
+.tr-stage { position: relative; height: 440px; overflow: hidden; border-radius: var(--r-md); background: var(--surface-sunken); }
+.tr-grid, .tr-3d { position: absolute; inset: 0; }
+.tr-grid[hidden], .tr-3d[hidden] { display: none; }
+.tr-grid-canvas, .tr-gl-canvas { display: block; width: 100%; height: 100%; border-radius: var(--r-md); }
+.tr-gl-canvas { touch-action: none; cursor: grab; }
+.tr-gl-canvas:active { cursor: grabbing; }
+.tr-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.tr-lbl { position: absolute; left: 0; top: 0; white-space: nowrap; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--chart-label); }
+.tr-lbl[hidden] { display: none; }
+.tr-msg { position: absolute; left: var(--space-12); bottom: var(--space-8); margin: 0; }
+.tr-msg:empty { display: none; }
+.tr-tip { z-index: var(--z-tooltip); }
+.tr-readout { min-height: 2.8em; margin: var(--space-10) 0 var(--space-8); font-variant-numeric: tabular-nums; }
+.tr-legend { display: flex; flex-direction: column; gap: var(--space-8); }
+.tr-key-species { display: none; margin: 0; }
+.tr-legend.is-species .tr-key-species { display: flex; }
+.tr-legend.is-species .tr-key-activity { display: none; }
+.tr-legend .ck-scale { margin-top: 0; align-items: flex-start; flex-wrap: nowrap; gap: var(--space-10); }
+.tr-legend .ck-off, .tr-legend .ck-steps { flex: none; margin-top: var(--space-4); }
+.tr-help { margin: var(--space-10) 0 0; max-width: 80ch; }
+.tr-table-slot .viz-table th, .tr-table-slot .viz-table td { white-space: nowrap; }
+@media (max-width: 719px) { .tr-stage { height: 360px; } }
 
 /* /charts2 */

@@ -259,7 +259,44 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
         };
         problems.extend(whole_number_problem(label, value, min, max, advice));
     }
+    // The fifteen numbers the station parses and, outside their range, quietly
+    // replaces or clamps. Read from the submission, like the rest, and from the
+    // table `--doctor` checks the file against, so the two cannot disagree.
+    for bound in birdnet_core::config::validate::FIELD_BOUNDS {
+        if let Some(value) = bounded_value(form, bound.form_key)
+            && !bound.accepts(value)
+        {
+            problems.push(bound.refusal(value.trim()));
+        }
+    }
     problems
+}
+
+/// The submitted text of one of the fields in
+/// [`birdnet_core::config::validate::FIELD_BOUNDS`].
+///
+/// A match and not a lookup in a map, so that adding a bound without wiring the
+/// field here is a failing test (`every_bounded_field_is_wired`) and not a bound
+/// that is checked against nothing.
+fn bounded_value<'a>(form: &'a SettingsForm, key: &str) -> Option<&'a String> {
+    match key {
+        "freq_shift_hz" => form.freq_shift_hz.as_ref(),
+        "pre_sunrise_offset" => form.pre_sunrise_offset.as_ref(),
+        "post_sunset_offset" => form.post_sunset_offset.as_ref(),
+        "notify_cooldown" => form.notify_cooldown.as_ref(),
+        "deadman_hours" => form.deadman_hours.as_ref(),
+        "clip_retention_days" => form.clip_retention_days.as_ref(),
+        "max_files_per_species" => form.max_files_per_species.as_ref(),
+        "purge_threshold" => form.purge_threshold.as_ref(),
+        "extraction_length" => form.extraction_length.as_ref(),
+        "rare_species_days" => form.rare_species_days.as_ref(),
+        "stream_retention_secs" => form.stream_retention_secs.as_ref(),
+        "stream_max_mb" => form.stream_max_mb.as_ref(),
+        "email_smtp_port" => form.email_smtp_port.as_ref(),
+        "email_cooldown_secs" => form.email_cooldown_secs.as_ref(),
+        "clip_target_lufs" => form.clip_target_lufs.as_ref(),
+        _ => None,
+    }
 }
 
 /// Problems with the fields that take one word out of a short list, phrased for
@@ -313,6 +350,23 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
             v::AUDIO_FORMATS.join(", ")
         ));
     }
+    if let Some(raw) = given(&form.full_disk_action)
+        && !v::is_full_disk_action(&raw)
+    {
+        problems.push(format!(
+            "When the disk is full must be one of {}. You entered “{raw}”.",
+            v::FULL_DISK_ACTIONS.join(", ")
+        ));
+    }
+    if let Some(raw) = given(&form.notify_trigger) {
+        let unknown = v::unknown_trigger_words(&raw);
+        if !unknown.is_empty() {
+            problems.push(format!(
+                "Notification trigger takes each, new-species, new-species-daily or off \
+                 (several may be listed, separated by commas). You entered “{raw}”."
+            ));
+        }
+    }
     if let Some(raw) = given(&form.spectrogram_colormap)
         && !crate::routes::spectrogram::is_colormap(&raw)
     {
@@ -332,7 +386,9 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
     if let Some(raw) = given(&form.time_format)
         && !crate::display::is_time_format(&raw)
     {
-        problems.push(format!("Clock must be 24h or 12h. You entered “{raw}”."));
+        problems.push(format!(
+            "Clock must be 24h or 12h. You entered “{raw}”."
+        ));
     }
     if let Some(raw) = given(&form.temperature_unit)
         && !crate::display::is_temperature_unit(&raw)
@@ -378,6 +434,7 @@ pub(crate) fn submission_problems(form: &SettingsForm) -> Vec<String> {
     problems.extend(choice_problems(form));
     problems.extend(birdweather_token_problem(form));
     problems.extend(language_problem(form));
+    problems.extend(super::extra::problems(&form.extra));
     problems
 }
 
@@ -516,6 +573,39 @@ pub async fn save_settings(
                     Some(&keys),
                 );
             }
+            // Which of what was just saved is in force already and which waits
+            // for the station to start again. The page used to say "Settings are
+            // applied when the station next starts" of all of them, which was
+            // false of the species lists and the spectrogram options and,
+            // worse, left the person with a link to a page rather than a button.
+            let (waiting, in_force): (Vec<&str>, Vec<&str>) =
+                items.iter().map(|(k, _, _)| *k).partition(|k| {
+                    super::applies::applies_for(k).is_some_and(super::applies::Applies::needs_restart)
+                });
+            let readable = |keys: &[&str]| {
+                keys.iter()
+                    .map(|k| k.replace('_', " "))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let when = if waiting.is_empty() {
+                if saved == 0 {
+                    String::new()
+                } else {
+                    r#"<span class="save-note dim">These are in force already.</span>"#.to_owned()
+                }
+            } else {
+                format!(
+                    r#"<div class="applies-banner" role="status"><div class="applies-banner__text"><strong>{n} of these need a restart</strong> before the station uses them: {list}.{rest}</div><button type="button" class="bnb-btn primary" data-restart-now>Restart the station now</button><span class="bnb-meta" data-restart-status role="status"></span></div>"#,
+                    n = waiting.len(),
+                    list = crate::routes::pages::escape_html(&readable(&waiting)),
+                    rest = if in_force.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" The others ({}) are in force already.", in_force.len())
+                    },
+                )
+            };
             let body = Html(format!(
                 r#"<div class="alert alert-success" role="alert"
                     hx-swap-oob="true" id="settings-feedback">
@@ -523,22 +613,26 @@ pub async fn save_settings(
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
                 </svg>
                 Settings saved ({saved} values updated).
-                <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
+                {when}
             </div>"#
             ));
-            // O-18: toast the success outcome via OOB, with a follow-up action
-            // — settings only take effect on next restart, so surface the link.
+            // O-18: toast the success outcome via OOB. The follow-up action is
+            // offered only when something saved actually waits for a restart.
+            let toast = Toast::success(if waiting.is_empty() {
+                format!("Settings saved ({saved} values updated).")
+            } else {
+                format!(
+                    "Settings saved ({saved} values updated). {} need a restart to apply.",
+                    waiting.len()
+                )
+            });
             Ok(toast::with(
                 body,
-                // The action used to read "Open system", which says where to
-                // go and not why. Three places told the reader about the
-                // restart in three different ways — "Most settings require a
-                // restart", "Changes apply on next restart", and, in the most
-                // prominent of the three, nothing at all.
-                Toast::success(format!(
-                    "Settings saved ({saved} values updated). Restart to apply them."
-                ))
-                .with_action("/admin/system", "Restart →"),
+                if waiting.is_empty() {
+                    toast
+                } else {
+                    toast.with_action("/admin/system/restart", "Restart →")
+                },
             ))
         }
         Err(e) => {
@@ -706,13 +800,30 @@ pub(crate) fn load_settings_for(
     user: Option<&crate::auth_middleware::RequestUser>,
 ) -> Result<HashMap<String, String>, String> {
     let raw = load_all_settings(state)?;
-    Ok(
-        if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
-            raw
-        } else {
-            mask_credentials(&raw)
-        },
-    )
+    let mut shown = if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
+        raw
+    } else {
+        mask_credentials(&raw)
+    };
+    // Not a setting: the keys saved since the station started, for the page's
+    // "waiting for a restart" banner. Added here, after the masking, and not in
+    // `load_all_settings`, so the API and the save's diff never see it.
+    let pending = pending_restart_keys(state);
+    if !pending.is_empty() {
+        shown.insert(super::render::PENDING_KEY.to_owned(), pending.join(","));
+    }
+    Ok(shown)
+}
+
+/// The settings saved since the station started (see [`crate::pending_restart`]).
+///
+/// A read that fails is not a reason to withhold the page: this only decides
+/// whether to show a banner, and the page says nothing false without it.
+fn pending_restart_keys(state: &AppState) -> Vec<String> {
+    crate::pending_restart::changed_settings(state).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not tell which saved settings await a restart");
+        Vec::new()
+    })
 }
 
 /// Every stored setting, by key.
@@ -1069,6 +1180,11 @@ pub(crate) fn build_settings_items(
         SettingsCategory::System
     );
     push!(
+        form.full_disk_action,
+        "full_disk_action",
+        SettingsCategory::System
+    );
+    push!(
         form.stream_retention_secs,
         "stream_retention_secs",
         SettingsCategory::System
@@ -1135,6 +1251,8 @@ pub(crate) fn build_settings_items(
         SettingsCategory::Notifications
     );
 
+    // The table-driven settings: same rule, only what changed.
+    items.extend(super::extra::changed(&form.extra, existing));
     items
 }
 
@@ -1561,6 +1679,7 @@ mod tests {
             custom_image_dir: None,
             max_files_per_species: None,
             purge_threshold: None,
+            full_disk_action: None,
             stream_retention_secs: None,
             stream_max_mb: None,
             site_name: None,
@@ -1578,6 +1697,7 @@ mod tests {
             email_starttls: None,
             email_min_confidence: None,
             email_cooldown_secs: None,
+            extra: HashMap::new(),
         }
     }
 
@@ -1745,13 +1865,15 @@ mod tests {
         // but never reaches `set_many` would be classified as wired while still
         // doing nothing. Submitting a form with every field populated must emit
         // exactly the declared set — no more, no fewer.
-        use super::super::form::SETTINGS_FORM_KEYS;
+        use super::super::form::all_form_keys;
         use std::collections::BTreeSet;
 
         // Build the form the way a browser does, so the fields exercised are the
-        // ones serde actually binds.
+        // ones serde actually binds — the table-driven ones through the flattened
+        // map, which is the part that could silently drop a key.
+        let declared_keys = all_form_keys();
         let submitted: std::collections::HashMap<&str, &str> =
-            SETTINGS_FORM_KEYS.iter().map(|k| (*k, "1")).collect();
+            declared_keys.iter().map(|k| (*k, "1")).collect();
         let form: SettingsForm =
             serde_json::from_value(serde_json::to_value(&submitted).expect("payload serialises"))
                 .expect("a payload of every declared key deserialises into the form");
@@ -1760,7 +1882,7 @@ mod tests {
             .into_iter()
             .map(|(k, _, _)| k)
             .collect();
-        let declared: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+        let declared: BTreeSet<&str> = declared_keys.iter().copied().collect();
 
         assert_eq!(
             emitted, declared,
@@ -1779,5 +1901,73 @@ mod tests {
         let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let name = items.iter().find(|(k, _, _)| *k == "station_name").unwrap();
         assert_eq!(name.1, "Backyard, Boston");
+    }
+
+    /// "Bare spectrograms" was a checkbox, and an unticked checkbox sends no
+    /// field at all, so once it was on there was no way to submit it off.
+    /// Observed failing against the checkbox: the page rendered no `<select>`
+    /// and the form could not say `false` over a stored `true`.
+    #[test]
+    fn bare_spectrograms_can_be_turned_off_again() {
+        let html = super::super::render::render_settings_form(
+            &HashMap::from([("raw_spectrogram".to_owned(), "true".to_owned())]),
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(html.contains(r#"<select id="raw_spectrogram" name="raw_spectrogram">"#));
+        assert!(html.contains(r#"<option value="true" selected>"#), "the stored choice shows");
+        let form = SettingsForm {
+            raw_spectrogram: Some("false".to_owned()),
+            ..empty_form()
+        };
+        let stored = HashMap::from([("raw_spectrogram".to_owned(), "true".to_owned())]);
+        let items = build_settings_items(&form, &stored, Unset::AsShownByTheForm);
+        assert!(
+            items.iter().any(|(k, v, _)| *k == "raw_spectrogram" && v == "false"),
+            "turning it off is a change: {items:?}"
+        );
+    }
+
+    /// Every bounded field has a place in `bounded_value`, and a value one past
+    /// each end is refused while the ends themselves are not. The counterpart
+    /// matters: a table that refused everything would otherwise pass.
+    #[test]
+    fn every_bounded_field_is_wired() {
+        use birdnet_core::config::validate::FIELD_BOUNDS;
+        for b in FIELD_BOUNDS {
+            let probe = |text: &str| {
+                let mut form = empty_form();
+                match b.form_key {
+                    "freq_shift_hz" => form.freq_shift_hz = Some(text.to_owned()),
+                    "pre_sunrise_offset" => form.pre_sunrise_offset = Some(text.to_owned()),
+                    "post_sunset_offset" => form.post_sunset_offset = Some(text.to_owned()),
+                    "notify_cooldown" => form.notify_cooldown = Some(text.to_owned()),
+                    "deadman_hours" => form.deadman_hours = Some(text.to_owned()),
+                    "clip_retention_days" => form.clip_retention_days = Some(text.to_owned()),
+                    "max_files_per_species" => form.max_files_per_species = Some(text.to_owned()),
+                    "purge_threshold" => form.purge_threshold = Some(text.to_owned()),
+                    "extraction_length" => form.extraction_length = Some(text.to_owned()),
+                    "rare_species_days" => form.rare_species_days = Some(text.to_owned()),
+                    "stream_retention_secs" => form.stream_retention_secs = Some(text.to_owned()),
+                    "stream_max_mb" => form.stream_max_mb = Some(text.to_owned()),
+                    "email_smtp_port" => form.email_smtp_port = Some(text.to_owned()),
+                    "email_cooldown_secs" => form.email_cooldown_secs = Some(text.to_owned()),
+                    "clip_target_lufs" => form.clip_target_lufs = Some(text.to_owned()),
+                    other => panic!("{other} is in FIELD_BOUNDS and this test cannot set it"),
+                }
+                range_problems(&form)
+            };
+            let fmt = |v: f64| format!("{v}");
+            assert!(probe(&fmt(b.min)).is_empty(), "{}: the minimum is refused", b.form_key);
+            assert!(probe(&fmt(b.max)).is_empty(), "{}: the maximum is refused", b.form_key);
+            assert!(probe("").is_empty(), "{}: blank clears and is fine", b.form_key);
+            let above = if b.whole { b.max + 1.0 } else { b.max + 0.5 };
+            let below = if b.whole { b.min - 1.0 } else { b.min - 0.5 };
+            assert_eq!(probe(&fmt(above)).len(), 1, "{}: {above} is allowed", b.form_key);
+            assert_eq!(probe(&fmt(below)).len(), 1, "{}: {below} is allowed", b.form_key);
+            assert_eq!(probe("lots").len(), 1, "{}: text is allowed", b.form_key);
+            if b.whole {
+                assert_eq!(probe("1.5").len(), 1, "{}: a fraction is allowed", b.form_key);
+            }
+        }
     }
 }

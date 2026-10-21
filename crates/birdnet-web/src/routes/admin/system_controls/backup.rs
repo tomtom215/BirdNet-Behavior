@@ -524,7 +524,7 @@ pub(super) async fn restore_backup(
             // the old ones. Under systemd the station restarts itself now, which
             // is what "stop, restore, start" means for a self-supervised unit;
             // elsewhere the operator is told, as before.
-            let restarted = super::service::request_restart(state.supervised_by_systemd())
+            let restarted = super::service::request_restart(state.restart_support())
                 == super::service::RestartOutcome::Signalled;
             Html(format!(
                 r#"<p class="ctl-ok">{}</p>"#,

@@ -32,13 +32,24 @@ pub fn supervised_by_systemd() -> bool {
     std::env::var_os("INVOCATION_ID").is_some() || std::env::var_os("JOURNAL_STREAM").is_some()
 }
 
-/// What a restart request would do, given whether systemd is supervising us.
+/// What would bring this process back after a restart request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartSupport {
+    /// systemd supervises the process: exit, and `Restart=always` starts a new one.
+    pub under_systemd: bool,
+    /// The binary replaces itself with a fresh copy of its own program once it
+    /// has shut down ([`crate::restart`]). Only ever the case when nothing else
+    /// supervises it.
+    pub self_exec: bool,
+}
+
+/// What a restart request would do, given what would bring the process back.
 ///
 /// Pure, and separate from [`request_restart`] so the discrimination can be
 /// asserted without a test process signalling itself.
 #[must_use]
-pub const fn restart_outcome(under_systemd: bool) -> RestartOutcome {
-    if under_systemd {
+pub const fn restart_outcome(support: RestartSupport) -> RestartOutcome {
+    if support.under_systemd || support.self_exec {
         RestartOutcome::Signalled
     } else {
         RestartOutcome::NotUnderSystemd
@@ -57,17 +68,26 @@ pub const fn restart_outcome(under_systemd: bool) -> RestartOutcome {
 /// nothing to bring us back, so we say so rather than kill the process and leave
 /// the operator staring at a dead server behind a misleading "restart sent".
 ///
-/// `under_systemd` is a parameter rather than an environment read so that the
+/// `support` is a parameter rather than an environment read so that the
 /// only thing separating a test from a self-inflicted SIGTERM is an explicit
 /// argument. See [`supervised_by_systemd`].
+///
+/// A station nobody supervises, whose binary can run itself again, is told to
+/// do that ([`crate::restart::request_reexec`]) before the SIGTERM, so that
+/// once the graceful shutdown has finished the same program starts in its
+/// place. Under systemd that is never set: the unit's own restart is the one it
+/// was written for.
 ///
 /// Does **not** audit: the caller does, because the two callers have different
 /// identities (a logged-in person, or a bearer token that is nobody) and the
 /// audit-log vocabulary gate reads the action literal at the call site.
-pub fn request_restart(under_systemd: bool) -> RestartOutcome {
-    let outcome = restart_outcome(under_systemd);
+pub fn request_restart(support: RestartSupport) -> RestartOutcome {
+    let outcome = restart_outcome(support);
     if outcome == RestartOutcome::NotUnderSystemd {
         return outcome;
+    }
+    if !support.under_systemd {
+        crate::restart::request_reexec();
     }
 
     // Respond first, then signal: send SIGTERM from a detached thread after a
@@ -125,7 +145,7 @@ pub(super) async fn service_restart(
             // "who kept pressing this?" is a question either outcome raises.
             crate::audit::audit(state, Some(&request_user), "system.restart", None, None);
 
-            restart_fragment(request_restart(state.supervised_by_systemd()))
+            restart_fragment(request_restart(state.restart_support()))
         })
         .await
 }
@@ -247,7 +267,7 @@ fn check_systemd_service_active(service: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestartOutcome, restart_fragment, restart_outcome};
+    use super::{RestartOutcome, RestartSupport, restart_fragment, restart_outcome};
 
     /// The decision, both ways, without anything signalling itself.
     ///
@@ -258,8 +278,31 @@ mod tests {
     /// `INVOCATION_ID`. Splitting the decision out is what makes this a test.
     #[test]
     fn a_restart_is_refused_when_nothing_would_bring_us_back() {
-        assert_eq!(restart_outcome(true), RestartOutcome::Signalled);
-        assert_eq!(restart_outcome(false), RestartOutcome::NotUnderSystemd);
+        let none = RestartSupport {
+            under_systemd: false,
+            self_exec: false,
+        };
+        assert_eq!(restart_outcome(none), RestartOutcome::NotUnderSystemd);
+        assert_eq!(
+            restart_outcome(RestartSupport {
+                under_systemd: true,
+                ..none
+            }),
+            RestartOutcome::Signalled
+        );
+    }
+
+    /// A station nobody supervises can restart itself when the binary can run
+    /// its own program again; without that it still refuses.
+    #[test]
+    fn a_self_restarting_station_is_not_refused() {
+        assert_eq!(
+            restart_outcome(RestartSupport {
+                under_systemd: false,
+                self_exec: true,
+            }),
+            RestartOutcome::Signalled
+        );
     }
 
     /// The dashboard tells the operator which of the two happened.

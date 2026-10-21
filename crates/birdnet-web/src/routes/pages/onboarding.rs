@@ -1,30 +1,44 @@
 //! First-run onboarding wizard.
 //!
-//! A full-bleed, no-chrome six-step setup flow (Welcome → Location →
+//! A full-bleed, no-chrome seven-step setup flow (Welcome → Model → Location →
 //! Microphone → Accuracy → Notifications → Done) served at `/onboarding`,
-//! behind the admin gate (see [`gated_router`]). The
-//! wizard persists: the Location step auto-detects coordinates (and the
-//! timezone) via the existing `/admin/settings/detect-location` endpoint and
-//! submits to `POST /onboarding/save`, which writes the chosen settings and
-//! marks onboarding complete. Audio device *selection* is intentionally
-//! delegated to Settings → Audio (richer ALSA/RTSP handling lives there); the
-//! Microphone step reports what is configured rather than offering a choice it
-//! does not implement.
+//! behind the admin gate (see [`gated_router`]). It exists so that a person can
+//! take a station from first boot to listening with a browser and nothing else:
+//!
+//! * **Model.** The bird-identifying model is a 54 MB download the binary does
+//!   not ship. This step shows whether it is installed and, if not, one button
+//!   installs it (progress while it downloads), through the same checked
+//!   installer as `--install-model`. See [`crate::classifier_setup`].
+//! * **Location.** Coordinates (with a lookup), the station's name and the
+//!   language bird names are shown in.
+//! * **Microphone.** The sound cards the kernel lists that can record are
+//!   offered by name, with a test that measures their level; a network camera's
+//!   address or a device name can be typed instead. What is chosen becomes an
+//!   `audio_sources` row, the same one the Capture tab makes.
+//! * **Accuracy** and **Alerts** are plain-language presets.
+//! * **Done.** `POST /onboarding/save` writes everything, and the next page
+//!   (`/onboarding/done`) shows what is true now — model, microphone — with the
+//!   one button that restarts the station so it starts listening.
 //!
 //! **Every value the page shows is real.** The Microphone step and the final
 //! summary card used to be a mock-up — a hard-coded "UMC202HD · card 1 ·
 //! 48 kHz" microphone marked *recommended*, a "Boston, MA" location, and an
 //! `http://birdnet.local/` dashboard address — shown identically to every
 //! station regardless of its hardware, whereabouts or how it was reached. The
-//! microphone rows are now rendered from `audio_sources`, and the rows that
-//! depend on operator input are placeholders the page script fills from the
-//! form, so a station with no capture source is told so instead of being
-//! congratulated on a device it does not have.
+//! microphone rows are rendered from `audio_sources` and from the kernel's list
+//! of sound cards, and the rows that depend on operator input are placeholders
+//! the page script fills from the form, so a station with no capture source is
+//! told so instead of being congratulated on a device it does not have.
+//!
+//! **A failed read is not an empty station.** The page reads the audio sources
+//! and the stored settings before it draws anything; if either read fails it
+//! says so and shows no wizard, because a wizard drawn from defaults would
+//! offer to save them over the real configuration (the hidden confidence and
+//! alert fields are never empty, so they are written on every completion).
 //!
 //! The Accuracy step exists because the minimum-confidence threshold decides
 //! whether anything is recorded at all, and nothing in the setup path used to
-//! mention it: an operator who wanted stricter or looser detection had to find
-//! Settings → Detection unprompted. Its cards are pre-selected on
+//! mention it. Its cards are pre-selected on
 //! [`DEFAULT_CONFIDENCE_THRESHOLD`](birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
 //! so clicking straight through yields exactly what the daemon would have
 //! enforced anyway.
@@ -43,13 +57,14 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use axum::{Form, Router};
 
-use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, SourceKind};
+use birdnet_core::audio::capture::alsa::CaptureDevice;
+use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, NewAudioSource, SourceKind};
 use birdnet_db::settings::{self, SettingsCategory};
 
 use crate::routes::admin::audio::{detail_for, kind_label};
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
-use birdnet_db::accounts::{self, UserStore as _};
+use birdnet_db::accounts::{self, AuditLog as _, UserStore as _};
 
 /// Every settings key `POST /onboarding/save` can persist.
 ///
@@ -68,6 +83,8 @@ pub const ONBOARDING_SETTING_KEYS: &[&str] = &[
     "latitude",
     "longitude",
     "timezone",
+    "station_name",
+    "database_lang",
     "notify_trigger",
     "confidence_threshold",
     "onboarding_complete",
@@ -87,7 +104,7 @@ pub const ONBOARDING_SETTING_KEYS: &[&str] = &[
 ///
 /// A fresh station still shows the wizard to anyone: with no admin password —
 /// a fresh Docker run, or an operator who cleared it — the middleware bypasses.
-/// With a password set, the operator signs in first and then answers the six
+/// With a password set, the operator signs in first and then answers the seven
 /// steps as that account, which is also what lets the Location step's
 /// auto-detect (an admin endpoint) work.
 ///
@@ -100,44 +117,52 @@ pub fn gated_router() -> Router<AppState> {
             "/onboarding/save",
             get(|| async { Redirect::to("/onboarding") }).post(onboarding_save),
         )
+        .route("/onboarding/done", get(onboarding_done))
+        .route("/onboarding/mic-test", axum::routing::post(mic_test))
 }
 
 /// The settings the wizard must show as they already are, rather than as it
 /// wishes they were.
 ///
-/// Every one of these was hardcoded in the markup. For the two text fields that
+/// Every one of these was hardcoded in the markup. For the text fields that
 /// made the page merely uninformative — a station configured at install time
 /// rendered blank boxes, so setup looked like it had lost the operator's
 /// answers. For the two hidden fields it was worse: because they are never
 /// empty, they slip past `onboarding_save`'s skip-if-blank guard and are
 /// written on every completion. An operator who had set `CONFIDENCE=0.6` and
 /// then clicked through the wizard had it silently reset to the default.
-#[derive(Default)]
+///
+/// It is therefore **not** `Default`: a read that failed must not become a
+/// page drawn from defaults, which would offer to save them over the real
+/// values. [`Prefill::load`] returns the error and the page says so.
 struct Prefill {
     latitude: String,
     longitude: String,
+    station_name: String,
+    database_lang: String,
     confidence: String,
     notify_trigger: String,
 }
 
 impl Prefill {
     /// Read the current values, falling back to the wizard's recommended
-    /// defaults only where the station genuinely has no setting yet.
-    fn load(conn: &rusqlite::Connection) -> Self {
-        let get = |key: &str, default: &str| {
-            settings::get_or(conn, key, default).unwrap_or_else(|_| default.to_owned())
-        };
-        Self {
-            latitude: get("latitude", ""),
-            longitude: get("longitude", ""),
+    /// defaults only where the station genuinely has no setting yet — a row
+    /// that is absent, not a table that could not be read.
+    fn load(conn: &rusqlite::Connection) -> Result<Self, settings::SettingsError> {
+        let get = |key: &str, default: &str| settings::get_or(conn, key, default);
+        Ok(Self {
+            latitude: get("latitude", "")?,
+            longitude: get("longitude", "")?,
+            station_name: get("station_name", "")?,
+            database_lang: get("database_lang", "")?,
             confidence: get(
                 "confidence_threshold",
                 // `Display`, not `{:.2}`: the cards carry `0.9`, `0.6`, `0.7`, and the
                 // card that matches the stored value is chosen by comparing them.
                 &birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD.to_string(),
-            ),
-            notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER),
-        }
+            )?,
+            notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER)?,
+        })
     }
 }
 
@@ -148,7 +173,7 @@ const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 async fn onboarding_page(State(state): State<AppState>, req: Request) -> Response {
     state
         .run_blocking(move |state| {
-            // A signed-in *viewer* used to be walked through all six steps and then
+            // A signed-in *viewer* used to be walked through every step and then
             // refused at the finish line. `cookie_auth_middleware` allows safe methods
             // to any authenticated user and gates unsafe ones behind `require_admin`,
             // so `GET /onboarding` rendered the whole wizard and `POST
@@ -165,25 +190,62 @@ async fn onboarding_page(State(state): State<AppState>, req: Request) -> Respons
                 return not_admin_page();
             }
             // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
-            let (sources, prefill) = state
-                .with_read_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
-                .unwrap_or_else(|err| {
-                    tracing::error!(error = %err, "onboarding: audio_sources list failed");
-                    (Vec::new(), Prefill::default())
-                });
+            //
+            // A failed read is not an empty station. This used to be
+            // `.unwrap_or_else(|_| (Vec::new(), Prefill::default()))`, so a
+            // database that could not be read drew the wizard of a station with
+            // no microphone and default settings, and its Finish would have
+            // saved those defaults over the real ones.
+            let loaded = state.with_read_db(|conn| {
+                let sources = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
+                let prefill = Prefill::load(conn).map_err(|e| e.to_string())?;
+                Ok::<_, String>((sources, prefill))
+            });
+            let (sources, prefill) = match loaded {
+                Ok(read) => read,
+                Err(err) => {
+                    tracing::error!(error = %err, "onboarding: could not read the audio sources or settings");
+                    return read_failed_page();
+                }
+            };
             let needs_password = !crate::auth_middleware::admin_password_configured(state);
-            let password_error = req
-                .uri()
-                .query()
-                .is_some_and(|q| q.split('&').any(|p| p == "error=password"));
-
+            let query = req.uri().query().unwrap_or("");
+            let error = query
+                .split('&')
+                .find_map(|p| p.strip_prefix("error="))
+                .unwrap_or("");
+            let devices = birdnet_core::audio::capture::alsa::list_capture_devices();
+            let parts = PageParts {
+                mic_body: render_mic_body(
+                    &sources,
+                    &devices,
+                    capture_verdict(state).as_deref(),
+                    mic_notice(error),
+                ),
+                mic_summary: escape_html(&mic_summary(&sources)),
+                model_panel: crate::routes::admin::classifier::render_panel(
+                    &state
+                        .classifier_setup()
+                        .snapshot(state.detection_daemon_running()),
+                ),
+                lang_options: crate::routes::admin::settings::render::language_options(
+                    &prefill.database_lang,
+                    state.names(),
+                ),
+                // A refused password sends the person back to the first step, a
+                // refused microphone to the fourth: the step that failed.
+                start_step: match error {
+                    "password" => 1,
+                    e if e.starts_with("mic") => 4,
+                    _ => 1,
+                },
+            };
             let body = render_page(
-                &render_mic_body(&sources, capture_verdict(state).as_deref()),
-                &escape_html(&mic_summary(&sources)),
+                &parts,
                 &prefill,
                 PasswordStep {
                     needed: needs_password,
-                    error: password_error,
+                    error: error == "password",
                 },
             );
             // `no-store` because the Welcome step can carry a password form: without
@@ -199,6 +261,32 @@ async fn onboarding_page(State(state): State<AppState>, req: Request) -> Respons
                 .into_response()
         })
         .await
+}
+
+/// What the wizard says instead of itself when the station could not read what
+/// it needs to draw it. Not a `200`: a monitor, and the browser's history, should
+/// not treat it as the wizard.
+fn read_failed_page() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        Html(format!(
+            r#"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup · BirdNet-Behavior</title>
+<link rel="stylesheet" href="/static/css/app.css?v={v}"></head>
+<body><main id="main-content" class="ob-root"><div class="empty-state">
+<h1 class="display es-h">Setup cannot start: the station could not read its own records.</h1>
+<p class="bnb-meta es-sub">The wizard shows what is already set and offers to change it. It could not read the audio sources or the settings, and a wizard drawn from blanks would offer to save those blanks over them. Nothing has been changed.</p>
+<p class="bnb-meta es-sub"><a href="/admin/doctor">Diagnostics</a> says what is wrong with the database; reload this page once it is fixed.</p>
+</div></main></body></html>"#,
+            v = env!("CARGO_PKG_VERSION"),
+        )),
+    )
+        .into_response()
 }
 
 /// What a signed-in non-admin sees instead of a wizard they cannot submit.
@@ -263,6 +351,20 @@ fn render_password_step(step: PasswordStep) -> String {
     )
 }
 
+/// What the server fills into the wizard template, besides the stored settings.
+struct PageParts {
+    /// The microphone step's body, already markup.
+    mic_body: String,
+    /// The summary's microphone line, **already escaped**.
+    mic_summary: String,
+    /// The classifier panel, already markup.
+    model_panel: String,
+    /// The `<option>`s of the bird-name language picker, already markup.
+    lang_options: String,
+    /// The step the page opens on (1 unless a save was refused on a later one).
+    start_step: u8,
+}
+
 /// Substitute the server-filled placeholders into the wizard template.
 ///
 /// A single pass, which is what the comment here has claimed since it was
@@ -281,41 +383,50 @@ fn render_password_step(step: PasswordStep) -> String {
 /// template. An unrecognised `{{name}}` is copied through verbatim so a typo in
 /// the template shows up as a literal placeholder rather than silently
 /// swallowing the text around it.
-fn render_page(
-    mic_body: &str,
-    mic_summary: &str,
-    prefill: &Prefill,
-    password: PasswordStep,
-) -> String {
-    // Substituted in one pass each. `mic_body` is already-rendered markup and
-    // `mic_summary` is pre-escaped by the caller; the `prefill` values come
-    // from the database and land inside HTML attributes, so they are escaped
-    // here rather than trusted.
+fn render_page(parts: &PageParts, prefill: &Prefill, password: PasswordStep) -> String {
+    // Substituted in one pass each. `mic_body`, `model_panel` and `lang_options`
+    // are already-rendered markup and `mic_summary` is pre-escaped by the
+    // caller; the `prefill` values come from the database and land inside HTML
+    // attributes, so they are escaped here rather than trusted.
     let password_step = render_password_step(password);
     let latitude = escape_html(&prefill.latitude);
     let longitude = escape_html(&prefill.longitude);
+    let station_name = escape_html(&prefill.station_name);
     let confidence = escape_html(&prefill.confidence);
     let notify_trigger = escape_html(&prefill.notify_trigger);
-    let lookup = |name: &str| -> Option<&str> {
+    let start_step = parts.start_step.to_string();
+    let setup_script = crate::routes::admin::classifier::CONTROLS_SCRIPT.as_str();
+    let lookup = |name: &str| -> Option<String> {
         Some(match name {
-            "mic_body" => mic_body,
-            "mic_summary" => mic_summary,
-            "latitude" => &latitude,
-            "longitude" => &longitude,
-            "confidence" => &confidence,
-            "notify_trigger" => &notify_trigger,
-            "password_step" => &password_step,
+            "mic_body" => parts.mic_body.clone(),
+            "mic_summary" => parts.mic_summary.clone(),
+            "model_panel" => parts.model_panel.clone(),
+            "lang_options" => parts.lang_options.clone(),
+            "start_step" => start_step.clone(),
+            "setup_script" => setup_script.to_owned(),
+            "latitude" => latitude.clone(),
+            "longitude" => longitude.clone(),
+            "station_name" => station_name.clone(),
+            "confidence" => confidence.clone(),
+            "notify_trigger" => notify_trigger.clone(),
+            "password_step" => password_step.clone(),
             // Versioned stylesheet URL — see `pages::with_asset_version`.
-            "version" => env!("CARGO_PKG_VERSION"),
+            "version" => env!("CARGO_PKG_VERSION").to_owned(),
             _ => return None,
         })
     };
 
-    // One pass over the template. An unknown `{{name}}` is copied through
-    // verbatim, which keeps a typo visible in the output instead of dropping
-    // the surrounding text.
-    let mut out = String::with_capacity(ONBOARDING_HTML.len() + 2048);
-    let mut rest = ONBOARDING_HTML.as_str();
+    fill(ONBOARDING_HTML.as_str(), &lookup)
+}
+
+/// One pass over `template`, replacing each `{{name}}` that `lookup` knows.
+///
+/// An unknown `{{name}}` is copied through verbatim, which keeps a typo visible
+/// in the output instead of dropping the surrounding text; a value that was
+/// inserted is never scanned again.
+fn fill(template: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(template.len() + 4096);
+    let mut rest = template;
     while let Some(open) = rest.find("{{") {
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
@@ -327,7 +438,7 @@ fn render_page(
         };
         let name = &after[..close];
         if let Some(value) = lookup(name) {
-            out.push_str(value);
+            out.push_str(&value);
         } else {
             out.push_str("{{");
             out.push_str(name);
@@ -339,21 +450,39 @@ fn render_page(
     out
 }
 
-/// The microphone step, rendered from the station's actual capture sources.
-///
-/// This step used to be a mock-up: a hard-coded "UMC202HD · USB audio ·
-/// card 1 · 48 kHz" card marked *recommended* and pre-selected, plus a
-/// "Built-in microphone · card 0" and two more cards offering RTSP and
-/// folder-watching. None of it was real — no station was consulted, nothing was
-/// clickable to any effect, and a first-run operator was shown hardware they do
-/// not own, described as already detected. On a station whose microphone was
-/// missing or misconfigured, the setup wizard's answer to "will this hear
-/// anything?" was a confident yes about a device that does not exist.
-///
-/// The wizard deliberately does not *change* the capture source — Settings →
-/// Audio owns that, with the ALSA/RTSP handling this step cannot reproduce — so
-/// the honest version reports rather than pretends to offer a choice. The cards
-/// are therefore not selectable: nothing here writes a setting.
+/// The page after Finish: what is true now.
+fn render_done_page(model_panel: &str, microphone: &str, restart_needed: bool) -> String {
+    // "Listening" is claimed only when the engine is up with a classifier AND
+    // nothing saved is waiting for a restart; either one false and the page says
+    // "almost".
+    let listening = model_panel.contains(r#"data-cls-state="ready""#) && !restart_needed;
+    let (eyebrow, heading) = if listening {
+        ("All set", "You're <em>listening</em>.")
+    } else {
+        ("Saved", "Almost <em>listening</em>.")
+    };
+    let restart_block = if restart_needed {
+        r#"<p class="ob-p">What you chose is saved. The station reads most of it when it starts, so it needs one restart to put it to work. This takes a few seconds, and this page updates by itself when the station is back.</p><div class="ob-mt-16"><button type="button" class="bnb-btn primary" data-restart-now>Restart the station now</button> <span class="bnb-meta" data-restart-status role="status"></span></div>"#
+    } else {
+        r#"<p class="ob-p">What you chose is saved and the running station already has it.</p>"#
+    };
+    let lookup = |name: &str| -> Option<String> {
+        Some(match name {
+            "eyebrow" => eyebrow.to_owned(),
+            "heading" => heading.to_owned(),
+            "restart_block" => restart_block.to_owned(),
+            "model_panel" => model_panel.to_owned(),
+            "microphone" => microphone.to_owned(),
+            "setup_script" => crate::routes::admin::classifier::CONTROLS_SCRIPT
+                .as_str()
+                .to_owned(),
+            "version" => env!("CARGO_PKG_VERSION").to_owned(),
+            _ => return None,
+        })
+    };
+    fill(ONBOARDING_DONE_HTML.as_str(), &lookup)
+}
+
 /// What the capture supervisor says about the station's sources right now.
 ///
 /// The Microphone step listed what is *configured* and stopped there, which
@@ -397,55 +526,216 @@ fn capture_verdict(state: &AppState) -> Option<String> {
     })
 }
 
-fn render_mic_body(sources: &[AudioSource], verdict: Option<&str>) -> String {
-    if sources.is_empty() {
-        let _ = verdict; // nothing configured: there is nothing to report on
-        return concat!(
-            r#"<div class="ob-cards"><div class="ob-card ob-card--static"><span class="ic" aria-hidden="true">🔇</span>"#,
-            r#"<div class="ob-grow"><div class="t">No audio source configured</div>"#,
-            r#"<div class="s">Nothing will be detected until a microphone or RTSP stream is added. "#,
-            r#"The installer normally sets this up; if it could not find your device you can add it by hand.</div>"#,
-            r#"</div></div></div>"#,
-            r#"<p class="bnb-meta ob-mt-16"><a href="/station/capture">Add a microphone or RTSP stream →</a></p>"#,
-        )
-        .to_string();
-    }
-
-    let mut out = String::from(r#"<div class="ob-cards" id="mic-cards">"#);
-    for s in sources {
-        let icon = if matches!(s.kind, SourceKind::Rtsp) {
-            "📡"
-        } else {
-            "🎤"
-        };
-        // Unlabelled sources take the device id as their heading, so repeating
-        // it on the detail line would print `plughw:CARD=PRO,DEV=0` twice.
-        let label = friendly_label(s);
-        let detail = match label {
-            Some(_) => format!("{} · {}", s.device_id, detail_for(s)),
-            None => detail_for(s),
-        };
+/// The microphone step: what is configured, what the kernel lists that could be
+/// added, and the two ways to name one that it does not.
+///
+/// This step used to be a mock-up: a hard-coded "UMC202HD · USB audio · card 1
+/// · 48 kHz" card marked *recommended* and pre-selected, plus a "Built-in
+/// microphone · card 0" and two more cards offering RTSP and folder-watching.
+/// None of it was real — no station was consulted, nothing was clickable to any
+/// effect, and a first-run operator was shown hardware they do not own,
+/// described as already detected. Every card here is either a row in
+/// `audio_sources` or a device the kernel listed a moment ago.
+///
+/// `notice` is a refusal from the save, shown first.
+fn render_mic_body(
+    sources: &[AudioSource],
+    devices: &[CaptureDevice],
+    verdict: Option<&str>,
+    notice: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    if let Some(n) = notice {
         let _ = write!(
             out,
-            concat!(
-                r#"<div class="ob-card ob-card--static"><span class="ic" aria-hidden="true">{icon}</span><div class="ob-grow">"#,
-                r#"<div class="t">{name} <span class="bnb-pill ob-ml-6">{kind}</span></div>"#,
-                r#"<div class="s mono">{detail}</div></div></div>"#,
-            ),
-            icon = icon,
-            name = escape_html(label.unwrap_or(&s.device_id)),
-            kind = escape_html(kind_label(s.kind)),
-            detail = escape_html(&detail),
+            r#"<p class="ob-password-error" role="alert">{}</p>"#,
+            escape_html(n)
         );
     }
-    out.push_str("</div>");
-    if let Some(v) = verdict {
-        out.push_str(v);
+
+    // What is already configured: shown as it is, never offered as a choice.
+    if !sources.is_empty() {
+        out.push_str(r#"<div class="ob-cards" id="mic-cards">"#);
+        for s in sources {
+            let icon = if matches!(s.kind, SourceKind::Rtsp) {
+                "📡"
+            } else {
+                "🎤"
+            };
+            // Unlabelled sources take the device id as their heading, so repeating
+            // it on the detail line would print `plughw:CARD=PRO,DEV=0` twice.
+            let label = friendly_label(s);
+            let detail = match label {
+                Some(_) => format!("{} · {}", s.device_id, detail_for(s)),
+                None => detail_for(s),
+            };
+            let _ = write!(
+                out,
+                concat!(
+                    r#"<div class="ob-card ob-card--static"><span class="ic" aria-hidden="true">{icon}</span><div class="ob-grow">"#,
+                    r#"<div class="t">{name} <span class="bnb-pill ob-ml-6">{kind}</span></div>"#,
+                    r#"<div class="s mono">{detail}</div></div></div>"#,
+                ),
+                icon = icon,
+                name = escape_html(label.unwrap_or(&s.device_id)),
+                kind = escape_html(kind_label(s.kind)),
+                detail = escape_html(&detail),
+            );
+        }
+        out.push_str("</div>");
+        if let Some(v) = verdict {
+            out.push_str(v);
+        }
     }
+
+    // The choice. With sources configured, "keep" leads and is the default;
+    // without, the first device the kernel listed is, because choosing nothing
+    // by default would finish a station that hears nothing.
+    let free: Vec<&CaptureDevice> = devices
+        .iter()
+        .filter(|d| !is_configured(d, sources))
+        .collect();
+    let first_is_default = sources.is_empty() && !free.is_empty();
     out.push_str(
-        r#"<p class="bnb-meta ob-mt-16">Already configured on this station. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Capture</a>.</p>"#,
+        r#"<fieldset class="mic-list" id="mic-choice"><legend class="sr-only">Microphone</legend>"#,
+    );
+    if sources.is_empty() {
+        out.push_str(
+            r#"<div class="ob-card ob-card--static"><span class="ic" aria-hidden="true">🔇</span><div class="ob-grow"><div class="t">No audio source configured</div><div class="s">"#,
+        );
+        out.push_str(if free.is_empty() {
+            "No microphone was found on this station. Plug a USB microphone in and press Look again, or use a network camera below. Nothing will be detected until one is added."
+        } else {
+            "Nothing will be detected until a microphone or network stream is chosen. These were found on this station:"
+        });
+        out.push_str("</div></div></div>");
+    } else {
+        out.push_str(&radio_card(
+            "keep",
+            "keep",
+            "✓",
+            "Keep it as it is",
+            "The microphone above stays; nothing is added.",
+            true,
+            None,
+        ));
+    }
+    for (i, d) in free.iter().enumerate() {
+        let spec = d.spec();
+        out.push_str(&radio_card(
+            &format!("alsa:{spec}"),
+            &format!("alsa{i}"),
+            "🎤",
+            &d.name,
+            &format!(
+                "{} · found on this station · {spec}",
+                if d.usb {
+                    "USB microphone"
+                } else {
+                    "Sound card"
+                }
+            ),
+            first_is_default && i == 0,
+            Some(&spec),
+        ));
+    }
+    out.push_str(&radio_card(
+        "rtsp",
+        "rtsp",
+        "📡",
+        "A network camera or stream",
+        "An RTSP, HTTP, HLS, RTMP, UDP or SRT address. Needs the ffmpeg program on the station.",
+        false,
+        None,
+    ));
+    out.push_str(
+        r#"<div class="mic-manual" id="mic-rtsp-field" hidden><label for="mic-rtsp-url">Stream address</label><input id="mic-rtsp-url" name="mic_rtsp_url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="rtsp://camera.local:554/stream"><p class="bnb-meta">It starts with <code>rtsp://</code>, <code>http://</code>, <code>https://</code>, <code>rtmp://</code>, <code>udp://</code> or <code>srt://</code>. A camera's password goes in the address, as <code>rtsp://user:password@camera.local/stream</code>.</p></div>"#,
+    );
+    out.push_str(&radio_card(
+        "manual",
+        "manual",
+        "⌨",
+        "A microphone by its device name",
+        "For a sound card the list above does not show, written the way ALSA names it, like plughw:CARD=Device,DEV=0.",
+        false,
+        None,
+    ));
+    out.push_str(
+        r#"<div class="mic-manual" id="mic-manual-field" hidden><label for="mic-manual-dev">Device name</label><input id="mic-manual-dev" name="mic_manual_device" type="text" autocomplete="off" spellcheck="false" placeholder="plughw:CARD=Device,DEV=0"></div>"#,
+    );
+    if sources.is_empty() {
+        out.push_str(&radio_card(
+            "none",
+            "none",
+            "⏭",
+            "Skip for now",
+            "Finish setup without a microphone and add one later in Settings → Capture.",
+            free.is_empty(),
+            None,
+        ));
+    }
+    out.push_str("</fieldset>");
+    out.push_str(
+        r#"<p class="bnb-meta mic-or"><a href="/onboarding">Look again</a> after plugging a microphone in. More options (gain, filters, several microphones) are in <a href="/station/capture">Settings → Capture</a> once setup is done.</p>"#,
     );
     out
+}
+
+/// One choice in the microphone step: a real radio button wrapped in a card.
+///
+/// `test` adds a "Test" button that records two seconds from that device and
+/// reports how loud it was.
+fn radio_card(
+    value: &str,
+    id: &str,
+    icon: &str,
+    title: &str,
+    sub: &str,
+    checked: bool,
+    test: Option<&str>,
+) -> String {
+    let test_button = test.map_or_else(String::new, |spec| {
+        format!(
+            r#"<button type="button" class="bnb-btn ghost" data-mic-test="{spec}">Test</button><span class="mic-level" data-mic-level role="status"></span>"#,
+            spec = escape_html(spec),
+        )
+    });
+    format!(
+        r#"<label class="ob-card{sel}" data-mic-card><input class="ob-pick" type="radio" name="mic_choice" value="{value}" aria-labelledby="mic-t-{id}" aria-describedby="mic-s-{id}"{chk}><span class="ic" aria-hidden="true">{icon}</span><div class="ob-grow"><div class="t" id="mic-t-{id}">{title}</div><div class="s mono-ish" id="mic-s-{id}">{sub}</div></div>{test_button}</label>"#,
+        sel = if checked { " sel" } else { "" },
+        chk = if checked { " checked" } else { "" },
+        value = escape_html(value),
+        title = escape_html(title),
+        sub = escape_html(sub),
+    )
+}
+
+/// Whether a sound card the kernel listed is one the station already uses,
+/// however the source names it (`plughw:1,0` by position or
+/// `plughw:CARD=Device,DEV=0` by name).
+fn is_configured(device: &CaptureDevice, sources: &[AudioSource]) -> bool {
+    use birdnet_core::audio::capture::alsa::{CardRef, parse_card_ref};
+    sources
+        .iter()
+        .filter(|s| matches!(s.kind, SourceKind::UsbAlsa))
+        .any(|s| match parse_card_ref(&s.device_id) {
+            Some(CardRef::Index(i)) => i.parse::<u32>().is_ok_and(|i| i == device.card),
+            Some(CardRef::Id(id)) => id == device.id,
+            None => false,
+        })
+}
+
+/// The sentence for a refused microphone, from the code the save redirected with.
+fn mic_notice(error: &str) -> Option<&'static str> {
+    match error {
+        "mic-url" => Some(
+            "That stream address was not accepted. It has to start with rtsp://, http://, https://, rtmp://, udp:// or srt://. Nothing was saved.",
+        ),
+        "mic-device" => Some(
+            "That device name was not accepted. A sound card is written like plughw:CARD=Device,DEV=0 or plughw:2,0. Nothing was saved.",
+        ),
+        _ => None,
+    }
 }
 
 /// The operator's own name for a source, when they gave it one.
@@ -487,6 +777,22 @@ struct OnboardingForm {
     notification_mode: String,
     #[serde(default)]
     confidence_threshold: String,
+    /// What the station should call itself (`station_name`).
+    #[serde(default)]
+    station_name: String,
+    /// The language bird names are shown in (`database_lang`).
+    #[serde(default)]
+    database_lang: String,
+    /// The microphone step's choice: `keep`, `none`, `rtsp`, `manual` or
+    /// `alsa:<device>`. Absent (a script-less submit of an older form) is `keep`.
+    #[serde(default)]
+    mic_choice: String,
+    /// The stream address, when `mic_choice` is `rtsp`.
+    #[serde(default)]
+    mic_rtsp_url: String,
+    /// The device name, when `mic_choice` is `manual`.
+    #[serde(default)]
+    mic_manual_device: String,
     /// The admin password, on a station that has none (DD-14).
     #[serde(default)]
     password: String,
@@ -520,6 +826,94 @@ fn valid_confidence(raw: &str) -> bool {
 /// `birdnet_integrations::notification::TriggerMode::parse`.
 fn valid_trigger(raw: &str) -> bool {
     matches!(raw, "each" | "new-species" | "new-species-daily")
+}
+
+/// A station name the wizard stores: trimmed, at most 80 characters, no control
+/// characters (it goes into page titles, exports and BirdWeather uploads).
+fn valid_station_name(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    (!name.is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control))
+        .then(|| name.to_owned())
+}
+
+/// A language code the station has names for. `en` is stored as `en`, so a
+/// station that picked English says so and is not read as "never chose".
+fn valid_language(raw: &str) -> Option<&'static str> {
+    birdnet_core::i18n::find_language(raw.trim()).map(|l| l.code)
+}
+
+/// What the microphone step asked for, checked.
+#[derive(Debug, PartialEq, Eq)]
+enum MicRequest {
+    /// Add nothing.
+    Nothing,
+    /// Add a sound card by device name.
+    Alsa {
+        device: String,
+        label: Option<String>,
+    },
+    /// Add a network stream.
+    Stream { url: String },
+    /// The choice could not be used; the code is the `?error=` to redirect with.
+    Refused(&'static str),
+}
+
+/// Whether `device` is something a person could mean by a sound card: the shapes
+/// `alsa::parse_card_ref` and the Capture tab accept, in a bounded alphabet.
+fn plausible_device(device: &str) -> bool {
+    !device.is_empty()
+        && device.len() <= 64
+        && device.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b':' | b'=' | b',' | b'_' | b'-' | b'.')
+        })
+        && birdnet_core::audio::capture::alsa::parse_card_ref(device).is_some()
+}
+
+/// Turn the submitted choice into a request, or say what was wrong with it.
+///
+/// A device typed or picked is held to the shapes a card is named by; a stream
+/// has to name a protocol capture can read (the Capture tab's own check). An
+/// unknown choice is `Nothing`, not a guess: the safe reading of a form from an
+/// older page is "leave the microphones alone".
+fn mic_request(form: &OnboardingForm, known: &[CaptureDevice]) -> MicRequest {
+    let choice = form.mic_choice.trim();
+    if let Some(device) = choice.strip_prefix("alsa:") {
+        let device = device.trim();
+        // Picked from the list: it must be one the kernel lists, so a hand-made
+        // POST cannot name an arbitrary device string through this path.
+        return known.iter().find(|d| d.spec() == device).map_or(
+            MicRequest::Refused("mic-device"),
+            |d| MicRequest::Alsa {
+                device: d.spec(),
+                label: Some(d.name.clone()),
+            },
+        );
+    }
+    match choice {
+        "rtsp" => {
+            let url = form.mic_rtsp_url.trim();
+            if birdnet_core::audio::capture::StreamProtocol::of(url).is_some() && url.len() <= 2048
+            {
+                MicRequest::Stream {
+                    url: url.to_owned(),
+                }
+            } else {
+                MicRequest::Refused("mic-url")
+            }
+        }
+        "manual" => {
+            let device = form.mic_manual_device.trim();
+            if plausible_device(device) {
+                MicRequest::Alsa {
+                    device: device.to_owned(),
+                    label: None,
+                }
+            } else {
+                MicRequest::Refused("mic-device")
+            }
+        }
+        _ => MicRequest::Nothing,
+    }
 }
 
 /// The largest latitude, in degrees, the wizard stores. The same number
@@ -603,6 +997,14 @@ async fn onboarding_save(
     Form(form): Form<OnboardingForm>,
 ) -> Response {
     state.run_blocking(move |state| {
+    // The microphone choice is checked before anything is written, like the
+    // password below: a refused answer saves nothing and sends the person back
+    // to the step that failed, rather than leaving a station half set up.
+    let known_devices = birdnet_core::audio::capture::alsa::list_capture_devices();
+    let mic = mic_request(&form, &known_devices);
+    if let MicRequest::Refused(code) = mic {
+        return Redirect::to(&format!("/onboarding?error={code}")).into_response();
+    }
     // The password first (DD-14), and only on a station that has none: with
     // one set, the operator signed in to reach this page and the fields are
     // not rendered. A refused password saves nothing else either — the
@@ -663,6 +1065,22 @@ async fn onboarding_save(
             items.push(("latitude", lat, SettingsCategory::Location));
             items.push(("longitude", lon, SettingsCategory::Location));
         }
+        // The name and the language of bird names: each only when given, so a
+        // blank box clears nothing and an unknown language is not stored (it
+        // would be read as English and look like a choice).
+        let name = valid_station_name(&form.station_name);
+        if let Some(name) = name.as_deref() {
+            items.push(("station_name", name, SettingsCategory::Location));
+        }
+        let lang = valid_language(&form.database_lang);
+        if let Some(code) = lang {
+            items.push(("database_lang", code, SettingsCategory::System));
+        } else if !form.database_lang.trim().is_empty() {
+            tracing::warn!(
+                language = form.database_lang.trim(),
+                "onboarding: language not stored; the station has no names for it"
+            );
+        }
         if plausible_timezone(tz) {
             items.push(("timezone", tz, SettingsCategory::Location));
         } else if !tz.is_empty() {
@@ -699,6 +1117,17 @@ async fn onboarding_save(
             // editable on the settings page. Silent it was not meant to be.
             tracing::error!(error = %e, "the setup wizard could not save its settings");
         }
+        // The microphone, as the same row the Capture tab makes. A source the
+        // station already has (the same device or stream) is not added twice.
+        match &mic {
+            MicRequest::Alsa { device, label } => {
+                add_source(conn, SourceKind::UsbAlsa, device, label.as_deref());
+            }
+            MicRequest::Stream { url } => {
+                add_source(conn, SourceKind::Rtsp, url, None);
+            }
+            MicRequest::Nothing | MicRequest::Refused(_) => {}
+        }
         // Set the completion flag last so a fresh box stops being redirected here
         // even if a settings write above failed.
         let _ = settings::set(
@@ -708,7 +1137,9 @@ async fn onboarding_save(
             SettingsCategory::System,
         );
     });
-    let mut resp = Redirect::to("/").into_response();
+    // Not the dashboard: what the answers need is a restart, and the next page
+    // says what is true now and offers it.
+    let mut resp = Redirect::to("/onboarding/done").into_response();
     if let Some(cookie) = set_cookie
         && let Ok(value) = axum::http::HeaderValue::from_str(&cookie)
     {
@@ -718,6 +1149,175 @@ async fn onboarding_save(
     resp
 })
 .await
+}
+
+/// Add an audio source unless the station already has that device or stream.
+///
+/// Failures are logged and the wizard carries on: the completion flag below it
+/// must still be set, and the Capture tab can add the source by hand.
+///
+/// Runs inside the caller's database lock, so the audit row is written on the
+/// connection it was handed: `audit_user_id` takes the lock itself and would
+/// wait for it forever.
+fn add_source(conn: &rusqlite::Connection, kind: SourceKind, device: &str, label: Option<&str>) {
+    let existing = match AudioSourceStore::list(conn) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "onboarding: could not read the audio sources; the microphone was not added");
+            return;
+        }
+    };
+    if existing
+        .iter()
+        .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device)
+    {
+        return;
+    }
+    let mut new =
+        NewAudioSource::defaults(crate::routes::admin::audio::synth_id(kind), kind, device);
+    new.label = label.map(str::to_owned);
+    match AudioSourceStore::insert(conn, &new) {
+        Ok(row) => {
+            if let Err(e) = conn.record(
+                None,
+                "audio.source.create",
+                Some(&row.device_id),
+                Some(&format!("kind={}; via=setup", row.kind)),
+            ) {
+                tracing::warn!(error = %e, "audit log write failed");
+            }
+            tracing::info!(kind = %row.kind, "setup wizard added an audio source");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "onboarding: the audio source could not be added");
+        }
+    }
+}
+
+/// `POST /onboarding/mic-test` — record two seconds from a listed sound card and
+/// say how loud it was.
+///
+/// Only a card the kernel lists *now* can be tested, so the endpoint cannot be
+/// pointed at an arbitrary device string. Answers `200` with `ok: false` and the
+/// reason for every failure, because the page script shows the message and htmx
+/// is not involved.
+async fn mic_test(Form(form): Form<MicTestForm>) -> Response {
+    let device = form.device.trim().to_owned();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let listed = birdnet_core::audio::capture::alsa::list_capture_devices()
+            .iter()
+            .any(|d| d.spec() == device);
+        if !listed {
+            return Err("That sound card is not listed any more. Press Look again.".to_owned());
+        }
+        birdnet_core::audio::capture::probe::measure_level(&device).map_err(|e| e.to_string())
+    })
+    .await;
+    let body = match outcome {
+        Ok(Ok(level)) => serde_json::json!({
+            "ok": true,
+            "rms_dbfs": (level.rms_dbfs * 10.0).round() / 10.0,
+            "peak_dbfs": (level.peak_dbfs * 10.0).round() / 10.0,
+            "message": level_message(level.rms_dbfs),
+        }),
+        Ok(Err(message)) => serde_json::json!({ "ok": false, "message": message }),
+        Err(e) => {
+            tracing::error!(error = %e, "onboarding: the microphone test task failed");
+            serde_json::json!({ "ok": false, "message": "The test could not run." })
+        }
+    };
+    ([(header::CACHE_CONTROL, "no-store")], axum::Json(body)).into_response()
+}
+
+/// The form the microphone test posts.
+#[derive(serde::Deserialize)]
+struct MicTestForm {
+    device: String,
+}
+
+/// What a level means, in a sentence. The cut-offs are judgement, not
+/// calibration: they separate "nothing arrived" from "something did", and say
+/// nothing about whether the microphone is good.
+fn level_message(rms_dbfs: f64) -> &'static str {
+    if rms_dbfs <= -80.0 {
+        "Silent. Check the microphone is plugged in and not muted."
+    } else if rms_dbfs <= -60.0 {
+        "Very quiet. Normal in a quiet room; it is picking something up."
+    } else if rms_dbfs <= -30.0 {
+        "Picking up sound."
+    } else {
+        "Loud: very close to the microphone, or the gain is high."
+    }
+}
+
+/// `GET /onboarding/done` — what is true now, and the button that restarts the
+/// station so it starts listening.
+async fn onboarding_done(State(state): State<AppState>, req: Request) -> Response {
+    state
+        .run_blocking(move |state| {
+            if let Some(user) = req
+                .extensions()
+                .get::<crate::auth_middleware::RequestUser>()
+                && !user.is_admin()
+            {
+                return not_admin_page();
+            }
+            let snapshot = state
+                .classifier_setup()
+                .snapshot(state.detection_daemon_running());
+            let sources = state.with_read_db(AudioSourceStore::list);
+            let body = render_done_page(
+                &crate::routes::admin::classifier::render_panel(&snapshot),
+                &done_microphone(sources.as_deref().map_err(ToString::to_string)),
+                pending_restart(state),
+            );
+            (
+                [
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                Html(body),
+            )
+                .into_response()
+        })
+        .await
+}
+
+/// Whether saved settings or sources are newer than the running station, so the
+/// done page should offer the restart.
+///
+/// A read that fails answers `true`: offering a restart that was not needed
+/// costs a few seconds, and hiding one that was leaves a station that was just
+/// set up and is not listening.
+fn pending_restart(state: &AppState) -> bool {
+    use crate::routes::admin::settings::applies::{Applies, applies_for};
+    let settings = match crate::pending_restart::changed_settings(state) {
+        Ok(keys) => keys
+            .iter()
+            .any(|k| applies_for(k).is_some_and(Applies::needs_restart)),
+        Err(e) => {
+            tracing::warn!(error = %e, "onboarding: could not tell which settings await a restart");
+            return true;
+        }
+    };
+    settings
+        || crate::pending_restart::sources_changed(state).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "onboarding: could not tell whether the sources changed");
+            true
+        })
+}
+
+/// The microphone line on the done page: what the station will listen with, or
+/// that it could not be read.
+fn done_microphone(sources: Result<&[AudioSource], String>) -> String {
+    match sources {
+        Err(_) => r#"<p class="bnb-meta ob-password-error" role="alert">The station could not read its audio sources. <a href="/admin/doctor">Diagnostics</a> says why.</p>"#.to_owned(),
+        Ok([]) => r#"<p class="bnb-meta">No microphone yet, so nothing will be detected. <a href="/station/capture">Add one in Settings → Capture</a>.</p>"#.to_owned(),
+        Ok(rows) => format!(
+            r#"<p class="bnb-meta">Listening with: {}.</p>"#,
+            escape_html(&mic_summary(rows))
+        ),
+    }
 }
 
 /// Hash `password` onto the seed admin row and record it. Returns the
@@ -914,17 +1514,19 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
        reader and a sighted user both got six unlabelled digits. Each pip now
        carries its own name, which survives that rule. -->
   <ol class="ob-stepper" id="ob-stepper" aria-label="Setup progress">
-    <li class="ob-pip" data-pip="1" aria-current="step"><span class="dot" aria-hidden="true">1</span><span class="nm">Welcome</span><span class="sr-only">Step 1 of 6: Welcome</span></li>
+    <li class="ob-pip" data-pip="1" aria-current="step"><span class="dot" aria-hidden="true">1</span><span class="nm">Welcome</span><span class="sr-only">Step 1 of 7: Welcome</span></li>
     <li class="bar" aria-hidden="true"></li>
-    <li class="ob-pip" data-pip="2"><span class="dot" aria-hidden="true">2</span><span class="nm">Location</span><span class="sr-only">Step 2 of 6: Location</span></li>
+    <li class="ob-pip" data-pip="2"><span class="dot" aria-hidden="true">2</span><span class="nm">Model</span><span class="sr-only">Step 2 of 7: Model</span></li>
     <li class="bar" aria-hidden="true"></li>
-    <li class="ob-pip" data-pip="3"><span class="dot" aria-hidden="true">3</span><span class="nm">Microphone</span><span class="sr-only">Step 3 of 6: Microphone</span></li>
+    <li class="ob-pip" data-pip="3"><span class="dot" aria-hidden="true">3</span><span class="nm">Location</span><span class="sr-only">Step 3 of 7: Location</span></li>
     <li class="bar" aria-hidden="true"></li>
-    <li class="ob-pip" data-pip="4"><span class="dot" aria-hidden="true">4</span><span class="nm">Accuracy</span><span class="sr-only">Step 4 of 6: Accuracy</span></li>
+    <li class="ob-pip" data-pip="4"><span class="dot" aria-hidden="true">4</span><span class="nm">Microphone</span><span class="sr-only">Step 4 of 7: Microphone</span></li>
     <li class="bar" aria-hidden="true"></li>
-    <li class="ob-pip" data-pip="5"><span class="dot" aria-hidden="true">5</span><span class="nm">Alerts</span><span class="sr-only">Step 5 of 6: Alerts</span></li>
+    <li class="ob-pip" data-pip="5"><span class="dot" aria-hidden="true">5</span><span class="nm">Accuracy</span><span class="sr-only">Step 5 of 7: Accuracy</span></li>
     <li class="bar" aria-hidden="true"></li>
-    <li class="ob-pip" data-pip="6"><span class="dot" aria-hidden="true">6</span><span class="nm">Done</span><span class="sr-only">Step 6 of 6: Done</span></li>
+    <li class="ob-pip" data-pip="6"><span class="dot" aria-hidden="true">6</span><span class="nm">Alerts</span><span class="sr-only">Step 6 of 7: Alerts</span></li>
+    <li class="bar" aria-hidden="true"></li>
+    <li class="ob-pip" data-pip="7"><span class="dot" aria-hidden="true">7</span><span class="nm">Done</span><span class="sr-only">Step 7 of 7: Done</span></li>
   </ol>
   <!-- Step changes were silent: content vanished and appeared with nothing
        announced. This says which step you are now on. -->
@@ -937,9 +1539,9 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
         <div>
           <div class="ob-eyebrow">Welcome</div>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
-          <p class="ob-p">Ninety seconds, six steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
+          <p class="ob-p">A few minutes, seven steps, nothing to type in a terminal. This station will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
           <ul class="ob-bullets">
-            <li><span class="tick">✓</span> No cloud accounts — runs entirely on your Pi</li>
+            <li><span class="tick">✓</span> No cloud accounts — everything stays on this device</li>
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
             <li><span class="tick">✓</span> Always tweakable — change anything later in Settings</li>
           </ul>
@@ -962,8 +1564,17 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       </div>
     </section>
 
-    <!-- Step 2 — Location -->
+    <!-- Step 2 — The bird-identifying model -->
     <section class="ob-step" data-step="2">
+      <div class="ob-eyebrow">What it knows</div>
+      <h1 class="ob-h">The bird-identifying model.</h1>
+      <p class="ob-p ob-mb-18">This is the part that recognises songs and calls. It is a file the station downloads once, about 84&nbsp;MB, and checks against a fingerprint before using it. You can carry on with the other steps while it downloads.</p>
+      <div class="bnb-card pad" data-cls-host>{{model_panel}}</div>
+      {{setup_script}}
+    </section>
+
+    <!-- Step 3 — Location -->
+    <section class="ob-step" data-step="3">
       <div class="ob-two">
         <div>
           <div class="ob-eyebrow">Where</div>
@@ -979,6 +1590,8 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
           </div>
           <input type="hidden" name="timezone" id="ob-tz">
           <p class="bnb-meta ob-mt-6" id="ob-loc-pill" role="status">Look it up, or type your coordinates — you can change this any time in Settings.</p>
+          <div class="ob-field ob-mt-16"><label for="ob-name">Station name <span class="bnb-meta">(optional)</span></label><input id="ob-name" name="station_name" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Back garden" value="{{station_name}}"></div>
+          <div class="ob-field"><label for="ob-lang">Language for bird names</label><select id="ob-lang" name="database_lang">{{lang_options}}</select></div>
         </div>
         <div class="ob-center">
           <svg width="280" height="220" viewBox="0 0 280 220" aria-hidden="true" class="ob-map">
@@ -995,16 +1608,16 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       </div>
     </section>
 
-    <!-- Step 3 — Microphone -->
-    <section class="ob-step" data-step="3">
+    <!-- Step 4 — Microphone -->
+    <section class="ob-step" data-step="4">
       <div class="ob-eyebrow">How it hears</div>
       <h1 class="ob-h">What it's listening with.</h1>
-      <p class="ob-p ob-mb-18">These are the capture sources your station is configured to use. Multiple microphones and RTSP streams are supported; add or change them under Settings &rarr; Capture.</p>
+      <p class="ob-p ob-mb-18">Pick the microphone this station should listen with. A USB microphone plugged into this device is listed by name; a network camera is added by its address.</p>
       {{mic_body}}
     </section>
 
-    <!-- Step 4 — Detection threshold -->
-    <section class="ob-step" data-step="4">
+    <!-- Step 5 — Detection threshold -->
+    <section class="ob-step" data-step="5">
       <div class="ob-eyebrow">How sure is sure</div>
       <h1 class="ob-h" id="ob-conf-h">How picky should it be?</h1>
       <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
@@ -1018,8 +1631,8 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/station/capture">Settings → Capture</a>, and set per-species thresholds under Species.</p>
     </section>
 
-    <!-- Step 5 — Notifications -->
-    <section class="ob-step" data-step="5">
+    <!-- Step 6 — Notifications -->
+    <section class="ob-step" data-step="6">
       <div class="ob-eyebrow">Who gets told</div>
       <h1 class="ob-h" id="ob-notify-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
@@ -1032,16 +1645,17 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/station/alerts">Settings → Alerts</a>. Until then this setting is simply waiting.</p>
     </section>
 
-    <!-- Step 6 — Done -->
-    <section class="ob-step" data-step="6">
+    <!-- Step 7 — Done -->
+    <section class="ob-step" data-step="7">
       <div class="ob-two">
         <div>
           <div class="ob-eyebrow">All set</div>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
-          <p class="ob-p">Here is what you chose. Press <strong>Finish</strong> below to save it — nothing has been written yet. The location, accuracy and alert settings then take effect the next time the station starts: restart it from <a href="/station/settings">Settings → General</a>, or reboot the Pi. On Docker, restart the container instead.</p>
+          <p class="ob-p">Here is what you chose. Press <strong>Finish</strong> below to save it — nothing has been written yet. The next screen has one button that restarts the station so it starts listening with all of it.</p>
           <div class="bnb-card pad ob-mt-16">
+            <div class="summary-row"><span class="k">Model</span><span id="ob-sum-model">Checking…</span></div>
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
-            <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
+            <div class="summary-row"><span class="k">Microphone</span><span id="ob-sum-mic" data-static="{{mic_summary}}">{{mic_summary}}</span></div>
             <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.70 · Balanced</span></div>
             <div class="summary-row"><span class="k">Alerts</span><span id="ob-sum-notify">Rare birds only</span></div>
             <div class="summary-row"><span class="k">Dashboard</span><span class="mono" id="ob-sum-url">—</span></div>
@@ -1059,7 +1673,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
             <div class="ob-eyebrow">What happens next</div>
             <ul class="ob-bullets ob-mt-6">
               <li><span class="tick">1</span> Press Finish; your answers are written to the station.</li>
-              <li><span class="tick">2</span> Restart the station so the new settings load.</li>
+              <li><span class="tick">2</span> Press the restart button on the next screen.</li>
               <li><span class="tick">3</span> Detections appear on the dashboard as birds are heard.</li>
             </ul>
           </div>
@@ -1078,7 +1692,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
          Continue was an <a href="#" role="button">: an anchor fires click on
          Enter but not on Space, so a keyboard user pressing Space on something
          announced as a button scrolled the page instead. -->
-    <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 6</p>
+    <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 7</p>
     <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
     <button type="button" class="bnb-btn primary" id="ob-next">Continue →</button>
     <button type="submit" class="bnb-btn primary ob-nosubmit">Save setup</button>
@@ -1092,7 +1706,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 
 <script>
 (function () {
-  var step = 1, total = 6;
+  var step = {{start_step}}, total = 7;
   // Same source of truth as live-detections.js: security.rs stamps
   // data-base-path onto <body> precisely so scripts can build their own URLs.
   var BASE = (document.body && document.body.dataset.basePath) || '';
@@ -1107,7 +1721,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   var cur = document.getElementById('ob-cur');
 
   var announce = document.getElementById('ob-announce');
-  var NAMES = ['Welcome', 'Location', 'Microphone', 'Accuracy', 'Alerts', 'Done'];
+  var NAMES = ['Welcome', 'Model', 'Location', 'Microphone', 'Accuracy', 'Alerts', 'Done'];
 
   // "Use the defaults and finish" finishes with both password boxes as they are:
   // blank keeps the station open (the dashboard keeps saying so), anything typed
@@ -1211,7 +1825,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     if (step === 1 && !passwordOk()) { return; }
     // Coordinates the server will refuse used to be accepted here, echoed back
     // in the step-6 summary, and then dropped with nothing said.
-    if (step === 2 && !markCoords()) {
+    if (step === 3 && !markCoords()) {
       var bad = document.getElementById('ob-lat');
       if (bad) { bad.focus(); }
       return;
@@ -1321,6 +1935,32 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
         ? (coordsValid(la, lo) ? la + ', ' + lo : 'Not valid — this will not be saved')
         : 'Not set — species filtering stays off';
     }
+    var sumMic = document.getElementById('ob-sum-mic');
+    if (sumMic) {
+      // What the station will listen with after Finish: the choice made in the
+      // microphone step, or — with nothing chosen there, a station that already
+      // had sources — the line the server rendered.
+      var text = sumMic.getAttribute('data-static') || '';
+      var picked = document.querySelector('input[name="mic_choice"]:checked');
+      if (picked) {
+        var v = picked.value;
+        var title = picked.closest('label');
+        title = title && title.querySelector('.t');
+        if (v === 'none') {
+          text = 'None — nothing will be detected until one is added';
+        } else if (v === 'rtsp') {
+          var u = ((document.getElementById('mic-rtsp-url') || {}).value || '').trim();
+          // A camera's password is part of its address; keep it off the summary.
+          text = u ? 'Network stream · ' + u.replace(/\/\/[^@\/]*@/, '//…@') : 'Network stream — no address entered yet';
+        } else if (v === 'manual') {
+          var d = ((document.getElementById('mic-manual-dev') || {}).value || '').trim();
+          text = d ? 'Sound card · ' + d : 'Sound card — no name entered yet';
+        } else if (v.indexOf('alsa:') === 0) {
+          text = (title ? title.textContent.trim() : 'Sound card') + ' · ' + v.slice(5);
+        }
+      }
+      sumMic.textContent = text;
+    }
     var sumUrl = document.getElementById('ob-sum-url');
     // The address the operator actually reached this page on. The hard-coded
     // mDNS URL this replaced does not resolve on every network.
@@ -1388,6 +2028,75 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     });
   }
 
+  // ---- Microphone step ---------------------------------------------------
+  // The cards are real radio buttons; choosing one shows the extra field it
+  // needs (a stream address, a device name) and updates the summary.
+  function micChanged() {
+    var chosen = document.querySelector('input[name="mic_choice"]:checked');
+    document.querySelectorAll('[data-mic-card]').forEach(function (c) {
+      var r = c.querySelector('input[name="mic_choice"]');
+      c.classList.toggle('sel', !!(r && r.checked));
+    });
+    var v = chosen ? chosen.value : '';
+    var rtsp = document.getElementById('mic-rtsp-field');
+    if (rtsp) { rtsp.hidden = v !== 'rtsp'; }
+    var manual = document.getElementById('mic-manual-field');
+    if (manual) { manual.hidden = v !== 'manual'; }
+    refreshSummary();
+  }
+  document.querySelectorAll('input[name="mic_choice"]').forEach(function (r) {
+    r.addEventListener('change', micChanged);
+  });
+  ['mic-rtsp-url', 'mic-manual-dev'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) { el.addEventListener('input', refreshSummary); }
+  });
+  // "Test": record two seconds from that sound card and say how loud it was.
+  document.querySelectorAll('[data-mic-test]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var out = btn.parentElement.querySelector('[data-mic-level]');
+      btn.disabled = true;
+      if (out) { out.textContent = 'Listening for two seconds…'; }
+      fetch(BASE + '/onboarding/mic-test', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'device=' + encodeURIComponent(btn.getAttribute('data-mic-test'))
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (out) { out.textContent = d.ok ? (d.rms_dbfs + ' dB — ' + d.message) : d.message; }
+        })
+        .catch(function () { if (out) { out.textContent = 'The test did not reach the station.'; } })
+        .finally(function () { btn.disabled = false; });
+    });
+  });
+  micChanged();
+
+  // ---- Model step --------------------------------------------------------
+  // The summary says what the panel says, in the panel's own words for the
+  // state, and keeps saying it as the download proceeds.
+  var MODEL_WORDS = {
+    'ready': 'Installed and running',
+    'needs-restart': 'Installed — starts after the restart',
+    'installing': 'Downloading…',
+    'missing': 'Not installed — nothing will be detected',
+    'failed': 'Install failed — nothing will be detected',
+    'stopped': 'Stopped',
+    'web-only': 'Not used (this station shows pages only)',
+    'configured': 'Set in the configuration file',
+    'unavailable': 'Not available'
+  };
+  function modelState(st) {
+    var el = document.getElementById('ob-sum-model');
+    if (el) { el.textContent = MODEL_WORDS[st] || st; }
+  }
+  document.addEventListener('cls:state', function (e) { modelState(e.detail && e.detail.state); });
+  var firstPanel = document.querySelector('[data-cls-panel]');
+  if (firstPanel) { modelState(firstPanel.getAttribute('data-cls-state')); }
+
   // Reduced motion. The stylesheet's `@media (prefers-reduced-motion: reduce)`
   // block sets `animation: none` on `.sonar *`, which has no effect on the
   // Welcome sonar: those rings are SMIL <animate> elements, not CSS
@@ -1413,9 +2122,111 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 </html>"##,
 );
 
+/// The page after Finish. Same chrome as the wizard, one screen.
+static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
+    r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BirdNet-Behavior · Setup saved</title>
+<link rel="stylesheet" href="/static/css/app.css?v={{version}}">
+<script src="/static/theme-guard.js?v={{version}}"></script>
+<style>
+  body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
+  .ob-root { max-width:980px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:0 24px; }
+  .ob-stage { flex:1; display:flex; align-items:center; padding:24px 0; }
+  .ob-step { width:100%; }
+  .ob-two { display:grid; grid-template-columns:1fr 1fr; gap:32px; align-items:start; }
+  .ob-eyebrow { font-size:10.5px; letter-spacing:0.10em; text-transform:uppercase; color:var(--fg-3); font-weight:500; }
+  .ob-h { font-family:var(--font-display); font-size:46px; line-height:1.08; letter-spacing:-0.02em; margin:8px 0 12px; }
+  .ob-h em { font-style:italic; color:var(--moss-ink); }
+  .ob-p { color:var(--fg-2); font-size:15px; max-width:42ch; }
+  .ob-mt-16 { margin-top:16px; }
+  .ob-password-error { color:var(--rare); background:var(--rare-soft); border:0.5px solid var(--rare); border-radius:var(--r-sm); padding:8px 12px; margin:10px 0 0; font-size:13px; }
+  @media (max-width:520px) {
+    .ob-root { padding:0 14px; }
+    .ob-two { grid-template-columns:1fr; gap:18px; }
+    .ob-h { font-size:32px; }
+  }
+</style>
+</head>
+<body>
+<main class="ob-root" id="main-content">
+  <div class="ob-stage">
+    <section class="ob-step">
+      <div class="ob-two">
+        <div>
+          <div class="ob-eyebrow">{{eyebrow}}</div>
+          <h1 class="ob-h">{{heading}}</h1>
+          {{restart_block}}
+          <p class="ob-mt-16"><a class="bnb-btn" href="/">Go to the dashboard →</a></p>
+        </div>
+        <div>
+          <div class="bnb-card pad">
+            <div class="ob-eyebrow">Bird-identifying model</div>
+            <div class="ob-mt-16" data-cls-host>{{model_panel}}</div>
+          </div>
+          <div class="bnb-card pad ob-mt-16">
+            <div class="ob-eyebrow">Microphone</div>
+            <div class="ob-mt-16">{{microphone}}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+{{setup_script}}
+</body>
+</html>"##,
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page script shows a field by clearing its `hidden` attribute. A class
+    /// rule that sets `display` outranks the browser's own `[hidden]` rule, so
+    /// such an element needs its own `.class[hidden]` rule or it is on screen
+    /// all along — the stream address and the device name were, before the
+    /// matching card was chosen, and no test of the markup could see it.
+    #[test]
+    fn an_element_the_page_hides_is_hidden_by_the_stylesheet() {
+        let css = include_str!("../../../static/css/app.css");
+        let markup = include_str!("onboarding.rs");
+        let markup = markup.split("#[cfg(test)]").next().unwrap_or(markup);
+        let mut checked = 0;
+        for (at, _) in markup.match_indices("class=\"") {
+            let rest = &markup[at + 7..];
+            let Some(quote) = rest.find('"') else {
+                continue;
+            };
+            let tag_end = rest.find('>').unwrap_or(rest.len());
+            if !rest[quote..tag_end].contains(" hidden") {
+                continue;
+            }
+            for class in rest[..quote].split_whitespace() {
+                let rule = format!(".{class} {{");
+                let sets_display = css.match_indices(&rule).any(|(i, _)| {
+                    css[i..]
+                        .split('}')
+                        .next()
+                        .is_some_and(|body| body.contains("display:"))
+                });
+                if sets_display {
+                    checked += 1;
+                    assert!(
+                        css.contains(&format!(".{class}[hidden]")),
+                        ".{class} sets display and is rendered hidden, but app.css has no .{class}[hidden] rule"
+                    );
+                }
+            }
+        }
+        assert!(
+            checked > 0,
+            "the scan found no hidden element whose class sets display: it is not looking at the markup"
+        );
+    }
 
     /// The wizard is the third place a person can type a confidence or a
     /// coordinate, and it keeps its own copy of the bounds. It may be stricter
@@ -1517,8 +2328,20 @@ mod tests {
         Prefill {
             latitude: "51.48".into(),
             longitude: "-0.13".into(),
+            station_name: "Back garden".into(),
+            database_lang: String::new(),
             confidence: "0.75".into(),
             notify_trigger: "new-species".into(),
+        }
+    }
+
+    fn parts(mic_body: &str, mic_summary: &str) -> PageParts {
+        PageParts {
+            mic_body: mic_body.to_owned(),
+            mic_summary: mic_summary.to_owned(),
+            model_panel: "MODEL".to_owned(),
+            lang_options: "<option value=\"en\">English</option>".to_owned(),
+            start_step: 1,
         }
     }
 
@@ -1545,11 +2368,15 @@ mod tests {
             "confidence",
             "notify_trigger",
             "version",
+            "model_panel",
+            "lang_options",
+            "station_name",
+            "start_step",
+            "setup_script",
         ] {
             let label = format!("{{{{{name}}}}}");
             let html = render_page(
-                &label,
-                &label,
+                &parts(&label, &label),
                 &prefill(),
                 PasswordStep {
                     needed: true,
@@ -1569,8 +2396,7 @@ mod tests {
     #[test]
     fn every_template_placeholder_is_filled() {
         let html = render_page(
-            "MIC",
-            "SUMMARY",
+            &parts("MIC", "SUMMARY"),
             &prefill(),
             PasswordStep {
                 needed: true,
@@ -1586,6 +2412,11 @@ mod tests {
             "{{notify_trigger}}",
             "{{password_step}}",
             "{{version}}",
+            "{{model_panel}}",
+            "{{lang_options}}",
+            "{{station_name}}",
+            "{{start_step}}",
+            "{{setup_script}}",
         ] {
             assert!(
                 !html.contains(leftover),
@@ -1607,8 +2438,7 @@ mod tests {
     #[test]
     fn an_unknown_placeholder_is_passed_through() {
         let html = render_page(
-            "{{not_a_real_key}}",
-            "S",
+            &parts("{{not_a_real_key}}", "S"),
             &prefill(),
             PasswordStep {
                 needed: true,

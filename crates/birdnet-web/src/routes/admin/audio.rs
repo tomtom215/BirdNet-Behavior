@@ -193,32 +193,57 @@ async fn page() -> axum::response::Redirect {
 /// camera's password, so a read-only account sees it with the password masked
 /// (`redact_value`), exactly as the settings API shows it.
 pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
-    let mut sources = state
-        .with_read_db(AudioSourceStore::list)
-        .unwrap_or_else(|err| {
+    // A failed read is not an empty station. This was `Vec::new()`, which drew
+    // "0 mics, 0 streams" and two add forms over a station that had both, and
+    // invited the person to add a second copy of a microphone it already had.
+    let mut sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(list) => list,
+        Err(err) => {
             tracing::error!(error = %err, "audio_sources list failed");
-            Vec::new()
-        });
+            return crate::routes::pages::error_states::could_not_load(
+                "your microphones and streams",
+            );
+        }
+    };
     if !show_credentials {
         for s in &mut sources {
             s.device_id = birdnet_core::config::redact::redact_value(&s.device_id);
         }
     }
     let listen_default = listen_default_id(state);
-    render_body(&sources, |row| daemon_status(row, state), &listen_default)
+    let note = if listen_default == LISTEN_DEFAULT_UNREADABLE {
+        crate::routes::pages::error_states::inline("which source Listen plays by default")
+    } else {
+        String::new()
+    };
+    let body = render_body(&sources, |row| daemon_status(row, state), &listen_default);
+    format!("{note}{body}")
 }
 
+/// Stands in for the listen-default id when the settings table could not be
+/// read. An empty id means "the station never picked one", which is a claim; a
+/// row given this draws neither the pill nor the button, because it cannot say
+/// which of the two is true. No source id can equal it (they are `src_…`).
+const LISTEN_DEFAULT_UNREADABLE: &str = "\u{0}unreadable";
+
 /// The `audio_sources` id `/stream` serves when the listener has not chosen
-/// one, or `""` when the station has never picked a default.
+/// one, `""` when the station has never picked a default, or
+/// [`LISTEN_DEFAULT_UNREADABLE`] when the setting could not be read.
 fn listen_default_id(state: &AppState) -> String {
-    state.with_read_db(|conn| {
+    let read = state.with_read_db(|conn| {
         birdnet_db::settings::get_or(
             conn,
             crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
             "",
         )
-        .unwrap_or_default()
-    })
+    });
+    match read {
+        Ok(id) => id,
+        Err(err) => {
+            tracing::error!(error = %err, "reading the live-stream default failed");
+            LISTEN_DEFAULT_UNREADABLE.to_owned()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -705,7 +730,17 @@ async fn listen_default(
         None,
     );
 
-    let sources = state.with_read_db(AudioSourceStore::list).unwrap_or_default();
+    // The default is stored. If the lists cannot be read back, say that, rather
+    // than redraw them empty under a toast that reports success.
+    let sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "audio_sources list failed after storing the listen default");
+            return toast::applied_but_not_redrawn(&Toast::warn(
+                "Listen default saved, but the list could not be read back. Reload the page to see it.",
+            ));
+        }
+    };
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
@@ -1014,9 +1049,16 @@ fn oob_count(span_id: &str, n: usize, singular: &str, plural: &str) -> String {
 /// add/remove responses so the header totals stay truthful the instant a source
 /// is added or removed.
 fn count_oobs(state: &AppState) -> String {
-    let sources = state
-        .with_read_db(AudioSourceStore::list)
-        .unwrap_or_default();
+    // On a failed read the chips are left out, not zeroed: an out-of-band swap
+    // that is absent leaves the old figure in place, and a "0 mics" printed
+    // beside a row that was just added is a fabrication.
+    let sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "audio_sources list failed; the counts are not refreshed");
+            return String::new();
+        }
+    };
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
@@ -1122,7 +1164,11 @@ fn render_row(s: &AudioSource, status: Status, listen_default: &str) -> String {
         .replace("{{meta_line}}", &escape_html(&meta_for(s)))
         .replace(
             "{{listen_default}}",
-            &listen_default_control(s, !listen_default.is_empty() && listen_default == s.id),
+            &if listen_default == LISTEN_DEFAULT_UNREADABLE {
+                String::new()
+            } else {
+                listen_default_control(s, !listen_default.is_empty() && listen_default == s.id)
+            },
         )
 }
 
@@ -1387,7 +1433,7 @@ fn meta_for(s: &AudioSource) -> String {
     )
 }
 
-fn synth_id(kind: SourceKind) -> String {
+pub(crate) fn synth_id(kind: SourceKind) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     // A process-local sequence guarantees uniqueness even for two sources added
@@ -2891,5 +2937,100 @@ mod solar_quiet_form_tests {
             html.contains("sunset+30") && html.contains("sunrise-15"),
             "the stored anchors must render back into the form: {html}"
         );
+    }
+}
+
+// ── a failed read is not an empty station ───────────────────────────────
+#[cfg(test)]
+mod failed_read_tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("birds.db");
+        let _conn = birdnet_db::sqlite::open_or_create(&db_path).expect("open db");
+        let state = AppState::new(db_path).expect("state");
+        (dir, state)
+    }
+
+    fn one_microphone(state: &AppState) {
+        let new = NewAudioSource::defaults("src_nest", SourceKind::UsbAlsa, "hw:1,0");
+        state
+            .with_db(|conn| AudioSourceStore::insert(conn, &new))
+            .expect("insert");
+    }
+
+    fn drop_table(state: &AppState, table: &str) {
+        state
+            .with_db(|conn| conn.execute_batch(&format!("DROP TABLE {table};")))
+            .expect("drop the table so the next read fails");
+    }
+
+    /// The list of sources unreadable: say so, and do not draw "0 mics" with
+    /// two add forms over a station that has a microphone.
+    #[test]
+    fn an_unreadable_source_list_is_not_an_empty_station() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        drop_table(&state, "audio_sources");
+        let html = sources_body(&state, true);
+        assert!(
+            html.contains("couldn't load your microphones and streams"),
+            "{html}"
+        );
+        assert!(!html.contains("0 mics"), "{html}");
+        assert!(!html.contains("Add a microphone"), "{html}");
+    }
+
+    /// The counterpart: a readable, genuinely empty list still draws as empty,
+    /// so the check above is about the failure and not about emptiness.
+    #[test]
+    fn a_readable_empty_list_is_still_drawn_as_empty() {
+        let (_d, state) = fixture();
+        let html = sources_body(&state, true);
+        assert!(html.contains("0 mics"), "{html}");
+        assert!(html.contains("Add a microphone"), "{html}");
+        assert!(!html.contains("couldn't load"), "{html}");
+    }
+
+    /// An unreadable listen-default is neither "none chosen" (which would offer
+    /// the button) nor "this one" (the pill): the rows get neither, and the page
+    /// says why.
+    #[test]
+    fn an_unreadable_listen_default_draws_no_pill_and_no_button() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        drop_table(&state, "settings");
+        let html = sources_body(&state, true);
+        assert!(html.contains("hw:1,0"), "the source list was readable");
+        assert!(
+            html.contains("couldn't load which source Listen plays by default"),
+            "{html}"
+        );
+        assert!(!html.contains("Make listen default"), "{html}");
+        assert!(!html.contains("Listen default</span>"), "{html}");
+    }
+
+    /// The counterpart: with the setting readable and unset, the button is there
+    /// and the note is not.
+    #[test]
+    fn a_readable_unset_listen_default_offers_the_button() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        let html = sources_body(&state, true);
+        assert!(html.contains("Make listen default"), "{html}");
+        assert!(!html.contains("couldn't load"), "{html}");
+    }
+
+    /// The count chips after an add or remove: left out when the list cannot be
+    /// read (the old figure stays), never "0 mics" beside the row just added.
+    #[test]
+    fn unreadable_counts_are_omitted_not_zeroed() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        let ok = count_oobs(&state);
+        assert!(ok.contains("1 mic"), "{ok}");
+        drop_table(&state, "audio_sources");
+        assert_eq!(count_oobs(&state), "");
     }
 }

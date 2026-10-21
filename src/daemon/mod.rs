@@ -228,7 +228,9 @@ pub fn start_detection_daemon(
              UI will run but NO audio will be analysed and NO detections recorded"
         );
         tracing::warn!(
-            "configure --model, --labels, --watch-dir (or MODEL_PATH, LABELS_PATH, RECS_DIR in the config file) and restart"
+            "open the station in a browser and install the classifier from the setup page \
+             (Settings → Capture), then restart it from there; or set --model, --labels and \
+             --watch-dir (MODEL_PATH, LABELS_PATH and RECS_DIR in the config file)"
         );
         return None;
     };

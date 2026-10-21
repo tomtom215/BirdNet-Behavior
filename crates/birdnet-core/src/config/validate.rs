@@ -75,6 +75,7 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     for &(key, min, max) in NUMERIC_RANGES {
         check_bounded(config, key, min, max, &mut out);
     }
+    check_field_bounds(config, &mut out);
     check_confidence_floor(config, &mut out);
     check_confidence_ceiling(config, &mut out);
     check_sf_thresh_ceiling(config, &mut out);
@@ -98,6 +99,8 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_audio_sources(config, &mut out);
     check_audio_format(config, &mut out);
     check_info_site(config, &mut out);
+    check_full_disk(config, &mut out);
+    check_notify_trigger(config, &mut out);
     check_lang(config, &mut out);
     check_private_mode(config, &mut out);
     check_public_access(config, &mut out);
@@ -109,10 +112,7 @@ pub fn validate(config: &Config) -> Vec<Finding> {
 /// not (LC-7). A warning, not an error: the station runs, on the default.
 fn check_unknown_keys(config: &Config, out: &mut Vec<Finding>) {
     for unknown in config.unknown_keys() {
-        let fix = unknown.did_you_mean.map_or_else(
-            || "remove the line, or check the key against the configuration reference".to_string(),
-            |meant| format!("rename it to {meant}"),
-        );
+        let fix = unknown.remedy();
         out.push(Finding::warn(unknown.key.clone(), unknown.to_string(), fix));
     }
 }
@@ -224,6 +224,268 @@ pub const NUMERIC_RANGES: &[(&str, f64, f64)] = &[
     ("SENSITIVITY", 0.5, 1.5),
     ("OVERLAP", 0.0, 2.9),
 ];
+
+/// A number the settings pages and the configuration file both take, the range
+/// the station can do something sensible with, and what it does outside it.
+///
+/// This is the other half of [`NUMERIC_RANGES`]. Those five are `Error`s
+/// because outside them the station detects nothing. The fifteen below are not: the
+/// daemon parses each one, and a value it cannot use is replaced by the default
+/// or clamped, with a line in the log and nothing on screen. So here a value
+/// outside the range is a **warning**, not an error — an `Error` makes
+/// [`is_usable`] false, and `startup_config::choose` then reverts the *whole*
+/// station to its last-good file, which for a mistyped retention period would
+/// undo every other setting to punish it. The settings page and the settings API
+/// are stricter, because they are where the number is typed: they refuse a
+/// submission outside the range and say so ([`FieldBound::refusal`]).
+///
+/// What the daemon does outside the range is the `effect` column, from reading
+/// its consumer: a claim here that the station "ignores" a value it in fact
+/// applies would be worse than no claim.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldBound {
+    /// The settings-page field (and settings-table key).
+    pub form_key: &'static str,
+    /// The `birdnet.conf` key, or `""` for a setting only the settings table
+    /// carries (the email port and cooldown, the rare-species window).
+    pub config_key: &'static str,
+    /// The label the page shows.
+    pub label: &'static str,
+    /// Smallest value the station can use.
+    pub min: f64,
+    /// Largest value the station can use.
+    pub max: f64,
+    /// Whether only whole numbers are meaningful.
+    pub whole: bool,
+    /// What the station does with a value outside the range.
+    pub effect: &'static str,
+}
+
+impl FieldBound {
+    /// Whether `value` is inside the range.
+    #[must_use]
+    pub fn contains(&self, value: f64) -> bool {
+        value.is_finite() && value >= self.min && value <= self.max
+    }
+
+    /// The sentence the settings page gives for a refused submission of `raw`.
+    #[must_use]
+    pub fn refusal(&self, raw: &str) -> String {
+        let kind = if self.whole {
+            "a whole number"
+        } else {
+            "a number"
+        };
+        format!(
+            "{} must be {kind} from {} to {}. {} You entered “{raw}”.",
+            self.label,
+            fmt_bound(self.min),
+            fmt_bound(self.max),
+            self.effect,
+        )
+    }
+
+    /// Whether the text is acceptable for this field: blank (clears the
+    /// setting), or a number in range of the right kind.
+    #[must_use]
+    pub fn accepts(&self, raw: &str) -> bool {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return true;
+        }
+        let normalised = crate::config::locale::normalize_decimal(raw);
+        if self.whole {
+            // Digits, with one leading minus where the range goes negative.
+            let body = normalised
+                .strip_prefix('-')
+                .filter(|_| self.min < 0.0)
+                .unwrap_or(&normalised);
+            if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+                return false;
+            }
+        }
+        normalised.parse::<f64>().is_ok_and(|v| self.contains(v))
+    }
+}
+
+fn fmt_bound(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v}")
+    }
+}
+
+/// The fifteen bounded numeric settings. See [`FieldBound`].
+pub const FIELD_BOUNDS: &[FieldBound] = &[
+    FieldBound {
+        form_key: "freq_shift_hz",
+        config_key: "FREQ_SHIFT",
+        label: "Frequency Shift",
+        min: -12_000.0,
+        max: 12_000.0,
+        whole: true,
+        effect: "Shifting by more than 12 kHz pushes the sound past what a clip's sample rate can carry; 0 turns it off.",
+    },
+    FieldBound {
+        form_key: "pre_sunrise_offset",
+        config_key: "PRE_SUNRISE_OFFSET",
+        label: "Extra minutes before sunrise",
+        min: 0.0,
+        max: 120.0,
+        whole: true,
+        effect: "The station takes it as minutes of extra recording before sunrise; a value that does not parse is replaced by the twilight offset (30).",
+    },
+    FieldBound {
+        form_key: "post_sunset_offset",
+        config_key: "POST_SUNSET_OFFSET",
+        label: "Extra minutes after sunset",
+        min: 0.0,
+        max: 120.0,
+        whole: true,
+        effect: "The station takes it as minutes of extra recording after sunset; a value that does not parse is replaced by the twilight offset (30).",
+    },
+    FieldBound {
+        form_key: "notify_cooldown",
+        config_key: "APPRISE_COOLDOWN",
+        label: "Notification Cooldown",
+        min: 0.0,
+        max: 86_400.0,
+        whole: true,
+        effect: "It is seconds between alerts for the same species; a value that does not parse is replaced by the default (300), and more than a day silences a species for good.",
+    },
+    FieldBound {
+        form_key: "deadman_hours",
+        config_key: "DEADMAN_HOURS",
+        label: "Silence alert after (hours)",
+        min: 0.0,
+        max: 8_760.0,
+        whole: true,
+        effect: "0 turns the alert off; a value that does not parse is replaced by the default (24), and more than a year can never fire.",
+    },
+    FieldBound {
+        form_key: "clip_retention_days",
+        config_key: "CLIP_RETENTION_DAYS",
+        label: "Keep clips for (days)",
+        min: 0.0,
+        max: 36_500.0,
+        whole: true,
+        effect: "0 keeps clips for ever; any other value deletes the audio of every detection older than that many days, so a mistyped small number is not undoable.",
+    },
+    FieldBound {
+        form_key: "max_files_per_species",
+        config_key: "MAX_FILES_SPECIES",
+        label: "Maximum clips per species",
+        min: 0.0,
+        max: 100_000.0,
+        whole: true,
+        effect: "0 keeps every clip; any other value deletes the oldest clips of a species beyond that many.",
+    },
+    FieldBound {
+        form_key: "purge_threshold",
+        config_key: "DISK_PURGE_THRESHOLD",
+        label: "Disk-full threshold (percent)",
+        min: 1.0,
+        max: 100.0,
+        whole: true,
+        effect: "It is the percentage of the disk at which old recordings start being deleted: 0 would delete them continuously and anything above 100 never; the station uses 95 for a value outside 1 to 100.",
+    },
+    FieldBound {
+        form_key: "extraction_length",
+        config_key: "EXTRACTION_LENGTH",
+        label: "Clip length (seconds)",
+        min: 1.0,
+        max: 60.0,
+        whole: false,
+        effect: "Seconds of audio saved around each detection; the station clamps it to 1 to 60 without saying so.",
+    },
+    FieldBound {
+        form_key: "rare_species_days",
+        config_key: "",
+        label: "Rare-species window (days)",
+        min: 0.0,
+        max: 3_650.0,
+        whole: true,
+        effect: "Days without a sighting before a species counts as rare; the pages cap it at ten years.",
+    },
+    FieldBound {
+        form_key: "stream_retention_secs",
+        config_key: "STREAM_RETENTION_SECS",
+        label: "Streaming Folder Retention (seconds)",
+        min: 0.0,
+        max: 604_800.0,
+        whole: true,
+        effect: "How long a raw segment waits in the temporary folder before being removed; 0 turns the age limit off, and more than a week keeps raw audio in a RAM-backed folder far longer than analysis needs.",
+    },
+    FieldBound {
+        form_key: "stream_max_mb",
+        config_key: "STREAM_MAX_MB",
+        label: "Streaming Folder Limit (MB)",
+        min: 0.0,
+        max: 1_048_576.0,
+        whole: true,
+        effect: "A ceiling on the temporary folder; 0 turns it off. Above a terabyte it can never apply.",
+    },
+    FieldBound {
+        form_key: "email_smtp_port",
+        config_key: "",
+        label: "SMTP Port",
+        min: 1.0,
+        max: 65_535.0,
+        whole: true,
+        effect: "A TCP port; a value that does not parse is replaced by 587.",
+    },
+    FieldBound {
+        form_key: "email_cooldown_secs",
+        config_key: "",
+        label: "Email Cooldown (seconds)",
+        min: 0.0,
+        max: 86_400.0,
+        whole: true,
+        effect: "Seconds between emails for the same species; a value that does not parse is replaced by 300, and more than a day silences a species for good.",
+    },
+    FieldBound {
+        form_key: "clip_target_lufs",
+        config_key: "CLIP_TARGET_LUFS",
+        label: "Even out clip volume (LUFS)",
+        min: -40.0,
+        max: -6.0,
+        whole: false,
+        effect: "A loudness target outside −40 to −6 is ignored and clips are saved as recorded.",
+    },
+];
+
+/// A bounded setting present in the file with a value the station cannot use.
+fn check_field_bounds(config: &Config, out: &mut Vec<Finding>) {
+    for b in FIELD_BOUNDS.iter().filter(|b| !b.config_key.is_empty()) {
+        let Some(raw) = value_of(config, b.config_key) else {
+            continue;
+        };
+        if !b.accepts(raw) {
+            out.push(Finding::warn(
+                b.config_key,
+                format!(
+                    "{}={raw} is not {} from {} to {}: {}",
+                    b.config_key,
+                    if b.whole {
+                        "a whole number"
+                    } else {
+                        "a number"
+                    },
+                    fmt_bound(b.min),
+                    fmt_bound(b.max),
+                    b.effect
+                ),
+                format!(
+                    "set {} to a value from {} to {}, or remove the line to use the default",
+                    b.config_key,
+                    fmt_bound(b.min),
+                    fmt_bound(b.max)
+                ),
+            ));
+        }
+    }
+}
 
 /// Threshold below which `CONFIDENCE` is treated as a probable mistake.
 ///
@@ -575,6 +837,82 @@ fn check_info_site(config: &Config, out: &mut Vec<Finding>) {
                 raw.trim().to_ascii_lowercase()
             ),
             r#"use "ebird", "allaboutbirds", or "none""#.to_string(),
+        ));
+    }
+}
+
+/// What a full recordings disk may do (`FULL_DISK`).
+pub const FULL_DISK_ACTIONS: [&str; 2] = ["purge", "keep"];
+
+/// Whether `raw` is a [`FULL_DISK_ACTIONS`] entry, in any letter case.
+#[must_use]
+pub fn is_full_disk_action(raw: &str) -> bool {
+    FULL_DISK_ACTIONS.contains(&raw.trim().to_ascii_lowercase().as_str())
+}
+
+/// A word the station does not know deletes the oldest clips, as when the key
+/// is unset. A warning, not an error: it is a typo to fix, and an error here
+/// would revert the whole station to its last-good file over it.
+fn check_full_disk(config: &Config, out: &mut Vec<Finding>) {
+    let Some(raw) = value_of(config, "FULL_DISK") else {
+        return;
+    };
+    if !is_full_disk_action(raw) {
+        out.push(Finding::warn(
+            "FULL_DISK",
+            format!(
+                "FULL_DISK={:?} is neither purge nor keep, so the station deletes the oldest \
+                 clips when the disk is full, as when it is not set",
+                raw.trim()
+            ),
+            r#"use "purge" or "keep" ("keep" stops recording and deletes nothing)"#.to_string(),
+        ));
+    }
+}
+
+/// The words `APPRISE_TRIGGER` (and the Notification trigger setting) takes,
+/// alone or in a list: `each`, `new-species`, `new-species-daily`, or `off`.
+/// The underscore spellings and the aliases `detection`, `none` and `never` are
+/// read too.
+pub const TRIGGER_WORDS: [&str; 9] = [
+    "each",
+    "detection",
+    "new-species",
+    "new_species",
+    "new-species-daily",
+    "new_species_daily",
+    "off",
+    "none",
+    "never",
+];
+
+/// The words in a trigger list that are none of the [`TRIGGER_WORDS`].
+#[must_use]
+pub fn unknown_trigger_words(raw: &str) -> Vec<String> {
+    raw.split([',', '+', ' ', ';'])
+        .map(str::trim)
+        .filter(|w| !w.is_empty() && !TRIGGER_WORDS.contains(&w.to_ascii_lowercase().as_str()))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A trigger word nothing reads is skipped, and a list of nothing but such
+/// words notifies on every detection, which is not what a typo meant.
+fn check_notify_trigger(config: &Config, out: &mut Vec<Finding>) {
+    let Some(raw) = value_of(config, "APPRISE_TRIGGER") else {
+        return;
+    };
+    let unknown = unknown_trigger_words(raw);
+    if !unknown.is_empty() {
+        out.push(Finding::warn(
+            "APPRISE_TRIGGER",
+            format!(
+                "APPRISE_TRIGGER has words nothing reads: {}",
+                unknown.join(", ")
+            ),
+            "use each, new-species, new-species-daily, or off; several may be listed, \
+             for example each,new-species"
+                .to_string(),
         ));
     }
 }
@@ -1377,6 +1715,115 @@ mod tests {
         }
     }
 
+    /// `FULL_DISK` is BirdNET-Pi's own key and is read as it is: `keep` and
+    /// `purge` in any case are fine, anything else is a warning that says what
+    /// the station does instead.
+    #[test]
+    fn full_disk_takes_purge_or_keep_and_warns_about_anything_else() {
+        for ok in ["purge", "keep", "KEEP", " Purge "] {
+            let cfg = Config::parse(&format!("FULL_DISK={ok}")).unwrap();
+            assert!(
+                validate(&cfg).iter().all(|f| f.key != "FULL_DISK"),
+                "{ok:?} drew a finding"
+            );
+        }
+        let cfg = Config::parse("FULL_DISK=erase").unwrap();
+        let findings = validate(&cfg);
+        let f = findings
+            .iter()
+            .find(|f| f.key == "FULL_DISK")
+            .expect("a finding");
+        assert_eq!(
+            f.severity,
+            Severity::Warning,
+            "an error would revert the whole file"
+        );
+        assert!(
+            f.message.contains("deletes the oldest clips"),
+            "{}",
+            f.message
+        );
+    }
+
+    /// The trigger is a word or a list of words; a word nothing reads is named,
+    /// as a warning (an error would revert every other setting).
+    #[test]
+    fn the_notification_trigger_takes_a_list_and_names_a_word_it_cannot_read() {
+        for ok in [
+            "each",
+            "new-species,new-species-daily",
+            "off",
+            "each, new_species",
+        ] {
+            let cfg = Config::parse(&format!("APPRISE_TRIGGER={ok}")).unwrap();
+            assert!(
+                validate(&cfg).iter().all(|f| f.key != "APPRISE_TRIGGER"),
+                "{ok:?} drew a finding"
+            );
+        }
+        let cfg = Config::parse("APPRISE_TRIGGER=each,sometimes").unwrap();
+        let findings = validate(&cfg);
+        let f = findings
+            .iter()
+            .find(|f| f.key == "APPRISE_TRIGGER")
+            .expect("a finding");
+        assert_eq!(f.severity, Severity::Warning);
+        assert!(f.message.contains("sometimes"), "{}", f.message);
+    }
+
+    /// A key BirdNET-Pi writes is told where it went, or that it went nowhere:
+    /// "not a setting this station reads" sent the operator nowhere.
+    #[test]
+    fn a_birdnet_pi_key_is_told_where_it_went() {
+        let cfg = Config::parse(
+            "BIRDWEATHER_ID=abc\nPURGE_THRESHOLD=90\nAPPRISE_ONLY_NOTIFY_SPECIES_NAMES=Crow\n\
+             COLOR_SCHEME=dark\nRAW_SPECTROGRAM=1\nSITE_NAME=Home\nLATITUDE=42.36\nLONGITUDE=-71.06\n",
+        )
+        .unwrap();
+        let findings = validate(&cfg);
+        let of = |key: &str| {
+            findings
+                .iter()
+                .find(|f| f.key == key)
+                .unwrap_or_else(|| panic!("{key} drew no finding: {findings:?}"))
+        };
+        assert_eq!(
+            of("BIRDWEATHER_ID").remediation,
+            "rename it to BIRDWEATHER_TOKEN (without it BirdWeather uploads stop)"
+        );
+        assert_eq!(
+            of("PURGE_THRESHOLD").remediation,
+            "rename it to DISK_PURGE_THRESHOLD (without it the station purges at 95 %)"
+        );
+        // The name that misleads: it is the exclusion list, and says so.
+        assert_eq!(
+            of("APPRISE_ONLY_NOTIFY_SPECIES_NAMES").remediation,
+            "rename it to APPRISE_WATCHLIST_EXCLUDE (BirdNET-Pi's key is the EXCLUSION list despite its name)"
+        );
+        assert!(
+            of("COLOR_SCHEME")
+                .remediation
+                .starts_with("it has no equivalent here:"),
+            "{}",
+            of("COLOR_SCHEME").remediation
+        );
+        assert!(
+            of("RAW_SPECTROGRAM")
+                .remediation
+                .contains("`raw_spectrogram`")
+        );
+        // A spelling suggestion would have sent SITE_NAME to SITENAME by luck of
+        // edit distance; the BirdNET-Pi table says it on purpose.
+        assert_eq!(of("SITE_NAME").remediation, "rename it to SITENAME");
+        assert!(
+            of("BIRDWEATHER_ID")
+                .message
+                .contains("it is a BirdNET-Pi key"),
+            "{}",
+            of("BIRDWEATHER_ID").message
+        );
+    }
+
     /// The gate for LC-7: a misspelt key is reported, named, with the key it
     /// was meant to be; a file of real keys draws no such finding.
     #[test]
@@ -1430,6 +1877,69 @@ mod tests {
         ] {
             let config = Config::parse(&format!("{key}={bad}\n")).unwrap();
             assert!(!is_usable(&validate(&config)), "{key}={bad} passed");
+        }
+    }
+
+    /// The fifteen bounded settings: each takes its own edges and refuses one
+    /// step outside, in the file (a warning, never an error) and in the form.
+    #[test]
+    fn each_bounded_field_takes_its_edges_and_refuses_beyond_them() {
+        assert_eq!(FIELD_BOUNDS.len(), 15);
+        for b in FIELD_BOUNDS {
+            let step = if b.whole { 1.0 } else { 0.5 };
+            let at = |v: f64| format!("{v}");
+            assert!(b.accepts(&at(b.min)), "{} refuses its minimum", b.form_key);
+            assert!(b.accepts(&at(b.max)), "{} refuses its maximum", b.form_key);
+            assert!(
+                !b.accepts(&at(b.min - step)),
+                "{} takes a value below its minimum",
+                b.form_key
+            );
+            assert!(
+                !b.accepts(&at(b.max + step)),
+                "{} takes a value above its maximum",
+                b.form_key
+            );
+            assert!(b.accepts(""), "{} refuses blank", b.form_key);
+            assert!(!b.accepts("abc"), "{} takes text", b.form_key);
+            assert!(!b.accepts("NaN"), "{} takes NaN", b.form_key);
+            assert!(!b.accepts("inf"), "{} takes infinity", b.form_key);
+            if b.whole {
+                assert!(!b.accepts("1.5"), "{} takes a fraction", b.form_key);
+            }
+            let said = b.refusal("9999999");
+            assert!(said.contains(b.label) && said.contains("9999999"), "{said}");
+        }
+    }
+
+    /// The motivating slip: the percentage typed into a fraction-sized field.
+    /// Out-of-range numbers in the file are warnings (an error would roll the
+    /// whole station back to its last-good file), and the finding names the key.
+    #[test]
+    fn a_bounded_value_in_the_file_is_a_warning_and_never_an_error() {
+        for b in FIELD_BOUNDS.iter().filter(|b| !b.config_key.is_empty()) {
+            let bad = format!("{}", b.max + 1_000.0);
+            let findings = validate(&cfg(&[(b.config_key, bad.as_str())]));
+            let mine: Vec<&Finding> = findings.iter().filter(|f| f.key == b.config_key).collect();
+            assert!(
+                mine.iter().any(|f| f.severity == Severity::Warning),
+                "{}={bad} raised no warning",
+                b.config_key
+            );
+            assert!(
+                findings.iter().all(|f| f.severity != Severity::Error),
+                "{}={bad} must not make the station unusable: {findings:?}",
+                b.config_key
+            );
+            assert!(is_usable(&findings));
+            // The counterpart: the edge itself is clean.
+            let ok = format!("{}", b.max);
+            let findings = validate(&cfg(&[(b.config_key, ok.as_str())]));
+            assert!(
+                findings.iter().all(|f| f.key != b.config_key),
+                "{}={ok} was flagged: {findings:?}",
+                b.config_key
+            );
         }
     }
 }

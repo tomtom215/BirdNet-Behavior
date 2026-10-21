@@ -67,6 +67,7 @@ the manual.
 # Reference
 
 - [Full Configuration Reference](./reference/configuration-reference.md)
+- [Where Every Setting Is Changed](./reference/where-to-change-it.md)
 - [Web UI & URLs](./reference/web-api.md)
 - [HTTP & WebSocket API](./reference/api.md)
 - [Design Tokens](./reference/design-tokens.md)

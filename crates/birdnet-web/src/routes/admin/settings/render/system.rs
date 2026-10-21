@@ -7,18 +7,12 @@ use birdnet_core::i18n::{ENGLISH, LANGUAGES, NameLocalizer, find_language};
 
 use super::get_setting;
 
-/// The common-name language control: one option per language the station has
-/// names for, each with the share of the installed classifier's species it
-/// covers, so a Korean station finds out *before* choosing it that most birds
-/// will keep their English names.
+/// The `<option>`s of the common-name language control, the stored one chosen.
 ///
-/// A stored value that is not a language (a typo from the old free-text box)
-/// selects English, which is what the station shows for it, and the hint says
-/// so. Saving then replaces it with a real choice rather than refusing the
-/// whole form over a value the page no longer lets anyone type.
-fn language_picker(stored: &str, names: &NameLocalizer) -> String {
-    let stored = stored.trim();
-    let chosen = find_language(stored).map_or(ENGLISH, |l| l.code);
+/// Shared by the settings page and the setup wizard, so the two offer the same
+/// languages with the same coverage figures.
+pub(crate) fn language_options(stored: &str, names: &NameLocalizer) -> String {
+    let chosen = find_language(stored.trim()).map_or(ENGLISH, |l| l.code);
     let mut options = String::new();
     for language in LANGUAGES {
         let label = if language.code == ENGLISH {
@@ -48,6 +42,21 @@ fn language_picker(stored: &str, names: &NameLocalizer) -> String {
             crate::routes::pages::escape_html(&label)
         );
     }
+    options
+}
+
+/// The common-name language control: one option per language the station has
+/// names for, each with the share of the installed classifier's species it
+/// covers, so a Korean station finds out *before* choosing it that most birds
+/// will keep their English names.
+///
+/// A stored value that is not a language (a typo from the old free-text box)
+/// selects English, which is what the station shows for it, and the hint says
+/// so. Saving then replaces it with a real choice rather than refusing the
+/// whole form over a value the page no longer lets anyone type.
+fn language_picker(stored: &str, names: &NameLocalizer) -> String {
+    let stored = stored.trim();
+    let options = language_options(stored, names);
     let unrecognised = if stored.is_empty() || find_language(stored).is_some() {
         String::new()
     } else {
@@ -137,8 +146,18 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     let dash_title = get_setting(s, "dashboard_image_title");
     let maxfiles = get_setting(s, "max_files_per_species");
     let purge = get_setting(s, "purge_threshold");
+    let keep_everything = get_setting(s, "full_disk_action") == "keep";
+    let full_purge = if keep_everything { "" } else { " selected" };
+    let full_keep = if keep_everything { " selected" } else { "" };
     let raw_spec = get_setting(s, "raw_spectrogram");
-    let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
+    // A select, not a checkbox: an unticked checkbox submits nothing, and a form
+    // that sends nothing for a field changes nothing, so a station that had
+    // turned the caption off could never turn it back on from this page.
+    let (raw_spec_on, raw_spec_off) = if raw_spec == "true" {
+        (" selected", "")
+    } else {
+        ("", " selected")
+    };
     let time_options = choice_options(
         &get_setting(s, "time_format"),
         &[("24h", "24-hour (16:31)"), ("12h", "12-hour (4:31 PM)")],
@@ -177,7 +196,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
       <div>
         <label for="site_name">Site Name</label>
         <input id="site_name" name="site_name" value="{site}" placeholder="My Bird Station">
-        <p class="hint">Shown in page titles and headers (BirdNET-Pi: SITENAME)</p>
+        <p class="hint">Shown in page titles and headers (BirdNET-Pi: SITE_NAME)</p>
       </div>
       <div>
         <label for="info_site">Species Info Links</label>
@@ -206,14 +225,28 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
         <label for="max_files_per_species">Max Files Per Species (0 = unlimited)</label>
         <input id="max_files_per_species" name="max_files_per_species" type="number"
                value="{maxfiles}" min="0" step="10">
-        <p class="hint">Oldest files beyond this limit are auto-deleted (BirdNET-Pi: MAX_FILES_SPECIES)</p>
+        <p class="hint">Once a species has more clips than this, the oldest are deleted; locked clips never are
+          (BirdNET-Pi: MAX_FILES_SPECIES, which keeps the most confident clips instead).</p>
       </div>
     </div>
-    <div>
-      <label for="purge_threshold">Disk Purge Threshold (%)</label>
-      <input id="purge_threshold" name="purge_threshold" type="number"
-             value="{purge}" min="50" max="99" class="bnb-w-num">
-      <p class="hint">Start purging old recordings when disk usage exceeds this % (BirdNET-Pi: DISK_PURGE_THRESHOLD). Locked clips are never purged.</p>
+    <div class="grid-2">
+      <div>
+        <label for="purge_threshold">Disk Purge Threshold (%)</label>
+        <input id="purge_threshold" name="purge_threshold" type="number"
+               value="{purge}" min="50" max="99" class="bnb-w-num">
+        <p class="hint">The disk percentage at which the next setting takes effect (BirdNET-Pi: PURGE_THRESHOLD).</p>
+      </div>
+      <div>
+        <label for="full_disk_action">When the disk is full</label>
+        <select id="full_disk_action" name="full_disk_action">
+          <option value="purge"{full_purge}>Delete the oldest clips (default)</option>
+          <option value="keep"{full_keep}>Stop recording and keep everything</option>
+        </select>
+        <p class="hint">Deleting starts with the species recorded most, never takes a species below five clips,
+          and never takes a locked clip. Stopping deletes nothing and records nothing more until there is room again;
+          while it is stopped the station sends an alert (when notifications are set up) and
+          reports it at <code>/api/v2/health/conditions</code> (BirdNET-Pi: FULL_DISK).</p>
+      </div>
     </div>
     <div class="grid-2">
       <div>
@@ -236,8 +269,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     <div class="grid-2">
       <div>
         <label for="raw_spectrogram">Bare spectrograms</label>
-        <label class="bnb-check"><input id="raw_spectrogram" name="raw_spectrogram"
-               type="checkbox" value="true"{raw_spec_checked}> No text overlay</label>
+        <select id="raw_spectrogram" name="raw_spectrogram">
+          <option value="false"{raw_spec_off}>Show the species and confidence caption</option>
+          <option value="true"{raw_spec_on}>Leave the caption off</option>
+        </select>
         <p class="hint">Leaves out the species and confidence caption, for embedding in
           a stream overlay or a print (BirdNET-Pi: RAW_SPECTROGRAM). This renderer draws
           no axes in either case.</p>

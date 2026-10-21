@@ -58,6 +58,12 @@ const LISTEN_FX_CSS: &[u8] = include_bytes!("../../static/css/listen-fx.css");
 const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
 /// Hover, focus, keyboard and entrance for every chart (see the script's header).
 const CHART_KIT_JS: &[u8] = include_bytes!("../../static/chart-kit.js");
+/// The soundscape terrain (Patterns, "When active"): the grid, and the 3D view's controls.
+const TERRAIN_JS: &[u8] = include_bytes!("../../static/terrain.js");
+/// The part of three.js the terrain uses, built by `tools/vendor-three/build.sh`; loaded by the
+/// terrain's script the first time somebody opens the 3D view and by nothing else. Its
+/// provenance, licence and size budget are in `static/vendor/three/README.md`.
+const THREE_JS: &[u8] = include_bytes!("../../static/vendor/three/three.module.min.js");
 
 /// Type-to-filter for the admin settings page (embedded at compile time).
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
@@ -174,6 +180,8 @@ pub fn router() -> Router<AppState> {
         .route("/static/display-format.js", get(display_format_js))
         .route("/static/chart-text.js", get(chart_text_js))
         .route("/static/chart-kit.js", get(chart_kit_js))
+        .route("/static/terrain.js", get(terrain_js))
+        .route("/static/vendor/three/three.module.min.js", get(three_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
         .route("/static/setup-controls.js", get(setup_controls_js))
@@ -310,6 +318,50 @@ async fn chart_kit_js() -> impl IntoResponse {
         ],
         CHART_KIT_JS,
     )
+}
+
+async fn terrain_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        TERRAIN_JS,
+    )
+}
+
+/// The ETag of the vendored library: the first sixteen hex digits of its SHA-256, quoted. The
+/// bytes never change inside a build, so it is computed once.
+fn three_etag() -> &'static str {
+    use sha2::Digest as _;
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let digest = sha2::Sha256::digest(THREE_JS);
+        let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        format!("\"{hex}\"")
+    });
+    ETAG.as_str()
+}
+
+/// The vendored three.js: a large file that changes only when the library is bumped, so it is
+/// cached for a year and revalidated by hash. The page asks for it with `?v=<the file's hash>`,
+/// which makes the long cache safe: a new build is a new URL.
+async fn three_js(headers: axum::http::HeaderMap) -> axum::response::Response {
+    let etag = three_etag();
+    let fresh = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim().trim_start_matches("W/") == etag));
+    let common = [
+        (header::ETAG, etag),
+        (header::CACHE_CONTROL, IMMUTABLE),
+        (header::CONTENT_TYPE, "application/javascript"),
+    ];
+    if fresh {
+        (StatusCode::NOT_MODIFIED, common).into_response()
+    } else {
+        (StatusCode::OK, common, THREE_JS).into_response()
+    }
 }
 
 async fn chart_text_js() -> impl IntoResponse {

@@ -1,6 +1,20 @@
 # Settings & Detection
 
-The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) persists everything you change into the SQLite settings table, and the station reads it on the next restart.
+The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) persists everything you change into the SQLite settings table.
+
+### When a change takes effect
+
+Every field on the page carries a small badge: **Applies immediately** (the part of the station that uses it reads the stored value again on its own, typically within about half a minute) or **Applies after restart** (the value is read once, when the station starts). The badge is drawn from one table in the code, and a test fails if a field on the page lacks one, so the page cannot disagree with itself.
+
+When you have saved something that is still waiting for a restart, a banner at the top of the page lists which settings and offers the **Restart** button. Under a service manager (systemd, Docker's restart policy) the button stops the process and the manager starts it again. A station started by hand restarts itself in place with the same arguments; if neither is possible the button says so instead of stopping the station and leaving it stopped.
+
+### The bird-identifying model
+
+At the top of **Settings → System**, the **Bird-identifying model** panel says whether the classifier the station needs is installed. If it is missing, **Install** downloads it (checked against a pinned SHA-256, with a progress bar and a free-space check first) and the panel then offers the restart that loads it. This is the same installer as `--install-model`; the program, not the browser, does the download.
+
+### Numbers the page refuses
+
+A number typed into a field is checked against the range the station actually accepts before it is saved, and the message names the range. The same bounds apply to `PUT /api/v2/settings` and, as warnings, to `--doctor` for the config file: frequency shift, sunrise/sunset recording offsets, notification cooldown, dead-man hours, clip retention days, files kept per species, disk purge threshold, extraction length, rare-species window, stream retention and size, SMTP port, email cooldown and clip loudness target. (They are warnings, not errors, in `--doctor` because an error makes the station fall back to its last-good configuration file.)
 
 ### How a setting is resolved
 
@@ -19,7 +33,7 @@ flag is governed entirely by this page.
 
 ### Settings not on this page
 
-Two things are deliberately configured elsewhere:
+Two things are deliberately configured elsewhere in the browser:
 
 - **The admin password.** It is stored as an Argon2id hash in the accounts
   database, seeded from the `CADDY_PWD` environment variable — never as a
@@ -27,6 +41,8 @@ Two things are deliberately configured elsewhere:
 - **Per-source audio properties** (channels, sample rate, gain, RTSP transport).
   Each microphone or stream carries its own, on
   [Audio & Microphones](./audio.md).
+
+A handful of settings are file-only on purpose, each for a stated reason — secrets that must not live in the database a backup copies, listen address and TLS (a typo locks you out of the page you would fix it on), and similar. [Where to change it](../reference/where-to-change-it.md) lists every setting, the browser page that owns it, and for the exceptions why.
 
 ## Detection
 

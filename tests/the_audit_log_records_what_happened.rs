@@ -765,6 +765,7 @@ const ACTIONS: &[&str] = &[
     "auth.login.ok",
     "auth.login.throttled",
     "auth.logout",
+    "classifier.install",
     "data.backup.delete",
     "data.backup.run",
     "data.database.restore",

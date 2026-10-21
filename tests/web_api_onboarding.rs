@@ -135,7 +135,12 @@ async fn save_persists_location_and_marks_complete() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/");
+    // Not the dashboard: what was just saved needs a restart, and the next page
+    // says what is true now and offers it.
+    assert_eq!(
+        resp.headers().get(header::LOCATION).unwrap(),
+        "/onboarding/done"
+    );
 
     let (lat, lon, tz, complete) = state.with_db(|c| {
         (
@@ -205,15 +210,15 @@ async fn wizard_prompts_for_the_confidence_threshold() {
         );
     }
     assert!(
-        html.contains("Step <span id=\"ob-cur\">1</span> of 6"),
+        html.contains("Step <span id=\"ob-cur\">1</span> of 7"),
         "the step counter must match the number of steps actually rendered"
     );
     // `<section` anchors this to the step bodies — a bare `class="ob-step`
     // also matches the `ob-stepper` container that holds the numbered pips.
     let rendered_steps = html.matches(r#"<section class="ob-step"#).count();
     assert_eq!(
-        rendered_steps, 6,
-        "6 step sections expected, found {rendered_steps}"
+        rendered_steps, 7,
+        "7 step sections expected, found {rendered_steps}"
     );
     let pips = html.matches(r#"data-pip=""#).count();
     assert_eq!(
@@ -223,10 +228,10 @@ async fn wizard_prompts_for_the_confidence_threshold() {
     // The welcome copy states the count in prose; it went stale when the
     // Accuracy step was added and nothing would have caught it.
     assert!(
-        html.contains("six steps"),
+        html.contains("seven steps"),
         "the welcome text must state the real number of steps"
     );
-    assert!(!html.contains("five steps"));
+    assert!(!html.contains("six steps") && !html.contains("five steps"));
 }
 
 /// The microphone step used to be a mock-up: a hard-coded "UMC202HD · USB
@@ -319,11 +324,11 @@ async fn microphone_step_ignores_a_blank_label() {
     assert_eq!(card.matches("plughw:2,0").count(), 1);
 }
 
-/// The `data-step="3"` section only — so assertions about the microphone card
+/// The `data-step="4"` section only — so assertions about the microphone card
 /// are not satisfied by the same text appearing in the final summary.
 fn mic_step(html: &str) -> &str {
     let start = html
-        .find(r#"<section class="ob-step" data-step="3">"#)
+        .find(r#"<section class="ob-step" data-step="4">"#)
         .expect("microphone step present");
     let rest = &html[start..];
     let end = rest.find("</section>").expect("step is closed");
@@ -405,6 +410,7 @@ async fn declared_onboarding_keys_match_what_a_full_submit_writes() {
         build_router(state.clone()),
         "/onboarding/save",
         "latitude=51.5&longitude=-0.12&timezone=Europe/London\
+         &station_name=Back+garden&database_lang=de\
          &notification_mode=new-species&confidence_threshold=0.75",
     )
     .await;
@@ -667,4 +673,337 @@ async fn every_preference_card_is_a_real_radio_input() {
             "the {group} cards must be announced as one group under the step's heading"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The setup that needs no terminal: station name, language, microphone, model
+// ---------------------------------------------------------------------------
+
+/// What `POST /onboarding/save` leaves in `audio_sources`, as (kind, device).
+fn sources_of(state: &AppState) -> Vec<(String, String)> {
+    state.with_db(|c| {
+        let mut stmt = c
+            .prepare("SELECT kind, device_id FROM audio_sources WHERE disabled_at IS NULL ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    })
+}
+
+fn setting(state: &AppState, key: &str) -> Option<String> {
+    state.with_db(|c| birdnet_db::settings::get(c, key).ok())
+}
+
+/// The station's name and the language of its bird names are asked for, and
+/// stored under the keys the rest of the station reads.
+#[tokio::test]
+async fn save_persists_the_station_name_and_the_language() {
+    let state = fresh_state();
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "station_name=Back+garden&database_lang=de",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(setting(&state, "station_name").as_deref(), Some("Back garden"));
+    assert_eq!(setting(&state, "database_lang").as_deref(), Some("de"));
+}
+
+/// The counterpart: a blank name clears nothing and a language the station has
+/// no names for is not stored (it would be read as English and look chosen).
+#[tokio::test]
+async fn save_ignores_a_blank_name_and_an_unknown_language() {
+    let state = fresh_state();
+    state.with_db(|c| {
+        birdnet_db::settings::set(
+            c,
+            "station_name",
+            "Kept",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .unwrap();
+    });
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "station_name=++&database_lang=klingon",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(setting(&state, "station_name").as_deref(), Some("Kept"));
+    assert_eq!(setting(&state, "database_lang"), None);
+}
+
+/// A stream address typed into the wizard becomes the same row the Capture tab
+/// makes, and the wizard still completes.
+#[tokio::test]
+async fn a_network_stream_chosen_in_the_wizard_becomes_an_audio_source() {
+    let state = fresh_state();
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "mic_choice=rtsp&mic_rtsp_url=rtsp%3A%2F%2Fcamera.local%3A554%2Fstream",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        resp.headers().get(header::LOCATION).unwrap(),
+        "/onboarding/done"
+    );
+    assert_eq!(
+        sources_of(&state),
+        [("rtsp".to_owned(), "rtsp://camera.local:554/stream".to_owned())]
+    );
+    assert_eq!(setting(&state, "onboarding_complete").as_deref(), Some("true"));
+}
+
+/// A sound card named by hand is added as a USB microphone.
+#[tokio::test]
+async fn a_device_named_by_hand_becomes_an_audio_source() {
+    let state = fresh_state();
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "mic_choice=manual&mic_manual_device=plughw%3ACARD%3DDevice%2CDEV%3D0",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sources_of(&state),
+        [("usb-alsa".to_owned(), "plughw:CARD=Device,DEV=0".to_owned())]
+    );
+}
+
+/// The same device or stream is not added twice, however often the wizard is run.
+#[tokio::test]
+async fn a_source_the_station_already_has_is_not_added_again() {
+    let state = state_with_source(None, "plughw:CARD=Device,DEV=0");
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "mic_choice=manual&mic_manual_device=plughw%3ACARD%3DDevice%2CDEV%3D0",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(sources_of(&state).len(), 1);
+}
+
+/// A refused microphone saves **nothing** and sends the person back to the
+/// microphone step with the reason: half a setup, with the wizard marked
+/// complete and no way back to it, is the worst outcome.
+#[tokio::test]
+async fn a_refused_microphone_saves_nothing_and_goes_back_to_that_step() {
+    for (body, code) in [
+        (
+            "latitude=51.5&longitude=-0.12&mic_choice=rtsp&mic_rtsp_url=not-a-url",
+            "mic-url",
+        ),
+        (
+            "latitude=51.5&longitude=-0.12&mic_choice=manual&mic_manual_device=rm+-rf+%2F",
+            "mic-device",
+        ),
+        // A card picked from the list must be one the kernel lists *now*: this
+        // machine lists none, so a hand-made POST naming one is refused.
+        (
+            "latitude=51.5&longitude=-0.12&mic_choice=alsa%3Aplughw%3ACARD%3DGhost%2CDEV%3D0",
+            "mic-device",
+        ),
+    ] {
+        let state = fresh_state();
+        let resp = post_form(build_router(state.clone()), "/onboarding/save", body).await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{body}");
+        assert_eq!(
+            resp.headers().get(header::LOCATION).unwrap().to_str().unwrap(),
+            format!("/onboarding?error={code}"),
+            "{body}"
+        );
+        assert!(sources_of(&state).is_empty(), "{body}");
+        assert_eq!(setting(&state, "latitude"), None, "{body}: nothing else was saved");
+        assert_eq!(setting(&state, "onboarding_complete"), None, "{body}");
+    }
+}
+
+/// Coming back with the refusal opens the wizard on the microphone step and says
+/// what was wrong, in the step.
+#[tokio::test]
+async fn the_wizard_reopens_on_the_microphone_step_with_the_reason() {
+    let resp = build_router(fresh_state())
+        .oneshot(
+            Request::builder()
+                .uri("/onboarding?error=mic-url")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("var step = 4, total = 7"), "opens on step 4");
+    assert!(mic_step(&body).contains("That stream address was not accepted"));
+    let calm = fetch_wizard(fresh_state()).await;
+    assert!(calm.contains("var step = 1, total = 7"));
+    assert!(!calm.contains("was not accepted"));
+}
+
+// ── a failed read is not an empty station ───────────────────────────────
+
+/// The wizard used to draw itself from `unwrap_or_else(|_| (Vec::new(),
+/// Prefill::default()))`: a database that could not be read produced the wizard
+/// of a station with no microphone and blank settings, whose Finish would write
+/// those blanks (and the never-empty hidden confidence and alert fields) over
+/// the real ones.
+///
+/// Observed failing against that code: the page answered 200 and said "No audio
+/// source configured".
+#[tokio::test]
+async fn an_unreadable_source_table_is_not_drawn_as_a_station_with_no_microphone() {
+    let state = state_with_source(Some("Backyard feeder"), "plughw:1,0");
+    state.with_db(|c| c.execute("DROP TABLE audio_sources", []).unwrap());
+    let resp = build_router(state)
+        .oneshot(Request::builder().uri("/onboarding").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec(),
+    )
+    .unwrap();
+    assert!(!body.contains("No audio source configured"), "{body}");
+    assert!(!body.contains("ob-stepper"), "no wizard was drawn");
+    assert!(body.contains("could not read"), "and it says why: {body}");
+}
+
+/// The same for the stored settings, which the hidden fields are filled from.
+#[tokio::test]
+async fn unreadable_settings_are_not_drawn_as_defaults() {
+    let state = fresh_state();
+    state.with_db(|c| c.execute("DROP TABLE settings", []).unwrap());
+    let resp = build_router(state)
+        .oneshot(Request::builder().uri("/onboarding").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// The counterparts, so "503 on any failure" is not what passes: an empty
+/// station and a station with a source both draw the wizard.
+#[tokio::test]
+async fn a_readable_station_still_draws_the_wizard() {
+    for state in [fresh_state(), state_with_source(Some("Feeder"), "plughw:1,0")] {
+        let html = fetch_wizard(state).await;
+        assert!(html.contains("ob-stepper"));
+    }
+}
+
+// ── the model step ──────────────────────────────────────────────────────
+
+fn model_step(html: &str) -> &str {
+    let start = html
+        .find(r#"<section class="ob-step" data-step="2">"#)
+        .expect("model step present");
+    let rest = &html[start..];
+    &rest[..rest.find("</section>").expect("closed")]
+}
+
+/// A station whose classifier is not installed is told so, in the step, with
+/// the button that fixes it — and the summary row does not claim otherwise.
+#[tokio::test]
+async fn the_model_step_offers_the_install_when_nothing_is_installed() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = fresh_state();
+    state
+        .classifier_setup()
+        .configure(birdnet_web::classifier_setup::Layout {
+            model_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+    let html = fetch_wizard(state).await;
+    let step = model_step(&html);
+    assert!(step.contains(r#"data-cls-state="missing""#), "{step}");
+    assert!(step.contains("data-cls-install"), "the button is there: {step}");
+    assert!(step.contains("MB"), "and says how big the download is: {step}");
+    assert!(!step.contains("Listening"), "nothing is listening: {step}");
+}
+
+/// Files in place but not loaded by this start: "restart", never "listening".
+#[tokio::test]
+async fn installed_but_not_loaded_is_not_reported_as_listening() {
+    let dir = tempfile::tempdir().unwrap();
+    for id in ["birdnet-v24", "birdnet-v24-range-v2"] {
+        let e = birdnet_integrations::model_catalog::find(id).unwrap();
+        let (model, labels) = birdnet_integrations::model_catalog::installed_paths(e, dir.path());
+        std::fs::File::create(&model)
+            .and_then(|f| f.set_len(e.model_bytes))
+            .unwrap();
+        if let Some(l) = labels {
+            std::fs::write(l, "x\n").unwrap();
+        }
+    }
+    let state = fresh_state();
+    state
+        .classifier_setup()
+        .configure(birdnet_web::classifier_setup::Layout {
+            model_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        });
+    let step_html = fetch_wizard(state).await;
+    let step = model_step(&step_html);
+    assert!(step.contains(r#"data-cls-state="needs-restart""#), "{step}");
+    assert!(step.contains("data-cls-restart"), "{step}");
+    assert!(!step.contains("data-cls-install"), "nothing left to install: {step}");
+}
+
+// ── the page after Finish ───────────────────────────────────────────────
+
+async fn fetch(state: AppState, uri: &str) -> (StatusCode, String) {
+    let resp = build_router(state)
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = String::from_utf8(
+        axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec(),
+    )
+    .unwrap();
+    (status, body)
+}
+
+/// After Finish, with something saved since the station started, the page offers
+/// the one restart button and does not say the station is listening.
+#[tokio::test]
+async fn the_page_after_finish_offers_the_restart_when_a_save_is_waiting() {
+    let state = fresh_state();
+    state.pending_restart().mark_booted("2000-01-01 00:00:00".to_owned());
+    post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "latitude=51.5&longitude=-0.12",
+    )
+    .await;
+    let (status, body) = fetch(state, "/onboarding/done").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("data-restart-now"), "{body}");
+    assert!(body.contains("Almost"), "{body}");
+    assert!(!body.contains("You're <em>listening"), "{body}");
+}
+
+/// The counterpart: nothing waiting and nothing to restart for, no button — and
+/// still no claim to be listening without a running classifier.
+#[tokio::test]
+async fn the_page_after_finish_has_no_restart_button_when_nothing_waits() {
+    let (status, body) = fetch(fresh_state(), "/onboarding/done").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("data-restart-now"), "{body}");
+    assert!(
+        !body.contains("You're <em>listening"),
+        "no classifier is running, so the page must not say so: {body}"
+    );
 }

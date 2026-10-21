@@ -116,13 +116,54 @@ pub struct UnknownKey {
     pub key: String,
     /// The known key it is closest to, when one is close enough to suggest.
     pub did_you_mean: Option<&'static str>,
+    /// What BirdNET-Pi's key of this name is here, when it is one of BirdNET-Pi's.
+    /// Takes the place of a spelling suggestion: a key that is both a near miss
+    /// of one of ours and a different BirdNET-Pi setting is the second.
+    pub birdnet_pi: Option<&'static known_keys::PiEquivalent>,
+}
+
+impl UnknownKey {
+    /// What to do about it, in a sentence: the key to use, the place to set it,
+    /// or the plain statement that there is nothing to do.
+    #[must_use]
+    pub fn remedy(&self) -> String {
+        use known_keys::PiEquivalent;
+        match (self.birdnet_pi, self.did_you_mean) {
+            (Some(PiEquivalent::Renamed { ours, note }), _) => {
+                with_note(format!("rename it to {ours}"), note)
+            }
+            (Some(PiEquivalent::Setting { name, note }), _) => with_note(
+                format!(
+                    "set `{name}` on the Settings page, or import this file under Station, Data"
+                ),
+                note,
+            ),
+            (Some(PiEquivalent::None { reason }), _) => {
+                format!("it has no equivalent here: {reason}")
+            }
+            (None, Some(meant)) => format!("rename it to {meant}"),
+            (None, None) => {
+                "remove the line, or check the key against the configuration reference".to_owned()
+            }
+        }
+    }
+}
+
+fn with_note(text: String, note: &str) -> String {
+    if note.is_empty() {
+        text
+    } else {
+        format!("{text} ({note})")
+    }
 }
 
 impl fmt::Display for UnknownKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} is not a setting this station reads", self.key)?;
-        if let Some(meant) = self.did_you_mean {
-            write!(f, "; did you mean {meant}?")?;
+        match (self.birdnet_pi, self.did_you_mean) {
+            (Some(_), _) => write!(f, "; it is a BirdNET-Pi key: {}", self.remedy())?,
+            (None, Some(meant)) => write!(f, "; did you mean {meant}?")?,
+            (None, None) => {}
         }
         Ok(())
     }
@@ -217,6 +258,20 @@ impl Config {
             values.insert(key, parse_value(value));
         }
 
+        // BirdNET-Pi's name for the length of each recording chunk. This
+        // station calls it `SEGMENT_DURATION`; a `birdnet.conf` carried over
+        // from BirdNET-Pi says `RECORDING_LENGTH`, and used to be range-checked
+        // and then ignored, so a Pi recording 30-second chunks became a station
+        // recording 15-second ones with a clean `--doctor`. The new name wins
+        // when both are present and non-blank.
+        let blank = |v: Option<&String>| v.is_none_or(|v| v.trim().is_empty());
+        if blank(values.get("SEGMENT_DURATION"))
+            && let Some(length) = values.get("RECORDING_LENGTH").filter(|v| !v.trim().is_empty())
+        {
+            let length = length.clone();
+            values.insert("SEGMENT_DURATION".to_owned(), length);
+        }
+
         Ok(Self { values })
     }
 
@@ -287,6 +342,7 @@ impl Config {
             .map(|k| UnknownKey {
                 key: k.clone(),
                 did_you_mean: known_keys::did_you_mean(k),
+                birdnet_pi: known_keys::birdnet_pi_equivalent(k),
             })
             .collect();
         out.sort_by(|a, b| a.key.cmp(&b.key));
@@ -511,5 +567,23 @@ MODEL=BirdNET_GLOBAL_6K_V2.4_Model_FP16
         // The override wins over the value parsed from the file.
         assert_eq!(config.get("CONFIDENCE"), Some("0.8"));
         assert!((config.get_parsed::<f32>("CONFIDENCE").unwrap() - 0.8).abs() < f32::EPSILON);
+    }
+
+    /// A BirdNET-Pi `birdnet.conf` sets the chunk length as `RECORDING_LENGTH`;
+    /// it reaches the one reader of `SEGMENT_DURATION`, and an explicit
+    /// `SEGMENT_DURATION` still wins.
+    #[test]
+    fn recording_length_is_read_as_the_segment_duration() {
+        let c = Config::parse("RECORDING_LENGTH=30\n").unwrap();
+        assert_eq!(c.get("SEGMENT_DURATION"), Some("30"));
+        assert_eq!(c.get("RECORDING_LENGTH"), Some("30"));
+        let both = Config::parse("RECORDING_LENGTH=30\nSEGMENT_DURATION=20\n").unwrap();
+        assert_eq!(both.get("SEGMENT_DURATION"), Some("20"));
+        let blank = Config::parse("RECORDING_LENGTH=30\nSEGMENT_DURATION=\n").unwrap();
+        assert_eq!(blank.get("SEGMENT_DURATION"), Some("30"), "blank is unset");
+        let neither = Config::parse("OVERLAP=0.5\n").unwrap();
+        assert_eq!(neither.get("SEGMENT_DURATION"), None);
+        let empty_rl = Config::parse("RECORDING_LENGTH=\n").unwrap();
+        assert_eq!(empty_rl.get("SEGMENT_DURATION"), None);
     }
 }

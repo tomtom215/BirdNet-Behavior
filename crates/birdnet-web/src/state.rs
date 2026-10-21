@@ -262,6 +262,9 @@ struct AppStateInner {
     /// The origins allowed to frame the station (`P-9`); empty unless the
     /// operator listed some. Read on every response by the security headers.
     embed_origins: std::sync::RwLock<Arc<crate::embed::EmbedOrigins>>,
+    /// The TLS the binary is running, for the Access tab's "Secure connection"
+    /// card (`P-22`); `None` in a process that never reported one.
+    https_status: std::sync::RwLock<Option<crate::routes::admin::https::HttpsStatus>>,
     /// What the boot journal found changed since the last start (UP-3):
     /// empty on a first or ordinary start.
     boot_anomalies: std::sync::RwLock<Vec<crate::boot_journal::Anomaly>>,
@@ -385,6 +388,7 @@ impl AppState {
                 occurrence: std::sync::RwLock::new(None),
                 dynamic_thresholds: std::sync::RwLock::new(None),
                 embed_origins: std::sync::RwLock::new(Arc::new(crate::embed::EmbedOrigins::none())),
+                https_status: std::sync::RwLock::new(None),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
@@ -653,6 +657,7 @@ impl AppState {
                 occurrence: std::sync::RwLock::new(None),
                 dynamic_thresholds: std::sync::RwLock::new(None),
                 embed_origins: std::sync::RwLock::new(Arc::new(crate::embed::EmbedOrigins::none())),
+                https_status: std::sync::RwLock::new(None),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
@@ -719,6 +724,7 @@ impl AppState {
                 occurrence: std::sync::RwLock::new(None),
                 dynamic_thresholds: std::sync::RwLock::new(None),
                 embed_origins: std::sync::RwLock::new(Arc::new(crate::embed::EmbedOrigins::none())),
+                https_status: std::sync::RwLock::new(None),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
@@ -1815,6 +1821,19 @@ impl AppState {
         if let Ok(mut guard) = self.inner.embed_origins.write() {
             *guard = Arc::new(origins);
         }
+    }
+
+    /// Record the TLS the binary is running (once, at start).
+    pub fn set_https_status(&self, status: crate::routes::admin::https::HttpsStatus) {
+        if let Ok(mut guard) = self.inner.https_status.write() {
+            *guard = Some(status);
+        }
+    }
+
+    /// The TLS the binary reported, if it did.
+    #[must_use]
+    pub fn https_status(&self) -> Option<crate::routes::admin::https::HttpsStatus> {
+        self.inner.https_status.read().ok().and_then(|g| g.clone())
     }
 
     /// The origins allowed to frame the station; empty by default.

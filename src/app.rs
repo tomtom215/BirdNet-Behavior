@@ -777,6 +777,13 @@ async fn serve(
             .into());
         }
     };
+    // What the Access tab's "Secure connection" card says (P-22).
+    state.set_https_status(birdnet_web::routes::admin::https::HttpsStatus {
+        mode: tls_plan.settings.mode,
+        https_addr: tls_plan.https_addr.map(|a| a.to_string()),
+        state_dir: tls_plan.settings.state_dir.clone(),
+        waiting_for_clock: tls_deferred_for_clock,
+    });
     if tls_plan.settings.mode == birdnet_web::tls::TlsMode::SelfSigned {
         tracing::info!(
             ca = %birdnet_web::tls::ca_certificate_path(&tls_plan.settings.state_dir).display(),
