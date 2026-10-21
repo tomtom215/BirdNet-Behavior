@@ -359,7 +359,7 @@ fn render_quarantine_row(
     let com_name = escape_html(names.name(&row.sci_name, &row.com_name));
     let sci_name = escape_html(&row.sci_name);
     let date = escape_html(&row.date);
-    let time = escape_html(&row.time);
+    let time = crate::display::clock(&row.time);
     let reason_label =
         escape_html(birdnet_db::sqlite::QuarantineReason::from_db_str(&row.reason).label());
     let sf_info = row

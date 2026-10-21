@@ -84,7 +84,13 @@
       typeof d.confidence === "number"
         ? Math.round(d.confidence * 100) + "%"
         : "";
-    meta.textContent = (d.time || "") + (conf ? " · " + conf : "");
+    // The time is marked so display-format.js prints it in the reader's clock.
+    var when = document.createElement("span");
+    when.className = "clk";
+    when.setAttribute("data-clk", d.time || "");
+    when.textContent = d.time || "";
+    meta.appendChild(when);
+    if (conf) meta.appendChild(document.createTextNode(" · " + conf));
 
     row.appendChild(name);
     row.appendChild(meta);

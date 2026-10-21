@@ -253,7 +253,7 @@ fn with_ring_key(svg: String, ribbons: &[ChorusRibbon]) -> String {
             r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch" data-style="background:{c}"></span>{n} <span class="mono">peaks {p}</span></span>"#,
             c = ribbon.color,
             n = escape_html(&ribbon.name),
-            p = fmt_hour(f64::from(ribbon.peak_hour)),
+            p = crate::display::clock(&fmt_hour(f64::from(ribbon.peak_hour))),
         );
     }
     key.push_str("</div></div>");
@@ -537,7 +537,7 @@ async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
     for (i, ribbon) in ribbons.iter().enumerate() {
         let row_cls = if i == 0 { "dc-row first" } else { "dc-row" };
         let off_chorus = !(5..=8).contains(&ribbon.peak_hour);
-        let peak_label = fmt_hour(ribbon.peak_hour as f64);
+        let peak_label = crate::display::clock(&fmt_hour(ribbon.peak_hour as f64));
         let strip = render_hour_strip(&ribbon.hours, &ribbon.color);
         let _ = write!(
             s,

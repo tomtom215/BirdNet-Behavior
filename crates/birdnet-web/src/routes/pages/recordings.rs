@@ -403,7 +403,7 @@ fn render_clip_row(
     let shown = names.name(&d.sci_name, &d.com_name);
     let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
-    let time = escape_html(&d.time);
+    let time = crate::display::clock(&d.time);
     let date = escape_html(&d.date);
     let key = escape_html(&super::search::row_key(d));
     // `recordings.html` puts this straight into `.rc-hp-meta` when a clip

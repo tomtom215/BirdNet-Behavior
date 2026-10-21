@@ -292,12 +292,12 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
         let _ = write!(
             html,
             r#"<tr>
-<td class="tsd-key">{h:02}:00</td>
+<td class="tsd-key">{hour}</td>
 <td>{avg:.2}</td>
 <td>{total}</td>
 <td><div data-style="width:{pct:.0}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
 </tr>"#,
-            h = row.hour_of_day,
+            hour = crate::display::clock_hour(row.hour_of_day),
             avg = row.avg_detections_per_day,
             total = row.total_detections,
             pct = bar_pct,

@@ -37,7 +37,14 @@
         '<div class="bnb-meta mono rc-hp-time">0:00</div>' +
       '</div>';
     container.querySelector('.rc-hp-name').textContent = btn.getAttribute('data-clip-name') || 'Clip';
-    container.querySelector('.rc-hp-meta').textContent = btn.getAttribute('data-clip-meta') || '';
+    // `data-clip-meta` is "HH:MM:SS · date · conf%"; its time is printed in the
+    // reader's clock (static/display-format.js).
+    var meta = (btn.getAttribute('data-clip-meta') || '').split(' · ');
+    if (window.bnbDisplay) {
+      var shown = window.bnbDisplay.formatClock(meta[0], window.bnbDisplay.effective().time);
+      if (shown) meta[0] = shown;
+    }
+    container.querySelector('.rc-hp-meta').textContent = meta.join(' · ');
     var src = btn.getAttribute('data-play-src');
     var dl = container.querySelector('.rc-hp-dl');
     if (dl && src) { dl.setAttribute('href', src); dl.setAttribute('download', ''); }

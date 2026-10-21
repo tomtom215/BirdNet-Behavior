@@ -130,7 +130,7 @@ pub(super) async fn kiosk_content_partial(
                     conf = conf_pill(d.confidence * 100.0, floor),
                     com = escape_html(names.name(&d.sci_name, &d.com_name)),
                     sci = escape_html(&d.sci_name),
-                    time = escape_html(&d.time),
+                    time = crate::display::clock(&d.time),
                     date = escape_html(&d.date),
                 );
             }

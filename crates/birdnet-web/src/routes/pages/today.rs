@@ -664,7 +664,10 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
             ) {
                 let _ = write!(
                     out,
-                    r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now_t:.0}°</span><span class="mono x-wx-hl">H {max:.0}° · L {min:.0}°</span></span>"#
+                    r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now}</span><span class="mono x-wx-hl">H {hi} · L {lo}</span></span>"#,
+                    now = crate::display::temperature(f64::from(now_t), 0, false),
+                    hi = crate::display::temperature(f64::from(max), 0, false),
+                    lo = crate::display::temperature(f64::from(min), 0, false),
                 );
             }
 
@@ -673,8 +676,8 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                 let _ = write!(
                     out,
                     r#"<span class="bnb-pill">☀ sunrise {}</span><span class="bnb-pill">☾ sunset {}</span>"#,
-                    fmt_hour(sunrise),
-                    fmt_hour(sunset)
+                    crate::display::clock_from_hours(sunrise),
+                    crate::display::clock_from_hours(sunset)
                 );
             }
 
@@ -735,6 +738,7 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
             let mut strip = String::new();
             if let Some((silent, last)) = capture_outage(conn) {
                 let dur = fmt_duration(silent);
+                let last = crate::display::clock(&last);
                 let _ = write!(
                     strip,
                     r#"<div class="x-nudge" data-screen-label="Outage banner" data-announce="No detections recently: the microphone may be unplugged or the recorder stopped."><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
@@ -756,14 +760,6 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
     });
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-/// `6.35` hours → `"6:21"`.
-fn fmt_hour(h: f64) -> String {
-    let total_min = (h * 60.0).round();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let (hh, mm) = ((total_min / 60.0) as u32 % 24, (total_min % 60.0) as u32);
-    format!("{hh}:{mm:02}")
 }
 
 /// `8040` seconds → `"2h 14m"` (or `"45m"` under an hour).
@@ -1103,8 +1099,9 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let dawn: i64 = hourly[4..9].iter().sum();
 
     let stats_oob = format!(
-        r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_hour:02}:00</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
+        r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_clock}</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
         total_fmt = super::group_thousands(total),
+        peak_clock = crate::display::clock_hour(peak_hour),
     );
     // The caption's temperature clause, kept in step with whether the line is
     // actually drawn (`day_strip` draws it only for a non-empty `temps`).
@@ -1183,7 +1180,10 @@ fn render_detection_card(
     let conf = conf_bar(d.confidence, floor);
     let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
+    // `time` is plain text for the confirmation dialogs below, which cannot
+    // carry markup; the visible link prints through the display formatter.
     let time = escape_html(&d.time);
+    let time_clk = crate::display::clock(&d.time);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
     let row_vals = super::recordings::row_vals(&crate::state::RowRef::from(d));
@@ -1198,7 +1198,7 @@ fn render_detection_card(
          {conf}\
          </div>\
          <div class=\"bnb-meta mono tdl-card-sci\">{sci_name} · \
-         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time_clk}</a></div>\
          {audio}\
          </div>\
          <div class=\"tdl-card-actions\">\
@@ -1434,15 +1434,6 @@ mod tests {
         state.metrics().set_source_up("mic0", true);
         state.detection_status_flag().store(false, Ordering::SeqCst);
         assert_eq!(live_capture_state(&state), CaptureState::Up);
-    }
-
-    #[test]
-    fn hour_formatting() {
-        assert_eq!(fmt_hour(6.35), "6:21");
-        assert_eq!(fmt_hour(0.0), "0:00");
-        assert_eq!(fmt_hour(19.5), "19:30");
-        // Wraps past midnight rather than printing "24:xx".
-        assert_eq!(fmt_hour(24.01), "0:01");
     }
 
     #[test]

@@ -86,7 +86,7 @@ fn render_feed_row(
     let shown = names.name(&d.sci_name, &d.com_name);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
-    let time_short = d.time.get(0..5).unwrap_or(&d.time);
+    let time_short = crate::display::clock(d.time.get(0..5).unwrap_or(&d.time));
 
     // Marks the one detection that *was* the species' first ever — not every
     // detection of a species whose first was recent. `first_seen` used to hold
@@ -205,7 +205,7 @@ fn render_best_row(
 ) {
     let enc = simple_url_encode(&d.com_name);
     let shown = names.name(&d.sci_name, &d.com_name);
-    let time_short = d.time.get(0..5).unwrap_or(&d.time);
+    let time_short = crate::display::clock(d.time.get(0..5).unwrap_or(&d.time));
     // Same exact-instant rule as the feed row above.
     let tag = first_seen.get(&d.sci_name).map_or("", |fs| {
         if *fs != format!("{} {}", d.date, d.time) {
@@ -540,7 +540,7 @@ pub(super) async fn most_recent_partial(
     let com_safe = escape_html(names.name(&det.sci_name, &det.com_name));
     let sci_safe = escape_html(&det.sci_name);
     let date_safe = escape_html(&det.date);
-    let time_safe = escape_html(&det.time);
+    let time_safe = crate::display::clock(&det.time);
     let enc = simple_url_encode(&det.com_name);
 
     let audio_html = det

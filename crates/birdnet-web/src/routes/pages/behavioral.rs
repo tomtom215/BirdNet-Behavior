@@ -626,7 +626,7 @@ fn render_dawn_sequence(
                 html,
                 "<tr><td>{sp}</td><td>{t}</td></tr>",
                 sp = escape_html(names.name_of_stored(sp)),
-                t = escape_html(step_time_hhmm(t)),
+                t = crate::display::clock(step_time_hhmm(t)),
             );
         }
         html.push_str("</tbody></table>");

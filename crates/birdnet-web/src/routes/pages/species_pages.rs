@@ -839,7 +839,7 @@ async fn species_detections_partial(
                     html,
                     r"<tr><td>{conf}</td><td>{t}</td><td>{dt}</td></tr>",
                     conf = conf_pill(d.confidence * 100.0, floor),
-                    t = escape_html(&d.time),
+                    t = crate::display::clock(&d.time),
                     dt = escape_html(&d.date),
                 );
             }
@@ -1192,7 +1192,7 @@ async fn species_hero_partial(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or(file_name);
     let safe_file = escape_html(&basename);
-    let time_short = time.get(0..5).unwrap_or(&time);
+    let time_short = crate::display::clock(time.get(0..5).unwrap_or(&time));
     let conf_pct = conf * 100.0;
 
     // The hero is the *recording* — the spectrogram and audio of the loudest

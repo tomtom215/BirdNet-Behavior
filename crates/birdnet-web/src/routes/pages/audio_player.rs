@@ -44,6 +44,7 @@ async fn player_page(
     let species_safe = escape_html(species);
     let filename_safe = escape_html(&filename);
     let time_safe = escape_html(time);
+    let time_clk = crate::display::clock(time);
     let date_safe = escape_html(date);
 
     let content = format!(
@@ -52,7 +53,7 @@ async fn player_page(
     <h2>{species_safe}</h2>
     <div class="player-meta">
       <span class="confidence-badge">{confidence}%</span>
-      <span class="detection-time">{date_safe} {time_safe}</span>
+      <span class="detection-time">{date_safe} {time_clk}</span>
     </div>
   </div>
 

@@ -543,7 +543,7 @@ fn render_day_log_row(
         conf = conf_bar(d.confidence, floor),
         com = escape_html(shown),
         sci = escape_html(&d.sci_name),
-        time = escape_html(&d.time),
+        time = crate::display::clock(&d.time),
         date_enc = simple_url_encode(&d.date),
         time_enc = simple_url_encode(&d.time),
     );

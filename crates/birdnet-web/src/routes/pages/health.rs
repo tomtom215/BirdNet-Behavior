@@ -81,7 +81,10 @@ async fn station_health_line_partial(
         if let Some(temp) = crate::system_info::cpu_temperature() {
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
-                format_args!(r#"<span class="sep">·</span><span>{temp:.0}°C</span>"#),
+                format_args!(
+                    r#"<span class="sep">·</span><span>{}</span>"#,
+                    crate::display::temperature(f64::from(temp), 0, true)
+                ),
             );
         }
         out.push_str("</div>");
