@@ -962,8 +962,11 @@ pub fn protect_imported(
         {
             let tx = conn.unchecked_transaction()?;
             {
-                let mut insert =
-                    tx.prepare("INSERT OR IGNORE INTO bnb_protected(name) VALUES (?1)")?;
+                // The name is the table's PRIMARY KEY: a name listed twice is
+                // the one conflict to absorb, and nothing else is.
+                let mut insert = tx.prepare(
+                    "INSERT INTO bnb_protected(name) VALUES (?1) ON CONFLICT(name) DO NOTHING",
+                )?;
                 for name in names {
                     insert.execute([name])?;
                 }
