@@ -69,6 +69,7 @@ impl std::fmt::Debug for Bundle {
             .field("conf_bytes", &self.conf.as_ref().map(String::len))
             .field("apprise_bytes", &self.apprise.as_ref().map(String::len))
             .field("body_bytes", &self.body.as_ref().map(String::len))
+            .field("confirmed_bytes", &self.confirmed.as_ref().map(String::len))
             .field("lists", &self.lists.keys().collect::<Vec<_>>())
             .field("ignored", &self.ignored)
             .finish()
@@ -101,7 +102,7 @@ impl Bundle {
             self.body = Some(text);
         } else if lower == "confirmed_species_list.txt" {
             self.confirmed = Some(text);
-        } else if lower.ends_with(".conf") || looks_like_birdnet_conf(&text) {
+        } else if has_conf_suffix(&lower) || looks_like_birdnet_conf(&text) {
             self.conf = Some(text);
         } else {
             self.ignored.push(base.to_owned());
@@ -173,6 +174,15 @@ impl Bundle {
         }
         Ok(bundle)
     }
+}
+
+/// Whether an already lower-cased file name ends in `.conf`.
+#[allow(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "the caller lower-cased the name, so the exact match is a case-insensitive one"
+)]
+fn has_conf_suffix(lower: &str) -> bool {
+    lower.ends_with(".conf")
 }
 
 fn looks_like_birdnet_conf(text: &str) -> bool {
@@ -276,6 +286,10 @@ fn form_of(pairs: &[(String, String)]) -> Result<SettingsForm, ApplyError> {
 /// Work out what importing `bundle` would do on a station whose settings are
 /// `current` and whose data lives in `data_dir`. Reads nothing from disk.
 #[must_use]
+#[allow(
+    clippy::implicit_hasher,
+    reason = "the settings snapshot is the default-hasher map in every signature this calls; a generic hasher here would not type-check against them"
+)]
 pub fn prepare(bundle: &Bundle, current: &HashMap<String, String>, data_dir: &Path) -> Prepared {
     let mut out = Prepared {
         ignored: bundle.ignored.clone(),

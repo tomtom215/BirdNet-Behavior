@@ -75,7 +75,7 @@ fn pill(verdict: Verdict) -> String {
     )
 }
 
-fn order(v: Verdict) -> u8 {
+const fn order(v: Verdict) -> u8 {
     match v {
         Verdict::Refused => 0,
         Verdict::Attention => 1,

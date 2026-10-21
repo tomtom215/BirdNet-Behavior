@@ -282,10 +282,10 @@ mod tests {
     /// between two stops would show.
     #[test]
     fn lightness_is_monotonic() {
-        const STEPS: usize = 1000;
+        const STEPS: u16 = 1000;
         for m in Colormap::ALL {
             let l: Vec<f64> = (0..=STEPS)
-                .map(|i| lstar(m.rgb(i as f32 / STEPS as f32)))
+                .map(|i| lstar(m.rgb(f32::from(i) / f32::from(STEPS))))
                 .collect();
             let rising = m != Colormap::GreyInverted;
             // The old nine-stop viridis dips by 0.11 L* around t = 0.125 (its
@@ -306,7 +306,7 @@ mod tests {
                     pair[0], pair[1]
                 );
             }
-            let span = (l[STEPS] - l[0]).abs();
+            let span = (l[usize::from(STEPS)] - l[0]).abs();
             assert!(span > 60.0, "{m:?}: lightness spans only {span:.1}");
         }
     }

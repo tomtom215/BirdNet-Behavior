@@ -237,7 +237,7 @@ pub(super) struct LinesQuery {
 }
 
 /// `GET /admin/migrate/conf/lines`: the lines for `birdnet.conf`, as a file.
-pub(super) async fn lines_handler(lines: ConfigLines, Query(q): Query<LinesQuery>) -> Response {
+pub(super) fn lines_handler(lines: &ConfigLines, Query(q): Query<LinesQuery>) -> Response {
     let found = lines
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -1,6 +1,8 @@
-//! One picture of the owner's choosing on the Today page: a photograph of the
-//! site, or the last frame of a camera, with a title (BirdNET-Pi's
-//! `CUSTOM_IMAGE` and `CUSTOM_IMAGE_TITLE`, `scripts/overview.php:18-28`).
+//! One picture of the owner's choosing on the Today page.
+//!
+//! A photograph of the site, or the last frame of a camera, with a title
+//! (BirdNET-Pi's `CUSTOM_IMAGE` and `CUSTOM_IMAGE_TITLE`,
+//! `scripts/overview.php:18-28`).
 //!
 //! | Method | Path | Answer |
 //! |--------|------|--------|
@@ -217,9 +219,9 @@ async fn serve_image(State(state): State<AppState>, request: HeaderMap) -> Respo
         .await;
     let path = cfg.path;
     let for_stat = path.clone();
-    let etag = match tokio::task::spawn_blocking(move || stat(&for_stat)).await {
-        Ok(Stat::Ready { etag }) => etag,
-        _ => return (StatusCode::NOT_FOUND, "no picture").into_response(),
+    let Ok(Stat::Ready { etag }) = tokio::task::spawn_blocking(move || stat(&for_stat)).await
+    else {
+        return (StatusCode::NOT_FOUND, "no picture").into_response();
     };
     // The tag names the file's size and modification time, so a poll that
     // matches is answered without reading the file.

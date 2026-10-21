@@ -174,10 +174,10 @@ pub fn format_clock(time: &str, format: TimeFormat) -> Option<String> {
                 n => n,
             };
             let suffix = if h < 12 { "AM" } else { "PM" };
-            match s {
-                Some(s) => format!("{hour}:{m:02}:{s:02} {suffix}"),
-                None => format!("{hour}:{m:02} {suffix}"),
-            }
+            s.map_or_else(
+                || format!("{hour}:{m:02} {suffix}"),
+                |s| format!("{hour}:{m:02}:{s:02} {suffix}"),
+            )
         }
     })
 }

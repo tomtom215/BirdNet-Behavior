@@ -657,17 +657,15 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                     );
                 }
                 // The gauge says it is up, which does not depend on the detection
-                // history; the freshness read only ever contradicts a gauge.
-                (CaptureState::Up, Err(_)) => out.push_str(
+                // history; the freshness read only ever contradicts a gauge. The
+                // same pill when the history reads fine and shows no outage.
+                (CaptureState::Up, Err(_)) | (_, Ok(None)) => out.push_str(
                     r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
                 ),
                 // Nothing says it is up and the one thing that could say it is
                 // down could not be read: a pill that could not look says so.
                 (_, Err(_)) => out.push_str(
                     r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the detection history</span>"#,
-                ),
-                (_, Ok(None)) => out.push_str(
-                    r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
                 ),
             }
 

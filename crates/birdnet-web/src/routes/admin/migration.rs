@@ -204,7 +204,7 @@ pub fn router() -> Router<AppState> {
             "/admin/migrate/conf/lines",
             get({
                 let cl = Arc::clone(&conf_lines);
-                move |query| conf_handlers::lines_handler(cl, query)
+                move |query| std::future::ready(conf_handlers::lines_handler(&cl, query))
             }),
         )
         .route("/admin/migrate", get(migration_page))

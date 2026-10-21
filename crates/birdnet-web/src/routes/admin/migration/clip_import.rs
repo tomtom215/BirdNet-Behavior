@@ -53,7 +53,7 @@ struct Pager {
 }
 
 impl Pager {
-    fn new(state: AppState) -> Self {
+    const fn new(state: AppState) -> Self {
         Self {
             state,
             after: 0,
@@ -139,7 +139,7 @@ fn setup(state: &AppState, form: &ClipForm, dry_run: bool) -> Result<Setup, Stri
             birdnet_core::civil::shift_datetime(
                 &crate::routes::pages::today_date_string(),
                 "00:00:00",
-                -(retention_days.floor() as f64) * 86_400.0,
+                -retention_days.floor() * 86_400.0,
             )
         })
         .flatten()
@@ -156,7 +156,7 @@ fn setup(state: &AppState, form: &ClipForm, dry_run: bool) -> Result<Setup, Stri
     })
 }
 
-fn describe(mode: Mode) -> &'static str {
+const fn describe(mode: Mode) -> &'static str {
     match mode {
         Mode::Copy => "copied",
         Mode::Hardlink => "linked",
@@ -205,22 +205,20 @@ fn report_html(report: &Report, mode: Mode, dry_run: bool) -> String {
         );
     }
     if !report.missing_sample.is_empty() {
-        let list = report
-            .missing_sample
-            .iter()
-            .map(|n| format!("<li><code>{}</code></li>", escape_html(n)))
-            .collect::<String>();
+        let mut list = String::new();
+        for n in &report.missing_sample {
+            let _ = write!(list, "<li><code>{}</code></li>", escape_html(n));
+        }
         let _ = write!(
             s,
             r#"<details class="preview-details"><summary class="preview-summary">Some of the recordings that were not found</summary><ul class="steps">{list}</ul><p class="hint">Usually a clip BirdNET-Pi's own cleanup already deleted, or a folder that is somewhere else.</p></details>"#
         );
     }
     if !report.failed_sample.is_empty() {
-        let list = report
-            .failed_sample
-            .iter()
-            .map(|n| format!("<li>{}</li>", escape_html(n)))
-            .collect::<String>();
+        let mut list = String::new();
+        for n in &report.failed_sample {
+            let _ = write!(list, "<li>{}</li>", escape_html(n));
+        }
         let _ = write!(
             s,
             r#"<p class="hint"><strong>{} could not be {verb}:</strong></p><ul class="steps">{list}</ul>"#,
@@ -302,6 +300,7 @@ pub(super) async fn preview_handler(
     match result {
         Err(message) => err(&message),
         Ok((report, mode, source, mode_word)) => {
+            use std::fmt::Write as _;
             let mut html = String::from(r#"<div class="card result-card ok">"#);
             html.push_str(
                 r#"<div class="result-title ok">What bringing the recordings across would do</div><p class="hint"><strong>Nothing has been changed yet.</strong></p>"#,
@@ -315,14 +314,15 @@ pub(super) async fn preview_handler(
                 } else {
                     ""
                 };
-                html.push_str(&format!(
+                let _ = write!(
+                    html,
                     r##"<div class="actions center"><button class="btn btn-primary"
                       hx-post="/admin/migrate/clips/run"
                       hx-vals='{{"clips_source": "{src}", "clips_mode": "{mode}"}}'
                       hx-target="#clips-result" hx-swap="innerHTML"{confirm}>Bring them across</button></div></div>"##,
                     src = escape_html(&source).replace('\'', "&#39;"),
                     mode = escape_html(&mode_word),
-                ));
+                );
             }
             Html(html)
         }

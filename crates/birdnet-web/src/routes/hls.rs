@@ -538,6 +538,7 @@ async fn status() -> Response {
     for s in &streams {
         rows.push(describe(s, "active", s.ready().await, false));
     }
+    drop(streams);
     rows.sort_by(|a, b| a["source"].as_str().cmp(&b["source"].as_str()));
     Json(json!({ "count": rows.len(), "streams": rows })).into_response()
 }

@@ -139,7 +139,7 @@ async fn test_page(State(state): State<AppState>) -> Html<String> {
 fn render_test_page_for(state: &AppState) -> String {
     render_test_page(
         &PushChannel::of(state),
-        birdweather_state(state),
+        &birdweather_state(state),
         &super::data_source_test::cards(state),
     )
 }
@@ -187,12 +187,12 @@ fn birdweather_state(state: &AppState) -> BirdweatherToken {
 /// (`crate::routes::pages::homes::station_tabs`), which renders the
 /// confirm-before-you-rely-on-it test UI in the main shell.
 pub(crate) fn channels_test_body(state: &AppState) -> String {
-    let mut body = test_notifications_body(&PushChannel::of(state), birdweather_state(state));
+    let mut body = test_notifications_body(&PushChannel::of(state), &birdweather_state(state));
     body.push_str(&super::data_source_test::cards(state));
     body
 }
 
-fn render_test_page(push: &PushChannel, bw: BirdweatherToken, data_sources: &str) -> String {
+fn render_test_page(push: &PushChannel, bw: &BirdweatherToken, data_sources: &str) -> String {
     // The page's own title lives here, not in the body: the body is also the
     // Station Alerts tab's "Channels" section, under that tab's heading, and
     // a second `<h1>` there put the tab's outline out of order.
@@ -226,7 +226,7 @@ static NOTIFICATION_TEST_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
 /// Page-specific body (scoped `<style>` + cards). The shared shell supplies the
 /// chrome, the nav (with the Notifications tab active), and the
 /// `Admin › Notifications › Test` breadcrumb.
-fn test_notifications_body(push: &PushChannel, bw: BirdweatherToken) -> String {
+fn test_notifications_body(push: &PushChannel, bw: &BirdweatherToken) -> String {
     let bw_ok = bw.is_set();
     let push_ok = push.configured();
     let push_status = if push_ok {
@@ -626,14 +626,14 @@ mod tests {
     /// operator to type a token that may be there.
     #[test]
     fn an_unreadable_token_is_not_reported_as_not_configured() {
-        let body = test_notifications_body(&PushChannel::default(), BirdweatherToken::Unreadable);
+        let body = test_notifications_body(&PushChannel::default(), &BirdweatherToken::Unreadable);
         assert!(body.contains("Could not be read"), "{body}");
         assert!(
             !body.contains("Disabled until you set the BirdWeather token"),
             "{body}"
         );
         assert!(!body.contains("Not configured"), "{body}");
-        let missing = test_notifications_body(&PushChannel::default(), BirdweatherToken::NotSet);
+        let missing = test_notifications_body(&PushChannel::default(), &BirdweatherToken::NotSet);
         assert!(missing.contains("Not configured"), "{missing}");
     }
 
@@ -663,11 +663,11 @@ mod tests {
         // Check the page body, not `render_test_page` (the shared shell adds
         // `data-confirm-style` attributes a naive `style="` check would flag).
         assert!(
-            !test_notifications_body(&native_only(), BirdweatherToken::Set(token()))
+            !test_notifications_body(&native_only(), &BirdweatherToken::Set(token()))
                 .contains("style=\"")
         );
         assert!(
-            !test_notifications_body(&PushChannel::default(), BirdweatherToken::NotSet)
+            !test_notifications_body(&PushChannel::default(), &BirdweatherToken::NotSet)
                 .contains("style=\"")
         );
         assert!(!result_html(true, "ok").contains("style=\""));
@@ -681,7 +681,7 @@ mod tests {
         // pointing at the exact Settings field to fill in. (Check the `disabled>`
         // attribute, not the bare word "disabled" — the `.btn-disabled` CSS class
         // is always present in the page's <style> block.)
-        let body = test_notifications_body(&PushChannel::default(), BirdweatherToken::NotSet);
+        let body = test_notifications_body(&PushChannel::default(), &BirdweatherToken::NotSet);
         assert!(body.contains("disabled>")); // buttons carry the disabled attribute
         // Tooltips name the reason.
         assert!(
@@ -696,7 +696,7 @@ mod tests {
 
     #[test]
     fn enabled_buttons_are_not_disabled_and_have_action_tooltips() {
-        let body = test_notifications_body(&native_only(), BirdweatherToken::Set(token()));
+        let body = test_notifications_body(&native_only(), &BirdweatherToken::Set(token()));
         // No channel button carries the disabled attribute when both are configured.
         assert!(!body.contains("disabled>"));
         assert!(
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn the_page_names_the_destinations_it_resolved() {
-        let body = test_notifications_body(&native_only(), BirdweatherToken::NotSet);
+        let body = test_notifications_body(&native_only(), &BirdweatherToken::NotSet);
         assert!(
             body.contains("ntfy https://ntfy.sh (1 topic(s))"),
             "the resolved destination must be named: {body}"
@@ -745,7 +745,7 @@ mod tests {
             apprise_cli: false,
             apprise_server: false,
         };
-        let body = test_notifications_body(&hostile, BirdweatherToken::NotSet);
+        let body = test_notifications_body(&hostile, &BirdweatherToken::NotSet);
         assert!(!body.contains("<script>"), "{body}");
         assert!(body.contains("&lt;script&gt;"));
     }

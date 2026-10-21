@@ -194,7 +194,7 @@ fn apply(state: &AppState, user: &crate::auth_middleware::RequestUser, which: &R
     if matches!(&which, Reset::Species(s) if s.is_empty()) {
         return not_applied(&Toast::error("Choose a species to reset."));
     }
-    match reset(state, &which) {
+    match reset(state, which) {
         Ok(outcome) => {
             let (action, target, meta) = match &which {
                 Reset::Species(s) => (

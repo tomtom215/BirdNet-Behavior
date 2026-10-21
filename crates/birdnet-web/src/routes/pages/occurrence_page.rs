@@ -427,7 +427,7 @@ fn admitted_more(
     let picked = admitted_selection(report);
     let shown_to = (offset + LIST_PAGE).min(picked.matched);
     format!(
-        r##"{rows}{more}<span hx-swap-oob="innerHTML:#occ-status">Showing {shown_to} of {matched}.</span>"##,
+        r#"{rows}{more}<span hx-swap-oob="innerHTML:#occ-status">Showing {shown_to} of {matched}.</span>"#,
         rows = admitted_rows(&picked, offset, names),
         more = more_control(report.week, query, offset, picked.matched, true),
         matched = picked.matched,
