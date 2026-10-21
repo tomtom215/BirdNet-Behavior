@@ -3,14 +3,14 @@
 # Beside cargo-deny and cargo-audit (supply-chain.yml), which read RustSec,
 # this reads OSV, which also carries GitHub's advisory database, and it reads
 # the two non-Rust sets of pins the repository tracks: `tools/visual-qa/package-
-# lock.json` (the browser-QA tooling that gates the web UI) and the three
-# Python requirements files under `tools/` (the model converter and the parity
-# harness). The latter are not named like a lockfile, so each is given as
-# `requirements.txt:<path>`, which tells osv-scanner how to parse it. They were
-# unscanned here until Scorecard's Vulnerabilities alert (#154) reported a
-# certifi advisory pinned in all three while this job, which read only
-# Cargo.lock and the npm lock, stayed green. A finding fails the job: it is
-# ours to fix, or to waive in an `osv-scanner.toml` with a reason and an
+# lock.json` (the browser-QA tooling that gates the web UI) and the four
+# Python requirements files under `tools/` (CI's own PyYAML, the model
+# converter and the parity harness). The latter are not named like a lockfile,
+# so each is given as `requirements.txt:<path>`, which tells osv-scanner how to
+# parse it. They were unscanned here until Scorecard's Vulnerabilities alert
+# (#154) reported a certifi advisory pinned in three of them while this job,
+# which read only Cargo.lock and the npm lock, stayed green. A finding fails the
+# job: it is ours to fix, or to waive in an `osv-scanner.toml` with a reason and an
 # `ignoreUntil` date, as deny.toml does for RustSec. The cost is the same one
 # cargo-deny has: an advisory published against an unchanged lockfile reddens
 # every open pull request until it is fixed or waived.
@@ -73,6 +73,7 @@ jobs:
             --format=json
             --lockfile=Cargo.lock
             --lockfile=tools/visual-qa/package-lock.json
+            --lockfile=requirements.txt:tools/ci/requirements-ci.txt
             --lockfile=requirements.txt:tools/model-convert/requirements.txt
             --lockfile=requirements.txt:tools/parity/requirements-crosscheck.txt
             --lockfile=requirements.txt:tools/parity/requirements-primary.txt
