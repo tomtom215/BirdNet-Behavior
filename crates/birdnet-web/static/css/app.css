@@ -706,7 +706,7 @@ em       { font-style: italic; }
    under its lower third (a few per cent of the brand green) lifts it off the line
    without changing its colour or its measured contrast. */
 h1 em, .display em {
-  background: linear-gradient(transparent 74%, color-mix(in oklab, var(--moss-soft) 85%, transparent) 74%);
+  background: linear-gradient(transparent 56%, color-mix(in oklab, var(--moss-soft) 70%, transparent) 56%, color-mix(in oklab, var(--moss-soft) 70%, transparent) 84%, transparent 84%);
   padding: 0 .05em; margin: 0 -.05em; border-radius: var(--r-3xs);
 }
 
