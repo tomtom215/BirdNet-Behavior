@@ -284,12 +284,12 @@ pub const MIGRATIONS: &[Migration] = &[
         // O-15 adds the accounts surface that O-14's cookie sessions
         // build on. Day-zero shape: a single seeded `admin` row so
         // existing single-admin deployments see no behavioural change.
-        // `pwd_argon2` is the canonical column name — current installs
-        // store the password in the CADDY_PWD env var (not the DB), so
-        // the seed row writes an empty hash and the auth-middleware
-        // path still reads CADDY_PWD until the wire is flipped. See the
-        // TODO(O-15-followup) markers in `accounts.rs` and the auth
-        // module for the credential-store migration.
+        // `pwd_argon2` is the canonical column name. Installs of the time
+        // kept the password in the CADDY_PWD env var, not the DB, so the
+        // seed row wrote an empty hash. The credential store has since moved
+        // into this table (`helpers::auth::bootstrap_admin_password` writes
+        // the hash); `CADDY_PWD` survives only as a sign-in fallback in
+        // `auth_pages::authenticate`.
         //
         // Adapted from the O-15 accounts proposal's 009_accounts.sql for this
         // chain:
@@ -343,11 +343,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 15,
         description: "Create audio_sources table for first-class CRUD (O-13)",
         // O-13 replaces the audio.rs stub with a real entity model. The
-        // table carries one row per microphone or RTSP stream; the audio
-        // daemon continues to read `state.audio_source()` (a single
-        // string) until a follow-up PR teaches it to consume the table
-        // directly. See TODO(O-13-followup) in `routes::admin::audio`
-        // for the daemon-side change spelled out.
+        // table carries one row per microphone or RTSP stream. The capture
+        // daemon first read a single string (`state.audio_source()`); it now
+        // resolves its sources from this table
+        // (`capture::sources::resolve_sources_from_db`).
         //
         // The seed step pulls from `settings.audio_source` when present
         // so anyone with a configured single-string source lands on a

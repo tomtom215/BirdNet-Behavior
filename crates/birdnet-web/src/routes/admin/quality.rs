@@ -383,8 +383,9 @@ fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocal
         |m| render_model_vs_review(m, names),
     );
     let tuning_link = help_link(Topic::Tuning);
-    // Skeletons for the partials that load via hx-trigger="load" (resolves
-    // TODO(O-16-followup) for #quality-summary / #quality-trend).
+    // Skeletons for the partials that load via hx-trigger="load"
+    // (#quality-summary and #quality-trend), so the page does not jump when
+    // they arrive (O-16).
     let summary_skeleton = skeletons::stat_row(6);
     let trend_skeleton = skeletons::hourly_bars(30);
 

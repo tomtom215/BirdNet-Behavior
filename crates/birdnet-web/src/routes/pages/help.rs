@@ -40,10 +40,10 @@
 //! * Admin diagnostics → Troubleshooting (`admin::doctor::card_open`).
 //! * Quality low-confidence species → Tuning (shipped in #91).
 //!
-//! Still TODO(O-20-followup) for the remaining DIFF rows (admin settings
-//! sub-cards, admin audio post-O-13, admin remote-access, admin backups,
-//! correlation matrix, sharing, etc.) — same one-line pattern per file
-//! whenever the maintainer wants to extend.
+//! The rest have no link yet (admin settings sub-cards, admin audio, admin
+//! remote-access, admin backups, sharing, …): 12 of the 24 [`Topic`]s are named
+//! nowhere outside this file. Why, and the count, are TD-2 in
+//! `docs/TECH_DEBT.md`; the pattern for adding one is a single `help_link` call.
 
 use std::path::PathBuf;
 
@@ -147,10 +147,9 @@ async fn rewrite_extensionless_help(mut req: Request, next: Next) -> Response {
 
 /// Stable identifier for a docs page. Maps 1:1 to `docs/book/<section>/<page>.md`.
 ///
-/// Complete API surface: most variants don't have a call site in main yet
-/// — the broader per-template `help_link(Topic::...)` sweep is a
-/// TODO(O-20-followup), per the DIFF's 25-row table. Keep the enum whole
-/// so adding a call site is a one-line edit.
+/// Complete API surface: half the variants have no call site yet (TD-2 in
+/// `docs/TECH_DEBT.md`). Keep the enum whole so adding a call site is a
+/// one-line edit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum Topic {
@@ -258,8 +257,8 @@ pub fn help_link_labeled(topic: Topic, label: &str) -> String {
 /// `<dialog>` so the user doesn't lose the current screen. Pairs with the
 /// `_partial_help_drawer.html` mounted in `layout.html`.
 ///
-/// Part of the documented API surface; no call site exists in main yet
-/// (the per-template sweep is TODO(O-20-followup)).
+/// Part of the documented API surface; no call site exists yet (TD-2 in
+/// `docs/TECH_DEBT.md`).
 #[must_use]
 #[allow(dead_code)]
 pub fn help_drawer(topic: Topic, label: &str) -> String {
