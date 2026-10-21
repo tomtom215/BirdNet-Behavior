@@ -629,7 +629,7 @@ mod tests {
         assert!(etag_matches("W/\"abc\"", tag));
         assert!(etag_matches("\"zzz\", \"abc\"", tag));
         assert!(etag_matches("*", tag));
-        assert!(!etag_matches("\"abd\"", tag));
+        assert!(!etag_matches("\"abx\"", tag));
         assert!(!etag_matches("", tag));
     }
 }

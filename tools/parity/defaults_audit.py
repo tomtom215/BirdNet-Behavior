@@ -7,7 +7,7 @@ Each cell is a pair (file, regular expression).  The script finds the first line
 `value  (file:line)`, and exits 1 if any pattern matches nothing, so a cell cannot go on citing a line that has moved
 or a value that has changed.  What a cell *says* is written next to the pattern and is the reader's to judge; what
 this checks is that the cited line holds the cited text.  Pinned upstream commits: BirdNET-Pi 88985a3, birdnet-go
-30d163ded.
+`30d163ded`.
 """
 import argparse
 import os

@@ -4,7 +4,7 @@
     birdnet_go_estimate.py OURS.json [OURS2.json ...] --pi-golden x0_pi_default.json [--pi-golden-2 a1_station.json]
 
 birdnet-go itself was not executed (it needs a Go build and its own runtime libraries); this applies the rules its source
-shows (`internal/classifier/analyze.go`, `internal/analysis/processor/processor.go`, commit 30d163ded) to the same
+shows (`internal/classifier/analyze.go`, `internal/analysis/processor/processor.go`, commit `30d163ded`) to the same
 per-window top-10 raw logits `tests/parity_dump.rs` writes (FP32 ONNX, the model birdnet-go also runs):
 
   score      sigmoid(sensitivity x logit), sensitivity 1.0           (analyze.go: customSigmoid)

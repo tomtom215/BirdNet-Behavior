@@ -574,7 +574,7 @@ mod tests {
         )));
         assert!(!usable_share_secret(&format!("short-{pid}")));
         assert!(usable_share_secret(&format!(
-            "q3ZC0Ma7b4vX1l5pQd9rT2wYk8nH6sJfUe0iLzAoBc4-{pid}"
+            "q3ZC0Ma7b4vX1l5pQd9rT2wYk8nH6sJfUk0iLzAoBc4-{pid}"
         )));
     }
 
