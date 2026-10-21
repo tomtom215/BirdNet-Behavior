@@ -20,7 +20,15 @@
 //   - the 404 page offers the switcher too, and choosing a version leaves it;
 //   - at 390 px the menu bar does not clip the book title to an ellipsis and
 //     the page does not scroll sideways;
-//   - search finds a word that is on the page, and each result opens.
+//   - search finds a word that is on the page, and each result opens;
+//   - axe-core finds nothing serious or critical against WCAG 2.0 to 2.2 A and
+//     AA on the front page of the root, the oldest version and dev, the 404
+//     page, and two pages with the markup that has failed before (a table of
+//     code samples in the dark theme, a wide table), in the light and the navy
+//     theme, at 1440 and 390 px. Best-practice rules and the `minor` and
+//     `moderate` findings are not gated: mdBook's own toolbar is outside any
+//     landmark (`region`), and the switch is a label that takes role=button
+//     (`aria-allowed-role`, minor).
 //
 // Needs Playwright: `npm ci` in tools/visual-qa. CHROMIUM_PATH picks a browser.
 import { createRequire } from 'node:module';
@@ -185,6 +193,39 @@ console.log('phone, 390 px');
     const s = await snapshot(phone);
     check(!s.titleClipped, `${p.label}: the menu bar does not clip the book title to an ellipsis`);
     check(!s.sideways, `${p.label}: the page does not scroll sideways`);
+  }
+}
+
+// Accessibility.
+console.log('accessibility (axe), light and navy, 1440 and 390 px');
+{
+  const AxeModule = require('@axe-core/playwright');
+  const AxeBuilder = AxeModule.default || AxeModule.AxeBuilder || AxeModule;
+  const oldest = manifest.versions[manifest.versions.length - 2];
+  const targets = [
+    ['root front page', SITE + PAGE],
+    [`${oldest.name} front page`, SITE + oldest.path + PAGE],
+    ['dev front page', SITE + 'dev/' + PAGE],
+    ['the 404 page', SITE + 'v9.9.9/'],
+    ['design tokens', SITE + 'reference/design-tokens.html'],
+    ['migration guide', SITE + 'guides/migration.html'],
+  ];
+  for (const width of [1440, 390]) {
+    for (const theme of ['light', 'navy']) {
+      const ctx = await browser.newContext({ viewport: { width, height: 844 }, colorScheme: theme === 'light' ? 'light' : 'dark' });
+      await ctx.addInitScript((t) => { try { localStorage.setItem('mdbook-theme', t); } catch (e) { /* none */ } }, theme);
+      const pg = await ctx.newPage();
+      for (const [label, url] of targets) {
+        await pg.goto(url, { waitUntil: 'networkidle' });
+        await pg.waitForSelector('.bnb-version-select', { timeout: 3000 }).catch(() => {});
+        const r = await new AxeBuilder({ page: pg })
+          .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
+        const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+        check(bad.length === 0, `${label}, ${theme}, ${width}px`,
+          bad.map((v) => `${v.id} (${v.nodes.length}): ${v.nodes[0].target.join(' ')}`).join('; '));
+      }
+      await ctx.close();
+    }
   }
 }
 
