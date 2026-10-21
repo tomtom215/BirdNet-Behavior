@@ -190,6 +190,59 @@ async fn a_successful_sign_in_clears_the_address_failures() {
     );
 }
 
+/// A moment when the users cannot be read is not a sign-in and not a guess.
+/// The Unavailable arm used to call `succeeded`, which forgets every failure
+/// the address has made: four wrong guesses, one moment of an unreadable
+/// database, and the address had a fresh five. The unreadable attempt itself is
+/// still not counted (five of them must not lock anyone out of their own garden).
+#[tokio::test]
+async fn an_unreadable_user_table_neither_clears_nor_adds_to_the_failures() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = AppState::new(dir.path().join("birds.db")).expect("state");
+    let hash = birdnet_db::accounts::hash_password(&password()).expect("hash");
+    state
+        .with_db(|c| {
+            c.execute(
+                "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
+                rusqlite::params![hash],
+            )
+        })
+        .expect("set admin password");
+    for i in 1..=4 {
+        let res = post_login(&state, "203.0.113.7", &wrong_password()).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "guess {i}");
+    }
+
+    state
+        .with_db(|c| c.execute_batch("ALTER TABLE users RENAME TO users_away"))
+        .expect("take the table away");
+    // Several unreadable attempts: none is a guess, so none may count.
+    for i in 1..=3 {
+        let res = post_login(&state, "203.0.113.7", &wrong_password()).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "unreadable {i}");
+        assert!(
+            res.headers()["location"]
+                .to_str()
+                .unwrap()
+                .contains("error=lookup"),
+            "unreadable {i} is reported as the station's fault"
+        );
+    }
+    state
+        .with_db(|c| c.execute_batch("ALTER TABLE users_away RENAME TO users"))
+        .expect("put it back");
+
+    // Four guesses stand. The fifth is still allowed and is the last.
+    let fifth = post_login(&state, "203.0.113.7", &wrong_password()).await;
+    assert_eq!(fifth.status(), StatusCode::SEE_OTHER, "the fifth guess");
+    let sixth = post_login(&state, "203.0.113.7", &wrong_password()).await;
+    assert_eq!(
+        sixth.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "the four earlier guesses were forgotten when the table was unreadable"
+    );
+}
+
 async fn post_login_via(
     state: &AppState,
     peer: &str,

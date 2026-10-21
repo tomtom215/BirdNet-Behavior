@@ -143,8 +143,11 @@ async fn login_submit(
                 Authenticated::Unavailable => {
                     // Not a guess, so not charged to the throttle: five of these
                     // would otherwise lock someone out of their own garden over a
-                    // fault that was never theirs.
-                    state.login_throttle().succeeded(attempt);
+                    // fault that was never theirs. Withdrawn, not `succeeded`: that
+                    // forgets every failure the address has made, so a client with
+                    // four wrong guesses got a fresh five by finding a moment the
+                    // database was unreadable.
+                    state.login_throttle().withdraw(attempt);
                     let query = format!("?error=lookup&next={}", urlencode_path(&next));
                     return Redirect::to(&format!("/login{query}")).into_response();
                 }
