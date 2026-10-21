@@ -285,15 +285,30 @@ Not done, in the order they seem to matter:
   Also open from earlier parts: the interface text is English only, voice-activity
   detection, a page to edit trusted proxies, native non-WAV clip export, and
   birdnet-go's `range/heatmap`.
-- **Settings that take effect without a restart** (P-7): 47 of the 67 entries in
-  `SETTING_SPECS` are overlaid onto the config and take effect on the next start
-  (counted by parsing the table). Whether each of the other 20 is read per use or
-  once at start was not checked.
-- **`#[allow]` attributes without a reason:** 430 of 438 (counted by a parser over
-  `crates`, `src` and `tests`), mostly numeric cast lints (`cast_precision_loss`
-  201, `cast_possible_truncation` 189, `cast_sign_loss` 129). Adding a truthful
-  reason to each needs reading each site; a mass edit would invent reasons. Six
-  `TODO(O-nn-followup)` markers remain, each tied to an audit row.
+- **Settings that take effect without a restart** (P-7): settled. Every entry in
+  the settings page now carries an "Applies immediately" or "Applies after restart"
+  badge from one table (`routes/admin/settings/applies.rs`), each entry naming the
+  consumer that was read to decide it; a test fails for a field without a badge or
+  an entry without evidence. A banner lists changes still waiting for a restart.
+- **`#[allow]` attributes without a reason:** 419 of 429 attributes (732 lint
+  entries; a `syn` parser over `crates`, `src`, `tests` and `tools`, counted on
+  2026-10-21 after 24 were deleted and 19 trimmed because clippy, run with every
+  named lint forced to `warn`, showed them silencing nothing; the same clippy
+  diagnostics came out before and after for the seven non-web crates). The five
+  numeric cast lints are 573 of the 732 entries (`cast_precision_loss` 200,
+  `cast_possible_truncation` 184, `cast_sign_loss` 124, `cast_possible_wrap` 42,
+  `cast_lossless` 23), 261 of them in `birdnet-web` and 182 in `birdnet-core`; 109
+  entries are module-wide (`#![allow]`). **Proposal, not implemented:** allow the
+  cast lints once in `[workspace.lints.clippy]`, the way `module_name_repetitions`
+  already is, and delete the 573 entries; keep `reason = "…"` for every other lint.
+  Not implemented because it silences casts in code that has no allow today, and
+  the number of such sites was not measured. Not done: the dead-allow analysis for
+  `birdnet-web` (376 of the 732 entries) and the root crate (43), because the
+  `birdnet-web` lib-test target did not compile while another change was in flight;
+  `suboptimal_flops` allows were removed where the workspace already allows it.
+  The six `TODO(O-nn-followup)` markers are resolved (reworded to what the code
+  does or recorded in `docs/TECH_DEBT.md`) and `tests/no_todo_ships_in_the_source.rs`
+  refuses a new one.
 - **The Unreleased CHANGELOG is 121,915 bytes.** `release.yml` warns above
   120,000; GitHub caps a release body at 125,000 characters. Entries added after
   this must be short, or older ones condensed.
@@ -303,42 +318,33 @@ Not done, in the order they seem to matter:
   attribute is a different matter): the long accounts of both are in
   `docs/book/field/hardening.md` and `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`;
   neither was worked on this session.
-- **Failed reads still shown as empty, found by the last sweep and not fixed**
-  (each is outside code that session was changing; severity is the agent's, from
-  reading): the species page hero says "No recording captured for this species
-  yet" when its query failed (`species_pages.rs` ~1131/1143, medium); the Capture
-  tab's source list and chips read empty and 0/0 (`admin/audio.rs` ~198, medium);
-  "No per-species thresholds configured" on a failed read
-  (`admin/species/handler.rs` ~301, medium); the last scheduled backup reads as
-  never run (`admin/backup_recovery.rs` ~122, low-medium); listen-default and count
-  chips show 0 (`admin/audio.rs` ~220/708/1019, low); the image blacklist check
-  fails open and serves a blacklisted image (`images.rs` ~232, low); the live source
-  picker and the wizard's source list read empty (`recordings.rs` ~575,
-  `onboarding.rs` ~170, low); `livestream.rs` ~810 answers 404 where 503 is true
-  (low); `capture_outage` reads green "recording" if its freshness read fails during
-  the first seconds after a start (low). The sweep (a script kept in the session's
-  scratch, not in the repository) found 188 hit-lines and classified 61 as handled,
-  34 decoration, 29 request parameters, 16 filesystem or clock, 13 fail-closed, 9
-  deliberate omissions from an exposition, 7 task panics (6 fixed), 1 legitimate
-  zero and the 15 above.
-- **Blocking filesystem calls inside `async fn` bodies** (an approximate scan, not a
-  `syn` parse): 11 call sites in 6 functions, and 5 more through synchronous helpers.
-  On a page path: `species_image_file` (`std::fs::read` up to four times per
-  avatar), `serve_recording` and `serve_spectrogram` (`canonicalize` twice each),
-  and `fetch_clips`, which reads the whole recordings directory
-  (`recording_basenames`, the largest single one). Rare: `download_backup`,
-  `database_overview`, the HLS start. Extending
-  `tests/database_work_stays_off_the_async_runtime.rs` to filesystem calls looks
-  feasible (about 150 to 200 lines in the test and about ten production edits to
-  `tokio::fs` or into the existing blocking closures); the risks are std method
-  names colliding in the by-name fixed point, and callees in other crates.
-- **Numeric settings with no bound in `validate()`** (the daemon parses them and
-  silently falls back to the default on failure; its behaviour for each was not
-  examined): `freq_shift_hz`, `pre_sunrise_offset`, `post_sunset_offset`,
-  `notify_cooldown`, `deadman_hours`, `clip_retention_days`, `max_files_per_species`,
-  `purge_threshold`, `extraction_length`, `rare_species_days`, `stream_retention_secs`,
-  `stream_max_mb`, `email_smtp_port`, `email_cooldown_secs`, `clip_target_lufs`.
-  `RECORDING_LENGTH` is a known key that nothing reads.
+- **Failed reads shown as facts:** the sweep is now a test
+  (`tests/a_failed_read_is_not_defaulted_into_a_fact.rs`, a `syn` parse of every
+  crate; its table is `tests/data/read_default_sweep.tsv`, one row per site, with a
+  class and a gate that fails on an unclassified site and on a stale row). Fixed
+  with a failing-first test each: the species page hero, per-species thresholds,
+  the last scheduled backup, the image blacklist (now fails closed: a withdrawn
+  picture is not served because the database did not answer), the live source
+  picker, `/stream` (503 where the table is unreadable, 404 only for a missing
+  row), the Today pill and outage banner, the BirdWeather and rule tests, share
+  links, the Migration cards, sign-in, and the invite label. Still open, as
+  `tracked:TD-n` rows with their evidence in `docs/TECH_DEBT.md`: TD-1 (a failed
+  read inside the station-health evaluator ends an alert), TD-3 (the boot
+  journal's detection count), TD-4 (the Capture tab's duplicate guard and the
+  wizard's source list) and TD-6 (partials routed and never linked).
+- **Blocking filesystem calls inside `async fn` bodies:** the gate
+  `tests/database_work_stays_off_the_async_runtime.rs` now follows `std::fs`
+  and `Path` stat calls (a `syn` parse with a fixed point over call names, in
+  every crate); 42 calls in 28 functions moved to `tokio::fs` or the blocking pool.
+  The gate's limits: it resolves calls by name, so a method that shares a name with
+  a `std` one is on a deny list, `/proc` reads are exempt, and the one-shot
+  command-line actions in `main` and the start-up calls in `serve` are exempt by an
+  explicit list.
+- **Numeric settings with no bound in `validate()`:** done for the fifteen
+  (`validate::FIELD_BOUNDS`, read from what the daemon does with each). They are
+  warnings in the file, not errors, because an error reverts the whole station to
+  its last-good file; the settings page and `PUT /api/v2/settings` refuse them.
+  `RECORDING_LENGTH` is read as `SEGMENT_DURATION` when that is absent or blank.
 - **`--doctor` reports a config value outside its range as a warning, not a
   refusal** (`START_CRITICAL` holds four names: configuration file, web listen
   address, database directory, HTTPS), so a bad number leaves a station running on a
@@ -362,27 +368,23 @@ Not done, in the order they seem to matter:
   models survives unless a model-free test reaches it; and a real clock never
   equals a `Duration`, so put a time comparison in a function of its two durations
   to test the boundary.
-- **Two CodeQL warnings, on lines identical to main's, not changed:** both are
-  `warning` level and neither fails the check. `crates/birdnet-web/static/sw.js:80` is
-  a `message` handler with no origin check; it acts only on `SKIP_WAITING`, and a
-  service worker's clients are same-origin, so it looks like a false positive, but a
-  one-line `event.origin` comparison would silence it and `sw_harness.mjs` could
-  test it. `tools/visual-qa/qa.mjs:354` writes the sweep's report, which holds
-  fixture data read over HTTP, to a file. Whether `main` lists either is unknown.
-- **The literal-password pattern is still in 13 test files this PR does not touch**
-  (`crates/birdnet-db/src/accounts/users.rs` is the densest), and in
-  `crates/birdnet-web/src/routes/admin/accounts.rs`, which it does touch, at
-  `hash_password("a-real-password-here")`. That count is a lower bound: a grep for
-  `hash_password("`, `const PASSWORD` and `verify_password(… "…"`, not the query.
-  CodeQL annotated none of them on this PR, and flagged six unchanged lines in
-  files that were touched, so the files a PR touches do not predict where it
-  annotates. Fix them as `src/helpers/auth.rs` was: build the value with `format!`
-  over `std::process::id()`, and let no helper take the literal as an argument.
-- **Smaller findings, not fixed:** `/pages/quarantine-pending-count` is routed but
-  nothing links to it; the invite form posts a blank label as `""`; the occurrence
-  page lists 100 species before "Show the next 100", about 4,900 px on a phone;
-  RTSP credentials are on the `ffmpeg` command line (`ps` shows them; logs are
-  redacted) and cannot be avoided with ffmpeg 6.1.1;
+- **Two CodeQL warnings:** `sw.js` now compares `event.origin` with its own
+  origin before acting on `SKIP_WAITING` (`sw_harness.mjs` was seen failing for a
+  foreign origin first). `qa.mjs` writes fixture data to the report file; it is a
+  dismissal, with the reason written above the line. Whether CodeQL stops reporting
+  either is not known until it runs.
+- **The literal-password pattern:** `tests/no_literal_reaches_a_credential_parameter.rs`
+  parses the tree and fails on a literal that reaches a parameter named `password`,
+  `nonce`, `iv`, `salt` or `secret`; 62 sites were fixed with `format!` over the
+  process id. That the CodeQL query agrees was not run here.
+- **Smaller findings:** `/pages/quarantine-pending-count` is deleted (nothing
+  linked to it); the blank invite label is stored as no label; the range-filter list
+  shows 25 species and appends 25 more in place (about 1,800 px on a phone,
+  measured, from about 4,900); RTSP credentials are still on the `ffmpeg` command
+  line: ffmpeg 6.1.1's `concat` demuxer, fed a list file, accepted credentials
+  without them appearing in `ps`, against a test RTSP server that required Basic
+  authentication (`tools/rtsp-probe/`), but the station does not use it yet
+  (TD-5);
   the unit runs as the login user with `ProtectHome=read-only`, so that user's
   `~/.ssh` is readable by the service; the compose file has no `cap_drop` or
   `no-new-privileges`; the macOS formula carries an all-zero `sha256` (it fails

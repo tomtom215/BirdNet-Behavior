@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **birdnet-go parity: P-2, P-9, P-10, P-11, P-12, P-14, P-15, P-21, P-22.**
+  A per-species minimum interval between detections (`species_intervals`, migration 56,
+  Admin → Capture); MQTT client-certificate TLS (`MQTT_CLIENT_CERT`/`KEY`, `--doctor`
+  checks the pair); `EMBED_ORIGINS`, an origin list (never `*`) that may frame the
+  station; learned dynamic thresholds listed, counted and reset (`/api/v2/dynamic-thresholds`,
+  a bearer `POST …/reset`, an admin card); BirdWeather upload threshold and position blur;
+  `hardware.json` (CPU, memory, USB and sound devices, no serials) in the support bundle;
+  test buttons for MQTT, eBird and weather that show the real failure; a weather JSON API
+  (`/api/v2/weather/*`); a Secure connection card with the local CA download on the Access tab.
+
 - **A new station can be set up from the browser alone.** The setup wizard has
   a Model step (install the 54 MB classifier with a progress bar), a microphone
   picker listing the sound cards with a level test, and plain-language presets;
