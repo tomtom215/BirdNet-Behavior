@@ -1096,19 +1096,22 @@ async fn species_status_partial(
 async fn species_hero_partial(
     State(state): State<AppState>,
     Query(query): Query<SpeciesQuery>,
-) -> impl axum::response::IntoResponse {
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
     let Some(name) = query.name else {
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
             String::new(),
-        );
+        )
+            .into_response();
     };
 
     let lookup_name = name.clone();
     let state_clone = state.clone();
-    let best = tokio::task::spawn_blocking(move || {
-        state_clone.with_read_db(|conn| {
+    let read = tokio::task::spawn_blocking(move || {
+        state_clone.with_read_db(|conn| -> Result<_, rusqlite::Error> {
+            use rusqlite::OptionalExtension as _;
             // Shares `CLIP_AVAILABLE` with every other play-button surface, so
             // this page cannot end up offering audio the Recordings browser
             // knows has been reclaimed.
@@ -1119,6 +1122,11 @@ async fn species_hero_partial(
                  ORDER BY Confidence DESC LIMIT 1",
                 clip = birdnet_db::sqlite::CLIP_AVAILABLE,
             );
+            // `optional()` is the discrimination: no row is "no clip yet", an
+            // error is "could not look". Both used to be `.ok()` -> `None`, and
+            // the page told the operator of a station whose database had failed
+            // that no recording had been captured for a bird heard a hundred
+            // times.
             let best = conn
                 .query_row(&sql, [&lookup_name], |r| {
                     Ok((
@@ -1128,24 +1136,39 @@ async fn species_hero_partial(
                         r.get::<_, String>(3)?,
                     ))
                 })
-                .ok();
+                .optional()?;
             // With nothing to play, whether there ever was anything: retention
             // reclaims clips and keeps the rows, and "no recording captured"
             // is false for a bird recorded a hundred times last spring.
-            let reclaimed = best.is_none()
-                && conn
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM detections_analytic \
-                         WHERE Com_Name = ?1 AND Clip_Pruned_At IS NOT NULL)",
-                        [&lookup_name],
-                        |r| r.get::<_, bool>(0),
-                    )
-                    .unwrap_or(false);
-            (best, reclaimed)
+            let reclaimed = if best.is_none() {
+                conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM detections_analytic \
+                     WHERE Com_Name = ?1 AND Clip_Pruned_At IS NOT NULL)",
+                    [&lookup_name],
+                    |r| r.get::<_, bool>(0),
+                )?
+            } else {
+                false
+            };
+            Ok((best, reclaimed))
         })
     })
-    .await
-    .unwrap_or((None, false));
+    .await;
+
+    let best = match read {
+        Ok(Ok(best)) => best,
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species hero: query failed");
+            return super::error_states::failed_partial("this species' best recording")
+                .into_response();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species hero: task failed");
+            return super::error_states::failed_partial("this species' best recording")
+                .into_response();
+        }
+    };
 
     let (Some((date, time, conf, file_name)), _) = best else {
         let (caption, note) = if best.1 {
@@ -1161,7 +1184,7 @@ async fn species_hero_partial(
 <div class="bnb-photo spp-photo-empty" data-caption="{caption}"></div>
 <p class="bnb-meta spp-mt8">{note}</p>"#
         );
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
+        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html).into_response();
     };
 
     let basename = std::path::Path::new(&file_name)
@@ -1182,7 +1205,7 @@ async fn species_hero_partial(
 <div class="bnb-meta mono spp-mt8">{conf_pct:.0}% confidence · {date} {time_short}</div>"#,
     );
 
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html).into_response()
 }
 
 /// HTMX partial: companion species (co-occurrence).
