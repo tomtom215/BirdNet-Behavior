@@ -898,9 +898,21 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   position: sticky; top: 0; z-index: var(--z-sticky);
   display: flex; align-items: center; gap: var(--space-14); flex-wrap: wrap;
   padding: var(--space-10) 22px;
-  background: color-mix(in oklab, var(--bg) 86%, transparent);
-  backdrop-filter: saturate(1.4) blur(8px);
+  background: color-mix(in oklab, var(--bg) 80%, transparent);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   border-bottom: var(--bw) solid var(--hairline);
+}
+/* The bar gains a soft shadow as the page scrolls under it, driven by the scroll
+   position itself (no script). Not offered when motion is reduced. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: scroll()) {
+    .topnav { animation: bnb-nav-lift linear both; animation-timeline: scroll(root block); animation-range: 0 72px; }
+  }
+}
+@keyframes bnb-nav-lift {
+  from { box-shadow: 0 0 0 0 transparent; }
+  to   { box-shadow: 0 10px 28px -18px color-mix(in oklab, var(--shadow-tint) 45%, transparent); }
 }
 .topnav-brand { display: flex; align-items: center; gap: var(--space-8); text-decoration: none; }
 .topnav-brand:hover { text-decoration: none; }
@@ -910,9 +922,10 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .topnav-link {
   padding: var(--space-4) var(--space-10); border-radius: var(--r-sm); text-decoration: none;
   font-size: var(--fs-md); color: var(--fg-3); font-weight: var(--fw-regular); white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .topnav-link:hover { text-decoration: none; color: var(--fg); background: var(--surface-2); }
-.topnav-link.active { color: var(--fg); background: var(--surface-2); font-weight: var(--fw-medium); }
+.topnav-link.active { color: var(--fg); background: var(--surface-raised); box-shadow: var(--shadow-xs), 0 0 0 var(--bw) var(--border); font-weight: var(--fw-medium); }
 .topnav-right { margin-left: auto; display: flex; align-items: center; gap: var(--space-12); }
 /* The health badge arrives by htmx a moment after the page, and its label is a
    different width from the placeholder it replaces. The group is anchored to the
@@ -929,13 +942,48 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   border: var(--bw) solid var(--border); background: var(--surface); color: var(--fg-2);
   cursor: pointer; font-size: var(--fs-base); line-height: 1;
 }
+.icon-btn { box-shadow: var(--shadow-xs), var(--shadow-inset); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out); }
 .icon-btn:hover { background: var(--surface-2); color: var(--fg); }
+.icon-btn:active { transform: scale(var(--press-scale)); }
+/* The theme button's two glyphs were the characters ☽ and ☀, which each platform
+   draws in its own font and weight. The script still writes one of them into
+   #theme-icon; it is hidden (font-size 0) and an icon drawn as a mask takes its
+   place, in the button's own ink, so it follows hover and high contrast. The
+   moon is what light shows (press it for night), the sun what dark shows. */
+#theme-icon { display: inline-block; width: 16px; height: 16px; font-size: 0; line-height: 0; }
+#theme-icon::before {
+  content: ""; display: block; width: 100%; height: 100%; background: currentColor;
+  -webkit-mask: var(--icon-moon) center / contain no-repeat; mask: var(--icon-moon) center / contain no-repeat;
+}
+:root[data-theme="dark"] #theme-icon::before { -webkit-mask-image: var(--icon-sun); mask-image: var(--icon-sun); }
 .nav-search input {
   padding: 5px var(--space-10); border: var(--bw) solid var(--border); border-radius: var(--r-sm);
   background: var(--surface); color: var(--fg); font-size: var(--fs-md); width: 150px;
   transition: width var(--dur-base) ease, border-color var(--dur-base) ease; font-family: var(--font-ui);
 }
 .nav-search input:focus { width: 210px; border-color: var(--moss); }
+
+/* ── Motion: page arrival ─────────────────────────────────────────────────
+   Two things, both off when the OS or the operator asks for reduced motion.
+   A full navigation cross-fades instead of flashing white (the cross-document
+   View Transitions API: the nav and the phone's tab bar are named so they hold
+   still while the page between them changes). And the first screenful arrives
+   in order, each block a beat after the one above, a rise of 10 px and a
+   fade, with `backwards` fill so nothing keeps a transform afterwards (a
+   transform would turn the block into the containing block of a fixed child). */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: var(--dur-base); animation-timing-function: var(--ease-out); }
+  .topnav { view-transition-name: bnb-topnav; }
+  .bnb-tabbar { view-transition-name: bnb-tabbar; }
+  main > * { animation: bnb-reveal var(--dur-slow) var(--ease-out) backwards; }
+  main > :nth-child(2) { animation-delay: var(--stagger); }
+  main > :nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
+  main > :nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
+  main > :nth-child(n+5) { animation-delay: calc(var(--stagger) * 4); }
+}
+:root[data-motion="reduced"] main > *, :root[data-motion="reduced"] .topnav { animation: none; }
+@keyframes bnb-reveal { from { opacity: 0; transform: translateY(10px); } }
 
 /* ── Layout ───────────────────────────────────────────────────────────── */
 main {
@@ -973,7 +1021,7 @@ main {
 .stat-row {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
   border: var(--bw) solid var(--border); border-radius: var(--r-lg);
-  overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm);
+  overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm), var(--shadow-inset);
 }
 .stat-tile { padding: var(--pad-3); border-right: var(--bw) solid var(--hairline); display: flex; flex-direction: column; gap: var(--space-12); min-height: 150px; }
 .stat-tile:last-child { border-right: 0; }
@@ -991,11 +1039,12 @@ main {
 .feed-row .ago { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .feed-row .who .name { font-weight: var(--fw-medium); font-size: var(--fs-base); }
 .feed-row .who .sci  { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-row:hover { background: color-mix(in oklab, var(--fg) 3.5%, transparent); }
 .feed-row.fresh { background: color-mix(in oklab, var(--moss) 6%, var(--surface)); border-color: color-mix(in oklab, var(--moss) 30%, var(--border)); }
 
 /* Mini bar waveform (deterministic envelope rendered server-side) */
 .waveform { display: inline-flex; align-items: center; gap: 1.5px; height: 22px; }
-.waveform span { width: 2px; border-radius: 1px; background: color-mix(in oklab, var(--moss) 60%, var(--fg-4)); }
+.waveform span { width: 2px; border-radius: var(--r-3xs); background: color-mix(in oklab, var(--moss) 60%, var(--fg-4)); }
 
 /* Activity heatmap (compact) */
 .miniheat-row { display: flex; gap: var(--space-6); align-items: center; margin-top: 3px; }
@@ -1010,8 +1059,8 @@ main {
 /* ── Legacy class bridges (pre-redesign screens/partials) ─────────────── */
 .card {
   background: var(--surface); border: var(--bw) solid var(--border);
-  border-radius: var(--r-lg); padding: var(--pad-3); margin-bottom: var(--pad-3);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--r-card); padding: var(--pad-3); margin-bottom: var(--pad-3);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
 }
 .card h2 {
   font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--fg-3);
@@ -1022,7 +1071,7 @@ main {
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--pad-2); margin-bottom: var(--pad-3); }
 .stat-card {
   background: var(--surface); border: var(--bw) solid var(--border);
-  border-radius: var(--r-lg); padding: var(--pad-3); box-shadow: var(--shadow-sm);
+  border-radius: var(--r-card); padding: var(--pad-3); box-shadow: var(--shadow-sm), var(--shadow-inset);
 }
 .stat-card .value { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: var(--fs-stat); line-height: 1; color: var(--fg); }
 .stat-card .label { font-size: var(--fs-xs); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg-3); margin-top: var(--space-8); font-weight: var(--fw-medium); }
@@ -1031,7 +1080,8 @@ table { width: 100%; border-collapse: collapse; }
 th, td { padding: var(--space-8) var(--space-12); text-align: left; border-bottom: var(--bw) solid var(--hairline); }
 th { font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--fg-3); text-transform: uppercase; letter-spacing: var(--track-caps-sm); }
 td { font-size: var(--fs-md); }
-tbody tr:hover { background: var(--surface-2); }
+tbody tr { transition: background var(--dur-fast) var(--ease-out); }
+tbody tr:hover { background: color-mix(in oklab, var(--moss) 5%, var(--surface)); }
 
 .conf { display: inline-block; padding: var(--space-2) var(--space-8); border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; }
 .conf.high { background: var(--moss-soft); color: var(--moss-ink); }
@@ -1047,22 +1097,38 @@ tbody tr:hover { background: var(--surface-2); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-6);
-  padding: var(--space-6) var(--space-12); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm);
+  padding: var(--space-6) var(--space-12); border: var(--bw) solid var(--border-2); border-radius: var(--r-control); min-height: var(--control-h);
   background: var(--surface); color: var(--fg); font-size: var(--fs-md); font-weight: var(--fw-medium);
-  box-shadow: var(--shadow-sm); cursor: pointer; transition: background var(--dur-fast);
+  box-shadow: var(--shadow-xs), var(--shadow-inset); cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
-.btn:hover { background: var(--surface-2); text-decoration: none; }
-.btn-primary { background: var(--moss); color: var(--on-moss); border-color: transparent; }
-.btn-primary:hover { background: var(--moss-ink); }
-.btn.active { background: var(--fg); color: var(--bg); border-color: transparent; }
+.btn:hover { background: var(--surface-2); border-color: color-mix(in oklab, var(--border-2) 65%, var(--fg-3)); box-shadow: var(--shadow-sm), var(--shadow-inset); text-decoration: none; }
+.btn:active { transform: scale(var(--press-scale)); box-shadow: var(--shadow-press); }
+.btn-primary { background: var(--moss); color: var(--on-moss); border-color: transparent; box-shadow: var(--shadow-sm), var(--shadow-key); }
+.btn-primary:hover { background: var(--moss-ink); border-color: transparent; }
+.btn.active { background: var(--fg); color: var(--bg); border-color: transparent; box-shadow: var(--shadow-sm), var(--shadow-key); }
 
 /* Segmented control (period / range pickers) */
 .seg { display: inline-flex; gap: var(--space-4); flex-wrap: wrap; }
 
 input:not([type]), input[type="text"], input[type="search"], input[type="date"], input[type="number"], input[type="password"],
 input[type="email"], input[type="url"], input[type="tel"], input[type="time"], select, textarea {
-  padding: var(--space-6) var(--space-10); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm);
+  padding: var(--space-6) var(--space-10); border: var(--bw) solid var(--border-2); border-radius: var(--r-field);
   background: var(--surface); color: var(--fg); font-size: var(--fs-md); font-family: var(--font-ui);
+  box-shadow: var(--shadow-field);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+input:not([type]):hover, input[type="text"]:hover, input[type="search"]:hover, input[type="date"]:hover, input[type="number"]:hover,
+input[type="password"]:hover, input[type="email"]:hover, input[type="url"]:hover, input[type="tel"]:hover, input[type="time"]:hover,
+select:hover, textarea:hover { border-color: color-mix(in oklab, var(--border-2) 60%, var(--fg-3)); }
+/* A closed select draws its own chevron from two gradients, so it takes the
+   theme's ink; the native arrow is a fixed grey that vanishes on dark. */
+select:not([multiple]):not([size]) {
+  appearance: none; -webkit-appearance: none; padding-right: var(--space-28);
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%), linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
 /* Focus. `outline: none` used to live here, at (0,1,1) — higher than the
    `:focus-visible` rule further down at (0,1,0) — so the 2px indicator that
@@ -1086,7 +1152,18 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .progress { height: 6px; background: var(--surface-2); border-radius: var(--r-2xs); overflow: hidden; }
 .progress-bar { height: 100%; border-radius: var(--r-2xs); background: var(--moss); transition: width var(--dur-slow); }
 
-.empty-state { text-align: center; padding: var(--space-48) var(--space-24); color: var(--fg-3); }
+.empty-state {
+  text-align: center; padding: var(--space-48) var(--space-24); color: var(--fg-3);
+  /* A soft stage under the drawing: a few per cent of the brand green fading to
+     nothing, so an empty card reads as a place waiting for something. */
+  background: radial-gradient(60% 70% at 50% 28%, color-mix(in oklab, var(--moss) 7%, transparent), transparent 70%);
+  border-radius: var(--r-card);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .empty-state svg { animation: bnb-rise var(--dur-slower) var(--ease-out) backwards; }
+  .empty-state .es-h { animation: bnb-rise var(--dur-slower) var(--ease-out) .06s backwards; }
+  .empty-state .es-sub { animation: bnb-rise var(--dur-slower) var(--ease-out) .12s backwards; }
+}
 /* The illustrations are drawn on a 120-unit canvas; at 48 px square and half
    opacity they were a smudge above the sentence they were meant to introduce.
    Seventy-two px tall, full strength, the line art reads as a picture. */
@@ -1097,7 +1174,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
    the --rare family so an operator can tell at a glance which of the two they
    are looking at. The illustration is not dimmed the way an empty state's is:
    this one is meant to be noticed. */
-.error-state { color: var(--fg-2); }
+.error-state { color: var(--fg-2); background: radial-gradient(60% 70% at 50% 28%, color-mix(in oklab, var(--rare) 7%, transparent), transparent 70%); }
 .error-state svg { opacity: 1; }
 .error-state .es-h { color: var(--rare); }
 
@@ -1131,7 +1208,7 @@ footer a:hover { color: var(--moss-ink); }
    used to say `border-radius: 2px` here, which squared off every control the
    moment it was focused: 948 of 1,156 focus stops across the app (tools/visual-qa/
    focus.mjs), a pill (999px) or a 6px button turning into a hard-cornered box. */
-:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .skip-link {
   position: absolute; top: -48px; left: 8px; z-index: var(--z-skip);
   background: var(--moss); color: var(--on-moss); padding: var(--space-8) var(--space-14); border-radius: var(--r-sm);
@@ -1170,6 +1247,7 @@ footer a:hover { color: var(--moss-ink); }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-4); }
 
 @media (prefers-reduced-motion: reduce) {
+  :root { --lift: 0px; --press-scale: 1; }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .bnb-dot.live, .live-dot { animation: none; }
 }
@@ -1177,7 +1255,6 @@ footer a:hover { color: var(--moss-ink); }
 /* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 980px) {
   .hero { grid-template-columns: 1fr; }
-  .hero h1 { font-size: 46px; }
   .stat-row { grid-template-columns: repeat(2, 1fr); }
   .stat-tile:nth-child(2) { border-right: 0; }
   .stat-tile { border-bottom: var(--bw) solid var(--hairline); }
@@ -1193,7 +1270,6 @@ footer a:hover { color: var(--moss-ink); }
 }
 @media (max-width: 520px) {
   .stat-row { grid-template-columns: 1fr 1fr; }
-  .hero h1 { font-size: 38px; }
 }
 
 /* ── BNB:CSS-APPEND:O-03_display_prefs ── */
@@ -1202,6 +1278,7 @@ footer a:hover { color: var(--moss-ink); }
    No changes to existing rules; purely additive. */
 
 /* ── Motion override (in addition to OS prefers-reduced-motion) ──── */
+:root[data-motion="reduced"] { --lift: 0px; --press-scale: 1; }
 :root[data-motion="reduced"] *,
 :root[data-motion="reduced"] *::before,
 :root[data-motion="reduced"] *::after {
