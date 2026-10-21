@@ -399,3 +399,139 @@ fn the_default_file_sets_what_a_migrated_station_needs_to_behave_the_same() {
         assert_eq!(plan.value_of(setting), Some(value), "{setting}");
     }
 }
+
+/// An address is shown as `scheme://host[:port]`: enough to recognise it, none of
+/// the places a credential lives (user name, password, path, query).
+#[test]
+fn an_address_shows_its_host_and_nothing_a_credential_is_made_of() {
+    let plan = plan_of(
+        "HEARTBEAT_URL=https://user:pw0rd@hc-ping.com:8443/ping/9f8e7d6c?key=qq\n\
+         RTSP_STREAM=rtsp://cam:hunter2@10.0.0.5:554/s1,rtsp://10.0.0.6/s2\n",
+    );
+    let hb = row(&plan, "HEARTBEAT_URL");
+    assert_eq!(hb.shown, "https://hc-ping.com:8443");
+    assert_eq!(
+        hb.becomes,
+        [(
+            "heartbeat_url".to_owned(),
+            "https://hc-ping.com:8443".to_owned()
+        )]
+    );
+    let rtsp = row(&plan, "RTSP_STREAM");
+    assert_eq!(rtsp.shown, "rtsp://10.0.0.5:554, rtsp://10.0.0.6");
+    let printed = format!("{plan:?} {:?}", plan.rows);
+    for needle in ["pw0rd", "9f8e7d6c", "qq", "hunter2", "/s1", "cam"] {
+        assert!(
+            !printed.contains(needle),
+            "{needle} reached a display: {printed}"
+        );
+    }
+    // A key in the path alone (Healthchecks, ntfy) is hidden too.
+    let path_only = plan_of("HEARTBEAT_URL=https://hc-ping.com/aaaa-bbbb-cccc\n");
+    assert_eq!(
+        row(&path_only, "HEARTBEAT_URL").shown,
+        "https://hc-ping.com"
+    );
+    assert!(!format!("{path_only:?}").contains("aaaa-bbbb"));
+    // The real value is still what would be stored.
+    assert_eq!(
+        plan.value_of("heartbeat_url"),
+        Some("https://user:pw0rd@hc-ping.com:8443/ping/9f8e7d6c?key=qq")
+    );
+}
+
+/// A key the table does not know is not printed unless it is on the short list
+/// of plain ones; a key named like a credential is never printed.
+#[test]
+fn an_unknown_key_is_not_shown_and_a_credential_named_one_is_hidden() {
+    let plan = plan_of(
+        "BNB_API_TOKEN=tokenvalue1\nBNB_SESSION_SECRET=secretvalue2\nMQTT_PASSWORD=pwvalue3\n\
+         EMAIL_SMTP_PASSWORD=pwvalue4\nBNB_SHARE_SECRET=secretvalue5\nSOMETHING_ELSE=whatever6\n\
+         WEBHOOK_URL=https://u:p@example.org/hook/abc\nTZ=Europe/Amsterdam\n",
+    );
+    let printed = format!("{:?}", plan.rows);
+    for needle in [
+        "tokenvalue1",
+        "secretvalue2",
+        "pwvalue3",
+        "pwvalue4",
+        "secretvalue5",
+        "whatever6",
+        "u:p",
+        "/hook/abc",
+    ] {
+        assert!(
+            !printed.contains(needle),
+            "{needle} reached a display: {printed}"
+        );
+    }
+    assert_eq!(row(&plan, "SOMETHING_ELSE").shown, "(not shown)");
+    assert_eq!(row(&plan, "WEBHOOK_URL").shown, "https://example.org");
+    assert!(row(&plan, "BNB_API_TOKEN").shown.starts_with("(hidden"));
+    // The counterpart: a plain key on the list, and every key the table knows,
+    // still show their values.
+    assert_eq!(row(&plan, "TZ").shown, "Europe/Amsterdam");
+    let known = plan_of("LATITUDE=52.0\nCONFIDENCE=0.65\n");
+    assert_eq!(row(&known, "LATITUDE").shown, "52.0");
+}
+
+/// The name rule and the table agree: every key the table has that a name rule
+/// would call a credential is marked as one there.
+#[test]
+fn a_credential_named_key_in_the_table_is_marked_secret_there() {
+    for rule in birdnet_migrate::conf::RULES {
+        if birdnet_migrate::conf::is_secret_key(rule.pi_key)
+            && !birdnet_migrate::conf::is_url_key(rule.pi_key)
+        {
+            assert!(rule.secret, "{} is named like a credential", rule.pi_key);
+        }
+    }
+}
+
+/// A file as BirdNET-Pi installs it has all three notification switches at 0,
+/// so it imports as notifications off; the preview says so in a row of its own.
+#[test]
+fn a_default_file_says_notifications_will_be_off() {
+    let plan = plan_of(DEFAULT_CONF);
+    assert_eq!(plan.value_of("notify_trigger"), Some("off"));
+    let warning = plan
+        .rows
+        .iter()
+        .find(|r| r.pi_key == "(no BirdNET-Pi key)" && r.why.contains("notifications off"))
+        .expect("a warning row");
+    assert_eq!(warning.verdict, Verdict::Attention);
+    // The counterpart: with one switch on, there is nothing to warn about.
+    let on = plan_of("APPRISE_NOTIFY_EACH_DETECTION=1\n");
+    assert_eq!(on.value_of("notify_trigger"), Some("each"));
+    assert!(!on.rows.iter().any(|r| r.why.contains("notifications off")));
+}
+
+/// A large file is read in linear time and past the limit is counted, not
+/// planned: the preview prints a row per key.
+#[test]
+fn a_huge_file_is_capped_and_read_quickly() {
+    let mut text = String::new();
+    for i in 0..200_000 {
+        text.push_str(&format!("KEY_{i}=v\n"));
+    }
+    let started = std::time::Instant::now();
+    let plan = plan_of(&text);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(plan.rows.len(), birdnet_migrate::conf::MAX_ENTRIES);
+    assert_eq!(
+        plan.beyond_limit,
+        200_000 - birdnet_migrate::conf::MAX_ENTRIES
+    );
+}
+
+/// A repeated key still takes the position and value of its last line.
+#[test]
+fn a_repeated_key_keeps_the_last_line_in_the_last_position() {
+    let conf = ConfFile::parse("A=1\nB=2\nA=3\nC=4\n");
+    let keys: Vec<(&str, &str)> = conf
+        .entries
+        .iter()
+        .map(|e| (e.key.as_str(), e.value.as_str()))
+        .collect();
+    assert_eq!(keys, [("B", "2"), ("A", "3"), ("C", "4")]);
+}

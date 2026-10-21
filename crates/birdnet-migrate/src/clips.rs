@@ -141,7 +141,9 @@ pub struct Options {
     pub room: Option<DiskRoom>,
     /// Clips for detections dated before this (`YYYY-MM-DD`) are older than
     /// the retention this station is set to, and would be removed by its next
-    /// maintenance pass. Counted in the report, not acted on.
+    /// maintenance pass. Counted in the report; a [`Mode::Move`] of any such
+    /// clip is refused with [`ClipError::MoveWouldBeDeleted`], because it would
+    /// leave no copy anywhere.
     pub retention_cutoff: Option<String>,
 }
 
@@ -204,6 +206,12 @@ pub enum ClipError {
     BadDestination(String),
     /// Hard links need one filesystem and the two are not.
     DifferentFilesystems,
+    /// A move would take BirdNET-Pi's only copy of clips that this station's
+    /// retention would delete at its next cleanup.
+    MoveWouldBeDeleted {
+        /// How many of the clips to be moved are older than the retention.
+        older_than_retention: u64,
+    },
     /// The copy would not fit, or would take the disk past the point at which
     /// this station starts deleting clips.
     NoRoom {
@@ -231,6 +239,15 @@ impl std::fmt::Display for ClipError {
                 f,
                 "BirdNET-Pi's clips and this station's recordings are on different disks, so \
                  they cannot be linked; choose copy or move"
+            ),
+            Self::MoveWouldBeDeleted {
+                older_than_retention,
+            } => write!(
+                f,
+                "{older_than_retention} of these recordings are older than the number of days \
+                 this station keeps clips for, so its next cleanup would delete them, and moving \
+                 them would leave no copy anywhere. Choose copy, or raise the clip retention \
+                 first"
             ),
             Self::NoRoom {
                 needed,
@@ -522,6 +539,13 @@ pub fn run(
     // costs. The room check and the progress total come from it, and a dry run
     // ends here, so the preview and the run are one computation.
     let surveyed = pass(&root, options, wanted(), None, None);
+    if options.mode == Mode::Move && surveyed.older_than_retention > 0 {
+        // The dry run refuses too, so the person is never offered a button for
+        // an import that would destroy the only copy.
+        return Err(ClipError::MoveWouldBeDeleted {
+            older_than_retention: surveyed.older_than_retention,
+        });
+    }
     if let Some(room) = options.room {
         let needed = match options.mode {
             Mode::Copy | Mode::Move => surveyed.bytes,
@@ -658,13 +682,105 @@ fn pass(
     report
 }
 
+/// The filesystem calls a copy or move is made of, as a seam: the real thing
+/// is [`RealFs`]; a test substitutes one that records the order of the calls
+/// and can make one of them fail, which is the only way to prove that a move
+/// removes the original *last*.
+trait ClipFs {
+    /// Copy `src` to `part` (created new, never overwriting), carrying the
+    /// modification time across, and return the bytes written.
+    fn copy(&self, src: &Path, part: &Path) -> io::Result<u64>;
+    /// Flush the file's contents and metadata to the disk (`fsync`).
+    fn sync_file(&self, path: &Path) -> io::Result<()>;
+    /// Rename.
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// Flush a directory's entries to the disk, so a rename into it survives a
+    /// power cut.
+    fn sync_dir(&self, dir: &Path) -> io::Result<()>;
+    /// The length of the file at `path`.
+    fn len(&self, path: &Path) -> io::Result<u64>;
+    /// Remove a file.
+    fn remove(&self, path: &Path) -> io::Result<()>;
+}
+
+/// [`ClipFs`] over `std::fs`.
+struct RealFs;
+
+impl ClipFs for RealFs {
+    fn copy(&self, src: &Path, part: &Path) -> io::Result<u64> {
+        let mut from = fs::File::open(src)?;
+        let modified = from.metadata()?.modified().ok();
+        // `create_new`: a temporary file that is already there is somebody
+        // else's copy in flight, and writing into it would interleave.
+        let mut to = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(part)?;
+        let n = io::copy(&mut from, &mut to)?;
+        if let Some(modified) = modified {
+            // BirdNET-Pi's clip keeps its age. The disk manager purges oldest
+            // first, and a copy stamped "now" would look newer than every
+            // clip this station recorded.
+            to.set_modified(modified)?;
+        }
+        Ok(n)
+    }
+
+    fn sync_file(&self, path: &Path) -> io::Result<()> {
+        fs::File::open(path)?.sync_all()
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    #[cfg(unix)]
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        fs::File::open(dir)?.sync_all()
+    }
+
+    #[cfg(not(unix))]
+    fn sync_dir(&self, _dir: &Path) -> io::Result<()> {
+        // Windows has no directory fsync; the rename is as durable as the
+        // platform makes it.
+        Ok(())
+    }
+
+    fn len(&self, path: &Path) -> io::Result<u64> {
+        fs::metadata(path).map(|m| m.len())
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        fs::remove_file(path)
+    }
+}
+
 /// Do the action for one clip. Returns whether an original was removed.
 fn act(mode: Mode, src: &Path, dest_dir: &Path, name: &str, size: u64) -> io::Result<bool> {
+    act_with(&RealFs, mode, src, dest_dir, name, size)
+}
+
+/// [`act`] over a given filesystem.
+///
+/// A move removes the original only after, in this order: the copy is whole
+/// (byte count), its contents are on the disk (`fsync` of the temporary file),
+/// it is renamed into place, the rename is on the disk (`fsync` of the
+/// directory), and the destination is seen to have the original's length. On
+/// an SD card a power cut between "renamed" and "flushed" otherwise leaves a
+/// zero-length clip *and* no original.
+fn act_with(
+    fs_ops: &dyn ClipFs,
+    mode: Mode,
+    src: &Path,
+    dest_dir: &Path,
+    name: &str,
+    size: u64,
+) -> io::Result<bool> {
     let target = dest_dir.join(name);
     // Re-check at the last moment: another pass, or the station, may have put
     // a file there since the survey.
-    if let Ok(have) = fs::metadata(&target) {
-        return if have.len() == size {
+    if let Ok(have) = fs_ops.len(&target) {
+        return if have == size {
             Ok(false)
         } else {
             Err(io::Error::new(
@@ -680,23 +796,35 @@ fn act(mode: Mode, src: &Path, dest_dir: &Path, name: &str, size: u64) -> io::Re
         }
         Mode::Copy | Mode::Move => {
             let part = dest_dir.join(temp_name(name));
-            let copied = fs::copy(src, &part).and_then(|n| {
-                if n == size {
-                    fs::rename(&part, &target)
-                } else {
-                    Err(io::Error::new(
+            let copied = fs_ops.copy(src, &part).and_then(|n| {
+                if n != size {
+                    return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         "the copy is shorter than the original",
-                    ))
+                    ));
                 }
+                fs_ops.sync_file(&part)?;
+                fs_ops.rename(&part, &target)
             });
             if let Err(e) = copied {
-                let _ = fs::remove_file(&part);
+                // `AlreadyExists` is the temporary name being taken: that file
+                // is another writer's, not ours to remove.
+                if e.kind() != io::ErrorKind::AlreadyExists {
+                    let _ = fs_ops.remove(&part);
+                }
                 return Err(e);
             }
             if mode == Mode::Move {
-                // Only after the copy is whole and in place.
-                fs::remove_file(src)?;
+                // The original is the only other copy: it goes only once the
+                // rename is on the disk and the destination has its length.
+                fs_ops.sync_dir(dest_dir)?;
+                if fs_ops.len(&target)? != size {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the copy in place is not the original's length; the original was kept",
+                    ));
+                }
+                fs_ops.remove(src)?;
                 return Ok(true);
             }
             Ok(false)
@@ -790,5 +918,161 @@ mod tests {
         };
         assert!((room.percent_after(0) - 50.0).abs() < 1e-9);
         assert!((room.percent_after(45) - 95.0).abs() < 1e-9);
+    }
+
+    /// A [`ClipFs`] over the real one that records the calls in order and can
+    /// be told to fail one of them.
+    struct Recording {
+        calls: std::cell::RefCell<Vec<&'static str>>,
+        fail: Option<&'static str>,
+    }
+
+    impl Recording {
+        fn new(fail: Option<&'static str>) -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+                fail,
+            }
+        }
+        fn step(&self, what: &'static str) -> io::Result<()> {
+            self.calls.borrow_mut().push(what);
+            if self.fail == Some(what) {
+                return Err(io::Error::other(format!("injected {what} failure")));
+            }
+            Ok(())
+        }
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl ClipFs for Recording {
+        fn copy(&self, src: &Path, part: &Path) -> io::Result<u64> {
+            self.step("copy")?;
+            RealFs.copy(src, part)
+        }
+        fn sync_file(&self, path: &Path) -> io::Result<()> {
+            self.step("sync_file")?;
+            RealFs.sync_file(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.step("rename")?;
+            RealFs.rename(from, to)
+        }
+        fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+            self.step("sync_dir")?;
+            RealFs.sync_dir(dir)
+        }
+        fn len(&self, path: &Path) -> io::Result<u64> {
+            // Only the length checks after the rename are interesting; the
+            // "is anything there yet" probe is recorded too, so the order of
+            // the two is visible.
+            self.calls.borrow_mut().push("len");
+            RealFs.len(path)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            self.step("remove")?;
+            RealFs.remove(path)
+        }
+    }
+
+    fn scratch(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!(
+            "bnb-clips-test-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        let src_dir = base.join("src");
+        let dest = base.join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        let src = src_dir.join("a.wav");
+        fs::write(&src, b"0123456789").unwrap();
+        (base, src, dest)
+    }
+
+    #[test]
+    fn a_move_removes_the_original_last_and_only_after_both_flushes() {
+        let (base, src, dest) = scratch("order");
+        let rec = Recording::new(None);
+        let removed = act_with(&rec, Mode::Move, &src, &dest, "a.wav", 10).unwrap();
+        assert!(removed);
+        assert_eq!(
+            rec.calls(),
+            [
+                "len",
+                "copy",
+                "sync_file",
+                "rename",
+                "sync_dir",
+                "len",
+                "remove"
+            ],
+            "the original goes only after the file and the directory are flushed and the length is re-read"
+        );
+        assert!(!src.exists());
+        assert_eq!(fs::read(dest.join("a.wav")).unwrap(), b"0123456789");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_failed_flush_keeps_the_original() {
+        for failing in ["sync_file", "sync_dir"] {
+            let (base, src, dest) = scratch(failing);
+            let rec = Recording::new(Some(failing));
+            let result = act_with(&rec, Mode::Move, &src, &dest, "a.wav", 10);
+            assert!(result.is_err(), "{failing}");
+            assert!(src.exists(), "{failing}: the original must survive");
+            assert!(
+                !rec.calls().contains(&"remove") || failing == "sync_file",
+                "{failing}: nothing may be removed after a failed directory flush"
+            );
+            let _ = fs::remove_dir_all(base);
+        }
+    }
+
+    #[test]
+    fn a_plain_copy_flushes_the_file_and_never_removes_the_original() {
+        let (base, src, dest) = scratch("copy");
+        let rec = Recording::new(None);
+        assert!(!act_with(&rec, Mode::Copy, &src, &dest, "a.wav", 10).unwrap());
+        assert_eq!(rec.calls(), ["len", "copy", "sync_file", "rename"]);
+        assert!(src.exists());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_copy_keeps_the_age_of_the_original() {
+        let (base, src, dest) = scratch("mtime");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(400 * 86_400);
+        fs::File::options()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        act(Mode::Copy, &src, &dest, "a.wav", 10).unwrap();
+        let got = fs::metadata(dest.join("a.wav"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        let diff = got.duration_since(old).unwrap_or_else(|e| e.duration());
+        assert!(
+            diff < std::time::Duration::from_secs(2),
+            "the copy was stamped {diff:?} away from the original's time"
+        );
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_temporary_name_that_is_taken_is_left_alone() {
+        let (base, src, dest) = scratch("taken");
+        let part = dest.join(temp_name("a.wav"));
+        fs::write(&part, b"another writer's bytes").unwrap();
+        let err = act(Mode::Copy, &src, &dest, "a.wav", 10).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&part).unwrap(), b"another writer's bytes");
+        let _ = fs::remove_dir_all(base);
     }
 }

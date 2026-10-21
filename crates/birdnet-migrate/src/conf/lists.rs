@@ -85,6 +85,7 @@ impl SpeciesList {
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let mut out = Self::default();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -96,10 +97,10 @@ impl SpeciesList {
                 out.unusable.push(line.to_owned());
                 continue;
             }
-            if out.species.iter().any(|s| s.eq_ignore_ascii_case(name)) {
-                out.repeated += 1;
-            } else {
+            if seen.insert(name.to_ascii_lowercase()) {
                 out.species.push(name.to_owned());
+            } else {
+                out.repeated += 1;
             }
         }
         out
@@ -139,9 +140,11 @@ pub fn merge_into(existing: &str, incoming: &[String]) -> (String, usize) {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect();
+    let mut present: std::collections::HashSet<String> =
+        names.iter().map(|n| n.to_ascii_lowercase()).collect();
     let mut added = 0;
     for name in incoming {
-        if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        if present.insert(name.to_ascii_lowercase()) {
             names.push(name.clone());
             added += 1;
         }
@@ -253,6 +256,35 @@ mod tests {
         assert!(
             !printed.contains("SECRET") && !printed.contains("pass"),
             "{printed}"
+        );
+    }
+
+    /// A list the size of the size cap is read in linear time: the duplicate
+    /// check was a scan of everything read so far.
+    #[test]
+    fn a_long_list_is_read_in_linear_time() {
+        let word = |mut n: usize| {
+            let mut w = String::new();
+            for _ in 0..5 {
+                w.push(char::from(b'a' + u8::try_from(n % 26).unwrap()));
+                n /= 26;
+            }
+            w
+        };
+        let mut text = String::new();
+        for i in 0..40_000 {
+            text.push_str(&format!("Genus {}\n", word(i)));
+        }
+        let started = std::time::Instant::now();
+        let list = SpeciesList::parse(&text);
+        let incoming = list.species.clone();
+        let (_, added) = merge_into("", &incoming);
+        assert_eq!(list.species.len(), 40_000);
+        assert_eq!(added, 40_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "took {:?}",
+            started.elapsed()
         );
     }
 }

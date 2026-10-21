@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use super::{
-    Assignment, ConfEntry, ConfFile, ConfigLine, Decision, Plan, Row, Verdict, hide, is_secret_key,
+    Assignment, ConfEntry, ConfFile, ConfigLine, Decision, Plan, Row, Verdict, display_value,
+    is_secret_key,
 };
 
 /// How a BirdNET-Pi value is turned into this station's.
@@ -226,7 +227,7 @@ pub const RULES: &[Rule] = &[
         "heartbeat_url",
         Convert::Verbatim,
         "Pinged on a schedule here rather than after every analysis. Such addresses carry \
-         the monitor's key, so it is hidden in the preview.",
+         the monitor's key, so the preview shows only its scheme and host.",
     )),
     secret(file(
         "FLICKR_API_KEY",
@@ -299,8 +300,8 @@ pub const RULES: &[Rule] = &[
         "comma-separated network audio streams that replace the sound card (`birdnet_recording.sh`)",
         "rtsp_urls",
         Convert::Verbatim,
-        "Comma-separated here too. An address with a user name and password is hidden in the \
-         preview.",
+        "Comma-separated here too. The preview shows only each address's scheme and host; \
+         the user name, password and path are not shown.",
     )),
     note(
         "RTSP_STREAM_TO_LIVESTREAM",
@@ -898,7 +899,7 @@ pub fn decide(
 ) -> Decision {
     let secret = is_secret_key(&entry.key);
     let raw = entry.value.trim();
-    let shown = if secret { hide(raw) } else { raw.to_owned() };
+    let shown = display_value(&entry.key, raw, rule.is_some());
     let mut row = Row {
         pi_key: entry.key.clone(),
         shown,
@@ -955,11 +956,9 @@ pub fn decide(
                         Verdict::Imported
                     };
                     row.why = join_sentences(&[&note, rule.caveat_for_row()]);
-                    let shown_value = if secret { hide(&value) } else { value.clone() };
+                    let shown_value = display_value(&entry.key, &value, true);
                     row.becomes.push((key.to_owned(), shown_value));
-                    row.was = current
-                        .get(key)
-                        .map(|v| if secret { hide(v) } else { v.clone() });
+                    row.was = current.get(key).map(|v| display_value(&entry.key, v, true));
                     assignments.push(Assignment {
                         setting: key,
                         value,
@@ -1009,10 +1008,8 @@ pub fn decide(
                     },
                     rule.caveat
                 );
-                row.becomes.push((
-                    key.to_owned(),
-                    if secret { hide(&value) } else { value.clone() },
-                ));
+                row.becomes
+                    .push((key.to_owned(), display_value(&entry.key, &value, true)));
                 config_lines.push(ConfigLine { key, value, secret });
             }
         },
@@ -1136,6 +1133,29 @@ pub fn implied(
     rows
 }
 
+/// A row that says so when the import will leave notifications off.
+///
+/// BirdNET-Pi's own `birdnet.conf` is installed with all three
+/// `APPRISE_NOTIFY_*` switches at 0, so a file that was never edited imports as
+/// `notify_trigger = off`: the same as it behaved there (nothing was sent), and
+/// exactly what a person who expects notifications on the new station does not
+/// expect. Said as a row of its own, at the top of the preview, rather than only
+/// in the small print of three others.
+pub fn notifications_off(plan: &Plan) -> Option<Row> {
+    (plan.value_of("notify_trigger") == Some("off")).then(|| Row {
+        pi_key: "(no BirdNET-Pi key)".to_owned(),
+        shown: String::new(),
+        verdict: Verdict::Attention,
+        becomes: vec![("notify_trigger".to_owned(), "off".to_owned())],
+        was: None,
+        why: "All three APPRISE_NOTIFY_ switches are 0 in this file, which is how BirdNET-Pi \
+              is installed, so this import turns **notifications off** here, as they were \
+              there. If you expect to be told about birds on this station, switch a \
+              notification rule on under Settings, Notifications after you apply."
+            .to_owned(),
+    })
+}
+
 /// The mapping table, as the Markdown the migration guide carries.
 ///
 /// One row per [`RULES`] entry, in table order. The guide embeds exactly this
@@ -1158,7 +1178,9 @@ pub fn mapping_table_markdown() -> String {
             Target::Note => "not carried over (see the note)".to_owned(),
             Target::Nothing => "no equivalent".to_owned(),
         };
-        let secret = if r.secret {
+        let secret = if r.secret && super::is_url_key(r.pi_key) {
+            " *(a secret address; only its scheme and host are shown, never logged)*"
+        } else if r.secret {
             " *(a secret; never shown or logged)*"
         } else {
             ""

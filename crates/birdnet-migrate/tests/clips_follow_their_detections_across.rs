@@ -526,6 +526,85 @@ fn clips_older_than_the_retention_are_counted() {
     );
 }
 
+#[test]
+fn a_move_of_clips_the_retention_would_delete_is_refused_before_anything_is_touched() {
+    let tree = Tree::new();
+    let dest = tempfile::tempdir().expect("dest");
+    for dry_run in [true, false] {
+        let mut o = opts(&tree, dest.path(), Mode::Move, dry_run);
+        o.retention_cutoff = Some("2026-03-03".into());
+        let err = go(&tree, &o).expect_err("a move onto the purge's list must be refused");
+        assert!(
+            matches!(
+                err,
+                ClipError::MoveWouldBeDeleted {
+                    older_than_retention: 3
+                }
+            ),
+            "{err}"
+        );
+    }
+    assert!(listing(dest.path()).is_empty(), "nothing was written");
+    for w in &tree.rows {
+        assert!(
+            tree.by_date()
+                .join(&w.date)
+                .join(w.com_name.replace('\'', "").replace(' ', "_"))
+                .join(&w.file_name)
+                .exists(),
+            "the original of {} was removed",
+            w.file_name
+        );
+    }
+}
+
+/// The counterpart: the refusal is about moving old clips, not about a cutoff
+/// being set. A copy of the same clips, and a move when none is older, run.
+#[test]
+fn the_move_refusal_discriminates() {
+    let tree = Tree::new();
+    let dest = tempfile::tempdir().expect("dest");
+    let mut copy = opts(&tree, dest.path(), Mode::Copy, true);
+    copy.retention_cutoff = Some("2026-03-03".into());
+    assert_eq!(go(&tree, &copy).expect("copy is allowed").done, 4);
+    let mut mv = opts(&tree, dest.path(), Mode::Move, true);
+    mv.retention_cutoff = Some("2000-01-01".into());
+    assert_eq!(go(&tree, &mv).expect("nothing is older").done, 4);
+}
+
+/// A copy keeps the age of the original, or the oldest-first purge would take
+/// this station's own recent clips before the imported ones.
+#[test]
+fn a_copied_clip_keeps_its_age() {
+    let tree = Tree::new();
+    let dest = tempfile::tempdir().expect("dest");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(900 * 86_400);
+    for w in &tree.rows {
+        let src = tree
+            .by_date()
+            .join(&w.date)
+            .join(w.com_name.replace('\'', "").replace(' ', "_"))
+            .join(&w.file_name);
+        fs::File::options()
+            .write(true)
+            .open(src)
+            .and_then(|f| f.set_modified(old))
+            .expect("age the original");
+    }
+    go(&tree, &opts(&tree, dest.path(), Mode::Copy, false)).expect("run");
+    for w in &tree.rows {
+        let got = fs::metadata(dest.path().join(&w.file_name))
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        let diff = got.duration_since(old).unwrap_or_else(|e| e.duration());
+        assert!(
+            diff < std::time::Duration::from_secs(2),
+            "{} was stamped {diff:?} from the original",
+            w.file_name
+        );
+    }
+}
+
 /// The rows a pass asks about are the imported ones that name a clip still
 /// wanted: not this station's own, not blank, not already reclaimed.
 #[test]

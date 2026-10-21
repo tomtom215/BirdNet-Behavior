@@ -72,7 +72,14 @@ pub struct ConfFile {
     pub repeated: Vec<String>,
     /// Lines that were neither blank, a comment nor `KEY=value`.
     pub unreadable_lines: usize,
+    /// Distinct keys past [`MAX_ENTRIES`], which were not read.
+    pub beyond_limit: usize,
 }
+
+/// The most distinct keys one file is read for. A `birdnet.conf` has about
+/// seventy; a file with thousands is not one, and the preview prints a row for
+/// each.
+pub const MAX_ENTRIES: usize = 1_000;
 
 impl ConfFile {
     /// Read the text of a `birdnet.conf`.
@@ -87,9 +94,14 @@ impl ConfFile {
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let mut entries: Vec<ConfEntry> = Vec::new();
+        // Slots, not a Vec that is searched and shifted: a repeated key moves
+        // to the position of its last line, and a linear search per line made
+        // a large file quadratic.
+        let mut slots: Vec<Option<ConfEntry>> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
         let mut repeated = Vec::new();
         let mut unreadable_lines = 0_usize;
+        let mut beyond_limit = 0_usize;
         for (index, raw) in text.lines().enumerate() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
@@ -105,23 +117,27 @@ impl ConfFile {
                 unreadable_lines += 1;
                 continue;
             }
-            let entry = ConfEntry {
+            if let Some(&earlier) = at.get(key) {
+                if !repeated.iter().any(|k| k == key) {
+                    repeated.push(key.to_owned());
+                }
+                slots[earlier] = None;
+            } else if at.len() >= MAX_ENTRIES {
+                beyond_limit += 1;
+                continue;
+            }
+            at.insert(key.to_owned(), slots.len());
+            slots.push(Some(ConfEntry {
                 key: key.to_owned(),
                 value: unquote(value.trim()),
                 line: index + 1,
-            };
-            if let Some(at) = entries.iter().position(|e| e.key == entry.key) {
-                if !repeated.contains(&entry.key) {
-                    repeated.push(entry.key.clone());
-                }
-                entries.remove(at);
-            }
-            entries.push(entry);
+            }));
         }
         Self {
-            entries,
+            entries: slots.into_iter().flatten().collect(),
             repeated,
             unreadable_lines,
+            beyond_limit,
         }
     }
 
@@ -152,13 +168,135 @@ fn unquote(value: &str) -> String {
     value.to_owned()
 }
 
+/// Whether a key's *name* says it holds a credential.
+///
+/// For the keys the table does not know: a station's own `birdnet.conf` has
+/// `BNB_API_TOKEN`, `MQTT_PASSWORD` and the like, and a file handed over for
+/// import can have anything. Substring matches on the usual words, so a new
+/// credential named like one is hidden before anybody has to remember to say so.
+fn name_says_secret(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "PASSPHRASE",
+        "PWD",
+        "APIKEY",
+        "API_KEY",
+        "CREDENTIAL",
+        "PRIVATE",
+    ]
+    .iter()
+    .any(|needle| upper.contains(needle))
+        || upper == "KEY"
+        || upper.ends_with("_KEY")
+}
+
 /// Whether `key` holds a credential or an address that is one.
 ///
-/// The set of [`Rule::secret`] keys plus the `Debug` and display paths that
-/// must not print their values.
+/// The set of [`Rule::secret`] keys, plus any key whose name says it is one
+/// (`…TOKEN`, `…SECRET`, `…PASSWORD`, `…_KEY` and the like), plus the keys
+/// that hold an address ([`is_url_key`]). The `Debug` and display paths that
+/// must not print a value ask this.
 #[must_use]
 pub fn is_secret_key(key: &str) -> bool {
-    RULES.iter().any(|r| r.pi_key == key && r.secret)
+    RULES.iter().any(|r| r.pi_key == key && r.secret) || name_says_secret(key) || is_url_key(key)
+}
+
+/// Whether `key` holds an address, which can carry a user name, a password, or
+/// a monitor's key in its path (`https://user:pass@host/ping/KEY`).
+#[must_use]
+pub fn is_url_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper == "RTSP_STREAM"
+        || upper.ends_with("_URL")
+        || upper.ends_with("_URI")
+        || upper.ends_with("_DSN")
+        || upper.ends_with("_ENDPOINT")
+}
+
+/// An address as `scheme://host[:port]`, with the user name, password, path and
+/// query left out; a list of addresses (`RTSP_STREAM` is comma-separated) as
+/// those, comma-separated. A value that is no address at all is
+/// [`hide`]n.
+///
+/// The host is shown because it is what a person recognises ("hc-ping.com",
+/// "192.168.1.20:554") and what decides where a request goes; the rest is where
+/// the credential is.
+#[must_use]
+pub fn origin_only(value: &str) -> String {
+    let mut shown = Vec::new();
+    for piece in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let Some((scheme, rest)) = piece.split_once("://") else {
+            return hide(value);
+        };
+        if scheme.is_empty()
+            || !scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            return hide(value);
+        }
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let host = authority.rsplit('@').next().unwrap_or("");
+        if host.is_empty()
+            || host.len() > 100
+            || !host.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']' | '_')
+            })
+        {
+            return hide(value);
+        }
+        shown.push(format!("{}://{host}", scheme.to_ascii_lowercase()));
+    }
+    if shown.is_empty() {
+        String::new()
+    } else {
+        shown.join(", ")
+    }
+}
+
+/// Keys outside the table that are safe to print. Anything else the table does
+/// not know is shown as "(not shown)": a file handed over for import may name a
+/// key this code has never seen, and what its value is, nobody here has read.
+const UNKNOWN_KEYS_SAFE_TO_SHOW: [&str; 6] = [
+    "TZ",
+    "LANG",
+    "LOG_LEVEL",
+    "SITE_NAME",
+    "BNB_LOG_LEVEL",
+    "BNB_PUBLIC_URL_SCHEME",
+];
+
+/// How a value is displayed, for a key the table does or does not know.
+///
+/// * A credential, by the table or by its name: its length, or for an address
+///   its `scheme://host` ([`origin_only`]).
+/// * Any other value that is an address with a user name in it: the same.
+/// * A key the table knows: the value.
+/// * A key it does not: the value only if the key is on a short list of plain
+///   ones, otherwise "(not shown)".
+#[must_use]
+pub fn display_value(key: &str, value: &str, known: bool) -> String {
+    let has_userinfo = value.split(',').any(|piece| {
+        piece.split_once("://").is_some_and(|(_, rest)| {
+            rest.split(['/', '?', '#'])
+                .next()
+                .is_some_and(|authority| authority.contains('@'))
+        })
+    });
+    if is_url_key(key) || has_userinfo {
+        return origin_only(value);
+    }
+    if is_secret_key(key) {
+        return hide(value);
+    }
+    if known || UNKNOWN_KEYS_SAFE_TO_SHOW.contains(&key) || value.is_empty() {
+        return value.to_owned();
+    }
+    "(not shown)".to_owned()
 }
 
 /// What the import will do with one BirdNET-Pi key.
@@ -301,6 +439,8 @@ pub struct Plan {
     pub repeated_keys: Vec<String>,
     /// Lines that could not be read at all.
     pub unreadable_lines: usize,
+    /// Keys past [`MAX_ENTRIES`] that were not read.
+    pub beyond_limit: usize,
 }
 
 impl Plan {
@@ -329,6 +469,7 @@ pub fn plan(input: &PlanInput<'_>) -> Plan {
     let mut out = Plan {
         repeated_keys: input.conf.repeated.clone(),
         unreadable_lines: input.conf.unreadable_lines,
+        beyond_limit: input.conf.beyond_limit,
         ..Plan::default()
     };
     // Settings in the order they were first assigned, last value winning.
@@ -357,6 +498,9 @@ pub fn plan(input: &PlanInput<'_>) -> Plan {
     // default: pinned explicitly, and shown as rows of their own.
     let implied = table::implied(input.conf, input.current, input.check, &mut out);
     out.rows.extend(implied);
+    if let Some(row) = table::notifications_off(&out) {
+        out.rows.push(row);
+    }
     out
 }
 
