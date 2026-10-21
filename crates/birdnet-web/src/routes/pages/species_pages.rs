@@ -550,8 +550,9 @@ fn active_this_week(spark: Option<&Vec<i64>>) -> bool {
     spark.is_some_and(|d| d.iter().rev().take(7).sum::<i64>() > 0)
 }
 
-/// Build the cumulative-species accumulation points (`(label, cum)`), binned by
-/// month, mirroring the pre-spine life-list page.
+/// Build the cumulative-species accumulation points (`(label, cum)`): every month from the
+/// first species through this month, whether or not it added one, so the x axis is time and the
+/// curve ends at the present (the life-list partial draws the same curve; this is one function).
 fn accumulation_points(
     first_seen: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, i64)> {
@@ -561,14 +562,11 @@ fn accumulation_points(
             *monthly.entry(month.to_string()).or_default() += 1;
         }
     }
-    let mut cum: i64 = 0;
-    monthly
-        .iter()
-        .map(|(month, &c)| {
-            cum += i64::from(c);
-            (month.get(2..).unwrap_or(month).to_string(), cum)
-        })
-        .collect()
+    let this_month = super::today_date_string()
+        .get(..7)
+        .unwrap_or_default()
+        .to_string();
+    super::life_list::accumulation_points(&monthly, &this_month)
 }
 
 /// Count of species whose first-ever detection falls in the current year.
@@ -781,9 +779,7 @@ async fn species_daily_partial(
             // When the station was listening, so a day it was off is not drawn as a day this
             // bird was quiet. Unreadable means unknown, which draws nothing.
             let effort = match (days.first(), days.last()) {
-                (Some(a), Some(b)) => {
-                    super::listening::effort_by_date(conn, &a.date, &b.date).ok()
-                }
+                (Some(a), Some(b)) => super::listening::effort_by_date(conn, &a.date, &b.date).ok(),
                 _ => None,
             };
             Ok::<_, birdnet_db::sqlite::DbError>((days, effort))

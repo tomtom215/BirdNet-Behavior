@@ -40,7 +40,7 @@ fn step_class(ramp: Ramp, step: usize) -> String {
 
 /// Which sequential ramp.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Ramp {
+pub enum Ramp {
     /// Sand to brick (dark theme: ember to gold): how much, the default heat map.
     Sun,
     /// The brand green: a year of days.
@@ -51,7 +51,9 @@ pub(crate) enum Ramp {
 /// chart's own text for room): the step swatches, what they stand for in counts, and
 /// whatever else the chart wants to say beside it (`extra` is escaped here).
 fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listening: bool) -> String {
-    let mut s = String::from(r#"<div class="ck-scale"><span class="bnb-meta">Fewer</span><span class="ck-steps" aria-hidden="true">"#);
+    let mut s = String::from(
+        r#"<div class="ck-scale"><span class="bnb-meta">Fewer</span><span class="ck-steps" aria-hidden="true">"#,
+    );
     for k in 1..=7_usize {
         let _ = write!(s, r#"<i class="ck-sw {}"></i>"#, step_class(ramp, k));
     }
@@ -65,7 +67,11 @@ fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listenin
         s.push_str(r#"<span class="bnb-meta"><i class="ck-off" aria-hidden="true"></i> Not listening</span>"#);
     }
     for e in extra {
-        let _ = write!(s, r#"<span class="bnb-meta ck-scale-note">{}</span>"#, escape_html(e));
+        let _ = write!(
+            s,
+            r#"<span class="bnb-meta ck-scale-note">{}</span>"#,
+            escape_html(e)
+        );
     }
     s.push_str("</div>");
     s
@@ -74,7 +80,7 @@ fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listenin
 // ── hour × weekday ──────────────────────────────────────────────────────────────
 
 /// What the weekday grid draws.
-pub(crate) struct HourByWeekday<'a> {
+pub struct HourByWeekday<'a> {
     /// `data-ck-id` and the prefix of this chart's pattern id.
     pub id: &'a str,
     /// Total count per `[weekday][hour]` over the window (Sunday = 0).
@@ -99,8 +105,8 @@ pub(crate) struct HourByWeekday<'a> {
 /// days were listened to), so a 90-day window, which holds thirteen of one weekday and
 /// twelve of another, does not make the first look busier for having more days in it.
 #[must_use]
-#[allow(clippy::too_many_lines)]
-pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
+#[allow(clippy::too_many_lines, clippy::needless_range_loop)]
+pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     let any: i64 = o.counts.iter().flatten().sum();
     if any <= 0 {
         return EMPTY.to_string();
@@ -111,16 +117,24 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         let later_today = o.now.is_some_and(|(nd, nh)| nd == d && h > nh);
         o.occurrences[d].saturating_sub(u32::from(later_today && o.occurrences[d] > 0))
     };
-    let not_yet = |d: usize, h: usize| o.now.is_some_and(|(nd, nh)| nd == d && h > nh) && occ_of(d, h) == 0 && o.occurrences[d] > 0;
-    let avg = |d: usize, h: usize| -> f64 { o.counts[d][h] as f64 / f64::from(occ_of(d, h).max(1)) };
-    let max_avg = (0..7).flat_map(|d| (0..24).map(move |h| (d, h))).map(|(d, h)| avg(d, h)).fold(0.0_f64, f64::max);
+    let not_yet = |d: usize, h: usize| {
+        o.now.is_some_and(|(nd, nh)| nd == d && h > nh) && occ_of(d, h) == 0 && o.occurrences[d] > 0
+    };
+    let avg =
+        |d: usize, h: usize| -> f64 { o.counts[d][h] as f64 / f64::from(occ_of(d, h).max(1)) };
+    let max_avg = (0..7)
+        .flat_map(|d| (0..24).map(move |h| (d, h)))
+        .map(|(d, h)| avg(d, h))
+        .fold(0.0_f64, f64::max);
     let (peak_d, peak_h) = (0..7)
         .flat_map(|d| (0..24).map(move |h| (d, h)))
         .max_by(|a, b| avg(a.0, a.1).total_cmp(&avg(b.0, b.1)).then(b.cmp(a)))
         .unwrap_or((0, 0));
 
     let row_tot: Vec<i64> = (0..7).map(|d| o.counts[d].iter().sum()).collect();
-    let col_tot: Vec<i64> = (0..24).map(|h| (0..7).map(|d| o.counts[d][h]).sum()).collect();
+    let col_tot: Vec<i64> = (0..24)
+        .map(|h| (0..7).map(|d| o.counts[d][h]).sum())
+        .collect();
     let row_max = row_tot.iter().copied().max().unwrap_or(1).max(1);
     let col_max = col_tot.iter().copied().max().unwrap_or(1).max(1);
 
@@ -145,7 +159,7 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         "Activity by hour and day of the week",
         "A grid of the average detections in each hour of each day of the week, with the total for each day and each hour beside it.",
     ));
-    if o.occurrences.iter().any(|&n| n == 0) {
+    if o.occurrences.contains(&0) {
         let _ = write!(svg, "<defs>{}</defs>", kit::nodata_pattern(&g));
     }
 
@@ -153,7 +167,7 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         let _ = write!(
             svg,
             r#"<text class="mono ck-lbl" x="{x:.1}" y="12" text-anchor="middle" font-size="10">{hh:02}</text>"#,
-            x = label_w + hh as f64 * cw + cw / 2.0,
+            x = label_w + f64::from(hh) * cw + cw / 2.0,
         );
     }
     for d in 0..7_usize {
@@ -169,17 +183,33 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             let x0 = label_w + hh as f64 * cw;
             let n = o.counts[d][hh];
             let a = avg(d, hh);
-            let heading = format!("{} {:02}:00\u{2013}{:02}:00", kit::WEEKDAYS[d], hh, (hh + 1) % 24);
+            let heading = format!(
+                "{} {:02}:00\u{2013}{:02}:00",
+                kit::WEEKDAYS[d],
+                hh,
+                (hh + 1) % 24
+            );
             let idx = d * 24 + hh;
             let occ = occ_of(d, hh);
             let count_s = kit::thousands(n);
             let (cls_attr, fill_attr, tip) = if not_yet(d, hh) {
-                (r#" class="ck-future""#.to_string(), String::new(), kit::tip(&heading, &[], Some("Not yet")))
+                (
+                    r#" class="ck-future""#.to_string(),
+                    String::new(),
+                    kit::tip(&heading, &[], Some("Not yet")),
+                )
             } else if o.occurrences[d] == 0 && o.coverage_known {
                 (
                     String::new(),
                     format!(r#" fill="url(#{g}-nd)""#),
-                    kit::tip(&heading, &[], Some(&format!("The station was not listening on any {} in this period", kit::WEEKDAYS[d]))),
+                    kit::tip(
+                        &heading,
+                        &[],
+                        Some(&format!(
+                            "The station was not listening on any {} in this period",
+                            kit::WEEKDAYS[d]
+                        )),
+                    ),
                 )
             } else if n == 0 {
                 (
@@ -225,7 +255,11 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             r#"<text class="mono ck-annot" x="{x:.1}" y="{y:.1}" font-size="10">{t}</text>"#,
             x = marg_x + bw.max(1.5) + 5.0,
             y = y0 + ch / 2.0 + 3.5,
-            t = if o.occurrences[d] == 0 && o.coverage_known { "off".to_string() } else { kit::compact(row_tot[d] as f64) },
+            t = if o.occurrences[d] == 0 && o.coverage_known {
+                "off".to_string()
+            } else {
+                kit::compact(row_tot[d] as f64)
+            },
         );
     }
     // The peak.
@@ -252,22 +286,37 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         let _ = write!(
             svg,
             r#"<path class="ck-fill ck-cother" d="{p}"/>"#,
-            p = kit::bar_path(label_w + hh as f64 * cw + 5.0, col_y + col_h - bh, cw - 10.0, bh, 3.0),
+            p = kit::bar_path(
+                label_w + hh as f64 * cw + 5.0,
+                col_y + col_h - bh,
+                cw - 10.0,
+                bh,
+                3.0
+            ),
         );
     }
-    let words = format!("Busiest: {} {:02}:00, about {:.1} a day (ringed)", kit::WEEKDAYS[peak_d], peak_h, avg(peak_d, peak_h));
+    let words = format!(
+        "Busiest: {} {:02}:00, about {:.1} a day (ringed)",
+        kit::WEEKDAYS[peak_d],
+        peak_h,
+        avg(peak_d, peak_h)
+    );
     svg.push_str("</svg></div>");
     svg.push_str(&scale_legend(
         Ramp::Sun,
         max_avg,
         "Average a day",
-        &[words.clone()],
-        o.occurrences.iter().any(|&n| n == 0) && o.coverage_known,
+        std::slice::from_ref(&words),
+        o.occurrences.contains(&0) && o.coverage_known,
     ));
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p>"#,
-        escape_html(&format!("{} over the last {} days. {words}.", kit::thousands(any), o.window_days)),
+        escape_html(&format!(
+            "{} over the last {} days. {words}.",
+            kit::thousands(any),
+            o.window_days
+        )),
     );
     svg.push_str("</div>");
     svg
@@ -276,7 +325,7 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
 // ── calendar ────────────────────────────────────────────────────────────────────
 
 /// What the year calendar draws.
-pub(crate) struct Calendar<'a> {
+pub struct Calendar<'a> {
     /// `data-ck-id` and the prefix of this chart's pattern id.
     pub id: &'a str,
     /// First and last day drawn, ISO dates, inclusive.
@@ -301,7 +350,7 @@ pub(crate) struct Calendar<'a> {
 /// hatched. The busiest day is ringed and named. Months are labelled where they begin.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub(crate) fn calendar(o: &Calendar<'_>) -> String {
+pub fn calendar(o: &Calendar<'_>) -> String {
     let (Some(start), Some(end)) = (kit::epoch_day(o.from), kit::epoch_day(o.to)) else {
         return EMPTY.to_string();
     };
@@ -336,13 +385,14 @@ pub(crate) fn calendar(o: &Calendar<'_>) -> String {
     let off_known = o.effort.is_some_and(|e| !e.is_empty());
     let listened = |date: &str| -> bool {
         // Today is never "off": the recorder credits on a timer.
-        o.effort.is_none_or(|e| e.get(date).is_some_and(|s| *s >= 60.0) || date == o.to)
+        o.effort
+            .is_none_or(|e| e.get(date).is_some_and(|s| *s >= 60.0) || date == o.to)
     };
 
     let mut svg = String::with_capacity(48 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="hm-scroll" tabindex="0" role="group" aria-label="{name}, scrolls sideways"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="cal-svg ck-in" data-ck="marks" data-ck-id="{id}" data-ck-grid="7" data-ck-major="col" data-ck-start="{startidx}" data-ck-label="Left and right move between weeks, up and down between days.">"#,
+        r#"<div class="viz-chart ck"><div class="hm-scroll" tabindex="0" role="group" aria-label="{name}, scrolls sideways"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="cal-svg ck-in" data-ck-scroll-end data-ck="marks" data-ck-id="{id}" data-ck-grid="7" data-ck-major="col" data-ck-start="{startidx}" data-ck-label="Left and right move between weeks, up and down between days.">"#,
         name = escape_html(o.name),
         id = escape_html(o.id),
         startidx = {
@@ -388,7 +438,8 @@ pub(crate) fn calendar(o: &Calendar<'_>) -> String {
             }
         }
         let n = o.counts.get(&date).copied().unwrap_or(0);
-        let long = kit::civil_label(&date, 0).map_or_else(|| date.clone(), |(_, l)| format!("{l} {}", &date[..4]));
+        let long = kit::civil_label(&date, 0)
+            .map_or_else(|| date.clone(), |(_, l)| format!("{l} {}", &date[..4]));
         let idx = col * 7 + row;
         let count_s = kit::thousands(n);
         let (cls, fill, tip) = if n > 0 {
@@ -408,7 +459,15 @@ pub(crate) fn calendar(o: &Calendar<'_>) -> String {
             (
                 r#" class="ck-track""#.to_string(),
                 String::new(),
-                kit::tip(&long, &[], Some(if off_known { "Listened all day and heard none" } else { "None heard" })),
+                kit::tip(
+                    &long,
+                    &[],
+                    Some(if off_known {
+                        "Listened all day and heard none"
+                    } else {
+                        "None heard"
+                    }),
+                ),
             )
         };
         let _ = write!(
@@ -428,21 +487,38 @@ pub(crate) fn calendar(o: &Calendar<'_>) -> String {
             s = cell + 2.0,
         );
     }
-    let busiest = kit::civil_label(&peak_date, 0).map_or(peak_date.clone(), |(_, l)| l);
-    let words = format!("Busiest day: {busiest}, {} (ringed)", kit::thousands(peak_n));
+    let busiest = kit::civil_label(&peak_date, 0).map_or_else(|| peak_date.clone(), |(_, l)| l);
+    let words = format!(
+        "Busiest day: {busiest}, {} (ringed)",
+        kit::thousands(peak_n)
+    );
     svg.push_str("</svg></div>");
-    svg.push_str(&scale_legend(Ramp::Moss, max, &capitalise(o.unit), &[words.clone()], off_known));
+    svg.push_str(&scale_legend(
+        Ramp::Moss,
+        max,
+        &capitalise(o.unit),
+        std::slice::from_ref(&words),
+        off_known,
+    ));
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p></div>"#,
-        escape_html(&format!("{} {} from {} to {}. {words}.", kit::thousands(total), o.unit, o.from, o.to)),
+        escape_html(&format!(
+            "{} {} from {} to {}. {words}.",
+            kit::thousands(total),
+            o.unit,
+            o.from,
+            o.to
+        )),
     );
     svg
 }
 
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
-    c.next().map_or_else(String::new, |f| f.to_uppercase().collect::<String>() + c.as_str())
+    c.next().map_or_else(String::new, |f| {
+        f.to_uppercase().collect::<String>() + c.as_str()
+    })
 }
 
 #[cfg(test)]
@@ -455,7 +531,14 @@ mod tests {
         counts[1][7] = 9;
         counts[3][12] = 2;
         counts[6][18] = 1;
-        HourByWeekday { id: "t", counts, occurrences: [1; 7], coverage_known: true, window_days: 7, now: None }
+        HourByWeekday {
+            id: "t",
+            counts,
+            occurrences: [1; 7],
+            coverage_known: true,
+            window_days: 7,
+            now: None,
+        }
     }
 
     #[test]
@@ -470,11 +553,17 @@ mod tests {
     fn every_slot_has_a_cell_a_reading_and_an_index() {
         let svg = hour_by_weekday(&grid());
         assert_eq!(svg.matches("data-tip=").count(), 168, "{svg}");
-        for i in [0, 24 * 1 + 6, 167] {
+        for i in [0, 24 + 6, 167] {
             assert!(svg.contains(&format!(r#"data-ck-i="{i}""#)), "{i}");
         }
-        assert!(svg.contains(r#"data-ck-grid="24""#) && svg.contains(r#"data-ck-start="30""#), "{svg}");
-        assert!(svg.contains("Mon 06:00\u{2013}07:00&#10;Detections&#9;23"), "{svg}");
+        assert!(
+            svg.contains(r#"data-ck-grid="24""#) && svg.contains(r#"data-ck-start="30""#),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("Mon 06:00\u{2013}07:00&#10;Detections&#9;23"),
+            "{svg}"
+        );
     }
 
     /// Three states stay three: a count is a ramp step, a quiet hour is an empty cell, and a weekday
@@ -484,10 +573,20 @@ mod tests {
         let mut g = grid();
         g.occurrences[2] = 0; // Tuesday: not listening
         let svg = hour_by_weekday(&g);
-        assert!(svg.contains(r#"class="ck-fill ck-q7""#), "the peak is the top step: {svg}");
+        assert!(
+            svg.contains(r#"class="ck-fill ck-q7""#),
+            "the peak is the top step: {svg}"
+        );
         assert!(svg.contains(r#"class="ck-track""#), "{svg}");
-        assert_eq!(svg.matches("-nd)").count(), 24, "all 24 Tuesday cells: {svg}");
-        assert!(svg.contains("The station was not listening on any Tue in this period"), "{svg}");
+        assert_eq!(
+            svg.matches("-nd)").count(),
+            24,
+            "all 24 Tuesday cells: {svg}"
+        );
+        assert!(
+            svg.contains("The station was not listening on any Tue in this period"),
+            "{svg}"
+        );
         assert!(svg.contains(">off<"), "{svg}");
         // No ledger: Tuesday is just a quiet day, and nothing is hatched.
         g.coverage_known = false;
@@ -505,8 +604,16 @@ mod tests {
         g.occurrences = [4, 1, 1, 1, 1, 1, 1];
         let svg = hour_by_weekday(&g);
         // 10 a day on Sunday, 30 a day on Monday: Monday is the peak and Sunday is lower.
-        assert!(svg.contains("Busiest: Mon 06:00, about 30.0 a day"), "{svg}");
-        assert!(svg.contains("Sun 06:00\u{2013}07:00&#10;Average a day&#9;10.0&#10;In all&#9;40&#10;over 4 Suns"), "{svg}");
+        assert!(
+            svg.contains("Busiest: Mon 06:00, about 30.0 a day"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(
+                "Sun 06:00\u{2013}07:00&#10;Average a day&#9;10.0&#10;In all&#9;40&#10;over 4 Suns"
+            ),
+            "{svg}"
+        );
     }
 
     /// Today is the one weekday that is only partly lived: the hours of it still to come are
@@ -518,23 +625,46 @@ mod tests {
         g.now = Some((3, 10)); // Wednesday, ten o'clock
         let svg = hour_by_weekday(&g);
         // Wed 11:00 onward: 13 slots of "Not yet", and the 10:00 slot is today's so far.
-        assert_eq!(svg.matches("&#10;Not yet").count(), 13, "11:00 to 23:00 are still to come: {svg}");
+        assert_eq!(
+            svg.matches("&#10;Not yet").count(),
+            13,
+            "11:00 to 23:00 are still to come: {svg}"
+        );
         assert!(svg.contains("Wed 12:00\u{2013}13:00&#10;Not yet"), "{svg}");
         assert!(svg.contains(r#"class="ck-future""#), "{svg}");
-        assert!(!svg.contains("Wed 09:00\u{2013}10:00&#10;Not yet"), "09:00 has happened: {svg}");
+        assert!(
+            !svg.contains("Wed 09:00\u{2013}10:00&#10;Not yet"),
+            "09:00 has happened: {svg}"
+        );
         // Two Wednesdays in the window: the later hours average over the one that happened.
         let mut g = grid();
         g.occurrences[3] = 2;
         g.counts[3][12] = 8;
         g.now = Some((3, 10));
         let svg = hour_by_weekday(&g);
-        assert!(svg.contains("Wed 12:00\u{2013}13:00&#10;Detections&#9;8"), "one day that hour has happened on: no average to give: {svg}");
+        assert!(
+            svg.contains("Wed 12:00\u{2013}13:00&#10;Detections&#9;8"),
+            "one day that hour has happened on: no average to give: {svg}"
+        );
         // No clock, no claim.
         assert!(!hour_by_weekday(&grid()).contains("Not yet"));
     }
 
-    fn cal(from: &'static str, to: &'static str, counts: &'static BTreeMap<String, i64>, effort: Option<&'static BTreeMap<String, f64>>) -> String {
-        calendar(&Calendar { id: "cal", from, to, counts, effort, unit: "detections", name: "The year in activity" })
+    fn cal(
+        from: &'static str,
+        to: &'static str,
+        counts: &'static BTreeMap<String, i64>,
+        effort: Option<&'static BTreeMap<String, f64>>,
+    ) -> String {
+        calendar(&Calendar {
+            id: "cal",
+            from,
+            to,
+            counts,
+            effort,
+            unit: "detections",
+            name: "The year in activity",
+        })
     }
 
     fn counts_of(rows: &[(&str, i64)]) -> BTreeMap<String, i64> {
@@ -544,11 +674,19 @@ mod tests {
     /// One cell per day from the first to the last, none outside it, and the columns are Sunday-first weeks.
     #[test]
     fn a_calendar_has_a_cell_for_each_day_and_only_those() {
-        let c: &'static _ = Box::leak(Box::new(counts_of(&[("2026-10-14", 5), ("2026-10-20", 40)])));
+        let c: &'static _ = Box::leak(Box::new(counts_of(&[
+            ("2026-10-14", 5),
+            ("2026-10-20", 40),
+        ])));
         let svg = cal("2026-10-01", "2026-10-21", c, None);
         assert_eq!(svg.matches("data-tip=").count(), 21, "{svg}");
         // 1 Oct 2026 is a Thursday (row 4) in the first column; 21 Oct a Wednesday (row 3) in the fourth.
-        assert!(svg.contains(r#"data-ck-i="4""#) && svg.contains(r#"data-ck-i="24""#) && !svg.contains(r#"data-ck-i="25""#), "{svg}");
+        assert!(
+            svg.contains(r#"data-ck-i="4""#)
+                && svg.contains(r#"data-ck-i="24""#)
+                && !svg.contains(r#"data-ck-i="25""#),
+            "{svg}"
+        );
         assert!(svg.contains("Wed 14 Oct 2026&#10;Detections&#9;5"), "{svg}");
         assert!(svg.contains("Busiest day: Tue 20 Oct, 40"), "{svg}");
         assert!(svg.contains(r#"data-ck-major="col""#), "{svg}");
@@ -560,16 +698,32 @@ mod tests {
     fn a_quiet_day_and_an_unrecorded_day_are_told_apart() {
         let c: &'static _ = Box::leak(Box::new(counts_of(&[("2026-10-14", 5)])));
         let e: &'static _ = Box::leak(Box::new(
-            [("2026-10-14", 86_400.0), ("2026-10-15", 86_400.0), ("2026-10-17", 10.0)]
-                .iter()
-                .map(|(d, s)| ((*d).to_string(), *s))
-                .collect::<BTreeMap<_, _>>(),
+            [
+                ("2026-10-14", 86_400.0),
+                ("2026-10-15", 86_400.0),
+                ("2026-10-17", 10.0),
+            ]
+            .iter()
+            .map(|(d, s)| ((*d).to_string(), *s))
+            .collect::<BTreeMap<_, _>>(),
         ));
         let svg = cal("2026-10-14", "2026-10-18", c, Some(e));
-        assert!(svg.contains("Thu 15 Oct 2026&#10;Listened all day and heard none"), "{svg}");
-        assert!(svg.contains("Fri 16 Oct 2026&#10;The station was not listening"), "{svg}");
-        assert!(svg.contains("Sat 17 Oct 2026&#10;The station was not listening"), "ten seconds is not a day: {svg}");
-        assert!(svg.contains("Sun 18 Oct 2026&#10;Listened all day"), "today is never off: {svg}");
+        assert!(
+            svg.contains("Thu 15 Oct 2026&#10;Listened all day and heard none"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("Fri 16 Oct 2026&#10;The station was not listening"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("Sat 17 Oct 2026&#10;The station was not listening"),
+            "ten seconds is not a day: {svg}"
+        );
+        assert!(
+            svg.contains("Sun 18 Oct 2026&#10;Listened all day"),
+            "today is never off: {svg}"
+        );
         let no_ledger = cal("2026-10-14", "2026-10-18", c, None);
         assert!(!no_ledger.contains("not listening"), "{no_ledger}");
     }
@@ -586,8 +740,18 @@ mod tests {
     /// A whole year, 365 days, in 53 columns, is one SVG whose text can still be read.
     #[test]
     fn a_year_is_fifty_three_weeks() {
-        let rows: Vec<(String, i64)> = (0..365_i64).map(|i| (kit::shift_date("2025-10-22", i).map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}")).unwrap(), i % 37)).collect();
-        let c: &'static BTreeMap<String, i64> = Box::leak(Box::new(rows.into_iter().collect()));
+        let c: &'static BTreeMap<String, i64> = Box::leak(Box::new(
+            (0..365_i64)
+                .map(|i| {
+                    (
+                        kit::shift_date("2025-10-22", i)
+                            .map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"))
+                            .unwrap(),
+                        i % 37,
+                    )
+                })
+                .collect(),
+        ));
         let svg = cal("2025-10-22", "2026-10-21", c, None);
         assert_eq!(svg.matches("data-tip=").count(), 365);
         let months = svg.matches(r#"class="mono ck-lbl""#).count();

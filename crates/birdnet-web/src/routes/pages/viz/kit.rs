@@ -26,11 +26,11 @@ use std::fmt::Write as _;
 use crate::routes::pages::escape_html;
 
 /// Month names, for axis labels.
-pub(crate) const MONTHS: [&str; 12] = [
+pub const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 /// Weekday names, Sunday first (the order the heat map's rows use).
-pub(crate) const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+pub const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // ── dates ───────────────────────────────────────────────────────────────────────
 
@@ -40,7 +40,7 @@ pub(crate) const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri"
 /// workspace carries none. `None` if `end` does not parse, so a malformed date
 /// degrades to a chart without dates rather than a panic in a render path
 /// (`panic = "abort"`, so a handler panic is a station outage).
-pub(crate) fn civil_label(end: &str, days: i64) -> Option<(String, String)> {
+pub fn civil_label(end: &str, days: i64) -> Option<(String, String)> {
     let t = birdnet_core::civil::parse_civil(end, "00:00:00")?;
     let secs = birdnet_core::civil::unix_secs_from_civil(&t) + days * 86_400;
     let c = birdnet_core::civil::civil_from_unix_secs(secs);
@@ -51,13 +51,23 @@ pub(crate) fn civil_label(end: &str, days: i64) -> Option<(String, String)> {
     Some((short, long))
 }
 
+/// Sunday = 0 … Saturday = 6, `back` days before the day numbered `epoch_day` (days since 1970-01-01).
+pub const fn weekday_back(epoch_day: i64, back: usize) -> usize {
+    (epoch_day - back as i64 + 4).rem_euclid(7) as usize
+}
+
+/// The hour (0..=23) a fractional hour of the day falls in.
+pub const fn hour_floor(hours: f64) -> usize {
+    hours.floor().clamp(0.0, 23.0) as usize
+}
+
 /// Sunday = 0 … Saturday = 6 for a Unix timestamp (1970-01-01 was a Thursday).
-pub(crate) fn weekday_of_secs(secs: i64) -> usize {
+pub const fn weekday_of_secs(secs: i64) -> usize {
     (secs.div_euclid(86_400) + 4).rem_euclid(7) as usize
 }
 
 /// `(year, month 1-12, day)` of the ISO date `date` shifted by `days`, or `None`.
-pub(crate) fn shift_date(date: &str, days: i64) -> Option<(i32, u32, u32)> {
+pub fn shift_date(date: &str, days: i64) -> Option<(i32, u32, u32)> {
     let t = birdnet_core::civil::parse_civil(date, "00:00:00")?;
     let secs = birdnet_core::civil::unix_secs_from_civil(&t) + days * 86_400;
     let c = birdnet_core::civil::civil_from_unix_secs(secs);
@@ -65,7 +75,7 @@ pub(crate) fn shift_date(date: &str, days: i64) -> Option<(i32, u32, u32)> {
 }
 
 /// Days since the epoch of an ISO date, or `None`.
-pub(crate) fn epoch_day(date: &str) -> Option<i64> {
+pub fn epoch_day(date: &str) -> Option<i64> {
     let t = birdnet_core::civil::parse_civil(date, "00:00:00")?;
     Some(birdnet_core::civil::unix_secs_from_civil(&t).div_euclid(86_400))
 }
@@ -77,7 +87,7 @@ pub(crate) fn epoch_day(date: &str) -> Option<i64> {
 /// fraction, so the labels read 0, 10, 20, 30, 40 and never 0, 13, 27, 40 (a rule at 2.5
 /// detections is not a thing that was counted). Up to `want` steps, or one more where
 /// that is the only way to be round.
-pub(crate) fn count_ticks(top: f64, want: usize) -> Vec<f64> {
+pub fn count_ticks(top: f64, want: usize) -> Vec<f64> {
     let top = top.max(1.0);
     if !top.is_finite() {
         return vec![0.0];
@@ -92,13 +102,15 @@ pub(crate) fn count_ticks(top: f64, want: usize) -> Vec<f64> {
         .find(|&d| round(top / d as f64))
         .unwrap_or(1);
     let step = top / div as f64;
-    (0..=div).map(|i| (step * i as f64 * 1e9).round() / 1e9).collect()
+    (0..=div)
+        .map(|i| (step * i as f64 * 1e9).round() / 1e9)
+        .collect()
 }
 
 /// The top of an axis of whole counts: `x` rounded up to 1, 2, 3, 4, 5, 6 or 8 times
 /// a power of ten (an integer, always): a ceiling that allowed 1.5 or 2.5 would put a
 /// fractional rule on a count axis.
-pub(crate) fn count_ceiling(x: f64) -> f64 {
+pub fn count_ceiling(x: f64) -> f64 {
     if !x.is_finite() || x <= 1.0 {
         return 1.0;
     }
@@ -116,7 +128,7 @@ pub(crate) fn count_ceiling(x: f64) -> f64 {
 
 /// A count for an axis or a label: `950`, `1.5K`, `12.9K`, `1.6M`. Whole numbers
 /// below a thousand are printed as they are.
-pub(crate) fn compact(v: f64) -> String {
+pub fn compact(v: f64) -> String {
     let a = v.abs();
     let (scaled, suffix) = if a >= 1e9 {
         (v / 1e9, "B")
@@ -142,24 +154,24 @@ pub(crate) fn compact(v: f64) -> String {
 }
 
 /// An integer with thousands separators, for a tooltip or a table.
-pub(crate) fn thousands(n: i64) -> String {
+pub fn thousands(n: i64) -> String {
     crate::routes::pages::group_thousands(n)
 }
 
 /// The room an axis's labels need on the left of a plot, given the width of the widest one at
 /// its drawn size and the width of the drawing. On a phone the drawing is scaled down to about
-/// 340 px and `chart-text.js` grows any label that would then be under 9.5 px, in proportion to
-/// how far it was scaled: a margin cut to the label as drawn makes "1.6M" run off the edge and
-/// get cut to "1…". So the margin allows for that growth (at most threefold).
-pub(crate) fn axis_margin(widest: f64, drawing_width: f64) -> f64 {
-    let growth = (0.95 * drawing_width / 340.0).clamp(1.0, 3.0);
+/// about 300 px (a card on a 390 px phone) and `chart-text.js` grows any label that would then be
+/// under 9.5 px, in proportion to how far it was scaled: a margin cut to the label as drawn makes
+/// "1.6M" run off the edge and get cut to "1…". So the margin allows for that growth (at most 3.2 times).
+pub fn axis_margin(widest: f64, drawing_width: f64) -> f64 {
+    let growth = (0.95 * drawing_width / 300.0).clamp(1.0, 3.2);
     widest * growth + 8.0
 }
 
 /// Rough width of `s` set at `font` units: the label planner's measure. Wide on
 /// purpose (0.58 em per glyph); an over-estimate drops a label, an under-estimate
 /// lets two touch.
-pub(crate) fn text_width(s: &str, font: f64) -> f64 {
+pub fn text_width(s: &str, font: f64) -> f64 {
     s.chars().count() as f64 * font * 0.58
 }
 
@@ -167,7 +179,7 @@ pub(crate) fn text_width(s: &str, font: f64) -> f64 {
 
 /// A linear map from a data range to a screen range.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Linear {
+pub struct Linear {
     d0: f64,
     d1: f64,
     r0: f64,
@@ -176,7 +188,7 @@ pub(crate) struct Linear {
 
 impl Linear {
     /// `domain` maps onto `range`; a degenerate domain maps everything to `range.0`.
-    pub(crate) const fn new(domain: (f64, f64), range: (f64, f64)) -> Self {
+    pub const fn new(domain: (f64, f64), range: (f64, f64)) -> Self {
         Self {
             d0: domain.0,
             d1: domain.1,
@@ -186,7 +198,7 @@ impl Linear {
     }
 
     /// The screen position of `v`.
-    pub(crate) fn at(&self, v: f64) -> f64 {
+    pub fn at(self, v: f64) -> f64 {
         let span = self.d1 - self.d0;
         if span.abs() < f64::EPSILON {
             return self.r0;
@@ -211,7 +223,13 @@ fn tangents(pts: &[(f64, f64)]) -> Vec<f64> {
     let d: Vec<f64> = pts
         .windows(2)
         .zip(&h)
-        .map(|(w, h)| if *h == 0.0 { 0.0 } else { (w[1].1 - w[0].1) / h })
+        .map(|(w, h)| {
+            if *h == 0.0 {
+                0.0
+            } else {
+                (w[1].1 - w[0].1) / h
+            }
+        })
         .collect();
     m[0] = d[0];
     m[n - 1] = d[n - 2];
@@ -229,7 +247,7 @@ fn tangents(pts: &[(f64, f64)]) -> Vec<f64> {
 
 /// The cubic Bézier segments of the monotone curve through `pts`: for each pair of
 /// neighbours, the two control points.
-pub(crate) fn monotone_segments(pts: &[(f64, f64)]) -> Vec<[(f64, f64); 2]> {
+pub fn monotone_segments(pts: &[(f64, f64)]) -> Vec<[(f64, f64); 2]> {
     let m = tangents(pts);
     pts.windows(2)
         .enumerate()
@@ -245,7 +263,7 @@ pub(crate) fn monotone_segments(pts: &[(f64, f64)]) -> Vec<[(f64, f64); 2]> {
 
 /// An SVG path through `pts` as a monotone cubic, starting with `M` (or `L` when
 /// `continue_from_current` is set, for a path that is already under way).
-pub(crate) fn monotone_path(pts: &[(f64, f64)], continue_from_current: bool) -> String {
+pub fn monotone_path(pts: &[(f64, f64)], continue_from_current: bool) -> String {
     let mut d = String::with_capacity(pts.len() * 28);
     let Some(first) = pts.first() else {
         return d;
@@ -270,7 +288,7 @@ pub(crate) fn monotone_path(pts: &[(f64, f64)], continue_from_current: bool) -> 
 /// The same curve walked right to left, continuing the current subpath: for the
 /// return leg of a closed band, so the lower edge is the curve the neighbour's
 /// upper edge is, and the two never part.
-pub(crate) fn monotone_path_reversed(pts: &[(f64, f64)]) -> String {
+pub fn monotone_path_reversed(pts: &[(f64, f64)]) -> String {
     let mut d = String::with_capacity(pts.len() * 28);
     let Some(last) = pts.last() else {
         return d;
@@ -290,7 +308,7 @@ pub(crate) fn monotone_path_reversed(pts: &[(f64, f64)]) -> String {
 /// The value of the monotone curve through `pts` at `x` (for tests and for placing
 /// a mark on a curve rather than on the polyline). `None` outside the data's span.
 #[cfg(test)]
-pub(crate) fn monotone_at(pts: &[(f64, f64)], x: f64) -> Option<f64> {
+pub fn monotone_at(pts: &[(f64, f64)], x: f64) -> Option<f64> {
     let segs = monotone_segments(pts);
     for (w, c) in pts.windows(2).zip(&segs) {
         if x < w[0].0 || x > w[1].0 {
@@ -303,14 +321,14 @@ pub(crate) fn monotone_at(pts: &[(f64, f64)], x: f64) -> Option<f64> {
             u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c2 + t * t * t * d
         };
         for _ in 0..40 {
-            let t = (lo + hi) / 2.0;
+            let t = lo.midpoint(hi);
             if bez(w[0].0, c[0].0, c[1].0, w[1].0, t) < x {
                 lo = t;
             } else {
                 hi = t;
             }
         }
-        let t = (lo + hi) / 2.0;
+        let t = lo.midpoint(hi);
         return Some(bez(w[0].1, c[0].1, c[1].1, w[1].1, t));
     }
     None
@@ -320,7 +338,7 @@ pub(crate) fn monotone_at(pts: &[(f64, f64)], x: f64) -> Option<f64> {
 /// its data end. `up` is true for a bar that rises from a baseline below it.
 /// `r` shrinks to fit a bar narrower or shorter than twice its radius, so a sliver
 /// of one detection is still a sliver and not a blob.
-pub(crate) fn bar_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
+pub fn bar_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
     let h = h.max(0.0);
     let r = r.min(w / 2.0).min(h).max(0.0);
     if h <= 0.0 || w <= 0.0 {
@@ -337,7 +355,7 @@ pub(crate) fn bar_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
 }
 
 /// A horizontal bar's outline: square at the left baseline, round at the right end.
-pub(crate) fn hbar_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
+pub fn hbar_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
     let w = w.max(0.0);
     let r = r.min(h / 2.0).min(w).max(0.0);
     if h <= 0.0 || w <= 0.0 {
@@ -366,7 +384,7 @@ fn attr(s: &str) -> String {
 ///
 /// Every part is untrusted text (species names); the script sets each with
 /// `textContent`, and this escapes it for the attribute.
-pub(crate) fn tip(heading: &str, rows: &[(&str, &str, Option<&str>)], note: Option<&str>) -> String {
+pub fn tip(heading: &str, rows: &[(&str, &str, Option<&str>)], note: Option<&str>) -> String {
     let clean = |s: &str| s.replace(['\n', '\t'], " ");
     let mut v = clean(heading);
     for (l, val, key) in rows {
@@ -383,20 +401,20 @@ pub(crate) fn tip(heading: &str, rows: &[(&str, &str, Option<&str>)], note: Opti
 
 /// One column of a "cols" chart: its heading, one value per series (`None` where
 /// there is no data, which is not the same as zero) and an optional note.
-pub(crate) struct Col {
+pub struct Col {
     /// Heading, e.g. `Tue 14 Oct`.
-    pub(crate) label: String,
+    pub label: String,
     /// One value per series.
-    pub(crate) values: Vec<Option<f64>>,
+    pub values: Vec<Option<f64>>,
     /// A line under the values (for instance "Station was off").
-    pub(crate) note: Option<String>,
+    pub note: Option<String>,
 }
 
 /// The attributes of an `<svg data-ck="cols">`: columns, series, plot edges, unit.
 ///
 /// `series` is `(name, key colour)`; the colour is a `var(--…)` reference, never a
 /// literal. Returns the attribute string, starting with a space.
-pub(crate) fn cols_attrs(
+pub fn cols_attrs(
     cols: &[Col],
     series: &[(String, String)],
     x0: f64,
@@ -413,10 +431,10 @@ pub(crate) fn cols_attrs(
                 .iter()
                 .map(|v| v.map_or(serde_json::Value::Null, |x| serde_json::json!(x)))
                 .collect();
-            match &c.note {
-                Some(n) => serde_json::json!([c.label, vals, n]),
-                None => serde_json::json!([c.label, vals]),
-            }
+            c.note.as_ref().map_or_else(
+                || serde_json::json!([c.label, vals]),
+                |n| serde_json::json!([c.label, vals, n]),
+            )
         })
         .collect();
     let series_json: Vec<serde_json::Value> = series
@@ -444,7 +462,7 @@ pub(crate) fn cols_attrs(
 ///
 /// `classes` are CSS classes that set `--c` (`ck-c1`..`ck-c8`, `ck-cother`,
 /// `ck-q1`..`ck-q7`); the gradient for class `ck-c3` has the id `{prefix}-ck-c3`.
-pub(crate) fn gradient_defs(prefix: &str, classes: &[String]) -> String {
+pub fn gradient_defs(prefix: &str, classes: &[String]) -> String {
     let mut s = String::from("<defs>");
     for c in classes {
         let _ = write!(
@@ -460,7 +478,7 @@ pub(crate) fn gradient_defs(prefix: &str, classes: &[String]) -> String {
 /// `{prefix}-nd`. Used where a stretch of the chart is *not known* (the station was off,
 /// the sun is unknown), so that it cannot be read as *zero*. The lines are 45 degrees and
 /// recessive: this is a statement about the data, not decoration.
-pub(crate) fn nodata_pattern(prefix: &str) -> String {
+pub fn nodata_pattern(prefix: &str) -> String {
     format!(
         r#"<pattern id="{prefix}-nd" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><line class="ck-grid-strong" x1="0" y1="0" x2="0" y2="6" stroke-width="2"/></pattern>"#
     )
@@ -468,14 +486,20 @@ pub(crate) fn nodata_pattern(prefix: &str) -> String {
 
 /// `s` reduced to what is safe in an element id and in a `url(#…)` reference: ASCII
 /// letters, digits and hyphens.
-pub(crate) fn id_safe(s: &str) -> String {
+pub fn id_safe(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
 /// The class for categorical slot `i` (0-based): `ck-c1` … `ck-c8`, then `ck-cother`.
-pub(crate) fn slot_class(i: usize) -> String {
+pub fn slot_class(i: usize) -> String {
     if i < 8 {
         format!("ck-c{}", i + 1)
     } else {
@@ -486,7 +510,7 @@ pub(crate) fn slot_class(i: usize) -> String {
 /// The sequential step, 1 to 7, for `t` in `0..=1` (0 is the lowest drawn step; a
 /// caller handles "empty" itself). Square-root spaced, so a day with one detection
 /// beside a day with two hundred is not the same pale cell as every other small day.
-pub(crate) fn seq_step(t: f64) -> usize {
+pub fn seq_step(t: f64) -> usize {
     let t = t.clamp(0.0, 1.0).sqrt();
     ((t * 7.0).ceil() as usize).clamp(1, 7)
 }
@@ -497,14 +521,34 @@ mod tests {
 
     #[test]
     fn a_count_axis_never_has_a_fractional_rule() {
-        for x in [0.0, 1.0, 1.2, 2.0, 3.0, 7.0, 9.0, 12.0, 26.0, 40.0, 99.0, 450.0, 1_600_000.0] {
+        for x in [
+            0.0,
+            1.0,
+            1.2,
+            2.0,
+            3.0,
+            7.0,
+            9.0,
+            12.0,
+            26.0,
+            40.0,
+            99.0,
+            450.0,
+            1_600_000.0,
+        ] {
             let top = count_ceiling(x);
-            assert!(top >= x.max(1.0) && (top - top.round()).abs() < 1e-9, "{x} -> {top}");
+            assert!(
+                top >= x.max(1.0) && (top - top.round()).abs() < 1e-9,
+                "{x} -> {top}"
+            );
             let t = count_ticks(top, 4);
             for v in &t {
                 assert!((v - v.round()).abs() < 1e-9, "{x}: top {top} rules {t:?}");
             }
-            assert!((t[t.len() - 1] - top).abs() < 1e-6 && t.len() >= 2 && t.len() <= 7, "{x}: {t:?}");
+            assert!(
+                (t[t.len() - 1] - top).abs() < 1e-6 && t.len() >= 2 && t.len() <= 7,
+                "{x}: {t:?}"
+            );
         }
         assert_eq!(count_ticks(1.0, 4), vec![0.0, 1.0]);
         assert_eq!(count_ticks(10.0, 4), vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
@@ -517,10 +561,22 @@ mod tests {
     #[test]
     fn the_axis_margin_allows_for_the_growth_a_phone_gives_a_label() {
         let w = text_width("1.6M", 10.0);
-        assert!(axis_margin(w, 340.0) >= w + 8.0, "never less than the label");
-        assert!(axis_margin(w, 960.0) > axis_margin(w, 560.0), "a wider drawing is shrunk more");
-        assert!(axis_margin(w, 960.0) >= w * 2.5 + 8.0, "a 960 drawing on a 340 phone grows its text 2.7 times");
-        assert!((axis_margin(w, 5000.0) - (w * 3.0 + 8.0)).abs() < 1e-9, "and it stops at three");
+        assert!(
+            axis_margin(w, 340.0) >= w + 8.0,
+            "never less than the label"
+        );
+        assert!(
+            axis_margin(w, 960.0) > axis_margin(w, 560.0),
+            "a wider drawing is shrunk more"
+        );
+        assert!(
+            axis_margin(w, 760.0) >= w * 2.3 + 8.0,
+            "a 760 drawing on a 300 px card grows its text 2.4 times"
+        );
+        assert!(
+            (axis_margin(w, 5000.0) - (w * 3.2 + 8.0)).abs() < 1e-9,
+            "and it stops at 3.2"
+        );
     }
 
     #[test]
@@ -565,13 +621,20 @@ mod tests {
             (0..40).map(|i| f64::from((i * 7919) % 31)).collect(),
         ];
         for ys in cases {
-            let pts: Vec<(f64, f64)> = ys.iter().enumerate().map(|(i, y)| (i as f64 * 10.0, *y)).collect();
+            let pts: Vec<(f64, f64)> = ys
+                .iter()
+                .enumerate()
+                .map(|(i, y)| (i as f64 * 10.0, *y))
+                .collect();
             for w in pts.windows(2) {
                 let (lo, hi) = (w[0].1.min(w[1].1), w[0].1.max(w[1].1));
                 for s in 0..=50 {
                     let x = w[0].0 + (w[1].0 - w[0].0) * f64::from(s) / 50.0;
                     let y = monotone_at(&pts, x).expect("inside the span");
-                    assert!(y >= lo - 1e-6 && y <= hi + 1e-6, "{ys:?} at {x}: {y} outside [{lo}, {hi}]");
+                    assert!(
+                        y >= lo - 1e-6 && y <= hi + 1e-6,
+                        "{ys:?} at {x}: {y} outside [{lo}, {hi}]"
+                    );
                 }
             }
         }
@@ -580,7 +643,11 @@ mod tests {
     /// It is a curve *through* the data: the value at each sample is the sample.
     #[test]
     fn the_monotone_curve_passes_through_every_point() {
-        let pts: Vec<(f64, f64)> = [3.0, 9.0, 1.0, 4.0].iter().enumerate().map(|(i, y)| (i as f64 * 20.0, *y)).collect();
+        let pts: Vec<(f64, f64)> = [3.0, 9.0, 1.0, 4.0]
+            .iter()
+            .enumerate()
+            .map(|(i, y)| (i as f64 * 20.0, *y))
+            .collect();
         for p in &pts {
             assert!((monotone_at(&pts, p.0).unwrap() - p.1).abs() < 1e-6);
         }
@@ -615,7 +682,10 @@ mod tests {
         assert!(d.ends_with("L22.00,50.00 Z"), "{d}");
         // Too short for the radius: it shrinks to the height.
         let sliver = bar_path(0.0, 98.0, 12.0, 2.0, 4.0);
-        assert!(sliver.contains("L0.00,100.00") && sliver.contains("Q0.00,98.00 2.00,98.00"), "{sliver}");
+        assert!(
+            sliver.contains("L0.00,100.00") && sliver.contains("Q0.00,98.00 2.00,98.00"),
+            "{sliver}"
+        );
         // Nothing to draw: nothing drawn.
         assert!(bar_path(0.0, 0.0, 10.0, 0.0, 4.0).is_empty());
         assert!(hbar_path(0.0, 0.0, 0.0, 10.0, 4.0).is_empty());
@@ -626,23 +696,48 @@ mod tests {
     fn a_tip_is_escaped_and_cannot_be_split_by_its_own_text() {
         let t = tip(
             "Tue \"14\" Oct",
-            &[("A\tB <i>", "3", Some("var(--chart-1)")), ("Robin", "4", None)],
+            &[
+                ("A\tB <i>", "3", Some("var(--chart-1)")),
+                ("Robin", "4", None),
+            ],
             Some("Note\nwith a break"),
         );
-        assert!(!t.contains('\n') && !t.contains('\t') && !t.contains('<') && !t.contains('"'), "{t}");
+        assert!(
+            !t.contains('\n') && !t.contains('\t') && !t.contains('<') && !t.contains('"'),
+            "{t}"
+        );
         assert!(t.contains("Tue &quot;14&quot; Oct&#10;A B &lt;i&gt;&#9;3&#9;var(--chart-1)&#10;Robin&#9;4&#10;Note with a break"), "{t}");
     }
 
     #[test]
     fn cols_are_json_in_an_attribute_and_null_is_not_zero() {
         let cols = vec![
-            Col { label: "Mon 1 Jan".into(), values: vec![Some(3.0), None], note: None },
-            Col { label: "Tue 2 Jan".into(), values: vec![Some(0.0), Some(2.0)], note: Some("Station off".into()) },
+            Col {
+                label: "Mon 1 Jan".into(),
+                values: vec![Some(3.0), None],
+                note: None,
+            },
+            Col {
+                label: "Tue 2 Jan".into(),
+                values: vec![Some(0.0), Some(2.0)],
+                note: Some("Station off".into()),
+            },
         ];
-        let a = cols_attrs(&cols, &[("Robin".into(), "var(--chart-1)".into()), ("Jay \"Blue\"".into(), "var(--chart-2)".into())], 10.0, 90.0, false, "", Some("Total"));
+        let a = cols_attrs(
+            &cols,
+            &[
+                ("Robin".into(), "var(--chart-1)".into()),
+                ("Jay \"Blue\"".into(), "var(--chart-2)".into()),
+            ],
+            10.0,
+            90.0,
+            false,
+            "",
+            Some("Total"),
+        );
         assert!(a.contains(r#"data-ck="cols""#));
         assert!(a.contains("[[&quot;Mon 1 Jan&quot;,[3.0,null]],[&quot;Tue 2 Jan&quot;,[0.0,2.0],&quot;Station off&quot;]]"), "{a}");
-        assert!(a.contains(r#"Jay \&quot;Blue\&quot;"#), "{a}");
+        assert!(a.contains("Jay \\&quot;Blue\\&quot;"), "{a}");
         assert!(a.contains(r#"data-ck-pos="point""#) && a.contains(r#"data-ck-total="Total""#));
     }
 
@@ -670,7 +765,14 @@ mod tests {
             assert!(s >= last && (1..=7).contains(&s));
             last = s;
         }
-        assert!(seq_step(0.05) < seq_step(0.5), "a twentieth is paler than a half");
-        assert_ne!(seq_step(0.01), seq_step(0.1), "1 vs 10 detections of 100 must differ");
+        assert!(
+            seq_step(0.05) < seq_step(0.5),
+            "a twentieth is paler than a half"
+        );
+        assert_ne!(
+            seq_step(0.01),
+            seq_step(0.1),
+            "1 vs 10 detections of 100 must differ"
+        );
     }
 }

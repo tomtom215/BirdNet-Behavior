@@ -71,14 +71,22 @@ fn fmt(v: f64) -> String {
 /// the day, its value, the average and the day it is compared with.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
+pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     if points.len() < 2 {
         return EMPTY.to_string();
     }
     let n = points.len();
     let off = |i: usize| o.listened.is_some_and(|l| l.get(i).is_some_and(|on| !on));
     // The prior period lines up with the current one from the end.
-    let prior: Vec<&TrendPoint> = o.prior.iter().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect();
+    let prior: Vec<&TrendPoint> = o
+        .prior
+        .iter()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     let prior_at = |i: usize| -> Option<&TrendPoint> {
         let off = n - prior.len();
         i.checked_sub(off).and_then(|k| prior.get(k).copied())
@@ -88,12 +96,19 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     let top_data = points
         .iter()
         .flat_map(|p| [p.value, p.smooth.unwrap_or(0.0)])
-        .chain(prior.iter().flat_map(|p| [p.value, p.smooth.unwrap_or(0.0)]))
+        .chain(
+            prior
+                .iter()
+                .flat_map(|p| [p.value, p.smooth.unwrap_or(0.0)]),
+        )
         .filter(|v| v.is_finite())
         .fold(0.0_f64, f64::max);
     let top = kit::count_ceiling(top_data);
     let rules = kit::count_ticks(top, 4);
-    let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
+    let widest = rules
+        .iter()
+        .map(|&v| kit::text_width(&kit::compact(v), 10.0))
+        .fold(0.0_f64, f64::max);
 
     let w = 640.0_f64;
     let (pad_l, pad_r, pad_t, pad_b) = (kit::axis_margin(widest, w), 12.0, 14.0, 24.0);
@@ -107,7 +122,8 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     let g = kit::id_safe(&format!("g-{}", o.id));
 
     // The columns the readout reads: day, value, average, previous.
-    let mut series: Vec<(String, String)> = vec![(capitalise(o.unit), "var(--chart-other)".to_string())];
+    let mut series: Vec<(String, String)> =
+        vec![(capitalise(o.unit), "var(--chart-other)".to_string())];
     if o.bars && !o.smooth_name.is_empty() {
         series.push((capitalise(o.smooth_name), "var(--chart-1)".to_string()));
     } else {
@@ -117,7 +133,8 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     if has_prior {
         series.push(("Before".to_string(), "var(--chart-axis)".to_string()));
     }
-    let label_of = |iso: &str| kit::civil_label(iso, 0).unwrap_or_else(|| (iso.to_string(), iso.to_string()));
+    let label_of =
+        |iso: &str| kit::civil_label(iso, 0).unwrap_or_else(|| (iso.to_string(), iso.to_string()));
     let cols: Vec<Col> = points
         .iter()
         .enumerate()
@@ -127,7 +144,7 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
                 values.push(p.smooth);
             }
             if has_prior {
-                values.push(prior_at(i).and_then(|q| line_of(q)));
+                values.push(prior_at(i).and_then(line_of));
             }
             Col {
                 label: label_of(&p.date).1,
@@ -157,7 +174,13 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     runs.retain(|r| !r.is_empty());
     let ys: Vec<serde_json::Value> = points
         .iter()
-        .map(|p| line_of(p).filter(|v| v.is_finite()).map_or(serde_json::Value::Null, |v| serde_json::json!((y.at(v) * 10.0).round() / 10.0)))
+        .map(|p| {
+            line_of(p)
+                .filter(|v| v.is_finite())
+                .map_or(serde_json::Value::Null, |v| {
+                    serde_json::json!((y.at(v) * 10.0).round() / 10.0)
+                })
+        })
         .collect();
 
     let mut svg = String::with_capacity(10 * 1024);
@@ -173,8 +196,16 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
         &format!(
             "{} per day, {n} days, as {}{}.",
             o.unit,
-            if o.bars { "daily columns with a smoothed line over them" } else { "a line" },
-            if has_prior { ", with the period before as a faint line" } else { "" },
+            if o.bars {
+                "daily columns with a smoothed line over them"
+            } else {
+                "a line"
+            },
+            if has_prior {
+                ", with the period before as a faint line"
+            } else {
+                ""
+            },
         ),
     ));
     // The day columns fade from the neutral; a chart that is only a line has none.
@@ -193,7 +224,11 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     for &v in &rules {
         let yy = y.at(v);
         if v > 0.0 {
-            let _ = write!(svg, r#"<line class="ck-grid" x1="{pad_l:.1}" y1="{yy:.1}" x2="{x2:.1}" y2="{yy:.1}"/>"#, x2 = pad_l + plot_w);
+            let _ = write!(
+                svg,
+                r#"<line class="ck-grid" x1="{pad_l:.1}" y1="{yy:.1}" x2="{x2:.1}" y2="{yy:.1}"/>"#,
+                x2 = pad_l + plot_w
+            );
         }
         let _ = write!(
             svg,
@@ -219,8 +254,17 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             if p.value <= 0.0 || off(i) {
                 continue;
             }
-            let d = kit::bar_path(x_at(i) - bw / 2.0, y.at(p.value), bw, base - y.at(p.value), (bw / 2.0).min(3.0));
-            let _ = write!(svg, r#"<path class="ck-grow" d="{d}" fill="url(#{g}-ck-cother)" data-style="--i:{i}"/>"#);
+            let d = kit::bar_path(
+                x_at(i) - bw / 2.0,
+                y.at(p.value),
+                bw,
+                base - y.at(p.value),
+                (bw / 2.0).min(3.0),
+            );
+            let _ = write!(
+                svg,
+                r#"<path class="ck-grow" d="{d}" fill="url(#{g}-ck-cother)" data-style="--i:{i}"/>"#
+            );
         }
         svg.push_str("</g>");
     }
@@ -233,10 +277,19 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     // The period before, behind the line it is compared with.
     if has_prior {
         let pp: Vec<(f64, f64)> = (0..n)
-            .filter_map(|i| prior_at(i).and_then(|q| line_of(q)).filter(|v| v.is_finite()).map(|v| (x_at(i), y.at(v))))
+            .filter_map(|i| {
+                prior_at(i)
+                    .and_then(line_of)
+                    .filter(|v| v.is_finite())
+                    .map(|v| (x_at(i), y.at(v)))
+            })
             .collect();
         if pp.len() >= 2 {
-            let _ = write!(svg, r#"<path class="ck-ghost" d="{}"/>"#, kit::monotone_path(&pp, false));
+            let _ = write!(
+                svg,
+                r#"<path class="ck-ghost" d="{}"/>"#,
+                kit::monotone_path(&pp, false)
+            );
         }
     }
     // Area, then line, one run at a time.
@@ -253,21 +306,43 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             if off(i) || !p.value.is_finite() {
                 continue;
             }
-            let _ = write!(svg, r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#, x_at(i), y.at(p.value));
+            let _ = write!(
+                svg,
+                r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
+                x_at(i),
+                y.at(p.value)
+            );
         }
     }
 
     // The extremes of the *days* (not of the average), named where they happened.
-    let counted: Vec<(usize, f64)> = points.iter().enumerate().filter(|(i, p)| !off(*i) && p.value.is_finite()).map(|(i, p)| (i, p.value)).collect();
+    let counted: Vec<(usize, f64)> = points
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| !off(*i) && p.value.is_finite())
+        .map(|(i, p)| (i, p.value))
+        .collect();
     if counted.len() >= 3 {
-        let hi = counted.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0))).unwrap_or(counted[0]);
-        let lo = counted.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0))).unwrap_or(counted[0]);
+        let hi = counted
+            .iter()
+            .copied()
+            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+            .unwrap_or(counted[0]);
+        let lo = counted
+            .iter()
+            .copied()
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+            .unwrap_or(counted[0]);
         let mut placed: Vec<(f64, f64)> = Vec::new(); // (x_start, x_end) of labels, so two never overlap
         for (tag, (i, v), above) in [("High", hi, true), ("Low", lo, false)] {
             if (hi.1 - lo.1).abs() < f64::EPSILON && tag == "Low" {
                 continue;
             }
-            let text = format!("{tag} {} \u{b7} {}", kit::compact(v), label_of(&points[i].date).0);
+            let text = format!(
+                "{tag} {} \u{b7} {}",
+                kit::compact(v),
+                label_of(&points[i].date).0
+            );
             let tw = kit::text_width(&text, 10.0);
             let x = x_at(i);
             let (anchor, x0, x1) = if x + tw / 2.0 > pad_l + plot_w {
@@ -277,7 +352,11 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             } else {
                 ("middle", x - tw / 2.0, x + tw / 2.0)
             };
-            let yy = if above { y.at(v) - 8.0 } else { (y.at(v) + 16.0).min(base - 4.0) };
+            let yy = if above {
+                y.at(v) - 8.0
+            } else {
+                (y.at(v) + 16.0).min(base - 4.0)
+            };
             if placed.iter().any(|&(a, b)| x0 < b + 6.0 && x1 > a - 6.0) && !above {
                 continue; // the legend and the tooltip carry it
             }
@@ -325,7 +404,11 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             escape_html(o.smooth_name),
         );
     } else {
-        let _ = write!(svg, r#"<span class="bnb-meta"><i class="ck-keyline ck-c1"></i> {}</span>"#, escape_html(&capitalise(o.unit)));
+        let _ = write!(
+            svg,
+            r#"<span class="bnb-meta"><i class="ck-keyline ck-c1"></i> {}</span>"#,
+            escape_html(&capitalise(o.unit))
+        );
     }
     if has_prior {
         svg.push_str(r#"<span class="bnb-meta"><i class="ck-keyline ck-keyghost"></i> The period before</span>"#);
@@ -335,19 +418,29 @@ pub(crate) fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     }
     svg.push_str("</div>");
     // Click-free text equivalent of the picture.
-    let first = points.first().map(|p| p.value).unwrap_or(0.0);
-    let last = points.last().map(|p| p.value).unwrap_or(0.0);
+    let first = points.first().map_or(0.0, |p| p.value);
+    let last = points.last().map_or(0.0, |p| p.value);
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p></div>"#,
-        escape_html(&format!("{} {} per day over {n} days, from {} on {} to {} on {}.", capitalise(o.unit), "", fmt(first), label_of(&points[0].date).1, fmt(last), label_of(&points[n - 1].date).1)),
+        escape_html(&format!(
+            "{} {} per day over {n} days, from {} on {} to {} on {}.",
+            capitalise(o.unit),
+            "",
+            fmt(first),
+            label_of(&points[0].date).1,
+            fmt(last),
+            label_of(&points[n - 1].date).1
+        )),
     );
     svg
 }
 
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
-    c.next().map_or_else(String::new, |f| f.to_uppercase().collect::<String>() + c.as_str())
+    c.next().map_or_else(String::new, |f| {
+        f.to_uppercase().collect::<String>() + c.as_str()
+    })
 }
 
 #[cfg(test)]
@@ -366,7 +459,7 @@ mod tests {
             .collect()
     }
 
-    fn opts<'a>(prior: &'a [TrendPoint], bars: bool) -> TrendOpts<'a> {
+    fn opts(prior: &[TrendPoint], bars: bool) -> TrendOpts<'_> {
         TrendOpts {
             id: "t",
             unit: if bars { "detections" } else { "species" },
@@ -390,9 +483,20 @@ mod tests {
             assert!(svg.contains(date), "{date}: {svg}");
         }
         assert!(svg.contains("&quot;Tue 6 Oct&quot;,[33.0,null]"), "{svg}");
-        assert_eq!(svg.matches(r#"fill="url(#g-t-ck-cother)""#).count(), 5, "five day columns: {svg}");
-        assert_eq!(svg.matches(r#"class="ck-line ck-c1 ck-drawn""#).count(), 1, "one line: {svg}");
-        assert!(!svg.contains("oklch(") && !svg.contains("fill-opacity"), "{svg}");
+        assert_eq!(
+            svg.matches(r#"fill="url(#g-t-ck-cother)""#).count(),
+            5,
+            "five day columns: {svg}"
+        );
+        assert_eq!(
+            svg.matches(r#"class="ck-line ck-c1 ck-drawn""#).count(),
+            1,
+            "one line: {svg}"
+        );
+        assert!(
+            !svg.contains("oklch(") && !svg.contains("fill-opacity"),
+            "{svg}"
+        );
     }
 
     /// Without smoothing the series is the line, with a dot a day.
@@ -400,7 +504,12 @@ mod tests {
     fn a_trend_without_bars_is_a_line_with_a_dot_per_day() {
         let svg = trend_chart(&trend(&[13.0, 12.0, 14.0]), &opts(&[], false));
         assert!(!svg.contains("ck-cother"), "{svg}");
-        assert_eq!(svg.matches(r#"<circle class="ck-ring ck-c1 ck-fadein""#).count(), 3, "a dot a day: {svg}");
+        assert_eq!(
+            svg.matches(r#"<circle class="ck-ring ck-c1 ck-fadein""#)
+                .count(),
+            3,
+            "a dot a day: {svg}"
+        );
         assert!(trend_chart(&trend(&[1.0]), &opts(&[], true)).contains("Not enough data"));
     }
 
@@ -410,7 +519,11 @@ mod tests {
     fn the_previous_period_is_a_ghost_aligned_day_for_day() {
         let now = trend(&[10.0, 12.0, 14.0, 16.0]);
         let before: Vec<TrendPoint> = (0..4)
-            .map(|i| TrendPoint { date: format!("2026-09-{:02}", i + 20), value: 8.0 + f64::from(i), smooth: Some(8.0 + f64::from(i)) })
+            .map(|i| TrendPoint {
+                date: format!("2026-09-{:02}", i + 20),
+                value: 8.0 + f64::from(i),
+                smooth: Some(8.0 + f64::from(i)),
+            })
             .collect();
         let svg = trend_chart(&now, &opts(&before, true));
         assert_eq!(svg.matches(r#"class="ck-ghost""#).count(), 1, "{svg}");
@@ -418,7 +531,10 @@ mod tests {
         assert!(svg.contains("The period before"), "{svg}");
         // A shorter prior lines up with the *latest* days; the earliest have nothing to compare to.
         let short = trend_chart(&now, &opts(&before[2..], true));
-        assert!(short.contains("&quot;Tue 6 Oct&quot;,[10.0,null,null]]"), "no prior column for the first days: {short}");
+        assert!(
+            short.contains("&quot;Tue 6 Oct&quot;,[10.0,null,null]]"),
+            "no prior column for the first days: {short}"
+        );
         assert!(short.contains("Compared with Tue 22 Sep"), "{short}");
     }
 
@@ -429,7 +545,11 @@ mod tests {
         assert!(svg.contains("High 45 \u{b7} 8 Oct"), "{svg}");
         assert!(svg.contains("Low 12 \u{b7} 7 Oct"), "{svg}");
         let flat = trend_chart(&trend(&[5.0, 5.0, 5.0, 5.0]), &opts(&[], true));
-        assert_eq!(flat.matches("High 5").count() + flat.matches("Low 5").count(), 1, "{flat}");
+        assert_eq!(
+            flat.matches("High 5").count() + flat.matches("Low 5").count(),
+            1,
+            "{flat}"
+        );
     }
 
     /// A day the station was off is hatched, has no value in its tooltip and says why: it is not a zero.
@@ -454,18 +574,35 @@ mod tests {
         let mut o = opts(&[], false);
         o.listened = Some(&listened);
         let svg = trend_chart(&pts, &o);
-        assert_eq!(svg.matches(r#"class="ck-line ck-c1 ck-drawn""#).count(), 2, "two runs, not one line through a zero: {svg}");
+        assert_eq!(
+            svg.matches(r#"class="ck-line ck-c1 ck-drawn""#).count(),
+            2,
+            "two runs, not one line through a zero: {svg}"
+        );
         // Nothing is drawn at the off day: not a dot, not a point of the line.
-        assert_eq!(svg.matches(r#"<circle class="ck-ring ck-c1 ck-fadein""#).count(), 4, "{svg}");
+        assert_eq!(
+            svg.matches(r#"<circle class="ck-ring ck-c1 ck-fadein""#)
+                .count(),
+            4,
+            "{svg}"
+        );
         // Whole days listened to: one line, as before.
         o.listened = None;
-        assert_eq!(trend_chart(&pts, &o).matches(r#"class="ck-line ck-c1 ck-drawn""#).count(), 1);
+        assert_eq!(
+            trend_chart(&pts, &o)
+                .matches(r#"class="ck-line ck-c1 ck-drawn""#)
+                .count(),
+            1
+        );
     }
 
     /// A huge or tiny day neither overflows the axis nor makes it unreadable.
     #[test]
     fn extreme_values_keep_the_axis_readable() {
-        let svg = trend_chart(&trend(&[1_600_000.0, 3.0, 2.0, 900_000.0]), &opts(&[], true));
+        let svg = trend_chart(
+            &trend(&[1_600_000.0, 3.0, 2.0, 900_000.0]),
+            &opts(&[], true),
+        );
         assert!(svg.contains(">2M<"), "{svg}");
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
         let tiny = trend_chart(&trend(&[0.0, 0.0, 1.0]), &opts(&[], true));

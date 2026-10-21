@@ -14,6 +14,8 @@
 //                             appends `.ck-tip` and `.ck-live` to it; neither takes
 //                             any room, so a chart never moves when it is read.
 //   svg[data-ck]              turns the kit on for that svg.
+//     data-ck-scroll-end      on a phone a wide chart scrolls sideways inside its card; this
+//                             starts it scrolled to the right, where the newest day is
 //     data-ck-id="name"       identity for the entrance animation: a chart that is
 //                             swapped in again under the same id (a 30-second
 //                             refresh) does not play it again. Omit for "always".
@@ -125,6 +127,19 @@
     if (id) {
       if (seen[id]) svg.classList.add("ck-still");
       else seen[id] = true;
+    }
+
+    // A time series that scrolls sideways starts at its newest end: that is the part a reader came for.
+    if (svg.hasAttribute("data-ck-scroll-end")) {
+      var scroller = svg.closest(".viz-scroll, .hm-scroll");
+      if (scroller) {
+        var toEnd = function () {
+          scroller.scrollLeft = scroller.scrollWidth;
+        };
+        requestAnimationFrame(toEnd);
+        // Fonts and the chart-text fitter settle a frame or two later and can widen the box.
+        setTimeout(toEnd, 250);
+      }
     }
 
     var mode = svg.getAttribute("data-ck") === "cols" ? "cols" : "marks";
@@ -304,7 +319,14 @@
           : "") +
         (r.note ? ". " + r.note : "");
       live.textContent = spoken;
-      if (readout) readout.textContent = spoken;
+      // The line under the chart is the short form (the day, its first three rows), so reading a
+      // day never grows it past the room it keeps: the whole reading is in the card and the live region.
+      if (readout) {
+        var brief = r.rows.slice(0, 3).map(function (x) {
+          return (x.l ? x.l + " " : "") + x.v;
+        });
+        readout.textContent = r.h + (brief.length ? ": " + brief.join(", ") + (r.rows.length > 3 ? ", \u2026" : "") : "");
+      }
     }
 
     // Where the tooltip points, in client pixels.

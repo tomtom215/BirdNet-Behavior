@@ -51,7 +51,8 @@ fn nice_count(x: f64) -> i64 {
 /// "themeriver"): the day's total is split evenly above and below, so there is no
 /// zero line to read a value against (the scale bar and the tooltip carry the values).
 /// `scale` is units of `y` per detection.
-pub(crate) fn stack_edges(counts: &[Vec<i64>], days: usize, mid: f64, scale: f64) -> Vec<Vec<f64>> {
+#[allow(clippy::needless_range_loop)]
+pub fn stack_edges(counts: &[Vec<i64>], days: usize, mid: f64, scale: f64) -> Vec<Vec<f64>> {
     let at = |k: usize, d: usize| counts[k].get(d).copied().unwrap_or(0) as f64;
     let mut edges = vec![vec![0.0; days]; counts.len() + 1];
     for d in 0..days {
@@ -75,7 +76,7 @@ pub(crate) fn stack_edges(counts: &[Vec<i64>], days: usize, mid: f64, scale: f64
 /// (interpolated between days), must have the whole text height between the edges.
 /// A band too thin or too short for the text returns `None`, and the legend and the
 /// tooltip carry it instead: the text is never clipped or struck through by its own band.
-pub(crate) fn place_in_band(
+pub fn place_in_band(
     xs: &[f64],
     top: &[f64],
     bottom: &[f64],
@@ -90,7 +91,11 @@ pub(crate) fn place_in_band(
         // Linear between the two days either side of `x`.
         let i = xs.partition_point(|&v| v <= x).clamp(1, xs.len() - 1);
         let (xa, xb) = (xs[i - 1], xs[i]);
-        let t = if xb > xa { ((x - xa) / (xb - xa)).clamp(0.0, 1.0) } else { 0.0 };
+        let t = if xb > xa {
+            ((x - xa) / (xb - xa)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         e[i - 1] + (e[i] - e[i - 1]) * t
     };
     let mut best: Option<(f64, f64, f64)> = None; // (clearance, x, y)
@@ -107,7 +112,7 @@ pub(crate) fn place_in_band(
         }
         let clearance = lo - hi - height;
         if clearance >= 2.0 && best.is_none_or(|b| clearance > b.0 + 1e-9) {
-            best = Some((clearance, cx, (hi + lo) / 2.0));
+            best = Some((clearance, cx, hi.midpoint(lo)));
         }
     }
     best.map(|(_, x, y)| (x, y))
@@ -115,7 +120,7 @@ pub(crate) fn place_in_band(
 
 /// The columns an axis labels: at most `max` of the `days`, evenly spaced, the first
 /// and the last always among them.
-pub(crate) fn axis_columns(days: usize, max: usize) -> Vec<usize> {
+pub fn axis_columns(days: usize, max: usize) -> Vec<usize> {
     if days == 0 {
         return Vec::new();
     }
@@ -197,7 +202,9 @@ pub fn streamgraph(
         .iter()
         .map(|(_, v)| (0..days).map(|d| v.get(d).copied().unwrap_or(0)).collect())
         .collect();
-    let totals: Vec<i64> = (0..days).map(|d| counts.iter().map(|c| c[d]).sum()).collect();
+    let totals: Vec<i64> = (0..days)
+        .map(|d| counts.iter().map(|c| c[d]).sum())
+        .collect();
     let (peak_day, max_total) = totals
         .iter()
         .copied()
@@ -212,7 +219,7 @@ pub fn streamgraph(
     let off = |d: usize| listened.is_some_and(|l| l.get(d).is_some_and(|on| !on));
 
     let band_classes: Vec<String> = (0..series.len().min(9)).map(kit::slot_class).collect();
-    let mut classes_for_defs = band_classes.clone();
+    let mut classes_for_defs = band_classes;
     classes_for_defs.dedup();
     let names: Vec<(String, String)> = series
         .iter()
@@ -235,8 +242,16 @@ pub fn streamgraph(
     let mut svg = String::with_capacity(16 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="Activity streamgraph, scrolls sideways on a narrow screen"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h:.0}" role="img" class="viz-svg-block viz-stream ck-in" data-ck-id="stream-{days}" data-ck-dim="series" data-ck-label="Left and right read each day. Up and down put one species in the foreground."{attrs}>"#,
-        attrs = kit::cols_attrs(&cols, &names, pad_l, pad_l + plot_w, false, "detections", Some("All species")),
+        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="Activity streamgraph, scrolls sideways on a narrow screen"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h:.0}" role="img" class="viz-svg-block viz-stream ck-in" data-ck-scroll-end data-ck-id="stream-{days}" data-ck-dim="series" data-ck-label="Left and right read each day. Up and down put one species in the foreground."{attrs}>"#,
+        attrs = kit::cols_attrs(
+            &cols,
+            &names,
+            pad_l,
+            pad_l + plot_w,
+            false,
+            "detections",
+            Some("All species")
+        ),
     );
     svg.push_str(&svg_a11y(
         "Activity streamgraph",
@@ -275,10 +290,10 @@ pub fn streamgraph(
             kit::monotone_path(&top, false),
             kit::monotone_path_reversed(&bottom)
         );
-        let cls = kit::slot_class(k);
+        let band_cls = kit::slot_class(k);
         let _ = write!(
             svg,
-            r#"<path class="ck-seam" d="{path}" fill="url(#sg-{cls})" data-ck-s="{k}"/>"#,
+            r#"<path class="ck-seam" d="{path}" fill="url(#sg-{band_cls})" data-ck-s="{k}"/>"#,
         );
     }
     svg.push_str("</g>");
@@ -307,14 +322,24 @@ pub fn streamgraph(
             }
         };
         let cut: String = if name.chars().count() > 14 {
-            format!("{}\u{2026}", name.chars().take(13).collect::<String>().trim_end())
+            format!(
+                "{}\u{2026}",
+                name.chars().take(13).collect::<String>().trim_end()
+            )
         } else {
             name.clone()
         };
         'sizes: for font in [11.0_f64, 9.5] {
             for text in [name.clone(), short.clone(), cut.clone()] {
                 let tw = kit::text_width(&text, font);
-                if let Some((x, y)) = place_in_band(&xs, top, bottom, tw, font + 1.0, (pad_l + 4.0, pad_l + plot_w - 4.0)) {
+                if let Some((x, y)) = place_in_band(
+                    &xs,
+                    top,
+                    bottom,
+                    tw,
+                    font + 1.0,
+                    (pad_l + 4.0, pad_l + plot_w - 4.0),
+                ) {
                     let _ = write!(
                         svg,
                         r#"<text class="ck-bandlbl ck-halo" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="{font}" data-ck-s="{k}">{t}</text>"#,
@@ -481,7 +506,10 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let max = points.iter().map(|p| p.1).max().unwrap_or(1).max(1);
     let top = kit::count_ceiling(max as f64);
     let rules = kit::count_ticks(top, 3);
-    let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
+    let widest = rules
+        .iter()
+        .map(|&v| kit::text_width(&kit::compact(v), 10.0))
+        .fold(0.0_f64, f64::max);
     let w = 720.0_f64;
     let h = 210.0_f64;
     let (pad_l, pad_r, pad_b) = (kit::axis_margin(widest, w), 12.0, 26.0);
@@ -492,7 +520,11 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let y = kit::Linear::new((0.0, top), (pad_t + plot_h, pad_t));
     let x_at = |i: usize| pad_l + i as f64 * plot_w / (n - 1) as f64;
     let base = pad_t + plot_h;
-    let pts: Vec<(f64, f64)> = points.iter().enumerate().map(|(i, (_, v))| (x_at(i), y.at(*v as f64))).collect();
+    let pts: Vec<(f64, f64)> = points
+        .iter()
+        .enumerate()
+        .map(|(i, (_, v))| (x_at(i), y.at(*v as f64)))
+        .collect();
     let curve = kit::monotone_path(&pts, false);
 
     let cols: Vec<kit::Col> = points
@@ -507,13 +539,24 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
             }
         })
         .collect();
-    let ys: Vec<serde_json::Value> = pts.iter().map(|p| serde_json::json!((p.1 * 10.0).round() / 10.0)).collect();
+    let ys: Vec<serde_json::Value> = pts
+        .iter()
+        .map(|p| serde_json::json!((p.1 * 10.0).round() / 10.0))
+        .collect();
 
     let mut svg = String::new();
     let _ = write!(
         svg,
         r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block ck-in" data-ck-id="life-accumulation" data-ck-label="Left and right read each month."{attrs} data-ck-ys="{ys}">"#,
-        attrs = kit::cols_attrs(&cols, &[("Species so far".to_string(), "var(--chart-1)".to_string())], x_at(0), x_at(n - 1), false, "species", None),
+        attrs = kit::cols_attrs(
+            &cols,
+            &[("Species so far".to_string(), "var(--chart-1)".to_string())],
+            x_at(0),
+            x_at(n - 1),
+            false,
+            "species",
+            None
+        ),
         ys = escape_html(&serde_json::Value::Array(ys).to_string()),
     );
     svg.push_str(&svg_a11y(
@@ -526,7 +569,11 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     for &v in &rules {
         let yy = y.at(v);
         if v > 0.0 {
-            let _ = write!(svg, r#"<line class="ck-grid" x1="{pad_l:.1}" y1="{yy:.1}" x2="{x2:.1}" y2="{yy:.1}"/>"#, x2 = pad_l + plot_w);
+            let _ = write!(
+                svg,
+                r#"<line class="ck-grid" x1="{pad_l:.1}" y1="{yy:.1}" x2="{x2:.1}" y2="{yy:.1}"/>"#,
+                x2 = pad_l + plot_w
+            );
         }
         let _ = write!(
             svg,
@@ -547,7 +594,11 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     for (i, (_, v)) in points.iter().enumerate() {
         let added = if i == 0 { *v } else { v - points[i - 1].1 };
         if added > 0 && i + 1 < n {
-            let _ = write!(svg, r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#, pts[i].0, pts[i].1);
+            let _ = write!(
+                svg,
+                r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
+                pts[i].0, pts[i].1
+            );
         }
     }
     let (lx, ly) = pts[n - 1];
@@ -563,8 +614,18 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
         let (_, short) = month_label(&points[i].0);
         let long = month_label(&points[i].0).0;
         // The year, where the axis begins and where a new one starts.
-        let text = if k == 0 || points[i].0.ends_with("-01") { long } else { short };
-        let anchor = if k == 0 { "start" } else if k + 1 == ticks.len() { "end" } else { "middle" };
+        let text = if k == 0 || points[i].0.ends_with("-01") {
+            long
+        } else {
+            short
+        };
+        let anchor = if k == 0 {
+            "start"
+        } else if k + 1 == ticks.len() {
+            "end"
+        } else {
+            "middle"
+        };
         let _ = write!(
             svg,
             r#"<text class="mono ck-lbl" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="10">{t}</text>"#,
@@ -721,9 +782,14 @@ mod tests {
                 svg.contains(&format!(r#"fill="url(#sg-ck-c{n})""#)),
                 "slot {n}: {svg}"
             );
-            assert!(svg.contains(&format!(r#"class="ck-gr ck-c{n}""#)), "gradient {n}: {svg}");
             assert!(
-                svg.contains(&format!(r#"data-ck-series="[[&quot;Species 0&quot;,&quot;var(--chart-1)&quot;"#)),
+                svg.contains(&format!(r#"class="ck-gr ck-c{n}""#)),
+                "gradient {n}: {svg}"
+            );
+            assert!(
+                svg.contains(
+                    r#"data-ck-series="[[&quot;Species 0&quot;,&quot;var(--chart-1)&quot;"#
+                ),
                 "{svg}"
             );
         }
@@ -733,10 +799,21 @@ mod tests {
         );
         assert!(svg.contains("var(--chart-other)"), "{svg}");
         assert!(!svg.contains("fill-opacity"), "{svg}");
-        assert!(!svg.contains("oklch(") && !svg.contains("#fff") && !svg.contains("rgb("), "{svg}");
+        assert!(
+            !svg.contains("oklch(") && !svg.contains("#fff") && !svg.contains("rgb("),
+            "{svg}"
+        );
         // The chart is the kit's: its own entrance and tooltip, and a legend of buttons.
-        assert!(svg.contains(r#"data-ck="cols""#) && svg.contains("ck-in"), "{svg}");
-        assert_eq!(svg.matches(r#"class="bnb-meta viz-legend-item ck-leg""#).count(), 9, "{svg}");
+        assert!(
+            svg.contains(r#"data-ck="cols""#) && svg.contains("ck-in"),
+            "{svg}"
+        );
+        assert_eq!(
+            svg.matches(r#"class="bnb-meta viz-legend-item ck-leg""#)
+                .count(),
+            9,
+            "{svg}"
+        );
     }
 
     /// A centred stack: every day's total is split evenly about the middle line, and
@@ -751,11 +828,20 @@ mod tests {
         for d in 0..3 {
             let total: i64 = counts.iter().map(|c| c[d]).sum();
             // Bottom edge is below the middle line and top edge above, by the same amount.
-            assert!(((e[0][d] - mid) - (mid - e[3][d])).abs() < 1e-9, "day {d} is centred");
-            assert!(((e[0][d] - e[3][d]) - total as f64 * scale).abs() < 1e-9, "day {d} is as tall as its total");
+            assert!(
+                ((e[0][d] - mid) - (mid - e[3][d])).abs() < 1e-9,
+                "day {d} is centred"
+            );
+            assert!(
+                ((e[0][d] - e[3][d]) - total as f64 * scale).abs() < 1e-9,
+                "day {d} is as tall as its total"
+            );
             for k in 0..3 {
                 let thick = e[k][d] - e[k + 1][d];
-                assert!((thick - counts[k][d] as f64 * scale).abs() < 1e-9, "band {k} day {d}");
+                assert!(
+                    (thick - counts[k][d] as f64 * scale).abs() < 1e-9,
+                    "band {k} day {d}"
+                );
                 assert!(thick >= 0.0, "a band is never upside down");
             }
         }
@@ -773,12 +859,19 @@ mod tests {
             .collect();
         let top: Vec<f64> = thick.iter().map(|t| 100.0 - t / 2.0).collect();
         let bottom: Vec<f64> = thick.iter().map(|t| 100.0 + t / 2.0).collect();
-        let (x, y) = place_in_band(&xs, &top, &bottom, 40.0, 12.0, (0.0, 190.0)).expect("fits in the belly");
-        assert!((70.0..=120.0).contains(&x), "centred over the belly, got {x}");
+        let (x, y) =
+            place_in_band(&xs, &top, &bottom, 40.0, 12.0, (0.0, 190.0)).expect("fits in the belly");
+        assert!(
+            (70.0..=120.0).contains(&x),
+            "centred over the belly, got {x}"
+        );
         assert!((y - 100.0).abs() < 1e-6, "vertically centred, got {y}");
         for d in 0..20 {
             if xs[d] >= x - 20.0 && xs[d] <= x + 20.0 {
-                assert!(top[d] <= y - 6.0 && bottom[d] >= y + 6.0, "day {d} clips the label");
+                assert!(
+                    top[d] <= y - 6.0 && bottom[d] >= y + 6.0,
+                    "day {d} clips the label"
+                );
             }
         }
         // Too wide for the belly: nothing.
@@ -787,9 +880,15 @@ mod tests {
         assert!(place_in_band(&xs, &top, &bottom, 20.0, 40.0, (0.0, 190.0)).is_none());
         // A label never leaves the plot, even when the best belly is at its edge.
         let edge_top: Vec<f64> = (0..20).map(|i| if i >= 16 { 80.0 } else { 99.0 }).collect();
-        let edge_bot: Vec<f64> = (0..20).map(|i| if i >= 16 { 120.0 } else { 101.0 }).collect();
-        let (ex, _) = place_in_band(&xs, &edge_top, &edge_bot, 30.0, 12.0, (0.0, 190.0)).expect("fits at the right edge");
-        assert!(ex + 15.0 <= 190.0 + 1e-9, "label ran off the plot: centre {ex}");
+        let edge_bot: Vec<f64> = (0..20)
+            .map(|i| if i >= 16 { 120.0 } else { 101.0 })
+            .collect();
+        let (ex, _) = place_in_band(&xs, &edge_top, &edge_bot, 30.0, 12.0, (0.0, 190.0))
+            .expect("fits at the right edge");
+        assert!(
+            ex + 15.0 <= 190.0 + 1e-9,
+            "label ran off the plot: centre {ex}"
+        );
     }
 
     /// The axis labels at most `max` columns, evenly, first and last included.
@@ -809,10 +908,14 @@ mod tests {
     #[test]
     fn the_streamgraph_survives_a_huge_count_long_names_and_a_crowd() {
         let long = "Extraordinarily Long-named Warbler of the Far Northern Highlands";
-        let mut series: Vec<(String, Vec<i64>)> = vec![(long.to_string(), vec![1_600_000, 2, 900_000])];
+        let mut series: Vec<(String, Vec<i64>)> =
+            vec![(long.to_string(), vec![1_600_000, 2, 900_000])];
         series.extend((0..60).map(|i| (format!("Species number {i}"), vec![i, 3, 4])));
         let svg = streamgraph(&series, Some("2026-10-21"), None);
-        assert!(svg.contains("<svg") && svg.contains("1.6M"), "peak is compacted: {svg}");
+        assert!(
+            svg.contains("<svg") && svg.contains("1.6M"),
+            "peak is compacted: {svg}"
+        );
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
         // A seven-digit count is read with its separators, in the sentence under the chart too.
         assert!(svg.contains("The busiest day had 1,601,770."), "{svg}");
@@ -881,10 +984,19 @@ mod tests {
         assert!(svg.contains("<desc>A rising curve"));
         // The chart is named by its <title>; the scroll box around it is named for what it does.
         let tag = &svg[svg.find("<svg").unwrap()..];
-        assert!(!tag[..tag.find('>').unwrap()].contains("aria-label"), "{svg}");
+        assert!(
+            !tag[..tag.find('>').unwrap()].contains("aria-label"),
+            "{svg}"
+        );
         // A tooltip for every month: the total so far, and what came that month.
-        assert!(svg.contains("&quot;Apr 2024&quot;,[7.0],&quot;+4 first heard this month&quot;"), "{svg}");
-        assert!(svg.contains("&quot;Mar 2024&quot;,[3.0],&quot;+3 first heard this month&quot;"), "the first month adds its own: {svg}");
+        assert!(
+            svg.contains("&quot;Apr 2024&quot;,[7.0],&quot;+4 first heard this month&quot;"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("&quot;Mar 2024&quot;,[3.0],&quot;+3 first heard this month&quot;"),
+            "the first month adds its own: {svg}"
+        );
         assert!(svg.contains(r#"data-ck-id="life-accumulation""#), "{svg}");
     }
 
@@ -906,22 +1018,41 @@ mod tests {
         let svg = accumulation_curve(&pts);
         let number_after = |s: &str, key: &str| -> f64 {
             let rest = s.split_once(key).expect(key).1;
-            rest.split('"').next().expect("a value").parse().expect("a number")
+            rest.split('"')
+                .next()
+                .expect("a value")
+                .parse()
+                .expect("a number")
         };
-        let circle = svg.split(r#"<circle class="ck-ring ck-c1" "#).nth(1).expect("the end point");
+        let circle = svg
+            .split(r#"<circle class="ck-ring ck-c1" "#)
+            .nth(1)
+            .expect("the end point");
         let end_y = number_after(circle, r#"cy=""#);
-        let label = svg.split("<text").find(|t| t.contains("15 species")).expect("the total's label");
+        let label = svg
+            .split("<text")
+            .find(|t| t.contains("15 species"))
+            .expect("the total's label");
         let baseline = number_after(label, r#" y=""#);
-        assert!(baseline <= end_y - 6.0, "the label's baseline ({baseline}) is not above the end point ({end_y})");
+        assert!(
+            baseline <= end_y - 6.0,
+            "the label's baseline ({baseline}) is not above the end point ({end_y})"
+        );
         // Room for the glyphs above that baseline (the label-fitting script can
         // enlarge them to about 16 units), or the top of the drawing cuts them.
-        assert!(baseline >= 16.0, "the label's baseline ({baseline}) leaves no room above it");
+        assert!(
+            baseline >= 16.0,
+            "the label's baseline ({baseline}) leaves no room above it"
+        );
     }
 
     /// Months read as months, and a key that is not one is left alone.
     #[test]
     fn month_keys_are_named() {
-        assert_eq!(month_label("24-03"), ("Mar 2024".to_string(), "Mar".to_string()));
+        assert_eq!(
+            month_label("24-03"),
+            ("Mar 2024".to_string(), "Mar".to_string())
+        );
         assert_eq!(month_label("99-12").0, "Dec 2099");
         assert_eq!(month_label("nonsense").0, "nonsense");
         assert_eq!(month_label("24-13").0, "24-13");
@@ -941,7 +1072,9 @@ mod tests {
         hourly[7] = 7;
         let mut top = no_species();
         top[7] = vec![("American Robin".to_string(), 5)];
-        let temps: Vec<(f64, f64)> = (0..24).map(|h| (f64::from(h) + 0.5, 12.0 + f64::from(h) / 4.0)).collect();
+        let temps: Vec<(f64, f64)> = (0..24)
+            .map(|h| (f64::from(h) + 0.5, 12.0 + f64::from(h) / 4.0))
+            .collect();
         let svg = day_strip(&hourly, &top, &temps, Some((6.0, 19.5)), 13.0);
         assert!(svg.contains("<svg"));
         // The labelled solar markers carry real clock times.
@@ -954,9 +1087,17 @@ mod tests {
         assert!(svg.contains("American Robin&#9;5"), "{svg}");
         // Accessible name + an honest description that names the solar markers.
         assert!(svg.contains("<title>Activity across the day</title>"));
-        assert!(svg.contains("<desc>Detections for each hour of today, with night shaded and a now marker."), "{svg}");
+        assert!(
+            svg.contains(
+                "<desc>Detections for each hour of today, with night shaded and a now marker."
+            ),
+            "{svg}"
+        );
         let tag = &svg[svg.find("<svg").unwrap()..];
-        assert!(!tag[..tag.find('>').unwrap()].contains("aria-label"), "{svg}");
+        assert!(
+            !tag[..tag.find('>').unwrap()].contains("aria-label"),
+            "{svg}"
+        );
         // The chart is the kit's, and does not replay its entrance on a 30-second refresh.
         assert!(svg.contains(r#"data-ck-id="today-hourly""#), "{svg}");
     }
@@ -972,6 +1113,9 @@ mod tests {
         assert!(!svg.contains(r#"<rect class="ck-track""#));
         assert!(!svg.contains("Temperature"), "{svg}");
         // The honest description promises only the markers actually drawn.
-        assert!(svg.contains("<desc>Detections for each hour of today, with a now marker."), "{svg}");
+        assert!(
+            svg.contains("<desc>Detections for each hour of today, with a now marker."),
+            "{svg}"
+        );
     }
 }

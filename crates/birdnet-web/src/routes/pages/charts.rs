@@ -3,7 +3,6 @@
 //! Produces inline SVG for embedding directly in HTMX partial responses.
 //! All functions return a `String` that can be inserted directly into HTML.
 
-
 /// Render a column chart for hourly detection counts (0–23): a bar an hour on an axis from
 /// zero, the busiest hour labelled, a tooltip for every hour (including the empty ones).
 ///
@@ -79,7 +78,10 @@ pub(crate) fn render_daily_chart(
 
 /// One `(date, count)` per calendar day from the first date to `end` (or the last date),
 /// with zero for a day that has no row. Rows that are not dates are kept as they came.
-pub(crate) fn fill_days(days: &[birdnet_db::sqlite::DailyCount], end: Option<&str>) -> Vec<(String, i64)> {
+pub(crate) fn fill_days(
+    days: &[birdnet_db::sqlite::DailyCount],
+    end: Option<&str>,
+) -> Vec<(String, i64)> {
     use super::viz::kit::{epoch_day, shift_date};
     let first = days.first().and_then(|d| epoch_day(&d.date));
     let last_row = days.last().and_then(|d| epoch_day(&d.date));
@@ -91,7 +93,8 @@ pub(crate) fn fill_days(days: &[birdnet_db::sqlite::DailyCount], end: Option<&st
     if last - first > 400 {
         return days.iter().map(|d| (d.date.clone(), d.count)).collect();
     }
-    let by_date: std::collections::HashMap<&str, i64> = days.iter().map(|d| (d.date.as_str(), d.count)).collect();
+    let by_date: std::collections::HashMap<&str, i64> =
+        days.iter().map(|d| (d.date.as_str(), d.count)).collect();
     (first..=last)
         .filter_map(|day| {
             let (y, m, d) = shift_date("1970-01-01", day)?;
@@ -220,7 +223,6 @@ mod tests {
             !svg.contains("var(--rare)"),
             "the alarm colour is not a bucket"
         );
-    
     }
 
     /// The x-extent `(left, right)` of every painted bar: the first `M` and the last `L` of its path.
@@ -234,24 +236,43 @@ mod tests {
                         .filter_map(|t| t.parse().ok())
                         .collect()
                 };
-                let xs: Vec<f64> = d.split(['M', 'L', 'Q', ' ']).filter(|t| t.contains(',')).filter_map(|t| nums(t).first().copied()).collect();
-                (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+                let xs: Vec<f64> = d
+                    .split(['M', 'L', 'Q', ' '])
+                    .filter(|t| t.contains(','))
+                    .filter_map(|t| nums(t).first().copied())
+                    .collect();
+                (
+                    xs.iter().copied().fold(f64::INFINITY, f64::min),
+                    xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                )
             })
             .collect()
     }
 
     fn view_box(svg: &str) -> (f64, f64, f64, f64) {
-        let vb = svg.split_once("viewBox=\"").expect("viewBox").1.split_once('"').expect("end").0;
-        let v: Vec<f64> = vb.split_whitespace().map(|t| t.parse().expect("number")).collect();
+        let vb = svg
+            .split_once("viewBox=\"")
+            .expect("viewBox")
+            .1
+            .split_once('"')
+            .expect("end")
+            .0;
+        let v: Vec<f64> = vb
+            .split_whitespace()
+            .map(|t| t.parse().expect("number"))
+            .collect();
         (v[0], v[1], v[2], v[3])
     }
 
     fn daily(n: usize, f: impl Fn(usize) -> i64) -> Vec<birdnet_db::sqlite::DailyCount> {
         (0..n)
             .map(|i| birdnet_db::sqlite::DailyCount {
-                date: super::super::viz::kit::shift_date("2026-01-01", i as i64)
-                    .map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"))
-                    .expect("a date"),
+                date: super::super::viz::kit::shift_date(
+                    "2026-01-01",
+                    i64::try_from(i).unwrap_or(0),
+                )
+                .map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"))
+                .expect("a date"),
                 count: f(i),
             })
             .collect()
@@ -274,7 +295,11 @@ mod tests {
             let spans = bar_spans(&svg);
             assert_eq!(spans.len(), n, "n = {n}: every day must draw a bar");
             for (i, (l, r)) in spans.iter().enumerate() {
-                assert!(*l >= vx && *r <= vx + vw, "n = {n}: bar {i} spans {l}..{r} but the viewBox is {vx}..{}", vx + vw);
+                assert!(
+                    *l >= vx && *r <= vx + vw,
+                    "n = {n}: bar {i} spans {l}..{r} but the viewBox is {vx}..{}",
+                    vx + vw
+                );
             }
         }
     }
@@ -287,7 +312,12 @@ mod tests {
         let spans = bar_spans(&svg);
         assert_eq!(spans.len(), 14);
         for pair in spans.windows(2) {
-            assert!(pair[1].0 >= pair[0].1, "bar at {} overlaps the one ending at {}", pair[1].0, pair[0].1);
+            assert!(
+                pair[1].0 >= pair[0].1,
+                "bar at {} overlaps the one ending at {}",
+                pair[1].0,
+                pair[0].1
+            );
         }
     }
 
@@ -297,13 +327,48 @@ mod tests {
     #[test]
     fn the_busiest_count_is_drawn_inside_the_chart() {
         for (name, svg) in [
-            ("daily", render_daily_chart("t", &daily(3, |i| i64::try_from(i).unwrap_or(0) + 1), None, None)),
-            ("hourly", render_hourly_chart("t", &[birdnet_db::sqlite::HourlyCount { hour: "06".into(), count: 2 }, birdnet_db::sqlite::HourlyCount { hour: "07".into(), count: 7 }])),
+            (
+                "daily",
+                render_daily_chart(
+                    "t",
+                    &daily(3, |i| i64::try_from(i).unwrap_or(0) + 1),
+                    None,
+                    None,
+                ),
+            ),
+            (
+                "hourly",
+                render_hourly_chart(
+                    "t",
+                    &[
+                        birdnet_db::sqlite::HourlyCount {
+                            hour: "06".into(),
+                            count: 2,
+                        },
+                        birdnet_db::sqlite::HourlyCount {
+                            hour: "07".into(),
+                            count: 7,
+                        },
+                    ],
+                ),
+            ),
         ] {
             let (_, vy, _, vh) = view_box(&svg);
-            let label = svg.split("<text ").find(|t| t.contains("ck-annot ck-halo")).unwrap_or_else(|| panic!("{name}: the busiest is labelled"));
-            let y: f64 = label.split("y=\"").nth(1).and_then(|r| r.split('"').next()).and_then(|v| v.parse().ok()).expect("label has a y");
-            assert!(y - 10.0 >= vy && y <= vy + vh, "{name}: the label's baseline y = {y} leaves no room in {vy}..{}", vy + vh);
+            let label = svg
+                .split("<text ")
+                .find(|t| t.contains("ck-annot ck-halo"))
+                .unwrap_or_else(|| panic!("{name}: the busiest is labelled"));
+            let y: f64 = label
+                .split("y=\"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .and_then(|v| v.parse().ok())
+                .expect("label has a y");
+            assert!(
+                y - 10.0 >= vy && y <= vy + vh,
+                "{name}: the label's baseline y = {y} leaves no room in {vy}..{}",
+                vy + vh
+            );
         }
     }
 
@@ -311,13 +376,25 @@ mod tests {
     #[test]
     fn days_without_a_row_are_zeros_and_the_run_reaches_today() {
         let rows = vec![
-            birdnet_db::sqlite::DailyCount { date: "2026-10-15".into(), count: 4 },
-            birdnet_db::sqlite::DailyCount { date: "2026-10-17".into(), count: 9 },
+            birdnet_db::sqlite::DailyCount {
+                date: "2026-10-15".into(),
+                count: 4,
+            },
+            birdnet_db::sqlite::DailyCount {
+                date: "2026-10-17".into(),
+                count: 9,
+            },
         ];
         let f = fill_days(&rows, Some("2026-10-19"));
         assert_eq!(
             f,
-            vec![("2026-10-15".to_string(), 4), ("2026-10-16".to_string(), 0), ("2026-10-17".to_string(), 9), ("2026-10-18".to_string(), 0), ("2026-10-19".to_string(), 0)]
+            vec![
+                ("2026-10-15".to_string(), 4),
+                ("2026-10-16".to_string(), 0),
+                ("2026-10-17".to_string(), 9),
+                ("2026-10-18".to_string(), 0),
+                ("2026-10-19".to_string(), 0)
+            ]
         );
         // An end date earlier than the data, or not a date, does not truncate or invent.
         assert_eq!(fill_days(&rows, Some("2026-10-01")).len(), 3);
@@ -327,7 +404,13 @@ mod tests {
     /// A row that is not a date (an import) is carried as it came, not dropped.
     #[test]
     fn a_row_that_is_not_a_date_is_kept() {
-        let rows = vec![birdnet_db::sqlite::DailyCount { date: "garbage".into(), count: 3 }];
-        assert_eq!(fill_days(&rows, Some("2026-10-19")), vec![("garbage".to_string(), 3)]);
+        let rows = vec![birdnet_db::sqlite::DailyCount {
+            date: "garbage".into(),
+            count: 3,
+        }];
+        assert_eq!(
+            fill_days(&rows, Some("2026-10-19")),
+            vec![("garbage".to_string(), 3)]
+        );
     }
 }

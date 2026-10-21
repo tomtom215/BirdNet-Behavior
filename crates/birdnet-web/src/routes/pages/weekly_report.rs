@@ -282,7 +282,11 @@ fn busiest_day(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount]) -> (S
 /// The week as seven columns, Monday to Sunday, on an axis from zero: the busiest day
 /// labelled, the average as a hairline, a tooltip for every day. A day of the current week
 /// that has not happened yet is an empty slot that says "Not yet", not a zero.
-fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount], today: &str) -> String {
+fn render_weekly_chart(
+    week_start: &str,
+    daily: &[birdnet_db::sqlite::DailyCount],
+    today: &str,
+) -> String {
     let dates = week_dates(week_start);
     let mut counts = [0_i64; 7];
     for dc in daily {
@@ -426,8 +430,17 @@ mod tests {
     }
 
     fn view_box(svg: &str) -> (f64, f64, f64, f64) {
-        let vb = svg.split_once("viewBox=\"").unwrap().1.split_once('"').unwrap().0;
-        let n: Vec<f64> = vb.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        let vb = svg
+            .split_once("viewBox=\"")
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0;
+        let n: Vec<f64> = vb
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
         (n[0], n[1], n[2], n[3])
     }
 
@@ -437,7 +450,10 @@ mod tests {
             .skip(1)
             .filter_map(|frag| {
                 let body = frag.split('>').next().unwrap_or("");
-                let rest = body.split_once(&format!(" {attr}=\"")).or_else(|| body.split_once(&format!("\"{attr}=\""))).map(|x| x.1)?;
+                let rest = body
+                    .split_once(&format!(" {attr}=\""))
+                    .or_else(|| body.split_once(&format!("\"{attr}=\"")))
+                    .map(|x| x.1)?;
                 rest.split('"').next()?.parse().ok()
             })
             .collect()
@@ -470,13 +486,27 @@ mod tests {
             let svg = render_weekly_chart("2026-03-09", &week(counts), "2026-03-20");
             let (vx, vy, vw, vh) = view_box(&svg);
             for (i, y) in nums(&svg, "text", "y").iter().enumerate() {
-                assert!(*y >= vy && *y <= vy + vh, "{counts:?}: label {i} sits at y = {y} outside {vy}..{}", vy + vh);
+                assert!(
+                    *y >= vy && *y <= vy + vh,
+                    "{counts:?}: label {i} sits at y = {y} outside {vy}..{}",
+                    vy + vh
+                );
             }
             for (i, x) in nums(&svg, "text", "x").iter().enumerate() {
-                assert!(*x >= vx && *x <= vx + vw, "{counts:?}: label {i} sits at x = {x} outside the width");
+                assert!(
+                    *x >= vx && *x <= vx + vw,
+                    "{counts:?}: label {i} sits at x = {x} outside the width"
+                );
             }
-            for (i, (x, w)) in nums(&svg, "rect", "x").iter().zip(nums(&svg, "rect", "width")).enumerate() {
-                assert!(*x >= vx && x + w <= vx + vw + 1e-6, "{counts:?}: box {i} overflows the width");
+            for (i, (x, w)) in nums(&svg, "rect", "x")
+                .iter()
+                .zip(nums(&svg, "rect", "width"))
+                .enumerate()
+            {
+                assert!(
+                    *x >= vx && x + w <= vx + vw + 1e-6,
+                    "{counts:?}: box {i} overflows the width"
+                );
             }
         }
     }
@@ -488,10 +518,21 @@ mod tests {
         let svg = render_weekly_chart("2026-03-09", &week([10, 20, 30, 0, 0, 0, 0]), "2026-03-11");
         assert!(svg.contains("Thu 12 Mar&#10;Not yet"), "{svg}");
         assert!(svg.contains("Sun 15 Mar&#10;Not yet"), "{svg}");
-        assert!(svg.contains("avg 20"), "the average is over the three days that happened: {svg}");
+        assert!(
+            svg.contains("avg 20"),
+            "the average is over the three days that happened: {svg}"
+        );
         assert!(svg.contains("Mon") && svg.contains("Sun"), "{svg}");
+        // Seven wide slots: each weekday is centred under its own bar, none hung from an edge.
+        assert!(
+            !svg.contains(r#"text-anchor="start""#) && !svg.contains(r#"text-anchor="end">Sun"#),
+            "{svg}"
+        );
         // A finished week has no such days.
-        assert!(!render_weekly_chart("2026-03-09", &week([10, 20, 30, 0, 0, 0, 0]), "2026-03-20").contains("Not yet"));
+        assert!(
+            !render_weekly_chart("2026-03-09", &week([10, 20, 30, 0, 0, 0, 0]), "2026-03-20")
+                .contains("Not yet")
+        );
     }
 
     #[test]

@@ -15,6 +15,8 @@
 //! every day would be a lie of the opposite kind. No rows in the period means unknown,
 //! and unknown draws nothing.
 
+#![allow(clippy::cast_possible_wrap)]
+
 use std::collections::BTreeMap;
 
 use super::viz::kit;
@@ -29,7 +31,7 @@ const MIN_LISTENED_SECS: f64 = 60.0;
 ///
 /// A database error is returned, not defaulted: the caller decides whether a chart
 /// without the ledger is still honest (it is, it just says less).
-pub(crate) fn effort_by_date(
+pub fn effort_by_date(
     conn: &rusqlite::Connection,
     from: &str,
     to: &str,
@@ -37,7 +39,9 @@ pub(crate) fn effort_by_date(
     let mut stmt = conn.prepare(
         "SELECT date, SUM(seconds) FROM recording_effort WHERE date >= ?1 AND date <= ?2 GROUP BY date",
     )?;
-    let rows = stmt.query_map([from, to], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?;
+    let rows = stmt.query_map([from, to], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+    })?;
     rows.collect()
 }
 
@@ -46,7 +50,7 @@ pub(crate) fn effort_by_date(
 /// `None` when the ledger has no row anywhere in the period (unknown, so nothing is
 /// claimed). The last day is never reported as off: the recorder credits on a timer, so
 /// the first minutes of a day have no row yet.
-pub(crate) fn listened_days(effort: &BTreeMap<String, f64>, end: &str, days: usize) -> Option<Vec<bool>> {
+pub fn listened_days(effort: &BTreeMap<String, f64>, end: &str, days: usize) -> Option<Vec<bool>> {
     if effort.is_empty() || days == 0 {
         return None;
     }
@@ -54,7 +58,10 @@ pub(crate) fn listened_days(effort: &BTreeMap<String, f64>, end: &str, days: usi
     for d in 0..days {
         let back = d as i64 - (days as i64 - 1);
         let on = kit::shift_date(end, back).is_none_or(|(y, m, dd)| {
-            back == 0 || effort.get(&format!("{y:04}-{m:02}-{dd:02}")).is_some_and(|s| *s >= MIN_LISTENED_SECS)
+            back == 0
+                || effort
+                    .get(&format!("{y:04}-{m:02}-{dd:02}"))
+                    .is_some_and(|s| *s >= MIN_LISTENED_SECS)
         });
         out.push(on);
     }
@@ -63,7 +70,11 @@ pub(crate) fn listened_days(effort: &BTreeMap<String, f64>, end: &str, days: usi
 
 /// For each of `dates` (ISO, any order of days): was the station listening? `None` when
 /// the ledger has nothing for the period. `today` is never off.
-pub(crate) fn listened_on(effort: &BTreeMap<String, f64>, dates: &[String], today: &str) -> Option<Vec<bool>> {
+pub fn listened_on(
+    effort: &BTreeMap<String, f64>,
+    dates: &[String],
+    today: &str,
+) -> Option<Vec<bool>> {
     if effort.is_empty() || dates.is_empty() {
         return None;
     }
@@ -76,7 +87,7 @@ pub(crate) fn listened_on(effort: &BTreeMap<String, f64>, dates: &[String], toda
 }
 
 /// The first date of the `days` ending on `end`, as `YYYY-MM-DD`.
-pub(crate) fn first_date(end: &str, days: usize) -> Option<String> {
+pub fn first_date(end: &str, days: usize) -> Option<String> {
     let (y, m, d) = kit::shift_date(end, -(days as i64 - 1))?;
     Some(format!("{y:04}-{m:02}-{d:02}"))
 }
@@ -93,7 +104,11 @@ mod tests {
     /// whether or not it heard anything, and a minute of audio is not a day.
     #[test]
     fn a_day_without_a_row_was_not_listened_to() {
-        let l = ledger(&[("2026-10-18", 86_400.0), ("2026-10-20", 30.0), ("2026-10-21", 5.0)]);
+        let l = ledger(&[
+            ("2026-10-18", 86_400.0),
+            ("2026-10-20", 30.0),
+            ("2026-10-21", 5.0),
+        ]);
         let got = listened_days(&l, "2026-10-21", 4).expect("the ledger has rows");
         // 18th listened, 19th no row, 20th only 30 s, 21st (today) never "off".
         assert_eq!(got, vec![true, false, false, true]);
@@ -109,8 +124,14 @@ mod tests {
     #[test]
     fn listened_on_asks_about_exactly_the_dates_given() {
         let l = ledger(&[("2026-10-01", 3600.0), ("2026-10-03", 59.0)]);
-        let dates: Vec<String> = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"].iter().map(|s| (*s).to_string()).collect();
-        assert_eq!(listened_on(&l, &dates, "2026-10-04"), Some(vec![true, false, false, true]));
+        let dates: Vec<String> = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(
+            listened_on(&l, &dates, "2026-10-04"),
+            Some(vec![true, false, false, true])
+        );
         assert!(listened_on(&BTreeMap::new(), &dates, "2026-10-04").is_none());
     }
 

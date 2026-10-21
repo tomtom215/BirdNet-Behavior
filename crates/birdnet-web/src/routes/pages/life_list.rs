@@ -80,7 +80,7 @@ async fn life_accumulation_partial(
 /// Every month, not only those that added a species (ANA14a): a plateau is
 /// part of the record, and without it the x-axis is not time. Through this
 /// month, so the curve ends at the present rather than at the last addition.
-fn accumulation_points(
+pub(super) fn accumulation_points(
     monthly: &std::collections::BTreeMap<String, u32>,
     this_month: &str,
 ) -> Vec<(String, i64)> {

@@ -30,6 +30,8 @@
 //   MUTATE=nodim     the stylesheet stops dimming
 //   MUTATE=motion    reduced motion is switched off for chart animation
 //   MUTATE=noreplay  the kit never marks a repeat as `.ck-still`
+//   MUTATE=noscroll  the kit no longer scrolls a wide chart to its newest day
+//   MUTATE=nopan     the sideways-scrolling charts are made pan-y, so a swipe cannot scroll them
 import { chromium } from 'playwright';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
@@ -71,6 +73,13 @@ async function open(route, { reduced = 'no-preference', motionSetting = null, th
       await r.fulfill({ response: res, body });
     });
   }
+  if (MUTATE === 'noscroll') {
+    await context.route('**/static/chart-kit.js*', async (r) => {
+      const res = await r.fetch();
+      const body = (await res.text()).replace('svg.hasAttribute("data-ck-scroll-end")', 'false');
+      await r.fulfill({ response: res, body });
+    });
+  }
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -79,6 +88,7 @@ async function open(route, { reduced = 'no-preference', motionSetting = null, th
   // Through the CSSOM: the page's CSP forbids a <style> that is not its own.
   const inject = (rule) => page.evaluate((r) => document.styleSheets[0].insertRule(r, document.styleSheets[0].cssRules.length), rule);
   if (MUTATE === 'nodim') await inject('svg.ck-focus [data-ck-s], svg.ck-focus-i [data-ck-i] { opacity: 1 !important; }');
+  if (MUTATE === 'nopan') await inject('svg[data-ck] { touch-action: pan-y !important; }');
   if (MUTATE === 'motion') await inject('svg.ck-in .ck-grow { animation: ck-grow 3s linear both !important; }');
   return { page, context, errors };
 }
@@ -278,6 +288,24 @@ async function waitChart(page, sel) {
   });
   check('touch: the sideways-scrolling streamgraph and grid accept a swipe', ta.stream === 'auto' && ta.grid === 'auto', JSON.stringify(ta));
   check('touch: the hour bars keep pan-y so a drag reads and a swipe down scrolls', ta.hours === 'pan-y', JSON.stringify(ta));
+  // A time series that scrolls sideways starts at its newest day, not its oldest.
+  const scrolled = await page.evaluate(() => {
+    const sc = document.querySelector('#activity-streamgraph .viz-scroll');
+    return sc ? { left: sc.scrollLeft, max: sc.scrollWidth - sc.clientWidth } : null;
+  });
+  check('touch: the streamgraph starts scrolled to its newest day', scrolled && scrolled.max > 50 && scrolled.left >= scrolled.max - 2, JSON.stringify(scrolled));
+  await context.close();
+}
+{
+  const { page, context } = await open('/reports?tab=year', { width: 390, touch: true });
+  // Not waitChart: scrolling the chart into view would move the very scroll position being read.
+  await page.waitForSelector('svg.cal-svg[data-ck="marks"]', { timeout: 15000 });
+  await page.waitForTimeout(1200);
+  const scrolled = await page.evaluate(() => {
+    const sc = document.querySelector('.hm-scroll');
+    return sc ? { left: sc.scrollLeft, max: sc.scrollWidth - sc.clientWidth } : null;
+  });
+  check('touch: the year calendar starts scrolled to today', scrolled && scrolled.max > 50 && scrolled.left >= scrolled.max - 2, JSON.stringify(scrolled));
   await context.close();
 }
 

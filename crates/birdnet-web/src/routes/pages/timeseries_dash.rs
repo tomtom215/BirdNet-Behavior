@@ -144,10 +144,14 @@ fn compute_ts_diversity(state: &AppState) -> Option<String> {
         Some(Ok(rows)) => {
             let today = state
                 .with_read_db(|conn| {
-                    conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0))
+                    conn.query_row("SELECT date('now','localtime')", [], |r| {
+                        r.get::<_, String>(0)
+                    })
                 })
                 .ok();
-            Some(render_diversity_table(&rows, today.as_deref(), &|dates| listened_for(state, dates)))
+            Some(render_diversity_table(&rows, today.as_deref(), &|dates| {
+                listened_for(state, dates)
+            }))
         }
         _ => None,
     }
@@ -308,7 +312,8 @@ fn zero_fill(rows: &[(String, f64)], last: &str) -> Vec<(String, f64)> {
     let Some(end) = epoch_day(last) else {
         return rows.to_vec();
     };
-    let by_date: std::collections::HashMap<&str, f64> = rows.iter().map(|(d, v)| (d.as_str(), *v)).collect();
+    let by_date: std::collections::HashMap<&str, f64> =
+        rows.iter().map(|(d, v)| (d.as_str(), *v)).collect();
     (first..=end)
         .filter_map(|day| {
             let (y, m, d) = shift_date("1970-01-01", day)?;
@@ -363,7 +368,10 @@ const TABLE_OPEN: &str = r#"<details class="viz-table"><summary>Show as a table<
 #[cfg(feature = "analytics")]
 // Daily counts and richness are tens to thousands: an `f64` holds them exactly.
 #[allow(clippy::cast_precision_loss)]
-fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow], listened: Option<&[bool]>) -> String {
+fn render_trend_table(
+    rows: &[birdnet_timeseries::types::results::TrendRow],
+    listened: Option<&[bool]>,
+) -> String {
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No trend data yet.</p>"#.to_string();
     }
@@ -434,12 +442,19 @@ fn render_diversity_table(
     // One point a calendar day to today: a day with no detections is zero species, a point
     // on the line, not a day the line steps over.
     let last = today.unwrap_or_else(|| rows.last().map_or("", |r| r.date.as_str()));
-    let dated: Vec<(String, f64)> = rows.iter().map(|r| (r.date.clone(), r.species_richness as f64)).collect();
+    let dated: Vec<(String, f64)> = rows
+        .iter()
+        .map(|r| (r.date.clone(), r.species_richness as f64))
+        .collect();
     let filled = zero_fill(&dated, last);
-    let dates: Vec<String> = filled.iter().map(|d| d.0.clone()).collect();
-    let listened = listened_for(&dates);
+    let day_keys: Vec<String> = filled.iter().map(|d| d.0.clone()).collect();
+    let listened = listened_for(&day_keys);
     let split = filled.len().saturating_sub(30);
-    let point = |d: &(String, f64)| super::viz::TrendPoint { date: d.0.clone(), value: d.1, smooth: None };
+    let point = |d: &(String, f64)| super::viz::TrendPoint {
+        date: d.0.clone(),
+        value: d.1,
+        smooth: None,
+    };
     let pts: Vec<_> = filled[split..].iter().map(point).collect();
     let prior: Vec<_> = filled[..split].iter().map(point).collect();
     let listened_shown = listened.map(|l| l[split..].to_vec());

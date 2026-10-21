@@ -9,7 +9,6 @@
 //! | `GET /pages/heatmap-grid`    | HTMX partial — SVG heatmap grid      |
 //! | `GET /pages/hourly-totals`   | HTMX partial — bar chart by hour     |
 
-
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
@@ -119,12 +118,12 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 
 /// Compute the hour × day-of-week heatmap SVG, or `None` on a query error.
 fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
-    let cells = state
-        .with_read_db(|conn| weekly_heatmap(conn, days))
-        .ok()?;
+    let cells = state.with_read_db(|conn| weekly_heatmap(conn, days)).ok()?;
     let today = state
         .with_read_db(|conn| {
-            conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0))
+            conn.query_row("SELECT date('now','localtime')", [], |r| {
+                r.get::<_, String>(0)
+            })
         })
         .ok();
     // How many days of each weekday the window held and the station listened on, so a
@@ -143,11 +142,13 @@ fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
     };
     let mut occurrences = [0_u32; 7];
     for d in 0..n {
-        let on = listened.as_ref().is_none_or(|l| l.get(d).copied().unwrap_or(true));
+        let on = listened
+            .as_ref()
+            .is_none_or(|l| l.get(d).copied().unwrap_or(true));
         let dow = today
             .as_deref()
             .and_then(|end| {
-                super::viz::kit::epoch_day(end).map(|e| ((e - (n as i64 - 1 - d as i64) + 4).rem_euclid(7)) as usize)
+                super::viz::kit::epoch_day(end).map(|e| super::viz::kit::weekday_back(e, n - 1 - d))
             })
             // Without a date, spread the days over the week evenly.
             .unwrap_or(d % 7);
@@ -156,10 +157,22 @@ fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
         }
     }
     // Today's weekday and the hour it is now, so the hours still to come are not drawn as quiet ones.
-    let now = today.as_deref().and_then(super::viz::kit::epoch_day).map(|e| {
-        ((e + 4).rem_euclid(7) as usize, super::now_hour_local().floor() as usize)
-    });
-    Some(render_heatmap_svg(&cells, occurrences, listened.is_some(), days, now))
+    let now = today
+        .as_deref()
+        .and_then(super::viz::kit::epoch_day)
+        .map(|e| {
+            (
+                super::viz::kit::weekday_back(e, 0),
+                super::viz::kit::hour_floor(super::now_hour_local()),
+            )
+        });
+    Some(render_heatmap_svg(
+        &cells,
+        occurrences,
+        listened.is_some(),
+        days,
+        now,
+    ))
 }
 
 async fn heatmap_grid_partial(
@@ -327,8 +340,8 @@ fn render_heatmap_svg(
     for cell in cells {
         // A malformed row (a bad `Time`, imported) is skipped, not indexed: `panic = "abort"`.
         if let (Some(row), Some(slot)) = (
-            usize::try_from(cell.dow).ok().and_then(|d| counts.get_mut(d)),
-            usize::try_from(cell.hour).ok(),
+            counts.get_mut(usize::from(cell.dow)),
+            Some(usize::from(cell.hour)),
         ) && let Some(c) = row.get_mut(slot)
         {
             *c = cell.count;
@@ -418,10 +431,17 @@ mod tests {
         let mut last = 0;
         for i in 1..=100 {
             let c = heat_color(f64::from(i) / 100.0);
-            let n: usize = c.trim_start_matches("var(--seq-").trim_end_matches(')').parse().expect("a step");
+            let n: usize = c
+                .trim_start_matches("var(--seq-")
+                .trim_end_matches(')')
+                .parse()
+                .expect("a step");
             assert!((1..=7).contains(&n) && n >= last, "{c}");
             last = n;
-            assert!(!c.contains("oklch") && !c.contains("--heat") && !c.contains("--dawn"), "{c}");
+            assert!(
+                !c.contains("oklch") && !c.contains("--heat") && !c.contains("--dawn"),
+                "{c}"
+            );
         }
     }
 
@@ -448,7 +468,10 @@ mod tests {
         let svg = render_heatmap_svg(&cells, [1; 7], true, 7, None);
         assert!(svg.contains("<svg"));
         assert!(svg.contains("Mon"));
-        assert!(svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;10"), "{svg}");
+        assert!(
+            svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;10"),
+            "{svg}"
+        );
     }
 
     /// A row from an imported database with a weekday or hour outside the grid is
@@ -456,12 +479,27 @@ mod tests {
     #[test]
     fn a_malformed_cell_is_skipped_not_indexed() {
         let cells = vec![
-            HeatmapCell { dow: 9, hour: 7, count: 10 },
-            HeatmapCell { dow: 1, hour: 99, count: 10 },
-            HeatmapCell { dow: 1, hour: 7, count: 3 },
+            HeatmapCell {
+                dow: 9,
+                hour: 7,
+                count: 10,
+            },
+            HeatmapCell {
+                dow: 1,
+                hour: 99,
+                count: 10,
+            },
+            HeatmapCell {
+                dow: 1,
+                hour: 7,
+                count: 3,
+            },
         ];
         let svg = render_heatmap_svg(&cells, [1; 7], false, 7, None);
-        assert!(svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;3"), "{svg}");
+        assert!(
+            svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;3"),
+            "{svg}"
+        );
     }
 
     #[test]
