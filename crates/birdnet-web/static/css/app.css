@@ -599,7 +599,7 @@
 :root[data-theme="dark"] .streamgraph-band,
 :root[data-theme="dark"] .ridge-band,
 :root[data-theme="dark"] .mosaic-bar { filter: saturate(1.25) brightness(1.30); }
-:root[data-theme="dark"] .display { text-shadow: 0 0 28px var(--glow); }
+.display { text-shadow: var(--text-glow); }
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1409,8 +1409,9 @@ footer a:hover { color: var(--moss-ink); }
     linear-gradient(
       90deg,
       var(--surface-2) 0%,
-      color-mix(in oklab, var(--hairline) 65%, var(--surface-2)) 40%,
-      color-mix(in oklab, var(--hairline) 65%, var(--surface-2)) 60%,
+      var(--surface-2) 35%,
+      color-mix(in oklab, var(--fg) 7%, var(--surface-2)) 50%,
+      var(--surface-2) 65%,
       var(--surface-2) 100%
     );
   background-size: 200% 100%;
@@ -1492,15 +1493,15 @@ footer a:hover { color: var(--moss-ink); }
 }
 .bnb-modal::backdrop {
   background: var(--scrim);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
 }
 
 .bnb-modal__form {
-  background: var(--surface);
+  background: var(--surface-overlay);
   border: var(--bw) solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--r-dialog);
+  box-shadow: var(--shadow-xl);
   padding: 0;
   display: flex; flex-direction: column;
   font-family: var(--font-ui);
@@ -1510,15 +1511,15 @@ footer a:hover { color: var(--moss-ink); }
 .bnb-modal__foot {
   padding: var(--space-14) var(--space-18);
   border-top: var(--bw) solid var(--hairline);
-  background: var(--bg-2);
-  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  background: var(--surface-sunken);
+  border-radius: 0 0 var(--r-dialog) var(--r-dialog);
   display: flex; align-items: center; justify-content: flex-end; gap: var(--space-8);
 }
 
 /* Danger / warn theming on the dialog frame */
 .bnb-modal[data-style="danger"] .bnb-modal__form {
   border-color: color-mix(in oklab, var(--rare) 40%, var(--border));
-  box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in oklab, var(--rare) 8%, transparent);
+  box-shadow: var(--shadow-xl), var(--ring-danger);
 }
 .bnb-modal[data-style="warn"] .bnb-modal__form {
   border-color: color-mix(in oklab, var(--dawn) 50%, var(--border));
@@ -1527,14 +1528,14 @@ footer a:hover { color: var(--moss-ink); }
 /* Show/hide animation when supported */
 @media (prefers-reduced-motion: no-preference) {
   .bnb-modal[open] .bnb-modal__form {
-    animation: bnb-modal-rise var(--dur-base) var(--ease-out);
+    animation: bnb-modal-rise var(--dur-slow) var(--ease-spring);
   }
   .bnb-modal[open]::backdrop {
     animation: bnb-modal-fade var(--dur-base) ease-out;
   }
 }
 @keyframes bnb-modal-rise {
-  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  from { opacity: 0; transform: translateY(14px) scale(.97); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 @keyframes bnb-modal-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -1572,10 +1573,11 @@ footer a:hover { color: var(--moss-ink); }
   align-items: flex-start;
   gap: var(--space-10);
   padding: 11px var(--space-14);
-  background: var(--surface);
+  --k: var(--fg-3);
+  background: var(--surface-overlay);
   border: var(--bw) solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-md);
+  border-radius: var(--r-popover);
+  box-shadow: var(--shadow-lg), inset var(--accent-bar) 0 0 var(--k);
   font-size: var(--fs-base);
   line-height: 1.45;
   color: var(--fg);
@@ -1590,14 +1592,20 @@ footer a:hover { color: var(--moss-ink); }
   display: inline-block;
   width: 8px; height: 8px;
   border-radius: var(--r-pill);
-  background: var(--fg-3);
+  background: var(--k);
+  box-shadow: 0 0 0 var(--halo-w) color-mix(in oklab, var(--k) 20%, transparent);
   margin-top: var(--space-6);
   flex: 0 0 auto;
 }
-.bnb-toast[data-kind="success"] .bnb-toast__dot { background: var(--moss); }
-.bnb-toast[data-kind="warn"]    .bnb-toast__dot { background: var(--dawn); }
-.bnb-toast[data-kind="error"]   .bnb-toast__dot { background: var(--rare); }
-.bnb-toast[data-kind="info"]    .bnb-toast__dot { background: var(--info); }
+.bnb-toast[data-kind="success"] { --k: var(--moss); }
+.bnb-toast[data-kind="warn"]    { --k: var(--dawn); }
+.bnb-toast[data-kind="error"]   { --k: var(--rare); }
+.bnb-toast[data-kind="info"]    { --k: var(--info); }
+/* A toast arrives from the edge it lives on, overshoots a little and settles. */
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-toast.bnb-rise { animation: bnb-toast-in var(--dur-slow) var(--ease-spring) backwards; }
+}
+@keyframes bnb-toast-in { from { opacity: 0; transform: translateX(28px) scale(.96); } to { opacity: 1; transform: none; } }
 
 .bnb-toast__body {
   min-width: 0;
@@ -1627,21 +1635,21 @@ footer a:hover { color: var(--moss-ink); }
 
 /* Tinted backgrounds — subtle, never fights with the page */
 .bnb-toast[data-kind="success"] {
-  background: color-mix(in oklab, var(--moss-soft) 60%, var(--surface));
-  border-color: color-mix(in oklab, var(--moss) 30%, var(--border));
+  background: color-mix(in oklab, var(--moss-soft) 45%, var(--surface-overlay));
+  border-color: color-mix(in oklab, var(--moss) 28%, var(--border));
 }
 .bnb-toast[data-kind="warn"] {
-  background: color-mix(in oklab, var(--dawn-soft) 55%, var(--surface));
-  border-color: color-mix(in oklab, var(--dawn) 35%, var(--border));
+  background: color-mix(in oklab, var(--dawn-soft) 42%, var(--surface-overlay));
+  border-color: color-mix(in oklab, var(--dawn) 32%, var(--border));
 }
 .bnb-toast[data-kind="error"] {
-  background: color-mix(in oklab, var(--rare-soft) 55%, var(--surface));
-  border-color: color-mix(in oklab, var(--rare) 35%, var(--border));
+  background: color-mix(in oklab, var(--rare-soft) 42%, var(--surface-overlay));
+  border-color: color-mix(in oklab, var(--rare) 32%, var(--border));
   color: var(--fg);
 }
 .bnb-toast[data-kind="info"] {
-  background: color-mix(in oklab, var(--info-soft) 55%, var(--surface));
-  border-color: color-mix(in oklab, var(--info) 30%, var(--border));
+  background: color-mix(in oklab, var(--info-soft) 42%, var(--surface-overlay));
+  border-color: color-mix(in oklab, var(--info) 28%, var(--border));
 }
 
 /* Optional action link inside a toast (e.g. "Restart now") */
@@ -2373,7 +2381,7 @@ footer a:hover { color: var(--moss-ink); }
 }
 .audio-kind-badge.rtsp { background: var(--surface-2); color: var(--fg); }
 .audio-kind-glyph {
-  width: 6px; height: 6px; border-radius: 1px;
+  width: 6px; height: 6px; border-radius: var(--r-3xs);
   background: currentColor; opacity: .85;
 }
 .audio-kind-badge.rtsp .audio-kind-glyph { border-radius: var(--r-pill); }
@@ -2554,10 +2562,10 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 
 .bnb-cmdk__shell {
-  background: var(--surface);
+  background: var(--surface-overlay);
   border: var(--bw) solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--r-dialog);
+  box-shadow: var(--shadow-xl);
   overflow: hidden;
   display: flex; flex-direction: column;
   max-height: 70vh;
@@ -2583,6 +2591,9 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
    without putting a box around a control that is meant to read as part of the
    dialog chrome. */
 .bnb-cmdk__inputwrap input:focus { box-shadow: none; }
+/* The ring is the wrapper's (below); the input inside it draws none of its own,
+   or the field shows two boxes, one in the other. */
+.bnb-cmdk__inputwrap input:focus-visible { outline: none; }
 .bnb-cmdk__inputwrap:focus-within {
   outline: 2px solid var(--moss);
   outline-offset: -2px;
@@ -2618,7 +2629,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   color: var(--fg-4);
   padding: var(--space-12) var(--space-16) var(--space-4);
   position: sticky; top: 0;
-  background: linear-gradient(180deg, var(--surface) 80%, transparent);
+  background: linear-gradient(180deg, var(--surface-overlay) 80%, transparent);
 }
 .bnb-cmdk__results li[data-href] {
   display: grid;
@@ -2628,9 +2639,11 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   padding: var(--space-8) var(--space-16);
   cursor: pointer;
 }
+.bnb-cmdk__results li[data-href] { transition: background var(--dur-fast) var(--ease-out); }
 .bnb-cmdk__results li[data-href]:hover,
 .bnb-cmdk__results li[data-href].is-active {
-  background: color-mix(in oklab, var(--moss) 8%, var(--surface));
+  background: color-mix(in oklab, var(--moss) 9%, var(--surface-overlay));
+  box-shadow: inset var(--accent-bar-sm) 0 0 var(--moss);
 }
 .bnb-cmdk__results li[data-href] .glyph {
   font-family: var(--font-mono);
@@ -2665,7 +2678,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   display: flex; gap: var(--space-18); justify-content: flex-start;
   padding: var(--space-8) var(--space-14);
   border-top: var(--bw) solid var(--hairline);
-  background: var(--bg-2);
+  background: var(--surface-sunken);
   font-size: var(--fs-xs);
   color: var(--fg-3);
 }
@@ -2673,8 +2686,9 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   display: inline-block;
   padding: 1px 5px;
   border-radius: var(--r-2xs);
-  background: var(--surface);
+  background: var(--surface-raised);
   border: var(--bw) solid var(--border);
+  box-shadow: 0 var(--bw-strong) 0 var(--border-2);
   color: var(--fg-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
@@ -3087,10 +3101,11 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: var(--z-tabbar);
-  background: color-mix(in oklab, var(--bg) 88%, transparent);
-  backdrop-filter: saturate(1.4) blur(14px);
-  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  background: color-mix(in oklab, var(--bg) 84%, transparent);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   border-top: var(--bw) solid var(--border);
+  box-shadow: var(--shadow-up);
   padding: 4px 4px max(4px, env(safe-area-inset-bottom));
 }
 .bnb-tabbar__slot {
@@ -3120,10 +3135,13 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
+.bnb-tabbar__slot { transition: color var(--dur-fast) var(--ease-out), background var(--dur-base) var(--ease-out), transform var(--dur-instant) var(--ease-out); }
+.bnb-tabbar__slot:active { transform: scale(var(--press-scale)); }
 .bnb-tabbar__slot:hover { color: var(--fg); }
 .bnb-tabbar__slot.active {
   color: var(--moss-ink);
-  background: color-mix(in oklab, var(--moss) 10%, transparent);
+  background: color-mix(in oklab, var(--moss) 11%, transparent);
+  box-shadow: inset 0 0 0 var(--bw) color-mix(in oklab, var(--moss) 22%, transparent);
 }
 
 /* Make room for the bar so content doesn't hide beneath it. */
@@ -3767,11 +3785,13 @@ a.spp-inherit    { color: inherit; }
 .sp-h1     { font-size: var(--fs-h1); line-height: 1.04; margin-top: var(--space-6); }
 .sp-lede   { margin-top: var(--space-8); font-size: var(--fs-md); }
 .sp-controls { display: flex; align-items: center; gap: var(--space-12); flex-wrap: wrap; margin: var(--space-16) 0 var(--space-18); }
-.sp-seg { display: inline-flex; background: var(--surface-2); border: var(--bw) solid var(--border); border-radius: var(--r-sm); padding: var(--space-2); gap: var(--space-2); }
-.sp-seg a { border: 0; background: transparent; padding: var(--space-6) 13px; border-radius: var(--r-xs); font-size: var(--fs-md); color: var(--fg-2); font-family: var(--font-ui); cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-6); text-decoration: none; }
-.sp-seg a.active { background: var(--surface); color: var(--fg); font-weight: var(--fw-medium); box-shadow: var(--shadow-sm); }
+.sp-seg { display: inline-flex; background: var(--surface-sunken); border: var(--bw) solid var(--border); border-radius: var(--r-control); padding: var(--space-2); gap: var(--space-2); box-shadow: var(--shadow-field); }
+.sp-seg a { border: 0; background: transparent; padding: var(--space-6) 13px; border-radius: var(--r-xs); font-size: var(--fs-md); color: var(--fg-2); font-family: var(--font-ui); cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-6); text-decoration: none; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.sp-seg a:hover { color: var(--fg); }
+.sp-seg a.active { background: var(--surface-raised); color: var(--fg); font-weight: var(--fw-medium); box-shadow: var(--shadow-sm), var(--shadow-inset); }
 .sp-chips { display: inline-flex; gap: var(--space-6); flex-wrap: wrap; }
-.sp-chip { font-size: var(--fs-sm); padding: 5px 11px; border-radius: var(--r-pill); border: var(--bw) solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; text-decoration: none; }
+.sp-chip { font-size: var(--fs-sm); padding: 5px 11px; border-radius: var(--r-pill); border: var(--bw) solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; text-decoration: none; box-shadow: var(--shadow-xs); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out); }
+.sp-chip:active { transform: scale(var(--press-scale)); }
 .sp-chip.active { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: var(--fw-medium); }
 .sp-search { margin-left: auto; position: relative; }
 .sp-search input { background: var(--surface); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm); padding: 7px var(--space-10) 7px 30px; font: inherit; font-size: var(--fs-md); color: var(--fg); width: 200px; }
@@ -4511,6 +4531,18 @@ select.ls-select { font-family: var(--font-mono); font-size: var(--fs-md); paddi
 
 /* Shared layout (layout.html) — on every page. */
 .lay-logo        { color: var(--fg); }
+.topnav-brand .lay-logo { transition: color var(--dur-base) var(--ease-out); }
+.topnav-brand:hover g.lay-logo { color: var(--moss); }
+/* The five bars of the mark listen when the pointer is on it: each rises and
+   settles a beat after its neighbour, with the spring curve. */
+@media (prefers-reduced-motion: no-preference) {
+  .topnav-brand:hover g.lay-logo line { transform-box: fill-box; transform-origin: center; animation: bnb-listen var(--dur-slower) var(--ease-spring); }
+  .topnav-brand:hover g.lay-logo line:nth-child(2) { animation-delay: var(--stagger); }
+  .topnav-brand:hover g.lay-logo line:nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
+  .topnav-brand:hover g.lay-logo line:nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
+  .topnav-brand:hover g.lay-logo line:nth-child(5) { animation-delay: calc(var(--stagger) * 4); }
+}
+@keyframes bnb-listen { 45% { transform: scaleY(1.45); } }
 .lay-vrule       { height: 16px; align-self: center; }
 .lay-iflex-gap   { display: inline-flex; align-items: center; gap: var(--space-4); }
 .lay-iflex       { display: inline-flex; align-items: center; }
@@ -4789,7 +4821,8 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) var(--space
 }
 .bnb-subtab .l { font-size: var(--fs-base); font-weight: var(--fw-medium); display: block; }
 .bnb-subtab .q { font-size: var(--fs-xs); color: var(--fg-4); display: block; margin-top: 1px; }
-.bnb-subtab:hover { color: var(--fg); }
+.bnb-subtab { transition: color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out); border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.bnb-subtab:hover { color: var(--fg); background: color-mix(in oklab, var(--fg) 4%, transparent); }
 .bnb-subtab.active { color: var(--fg); border-bottom-color: var(--moss); }
 .bnb-subtab.active .q { color: var(--fg-3); }
 
@@ -4861,7 +4894,9 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 
 /* Review nudge / outage banner — surfaces only when something needs an eye */
 .x-nudge { display: flex; align-items: center; gap: var(--space-14); padding: 13px var(--space-18); border-radius: var(--r-lg);
-  border: var(--bw) solid color-mix(in oklab, var(--rare) 30%, var(--border)); background: var(--rare-soft); }
+  border: var(--bw) solid color-mix(in oklab, var(--rare) 30%, var(--border));
+  background: linear-gradient(90deg, color-mix(in oklab, var(--rare-soft) 70%, var(--surface)), color-mix(in oklab, var(--rare-soft) 38%, var(--surface)));
+  box-shadow: var(--shadow-sm), inset var(--accent-bar) 0 0 var(--rare); }
 .x-nudge .ico { width: 34px; height: 34px; border-radius: var(--r-pill); flex: none; display: grid; place-items: center;
   background: color-mix(in oklab, var(--rare) 16%, var(--surface)); color: var(--rare); font-size: var(--fs-lg); }
 .x-nudge .txt { flex: 1; min-width: 0; font-size: var(--fs-md); }
@@ -5021,8 +5056,9 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 /* Controls: filter chips · search · Select */
 .rc-controls { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; margin-bottom: var(--space-14); }
 .rc-chips { display: inline-flex; gap: var(--space-6); flex-wrap: wrap; }
-.rc-chip { font-size: var(--fs-sm); padding: 5px 11px; border-radius: var(--r-pill); border: var(--bw) solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; text-decoration: none; }
-.rc-chip:hover { color: var(--fg); }
+.rc-chip { font-size: var(--fs-sm); padding: 5px 11px; border-radius: var(--r-pill); border: var(--bw) solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; text-decoration: none; box-shadow: var(--shadow-xs); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out); }
+.rc-chip:hover { color: var(--fg); border-color: color-mix(in oklab, var(--border) 55%, var(--fg-3)); }
+.rc-chip:active { transform: scale(var(--press-scale)); }
 .rc-chip.active { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: var(--fw-medium); }
 .rc-sel-btn { margin-left: auto; font-size: var(--fs-sm); }
 .rc-search { position: relative; display: inline-flex; align-items: center; }
@@ -5042,7 +5078,7 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .rc-more { display: block; width: 100%; margin: var(--space-8) 0 var(--space-2); }
 .rc-row { display: grid; grid-template-columns: 22px 66px 104px minmax(0, 1fr) 92px auto; align-items: center; gap: var(--space-14); padding: 11px var(--space-12); border-radius: var(--r-md); border: var(--bw) solid transparent; }
 .rc-row + .rc-row { border-top: var(--bw) solid var(--hairline); border-radius: 0; }
-.rc-spectro { width: 104px; height: 31px; border-radius: 5px; display: block; object-fit: cover; background: var(--surface-2); border: var(--bw) solid var(--hairline); }
+.rc-spectro { width: 104px; height: 31px; border-radius: var(--r-sm); display: block; object-fit: cover; background: var(--surface-2); border: var(--bw) solid var(--hairline); }
 .rc-spectro-empty { background: transparent; border: var(--bw) dashed var(--hairline); opacity: 0.5; }
 /* Phones: drop the spectrogram preview column so the clip row keeps its
    original five-column fit. This block must follow the base .rc-row / .rc-spectro
@@ -5053,7 +5089,7 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
   .rc-spectro { display: none; }
 }
 .rc-row.playing, .rc-row.sel { background: color-mix(in oklab, var(--moss) 6%, var(--surface)); border: var(--bw) solid color-mix(in oklab, var(--moss) 28%, var(--border)); border-radius: var(--r-md); }
-.rc-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--border-2); cursor: pointer; visibility: hidden; }
+.rc-check { width: 17px; height: 17px; border-radius: var(--r-sm); border: 1.5px solid var(--border-2); cursor: pointer; visibility: hidden; }
 #rc-clips.rc-selecting .rc-check { visibility: visible; }
 .rc-row.sel .rc-check { background: var(--moss); border-color: var(--moss); }
 .rc-time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); }
@@ -5067,7 +5103,7 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .rc-who .sc { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-conf { display: flex; align-items: center; justify-content: flex-end; }
 .rc-acts { display: inline-flex; align-items: center; gap: var(--space-2); justify-content: flex-end; }
-.rc-iact { width: 28px; height: 28px; border-radius: 7px; border: 0; background: transparent; color: var(--fg-3); font-size: var(--fs-sm); cursor: pointer; display: inline-grid; place-items: center; text-decoration: none; }
+.rc-iact { width: 28px; height: 28px; border-radius: var(--r-base); border: 0; background: transparent; color: var(--fg-3); font-size: var(--fs-sm); cursor: pointer; display: inline-grid; place-items: center; text-decoration: none; }
 .rc-iact:hover { background: var(--surface-2); color: var(--fg); }
 .rc-lock.on { color: var(--moss-ink); }
 .rc-del:hover { color: var(--rare); }
@@ -5138,8 +5174,12 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .st-h3 { font-family: var(--font-display); font-size: var(--fs-title); font-weight: var(--fw-regular); margin: 26px 0 var(--space-12); }
 
 /* overall status banner */
-.st-status { display: flex; align-items: center; gap: var(--space-14); padding: var(--space-16) var(--space-20); border-radius: var(--r-lg); border: var(--bw) solid color-mix(in oklab, var(--moss) 24%, var(--border)); background: var(--moss-soft); margin-bottom: var(--space-18); }
-.st-status.warn { border-color: color-mix(in oklab, var(--dawn) 34%, var(--border)); background: var(--dawn-soft); }
+.st-status { display: flex; align-items: center; gap: var(--space-14); padding: var(--space-16) var(--space-20); border-radius: var(--r-card); border: var(--bw) solid color-mix(in oklab, var(--moss) 24%, var(--border)); margin-bottom: var(--space-18);
+  background: linear-gradient(90deg, color-mix(in oklab, var(--moss-soft) 80%, var(--surface)), color-mix(in oklab, var(--moss-soft) 42%, var(--surface)));
+  box-shadow: var(--shadow-sm), inset var(--accent-bar) 0 0 var(--moss); }
+.st-status.warn { border-color: color-mix(in oklab, var(--dawn) 34%, var(--border));
+  background: linear-gradient(90deg, color-mix(in oklab, var(--dawn-soft) 80%, var(--surface)), color-mix(in oklab, var(--dawn-soft) 42%, var(--surface)));
+  box-shadow: var(--shadow-sm), inset var(--accent-bar) 0 0 var(--dawn); }
 .st-status .ico { width: 40px; height: 40px; border-radius: var(--r-pill); flex: none; display: grid; place-items: center; font-size: 18px; background: color-mix(in oklab, var(--moss) 16%, var(--surface)); color: var(--moss-ink); }
 .st-status.warn .ico { background: color-mix(in oklab, var(--dawn) 16%, var(--surface)); color: var(--dawn-ink); }
 .st-status .t { font-family: var(--font-display); font-size: var(--fs-title); line-height: 1.1; }
@@ -5157,7 +5197,7 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 /* live per-source health: the 24h uptime strip (48 half-hour segments) and the
    retry/backoff line. up=moss, down=rare, out/no-data=surface-2 (no new tokens). */
 .st-uptime { display: flex; gap: 1.5px; height: 26px; align-items: stretch; margin: var(--space-14) 0 0; }
-.st-uptime span { flex: 1; border-radius: 1px; background: var(--surface-2); }
+.st-uptime span { flex: 1; border-radius: var(--r-3xs); background: var(--surface-2); }
 .st-uptime span.up { background: var(--moss); }
 .st-uptime span.down { background: var(--rare); }
 .st-uptime span.out { background: var(--surface-2); }
