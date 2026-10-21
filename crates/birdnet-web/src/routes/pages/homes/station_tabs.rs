@@ -116,7 +116,7 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
 {settings_css}
 {form}"#,
         tabs = station_subtabs("capture"),
-        classifier = crate::routes::admin::classifier::host_html(state),
+        classifier = crate::routes::admin::classifier::host_html(state, user.is_admin()),
         sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
         species = crate::routes::admin::species::handler::species_body(state),
         settings_css = SETTINGS_FORM_CSS,

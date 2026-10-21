@@ -375,15 +375,29 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
 ///
 /// `false` for the reads that export what a viewer must not hold: the database
 /// and its backups (every password hash and every stored credential), the
-/// support bundle, the rules export (webhook URLs carry their tokens), and an
-/// audio source's own row and edit form (an RTSP URL carries its password).
+/// support bundle, the rules export (webhook URLs carry their tokens), an
+/// audio source's own row and edit form (an RTSP URL carries its password),
+/// the `birdnet.conf` lines the BirdNET-Pi import offers for download (the
+/// station's keys, verbatim), and the diagnostics (`/admin/doctor`,
+/// `/admin/doctor.json`: the MQTT broker's host, the certificate and CA paths,
+/// the model and data directories) and the process id the restart button
+/// compares (`/admin/system/boot-id`: nothing a read-only account can use, since
+/// it cannot press that button).
 /// The source's status pill (`/probe`) stays readable — the capture tab polls
 /// it for everyone. The settings forms stay readable too, with every
-/// credential masked (`settings::handler::load_settings_for`).
+/// credential masked (`settings::handler::load_settings_for`), and so does the
+/// classifier panel, which hides its file paths from a viewer
+/// (`classifier::panel`).
 fn viewer_may_read(path: &str) -> bool {
     if matches!(
         path,
-        "/admin/system/backup/full" | "/admin/support-bundle" | "/admin/rules/export"
+        "/admin/system/backup/full"
+            | "/admin/support-bundle"
+            | "/admin/rules/export"
+            | "/admin/migrate/conf/lines"
+            | "/admin/doctor"
+            | "/admin/doctor.json"
+            | "/admin/system/boot-id"
     ) || path.starts_with("/admin/system/backups/")
     {
         return false;

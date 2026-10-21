@@ -54,25 +54,52 @@ pub(crate) static CONTROLS_SCRIPT: crate::seal::Sealed =
 /// The panel inside the element the script swaps it in and out of, with the
 /// script. For the Capture tab; the setup wizard embeds the same two parts.
 #[must_use]
-pub fn host_html(state: &AppState) -> String {
+///
+/// `show_paths` is `false` for a viewer, whose panel names no file path
+/// ([`for_reader`]).
+pub fn host_html(state: &AppState, show_paths: bool) -> String {
     format!(
         r#"<div class="bnb-card pad" data-cls-host>{panel}</div>{script}"#,
-        panel = render_panel(
-            &state
+        panel = render_panel(&for_reader(
+            state
                 .classifier_setup()
-                .snapshot(state.detection_daemon_running())
-        ),
+                .snapshot(state.detection_daemon_running()),
+            show_paths,
+        )),
         script = CONTROLS_SCRIPT.as_str(),
     )
 }
 
 /// `GET /admin/classifier/panel` — the current panel, as markup.
-async fn panel(State(state): State<AppState>) -> Response {
-    no_store(Html(render_panel(
-        &state
+async fn panel(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+) -> Response {
+    no_store(Html(render_panel(&for_reader(
+        state
             .classifier_setup()
             .snapshot(state.detection_daemon_running()),
-    )))
+        request_user.is_admin(),
+    ))))
+}
+
+/// What a viewer's copy of a snapshot keeps.
+///
+/// The panel is part of the Capture tab, which a read-only account may open, and
+/// two of its fields are filesystem paths or text that carries one: the
+/// configured model file that is not there, and the reason an install failed
+/// (an I/O error names the path it could not write). Neither is anything a
+/// viewer can act on, and both say where the station keeps its files. The
+/// administrator's panel is unchanged.
+#[must_use]
+pub fn for_reader(mut snap: Snapshot, show_paths: bool) -> Snapshot {
+    if !show_paths {
+        snap.missing_path = None;
+        if snap.failure.is_some() {
+            snap.failure = Some("The download did not finish.".to_owned());
+        }
+    }
+    snap
 }
 
 /// `POST /admin/classifier/install` — start installing, and return the panel.

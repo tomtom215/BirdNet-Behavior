@@ -32,6 +32,10 @@ fn viewer_password() -> String {
 }
 
 fn station() -> axum::Router {
+    build_router(station_state())
+}
+
+fn station_state() -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
     let admin_hash = birdnet_db::accounts::hash_password(&admin_password()).expect("hash");
@@ -55,10 +59,7 @@ fn station() -> axum::Router {
         format!("rtsp://viewer:{CAM_PASS}@camera.local/stream"),
     ))
     .expect("rtsp source");
-    build_router(AppState::from_connection(
-        conn,
-        std::path::PathBuf::from(":memory:"),
-    ))
+    AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
 }
 
 async fn sign_in(app: &axum::Router, user: &str, password: &str) -> String {
@@ -151,6 +152,92 @@ async fn a_viewer_cannot_download_the_database_or_the_support_bundle() {
     // Counterpart: the status pill the capture tab polls stays readable.
     let (status, _) = get(&app, "/admin/audio/sources/cam1/probe", &viewer).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// `GET /admin/migrate/conf/lines` is the BirdNET-Pi import's download of the
+/// station's `birdnet.conf` keys, verbatim (the Flickr key among them). It was
+/// reachable by a viewer: the comment on it said "behind admin RBAC", and the
+/// RBAC gate refuses only the paths its deny list names.
+///
+/// The token is not what is under test here (a bad one answers 404 to an
+/// administrator, which proves the request reached the handler); the deny list
+/// is, and it answers before the handler runs.
+#[tokio::test]
+async fn a_viewer_cannot_download_the_conf_lines_the_import_offers() {
+    let app = station();
+    let viewer = sign_in(&app, "viewer", &viewer_password()).await;
+    let admin = sign_in(&app, "admin", &admin_password()).await;
+    let uri = "/admin/migrate/conf/lines?token=1";
+    let (status, _) = get(&app, uri, &viewer).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer may GET {uri}");
+    // Counterpart: the administrator is not refused by the gate; the handler
+    // runs and finds no such token.
+    let (status, _) = get(&app, uri, &admin).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the admin reaches the handler"
+    );
+}
+
+/// The doctor prints the MQTT broker's host and the certificate and CA paths;
+/// the boot id is the process id and its start time in nanoseconds. A read-only
+/// account has no use for either (it cannot press the restart button the boot
+/// id exists for).
+#[tokio::test]
+async fn a_viewer_cannot_read_the_diagnostics_or_the_process_id() {
+    let app = station();
+    let viewer = sign_in(&app, "viewer", &viewer_password()).await;
+    let admin = sign_in(&app, "admin", &admin_password()).await;
+    for uri in [
+        "/admin/doctor",
+        "/admin/doctor.json",
+        "/admin/system/boot-id",
+    ] {
+        let (status, _) = get(&app, uri, &viewer).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "a viewer may GET {uri}");
+        let (status, _) = get(&app, uri, &admin).await;
+        assert_ne!(status, StatusCode::FORBIDDEN, "the admin was refused {uri}");
+    }
+    let (status, body) = get(&app, "/admin/system/boot-id", &admin).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains('-'), "a boot id: {body:?}");
+}
+
+/// The classifier panel is on the Capture tab, which a viewer may open. A
+/// configured model that is missing prints its path; the viewer's copy does not.
+#[tokio::test]
+async fn the_classifier_panel_shows_a_viewer_no_file_path() {
+    let state = station_state();
+    let missing = format!("/srv/secret-models-{}/nope.onnx", std::process::id());
+    state
+        .classifier_setup()
+        .configure(birdnet_web::classifier_setup::Layout {
+            model_dir: std::path::PathBuf::from("/srv/secret-models"),
+            model: Some(std::path::PathBuf::from(&missing)),
+            ..Default::default()
+        });
+    let app = build_router(state);
+    let viewer = sign_in(&app, "viewer", &viewer_password()).await;
+    let admin = sign_in(&app, "admin", &admin_password()).await;
+    for uri in ["/admin/classifier/panel", "/station/capture"] {
+        let (status, html) = get(&app, uri, &viewer).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(
+            html.contains("did not start with it"),
+            "{uri}: the panel still says what is wrong, without the path"
+        );
+        assert!(
+            !html.contains(&missing) && !html.contains("secret-models"),
+            "{uri} showed a viewer where the station keeps its model"
+        );
+        // Counterpart: the administrator, who has to put the file there, sees it.
+        let (_, html) = get(&app, uri, &admin).await;
+        assert!(
+            html.contains(&missing),
+            "{uri}: the admin's panel lost the path"
+        );
+    }
 }
 
 /// A CPU profile (`G-24`) is the station's stacks, and taking one slows it:
