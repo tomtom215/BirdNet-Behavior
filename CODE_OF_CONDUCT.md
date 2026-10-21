@@ -43,17 +43,20 @@ Examples of unacceptable behaviour include:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may
-be reported to the maintainer by opening a
-[private security advisory](https://github.com/tomtom215/BirdNet-Behavior/security/advisories/new)
-(used here as a private communication channel) or by emailing the
-maintainer listed on the repository profile. All complaints will be
+be reported to the maintainer. GitHub's private vulnerability reporting, which an
+earlier version of this section named as the private channel, is switched off for
+this repository (see [SECURITY.md](SECURITY.md)), so do what that file says for a
+private report: open an issue that contains no detail of the conduct (title it
+"Conduct report — please contact me"), and say how the maintainer can reach you
+privately. The details go there, not in the issue. No email address is published
+in this repository. All complaints will be
 reviewed and investigated promptly and fairly. The maintainer is
 obligated to respect the privacy and security of the reporter.
 
 ## Scope
 
 This code of conduct applies within all community spaces (the GitHub
-repository, its discussions, its issue tracker, and any other forum the
+repository, its issue tracker, its pull requests, and any other forum the
 maintainers designate as part of the project), and also applies when an
 individual is officially representing the community in public spaces.
 
