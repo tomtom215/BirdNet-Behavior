@@ -526,6 +526,14 @@ is described under *Changed* or *Fixed*.
 
 ### Fixed
 
+- **A viewer is no longer offered the Diagnostics link.** The viewer deny list refuses
+  `/admin/doctor`, so the admin nav's Diagnostics entry and the classifier panel's
+  "Diagnostics says why" link led a read-only account to a `403`. The admin gate now marks
+  a viewer's response and the nav row leaves the entry out (the rest of the nav is
+  untouched); the panel says an administrator can see why instead of linking. Gates:
+  `a_viewer_is_not_offered_the_diagnostics_link` and the nav, gate and panel unit tests.
+  The Station Health page and the Today checklist still name the page for everyone.
+
 **What the model hears and what is stored**
 
 - **A recording that is not 48 kHz no longer reaches the model a fraction of a sample

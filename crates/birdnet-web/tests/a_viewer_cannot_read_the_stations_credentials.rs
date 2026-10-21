@@ -240,6 +240,55 @@ async fn the_classifier_panel_shows_a_viewer_no_file_path() {
     }
 }
 
+/// The Diagnostics page answers a viewer `403` (above), so a viewer's admin nav
+/// and the classifier panel do not offer a link to it. A link that only ever
+/// fails reads as a broken station.
+#[tokio::test]
+async fn a_viewer_is_not_offered_the_diagnostics_link() {
+    let state = station_state();
+    let model = tempfile::NamedTempFile::new().expect("a model file that exists");
+    state
+        .classifier_setup()
+        .configure(birdnet_web::classifier_setup::Layout {
+            model_dir: model.path().parent().expect("dir").to_path_buf(),
+            model: Some(model.path().to_path_buf()),
+            ..Default::default()
+        });
+    let app = build_router(state);
+    let viewer = sign_in(&app, "viewer", &viewer_password()).await;
+    let admin = sign_in(&app, "admin", &admin_password()).await;
+    let link = r#"href="/admin/doctor""#;
+    for uri in [
+        "/admin/overview",
+        "/admin/system",
+        "/admin/settings",
+        "/admin/classifier/panel",
+        "/station/capture",
+    ] {
+        let (status, html) = get(&app, uri, &viewer).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(
+            !html.contains(link),
+            "{uri} offered a viewer a link to a page that refuses them"
+        );
+        // Counterpart: the administrator keeps it, wherever it was offered.
+        let (_, html) = get(&app, uri, &admin).await;
+        assert!(
+            html.contains(link),
+            "{uri}: the administrator lost the Diagnostics link"
+        );
+    }
+    // The rest of the nav is untouched for a viewer: only the refused entry goes.
+    let (_, html) = get(&app, "/admin/overview", &viewer).await;
+    assert!(
+        html.contains(r#"href="/admin/system""#) && html.contains(r#"href="/admin/audio""#),
+        "a viewer's nav lost entries it may open"
+    );
+    // And the engine's own page keeps telling the viewer something is wrong.
+    let (_, html) = get(&app, "/admin/classifier/panel", &viewer).await;
+    assert!(html.contains("did not start with it"), "{html}");
+}
+
 /// A CPU profile (`G-24`) is the station's stacks, and taking one slows it:
 /// an administrator's to ask for, not a viewer's or a passer-by's.
 #[cfg(feature = "profiling")]

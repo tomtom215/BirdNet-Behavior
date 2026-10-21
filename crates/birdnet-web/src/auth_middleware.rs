@@ -366,9 +366,18 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
         return *resp;
     }
 
+    // A viewer's page is built by the same shell as the administrator's; say who
+    // is reading so the nav leaves out what would answer them `403`.
+    let viewer = !user.is_admin();
     let mut req = request;
     req.extensions_mut().insert(user);
-    next.run(req).await
+    let mut response = next.run(req).await;
+    if viewer {
+        response
+            .extensions_mut()
+            .insert(crate::routes::admin::nav::ViewerView);
+    }
+    response
 }
 
 /// Whether a viewer may `GET` this admin path.
@@ -551,6 +560,23 @@ fn urlencode_path(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nav hides exactly what the gate refuses: every entry a viewer's nav
+    /// leaves out answers a viewer `403`, so no link in it is a dead one.
+    #[test]
+    fn every_entry_hidden_from_a_viewer_is_refused_to_a_viewer() {
+        for key in crate::routes::admin::nav::VIEWER_HIDDEN {
+            let nav = crate::routes::admin::nav::ADMIN_NAV
+                .iter()
+                .find(|n| n.key == *key)
+                .expect("a nav key");
+            assert!(
+                !viewer_may_read(nav.path),
+                "{} is hidden from a viewer's nav but the gate lets a viewer GET it",
+                nav.path
+            );
+        }
+    }
 
     #[test]
     fn excluded_paths_match_basic_auth() {

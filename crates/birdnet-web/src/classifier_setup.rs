@@ -196,6 +196,9 @@ pub struct Snapshot {
     pub failure: Option<String>,
     /// The configured model file that is not there, in the `Configured` phase.
     pub missing_path: Option<String>,
+    /// Whether the reader may open the Diagnostics page. `false` for a viewer, who
+    /// is refused it, so the panel does not offer a link that answers `403`.
+    pub diagnostics_link: bool,
 }
 
 impl ClassifierSetup {
@@ -237,6 +240,7 @@ impl ClassifierSetup {
             progress: None,
             failure: None,
             missing_path: None,
+            diagnostics_link: true,
         };
         let Ok(inner) = self.inner.lock() else {
             return snap;
@@ -319,6 +323,7 @@ impl ClassifierSetup {
             progress: None,
             failure: None,
             missing_path: None,
+            diagnostics_link: true,
         }
     }
 

@@ -239,6 +239,10 @@ pub async fn security_headers_middleware(
 
     let res = next.run(req).await;
     let (mut parts, body) = res.into_parts();
+    let viewer_view = parts
+        .extensions
+        .get::<crate::routes::admin::nav::ViewerView>()
+        .is_some();
 
     // A redirect's target is not HTML and never reaches the body pass. Missed,
     // it sends the browser out of the prefix on every login and every form
@@ -279,6 +283,14 @@ pub async fn security_headers_middleware(
         match axum::body::to_bytes(body, MAX_HTML_REWRITE_BYTES).await {
             Ok(bytes) => {
                 let html = String::from_utf8_lossy(&bytes);
+                // A viewer's admin page: leave out the nav entries it is refused.
+                let html = if viewer_view {
+                    std::borrow::Cow::Owned(crate::routes::admin::nav::without_viewer_hidden(
+                        html.as_ref(),
+                    ))
+                } else {
+                    html
+                };
                 // Suppress htmx's un-nonceable indicator <style> (its rules are
                 // already in app.css), then add the data-style applier; its
                 // <script> is sealed, so the pass below nonces it like any other.

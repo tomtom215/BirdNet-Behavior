@@ -95,6 +95,7 @@ async fn panel(
 pub fn for_reader(mut snap: Snapshot, show_paths: bool) -> Snapshot {
     if !show_paths {
         snap.missing_path = None;
+        snap.diagnostics_link = false;
         if snap.failure.is_some() {
             snap.failure = Some("The download did not finish.".to_owned());
         }
@@ -310,8 +311,13 @@ fn words(snap: &Snapshot) -> (&'static str, &'static str, String, String) {
             "This station is set to use its own model file".to_owned(),
             snap.missing_path.as_deref().map_or_else(
                 || {
-                    r#"The detection engine did not start with it. <a href="/admin/doctor">Diagnostics</a> says why."#
-                        .to_owned()
+                    if snap.diagnostics_link {
+                        r#"The detection engine did not start with it. <a href="/admin/doctor">Diagnostics</a> says why."#
+                            .to_owned()
+                    } else {
+                        "The detection engine did not start with it. An administrator can see why under Diagnostics."
+                            .to_owned()
+                    }
                 },
                 |p| {
                     format!(
