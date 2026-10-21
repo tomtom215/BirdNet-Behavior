@@ -71,6 +71,7 @@ const IMAGE_HOST: &str = "https://static.avicommons.org";
 const SIZES: [u32; 5] = [160, 240, 320, 480, 900];
 
 /// How old the on-disk copy of the index may be before it is fetched again.
+///
 /// The collection is updated about once a year (new taxonomy each October), so a
 /// month is far more often than it changes and far less often than a page load.
 pub const INDEX_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
@@ -257,6 +258,10 @@ impl AviCommonsClient {
     }
 
     /// The index: from memory, else from a fresh enough file, else downloaded.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the lock is held across the download on purpose: it makes the fetch single-flight, so a page of species asks the host once, not once each"
+    )]
     async fn index(&self) -> Result<Arc<Index>, ImageError> {
         let mut state = self.state.lock().await;
         match &*state {
