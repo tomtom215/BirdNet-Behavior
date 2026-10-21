@@ -63,10 +63,37 @@
     return main.innerHTML;
   }
 
-  async function load(url) {
+  // The docs unavailable: say so, and offer the page itself. Built with the
+  // DOM API: `url` is read back from a `data-help-drawer` attribute, and a
+  // quote in it must not be able to write markup into the drawer.
+  function unavailable(href) {
+    title.textContent = 'Couldn\u2019t load help';
+    var note = document.createElement('p');
+    note.className = 'bnb-meta';
+    if (href) {
+      note.append('The docs are unavailable on this device. ');
+      var again = document.createElement('a');
+      again.setAttribute('href', href);
+      again.setAttribute('target', '_blank');
+      again.setAttribute('rel', 'noopener');
+      again.textContent = 'Open in a new tab';
+      note.append(again, ' instead.');
+    } else {
+      note.append('That is not one of this station’s help pages, so it was not opened.');
+    }
+    body.replaceChildren(note);
+  }
+
+  async function load(raw) {
     title.textContent = 'Loading…';
     body.innerHTML = '<p class="bnb-meta">Fetching docs…</p>';
-    openFull.href = url;
+    // Only a page of this station is fetched or linked to; anything else is
+    // treated as docs that cannot be loaded, without a request.
+    var url = window.bnbSameOrigin(raw);
+    // A value that is not one of this station's pages leaves the link on the
+    // manual's front page rather than on '#', which goes nowhere.
+    openFull.setAttribute('href', url || window.bnbUrl('/help/index.html'));
+    if (!url) { unavailable(null); return; }
     try {
       var res = await fetch(url, { credentials: 'same-origin' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -86,8 +113,7 @@
         if (t) t.scrollIntoView({ block: 'start' });
       }
     } catch (e) {
-      title.textContent = 'Couldn\u2019t load help';
-      body.innerHTML = '<p class="bnb-meta">The docs are unavailable on this device. <a href="' + url + '" target="_blank" rel="noopener">Open in a new tab</a> instead.</p>';
+      unavailable(url);
     }
   }
 

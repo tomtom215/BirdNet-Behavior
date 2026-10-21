@@ -109,7 +109,7 @@
   function followActive() {
     var r = rows()[active];
     if (!r) return;
-    var href = r.getAttribute('data-href');
+    var href = window.bnbSameOrigin(r.getAttribute('data-href'));
     if (href) window.location.href = href;
   }
 
@@ -141,7 +141,8 @@
     var li = e.target.closest('li[data-href]');
     if (!li) return;
     e.preventDefault();
-    window.location.href = li.getAttribute('data-href');
+    var dest = window.bnbSameOrigin(li.getAttribute('data-href'));
+    if (dest) window.location.href = dest;
   });
 
   // Reset active row whenever results swap.

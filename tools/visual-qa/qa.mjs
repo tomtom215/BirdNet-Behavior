@@ -351,12 +351,16 @@ async function main() {
     }
   }
   await browser.close();
-  // CodeQL (js/http-to-file-access) flags this line: the report holds strings read
-  // from pages over HTTP (console messages, broken-image URLs). It is dismissed as
-  // "used in tests": the pages come from the fixture server this script's caller
-  // started on localhost, the file is JSON in the directory the caller named with
-  // --out, and nothing reads it back except a person and the summary below. It is
-  // never executed, served or included in a build.
+  // CodeQL (js/http-to-file-access) flags the write below: the report holds
+  // strings read from pages over HTTP (console messages cut to 200 characters,
+  // failed-request and broken-image URLs). That is the report's whole purpose, so
+  // it is not reduced to a derived summary: the sweep's reader needs the message
+  // and the URL to find the defect. The pages come from the fixture server this
+  // script's caller started on localhost, the file is JSON (every string
+  // escaped) in the directory the caller named with OUT, and no code reads it
+  // back: the summary below is computed from the in-memory `report`, and CI only
+  // uploads the file as an artifact for a person. It is never executed, served
+  // or included in a build. Dismissed as "used in tests".
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
 
   // A page where EVERY species photo failed is not "these birds have no
