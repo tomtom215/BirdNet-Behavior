@@ -32,7 +32,7 @@ promise. Today:
 |---|---|---|
 | `…/BirdNet-Behavior/` (the root) | the manual of the **latest stable release** | when a release tag is pushed |
 | `…/BirdNet-Behavior/vX.Y.Z/` | the manual of release `X.Y.Z`, built from that tag | rebuilt from its tag on every run; its words do not change |
-| `…/BirdNet-Behavior/dev/` | the manual on `main`: **documents features that may not be released** | on a push to `main` that touches `docs/book/**` |
+| `…/BirdNet-Behavior/dev/` | the manual on `main`: **documents features that may not be released** | on a push to `main` that touches `docs/book/**`, the book theme, `book.toml` or the docs scripts (`docs.yml` lists the paths) |
 | `/help` in the binary | the manual that was in the tree when that binary was built | never; it is the manual for the binary serving it |
 
 Only releases from `v0.17.1` on have a `/vX.Y.Z/` manual; for anything older the
