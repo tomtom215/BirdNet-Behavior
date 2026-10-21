@@ -522,7 +522,15 @@ async fn htmx_activity_streamgraph_partial() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    // `days` is clamped to 365, so this is the largest answer there is, and the
+    // limit is what makes "bounded" an assertion: `to_bytes` fails past it.
+    // The band outlines are one monotone cubic per day per edge (about 28 bytes
+    // each), so the size is the drawing, not waste: this fixture's 365 days come
+    // to 157,225 bytes (9,829 gzipped); a busy station's nine bands, measured
+    // separately, to about 270 KB (65 KB gzipped), and the page's own 90-day
+    // maximum to about 73 KB. The earlier 64 KiB limit was a guess from before
+    // the outlines were curves; 512 KiB is about twice the largest measured.
+    let body = axum::body::to_bytes(response.into_body(), 512 * 1024)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
