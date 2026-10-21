@@ -48,6 +48,10 @@ const BASE_PATH_JS: &[u8] = include_bytes!("../../static/base-path.js");
 /// Holds `every` polls back while the tab is hidden (M13).
 const POLL_VISIBILITY_JS: &[u8] = include_bytes!("../../static/poll-visibility.js");
 const CLIP_PLAYER_JS: &[u8] = include_bytes!("../../static/clip-player.js");
+/// Gain, high-pass and compressor for every player, in the browser (P-8).
+const LISTEN_FX_JS: &[u8] = include_bytes!("../../static/listen-fx.js");
+/// The styles of those controls, which the script loads when it builds them.
+const LISTEN_FX_CSS: &[u8] = include_bytes!("../../static/css/listen-fx.css");
 /// Keeps SVG chart labels legible at any scale (see the script's header).
 const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
 
@@ -164,6 +168,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
         .route("/static/fonts/{file}", get(font_file))
+        .route("/static/listen-fx.js", get(listen_fx_js))
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
         .route("/static/sw.js", get(service_worker_js))
@@ -171,6 +176,7 @@ pub fn router() -> Router<AppState> {
         // no `rel="icon"` asks for it unprompted, and this server used to
         // answer 404. `templates/layout.html` carries explicit icon links and
         // so escaped it — but seven full documents are rendered outside that
+        .route("/static/css/listen-fx.css", get(listen_fx_css))
         // layout (login, share and its 404, onboarding, kiosk, the standalone
         // audio player, the admin shell, the log viewer) and none of them did.
         // Every one showed a blank tab and logged a 404 to the console.
@@ -362,6 +368,29 @@ async fn htmx_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, IMMUTABLE),
         ],
         HTMX_JS,
+async fn listen_fx_css() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LISTEN_FX_CSS,
+    )
+}
+
+async fn listen_fx_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Requested with `?v=<version>` like the other app scripts.
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LISTEN_FX_JS,
+    )
+}
+
     )
 }
 

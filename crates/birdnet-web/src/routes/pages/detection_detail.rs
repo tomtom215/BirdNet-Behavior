@@ -269,6 +269,10 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     <source src="/api/v2/recordings/{safe}" type="audio/wav">
     Your browser does not support audio playback.
   </audio>
+  <details class="lfx-fold">
+    <summary>Listening aids</summary>
+    <div data-listen-fx></div>
+  </details>
 </div>"#
     )
 }

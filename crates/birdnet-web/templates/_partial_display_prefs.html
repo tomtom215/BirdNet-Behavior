@@ -70,6 +70,16 @@
         <button type="button" role="radio" aria-checked="false" class="btn" data-value="high">High</button>
       </div>
     </div>
+
+    <!-- Listening aids: boost, rumble cut, compressor (static/listen-fx.js,
+         which builds the controls and keeps its own localStorage key). -->
+    <div class="prefs-row prefs-row-stack">
+      <div class="prefs-label">
+        <div class="dpf-label">Listening</div>
+        <div class="bnb-meta">For quiet clips and noisy sites. Applies to every clip you play here.</div>
+      </div>
+      <div data-listen-fx></div>
+    </div>
   </div>
 
   <div class="bnb-meta dpf-foot">

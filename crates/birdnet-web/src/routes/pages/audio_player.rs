@@ -104,6 +104,11 @@ async fn player_page(
         Download
       </button>
     </div>
+
+    <details class="lfx-fold">
+      <summary>Listening aids</summary>
+      <div data-listen-fx></div>
+    </details>
   </div>
 </div>"#
     );
@@ -128,11 +133,17 @@ async fn player_page(
   {content}
 </div>
 {player_script}
+{listen_script}
 </body>
 </html>"#,
         site_name = escape_html(site_name),
         player_style = crate::seal::seal(&format!("<style>{PLAYER_CSS}</style>")),
         player_script = crate::seal::seal(&format!("<script>{PLAYER_JS}</script>")),
+        // Sealed like the page's own script: the security layer escapes any
+        // `<script` it did not seal, including an external one.
+        listen_script = crate::seal::seal(&format!(
+            r#"<script src="/static/listen-fx.js?v={css_v}" defer></script>"#
+        )),
     );
     Html(html)
 }
