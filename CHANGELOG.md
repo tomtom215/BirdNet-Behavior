@@ -404,6 +404,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an empty list; the station's position is shown rounded to 0.1 degrees. The first
   ask loads a second copy of the range model (14.7 or 29.5 MB on disk; its memory
   was not measured), and an answer is kept for 60 s.
+- **Listening and display options.** Every player can boost a quiet clip (to
+  +24 dB), cut low rumble and run a compressor in the browser, ending in a soft
+  limiter: through the page's own graph on four real clips the output peak stayed
+  at or below -0.2 dBFS in 28 of 28 cases, and +16 dBFS without it. Spectrograms
+  take a colour map (viridis, still the default, magma, inferno, grey, inverted
+  grey) and a dynamic range (60 to 120 dB, default 80) that show on the next
+  image: the answer is revalidated instead of kept an hour. The Today page can
+  show one picture with a title (`dashboard_image`: BirdNET-Pi's `CUSTOM_IMAGE`,
+  a webcam frame written to a file; images only, by their first bytes, 8 MB).
+  The clock (12 or 24 hour) and temperature (C or F) have a station default and a
+  per-browser choice through one formatter, and a test fails on a hand-written
+  time or temperature; chart axes and tooltips keep 24-hour. `IMAGE_PROVIDER=avicommons`
+  adds AviCommons photographs (no key; CC0, CC BY and CC BY-SA only, 25 % of species).
+  Opus and AAC clip export is declined: the decoder cannot read them. The help text
+  of `custom_image_dir` no longer claims to be `CUSTOM_IMAGE`.
 
 ### Changed
 

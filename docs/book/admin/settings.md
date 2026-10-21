@@ -93,11 +93,13 @@ All three actions are written to the [audit log](system.md).
 ## Species photographs
 
 Each species page shows a photograph, cached on disk so the station works
-offline after the first fetch. Two sources are available.
+offline after the first fetch. Three sources are available.
 
 **Wikipedia** (the default) needs no key and covers most species. For a long
 tail it has no photograph at all, and for many others it has a museum skin, an
 egg, or a range map rather than a living bird.
+
+**AviCommons** (`IMAGE_PROVIDER=avicommons`) needs no key. [AviCommons](https://avicommons.org) is a library of cropped, oriented Creative Commons bird photographs made to be embedded. It is tried first and Wikipedia fills in behind it. The station downloads AviCommons' one JSON index (1.6 MB, which its README asks to be fetched once and not on each page load) and keeps it in the image cache folder for 30 days, then each photograph once. **Only the CC0, CC BY and CC BY-SA images are used**, the same rule as Flickr below: of the index's 10,185 images (checked 2026-10-21) 2,620 qualify, the rest are NonCommercial. Against the 6,522 species of the BirdNET V2.4 labels that is 1,628 species (25 %) with an AviCommons photograph, and the rest keep Wikipedia's. Each photograph is shown with its photographer, its licence and a link to AviCommons. The project's repository declares no licence of its own; the terms are per image, in the index.
 
 **Flickr** searches Flickr first and falls back to Wikipedia when Flickr has
 nothing, so turning it on can only add coverage — it never leaves a species
@@ -147,6 +149,23 @@ skipped rather than shown uncredited.
   domain stays because it is the diagnostic half.
 - Neither source is used at all in offline mode, or when the image cache is
   disabled with an empty `IMAGE_CACHE_DIR`.
+
+## Spectrograms
+
+Two settings under **System & Display** change how every spectrogram is drawn, and a change shows on the next image, with no restart (the answer is revalidated rather than cached for an hour, so a browser that already has the old picture asks again):
+
+- **Spectrogram colours** — *Viridis* (blue to yellow, what earlier versions drew and the default), *Magma* and *Inferno* (black to pale or bright yellow), *Grey* (quiet is black) and *Grey, inverted* (quiet is white, the look of a printed figure). Louder is always lighter, so the order survives a grey print; a unit test holds CIELAB lightness monotonic for every map. Magma and Inferno are matplotlib's tables (CC0).
+- **Spectrogram dynamic range** — 60, 80 (the default), 100 or 120 dB. Cells more than this far below the loudest in the clip are drawn as the floor. A smaller range gives more contrast and lets faint calls sink into the background. birdnet-go offers 80, 100 and 120 (`dynamicrange`); 60 is added here.
+
+There is no gain setting, because the image is stretched between its own quietest and loudest cell, so a gain would change nothing. The live spectrogram on Recordings is drawn by the browser and keeps its own colours.
+
+## Your picture on the Today page
+
+BirdNET-Pi's `CUSTOM_IMAGE` and `CUSTOM_IMAGE_TITLE`. Set **Today page picture (file)** to the full path of a PNG, JPEG, GIF or WebP file and **Picture title** to its heading, and the Today page shows it between the day strip and the log. A webcam works the same way: something on the station keeps the file current (for example a cron job running `ffmpeg -i rtsp://camera/stream -frames:v 1 -y /home/pi/camera/latest.jpg` every minute) and the page checks it every ten seconds while the tab is visible, fetching it again only when the file's size or time changed. BirdNET-Pi re-reads it every second and inlines it; this does one conditional request in ten seconds, which is easier on a Raspberry Pi.
+
+The file is held to what a picture is: a regular file, at most 8 MiB, a PNG, JPEG, GIF or WebP **by its first bytes** whatever its name says (so a path typed with a slip, or `/etc/passwd`, shows nothing; SVG is refused because it can carry script). If the file cannot be read the block says so and keeps trying. It is a block like the others: hide or move it under **Today Page Layout**. Only a file path is supported, as upstream; a camera that only offers a URL needs the snapshot saved to a file first.
+
+This is not `custom_image_dir`, which replaces one species' photograph.
 
 ## Other categories
 

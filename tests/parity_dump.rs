@@ -115,19 +115,10 @@ fn parity_dump() {
                 }
                 write!(json, "[\"{}\",{:.6},{:.6}]", d.scientific_name, logit, p).unwrap();
             }
-            // What the window is, for stratifying the comparison: its peak-to-peak range
-            // (exactly 0 for digital silence) and its RMS.
-            let (lo, hi, sq) = c.spectrogram.data.iter().fold(
-                (f32::INFINITY, f32::NEG_INFINITY, 0.0_f64),
-                |(lo, hi, sq), &x| (lo.min(x), hi.max(x), sq + f64::from(x) * f64::from(x)),
-            );
-            #[allow(clippy::cast_precision_loss)]
-            let rms = (sq / c.spectrogram.data.len() as f64).sqrt();
             match pred.human_rank {
-                Some(rank) => write!(json, "],\"human_rank\":{rank}").unwrap(),
-                None => json.push_str("],\"human_rank\":null"),
+                Some(rank) => write!(json, "],\"human_rank\":{rank}}}").unwrap(),
+                None => json.push_str("],\"human_rank\":null}"),
             }
-            write!(json, ",\"ptp\":{:e},\"rms\":{rms:e}}}", hi - lo).unwrap();
             if i < 3 {
                 let bytes: Vec<u8> = c
                     .spectrogram

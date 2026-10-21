@@ -65,6 +65,11 @@ be hidden. Hide the log and the side column takes the full width; hide every
 side card and the log does. The order is the page's real order, so a screen
 reader and the Tab key follow what is on screen.
 
+The list also holds **Your picture**: one photograph of the site, or the last
+frame of a camera, with a title, between the day strip and the log. It is empty,
+and so invisible, until you give it a file under **Settings → System & Display →
+Today page picture** (see [Settings](../admin/settings.md#your-picture-on-the-today-page)).
+
 A new station shows everything until its first detection, so the setup
 checklist in the headline cannot be hidden by accident.
 
