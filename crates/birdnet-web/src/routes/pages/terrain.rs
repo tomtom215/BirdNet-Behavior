@@ -42,6 +42,10 @@ const NAMED_SPECIES: usize = 48;
 /// What the terrain shows when the query failed: the page's script reads this as "unavailable".
 const TERRAIN_ERR: &str = r#"{"error":"unavailable"}"#;
 
+/// What the table fragment shows when the query failed (not cached, so a transient failure does
+/// not stay on the page for the cache's life). Named so the error-wording gate can read it.
+const FRAGMENT_ERR: &str = r#"<p class="bnb-meta">Analytics temporarily unavailable.</p>"#;
+
 /// Mount the terrain's data routes.
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -355,7 +359,7 @@ async fn terrain_table(
     let html = cached_fragment(
         &state,
         format!("terrain-table:{days}"),
-        r#"<p class="bnb-meta">Analytics temporarily unavailable.</p>"#,
+        FRAGMENT_ERR,
         move |s| compute_terrain(s, days).map(|t| render_table(&t)),
     )
     .await;
