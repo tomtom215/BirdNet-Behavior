@@ -45,6 +45,10 @@ const PROPS = [
   'borderTopColor', 'borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius',
   'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
   'color', 'backgroundColor', 'boxShadow', 'width', 'height', 'opacity', 'transitionDuration',
+  // The motion, layer and effect tokens: a token pass over z-index, easing and
+  // blur moves these and none of the properties above.
+  'zIndex', 'transitionTimingFunction', 'transitionDelay', 'animationDuration', 'animationTimingFunction',
+  'backdropFilter', 'textShadow', 'outlineWidth', 'outlineOffset', 'minHeight', 'maxWidth', 'transform',
 ];
 
 const VIEWS = [

@@ -158,6 +158,69 @@
   --heat-mid:    oklch(74% 0.15 65);
   --heat-hi:     oklch(46% 0.15 32);
 
+  /* Sequential ramps: how much. Seven steps, one hue family, lightness moving
+     one way at a roughly equal OKLab distance per step (9-11 dE, measured by
+     tools/visual-qa/chart-ramps.mjs), so the eye reads the same difference
+     between any two neighbours. Light: pale is little, dark ink is a lot. Dark:
+     the other way up (ember is little, gold is a lot), because on a dark card
+     the mark that carries more must be the one that glows more. Step 1 is held
+     at least 8 dE from an empty cell (--surface-2) so one detection never reads
+     as none. --seq-N is the sun ramp (sand, amber, brick), the default for a
+     heat map; --seq-moss-N is the same idea in the brand green, for a calendar
+     that prints a number on every cell. Interpolate between steps in OKLab. */
+  --seq-1:       oklch(92% 0.07 95);
+  --seq-2:       oklch(85% 0.11 85);
+  --seq-3:       oklch(77% 0.145 72);
+  --seq-4:       oklch(69% 0.16 58);
+  --seq-5:       oklch(60% 0.165 46);
+  --seq-6:       oklch(50% 0.15 36);
+  --seq-7:       oklch(40% 0.12 30);
+  --seq-moss-1:  oklch(91% 0.055 150);
+  --seq-moss-2:  oklch(83.5% 0.085 152);
+  --seq-moss-3:  oklch(75.5% 0.105 152);
+  --seq-moss-4:  oklch(67% 0.118 151);
+  --seq-moss-5:  oklch(58% 0.118 150);
+  --seq-moss-6:  oklch(49% 0.102 150);
+  --seq-moss-7:  oklch(40% 0.085 150);
+
+  /* Diverging ramp: which side of a baseline, and how far. Blue below, brick
+     above, a neutral grey between (never a hue at the middle). Blue against
+     orange is the pair a reader who cannot tell red from green still separates
+     (the strong poles measure 17.8 dE under protanopia and 23.9 under
+     deuteranopia). Three steps an arm, symmetric. */
+  --div-neg-3:   oklch(42% 0.105 250);
+  --div-neg-2:   oklch(62% 0.11 248);
+  --div-neg-1:   oklch(83% 0.055 245);
+  --div-mid:     oklch(95% 0.004 80);
+  --div-pos-1:   oklch(85% 0.08 62);
+  --div-pos-2:   oklch(70% 0.15 50);
+  --div-pos-3:   oklch(50% 0.15 36);
+
+  /* Data ink: what a chart draws that is not data. Recessive by construction,
+     so the marks are what you see. The grid is 1.2:1 on purpose (it is a guide,
+     not information); the axis line clears 3:1 (WCAG 1.4.11, it states where
+     zero is); the label and the annotation clear 4.5:1 as text. */
+  --chart-grid:         oklch(93% 0.005 80);
+  --chart-grid-strong:  oklch(87% 0.006 80);
+  --chart-axis:         oklch(64% 0.010 70);
+  --chart-label:        var(--fg-3);
+  --chart-annot:        var(--fg-2);
+  --chart-track:        var(--bg-2);
+  --chart-gap:          var(--surface);
+  --chart-crosshair:    var(--fg-3);
+  /* The tooltip is a small dark card in the light theme and a lifted one in
+     dark, with its own edge so it never merges with the card behind it. */
+  --chart-tip-bg:       oklch(24% 0.010 70);
+  --chart-tip-fg:       oklch(98% 0.004 80);
+  --chart-tip-border:   oklch(34% 0.010 70);
+  /* Mark anatomy, so every chart draws the same pen: a 2 px line, a 2 px
+     surface gap between touching fills, a 4 px round on a data end, and the
+     opacity the marks that are not hovered fall to. */
+  --chart-stroke:       2px;
+  --chart-gap-w:        2px;
+  --chart-bar-r:        4px;
+  --chart-dim:          .35;
+
   --paper:       oklch(96% 0.012 75);
   --night:       oklch(28% 0.04 270);
 
@@ -183,10 +246,31 @@
   --r-2xs: 3px; --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px;
   --r-pill: 999px;
 
+  /* The radius ladder is 2, 3, 4, 6, 8, 10, 14, 20, 28 and a pill. The
+     semantic names say what a thing is, so a rule asks for a card's radius, not
+     for 14 px, and the whole product can re-round by changing one line. A nested
+     shape takes the outer radius minus the padding between them
+     (calc(var(--r-card) - var(--pad-1))). */
+  --r-3xs: 2px;
+  --r-base: 8px;
+  --r-2xl: 28px;
+  --r-control: var(--r-sm);
+  --r-field: var(--r-sm);
+  --r-card: var(--r-lg);
+  --r-popover: var(--r-md);
+  --r-dialog: var(--r-xl);
+
   /* The hairline. Every card, row divider and control edge is one of these;
      high contrast thickens all of them by changing this one value. */
   --bw: 0.5px;
   --bw-strong: 1px;
+
+  /* A whole edge in one token: width, style and colour, for the three strengths
+     a surface has (a card's edge, a control's edge, a divider). High contrast
+     thickens all three through --bw. */
+  --edge:       var(--bw) solid var(--border);
+  --edge-2:     var(--bw) solid var(--border-2);
+  --edge-hair:  var(--bw) solid var(--hairline);
 
   /* Weights and tracking (letter-spacing). Inter Tight ships 400/500/600; 700
      is the browser's synthetic bold on the few places that ask for it. */
@@ -215,6 +299,10 @@
   --space-20: 20px;
   --space-24: 24px;
   --space-32: 32px;
+  --space-28: 28px;
+  --space-40: 40px;
+  --space-48: 48px;
+  --space-64: 64px;
 
   /* Type scale. Body is --fs-base; the five steps below it are the small
      print (hints, eyebrows, table heads, chips). The serif steps are the card
@@ -234,6 +322,18 @@
   --fs-stat-lg: 44px;
   --fs-h1: clamp(34px, 9vw, 46px);
   --fs-hero: clamp(40px, 11vw, 60px);
+  /* Above the hero: the oversize numeral or opening line of a page that has one
+     thing to say. And the section title, fluid so it grows a little on a desk. */
+  --fs-display: clamp(48px, 5vw + 24px, 84px);
+  --fs-section: clamp(22px, 1vw + 16px, 28px);
+  /* Line heights. A serif display line is set tight, a paragraph at 1.5, and
+     --measure is the longest a line of prose should run. */
+  --lh-none: 1;
+  --lh-tight: 1.1;
+  --lh-snug: 1.3;
+  --lh-base: 1.5;
+  --lh-loose: 1.7;
+  --measure: 66ch;
 
   /* Motion. Three durations and two curves; prefers-reduced-motion flattens
      all of them at once (see the reduced-motion block). */
@@ -242,6 +342,25 @@
   --dur-slow: .32s;
   --ease-out: cubic-bezier(.2, .7, .2, 1);
   --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+  /* The rest of the motion scale: an instant for a press, a slower for a panel
+     that travels, the two loops (a skeleton's sweep, a live dot's pulse), three
+     more curves (in, emphasised for something that arrives with intent, and a
+     spring that overshoots by a few per cent for a control that settles) and the
+     delay between neighbours in a list that reveals. --lift and --press-scale
+     are how far a hovered card rises and how far a pressed button sinks; the
+     reduced-motion rules set them to nothing, so no hover moves anything. */
+  --dur-instant: .08s;
+  --dur-slower: .5s;
+  --dur-loop: 1.4s;
+  --dur-pulse: 1.6s;
+  --dur-blink: 1.2s;
+  --dur-glow: .6s;
+  --ease-in: cubic-bezier(.4, 0, 1, 1);
+  --ease-emphasized: cubic-bezier(.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --stagger: .04s;
+  --lift: -1px;
+  --press-scale: .98;
 
   /* Stacking layers: only the ones that must agree across components. A
      z-index of 0/1 inside a component's own stacking context is local, not a
@@ -251,20 +370,63 @@
   --z-tabbar: 55;
   --z-toast: 60;
   --z-skip: 100;
+  /* The rest of the ladder, bottom to top: the page, a dropdown under the nav, a
+     drawer, a dialog that is not in the top layer, a tooltip. A <dialog> opened
+     with showModal() is in the top layer and ignores all of these. */
+  --z-base: 0;
+  --z-dropdown: 45;
+  --z-drawer: 65;
+  --z-modal: 80;
+  --z-tooltip: 90;
 
   /* Focus: the keyboard ring (a --surface gap, then --moss) and the softer
      halo a pointer-focused field keeps. */
   --ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--moss);
   --ring-soft: 0 0 0 3px color-mix(in oklab, var(--moss) 22%, transparent);
+  --focus-color: var(--moss);
+  --focus-width: 2px;
+  --focus-offset: 2px;
 
   /* The dimming layer behind a dialog, a drawer or a sheet. */
   --scrim: oklch(0% 0 0 / .32);
+
+  /* Surface layering, from the page up. A card is --surface-raised, a popover or
+     a dialog is --surface-overlay (lifted again in dark, where lighter means
+     nearer), a well cut into a card is --surface-sunken, and --surface-glass is
+     the translucent one the sticky bars use, to be drawn with --glass-blur. */
+  --surface-sunken: var(--bg-2);
+  --surface-raised: var(--surface);
+  --surface-overlay: var(--surface);
+  --surface-glass: color-mix(in oklab, var(--surface-overlay) 76%, transparent);
+  --glass-blur: saturate(1.5) blur(14px);
+  /* The two washes behind the page: a green one from the top left and a warm one
+     from the top right, painted once, fixed, under everything. They tint the
+     page by a few per cent and no text is ever set on one alone. */
+  --wash-a: oklch(90% 0.07 150 / .40);
+  --wash-b: oklch(93% 0.07 75 / .45);
+
+  /* What a shadow is tinted with: a warm brown in light, so a lifted card sits
+     on the page as a shadow on paper does, and a cool near-black in dark. */
+  --shadow-tint: oklch(32% 0.045 65);
+  --shadow-xs: 0 1px 1px color-mix(in oklab, var(--shadow-tint) 8%, transparent);
+  --shadow-hover: 0 2px 4px color-mix(in oklab, var(--shadow-tint) 7%, transparent), 0 12px 28px -6px color-mix(in oklab, var(--shadow-tint) 15%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent);
+  --shadow-xl: 0 6px 12px color-mix(in oklab, var(--shadow-tint) 6%, transparent), 0 32px 64px -12px color-mix(in oklab, var(--shadow-tint) 24%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent);
+  --shadow-press: inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 16%, transparent);
+  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / .7);
+  --text-glow: none;
+  --ring-danger: 0 0 0 4px color-mix(in oklab, var(--rare) 8%, transparent);
+  --shadow-glow: 0 0 0 1px color-mix(in oklab, var(--moss) 30%, transparent), 0 6px 24px -6px color-mix(in oklab, var(--moss) 38%, transparent);
 
   --density: 1;
   --pad-1: calc(8px  * var(--density));
   --pad-2: calc(12px * var(--density));
   --pad-3: calc(18px * var(--density));
   --pad-4: calc(28px * var(--density));
+  /* The height of a control and of a list row follow density too, floored so a
+     compact desk stays hittable. A phone's coarse pointer sets 44 px on its own. */
+  --control-h: max(28px, calc(32px * var(--density)));
+  --control-h-sm: max(24px, calc(26px * var(--density)));
+  --row-h: calc(48px * var(--density));
 
   --font-display: "Instrument Serif", "Source Serif 4", Georgia, "Noto Serif CJK SC", "Noto Serif CJK JP", serif;
   --font-ui:      "Inter Tight", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Sans Devanagari", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -348,6 +510,35 @@
   --heat-mid:    oklch(62% 0.13 65);
   --heat-hi:     oklch(86% 0.14 92);
 
+  --seq-1:       oklch(32% 0.05 60);
+  --seq-2:       oklch(40% 0.085 55);
+  --seq-3:       oklch(49% 0.115 55);
+  --seq-4:       oklch(58% 0.13 62);
+  --seq-5:       oklch(67% 0.14 72);
+  --seq-6:       oklch(77% 0.145 85);
+  --seq-7:       oklch(88% 0.13 98);
+  --seq-moss-1:  oklch(31% 0.04 150);
+  --seq-moss-2:  oklch(39% 0.065 152);
+  --seq-moss-3:  oklch(48% 0.09 152);
+  --seq-moss-4:  oklch(57% 0.11 151);
+  --seq-moss-5:  oklch(66% 0.125 150);
+  --seq-moss-6:  oklch(76% 0.14 150);
+  --seq-moss-7:  oklch(87% 0.13 150);
+  --div-neg-3:   oklch(80% 0.11 240);
+  --div-neg-2:   oklch(60% 0.12 248);
+  --div-neg-1:   oklch(40% 0.07 250);
+  --div-mid:     oklch(26% 0.008 250);
+  --div-pos-1:   oklch(40% 0.08 52);
+  --div-pos-2:   oklch(62% 0.15 48);
+  --div-pos-3:   oklch(82% 0.115 62);
+
+  --chart-grid:         oklch(26% 0.012 250);
+  --chart-grid-strong:  oklch(32% 0.014 250);
+  --chart-axis:         oklch(58% 0.014 250);
+  --chart-tip-bg:       oklch(30% 0.014 250);
+  --chart-tip-fg:       oklch(97% 0.004 240);
+  --chart-tip-border:   oklch(42% 0.016 250);
+
   --card-top:    oklch(20% 0.010 250);
   --card-bottom: oklch(17% 0.010 250);
   --sheen:       oklch(100% 0 0 / .04);
@@ -359,6 +550,18 @@
   --shadow-sm:   0 1px 2px oklch(0% 0 0 / .50), 0 0 0 0.5px oklch(100% 0 0 / .04);
   --shadow-md:   0 8px 24px oklch(0% 0 0 / .55), 0 0 0 0.5px oklch(100% 0 0 / .06);
   --shadow-lg:   0 24px 60px oklch(0% 0 0 / .65), 0 0 0 0.5px oklch(100% 0 0 / .07);
+
+  --surface-raised: oklch(20% 0.011 250);
+  --surface-overlay: oklch(24% 0.012 250);
+  --wash-a: oklch(34% 0.09 160 / .32);
+  --wash-b: oklch(30% 0.07 60 / .20);
+  --shadow-tint: oklch(4% 0.03 255);
+  --shadow-xs: 0 1px 1px color-mix(in oklab, var(--shadow-tint) 60%, transparent);
+  --shadow-hover: 0 2px 4px color-mix(in oklab, var(--shadow-tint) 40%, transparent), 0 14px 32px -6px color-mix(in oklab, var(--shadow-tint) 75%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09);
+  --shadow-xl: 0 8px 16px color-mix(in oklab, var(--shadow-tint) 40%, transparent), 0 40px 80px -12px color-mix(in oklab, var(--shadow-tint) 80%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09), inset 0 1px 0 oklch(100% 0 0 / .06);
+  --shadow-press: inset 0 1px 3px color-mix(in oklab, var(--shadow-tint) 70%, transparent);
+  --text-glow: 0 0 28px var(--glow);
+  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / .06);
 
   --warning:     var(--dawn);
   --on-fill:     oklch(15% 0.02 150);
@@ -5416,3 +5619,59 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
   .acct-reset { display: flex; flex-wrap: wrap; width: 100%; }
   .acct-reset input { flex: 1 1 100%; min-width: 0; }
 }
+
+
+/* ============================================================================
+   SETUP SECTION (owner: the setup work — classifier panel, "when does this
+   apply" badges, the waiting-for-restart banner, the setup wizard's
+   microphone picker). Component rules only; tokens, no literals for colour,
+   radius or shadow.
+   ========================================================================== */
+
+/* The bird-identifying model: one status, one button. */
+.cls-panel { display: grid; gap: var(--space-8); border-inline-start: 3px solid var(--border-2); padding-inline-start: var(--space-12); }
+.cls-panel[data-tone="ok"]   { border-inline-start-color: var(--moss); }
+.cls-panel[data-tone="warn"] { border-inline-start-color: var(--dawn); }
+.cls-panel[data-tone="bad"]  { border-inline-start-color: var(--rare); }
+.cls-panel[data-tone="info"] { border-inline-start-color: var(--info); }
+.cls-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
+.cls-name { font-weight: var(--fw-semibold); }
+.cls-detail { margin: 0; color: var(--fg-2); max-width: 70ch; }
+.cls-actions { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.cls-actions:empty { display: none; }
+.cls-bar { width: 100%; max-width: 32rem; height: var(--space-8); accent-color: var(--moss); }
+.cls-note { margin: 0; color: var(--rare); }
+[data-cls-host][aria-busy="true"] { opacity: .85; }
+
+/* Beside a setting's label: when a saved value takes effect. Plain words, with
+   a shape as well as a colour so the difference survives without colour. */
+.applies {
+  display: inline-block; margin-inline-start: var(--space-8); padding: 0 var(--space-6);
+  border: var(--edge); border-radius: var(--r-pill);
+  font-size: var(--fs-xs); font-weight: var(--fw-medium); letter-spacing: 0;
+  line-height: var(--lh-snug); vertical-align: baseline; white-space: nowrap;
+  background: var(--surface-2); color: var(--fg-2);
+}
+.applies--now     { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
+.applies--soon    { background: var(--info-soft); color: var(--info-ink); border-color: transparent; }
+.applies--restart { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+.applies--restart::before { content: "\21BB\00a0"; }
+.applies--record  { background: var(--surface-2); color: var(--fg-3); }
+
+/* Saved, and waiting for the station to start again. */
+.applies-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-10) var(--space-16);
+  margin: 0 0 var(--space-16); padding: var(--space-12) var(--space-16);
+  background: var(--dawn-soft); color: var(--dawn-ink);
+  border: var(--edge); border-radius: var(--r-md);
+}
+.applies-banner__text { flex: 1 1 22rem; min-width: 0; }
+.applies-banner .bnb-meta { color: inherit; }
+
+/* The wizard's microphone step: detected devices as cards, then the manual ways. */
+.mic-list { display: grid; gap: var(--space-12); margin: 0; padding: 0; border: 0; }
+.mic-or { margin: var(--space-16) 0 var(--space-8); }
+.mic-manual { display: grid; gap: var(--space-8); }
+.mic-manual input[type="text"] { width: 100%; max-width: 36rem; }
+.mic-test { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-8); }
+.mic-level { font-family: var(--font-mono); color: var(--fg-2); }
