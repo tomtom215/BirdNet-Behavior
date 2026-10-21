@@ -1,6 +1,6 @@
 # Stability policy
 
-**Status: proposed 2026-10-14.** This describes what the project already does and
+**Status: proposed 2026-10-14; the counts in §2 were re-measured 2026-10-21.** This describes what the project already does and
 what it is willing to commit to; it is the maintainer's to accept, amend or drop
 (see [docs/HANDOFF.md](docs/HANDOFF.md)). Until then it is a description, not a promise.
 [RELEASING.md](RELEASING.md) is the release runbook and [CHANGELOG.md](CHANGELOG.md)
@@ -29,9 +29,9 @@ An operator or an integrator can rely on these, in this order of seriousness:
 
 | Surface | Where it is defined | Today |
 |---|---|---|
-| **Station data** — the SQLite database and its migrations | `crates/birdnet-db/src/migration.rs` | N migrations, contiguous from 1; forward-only. N is what `awk '/pub const MIGRATIONS/,/^\];/' crates/birdnet-db/src/migration.rs \| grep -cE '^\s+version: [0-9]+,'` prints: 54 on 2026-10-20 |
-| **Configuration** — `birdnet.conf` keys, `BIRDNET_*` / `BNB_*` environment variables, command-line flags | `crates/birdnet-core/src/config/known_keys.rs`, `src/cli.rs`, `--help` | 148 file keys (the quoted strings in `KNOWN_CONFIG_KEYS`) and 112 option lines in `--help` (`grep -cE '^\s{2,6}(-[a-zA-Z], )?--[a-z0-9-]+' docs/book/_generated/cli-help.txt`), on 2026-10-20 |
-| **HTTP API** — `/api/v2`, bearer-token and public | `crates/birdnet-web/openapi.json`, [`docs/book/reference/api.md`](docs/book/reference/api.md) | 96 paths, 98 operations (the sizes of `paths` and of its HTTP-method entries in `openapi.json`), on 2026-10-20 |
+| **Station data** — the SQLite database and its migrations | `crates/birdnet-db/src/migration.rs` | N migrations, contiguous from 1; forward-only. N is what `awk '/pub const MIGRATIONS/,/^\];/' crates/birdnet-db/src/migration.rs \| grep -cE '^\s+version: [0-9]+,'` prints: 56 on 2026-10-21 (52 in `v0.17.1`) |
+| **Configuration** — `birdnet.conf` keys, `BIRDNET_*` / `BNB_*` environment variables, command-line flags | `crates/birdnet-core/src/config/known_keys.rs`, `src/cli.rs`, `--help` | 155 file keys (the quoted entries inside the `KNOWN_CONFIG_KEYS` array) and 118 option lines in `--help` (`grep -cE '^\s{2,6}(-[a-zA-Z], )?--[a-z0-9-]+'` over `birdnet-behavior --help`, which is what `docs/book/_generated/cli-help.txt` holds once `scripts/gen-cli-help.sh` has been run), on 2026-10-21 |
+| **HTTP API** — `/api/v2`, bearer-token and public | `crates/birdnet-web/openapi.json`, [`docs/book/reference/api.md`](docs/book/reference/api.md) | 106 paths, 108 operations (the sizes of `paths` and of its HTTP-method entries in `openapi.json`: `python3 -c "import json;d=json.load(open('crates/birdnet-web/openapi.json'))['paths'];print(len(d),sum(1 for v in d.values() for k in v if k in ('get','put','post','delete','patch')))"`), on 2026-10-21 |
 | **Metrics and messages** — Prometheus series, MQTT topics and Home Assistant discovery payloads, webhook bodies | [`docs/book/reference/integrations.md`](docs/book/reference/integrations.md) | `birdnet_*` series |
 | **Release artefacts and installer** — tarball names, `SHA256SUMS`, `install.sh` flags, the container image tags | [RELEASING.md](RELEASING.md) | |
 | **Supported platforms** | [README](README.md#supported-hardware--os) | see §6 |
