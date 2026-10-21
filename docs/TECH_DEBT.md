@@ -64,23 +64,29 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   (`Option<u64>`) and `record`'s comparison, which want their own compatibility
   tests against journals written by earlier versions.
 
-## TD-4 The Capture tab's duplicate guard and the wizard read an unreadable source list as empty
+## TD-4 The Capture tab's duplicate guard reads an unreadable source list as empty; the wizard logs it and says nothing
 
 * **Where:** `crates/birdnet-web/src/routes/admin/audio.rs` (`create`: the check
-  that refuses to add the same source twice) and
-  `crates/birdnet-web/src/routes/pages/onboarding.rs`.
+  that refuses to add the same source twice, `.with_read_db(AudioSourceStore::list)
+  .unwrap_or_default()`) and `crates/birdnet-web/src/routes/pages/onboarding.rs`
+  (`add_source`).
 * **What it does:** `create` reads the list with `.unwrap_or_default()`, so a list
   that could not be read passes the "already configured" check and the insert is
   attempted; on a database that cannot be read the insert fails too, so the cost is
-  a duplicate only if the read fails and the write succeeds. The wizard's rows are
-  the same shape. The other sites this entry first listed (`sources_body`,
-  `listen_default`, `count_oobs`, `listen_default_id`) were rewritten by the
-  setup-wizard change while it was in flight and no longer default their errors.
-* **Evidence:** the rows of class `tracked:TD-4` in
-  `tests/data/read_default_sweep.tsv`; each is a quoted line in the sweep.
-* **Why it is open:** the setup-wizard change owns both files and had not landed
-  when the sweep was last run. When it does, delete the rows the sweep no longer
-  reports; what is left is this debt.
+  a duplicate only if the read fails and the write succeeds. The wizard no longer
+  treats the list as empty: `add_source` matches on the read, logs "could not read
+  the audio sources; the microphone was not added" at `error` and returns, but it
+  returns `()`, so the page the person sees does not say that nothing was added.
+  The other sites this entry first listed (`sources_body`, `listen_default`,
+  `count_oobs`, `listen_default_id`) were rewritten by the setup-wizard change and no
+  longer default their errors.
+* **Evidence:** read at the cited places on 2026-10-21; the rows of class
+  `tracked:TD-4` in `tests/data/read_default_sweep.tsv` (lines 33 and 134 to 137)
+  are what the sweep still reports, and I did not re-classify the four wizard rows
+  after the rewrite.
+* **Why it is open:** the guard's cost is a duplicate row in a corner case, and the
+  wizard's fix is a message on a page that has just been rewritten; neither was part
+  of the change that found them.
 
 ## TD-5 RTSP credentials are on ffmpeg's command line
 
@@ -135,3 +141,19 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   they are an old dashboard that Today replaced, or an HTMX surface for something
   outside this repository (a kiosk, an embed), is a decision about what the
   interface promises, not something to settle by deleting what a grep did not find.
+
+## TD-7 BirdNET-Pi's protected clips are parsed and nothing uses the result
+
+* **Where:** `crates/birdnet-migrate/src/clips.rs:714`, `pub fn protected_names`.
+* **What it does:** it reads BirdNET-Pi's `disk_check_exclude.txt` (a `##start` line,
+  then one `Date/Species/File_Name` per protected clip, each followed by the same line
+  with `.png`) and returns the file names. It has a test
+  (`the_protected_list_gives_names_not_pictures`). **Nothing calls it**: `git grep
+  protected_names` finds the definition and that test. The clip import therefore brings a
+  protected clip across as an ordinary one, which `MAX_FILES_SPECIES` and the disk purge
+  may delete; the migration guide says to lock such clips again by hand
+  (`docs/book/guides/migration.md:151` and `:204`).
+* **Evidence:** PROVEN by `git grep protected_names HEAD` on 2026-10-21 (two hits).
+* **Why it is open:** wiring it means choosing where the import locks a row (the
+  detection that owns the clip, by `File_Name`) and what to do with a name that matches
+  none; it is `A-23` in `FEATURE_GAP_ANALYSIS.md`.

@@ -29,7 +29,7 @@ users**, with deep analytics underneath for enthusiasts.
   classes in one stylesheet; the few dynamic values use a `data-style`
   attribute promoted by a nonce'd `<style>` block. Do not propose inline styles.
 - **One hand-written stylesheet** (`crates/birdnet-web/static/css/app.css`,
-  ~5.9k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
+  ~6.2k lines, 6,233 on 2026-10-21) and **self-hosted fonts** (offline-capable — air-gapped Pi
   installs are supported). No CDNs, no runtime-fetched web fonts, no new JS
   dependencies.
 - **Performance-conscious for a Pi** and **fully responsive** (a phone
@@ -239,13 +239,17 @@ users**, with deep analytics underneath for enthusiasts.
     sequential or diverging ramp, no data-ink tokens, shadows pure black, 42 raw
     border radii, 329 `gap`/`padding`/`margin` declarations in pixels, 23 raw
     font sizes, 10 raw durations, and a gate that held colours and weights only.
-    After: 241 and 90 (`design-tokens.md` carries both numbers, generated);
-    0 raw radii, 0 on-ladder gaps (126 declarations remain at the time of
-    writing, all optical gaps off the ladder), 0 raw durations or curves, shadows and layers by token, 17
-    named display font sizes, and `tests/design_tokens_are_the_only_literals.rs`
-    now refuses a raw shadow, radius, duration, curve, layer or on-ladder gap
-    with a named exemption list. The tokenisation was proved pure with
-    `style-snapshot.mjs` (129 pages, 48,054 elements; the only differences were
+    After: 241 and 90 (`design-tokens.md` carries both numbers, generated;
+    `node tools/visual-qa/token-doc.mjs --check` passed on 2026-10-21), 15
+    `--fs-*` font-size tokens, and `tests/design_tokens_are_the_only_literals.rs`
+    refuses a raw shadow, radius, duration, curve, layer or on-ladder gap with a
+    named exemption list. The *before* counts above (42, 329, 23, 10) and the
+    *after* counts the pass reported (0 raw radii, 126 optical gaps off the
+    ladder, 0 raw durations or curves) were not re-derived; a plain regex over
+    `app.css` before and after finds 41, 325, 23 and 10 raw `border-radius`,
+    spacing, `font-size` and transition declarations before, and 0 raw
+    `border-radius` after. The tokenisation was proved pure with
+    `style-snapshot.mjs` by the pass that did it (the only differences were
     `<main>`'s auto margin flipping between runs of the *same* stylesheet).
     The ramps and the layers around the content are graded by arithmetic
     (`chart-ramps.mjs`, `surface-layers.mjs`). The visual pass is surfaces
@@ -259,7 +263,8 @@ users**, with deep analytics underneath for enthusiasts.
     simply does not animate). Observed in Chromium 141 only: a navigation ran a
     view transition (`pagereveal` carried one) with motion allowed and none under
     `prefers-reduced-motion`; Firefox and WebKit were not tried. The chart sections
-    are being rewritten by the chart pass.
+    have been redrawn on a shared kit (`docs/design/charts.md`,
+    `docs/design/charts-relational.md`).
 
 ## What I want from you, per screen (deliverables)
 
