@@ -92,6 +92,7 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", health::router())
         .merge(livestream::stream_router())
         .merge(dashboard_image::router())
+        .merge(crate::display::router())
         .merge(pages::router())
         .merge(redirects::router())
         .merge(feeds::router())

@@ -391,6 +391,18 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::System,
     ),
     (
+        "time_format",
+        // Served to the browser at /api/v2/display, which prints every clock
+        // time in it unless the reader chose otherwise.
+        Wiring::OwnedBy("the display formatter"),
+        SettingsCategory::System,
+    ),
+    (
+        "temperature_unit",
+        Wiring::OwnedBy("the display formatter"),
+        SettingsCategory::System,
+    ),
+    (
         "rare_species_days",
         Wiring::OwnedBy("the rare-species feeds"),
         SettingsCategory::System,

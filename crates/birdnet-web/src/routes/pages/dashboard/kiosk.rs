@@ -62,6 +62,7 @@ static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   <p class="ki-loading">Loading…</p>
 </main>
 <script src="/static/htmx.min.js?v={{version}}"></script>
+<script src="/static/display-format.js?v={{version}}" defer></script>
 <script>
   // ESC leaves kiosk mode — the keyboard counterpart of the corner link.
   document.addEventListener('keydown', function (e) {

@@ -134,6 +134,7 @@ async fn player_page(
 </div>
 {player_script}
 {listen_script}
+{display_script}
 </body>
 </html>"#,
         site_name = escape_html(site_name),
@@ -143,6 +144,9 @@ async fn player_page(
         // `<script` it did not seal, including an external one.
         listen_script = crate::seal::seal(&format!(
             r#"<script src="/static/listen-fx.js?v={css_v}" defer></script>"#
+        )),
+        display_script = crate::seal::seal(&format!(
+            r#"<script src="/static/display-format.js?v={css_v}" defer></script>"#
         )),
     );
     Html(html)

@@ -70,6 +70,8 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "raw_spectrogram",
     "spectrogram_colormap",
     "spectrogram_range_db",
+    "time_format",
+    "temperature_unit",
     "extraction_length",
     "rare_species_days",
     "stream_retention_secs",
@@ -224,6 +226,12 @@ pub struct SettingsForm {
     /// Dynamic range of the spectrograms in dB: `60`, `80` (the default), `100`
     /// or `120`. Cells further than this below the loudest are drawn as the floor.
     pub spectrogram_range_db: Option<String>,
+    /// The clock times are printed in by default: `24h` (the default) or `12h`.
+    /// Each browser may choose otherwise on the Display card.
+    pub time_format: Option<String>,
+    /// The unit temperatures are printed in by default: `celsius` (the
+    /// default) or `fahrenheit`. Each browser may choose otherwise.
+    pub temperature_unit: Option<String>,
     /// Seconds of audio saved around each detection (BirdNET-Pi:
     /// `EXTRACTION_LENGTH`). The field existed in `ExtractionConfig` from the
     /// start and was never reachable from the UI, so every station ran the

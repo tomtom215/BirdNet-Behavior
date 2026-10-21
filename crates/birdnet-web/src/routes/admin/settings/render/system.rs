@@ -69,6 +69,22 @@ fn language_picker(stored: &str, names: &NameLocalizer) -> String {
     )
 }
 
+/// `<option>`s for a small fixed choice, the stored one selected (the default
+/// when the stored value is none of them).
+fn choice_options(stored: &str, choices: &[(&str, &str)], default: &str) -> String {
+    let chosen = choices
+        .iter()
+        .find(|(value, _)| *value == stored.trim())
+        .map_or(default, |(value, _)| *value);
+    choices
+        .iter()
+        .map(|(value, label)| {
+            let selected = if *value == chosen { " selected" } else { "" };
+            format!(r#"<option value="{value}"{selected}>{label}</option>"#)
+        })
+        .collect()
+}
+
 /// The `<option>`s of the spectrogram colour-map picker, the stored one chosen.
 ///
 /// A stored value that is no colour map selects the default, which is what the
@@ -123,6 +139,16 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     let purge = get_setting(s, "purge_threshold");
     let raw_spec = get_setting(s, "raw_spectrogram");
     let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
+    let time_options = choice_options(
+        &get_setting(s, "time_format"),
+        &[("24h", "24-hour (16:31)"), ("12h", "12-hour (4:31 PM)")],
+        "24h",
+    );
+    let temp_options = choice_options(
+        &get_setting(s, "temperature_unit"),
+        &[("celsius", "Celsius (°C)"), ("fahrenheit", "Fahrenheit (°F)")],
+        "celsius",
+    );
     let colormap_options = spectrogram_colormap_options(&get_setting(s, "spectrogram_colormap"));
     let range_options = spectrogram_range_options(&get_setting(s, "spectrogram_range_db"));
     let rare_days = get_setting(s, "rare_species_days");
@@ -215,6 +241,22 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
         <p class="hint">Leaves out the species and confidence caption, for embedding in
           a stream overlay or a print (BirdNET-Pi: RAW_SPECTROGRAM). This renderer draws
           no axes in either case.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="time_format">Clock</label>
+        <select id="time_format" name="time_format">{time_options}</select>
+        <p class="hint">How times are shown across the dashboard. Each browser can choose
+          its own on the Display card (Station &rarr; Settings); this is what a browser
+          that has not chosen shows. Feeds, exports and the API keep 24-hour ISO times.</p>
+      </div>
+      <div>
+        <label for="temperature_unit">Temperature unit</label>
+        <select id="temperature_unit" name="temperature_unit">{temp_options}</select>
+        <p class="hint">For the weather line, the day strip and the station's own
+          temperature. Stored and exported in Celsius whatever is shown. Each browser can
+          choose its own on the Display card.</p>
       </div>
     </div>
     <div class="grid-2">

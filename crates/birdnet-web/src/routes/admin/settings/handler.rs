@@ -329,6 +329,18 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
              entered “{raw}”."
         ));
     }
+    if let Some(raw) = given(&form.time_format)
+        && !crate::display::is_time_format(&raw)
+    {
+        problems.push(format!("Clock must be 24h or 12h. You entered “{raw}”."));
+    }
+    if let Some(raw) = given(&form.temperature_unit)
+        && !crate::display::is_temperature_unit(&raw)
+    {
+        problems.push(format!(
+            "Temperature unit must be celsius or fahrenheit. You entered “{raw}”."
+        ));
+    }
     if let Some(problem) = form
         .dashboard_image
         .as_deref()
@@ -1045,6 +1057,12 @@ pub(crate) fn build_settings_items(
         "spectrogram_range_db",
         SettingsCategory::System
     );
+    push!(form.time_format, "time_format", SettingsCategory::System);
+    push!(
+        form.temperature_unit,
+        "temperature_unit",
+        SettingsCategory::System
+    );
     push!(
         form.purge_threshold,
         "purge_threshold",
@@ -1496,6 +1514,8 @@ mod tests {
             raw_spectrogram: None,
             spectrogram_colormap: None,
             spectrogram_range_db: None,
+            time_format: None,
+            temperature_unit: None,
             dashboard_image: None,
             dashboard_image_title: None,
             extraction_length: None,

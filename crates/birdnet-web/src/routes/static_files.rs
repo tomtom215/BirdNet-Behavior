@@ -48,6 +48,8 @@ const BASE_PATH_JS: &[u8] = include_bytes!("../../static/base-path.js");
 /// Holds `every` polls back while the tab is hidden (M13).
 const POLL_VISIBILITY_JS: &[u8] = include_bytes!("../../static/poll-visibility.js");
 const CLIP_PLAYER_JS: &[u8] = include_bytes!("../../static/clip-player.js");
+/// Prints clock times and temperatures in the reader's choice (P-16).
+const DISPLAY_FORMAT_JS: &[u8] = include_bytes!("../../static/display-format.js");
 /// Gain, high-pass and compressor for every player, in the browser (P-8).
 const LISTEN_FX_JS: &[u8] = include_bytes!("../../static/listen-fx.js");
 /// The styles of those controls, which the script loads when it builds them.
@@ -165,6 +167,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/base-path.js", get(base_path_js))
         .route("/static/clip-player.js", get(clip_player_js))
         .route("/static/listen-fx.js", get(listen_fx_js))
+        .route("/static/display-format.js", get(display_format_js))
         .route("/static/chart-text.js", get(chart_text_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
@@ -349,6 +352,17 @@ async fn search_select_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         SEARCH_SELECT_JS,
+    )
+}
+
+async fn display_format_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        DISPLAY_FORMAT_JS,
     )
 }
 

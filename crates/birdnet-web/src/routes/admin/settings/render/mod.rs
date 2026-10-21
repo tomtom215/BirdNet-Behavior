@@ -149,6 +149,8 @@ fn fixed_form_default(key: &str) -> &'static str {
         "sf_thresh" => "0.03",
         "spectrogram_colormap" => "viridis",
         "spectrogram_range_db" => "80",
+        "temperature_unit" => "celsius",
+        "time_format" => "24h",
         "stream_max_mb" => "512",
         "stream_retention_secs" => "600",
         "weekly_report_schedule" => "monday",
