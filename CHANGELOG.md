@@ -480,9 +480,9 @@ is described under *Changed* or *Fixed*.
   `tests/testdata/Pica_pica_30s.wav` is byte-identical to the recording in BirdNET-Pi's
   `tests/testdata/`.
 - **Releases and CI are stricter, and pinned.** A release refuses a lightweight tag, a
-  tag off the default branch and an undated changelog heading (twenty of the
-  repository's 23 tag refs are bare commits although `RELEASING.md` prescribes
-  `git tag -a`); `install.sh`, `uninstall.sh` and `SHA256SUMS` are attested like the
+  tag off the default branch and an undated changelog heading (21 of the
+  repository's 24 tag refs are bare commits although `RELEASING.md` prescribes
+  `git tag -a`, read 2026-10-21); `install.sh`, `uninstall.sh` and `SHA256SUMS` are attested like the
   archives and `verify-release` runs `gh attestation verify` on every asset. Release and
   Docker builds fail (after three retries) when a DuckDB extension cannot be fetched,
   instead of shipping a binary that needs the network at first run (the 0.13.1 fault);
