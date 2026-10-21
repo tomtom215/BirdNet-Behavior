@@ -351,6 +351,12 @@ async function main() {
     }
   }
   await browser.close();
+  // CodeQL (js/http-to-file-access) flags this line: the report holds strings read
+  // from pages over HTTP (console messages, broken-image URLs). It is dismissed as
+  // "used in tests": the pages come from the fixture server this script's caller
+  // started on localhost, the file is JSON in the directory the caller named with
+  // --out, and nothing reads it back except a person and the summary below. It is
+  // never executed, served or included in a build.
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
 
   // A page where EVERY species photo failed is not "these birds have no

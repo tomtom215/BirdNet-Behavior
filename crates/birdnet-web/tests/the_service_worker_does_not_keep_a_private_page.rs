@@ -12,7 +12,9 @@
 //!   cached *as* `/today`, and shown to the same browser after it signed in;
 //! * an ordinary public page **is** stored and **is** still served with the
 //!   network gone, which is the offline behaviour of the PWA that must survive;
-//! * `/admin` and `/login` never reach the worker's strategies.
+//! * `/admin` and `/login` never reach the worker's strategies;
+//! * the one message it acts on, `SKIP_WAITING`, is honoured from a page of its
+//!   own origin and from nowhere else (CodeQL `js/missing-origin-check`).
 //!
 //! Needs `node`. Where it is missing the test says so and passes, unless `CI` is
 //! set, where a skip would be a gate that quietly stopped gating.
@@ -78,4 +80,31 @@ fn the_worker_keeps_what_is_public_and_nothing_else() {
 
     assert_eq!(out["admin_handled"], false, "{out}");
     assert_eq!(out["login_handled"], false, "{out}");
+}
+
+/// `SKIP_WAITING` promotes a waiting worker. It is honoured when the message's
+/// origin is the worker's own, and not when it is another origin's or has none;
+/// and the worker still ignores any other message, so the origin check is not
+/// satisfied by a handler that ignores everything.
+///
+/// Observed failing against the worker before the check existed:
+/// `from_another_origin` and `from_no_origin` were both 1.
+#[test]
+fn the_worker_skips_waiting_for_its_own_origin_only() {
+    let Some(out) = run_harness() else { return };
+    let skip = &out["skip_waiting"];
+    assert_eq!(
+        skip["from_own_origin"], 1,
+        "the page that registered the worker can no longer ask it to update: {out}"
+    );
+    assert_eq!(
+        skip["from_another_origin"], 0,
+        "a message from another origin promoted a waiting worker: {out}"
+    );
+    assert_eq!(
+        skip["from_no_origin"], 0,
+        "a message with no origin promoted a waiting worker: {out}"
+    );
+    assert_eq!(skip["another_message"], 0, "{out}");
+    assert_eq!(skip["no_data"], 0, "{out}");
 }

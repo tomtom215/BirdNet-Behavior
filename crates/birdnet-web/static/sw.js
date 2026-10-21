@@ -76,8 +76,14 @@ self.addEventListener('activate', function (event) {
   );
 });
 
-// Posts from the page can ask the worker to skip its install delay.
+// Posts from the page can ask the worker to skip its install delay. Only a page
+// of this origin is a page of this station: a window of another origin that
+// obtained a reference to this worker's clients must not be able to promote a
+// waiting worker. (A worker's clients are same-origin by construction, so this
+// is a check that never fires in practice; it states the assumption in the code
+// that depends on it, and tests/sw_harness.mjs holds the line.)
 self.addEventListener('message', function (event) {
+  if (event.origin !== self.location.origin) return;
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
