@@ -56,14 +56,18 @@ const LISTEN_FX_JS: &[u8] = include_bytes!("../../static/listen-fx.js");
 const LISTEN_FX_CSS: &[u8] = include_bytes!("../../static/css/listen-fx.css");
 /// Keeps SVG chart labels legible at any scale (see the script's header).
 const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
-
-/// Type-to-filter for the admin settings page (embedded at compile time).
 /// Hover, focus, keyboard and entrance for every chart (see the script's header).
 const CHART_KIT_JS: &[u8] = include_bytes!("../../static/chart-kit.js");
+
+/// Type-to-filter for the admin settings page (embedded at compile time).
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
 
 /// Select-all for the search page's bulk action bar (embedded at compile time).
 const SEARCH_SELECT_JS: &[u8] = include_bytes!("../../static/search-select.js");
+
+/// Install the species model, restart and wait for the station (setup wizard,
+/// Capture tab, settings banner). Embedded at compile time.
+const SETUP_CONTROLS_JS: &[u8] = include_bytes!("../../static/setup-controls.js");
 
 /// Self-hosted webfonts (latin + latin-ext subsets), embedded at compile time
 /// so the UI renders fully offline with no CDN dependency. `Inter Tight` (UI),
@@ -169,15 +173,16 @@ pub fn router() -> Router<AppState> {
         .route("/static/listen-fx.js", get(listen_fx_js))
         .route("/static/display-format.js", get(display_format_js))
         .route("/static/chart-text.js", get(chart_text_js))
+        .route("/static/chart-kit.js", get(chart_kit_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
+        .route("/static/setup-controls.js", get(setup_controls_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
         .route("/static/css/listen-fx.css", get(listen_fx_css))
         .route("/static/fonts/{file}", get(font_file))
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
-        .route("/static/chart-kit.js", get(chart_kit_js))
         .route("/static/sw.js", get(service_worker_js))
         // `/favicon.ico` is the browser's *fallback* request: a document with
         // no `rel="icon"` asks for it unprompted, and this server used to
@@ -296,14 +301,6 @@ async fn poll_visibility_js() -> impl IntoResponse {
     )
 }
 
-async fn chart_text_js() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/javascript"),
-            // Same policy as the other app scripts: it ships with the binary and
-            // is requested with `?v=<version>`, so a day is safe.
-            (header::CACHE_CONTROL, "public, max-age=86400"),
 async fn chart_kit_js() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -315,6 +312,14 @@ async fn chart_kit_js() -> impl IntoResponse {
     )
 }
 
+async fn chart_text_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Same policy as the other app scripts: it ships with the binary and
+            // is requested with `?v=<version>`, so a day is safe.
+            (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         CHART_TEXT_JS,
     )
@@ -341,6 +346,17 @@ async fn settings_filter_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         SETTINGS_FILTER_JS,
+    )
+}
+
+async fn setup_controls_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        SETUP_CONTROLS_JS,
     )
 }
 
@@ -510,15 +526,6 @@ mod tests {
         assert!(!js.contains("cssText"));
     }
 
-    #[test]
-    fn live_detections_client_embedded() {
-        let js = std::str::from_utf8(LIVE_DETECTIONS_JS).unwrap();
-        assert!(js.contains("/api/v2/ws/detections"));
-        assert!(js.contains("birdnet:detection"));
-        // Must never assign untrusted species names via innerHTML.
-        assert!(!js.contains(".innerHTML"));
-    }
-}
     /// The chart kit renders species names into tooltips and a live region: only
     /// ever as text. And it must not write a `style` attribute, which the CSP
     /// forbids; `style.setProperty` goes through the CSSOM, which it allows.
@@ -535,3 +542,12 @@ mod tests {
         assert!(!js.contains("fetch("));
     }
 
+    #[test]
+    fn live_detections_client_embedded() {
+        let js = std::str::from_utf8(LIVE_DETECTIONS_JS).unwrap();
+        assert!(js.contains("/api/v2/ws/detections"));
+        assert!(js.contains("birdnet:detection"));
+        // Must never assign untrusted species names via innerHTML.
+        assert!(!js.contains(".innerHTML"));
+    }
+}

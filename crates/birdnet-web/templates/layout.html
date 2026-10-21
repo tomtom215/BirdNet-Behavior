@@ -185,10 +185,10 @@
     <!-- Chart labels are scaled with their SVG; this keeps them readable on a
          phone (static/chart-text.js). -->
     <script src="/static/chart-text.js?v={{version}}" defer></script>
-    <!-- A region that fails to load must say so. htmx leaves the target as it
-         was on a 4xx/5xx and on a transport error, so a failed partial — or a
     <!-- Hover, focus, keyboard and entrance for every chart (static/chart-kit.js). -->
     <script src="/static/chart-kit.js?v={{version}}" defer></script>
+    <!-- A region that fails to load must say so. htmx leaves the target as it
+         was on a 4xx/5xx and on a transport error, so a failed partial — or a
          station that died under an open dashboard — used to leave its
          skeleton or "Loading…" in place indefinitely (UX-4). GET loads only:
          a form that failed to POST keeps itself so the operator can retry.

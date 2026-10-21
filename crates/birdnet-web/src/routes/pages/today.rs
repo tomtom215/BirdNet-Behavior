@@ -438,23 +438,32 @@ fn first_run_needs_onboarding(state: &AppState) -> bool {
 
 /// Capture-outage check: the station has detected before, the silence exceeds
 /// the threshold, and (with a location) we're inside daylight, when silence
-/// is anomalous. Returns the silence duration and the last detection's time.
-pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String)> {
-    let silent = birdnet_db::sqlite::seconds_since_last_detection(conn)
-        .ok()
-        .flatten()?;
+/// is anomalous. `Ok(Some((silence, last)))` is the duration of the silence and
+/// the last detection's time; `Ok(None)` is "no outage".
+///
+/// `Err` when the detection history could not be read. That is a third answer,
+/// not `Ok(None)`: the pills drew "recording" in green for a station whose
+/// freshness they had not been able to look at, and the outage banner, which is
+/// "absent entirely when nothing waits", was absent for the same reason.
+pub(super) fn capture_outage(
+    conn: &rusqlite::Connection,
+) -> Result<Option<(u64, String)>, birdnet_db::sqlite::DbError> {
+    use rusqlite::OptionalExtension as _;
+    let Some(silent) = birdnet_db::sqlite::seconds_since_last_detection(conn)? else {
+        return Ok(None);
+    };
     let threshold = match super::solar_times_local(conn) {
         Some((sunrise, sunset)) => {
             let now = super::now_hour_local();
             if now < sunrise || now > sunset {
-                return None; // overnight silence is normal
+                return Ok(None); // overnight silence is normal
             }
             OUTAGE_DAYTIME_SECS
         }
         None => OUTAGE_NO_LOCATION_SECS,
     };
     if silent < threshold {
-        return None;
+        return Ok(None);
     }
     let last = conn
         .query_row(
@@ -462,8 +471,8 @@ pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String
             [],
             |row| row.get::<_, String>(0),
         )
-        .ok()?;
-    Some((silent, last.get(0..5).unwrap_or(&last).to_string()))
+        .optional()?;
+    Ok(last.map(|last| (silent, last.get(0..5).unwrap_or(&last).to_string())))
 }
 
 /// Filesystem usage of the data directory as a used percentage.
@@ -626,7 +635,11 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
             // Recording state. The gauge is authoritative when it has an
             // opinion; otherwise fall back to the detection-freshness signal
             // that drives the outage banner, so the two cannot disagree.
-            match (capture, capture_outage(conn)) {
+            let outage = capture_outage(conn);
+            if let Err(e) = &outage {
+                tracing::warn!(error = %e, "recording pill: the detection history could not be read");
+            }
+            match (capture, outage) {
                 (CaptureState::NoSource, _) => out.push_str(
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · no microphone configured</span>"#,
                 ),
@@ -637,13 +650,23 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                 (CaptureState::Unreadable, _) => out.push_str(
                     r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the audio sources</span>"#,
                 ),
-                (_, Some((_, last))) => {
+                (_, Ok(Some((_, last)))) => {
                     let _ = write!(
                         out,
                         r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> recording stopped · last heard {last}</span>"#
                     );
                 }
-                (_, None) => out.push_str(
+                // The gauge says it is up, which does not depend on the detection
+                // history; the freshness read only ever contradicts a gauge.
+                (CaptureState::Up, Err(_)) => out.push_str(
+                    r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
+                ),
+                // Nothing says it is up and the one thing that could say it is
+                // down could not be read: a pill that could not look says so.
+                (_, Err(_)) => out.push_str(
+                    r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the detection history</span>"#,
+                ),
+                (_, Ok(None)) => out.push_str(
                     r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
                 ),
             }
@@ -736,7 +759,14 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
                 );
             }
             let mut strip = String::new();
-            if let Some((silent, last)) = capture_outage(conn) {
+            let outage = capture_outage(conn);
+            if let Err(e) = &outage {
+                tracing::warn!(error = %e, "outage banner: the detection history could not be read");
+                strip.push_str(&super::error_states::inline(
+                    "whether the microphone has gone quiet",
+                ));
+            }
+            if let Ok(Some((silent, last))) = outage {
                 let dur = fmt_duration(silent);
                 let last = crate::display::clock(&last);
                 let _ = write!(
@@ -1028,6 +1058,7 @@ async fn today_partial(
 )]
 async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
     let today = today_date_string();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             // The hour totals come from the database, not from counting the rows of a
@@ -1063,7 +1094,6 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
             [(header::CONTENT_TYPE, "text/html")],
             // Clear the header stats out-of-band too, so a deleted last
             // detection doesn't strand stale numbers.
-    let names = state.names_handle();
             r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"></div><div class="bnb-meta tdl-strip-empty"><span>No detections yet today.</span></div>"#
                 .to_string(),
         );
@@ -1076,6 +1106,17 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         {
             hourly[hi] += r.count;
         }
+    }
+    // Per hour, the three species with the most detections, in the station's language.
+    let mut top: [Vec<(String, i64)>; 24] = std::array::from_fn(|_| Vec::new());
+    for (name, hour, count) in &by_hour {
+        if let Some(slot) = top.get_mut(usize::from(*hour)) {
+            slot.push((names.name_of_stored(name).to_owned(), *count));
+        }
+    }
+    for slot in &mut top {
+        slot.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        slot.truncate(3);
     }
 
     let temps: Vec<(f64, f64)> = samples
@@ -1115,17 +1156,6 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
         format!("{stats_oob}{tempkey_oob}{strip}"),
-    // Per hour, the three species with the most detections, in the station's language.
-    let mut top: [Vec<(String, i64)>; 24] = std::array::from_fn(|_| Vec::new());
-    for (name, hour, count) in &by_hour {
-        if let Some(slot) = top.get_mut(usize::from(*hour)) {
-            slot.push((names.name_of_stored(name).to_owned(), *count));
-        }
-    }
-    for slot in &mut top {
-        slot.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        slot.truncate(3);
-    }
     )
 }
 

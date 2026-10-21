@@ -827,10 +827,10 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
    (a stylesheet rule always beats an attribute), so this is where it is the
    chart palette's first slot. The dot at the end sits on the box's edge. */
 .bnb-spark { overflow: visible; }
-.bnb-spark .line  { stroke: var(--chart-1); stroke-width: 1.4; fill: none; }
-.bnb-spark .area  { fill: var(--chart-1); opacity: 0.10; }
+.bnb-spark .line  { stroke: var(--chart-1); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.bnb-spark .area  { fill: var(--chart-1); opacity: 0.12; }
 .bnb-spark .pt    { fill: var(--chart-1); }
-.bnb-spark .end   { fill: var(--chart-1); }
+.bnb-spark .end   { fill: var(--chart-1); stroke: var(--chart-gap); stroke-width: 1.5px; }
 .bnb-spark .floor { stroke: var(--hairline); stroke-width: 1; fill: none; }
 
 /* Time-of-day heat ramp (dawn hue) */
@@ -3666,7 +3666,6 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-loadmore-row { text-align: center; padding: 1rem; }
 .qz-loadmore   { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: var(--fs-base); }
 .qz-err        { color: var(--danger); }
-.qz-pending-badge { background: var(--warning); color: var(--on-fill); border-radius: var(--r-pill); /* #000 on the light --warning read about 3.5:1 (UX-17) */ padding: 0.1rem 0.45rem; font-size: var(--fs-xs); font-weight: var(--fw-bold); margin-left: 0.25rem; }
 
 /* ── Behavioral analytics partials (/analytics) — O-25 harmonisation ───────
    Faithful extraction of the static inline styles the behavioral.rs HTMX
@@ -4679,6 +4678,7 @@ a.sr-about       { color: var(--fg-3); }
 .viz-table-scroll { overflow-x: auto; margin-top: var(--space-8); }
 .viz-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .viz-table th[scope="row"] { text-align: left; font-weight: var(--fw-regular); }
+.viz-table .viz-swatch { margin-right: var(--space-4); vertical-align: baseline; }
 /* charts ─────────────────────────────────────────────────────────────────────
    The chart kit's stylesheet (static/chart-kit.js, routes/pages/viz/kit.rs,
    docs/design/charts.md). Colour and ink come from the chart tokens and nothing
@@ -4763,7 +4763,7 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 .ck-tip-n { margin-top: var(--space-4); color: color-mix(in oklab, var(--chart-tip-fg) 74%, transparent); }
 
 /* The legend as buttons: hover or focus previews a series, a click pins it. */
-.ck-leg { appearance: none; background: none; border: 0; margin: 0; padding: var(--space-2) var(--space-6); font: inherit; color: inherit; cursor: pointer; border-radius: var(--r-xs); transition: opacity var(--dur-base) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.ck-leg { appearance: none; background: none; border: 0; margin: 0; padding: var(--space-2) var(--space-6); font-family: inherit; line-height: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: var(--r-xs); transition: opacity var(--dur-base) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .ck-leg:hover { background: var(--bg-2); }
 .ck-leg[aria-pressed="true"] { background: var(--bg-2); box-shadow: inset 0 0 0 var(--bw-strong) var(--chart-axis); }
 .ck-focused .ck-leg:not(.ck-sel) { opacity: var(--chart-dim); }
@@ -4782,8 +4782,20 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
   :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .ck-drawn { animation: ck-draw 900ms var(--ease-out) backwards; }
   :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .ck-fadein { animation: ck-fade var(--dur-slower) var(--ease-out) 500ms backwards; }
 }
+/* The colour key under a heat map, in HTML so it wraps. */
+.ck-scale { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-12); margin-top: var(--space-10); }
+.ck-steps { display: inline-flex; gap: var(--space-2); }
+.ck-steps .ck-sw { display: block; width: 14px; height: 10px; border-radius: var(--r-2xs); }
+.ck-off { display: inline-block; width: 14px; height: 10px; border-radius: var(--r-2xs); vertical-align: -1px; background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); }
+.ck-scale-note { color: var(--chart-annot); }
+.ck-ring-annot { fill: var(--chart-annot); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
+.ck-keyline { display: inline-block; width: 18px; height: 3px; border-radius: var(--r-2xs); vertical-align: 3px; background: var(--c, var(--chart-1)); }
+.ck-keyghost { background: var(--chart-axis); opacity: .7; }
+.ck-keybar { display: inline-block; width: 6px; height: 11px; border-radius: var(--r-2xs); vertical-align: -1px; background: var(--chart-other); }
+/* The calendar is a year wide: on a phone it keeps a readable size and scrolls inside its card. */
+.cal-svg { display: block; width: 100%; height: auto; min-width: 560px; }
+.cal-slot { min-height: 150px; }
 /* /charts */
-.viz-table .viz-swatch { margin-right: var(--space-4); vertical-align: baseline; }
 /* The dawn chorus: the ring chart, then which ring is which bird. */
 .dc-polar-col { display: flex; flex-direction: column; align-items: center; gap: var(--space-12); width: 100%; }
 .dc-key-note  { text-align: center; }
@@ -5901,7 +5913,7 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 /* The bird-identifying model: one status, one button. */
 .cls-panel { display: grid; gap: var(--space-8); border-inline-start: 3px solid var(--border-2); padding-inline-start: var(--space-12); }
 .cls-panel[data-tone="ok"]   { border-inline-start-color: var(--moss); }
-.cls-panel[data-tone="warn"] { border-inline-start-color: var(--dawn); }
+.cls-panel[data-tone="warn"] { border-inline-start-color: var(--warning); }
 .cls-panel[data-tone="bad"]  { border-inline-start-color: var(--rare); }
 .cls-panel[data-tone="info"] { border-inline-start-color: var(--info); }
 .cls-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
