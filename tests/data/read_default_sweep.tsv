@@ -83,10 +83,6 @@ fail-closed	crates/birdnet-web/src/routes/auth_pages.rs	open_bypass_redirect	let
 not-a-read	crates/birdnet-web/src/routes/charts.rs	civil_dawn_minute	ok	conn.query_row( "SELECT date(?1, 'unixepoch', 'localtime'), CAST(strftime('%H', ?1, 'unixepoch', 'localtime') 
 task-panic	crates/birdnet-web/src/routes/dashboard_image.rs	block_for	unwrap_or	tokio::task::spawn_blocking(move || stat(&path)) .await .unwrap_or(Stat::Unusable("the check did not finish"))
 decoration	crates/birdnet-web/src/routes/dashboard_image.rs	load	match-err	match birdnet_db::settings::get(conn, key) { Err .. }
-not-a-read	crates/birdnet-web/src/routes/dashboard_image.rs	serve_image	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || read_picture(&path)).await
-handled	crates/birdnet-web/src/routes/dynamic_thresholds.rs	list	match-err	match snapshot(state, now_ms) { Err .. }
-handled	crates/birdnet-web/src/routes/dynamic_thresholds.rs	one	match-err	match snapshot(state, epoch_ms()) { Err .. }
-handled	crates/birdnet-web/src/routes/dynamic_thresholds.rs	stats	match-err	match snapshot(state, epoch_ms()) { Err .. }
 setting-default	crates/birdnet-web/src/routes/export/ebird.rs	export_ebird	unwrap_or_default	birdnet_db::settings::get_or(conn, "site_name", "").unwrap_or_default()
 setting-default	crates/birdnet-web/src/routes/export/ebird.rs	export_ebird	unwrap_or_default	birdnet_db::settings::get_or(conn, "station_name", "").unwrap_or_default()
 setting-default	crates/birdnet-web/src/routes/export/ebird.rs	setting_f64	ok	birdnet_db::settings::get_or(conn, key, "") .ok()
@@ -120,7 +116,6 @@ handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || render_thread(&st, &date, &time, &sci_name, None)) .await .unwrap_or_else(
 decoration	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	unwrap_or_default	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
 task-panic	crates/birdnet-web/src/routes/pages/health.rs	station_health_line_partial	unwrap_or_default	tokio::task::spawn_blocking(move || {
-handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| weekly_heatmap(conn, days)) .ok()
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) }) .ok()
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| species_sparklines(conn, days)) .ok()
 handled	crates/birdnet-web/src/routes/pages/migration.rs	stats_partial	ok	s.with_read_db(|conn| stats_fragment(conn, &today, s.names())) .ok()
@@ -178,6 +173,7 @@ setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or	birdnet
 setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or_else	birdnet_db::settings::get_or(conn, key, &default.to_string()) .unwrap_or_else(|_| default.to_string())
 handled	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { birdnet_integrations::auto_update::check_for_update(current_versio
 not-a-read	src/app.rs	serve	ok	conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0)) .ok()
+task-panic	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { integrations::with_persisted_blur_seed(client, data_dir.as_deref()
 handled	src/capture/sources.rs	resolve_sources_from_db	ok	AudioSourceStore::list(conn).ok()
 handled	src/capture/sources.rs	seed_sources_from_config	match-err	match state.with_db(|conn| conn.insert(&new)) { Err .. }
 handled	src/daemon/duplicate.rs	reread	match-err	match state.with_db(birdnet_db::sqlite::get_species_interval_map) { Err .. }
@@ -235,11 +231,9 @@ setting-default	crates/birdnet-web/src/routes/admin/migration/clip_import.rs	set
 handled	crates/birdnet-web/src/routes/admin/migration/clip_import.rs	run_handler	match-err	match setup_state .with_db(|conn| clips::protect_imported(conn, &setup.protected, true)) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/migration/conf_import.rs	apply_with_file	match-err	match apply(conn, assignments) { Err .. }
 omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
-not-a-read	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| { conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0)) }
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_hourly_totals	ok	state.with_read_db(|conn| hourly_totals(conn, days)).ok()
 omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
 setting-default	src/helpers/migrate_cli.rs	settings_of	unwrap_or_default	birdnet_db::settings::list(conn, None) .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect()) .unwr
-not-a-read	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	compute_ts_diversity	ok	state .with_read_db(|conn| { conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0)) }
 omitted	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	listened_for	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, first, last)) .ok()
 omitted	crates/birdnet-web/src/routes/admin/audio.rs	count_oobs	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/audio.rs	listen_default	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
@@ -250,10 +244,8 @@ omitted	crates/birdnet-web/src/routes/pages/species_pages.rs	species_daily_parti
 omitted	crates/birdnet-web/src/routes/pages/species_pages.rs	species_year_partial	ok	super::listening::effort_by_date(conn, &a.date, &b.date).ok()
 omitted	crates/birdnet-web/src/routes/pages/year_in_review.rs	content	ok	super::listening::effort_by_date(conn, &start, &today).ok()
 handled	crates/birdnet-web/src/routes/weather.rs	for_detection	match-err	match hour_row(state, &day, hour) { Err .. }
-handled	crates/birdnet-web/src/routes/weather.rs	for_detection	match-err	match state.with_read_db(|c| { birdnet_db::sqlite::detected_at_utc_for(c, &date, &time, &sci) }) { Err .. }
 handled	crates/birdnet-web/src/routes/weather.rs	hourly_day	match-err	match day_rows(state, &date) { Err .. }
 handled	crates/birdnet-web/src/routes/weather.rs	hourly_hour	match-err	match hour_row(state, &date, hour) { Err .. }
-handled	crates/birdnet-web/src/routes/weather.rs	latest	match-err	match state.with_read_db(|c| c.latest()) { Err .. }
 not-a-read	crates/birdnet-web/src/routes/admin/https.rs	download_ca	match-err	match state.run_blocking(move |_| std::fs::read(&path)).await { Err .. }
 omitted	crates/birdnet-web/src/routes/pages/dawn_chorus.rs	sky_over	unwrap_or	super::civil_twilight_local(conn).unwrap_or((None, None))
 handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	state .with_read_db(|conn| { let ridges = collect_ridges(conn, year, MAX_RIDGES)?; let diversity = weekly_dive
