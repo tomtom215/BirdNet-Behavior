@@ -3,18 +3,14 @@
 //! Produces inline SVG for embedding directly in HTMX partial responses.
 //! All functions return a `String` that can be inserted directly into HTML.
 
-use std::fmt::Write as _;
 
-/// Render an SVG bar chart for hourly detection counts (0–23).
+/// Render a column chart for hourly detection counts (0–23): a bar an hour on an axis from
+/// zero, the busiest hour labelled, a tooltip for every hour (including the empty ones).
 ///
-/// Returns a "no data" message if all counts are zero.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
-)]
-pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> String {
+/// `id` names the chart on its page (its gradients and its entrance animation are keyed by
+/// it, so two charts on one page need two ids). Returns a "no data" message if all counts
+/// are zero. The drawing is [`super::viz::bars::hourly`].
+pub(crate) fn render_hourly_chart(id: &str, hours: &[birdnet_db::sqlite::HourlyCount]) -> String {
     let mut counts = [0_i64; 24];
     for h in hours {
         if let Ok(hour) = h.hour.parse::<usize>()
@@ -27,144 +23,94 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
     if counts.iter().all(|&c| c == 0) {
         return r#"<p class="cht-empty">No detections today yet.</p>"#.to_string();
     }
-
-    let max_count = counts.iter().copied().max().unwrap_or(1).max(1);
-    let chart_w = 700;
-    // Room above the tallest bar for its count, as in `render_daily_chart`.
-    let top = 12;
-    let chart_h = 120;
-    let bar_w = 25;
-    let gap = 4;
-    let left_pad = 5;
-
-    let mut svg = format!(
-        r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
-        svg_w = chart_w,
-        svg_h = top + chart_h + 20,
-    );
-
-    for (i, &count) in counts.iter().enumerate() {
-        let x = left_pad + i as i32 * (bar_w + gap);
-        let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
-        let y = top + chart_h - bar_h;
-        let color = if count > 0 {
-            "var(--chart-1)"
-        } else {
-            "var(--surface-2)"
-        };
-
-        let _ = write!(
-            svg,
-            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="{color}"/>"#,
-        );
-
-        if count > 0 {
-            let _ = write!(
-                svg,
-                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="9" font-family="sans-serif">{count}</text>"#,
-                tx = x + bar_w / 2,
-                ty = y - 3,
-            );
-        }
-
-        if i % 3 == 0 {
-            let _ = write!(
-                svg,
-                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="9" font-family="sans-serif">{i:02}</text>"#,
-                tx = x + bar_w / 2,
-                ty = top + chart_h + 14,
-            );
-        }
-    }
-
-    svg.push_str("</svg>");
-    svg
+    super::viz::bars::hourly(&super::viz::bars::Hourly {
+        id,
+        name: "Detections by hour of the day",
+        desc: "Detections for each hour of the day; the busiest hour is labelled and every hour has a tooltip.",
+        unit: "detections",
+        counts,
+        fill: super::viz::bars::Fill::Slot(0),
+        width: 700.0,
+        plot_h: 120.0,
+        solar: None,
+        now_h: None,
+        top: None,
+        temps: &[],
+        table: false,
+    })
 }
 
-/// Render an SVG bar chart for daily detection counts.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
-)]
-pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> String {
+/// Render a column chart for daily detection counts: a bar a day on an axis from zero, the
+/// busiest day labelled, the average as a hairline, a tooltip for every day.
+///
+/// A run of days is drawn as a run of days: a day with no row is a zero between the first
+/// date and `end` (today), not a gap the bars close over. `effort` is the station's
+/// recording-effort ledger for those dates (see `pages::listening`): a day with no audio in
+/// it is hatched and says so; `None`, or a ledger with nothing in the period, claims nothing.
+pub(crate) fn render_daily_chart(
+    id: &str,
+    days: &[birdnet_db::sqlite::DailyCount],
+    end: Option<&str>,
+    effort: Option<&std::collections::BTreeMap<String, f64>>,
+) -> String {
     if days.is_empty() {
         return r#"<p class="cht-empty">No detection data yet.</p>"#.to_string();
     }
-
-    let max_count = days.iter().map(|d| d.count).max().unwrap_or(1).max(1);
-    // Room above the tallest bar for its count. Without it the label sat at
-    // y = -3, outside the viewBox, so the busiest day — the one a reader
-    // looks for — was the one whose number never showed.
-    let top = 12;
-    let chart_h = 100;
-    let bar_w = 32;
-    let gap = 6;
-    let left_pad = 5;
-    // Derived from the data, not fixed. This used to be a hard-coded 280 while
-    // `x` stepped by `bar_w + gap` per day, so the caller's 14-day request drew
-    // six bars outside the viewBox and the browser clipped them without a word.
-    // The SVG carries no intrinsic width, so `.bnb-card svg { max-width: 100% }`
-    // scales whatever we declare here down into the card.
-    let chart_w = left_pad + days.len() as i32 * (bar_w + gap);
-
-    let mut svg = format!(
-        r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
-        svg_w = chart_w,
-        svg_h = top + chart_h + 22,
-    );
-
-    for (i, day) in days.iter().enumerate() {
-        let x = left_pad + i as i32 * (bar_w + gap);
-        let bar_h = (day.count as f64 / max_count as f64 * chart_h as f64) as i32;
-        let y = top + chart_h - bar_h;
-
-        let _ = write!(
-            svg,
-            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="var(--chart-1)"/>"#,
-        );
-
-        if day.count > 0 {
-            let _ = write!(
-                svg,
-                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="9" font-family="sans-serif">{count}</text>"#,
-                tx = x + bar_w / 2,
-                ty = y - 3,
-                count = day.count,
-            );
-        }
-
-        let date_label = day.date.get(5..).unwrap_or(&day.date);
-        let _ = write!(
-            svg,
-            r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="8" font-family="sans-serif">{label}</text>"#,
-            tx = x + bar_w / 2,
-            ty = top + chart_h + 14,
-            label = super::escape_html(date_label),
-        );
-    }
-
-    svg.push_str("</svg>");
-    svg
+    let filled = fill_days(days, end);
+    let dates: Vec<String> = filled.iter().map(|d| d.0.clone()).collect();
+    let today = dates.last().cloned().unwrap_or_default();
+    let listened = effort.and_then(|e| super::listening::listened_on(e, &dates, &today));
+    super::viz::bars::daily(&super::viz::bars::Daily {
+        id,
+        name: "Detections by day",
+        desc: "Detections for each day; the busiest day is labelled, the average is a thin line and every day has a tooltip.",
+        unit: "detections",
+        days: &filled,
+        slot: 0,
+        width: 700.0,
+        plot_h: 110.0,
+        listened: listened.as_deref(),
+        mean_line: true,
+        future_from: None,
+        weekday_labels: false,
+        table: false,
+    })
 }
 
-/// Render an SVG horizontal bar chart for confidence distribution.
+/// One `(date, count)` per calendar day from the first date to `end` (or the last date),
+/// with zero for a day that has no row. Rows that are not dates are kept as they came.
+pub(crate) fn fill_days(days: &[birdnet_db::sqlite::DailyCount], end: Option<&str>) -> Vec<(String, i64)> {
+    use super::viz::kit::{epoch_day, shift_date};
+    let first = days.first().and_then(|d| epoch_day(&d.date));
+    let last_row = days.last().and_then(|d| epoch_day(&d.date));
+    let last = end.and_then(epoch_day).into_iter().chain(last_row).max();
+    let (Some(first), Some(last)) = (first, last) else {
+        return days.iter().map(|d| (d.date.clone(), d.count)).collect();
+    };
+    // A station that has run for years must not be asked for a thousand bars by a bad row.
+    if last - first > 400 {
+        return days.iter().map(|d| (d.date.clone(), d.count)).collect();
+    }
+    let by_date: std::collections::HashMap<&str, i64> = days.iter().map(|d| (d.date.as_str(), d.count)).collect();
+    (first..=last)
+        .filter_map(|day| {
+            let (y, m, d) = shift_date("1970-01-01", day)?;
+            let iso = format!("{y:04}-{m:02}-{d:02}");
+            let n = by_date.get(iso.as_str()).copied().unwrap_or(0);
+            Some((iso, n))
+        })
+        .collect()
+}
+
+/// Render a horizontal bar chart for confidence distribution.
 ///
 /// Buckets: `[0-50%, 50-60%, 60-70%, 70-80%, 80-90%, 90-100%]`.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
-)]
 pub(crate) fn render_confidence_chart(buckets: &[i64; 6], floor: f64) -> String {
     let total: i64 = buckets.iter().sum();
     if total == 0 {
         return r#"<p class="cht-empty">No detection data yet.</p>"#.to_string();
     }
 
-    let max_count = buckets.iter().copied().max().unwrap_or(1).max(1);
     let labels = ["<50%", "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"];
     // Coloured by the one confidence rule (`pages::confidence`), at the middle
     // of each bucket, and grey below the station's own cut-off. This used to be
@@ -173,65 +119,30 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6], floor: f64) -> String 
     // here and a different colour on every other page for the same bird, and the
     // alarm red was spent on detections the station had accepted.
     let cut = f64::from(crate::routes::pages::confidence::cutoff_percent(floor));
-    let colors: Vec<String> = [45.0_f64, 55.0, 65.0, 75.0, 85.0, 95.0]
+    let rows: Vec<super::viz::bars::Row<'_>> = [45.0_f64, 55.0, 65.0, 75.0, 85.0, 95.0]
         .iter()
-        .map(|&mid| {
-            if mid < cut {
+        .zip(labels)
+        .zip(buckets)
+        .map(|((&mid, label), &count)| super::viz::bars::Row {
+            label,
+            count,
+            fill: if mid < cut {
                 "var(--fg-4)".to_string()
             } else {
                 format!(
                     "var(--conf-{})",
                     crate::routes::pages::confidence::tier_of_percent(mid, floor).class()
                 )
-            }
+            },
         })
         .collect();
-
-    let bar_h = 18;
-    let gap = 6;
-    let label_w = 55;
-    let chart_w = 280;
-    let max_bar_w = chart_w - label_w - 40;
-    let svg_h = 6 * (bar_h + gap);
-
-    let mut svg = format!(
-        r#"<svg viewBox="0 0 {chart_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
-    );
-
-    for (i, (&count, (&label, color))) in buckets
-        .iter()
-        .zip(labels.iter().zip(colors.iter()))
-        .enumerate()
-    {
-        let y = i as i32 * (bar_h + gap);
-        let bar_w = if max_count > 0 {
-            (count as f64 / max_count as f64 * max_bar_w as f64) as i32
-        } else {
-            0
-        };
-
-        let _ = write!(
-            svg,
-            r#"<text x="{lx}" y="{ly}" text-anchor="end" fill="var(--fg-3)" font-size="10" font-family="sans-serif" dominant-baseline="middle">{label}</text>"#,
-            lx = label_w - 4,
-            ly = y + bar_h / 2,
-        );
-        let _ = write!(
-            svg,
-            r#"<rect x="{label_w}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="{color}"/>"#,
-        );
-        if count > 0 {
-            let _ = write!(
-                svg,
-                r#"<text x="{tx}" y="{ty}" fill="var(--fg-3)" font-size="9" font-family="sans-serif" dominant-baseline="middle">{count}</text>"#,
-                tx = label_w + bar_w + 4,
-                ty = y + bar_h / 2,
-            );
-        }
-    }
-
-    svg.push_str("</svg>");
-    svg
+    super::viz::bars::distribution(
+        "confidence",
+        "Detections by confidence",
+        "How many detections fall in each confidence band; bands below the station's cut-off are grey.",
+        "detections",
+        &rows,
+    )
 }
 
 #[cfg(test)]
@@ -240,13 +151,13 @@ mod tests {
 
     #[test]
     fn hourly_chart_empty() {
-        let r = render_hourly_chart(&[]);
+        let r = render_hourly_chart("t", &[]);
         assert!(r.contains("No detections today"));
     }
 
     #[test]
     fn daily_chart_empty() {
-        let r = render_daily_chart(&[]);
+        let r = render_daily_chart("t", &[], None, None);
         assert!(r.contains("No detection data"));
     }
 
@@ -259,7 +170,7 @@ mod tests {
     #[test]
     fn confidence_chart_all_labels() {
         let svg = render_confidence_chart(&[5, 10, 20, 30, 25, 15], 0.70);
-        assert!(svg.contains("<50%"));
+        assert!(svg.contains("&lt;50%"), "{svg}");
         assert!(svg.contains("90-100%"));
     }
 
@@ -271,9 +182,12 @@ mod tests {
     fn the_confidence_chart_uses_the_one_confidence_rule() {
         let fills = |floor: f64| -> Vec<String> {
             render_confidence_chart(&[5, 10, 20, 30, 25, 15], floor)
-                .split("rx=\"2\" fill=\"")
+                .split(r#"<path d=""#)
                 .skip(1)
-                .map(|s| s.split('"').next().unwrap_or("").to_string())
+                .map(|s| {
+                    let rest = s.split_once(r#" fill=""#).expect("a bar has a fill").1;
+                    rest.split('"').next().unwrap_or("").to_string()
+                })
                 .collect()
         };
         // Cut-off 70: buckets mid 45/55/65 are below it; 75 is within ten points
@@ -306,148 +220,114 @@ mod tests {
             !svg.contains("var(--rare)"),
             "the alarm colour is not a bucket"
         );
+    
     }
 
-    /// Extract `(x, width)` for every `<rect>` that carries an explicit `x`.
+    /// The x-extent `(left, right)` of every painted bar: the first `M` and the last `L` of its path.
+    fn bar_spans(svg: &str) -> Vec<(f64, f64)> {
+        svg.split(r#"<path class="ck-grow" d=""#)
+            .skip(1)
+            .map(|frag| {
+                let d = frag.split('"').next().expect("a path");
+                let nums = |seg: &str| -> Vec<f64> {
+                    seg.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+                        .filter_map(|t| t.parse().ok())
+                        .collect()
+                };
+                let xs: Vec<f64> = d.split(['M', 'L', 'Q', ' ']).filter(|t| t.contains(',')).filter_map(|t| nums(t).first().copied()).collect();
+                (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+            })
+            .collect()
+    }
+
+    fn view_box(svg: &str) -> (f64, f64, f64, f64) {
+        let vb = svg.split_once("viewBox=\"").expect("viewBox").1.split_once('"').expect("end").0;
+        let v: Vec<f64> = vb.split_whitespace().map(|t| t.parse().expect("number")).collect();
+        (v[0], v[1], v[2], v[3])
+    }
+
+    fn daily(n: usize, f: impl Fn(usize) -> i64) -> Vec<birdnet_db::sqlite::DailyCount> {
+        (0..n)
+            .map(|i| birdnet_db::sqlite::DailyCount {
+                date: super::super::viz::kit::shift_date("2026-01-01", i as i64)
+                    .map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"))
+                    .expect("a date"),
+                count: f(i),
+            })
+            .collect()
+    }
+
+    /// Every bar `render_daily_chart` draws is inside the `viewBox` it declares, for one
+    /// day and for ninety.
     ///
-    /// The background rect, where one exists, has no `x`, so it is skipped and
-    /// only the data bars are returned.
-    fn bar_boxes(svg: &str) -> Vec<(i64, i64)> {
-        let mut out = Vec::new();
-        for frag in svg.split("<rect ").skip(1) {
-            let attr = |name: &str| -> Option<i64> {
-                let key = format!("{name}=\"");
-                let rest = frag.split_once(&key)?.1;
-                rest.split_once('"')?.0.parse().ok()
-            };
-            if let (Some(x), Some(w)) = (attr("x"), attr("width")) {
-                out.push((x, w));
-            }
-        }
-        out
-    }
-
-    fn view_box_width(svg: &str) -> i64 {
-        let vb = svg
-            .split_once("viewBox=\"")
-            .expect("chart has a viewBox")
-            .1
-            .split_once('"')
-            .expect("viewBox is terminated")
-            .0;
-        vb.split_whitespace()
-            .nth(2)
-            .expect("viewBox has a width")
-            .parse()
-            .expect("viewBox width is an integer")
-    }
-
-    /// Every bar `render_daily_chart` draws must fit inside the `viewBox` it
-    /// declares.
-    ///
-    /// Observed failing against the pre-fix renderer, which hard-coded
-    /// `chart_w = 280` regardless of how many days it was handed while
-    /// stepping `x` by `bar_w + gap` = 38 per day. The caller
-    /// (`species_pages::species_daily_partial`) asks for 14 days, so bar 7
-    /// ended at x = 303 and bars 8..=13 started at 309..=537 — entirely
-    /// outside the 280-wide viewBox. A species heard on nine or more distinct
-    /// days silently lost its most recent week, and the skeleton it replaced
-    /// (`skeletons::trend_line`) draws 14 bars, so the card visibly shrank on
-    /// swap. With `n = 14` the old code failed this at the first bar past
-    /// index 6; `n = 1` and `n = 7` passed even then, which is why only the
-    /// 14-day case proves the fix.
+    /// Observed failing against the pre-fix renderer, which hard-coded `chart_w = 280`
+    /// regardless of how many days it was handed while stepping `x` by 38 a day: the
+    /// 14-day species chart lost its most recent week outside the box. Kept for the new
+    /// renderer because the failure is one of arithmetic and could come back with any
+    /// change to the slot width.
     #[test]
     fn daily_chart_bars_fit_inside_their_view_box() {
         for n in [1_usize, 2, 7, 14, 30, 90] {
-            let days: Vec<_> = (0..n)
-                .map(|i| birdnet_db::sqlite::DailyCount {
-                    date: format!("2026-01-{:02}", (i % 28) + 1),
-                    count: i64::try_from(i % 17).unwrap_or(0) + 1,
-                })
-                .collect();
-            let svg = render_daily_chart(&days);
-            let vb_w = view_box_width(&svg);
-            let boxes = bar_boxes(&svg);
-            assert_eq!(boxes.len(), n, "n = {n}: every day must draw a bar");
-            for (i, (x, w)) in boxes.iter().enumerate() {
-                assert!(
-                    x + w <= vb_w,
-                    "n = {n}: bar {i} spans {x}..{} but the viewBox is only {vb_w} wide",
-                    x + w
-                );
-                assert!(*x >= 0, "n = {n}: bar {i} starts at a negative x ({x})");
+            let days = daily(n, |i| i64::try_from(i % 17).unwrap_or(0) + 1);
+            let svg = render_daily_chart("t", &days, None, None);
+            let (vx, _, vw, _) = view_box(&svg);
+            let spans = bar_spans(&svg);
+            assert_eq!(spans.len(), n, "n = {n}: every day must draw a bar");
+            for (i, (l, r)) in spans.iter().enumerate() {
+                assert!(*l >= vx && *r <= vx + vw, "n = {n}: bar {i} spans {l}..{r} but the viewBox is {vx}..{}", vx + vw);
             }
         }
     }
 
-    /// The same for the hour-of-day chart. Observed failing before the top
-    /// margin: y = -3.
-    #[test]
-    fn the_busiest_hours_count_is_drawn_inside_the_chart() {
-        let hours: Vec<_> = [("06", 2_i64), ("07", 7)]
-            .into_iter()
-            .map(|(hour, count)| birdnet_db::sqlite::HourlyCount {
-                hour: hour.into(),
-                count,
-            })
-            .collect();
-        let svg = render_hourly_chart(&hours);
-        let label = svg
-            .split("<text ")
-            .find(|t| t.contains(">7</text>"))
-            .expect("the busiest hour is labelled");
-        let y: i32 = label
-            .split("y=\"")
-            .nth(1)
-            .and_then(|r| r.split('"').next())
-            .and_then(|v| v.parse().ok())
-            .expect("label has a y");
-        assert!(y >= 9, "the label's baseline is at y = {y}");
-    }
-
-    /// The count over the tallest bar is inside the viewBox, with room for
-    /// its 9-unit glyphs. Observed failing before the top margin: y = -3.
-    #[test]
-    fn the_tallest_bars_count_is_drawn_inside_the_chart() {
-        let days: Vec<_> = (1..=3)
-            .map(|i| birdnet_db::sqlite::DailyCount {
-                date: format!("2026-01-{i:02}"),
-                count: i,
-            })
-            .collect();
-        let svg = render_daily_chart(&days);
-        let label = svg
-            .split("<text ")
-            .find(|t| t.contains(">3</text>"))
-            .expect("the tallest bar is labelled");
-        let y: i32 = label
-            .split("y=\"")
-            .nth(1)
-            .and_then(|r| r.split('"').next())
-            .and_then(|v| v.parse().ok())
-            .expect("label has a y");
-        assert!(y >= 9, "the label's baseline is at y = {y}");
-    }
-
-    /// The counterpart to the gate above: proving bars *fit* is worthless if
-    /// the renderer could satisfy it by drawing them on top of each other.
+    /// The counterpart: proving bars *fit* is worthless if the renderer could satisfy it
+    /// by drawing them on top of each other.
     #[test]
     fn daily_chart_bars_do_not_overlap() {
-        let days: Vec<_> = (0..14)
-            .map(|i| birdnet_db::sqlite::DailyCount {
-                date: format!("2026-01-{:02}", i + 1),
-                count: 5,
-            })
-            .collect();
-        let boxes = bar_boxes(&render_daily_chart(&days));
-        for pair in boxes.windows(2) {
-            let (x0, w0) = pair[0];
-            let (x1, _) = pair[1];
-            assert!(
-                x1 >= x0 + w0,
-                "bar at {x1} overlaps the one ending at {}",
-                x0 + w0
-            );
+        let svg = render_daily_chart("t", &daily(14, |_| 5), None, None);
+        let spans = bar_spans(&svg);
+        assert_eq!(spans.len(), 14);
+        for pair in spans.windows(2) {
+            assert!(pair[1].0 >= pair[0].1, "bar at {} overlaps the one ending at {}", pair[1].0, pair[0].1);
         }
+    }
+
+    /// The busiest bar's number is inside the drawing, with room for its glyphs, however
+    /// tall the bar. (The first version of this chart wrote it at y = -3, outside the box,
+    /// so the busiest day, the one a reader looks for, was the one whose number never showed.)
+    #[test]
+    fn the_busiest_count_is_drawn_inside_the_chart() {
+        for (name, svg) in [
+            ("daily", render_daily_chart("t", &daily(3, |i| i64::try_from(i).unwrap_or(0) + 1), None, None)),
+            ("hourly", render_hourly_chart("t", &[birdnet_db::sqlite::HourlyCount { hour: "06".into(), count: 2 }, birdnet_db::sqlite::HourlyCount { hour: "07".into(), count: 7 }])),
+        ] {
+            let (_, vy, _, vh) = view_box(&svg);
+            let label = svg.split("<text ").find(|t| t.contains("ck-annot ck-halo")).unwrap_or_else(|| panic!("{name}: the busiest is labelled"));
+            let y: f64 = label.split("y=\"").nth(1).and_then(|r| r.split('"').next()).and_then(|v| v.parse().ok()).expect("label has a y");
+            assert!(y - 10.0 >= vy && y <= vy + vh, "{name}: the label's baseline y = {y} leaves no room in {vy}..{}", vy + vh);
+        }
+    }
+
+    /// A run of days is a run of days: a day with no row is a zero, and the run reaches today.
+    #[test]
+    fn days_without_a_row_are_zeros_and_the_run_reaches_today() {
+        let rows = vec![
+            birdnet_db::sqlite::DailyCount { date: "2026-10-15".into(), count: 4 },
+            birdnet_db::sqlite::DailyCount { date: "2026-10-17".into(), count: 9 },
+        ];
+        let f = fill_days(&rows, Some("2026-10-19"));
+        assert_eq!(
+            f,
+            vec![("2026-10-15".to_string(), 4), ("2026-10-16".to_string(), 0), ("2026-10-17".to_string(), 9), ("2026-10-18".to_string(), 0), ("2026-10-19".to_string(), 0)]
+        );
+        // An end date earlier than the data, or not a date, does not truncate or invent.
+        assert_eq!(fill_days(&rows, Some("2026-10-01")).len(), 3);
+        assert_eq!(fill_days(&rows, Some("not a date")).len(), 3);
+    }
+
+    /// A row that is not a date (an import) is carried as it came, not dropped.
+    #[test]
+    fn a_row_that_is_not_a_date_is_kept() {
+        let rows = vec![birdnet_db::sqlite::DailyCount { date: "garbage".into(), count: 3 }];
+        assert_eq!(fill_days(&rows, Some("2026-10-19")), vec![("garbage".to_string(), 3)]);
     }
 }

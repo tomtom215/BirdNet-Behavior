@@ -11,7 +11,7 @@ use axum::Router;
 
 use super::atoms::avatar;
 use super::{
-    date_to_epoch_days, days_to_date, escape_html, group_thousands, simple_url_encode,
+    escape_html, group_thousands, simple_url_encode,
     today_date_string,
 };
 use crate::state::AppState;
@@ -53,12 +53,15 @@ pub(super) async fn content(state: AppState) -> String {
             // 1000 is more species than any station has heard.
             let top = birdnet_db::sqlite::weekly_top_species(conn, &start, &today, 1000)?;
             let new = birdnet_db::sqlite::weekly_new_species(conn, &start, &today)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new))
+            // When the station was listening, so a day it was off is not a quiet one in the
+            // calendar. Unreadable means unknown, which draws nothing.
+            let effort = super::listening::effort_by_date(conn, &start, &today).ok();
+            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new, effort))
         })
     })
     .await;
 
-    let (today, daily, top, new) = match result {
+    let (today, daily, top, new, effort) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "year in review: query failed");
@@ -70,17 +73,13 @@ pub(super) async fn content(state: AppState) -> String {
         }
     };
 
-    render_content(&today, &daily, &top, &new, &names)
+    render_content(&today, &daily, &top, &new, effort.as_ref(), &names)
 }
 
 /// `YYYY-01-01` for the year `today` falls in.
 fn year_start(today: &str) -> String {
     format!("{}-01-01", today.get(0..4).unwrap_or("1970"))
 }
-
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
 
 #[allow(
     clippy::cast_precision_loss,
@@ -93,6 +92,7 @@ fn render_content(
     daily: &[birdnet_db::sqlite::DailyCount],
     top: &[(String, String, i64)],
     new: &[(String, String, String)],
+    effort: Option<&std::collections::BTreeMap<String, f64>>,
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let year = today.get(0..4).unwrap_or("----");
@@ -109,18 +109,6 @@ fn render_content(
             _ => Some(d),
         },
     );
-
-    // One cell per week of the calendar year, from 1 January.
-    let base = date_to_epoch_days(&year_start(today));
-    let mut weeks = [0i64; 53];
-    for dc in daily {
-        let e = date_to_epoch_days(&dc.date);
-        if e >= base {
-            let wk = usize::try_from((e - base) / 7).unwrap_or(0).min(52);
-            weeks[wk] += dc.count;
-        }
-    }
-    let week_max = weeks.iter().copied().max().unwrap_or(1).max(1) as f64;
 
     let mut html = String::with_capacity(8192);
 
@@ -168,46 +156,27 @@ fn render_content(
         busy_date = busiest.map_or_else(|| "—".to_string(), |d| escape_html(&d.date)),
     );
 
-    // ── Year tape ────────────────────────────────────────────────────────
+    // ── The year as a calendar ───────────────────────────────────────────
+    // A cell a day from 1 January to today (not a cell a week: a week hides the day
+    // the yard was loudest, which is the day a reader looks for).
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week</div><h2 class="sh-h">The year in activity</h2></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every day</div><h2 class="sh-h">The year in activity</h2></div></div>"#,
     );
-    html.push_str(r#"<div class="yir-tape">"#);
-    for (wk, &c) in weeks.iter().enumerate() {
-        let intensity = (c as f64 / week_max).clamp(0.0, 1.0);
-        let pct = (intensity * 92.0).round() as i64 + if c > 0 { 8 } else { 0 };
-        let (wy, wm, wd) = days_to_date(base + wk as u64 * 7);
-        let bg = if c > 0 {
-            format!("color-mix(in oklab, var(--moss) {pct}%, var(--surface-2))")
-        } else {
-            "var(--surface-2)".to_string()
-        };
-        let _ = write!(
-            html,
-            r#"<span class="yir-tape-cell" title="Week of {wy:04}-{wm:02}-{wd:02} — {c} detections" data-style="background:{bg};"></span>"#,
-        );
-    }
+    let counts: std::collections::BTreeMap<String, i64> = daily
+        .iter()
+        .filter(|d| d.count > 0)
+        .map(|d| (d.date.clone(), d.count))
+        .collect();
+    html.push_str(&super::viz::heat::calendar(&super::viz::heat::Calendar {
+        id: "year-in-review",
+        from: &year_start(today),
+        to: today,
+        counts: &counts,
+        effort,
+        unit: "detections",
+        name: "Your year in activity",
+    }));
     html.push_str("</div>");
-    // Month labels aligned beneath the tape.
-    html.push_str(r#"<div class="yir-months">"#);
-    let mut prev_month = 0u32;
-    for wk in 0..weeks.len() {
-        let (_, wm, _) = days_to_date(base + wk as u64 * 7);
-        let label = if wm == prev_month {
-            ""
-        } else {
-            prev_month = wm;
-            MONTHS
-                .get((wm.saturating_sub(1)) as usize)
-                .copied()
-                .unwrap_or("")
-        };
-        let _ = write!(
-            html,
-            r#"<span class="bnb-meta mono yir-month">{label}</span>"#,
-        );
-    }
-    html.push_str("</div></div>");
 
     // ── Leaderboard + milestones (two columns) ───────────────────────────
     html.push_str(r#"<div class="yir-cols">"#);
@@ -330,12 +299,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn date_to_epoch_days_known() {
-        assert_eq!(date_to_epoch_days("1970-01-01"), 0);
-        assert!(date_to_epoch_days("2026-05-22") > 20_000);
-    }
-
-    #[test]
     fn render_content_smoke() {
         let daily = vec![birdnet_db::sqlite::DailyCount {
             date: "2026-05-20".into(),
@@ -351,12 +314,28 @@ mod tests {
             &daily,
             &top,
             &[],
+            None,
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("Your year in"));
         assert!(html.contains("rp-stats"));
         assert!(html.contains("Northern Cardinal"));
         assert!(html.contains("leaderboard"));
+        // The year is a calendar, a cell a day from 1 January to today.
+        assert!(html.contains("The year in activity") && html.contains("cal-svg"), "{html}");
+        assert_eq!(html.matches("data-tip=").count(), 142, "1 Jan to 22 May is 142 days");
+    }
+
+    /// The calendar tells a day the station was off from a day it heard nothing, from the
+    /// ledger: here the 21st was listened to and the 19th was not.
+    #[test]
+    fn the_year_calendar_says_which_days_the_station_was_off() {
+        let daily = vec![birdnet_db::sqlite::DailyCount { date: "2026-05-20".into(), count: 30 }];
+        let effort: std::collections::BTreeMap<String, f64> =
+            [("2026-05-20", 86_400.0), ("2026-05-21", 86_400.0)].iter().map(|(d, s)| ((*d).to_string(), *s)).collect();
+        let html = render_content("2026-05-22", &daily, &[], &[], Some(&effort), &birdnet_core::i18n::NameLocalizer::english());
+        assert!(html.contains("Tue 19 May 2026&#10;The station was not listening"), "{html}");
+        assert!(html.contains("Thu 21 May 2026&#10;Listened all day and heard none"), "{html}");
     }
 
     /// Two equal days: the busiest is the first, whatever order a fold meets
@@ -372,6 +351,7 @@ mod tests {
             &[day("2026-03-01"), day("2026-04-01")],
             &[],
             &[],
+            None,
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("2026-03-01 · 5 · the loudest"), "{html}");

@@ -443,7 +443,7 @@ pub(super) async fn hourly_chart_partial(
         Ok(Ok(hours)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_hourly_chart(&hours),
+            render_hourly_chart("dash-hourly", &hours),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -460,15 +460,29 @@ pub(super) async fn hourly_chart_partial(
 pub(super) async fn daily_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
+    let today = crate::routes::pages::today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::daily_counts(conn, 7)?;
+            // The station's own record of when it was listening, so a day it was off is
+            // not drawn as a quiet one. Unreadable means unknown, which draws nothing.
+            let effort = days.first().and_then(|first| {
+                crate::routes::pages::listening::effort_by_date(
+                    conn,
+                    &first.date,
+                    &crate::routes::pages::today_date_string(),
+                )
+                .ok()
+            });
+            Ok::<_, birdnet_db::sqlite::DbError>((days, effort))
+        })
     })
     .await;
     match result {
-        Ok(Ok(days)) => (
+        Ok(Ok((days, effort))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_daily_chart(&days),
+            render_daily_chart("dash-daily", &days, Some(&today), effort.as_ref()),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {

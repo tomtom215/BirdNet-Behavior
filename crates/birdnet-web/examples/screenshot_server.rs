@@ -558,9 +558,7 @@ fn seed(conn: &Connection, today_days: i64) {
     // is the only one whose sunrise lands where its dawn chorus does. The sun lines on
     // Today and the night bands on Patterns are drawn from these two settings.
     let (lat, lon) = (51.4778, -0.0015);
-    for (k, v) in [("latitude", "51.4778"), ("longitude", "-0.0015")] {
-        let _ = birdnet_db::settings::set(conn, k, v, birdnet_db::settings::SettingsCategory::Location);
-    }
+    seed_location(conn);
 
     // Today stops at the clock: a station cannot have heard what has not happened yet,
     // and the Today chart has a "now" marker that would otherwise sit left of its own
@@ -696,6 +694,104 @@ fn seed(conn: &Connection, today_days: i64) {
     seed_notifications(conn, today_days);
     seed_alert_rules(conn);
     seed_thresholds(conn);
+    seed_audio_sources(conn);
+}
+
+/// The station's location, so the sun lines and the night bands draw (see `seed`).
+fn seed_location(conn: &Connection) {
+    for (k, v) in [("latitude", "51.4778"), ("longitude", "-0.0015")] {
+        let _ = birdnet_db::settings::set(conn, k, v, birdnet_db::settings::SettingsCategory::Location);
+    }
+}
+
+/// Profile `empty`: a configured station that has heard nothing yet.
+fn seed_profile_empty(conn: &Connection) {
+    seed_location(conn);
+    seed_audio_sources(conn);
+}
+
+/// Profile `one`: exactly one detection, this morning, and a ledger that says the station
+/// has been listening for a day. Every chart must draw one point honestly.
+fn seed_profile_one(conn: &Connection, today_days: i64) {
+    seed_location(conn);
+    let (y, m, d) = civil_from_days(today_days);
+    let date = format!("{y:04}-{m:02}-{d:02}");
+    let _ = conn.execute(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source, Duration_Secs)
+         VALUES (?1,'06:30:00','Cyanocitta cristata','Blue Jay',0.93,51.4778,-0.0015,0.7,42,1.25,0.0,?2,'local',8.0)",
+        params![date, format!("Blue_Jay-93-{date}-birdnet-local-06:30:00.wav")],
+    );
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, 'local', 86400)",
+        params![date],
+    );
+    seed_audio_sources(conn);
+}
+
+/// Profile `stress`: the shapes that break a chart's layout.
+///
+/// * sixty species, so the streamgraph folds fifty-two of them into one band and the
+///   legend has to wrap;
+/// * names from four letters to sixty-odd characters, so a direct label, a tooltip row
+///   and a legend entry each have to cope with a name that does not fit;
+/// * a full year of days, so the 90-day and 365-day ranges draw 90 and 365 columns;
+/// * an hour yesterday with 1.6 million detections in it, so an axis label, a tooltip
+///   number and a peak annotation are all asked to hold a seven-digit count.
+fn seed_profile_stress(conn: &Connection, today_days: i64) {
+    seed_location(conn);
+    let mut rng = Rng::new(0x57_E55_u64.rotate_left(9) ^ 0x1234_5678);
+    let long_names = [
+        "Extraordinarily Long-named Warbler of the Far Northern Highland Forests",
+        "Black-and-white Striped Tropical Mockingbird Imitator",
+        "Eurasian",
+        "Tit",
+    ];
+    let words = ["Northern", "Southern", "Western", "Eastern", "Common", "Lesser", "Greater", "Spotted", "Crested", "Rufous"];
+    let kinds = ["Warbler", "Sparrow", "Finch", "Thrush", "Wren", "Swift", "Tanager", "Flycatcher", "Bunting", "Vireo"];
+    let mut species: Vec<(String, String)> = Vec::new();
+    for (i, n) in long_names.iter().enumerate() {
+        species.push(((*n).to_string(), format!("Stressus longus{i}")));
+    }
+    for i in 0..56 {
+        species.push((
+            format!("{} {} {}", words[i % 10], kinds[(i / 10 + i) % 10], i / 20 + 1).replace(" 1", ""),
+            format!("Stressus bird{i}"),
+        ));
+    }
+    let tx = conn.unchecked_transaction().expect("txn");
+    for days_ago in 0..365_i64 {
+        let (y, m, d) = civil_from_days(today_days - days_ago);
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        let doy = day_of_year(y, m, d);
+        let season = 0.6 + 0.4 * (std::f64::consts::TAU * (f64::from(doy) - 110.0) / 365.0).cos().abs();
+        for (k, (com, sci)) in species.iter().enumerate() {
+            // A long tail: the first few species are common, the rest are heard now and then.
+            let lambda = 6.0 / (1.0 + k as f64 * 0.35) * season;
+            for _ in 0..poisson(&mut rng, lambda) {
+                let hour = rng.range(4, 21);
+                let (minute, second) = (rng.range(0, 59), rng.range(0, 59));
+                let time = format!("{hour:02}:{minute:02}:{second:02}");
+                let _ = tx.execute(
+                    "INSERT OR IGNORE INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source, Duration_Secs)
+                     VALUES (?1,?2,?3,?4,0.85,51.4778,-0.0015,0.7,?5,1.25,0.0,?6,'local',8.0)",
+                    params![date, time, sci, com, (doy / 7 + 1).min(52), format!("s{k}-{date}-{time}.wav")],
+                );
+            }
+        }
+        let _ = tx.execute(
+            "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, 'local', 86400)",
+            params![date],
+        );
+    }
+    // 1.6 million detections inside one hour yesterday.
+    let (y, m, d) = civil_from_days(today_days - 1);
+    let _ = tx.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1600000)
+         INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source, Duration_Secs)
+         SELECT ?1, printf('06:%02d:%02d', (i / 60) % 60, i % 60), ?3, ?2, 0.9, 51.4778, -0.0015, 0.7, 42, 1.25, 0.0, printf('huge-%d.wav', i), 'local', 8.0 FROM n",
+        params![format!("{y:04}-{m:02}-{d:02}"), species[4].0, species[4].1],
+    );
+    tx.commit().expect("commit stress detections");
     seed_audio_sources(conn);
 }
 
@@ -984,7 +1080,16 @@ async fn main() {
     let today_days = (now / 86_400) as i64;
 
     eprintln!("seeding synthetic dataset…");
-    seed(&conn, today_days);
+    // The charts are graded on the awkward stations too, not only the lived-in one:
+    // `BNB_FIXTURE_PROFILE` = `empty` (nothing heard), `one` (one detection), `stress`
+    // (sixty species with very long names, a year of them, and an hour with 1.6 million
+    // detections in it). Anything else is the usual fixture.
+    match std::env::var("BNB_FIXTURE_PROFILE").unwrap_or_default().as_str() {
+        "empty" => seed_profile_empty(&conn),
+        "one" => seed_profile_one(&conn, today_days),
+        "stress" => seed_profile_stress(&conn, today_days),
+        _ => seed(&conn, today_days),
+    }
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
         .unwrap_or(0);
@@ -1080,6 +1185,72 @@ async fn main() {
     state.set_occurrence_source(std::sync::Arc::new(
         birdnet_web::occurrence::FixedOccurrence::answering(seed_occurrence()),
     ));
+
+    // Opt-in (`BNB_FIXTURE_PARITY=1`): a running tracker with learned levels,
+    // per-species intervals and a TLS setting to draw, for the pictures of the
+    // Learned thresholds, Minimum interval and Secure connection cards. Off by
+    // default so the shared fixture's other pages are unchanged.
+    if std::env::var("BNB_FIXTURE_PARITY").is_ok() {
+        use birdnet_core::detection::dynamic_threshold::{
+            DynamicThresholdConfig, DynamicThresholdHandle,
+        };
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis()),
+        )
+        .unwrap_or(0);
+        let hour = 3_600_000_i64;
+        let learned = |name: &str, level: u8, conf: u32, expires: i64, first: i64, last: i64| {
+            birdnet_db::dynamic_thresholds::LearnedThreshold {
+                sci_name: name.to_owned(),
+                level,
+                confirmations: conf,
+                expires_at_ms: now + expires * hour,
+                first_learned_ms: now - first * hour,
+                last_confirmed_ms: now - last * hour,
+            }
+        };
+        let _ = state.with_db(|c| {
+            birdnet_db::dynamic_thresholds::replace_all(
+                c,
+                &[
+                    learned("Strix aluco", 3, 9, 14, 30, 2),
+                    learned("Turdus merula", 2, 5, 20, 10, 4),
+                    learned("Erithacus rubecula", 1, 2, 2, 20, 22),
+                    learned("Parus major", 1, 1, -3, 30, 27),
+                ],
+            )?;
+            for (sci, secs) in [("Strix aluco", 60), ("Turdus merula", 5), ("Pica pica", 3600)] {
+                birdnet_db::sqlite::set_species_interval(c, sci, secs)?;
+            }
+            Ok::<(), birdnet_db::sqlite::DbError>(())
+        });
+        state.set_dynamic_threshold_handle(std::sync::Arc::new(DynamicThresholdHandle::new(
+            DynamicThresholdConfig {
+                enabled: true,
+                trigger: 0.8,
+                min: 0.25,
+                valid_hours: 24,
+            },
+        )));
+        let mode = std::env::var("BNB_FIXTURE_TLS").unwrap_or_else(|_| "self-signed".into());
+        let dir = std::env::temp_dir().join(format!("bnb-fixture-tls-{}", std::process::id()));
+        let mode = match mode.as_str() {
+            "off" => birdnet_web::tls::TlsMode::Off,
+            "manual" => birdnet_web::tls::TlsMode::Manual,
+            _ => {
+                let _ = birdnet_web::tls::ensure_self_signed(&dir, &["localhost".to_owned()], 397);
+                birdnet_web::tls::TlsMode::SelfSigned
+            }
+        };
+        state.set_https_status(birdnet_web::routes::admin::https::HttpsStatus {
+            mode,
+            https_addr: mode.enabled().then(|| "0.0.0.0:8503".to_owned()),
+            state_dir: dir,
+            waiting_for_clock: false,
+        });
+    }
 
     // The per-source `audio_source_up` gauge is what the dashboard pill, the
     // header badge and the Today rail grade the station on, and the shipped

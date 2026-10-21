@@ -47,38 +47,27 @@ pub(crate) enum Ramp {
     Moss,
 }
 
-/// The scale printed under a heat map: the step swatches with the counts they start at.
-fn scale_legend(ramp: Ramp, max: f64, x: f64, y: f64, unit_word: &str) -> String {
-    let mut s = String::new();
-    let sw = 14.0;
-    let _ = write!(
-        s,
-        r#"<text class="ck-lbl" x="{x:.1}" y="{ty:.1}" font-size="10">Fewer</text>"#,
-        ty = y + 9.0
-    );
-    let start = x + kit::text_width("Fewer", 10.0) + 8.0;
+/// The scale printed under a heat map, as HTML (so it wraps and never competes with the
+/// chart's own text for room): the step swatches, what they stand for in counts, and
+/// whatever else the chart wants to say beside it (`extra` is escaped here).
+fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listening: bool) -> String {
+    let mut s = String::from(r#"<div class="ck-scale"><span class="bnb-meta">Fewer</span><span class="ck-steps" aria-hidden="true">"#);
     for k in 1..=7_usize {
-        let _ = write!(
-            s,
-            r#"<rect class="ck-fill {c}" x="{x:.1}" y="{y:.1}" width="{sw}" height="11" rx="3"/>"#,
-            c = step_class(ramp, k),
-            x = start + (k - 1) as f64 * (sw + 2.0),
-        );
+        let _ = write!(s, r#"<i class="ck-sw {}"></i>"#, step_class(ramp, k));
     }
-    let end = start + 7.0 * (sw + 2.0) + 4.0;
     let _ = write!(
         s,
-        r#"<text class="ck-lbl" x="{end:.1}" y="{ty:.1}" font-size="10">More</text>"#,
-        ty = y + 9.0
-    );
-    // What step 4 and step 7 mean in counts, so "darker" is a number.
-    let _ = write!(
-        s,
-        r#"<text class="mono ck-lbl" x="{ex:.1}" y="{ty:.1}" font-size="10">{unit_word}: 1 to {m} (steps spaced by square root)</text>"#,
-        ex = end + kit::text_width("More", 10.0) + 12.0,
-        ty = y + 9.0,
+        r#"</span><span class="bnb-meta">More</span><span class="bnb-meta">{what}: 1 to {m}, in steps by square root</span>"#,
+        what = escape_html(what),
         m = kit::compact((max * 10.0).round() / 10.0),
     );
+    if not_listening {
+        s.push_str(r#"<span class="bnb-meta"><i class="ck-off" aria-hidden="true"></i> Not listening</span>"#);
+    }
+    for e in extra {
+        let _ = write!(s, r#"<span class="bnb-meta ck-scale-note">{}</span>"#, escape_html(e));
+    }
+    s.push_str("</div>");
     s
 }
 
@@ -95,6 +84,9 @@ pub(crate) struct HourByWeekday<'a> {
     pub occurrences: [u32; 7],
     /// The ledger had rows for the period (so a weekday with none really was off).
     pub coverage_known: bool,
+    /// Today's weekday and the hour it is now: the hours of today that have not happened yet
+    /// are "not yet", not "none heard", and are not counted among the days they would average over.
+    pub now: Option<(usize, usize)>,
     /// The window in days, for the words.
     pub window_days: u32,
 }
@@ -113,10 +105,14 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     if any <= 0 {
         return EMPTY.to_string();
     }
-    let avg = |d: usize, h: usize| -> f64 {
-        let occ = o.occurrences[d].max(1);
-        o.counts[d][h] as f64 / f64::from(occ)
+    // How many days this slot has really happened on: the weekday's days, less today when
+    // today's hour has not come round yet.
+    let occ_of = |d: usize, h: usize| -> u32 {
+        let later_today = o.now.is_some_and(|(nd, nh)| nd == d && h > nh);
+        o.occurrences[d].saturating_sub(u32::from(later_today && o.occurrences[d] > 0))
     };
+    let not_yet = |d: usize, h: usize| o.now.is_some_and(|(nd, nh)| nd == d && h > nh) && occ_of(d, h) == 0 && o.occurrences[d] > 0;
+    let avg = |d: usize, h: usize| -> f64 { o.counts[d][h] as f64 / f64::from(occ_of(d, h).max(1)) };
     let max_avg = (0..7).flat_map(|d| (0..24).map(move |h| (d, h))).map(|(d, h)| avg(d, h)).fold(0.0_f64, f64::max);
     let (peak_d, peak_h) = (0..7)
         .flat_map(|d| (0..24).map(move |h| (d, h)))
@@ -128,15 +124,14 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     let row_max = row_tot.iter().copied().max().unwrap_or(1).max(1);
     let col_max = col_tot.iter().copied().max().unwrap_or(1).max(1);
 
-    let (label_w, cw, ch) = (36.0_f64, 31.0_f64, 24.0_f64);
+    let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 24.0_f64);
     let marg_x = label_w + 24.0 * cw + 10.0;
     let w = marg_x + 74.0;
     let top = 20.0;
     let grid_h = 7.0 * ch;
     let col_y = top + grid_h + 8.0;
     let col_h = 26.0;
-    let legend_y = col_y + col_h + 14.0;
-    let h = legend_y + 18.0;
+    let h = col_y + col_h + 6.0;
 
     let g = kit::id_safe(&format!("g-{}", o.id));
     let mut svg = String::with_capacity(32 * 1024);
@@ -176,9 +171,11 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             let a = avg(d, hh);
             let heading = format!("{} {:02}:00\u{2013}{:02}:00", kit::WEEKDAYS[d], hh, (hh + 1) % 24);
             let idx = d * 24 + hh;
-            let occ = o.occurrences[d];
+            let occ = occ_of(d, hh);
             let count_s = kit::thousands(n);
-            let (cls_attr, fill_attr, tip) = if occ == 0 && o.coverage_known {
+            let (cls_attr, fill_attr, tip) = if not_yet(d, hh) {
+                (r#" class="ck-future""#.to_string(), String::new(), kit::tip(&heading, &[], Some("Not yet")))
+            } else if o.occurrences[d] == 0 && o.coverage_known {
                 (
                     String::new(),
                     format!(r#" fill="url(#{g}-nd)""#),
@@ -258,17 +255,15 @@ pub(crate) fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             p = kit::bar_path(label_w + hh as f64 * cw + 5.0, col_y + col_h - bh, cw - 10.0, bh, 3.0),
         );
     }
-    // The scale, and what the ring is.
-    svg.push_str(&scale_legend(Ramp::Sun, max_avg, label_w, legend_y, "Average a day"));
-    let words = format!("Busiest: {} {:02}:00, about {:.1} a day", kit::WEEKDAYS[peak_d], peak_h, avg(peak_d, peak_h));
-    let _ = write!(
-        svg,
-        r#"<text class="ck-annot" x="{x:.1}" y="{y:.1}" text-anchor="end" font-size="10">{t}</text>"#,
-        x = w - 4.0,
-        y = legend_y + 9.0 + 14.0,
-        t = escape_html(&words),
-    );
+    let words = format!("Busiest: {} {:02}:00, about {:.1} a day (ringed)", kit::WEEKDAYS[peak_d], peak_h, avg(peak_d, peak_h));
     svg.push_str("</svg></div>");
+    svg.push_str(&scale_legend(
+        Ramp::Sun,
+        max_avg,
+        "Average a day",
+        &[words.clone()],
+        o.occurrences.iter().any(|&n| n == 0) && o.coverage_known,
+    ));
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p>"#,
@@ -326,13 +321,12 @@ pub(crate) fn calendar(o: &Calendar<'_>) -> String {
     let dow = |day: i64| ((day + 4).rem_euclid(7)) as usize; // 1970-01-01 was a Thursday
     let first_col_day = start - dow(start) as i64;
     let weeks = ((end - first_col_day) / 7 + 1) as usize;
-    let (label_w, cell, gap) = (30.0_f64, 12.0_f64, 3.0_f64);
+    let (label_w, cell, gap) = (38.0_f64, 12.0_f64, 3.0_f64);
     let pitch = cell + gap;
     let w = label_w + weeks as f64 * pitch + 4.0;
     let top = 18.0;
     let grid_h = 7.0 * pitch;
-    let legend_y = top + grid_h + 10.0;
-    let h = legend_y + 18.0;
+    let h = top + grid_h + 2.0;
 
     let g = kit::id_safe(&format!("g-{}", o.id));
     let date_of = |day: i64| -> String {
@@ -434,27 +428,10 @@ pub(crate) fn calendar(o: &Calendar<'_>) -> String {
             s = cell + 2.0,
         );
     }
-    svg.push_str(&scale_legend(Ramp::Moss, max, label_w, legend_y, &capitalise(o.unit)));
     let busiest = kit::civil_label(&peak_date, 0).map_or(peak_date.clone(), |(_, l)| l);
-    let words = format!("Busiest day: {busiest}, {}", kit::thousands(peak_n));
-    let _ = write!(
-        svg,
-        r#"<text class="ck-annot" x="{x:.1}" y="{y:.1}" text-anchor="end" font-size="10">{t}</text>"#,
-        x = w - 4.0,
-        y = legend_y + 9.0,
-        t = escape_html(&words),
-    );
-    if off_known {
-        let _ = write!(
-            svg,
-            r#"<rect x="{x:.1}" y="{y:.1}" width="11" height="11" rx="3" fill="url(#{g}-nd)"/><text class="ck-lbl" x="{tx:.1}" y="{ty:.1}" font-size="10">Not listening</text>"#,
-            x = label_w,
-            y = legend_y + 16.0,
-            tx = label_w + 16.0,
-            ty = legend_y + 25.0,
-        );
-    }
+    let words = format!("Busiest day: {busiest}, {} (ringed)", kit::thousands(peak_n));
     svg.push_str("</svg></div>");
+    svg.push_str(&scale_legend(Ramp::Moss, max, &capitalise(o.unit), &[words.clone()], off_known));
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p></div>"#,
@@ -478,7 +455,7 @@ mod tests {
         counts[1][7] = 9;
         counts[3][12] = 2;
         counts[6][18] = 1;
-        HourByWeekday { id: "t", counts, occurrences: [1; 7], coverage_known: true, window_days: 7 }
+        HourByWeekday { id: "t", counts, occurrences: [1; 7], coverage_known: true, window_days: 7, now: None }
     }
 
     #[test]
@@ -530,6 +507,30 @@ mod tests {
         // 10 a day on Sunday, 30 a day on Monday: Monday is the peak and Sunday is lower.
         assert!(svg.contains("Busiest: Mon 06:00, about 30.0 a day"), "{svg}");
         assert!(svg.contains("Sun 06:00\u{2013}07:00&#10;Average a day&#9;10.0&#10;In all&#9;40&#10;over 4 Suns"), "{svg}");
+    }
+
+    /// Today is the one weekday that is only partly lived: the hours of it still to come are
+    /// "Not yet" (an outline, not a quiet cell), and they are not among the days a slot averages
+    /// over, so a Wednesday of fourteen days divides this Wednesday's morning by one fewer.
+    #[test]
+    fn the_hours_of_today_still_to_come_are_not_yet_and_not_quiet() {
+        let mut g = grid();
+        g.now = Some((3, 10)); // Wednesday, ten o'clock
+        let svg = hour_by_weekday(&g);
+        // Wed 11:00 onward: 13 slots of "Not yet", and the 10:00 slot is today's so far.
+        assert_eq!(svg.matches("&#10;Not yet").count(), 13, "11:00 to 23:00 are still to come: {svg}");
+        assert!(svg.contains("Wed 12:00\u{2013}13:00&#10;Not yet"), "{svg}");
+        assert!(svg.contains(r#"class="ck-future""#), "{svg}");
+        assert!(!svg.contains("Wed 09:00\u{2013}10:00&#10;Not yet"), "09:00 has happened: {svg}");
+        // Two Wednesdays in the window: the later hours average over the one that happened.
+        let mut g = grid();
+        g.occurrences[3] = 2;
+        g.counts[3][12] = 8;
+        g.now = Some((3, 10));
+        let svg = hour_by_weekday(&g);
+        assert!(svg.contains("Wed 12:00\u{2013}13:00&#10;Detections&#9;8"), "one day that hour has happened on: no average to give: {svg}");
+        // No clock, no claim.
+        assert!(!hour_by_weekday(&grid()).contains("Not yet"));
     }
 
     fn cal(from: &'static str, to: &'static str, counts: &'static BTreeMap<String, i64>, effort: Option<&'static BTreeMap<String, f64>>) -> String {

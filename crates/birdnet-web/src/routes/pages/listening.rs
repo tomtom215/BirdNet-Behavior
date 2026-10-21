@@ -61,6 +61,20 @@ pub(crate) fn listened_days(effort: &BTreeMap<String, f64>, end: &str, days: usi
     Some(out)
 }
 
+/// For each of `dates` (ISO, any order of days): was the station listening? `None` when
+/// the ledger has nothing for the period. `today` is never off.
+pub(crate) fn listened_on(effort: &BTreeMap<String, f64>, dates: &[String], today: &str) -> Option<Vec<bool>> {
+    if effort.is_empty() || dates.is_empty() {
+        return None;
+    }
+    Some(
+        dates
+            .iter()
+            .map(|d| d == today || effort.get(d).is_some_and(|s| *s >= MIN_LISTENED_SECS))
+            .collect(),
+    )
+}
+
 /// The first date of the `days` ending on `end`, as `YYYY-MM-DD`.
 pub(crate) fn first_date(end: &str, days: usize) -> Option<String> {
     let (y, m, d) = kit::shift_date(end, -(days as i64 - 1))?;
@@ -90,6 +104,14 @@ mod tests {
     fn an_empty_ledger_claims_nothing() {
         assert!(listened_days(&BTreeMap::new(), "2026-10-21", 7).is_none());
         assert!(listened_days(&ledger(&[("2026-10-21", 1.0)]), "2026-10-21", 0).is_none());
+    }
+
+    #[test]
+    fn listened_on_asks_about_exactly_the_dates_given() {
+        let l = ledger(&[("2026-10-01", 3600.0), ("2026-10-03", 59.0)]);
+        let dates: Vec<String> = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"].iter().map(|s| (*s).to_string()).collect();
+        assert_eq!(listened_on(&l, &dates, "2026-10-04"), Some(vec![true, false, false, true]));
+        assert!(listened_on(&BTreeMap::new(), &dates, "2026-10-04").is_none());
     }
 
     #[test]

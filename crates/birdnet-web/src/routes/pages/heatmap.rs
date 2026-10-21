@@ -9,7 +9,6 @@
 //! | `GET /pages/heatmap-grid`    | HTMX partial — SVG heatmap grid      |
 //! | `GET /pages/hourly-totals`   | HTMX partial — bar chart by hour     |
 
-use std::fmt::Write as _;
 
 use axum::Router;
 use axum::extract::{Query, State};
@@ -156,7 +155,11 @@ fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
             occurrences[dow] += 1;
         }
     }
-    Some(render_heatmap_svg(&cells, occurrences, listened.is_some(), days))
+    // Today's weekday and the hour it is now, so the hours still to come are not drawn as quiet ones.
+    let now = today.as_deref().and_then(super::viz::kit::epoch_day).map(|e| {
+        ((e + 4).rem_euclid(7) as usize, super::now_hour_local().floor() as usize)
+    });
+    Some(render_heatmap_svg(&cells, occurrences, listened.is_some(), days, now))
 }
 
 async fn heatmap_grid_partial(
@@ -312,6 +315,7 @@ fn render_heatmap_svg(
     occurrences: [u32; 7],
     coverage_known: bool,
     window_days: u32,
+    now: Option<(usize, usize)>,
 ) -> String {
     if cells.is_empty() {
         return r#"<p class="hm-empty">
@@ -336,6 +340,7 @@ fn render_heatmap_svg(
         occurrences,
         coverage_known,
         window_days,
+        now,
     })
 }
 
@@ -422,7 +427,7 @@ mod tests {
 
     #[test]
     fn render_heatmap_svg_empty() {
-        let html = render_heatmap_svg(&[], [1; 7], true, 7);
+        let html = render_heatmap_svg(&[], [1; 7], true, 7, None);
         assert!(html.contains("No data"));
     }
 
@@ -440,7 +445,7 @@ mod tests {
                 count: 5,
             },
         ];
-        let svg = render_heatmap_svg(&cells, [1; 7], true, 7);
+        let svg = render_heatmap_svg(&cells, [1; 7], true, 7, None);
         assert!(svg.contains("<svg"));
         assert!(svg.contains("Mon"));
         assert!(svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;10"), "{svg}");
@@ -455,7 +460,7 @@ mod tests {
             HeatmapCell { dow: 1, hour: 99, count: 10 },
             HeatmapCell { dow: 1, hour: 7, count: 3 },
         ];
-        let svg = render_heatmap_svg(&cells, [1; 7], false, 7);
+        let svg = render_heatmap_svg(&cells, [1; 7], false, 7, None);
         assert!(svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;3"), "{svg}");
     }
 

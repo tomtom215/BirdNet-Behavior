@@ -8,8 +8,8 @@
 //!   ([`bar_path`]);
 //! * a curve through points never leaves the range of the two neighbours it joins
 //!   ([`monotone_path`]), so smoothing cannot invent a peak the data did not have;
-//! * an axis tops out on a round number at or above the data ([`nice_ceiling`],
-//!   [`ticks`]), and a count too large to print is compacted ([`compact`]);
+//! * an axis tops out on a round number at or above the data ([`count_ceiling`],
+//!   [`count_ticks`]), and a count too large to print is compacted ([`compact`]);
 //! * a reading the tooltip shows is written once, here, in the form the script parses
 //!   ([`tip`], [`cols_attrs`]).
 #![allow(
@@ -72,64 +72,32 @@ pub(crate) fn epoch_day(date: &str) -> Option<i64> {
 
 // ── numbers ─────────────────────────────────────────────────────────────────────
 
-/// The smallest "round" number (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 or 10 times a power
-/// of ten) that is at least `x`: where the top of a value axis goes.
-pub(crate) fn nice_ceiling(x: f64) -> f64 {
-    if !x.is_finite() || x <= 1.0 {
-        return 1.0;
-    }
-    let mut mag = 10_f64.powf(x.log10().floor());
-    if x / mag >= 10.0 {
-        mag *= 10.0;
-    }
-    for m in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0] {
-        if m * mag >= x {
-            return m * mag;
-        }
-    }
-    10.0 * mag
-}
-
-/// Gridline values for an axis from zero to `top` (itself a [`nice_ceiling`]): zero
-/// and a handful of equal steps that are round numbers, `want` at most.
-///
-/// `top` is a 1, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 times a power of ten; the step is the
-/// largest "nice" divisor of it that still gives no more than `want` rules, so the
-/// labels read 0, 10, 20, 30, 40 and never 0, 13, 27, 40.
-pub(crate) fn ticks(top: f64, want: usize) -> Vec<f64> {
-    ticks_with(top, want, &[1.0, 2.0, 2.5, 5.0, 10.0])
-}
-
-/// [`ticks`] for an axis of whole counts: steps of 1, 2 or 5 times a power of ten,
-/// never a fraction (a rule at 2.5 detections is not a thing that was counted).
+/// Gridline values for an axis of whole counts from zero to `top` (itself a
+/// [`count_ceiling`]): zero and equal steps of 1, 2 or 5 times a power of ten, never a
+/// fraction, so the labels read 0, 10, 20, 30, 40 and never 0, 13, 27, 40 (a rule at 2.5
+/// detections is not a thing that was counted). Up to `want` steps, or one more where
+/// that is the only way to be round.
 pub(crate) fn count_ticks(top: f64, want: usize) -> Vec<f64> {
-    ticks_with(top.max(1.0), want, &[1.0, 2.0, 5.0, 10.0])
-}
-
-fn ticks_with(top: f64, want: usize, round_mantissas: &[f64]) -> Vec<f64> {
-    if !(top.is_finite() && top > 0.0) {
+    let top = top.max(1.0);
+    if !top.is_finite() {
         return vec![0.0];
     }
-    let want = want.max(1);
-    let whole = round_mantissas.len() == 4;
     let round = |step: f64| {
         let mag = 10_f64.powf(step.log10().floor());
         let f = (step / mag * 1000.0).round() / 1000.0;
-        round_mantissas.contains(&f) && (!whole || step >= 1.0)
+        step >= 1.0 && [1.0, 2.0, 5.0, 10.0].contains(&f)
     };
-    // The most steps that are still round, up to one more than `want` (an axis
-    // topping out at 2.5 wants five steps of 0.5, not one of 2.5).
-    let div = (1..=want + 1)
+    let div = (1..=want.max(1) + 1)
         .rev()
         .find(|&d| round(top / d as f64))
         .unwrap_or(1);
     let step = top / div as f64;
-    // Rounded, so a rule at 0.6 is 0.6 and not 0.6000000000000001.
     (0..=div).map(|i| (step * i as f64 * 1e9).round() / 1e9).collect()
 }
 
 /// The top of an axis of whole counts: `x` rounded up to 1, 2, 3, 4, 5, 6 or 8 times
-/// a power of ten (an integer, always). [`nice_ceiling`] would offer 1.5 or 2.5.
+/// a power of ten (an integer, always): a ceiling that allowed 1.5 or 2.5 would put a
+/// fractional rule on a count axis.
 pub(crate) fn count_ceiling(x: f64) -> f64 {
     if !x.is_finite() || x <= 1.0 {
         return 1.0;
@@ -176,6 +144,14 @@ pub(crate) fn compact(v: f64) -> String {
 /// An integer with thousands separators, for a tooltip or a table.
 pub(crate) fn thousands(n: i64) -> String {
     crate::routes::pages::group_thousands(n)
+}
+
+/// The room an axis's labels need on the left of a plot, given the width of the widest one at
+/// its drawn size. On a phone the drawing is scaled down and `chart-text.js` grows any label
+/// that would be smaller than 9.5 px, by up to about half again (a 700-unit chart held to 480 px
+/// wide): a margin cut to the label as drawn makes "500K" run off the edge and get cut to "500…".
+pub(crate) fn axis_margin(widest: f64) -> f64 {
+    widest * 1.55 + 8.0
 }
 
 /// Rough width of `s` set at `font` units: the label planner's measure. Wide on
@@ -311,6 +287,7 @@ pub(crate) fn monotone_path_reversed(pts: &[(f64, f64)]) -> String {
 
 /// The value of the monotone curve through `pts` at `x` (for tests and for placing
 /// a mark on a curve rather than on the polyline). `None` outside the data's span.
+#[cfg(test)]
 pub(crate) fn monotone_at(pts: &[(f64, f64)], x: f64) -> Option<f64> {
     let segs = monotone_segments(pts);
     for (w, c) in pts.windows(2).zip(&segs) {
@@ -335,22 +312,6 @@ pub(crate) fn monotone_at(pts: &[(f64, f64)], x: f64) -> Option<f64> {
         return Some(bez(w[0].1, c[0].1, c[1].1, w[1].1, t));
     }
     None
-}
-
-/// A step curve through `pts`: level until the next point, then straight up or
-/// down. The honest shape for a count that changes at an event (a species joining
-/// the list) rather than gliding between samples.
-pub(crate) fn step_path(pts: &[(f64, f64)]) -> String {
-    let mut d = String::with_capacity(pts.len() * 24);
-    for (i, (x, y)) in pts.iter().enumerate() {
-        if i == 0 {
-            let _ = write!(d, "M{x:.1},{y:.1}");
-        } else {
-            let prev_y = pts[i - 1].1;
-            let _ = write!(d, " L{x:.1},{prev_y:.1} L{x:.1},{y:.1}");
-        }
-    }
-    d
 }
 
 /// A bar's outline: square at the baseline, `r` units of round on the two corners at
@@ -533,49 +494,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ceilings_are_round_and_never_below_the_data() {
-        for (x, want) in [
-            (0.0, 1.0),
-            (1.0, 1.0),
-            (14.0, 15.0),
-            (35.0, 40.0),
-            (26.0, 30.0),
-            (51.0, 60.0),
-            (100.0, 100.0),
-            (101.0, 150.0),
-            (1_600_000.0, 2_000_000.0),
-        ] {
-            assert!(
-                (nice_ceiling(x) - want).abs() < 1e-6,
-                "nice_ceiling({x}) = {}",
-                nice_ceiling(x)
-            );
-            assert!(nice_ceiling(x) >= x);
-        }
-        assert!((nice_ceiling(f64::NAN) - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn ticks_are_round_numbers_from_zero_to_the_top() {
-        assert_eq!(ticks(40.0, 4), vec![0.0, 10.0, 20.0, 30.0, 40.0]);
-        assert_eq!(ticks(30.0, 3), vec![0.0, 10.0, 20.0, 30.0]);
-        assert_eq!(ticks(1.0, 4), vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0]);
-        assert_eq!(ticks(100.0, 4), vec![0.0, 20.0, 40.0, 60.0, 80.0, 100.0]);
-        assert_eq!(ticks(2.5, 4), vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5]);
-        // Whatever the top, the rules start at zero, end at the top and are even.
-        for top in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 150.0, 2_000_000.0] {
-            let t = ticks(top, 4);
-            assert!((t[0]).abs() < 1e-9, "{top}: {t:?}");
-            assert!((t[t.len() - 1] - top).abs() < 1e-6, "{top}: {t:?}");
-            assert!(t.len() <= 7, "{top}: {t:?}");
-            let step = t[1] - t[0];
-            for w in t.windows(2) {
-                assert!((w[1] - w[0] - step).abs() < 1e-6, "{top}: {t:?}");
-            }
-        }
-    }
-
-    #[test]
     fn a_count_axis_never_has_a_fractional_rule() {
         for x in [0.0, 1.0, 1.2, 2.0, 3.0, 7.0, 9.0, 12.0, 26.0, 40.0, 99.0, 450.0, 1_600_000.0] {
             let top = count_ceiling(x);
@@ -670,12 +588,6 @@ mod tests {
         assert!(back.starts_with("L20.0,2.0"), "{back}");
         assert!(back.ends_with("0.0,5.0"), "{back}");
         assert_eq!(back.matches('C').count(), 2);
-    }
-
-    #[test]
-    fn a_step_path_holds_its_level_until_the_next_event() {
-        let d = step_path(&[(0.0, 10.0), (5.0, 8.0), (9.0, 2.0)]);
-        assert_eq!(d, "M0.0,10.0 L5.0,10.0 L5.0,8.0 L9.0,8.0 L9.0,2.0");
     }
 
     /// A bar is square where it stands and round where it ends, and never wider than

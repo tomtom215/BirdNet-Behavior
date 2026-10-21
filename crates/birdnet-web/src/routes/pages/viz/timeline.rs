@@ -446,89 +446,136 @@ pub fn streamgraph(
     svg
 }
 
-/// Monotonic life-list accumulation: `points` is `(label, cumulative_total)`
-/// in chronological order. Renders a filled step-up area with end-value label.
+/// `24-03` (a `YY-MM` month key) as `("Mar 2024", "Mar")`: the long form for a tooltip, the
+/// month alone for an axis tick that already shows the year elsewhere. A key that is not
+/// of that shape comes back as it is.
+fn month_label(key: &str) -> (String, String) {
+    let parts: Vec<&str> = key.split('-').collect();
+    if let [yy, mm] = parts.as_slice()
+        && let (Ok(y), Ok(m)) = (yy.parse::<u32>(), mm.parse::<usize>())
+        && (1..=12).contains(&m)
+    {
+        let month = kit::MONTHS[m - 1];
+        let year = if y < 100 { 2000 + y } else { y };
+        return (format!("{month} {year}"), month.to_string());
+    }
+    (key.to_string(), key.to_string())
+}
+
+/// Monotonic life-list accumulation: `points` is `(YY-MM label, cumulative_total)` in
+/// chronological order, a point a month. A rising curve with a soft area beneath it, a
+/// dot in each month that added a bird, the total written above its end, and a tooltip
+/// for every month (the total so far and how many came that month).
+///
+/// The curve is a monotone cubic through the monthly totals, so a plateau stays a
+/// plateau and a month's jump cannot overshoot; the axis starts at zero.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     if points.len() < 2 {
         return EMPTY.to_string();
     }
+    let n = points.len();
+    let max = points.iter().map(|p| p.1).max().unwrap_or(1).max(1);
+    let top = kit::count_ceiling(max as f64);
+    let rules = kit::count_ticks(top, 3);
+    let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
     let w = 720.0_f64;
-    let h = 200.0_f64;
-    let pad_l = 6.0;
-    let pad_b = 22.0;
+    let h = 210.0_f64;
+    let (pad_l, pad_r, pad_b) = (kit::axis_margin(widest), 12.0, 26.0);
     // Headroom for the total, written above the curve's end (see the test).
     let pad_t = 26.0;
     let plot_h = h - pad_b - pad_t;
-    let n = points.len();
-    let max = points.last().map_or(1, |(_, v)| *v).max(1) as f64;
-    let step = (w - pad_l) / (n - 1) as f64;
-    let x_at = |i: usize| pad_l + i as f64 * step;
-    let y_at = |v: i64| pad_t + plot_h - (v as f64 / max) * plot_h;
+    let plot_w = w - pad_l - pad_r;
+    let y = kit::Linear::new((0.0, top), (pad_t + plot_h, pad_t));
+    let x_at = |i: usize| pad_l + i as f64 * plot_w / (n - 1) as f64;
+    let base = pad_t + plot_h;
+    let pts: Vec<(f64, f64)> = points.iter().enumerate().map(|(i, (_, v))| (x_at(i), y.at(*v as f64))).collect();
+    let curve = kit::monotone_path(&pts, false);
 
-    let mut line = String::new();
-    for (i, (_, v)) in points.iter().enumerate() {
-        let _ = write!(
-            line,
-            "{}{x:.1},{y:.1} ",
-            if i == 0 { "M" } else { "L" },
-            x = x_at(i),
-            y = y_at(*v)
-        );
-    }
-    let area = format!(
-        "{line}L{x:.1},{base:.1} L{x0:.1},{base:.1} Z",
-        x = x_at(n - 1),
-        x0 = x_at(0),
-        base = pad_t + plot_h,
-    );
+    let cols: Vec<kit::Col> = points
+        .iter()
+        .enumerate()
+        .map(|(i, (label, v))| {
+            let added = if i == 0 { *v } else { v - points[i - 1].1 };
+            kit::Col {
+                label: month_label(label).0,
+                values: vec![Some(*v as f64)],
+                note: (added > 0).then(|| format!("+{added} first heard this month")),
+            }
+        })
+        .collect();
+    let ys: Vec<serde_json::Value> = pts.iter().map(|p| serde_json::json!((p.1 * 10.0).round() / 10.0)).collect();
 
-    let mut svg = format!(
-        r#"<svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" class="viz-svg-block">"#
+    let mut svg = String::new();
+    let _ = write!(
+        svg,
+        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="Species accumulation, scrolls sideways on a narrow screen"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block ck-wide ck-in" data-ck-id="life-accumulation" data-ck-label="Left and right read each month."{attrs} data-ck-ys="{ys}">"#,
+        attrs = kit::cols_attrs(&cols, &[("Species so far".to_string(), "var(--chart-1)".to_string())], x_at(0), x_at(n - 1), false, "species", None),
+        ys = escape_html(&serde_json::Value::Array(ys).to_string()),
     );
     svg.push_str(&svg_a11y(
         "Species accumulation over time",
-        "A rising line showing how many distinct species have been recorded as time goes on.",
+        "A rising curve showing how many distinct species have been recorded as time goes on.",
     ));
+    svg.push_str(
+        r#"<defs><linearGradient id="g-life-area" class="ck-gr ck-c1" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0" stop-opacity=".30"/><stop class="a" offset="1" stop-opacity="0"/></linearGradient></defs>"#,
+    );
+    for &v in &rules {
+        let yy = y.at(v);
+        if v > 0.0 {
+            let _ = write!(svg, r#"<line class="ck-grid" x1="{pad_l:.1}" y1="{yy:.1}" x2="{x2:.1}" y2="{yy:.1}"/>"#, x2 = pad_l + plot_w);
+        }
+        let _ = write!(
+            svg,
+            r#"<text class="mono ck-lbl" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="10">{l}</text>"#,
+            tx = pad_l - 6.0,
+            ty = yy + 3.5,
+            l = kit::compact(v),
+        );
+    }
     let _ = write!(
         svg,
-        r#"<line x1="{pad_l:.1}" y1="{base:.1}" x2="{w:.1}" y2="{base:.1}" stroke="var(--hairline)" stroke-width="0.5"/>"#,
-        base = pad_t + plot_h,
+        r#"<line class="ck-axis" x1="{pad_l:.1}" y1="{base:.1}" x2="{x2:.1}" y2="{base:.1}"/><path class="ck-area" d="{curve} L{xb:.1},{base:.1} L{xa:.1},{base:.1} Z" fill="url(#g-life-area)"/><path class="ck-line ck-c1 ck-drawn" d="{curve}" pathLength="1"/>"#,
+        x2 = pad_l + plot_w,
+        xa = pts[0].0,
+        xb = pts[n - 1].0,
     );
-    let _ = write!(
-        svg,
-        r#"<path d="{area}" fill="var(--chart-1)" fill-opacity="0.12"/><path d="{line}" fill="none" stroke="var(--chart-1)" stroke-width="1.6"/>"#,
-    );
-    let (lx, ly) = (x_at(n - 1), y_at(points[n - 1].1));
-    let _ = write!(
-        svg,
-        r#"<circle cx="{lx:.1}" cy="{ly:.1}" r="2.6" fill="var(--chart-1)"/><text class="mono" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="11" fill="var(--fg-2)">{total} species</text>"#,
-        tx = lx - 4.0,
-        ty = ly - 8.0,
-        total = points[n - 1].1,
-    );
-    let stride = (n / 6).max(1);
-    for (i, (label, _)) in points.iter().enumerate() {
-        if i % stride == 0 || i == n - 1 {
-            // The first and last labels are anchored inward: centred on the plot's
-            // edge, half of each hung outside the SVG, and the label-fitting script
-            // (static/chart-text.js) then cut them to "25-…" and "26-…".
-            let anchor = if i == 0 {
-                "start"
-            } else if i == n - 1 {
-                "end"
-            } else {
-                "middle"
-            };
-            let _ = write!(
-                svg,
-                r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="8" fill="var(--fg-4)">{label}</text>"#,
-                x = x_at(i),
-                ty = h - 6.0,
-            );
+    // A dot in each month that added a species.
+    for (i, (_, v)) in points.iter().enumerate() {
+        let added = if i == 0 { *v } else { v - points[i - 1].1 };
+        if added > 0 && i + 1 < n {
+            let _ = write!(svg, r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#, pts[i].0, pts[i].1);
         }
     }
-    svg.push_str("</svg>");
+    let (lx, ly) = pts[n - 1];
+    let _ = write!(
+        svg,
+        r#"<circle class="ck-ring ck-c1" cx="{lx:.1}" cy="{ly:.1}" r="4.5"/><text class="mono ck-annot ck-halo" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="11">{total} species</text>"#,
+        tx = lx - 4.0,
+        ty = ly - 10.0,
+        total = points[n - 1].1,
+    );
+    let ticks = axis_columns(n, 7);
+    for (k, &i) in ticks.iter().enumerate() {
+        let (_, short) = month_label(&points[i].0);
+        let long = month_label(&points[i].0).0;
+        // The year, where the axis begins and where a new one starts.
+        let text = if k == 0 || points[i].0.ends_with("-01") { long } else { short };
+        let anchor = if k == 0 { "start" } else if k + 1 == ticks.len() { "end" } else { "middle" };
+        let _ = write!(
+            svg,
+            r#"<text class="mono ck-lbl" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="10">{t}</text>"#,
+            x = x_at(i),
+            ty = h - 8.0,
+            t = escape_html(&text),
+        );
+    }
+    let _ = write!(
+        svg,
+        r#"<line class="ck-cursor" x1="{pad_l:.1}" y1="{pad_t:.1}" x2="{pad_l:.1}" y2="{base:.1}" visibility="hidden"/><circle class="ck-dot ck-c1" cx="{pad_l:.1}" cy="{base:.1}" r="4.5" visibility="hidden"/>"#
+    );
+    svg.push_str("</svg></div></div>");
     svg
 }
 
@@ -574,188 +621,6 @@ pub fn day_strip(
         temps,
         table: false,
     })
-}
-
-/// One day of a trend.
-#[cfg(feature = "analytics")]
-pub struct TrendPoint {
-    /// ISO date, `YYYY-MM-DD`.
-    pub date: String,
-    /// The day's value.
-    pub value: f64,
-    /// A smoothed value for the same day, if there is one (a moving average).
-    pub smooth: Option<f64>,
-}
-
-/// The smallest "round" number (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 or 10 times a power
-/// of ten) that is at least `x`: where the top of a value axis goes.
-#[cfg(feature = "analytics")]
-fn nice_ceiling(x: f64) -> f64 {
-    if x <= 1.0 {
-        return 1.0;
-    }
-    let mut mag = 10_f64.powf(x.log10().floor());
-    if x / mag >= 10.0 {
-        mag *= 10.0;
-    }
-    for m in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0] {
-        if m * mag >= x {
-            return m * mag;
-        }
-    }
-    10.0 * mag
-}
-
-/// A day-by-day trend as a picture, above the table it summarises.
-///
-/// "Is your yard getting busier?" was answered by fourteen rows of numbers in two
-/// tables: the question is about a *direction*, and a column of figures makes the
-/// reader do the subtraction. With `bars`, each day is a quiet neutral bar and
-/// the smoothed series is the one line in the chart's colour, so the eye follows
-/// the line and the bars say how noisy the days were; without, the series is the
-/// line (species richness, which has no smoothing).
-///
-/// A value axis from zero with three rules, labelled; the first, middle and last
-/// dates; every point's date and value in its `<title>`. The table is still on
-/// the page, behind a disclosure, for anyone who wants to read it.
-#[cfg(feature = "analytics")]
-#[must_use]
-#[allow(clippy::too_many_lines)]
-pub fn trend_chart(points: &[TrendPoint], unit: &str, bars: bool) -> String {
-    if points.len() < 2 {
-        return EMPTY.to_string();
-    }
-    let w = 640.0_f64;
-    let h = 176.0_f64;
-    let (pad_l, pad_r, pad_t, pad_b) = (34.0_f64, 8.0_f64, 10.0_f64, 22.0_f64);
-    let plot_w = w - pad_l - pad_r;
-    let plot_h = h - pad_t - pad_b;
-    let n = points.len();
-    let top = points
-        .iter()
-        .flat_map(|p| [p.value, p.smooth.unwrap_or(0.0)])
-        .fold(0.0_f64, f64::max);
-    let ymax = nice_ceiling(top);
-    let y_at = |v: f64| pad_t + plot_h - (v / ymax).clamp(0.0, 1.0) * plot_h;
-    let slot = plot_w / n as f64;
-    let x_at = |i: usize| pad_l + (i as f64 + 0.5) * slot;
-    let fmt = |v: f64| {
-        if (v - v.round()).abs() < 0.05 {
-            format!("{}", v.round() as i64)
-        } else {
-            format!("{v:.1}")
-        }
-    };
-
-    let mut svg = format!(
-        r#"<div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block viz-trend">"#
-    );
-    svg.push_str(&svg_a11y(
-        "Daily trend",
-        &format!(
-            "{unit} per day, {n} days, as {}.",
-            if bars {
-                "daily bars with a smoothed line over them"
-            } else {
-                "a line"
-            }
-        ),
-    ));
-
-    // Value axis: zero, half, top.
-    for frac in [0.0_f64, 0.5, 1.0] {
-        let v = ymax * frac;
-        let y = y_at(v);
-        let _ = write!(
-            svg,
-            r#"<line x1="{pad_l:.0}" y1="{y:.1}" x2="{x2:.1}" y2="{y:.1}" stroke="var(--hairline)" stroke-width="1" vector-effect="non-scaling-stroke"/><text class="mono" x="{tx:.0}" y="{ty:.1}" text-anchor="end" font-size="10" fill="var(--fg-3)">{label}</text>"#,
-            x2 = w - pad_r,
-            tx = pad_l - 6.0,
-            ty = y + 3.5,
-            label = fmt(v),
-        );
-    }
-
-    let long_of =
-        |p: &TrendPoint| kit::civil_label(&p.date, 0).map_or_else(|| p.date.clone(), |(_, long)| long);
-
-    if bars {
-        let bw = (slot * 0.5).max(2.0);
-        for (i, p) in points.iter().enumerate() {
-            let y = y_at(p.value);
-            let _ = write!(
-                svg,
-                r#"<rect x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" rx="2" fill="var(--chart-other)"><title>{d} — {v} {unit}</title></rect>"#,
-                x = x_at(i) - bw / 2.0,
-                bh = (y_at(0.0) - y).max(0.0),
-                d = escape_html(&long_of(p)),
-                v = fmt(p.value),
-                unit = escape_html(unit),
-            );
-        }
-    }
-
-    // The line: the smoothed series where there is one, else the values.
-    let line_of = |get: &dyn Fn(&TrendPoint) -> Option<f64>| -> Vec<(f64, f64)> {
-        points
-            .iter()
-            .enumerate()
-            .filter_map(|(i, p)| get(p).map(|v| (x_at(i), y_at(v))))
-            .collect()
-    };
-    let pts = if bars {
-        line_of(&|p| p.smooth)
-    } else {
-        line_of(&|p| Some(p.value))
-    };
-    if pts.len() >= 2 {
-        let mut d = String::new();
-        for (k, (x, y)) in pts.iter().enumerate() {
-            let _ = write!(d, "{}{x:.1},{y:.1} ", if k == 0 { "M" } else { "L" });
-        }
-        let _ = write!(
-            svg,
-            r#"<path d="{d}" fill="none" stroke="var(--chart-1)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>"#
-        );
-    }
-    if !bars {
-        for (i, p) in points.iter().enumerate() {
-            let _ = write!(
-                svg,
-                r#"<circle cx="{x:.1}" cy="{y:.1}" r="2.6" fill="var(--chart-1)" stroke="var(--card-top)" stroke-width="1" vector-effect="non-scaling-stroke"><title>{d} — {v} {unit}</title></circle>"#,
-                x = x_at(i),
-                y = y_at(p.value),
-                d = escape_html(&long_of(p)),
-                v = fmt(p.value),
-                unit = escape_html(unit),
-            );
-        }
-    }
-    if let Some((x, y)) = pts.last() {
-        let _ = write!(
-            svg,
-            r#"<circle cx="{x:.1}" cy="{y:.1}" r="3.4" fill="var(--chart-1)" stroke="var(--card-top)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>"#
-        );
-    }
-
-    // First, middle and last date.
-    for (i, anchor) in [(0_usize, "start"), (n / 2, "middle"), (n - 1, "end")] {
-        let label = kit::civil_label(&points[i].date, 0)
-            .map_or_else(|| points[i].date.clone(), |(short, _)| short);
-        let x = match anchor {
-            "start" => pad_l,
-            "end" => w - pad_r,
-            _ => x_at(i),
-        };
-        let _ = write!(
-            svg,
-            r#"<text class="mono" x="{x:.1}" y="{y:.1}" text-anchor="{anchor}" font-size="10" fill="var(--fg-3)">{label}</text>"#,
-            y = h - 6.0,
-            label = escape_html(&label),
-        );
-    }
-    svg.push_str("</svg></div>");
-    svg
 }
 
 #[cfg(test)]
@@ -1009,18 +874,24 @@ mod tests {
         let svg = accumulation_curve(&pts);
         assert!(svg.contains("<svg") && svg.contains("12 species"));
         assert!(svg.contains("<title>Species accumulation over time</title>"));
-        assert!(svg.contains("<desc>A rising line"));
-        assert!(!svg.contains("aria-label"));
+        assert!(svg.contains("<desc>A rising curve"));
+        // The chart is named by its <title>; the scroll box around it is named for what it does.
+        let tag = &svg[svg.find("<svg").unwrap()..];
+        assert!(!tag[..tag.find('>').unwrap()].contains("aria-label"), "{svg}");
+        // A tooltip for every month: the total so far, and what came that month.
+        assert!(svg.contains("&quot;Apr 2024&quot;,[7.0],&quot;+4 first heard this month&quot;"), "{svg}");
+        assert!(svg.contains("&quot;Mar 2024&quot;,[3.0],&quot;+3 first heard this month&quot;"), "the first month adds its own: {svg}");
+        assert!(svg.contains(r#"data-ck-id="life-accumulation""#), "{svg}");
     }
 
     /// The total is written at the point where the curve ends, and that point is
     /// always the chart's highest, so the label was clamped to the top of the
     /// drawing — *below* the point, with the curve's last stretch running through
-    /// "15 species". The plot now leaves headroom and the label sits above the point;
+    /// "15 species". The plot leaves headroom and the label sits above the point;
     /// the curve never rises to the left of its end, so nothing can cross it there.
     ///
     /// Observed failing before the fix: the label's baseline was 8 units below the
-    /// end point.
+    /// end point. Kept for the new drawing, whose end point is a ringed dot.
     #[test]
     fn the_total_sits_above_the_curve_it_labels() {
         let pts = vec![
@@ -1031,29 +902,25 @@ mod tests {
         let svg = accumulation_curve(&pts);
         let number_after = |s: &str, key: &str| -> f64 {
             let rest = s.split_once(key).expect(key).1;
-            rest.split('"')
-                .next()
-                .expect("a value")
-                .parse()
-                .expect("a number")
+            rest.split('"').next().expect("a value").parse().expect("a number")
         };
-        let circle = svg.split("<circle").nth(1).expect("the end point");
+        let circle = svg.split(r#"<circle class="ck-ring ck-c1" "#).nth(1).expect("the end point");
         let end_y = number_after(circle, r#"cy=""#);
-        let label = svg
-            .split("<text")
-            .find(|t| t.contains("15 species"))
-            .expect("the total's label");
+        let label = svg.split("<text").find(|t| t.contains("15 species")).expect("the total's label");
         let baseline = number_after(label, r#" y=""#);
-        assert!(
-            baseline <= end_y - 6.0,
-            "the label's baseline ({baseline}) is not above the end point ({end_y})"
-        );
+        assert!(baseline <= end_y - 6.0, "the label's baseline ({baseline}) is not above the end point ({end_y})");
         // Room for the glyphs above that baseline (the label-fitting script can
         // enlarge them to about 16 units), or the top of the drawing cuts them.
-        assert!(
-            baseline >= 16.0,
-            "the label's baseline ({baseline}) leaves no room above it"
-        );
+        assert!(baseline >= 16.0, "the label's baseline ({baseline}) leaves no room above it");
+    }
+
+    /// Months read as months, and a key that is not one is left alone.
+    #[test]
+    fn month_keys_are_named() {
+        assert_eq!(month_label("24-03"), ("Mar 2024".to_string(), "Mar".to_string()));
+        assert_eq!(month_label("99-12").0, "Dec 2099");
+        assert_eq!(month_label("nonsense").0, "nonsense");
+        assert_eq!(month_label("24-13").0, "24-13");
     }
 
     fn no_species() -> [Vec<(String, i64)>; 24] {
@@ -1084,7 +951,8 @@ mod tests {
         // Accessible name + an honest description that names the solar markers.
         assert!(svg.contains("<title>Activity across the day</title>"));
         assert!(svg.contains("<desc>Detections for each hour of today, with night shaded and a now marker."), "{svg}");
-        assert!(!svg.contains("aria-label"));
+        let tag = &svg[svg.find("<svg").unwrap()..];
+        assert!(!tag[..tag.find('>').unwrap()].contains("aria-label"), "{svg}");
         // The chart is the kit's, and does not replay its entrance on a 30-second refresh.
         assert!(svg.contains(r#"data-ck-id="today-hourly""#), "{svg}");
     }
@@ -1101,85 +969,5 @@ mod tests {
         assert!(!svg.contains("Temperature"), "{svg}");
         // The honest description promises only the markers actually drawn.
         assert!(svg.contains("<desc>Detections for each hour of today, with a now marker."), "{svg}");
-    }
-
-    #[cfg(feature = "analytics")]
-    fn trend(values: &[f64]) -> Vec<TrendPoint> {
-        values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| TrendPoint {
-                date: format!("2026-10-{:02}", i + 6),
-                value: *v,
-                smooth: if i >= 2 { Some(*v - 1.0) } else { None },
-            })
-            .collect()
-    }
-
-    /// The question the Trends tab asks is about a direction, so the chart has a
-    /// value axis from zero (three labelled rules), the first, middle and last
-    /// dates, every day's date and value in its tooltip, and the smoothed series
-    /// as the one line in the chart's colour over neutral bars.
-    #[cfg(feature = "analytics")]
-    #[test]
-    fn the_trend_chart_has_an_axis_dates_and_one_coloured_line() {
-        let svg = trend_chart(&trend(&[33.0, 31.0, 32.0, 34.0, 33.0]), "detections", true);
-        for label in ["0<", "20<", "40<"] {
-            assert!(svg.contains(&format!(">{label}")), "axis {label}: {svg}");
-        }
-        for date in [">6 Oct<", ">8 Oct<", ">10 Oct<"] {
-            assert!(svg.contains(date), "{date}: {svg}");
-        }
-        assert!(svg.contains("Tue 6 Oct — 33 detections"), "{svg}");
-        assert_eq!(
-            svg.matches(r#"fill="var(--chart-other)""#).count(),
-            5,
-            "five bars"
-        );
-        assert_eq!(
-            svg.matches(r#"stroke="var(--chart-1)""#).count(),
-            1,
-            "one line"
-        );
-        assert!(
-            !svg.contains("fill-opacity") && !svg.contains("oklch("),
-            "{svg}"
-        );
-    }
-
-    /// Without smoothing the series is the line, with a dot per day.
-    #[cfg(feature = "analytics")]
-    #[test]
-    fn a_trend_without_bars_is_a_line_with_a_dot_per_day() {
-        let svg = trend_chart(&trend(&[13.0, 12.0, 14.0]), "species", false);
-        assert!(!svg.contains("chart-other"), "{svg}");
-        assert_eq!(
-            svg.matches("<circle").count(),
-            4,
-            "a dot per day and the end mark: {svg}"
-        );
-        assert!(svg.contains("— 14 species"), "{svg}");
-        assert!(trend_chart(&trend(&[1.0]), "x", true).contains("Not enough data"));
-    }
-
-    #[cfg(feature = "analytics")]
-    #[test]
-    fn the_axis_tops_out_on_a_round_number_at_or_above_the_data() {
-        for (x, want) in [
-            (0.0, 1.0),
-            (1.0, 1.0),
-            (14.0, 15.0),
-            (35.0, 40.0),
-            (26.0, 30.0),
-            (51.0, 60.0),
-            (100.0, 100.0),
-            (101.0, 150.0),
-        ] {
-            assert!(
-                (nice_ceiling(x) - want).abs() < 1e-9,
-                "nice_ceiling({x}) = {}",
-                nice_ceiling(x)
-            );
-        }
     }
 }

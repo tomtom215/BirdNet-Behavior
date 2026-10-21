@@ -3872,7 +3872,7 @@ a.spp-inherit    { color: inherit; }
 .sp-photo-meta .sub { font-size: var(--fs-xs); color: var(--fg-3); margin-top: var(--space-2); font-family: var(--font-mono); }
 
 /* life list */
-.sp-life-head { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--pad-4); align-items: center; margin-bottom: 22px; }
+.sp-life-head { display: grid; grid-template-columns: 1fr 1.5fr; gap: var(--pad-4); align-items: center; margin-bottom: 22px; }
 @media (max-width: 880px) { .sp-life-head { grid-template-columns: 1fr; } }
 .sp-life-stat { display: flex; gap: var(--space-28); }
 .sp-life-stat .v { font-family: var(--font-display); font-size: 48px; line-height: 1; }
@@ -3944,7 +3944,10 @@ a.spp-inherit    { color: inherit; }
    rows and 456px (wide) to 490px (phone) once drawn; this holds most of that. */
 #rp-cal-wrap { min-height: 28rem; }
 .rp-viz { display: flex; justify-content: center; padding: var(--space-6) 0; }
-.rp-viz svg { width: 100%; max-width: 540px; height: auto; }
+.rp-viz svg { width: 100%; max-width: 640px; height: auto; }
+/* A chart in the kit is a box (its own tooltip positioning context) around the svg: without a width of
+   its own, a flex item that holds only a width:100% svg collapses to the svg's 300 px default. */
+.rp-viz > .viz-chart { width: 100%; max-width: 640px; }
 
 /* Leaderboard + new-species rows */
 .rp-row { display: grid; grid-template-columns: 24px 32px 1fr auto; align-items: center; gap: 11px; padding: 9px 0; border-top: var(--bw) solid var(--hairline); }
@@ -4799,6 +4802,8 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 /* The calendar is a year wide: on a phone it keeps a readable size and scrolls inside its card. */
 .cal-svg { display: block; width: 100%; height: auto; min-width: 560px; }
 .cal-slot { min-height: 150px; }
+/* A kit chart fills its container even where that container is a flex row. */
+.viz-chart.ck { width: 100%; box-sizing: border-box; }
 /* /charts */
 /* The dawn chorus: the ring chart, then which ring is which bird. */
 .dc-polar-col { display: flex; flex-direction: column; align-items: center; gap: var(--space-12); width: 100%; }
@@ -6106,7 +6111,8 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .bt-hr, .mo-hr { font-size: var(--fs-2xs); }
 .bt-bar { fill: var(--c); cursor: pointer; }
 .bt-key { margin-top: var(--space-8); }
-.rt-scroll { margin-top: var(--space-8); }
+.rt-scroll { margin-top: var(--space-8); overflow-x: auto; }
+@media (max-width: 560px) { .rt-bar { display: none; } .rt-name { max-width: 8rem; } }
 .rt-table { width: 100%; border-collapse: separate; border-spacing: 0 var(--space-2); font-size: var(--fs-md); }
 .rt-table th, .rt-table td { padding: var(--space-4) var(--space-6); text-align: left; border: 0; background: none; }
 .rt-table thead th { font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--chart-label); text-align: center; }
@@ -6139,6 +6145,7 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .fl-trigger { fill: var(--fg); font-size: var(--fs-md); font-weight: var(--fw-medium); }
 .mo-name { fill: var(--fg); font-size: var(--fs-md); font-weight: var(--fw-medium); }
 .mo-count { font-size: var(--fs-xs); }
+.mo-name, .mo-count { pointer-events: none; }
 .mo-line { fill: none; stroke: var(--chart-axis); stroke-width: 1px; vector-effect: non-scaling-stroke; opacity: .45; stroke-linejoin: round; }
 .mo-line.is-now { stroke: var(--chart-annot); stroke-width: 2px; opacity: 1; }
 .mo-dot { fill: var(--c); fill-opacity: .55; }
@@ -6176,3 +6183,24 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 @media (max-width: 719px) { .tr-stage { height: 360px; } }
 
 /* /charts2 */
+
+/* BirdNET-Pi move: the settings table reads as one card per key on a phone,
+   so the meaning is not off to the right of a clipped key. */
+.conf-table { white-space: normal; }
+.conf-table th[scope="row"] { overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .conf-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .conf-table { overflow: visible; }
+  .conf-table, .conf-table tbody, .conf-table tr, .conf-table th, .conf-table td { display: block; width: 100%; }
+  .conf-table tr { padding: var(--space-12) 0; border-bottom: 1px solid var(--hairline); }
+  .conf-table th, .conf-table td { padding: var(--space-4) 0; border: 0; text-align: left; }
+  .conf-table td::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--fg-3);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--track-caps-sm);
+    font-weight: var(--fw-medium);
+  }
+}

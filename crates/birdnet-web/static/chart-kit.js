@@ -49,6 +49,14 @@
 //     data-ck-major="col"     the lines run down (a calendar's weeks): Left/Right
 //                             move by line, Up/Down by one
 //     data-ck-start="n"       the index a keyboard lands on first (the peak)
+//     data-ck-s="3 5"         (charts2) a mark may belong to several things, as space-
+//                             separated tokens: a ribbon between species 3 and 5.
+//     data-ck-f="3 5"         (charts2) on a mark with a reading: while it is read, only
+//                             marks whose data-ck-s holds all of these tokens stay in the
+//                             foreground (data-ck-dim must name "series"). A species' arc
+//                             says its own number, and lists its partners' in its data-ck-s,
+//                             so its ribbons and partners stay; a ribbon says both of its
+//                             species, so only it and those two stay.
 //
 //   Legend, inside .ck:  <button class="ck-leg" data-ck-s="k" aria-pressed="false">
 //                             hover or focus previews that series; a click pins it.
@@ -326,13 +334,19 @@
     }
 
     // ── focus and dim ──
+    // charts2: a mark belongs to series "3", or to several: tokens separated by spaces
+    // ("3 5"), which is what a ribbon between two species needs. A single number is the
+    // old contract, unchanged.
+    function hasTok(m, k) {
+      return (" " + (m.getAttribute("data-ck-s") || "") + " ").indexOf(" " + k + " ") >= 0;
+    }
     function applyFocus(k) {
       if (k === focusSeries && svg.classList.contains("ck-focus") === (k >= 0)) return;
       focusSeries = k;
-      svg.classList.toggle("ck-focus", k >= 0 && dimMode === "series");
+      svg.classList.toggle("ck-focus", k >= 0 && dimMode.indexOf("series") >= 0);
       wrap.classList.toggle("ck-focused", k >= 0);
       svg.querySelectorAll("[data-ck-s]").forEach(function (m) {
-        m.classList.toggle("ck-sel", k >= 0 && Number(m.getAttribute("data-ck-s")) === k);
+        m.classList.toggle("ck-sel", k >= 0 && hasTok(m, k));
       });
       wrap.querySelectorAll(".ck-leg").forEach(function (b) {
         var on = k >= 0 && Number(b.getAttribute("data-ck-s")) === k;
@@ -344,7 +358,7 @@
       svg.querySelectorAll(".ck-on").forEach(function (m) {
         m.classList.remove("ck-on");
       });
-      svg.classList.toggle("ck-focus-i", k !== null && dimMode === "index");
+      svg.classList.toggle("ck-focus-i", k !== null && dimMode.indexOf("index") >= 0);
       svg.querySelectorAll("[data-ck-i]").forEach(function (m) {
         m.classList.remove("ck-sel");
       });
@@ -352,6 +366,35 @@
       svg.querySelectorAll('[data-ck-i="' + k + '"]').forEach(function (m) {
         m.classList.add("ck-on");
         m.classList.add("ck-sel");
+      });
+    }
+
+    // charts2: in "marks" mode a reading can bring a set of marks forward. A mark that
+    // carries data-ck-f="3 5" lights every mark whose data-ck-s holds all of those tokens
+    // (a species: its ribbons and the species they end on; a ribbon: itself and its two
+    // species) and the rest fall to --chart-dim. Only charts that write data-ck-f get it.
+    var hasF = mode === "marks" && !!svg.querySelector("[data-ck-f]");
+    function applyTokens(f) {
+      var want = f ? f.split(" ") : [];
+      svg.classList.toggle("ck-focus", want.length > 0 && dimMode.indexOf("series") >= 0);
+      wrap.classList.toggle("ck-focused", want.length > 0);
+      svg.querySelectorAll("[data-ck-s]").forEach(function (m) {
+        m.classList.toggle(
+          "ck-sel",
+          want.length > 0 &&
+            want.every(function (t) {
+              return hasTok(m, t);
+            })
+        );
+      });
+      wrap.querySelectorAll(".ck-leg").forEach(function (b) {
+        b.classList.toggle(
+          "ck-sel",
+          want.length > 0 &&
+            want.every(function (t) {
+              return hasTok(b, t);
+            })
+        );
       });
     }
 
@@ -386,6 +429,7 @@
       if (!r) return;
       paint(r);
       lightIndex(k);
+      if (hasF) applyTokens(svg.querySelector('[data-tip][data-ck-i="' + k + '"]').getAttribute("data-ck-f"));
       // Point at what is painted (the bar), not at the invisible box that catches the
       // pointer over its slot; a slot with nothing painted gets the box's lower part.
       var shown = svg.querySelector('[data-ck-i="' + k + '"]:not(.ck-hit)');
@@ -401,6 +445,7 @@
       if (cursor) cursor.setAttribute("visibility", "hidden");
       if (dot) dot.setAttribute("visibility", "hidden");
       if (mode === "marks") lightIndex(null);
+      if (hasF) applyTokens(null);
       if (readout) readout.textContent = idleReadout;
       cur = -1;
       if (pinned < 0) applyFocus(-1);
@@ -481,7 +526,10 @@
       }
       var n = mode === "cols" ? cols.length : stops.length;
       if (!n) return;
-      var at = cur < 0 ? 0 : cur;
+      // With no reading yet (focus reached the chart without showing one), the first key
+      // starts from where a keyboard would have landed: the newest column, or the start mark.
+      var from = mode === "cols" ? cols.length - 1 : startAt !== null ? Math.max(0, stops.indexOf(startAt)) : 0;
+      var at = cur < 0 ? from : cur;
       var to = at;
       if (mode === "cols") {
         if (key === "ArrowRight") to = at + 1;
@@ -567,10 +615,16 @@
     });
 
     // A touch that lands outside lets the reading go.
-    document.addEventListener("pointerdown", function (e) {
-      if (!wrap.isConnected) return;
+    // (Taken off again once the chart has been swapped away, so a page that refreshes
+    // a chart every thirty seconds does not collect one listener per refresh.)
+    var elsewhere = function (e) {
+      if (!wrap.isConnected) {
+        document.removeEventListener("pointerdown", elsewhere);
+        return;
+      }
       if (!wrap.contains(e.target) && tip.classList.contains("on")) hide();
-    });
+    };
+    document.addEventListener("pointerdown", elsewhere);
 
     if (typeof ResizeObserver === "function") {
       var first = true;
@@ -586,9 +640,38 @@
     uid++;
   }
 
+  // A chart wider than its card scrolls sideways inside it; a mark with `.ck-scroll-to`
+  // (the "today" line of the migration ridgeline) is brought into view once, so the reader
+  // does not arrive at January on a phone in October.
+  function scrollToMark(svg) {
+    var m = svg.querySelector(".ck-scroll-to");
+    var sc = svg.parentNode;
+    if (!m || !sc || sc.scrollWidth <= sc.clientWidth + 1 || sc.getAttribute("data-ck-scrolled")) return;
+    sc.setAttribute("data-ck-scrolled", "1");
+    sc.scrollLeft += m.getBoundingClientRect().left - sc.getBoundingClientRect().left - sc.clientWidth * 0.7;
+  }
+
+  // Row names (`.ck-sticky`) stay at the left edge of the card while the chart scrolls
+  // under them: an SVG has no `position: sticky`, so they are moved by the scroll offset.
+  function stick(svg) {
+    var sc = svg.parentNode;
+    var els = svg.querySelectorAll(".ck-sticky");
+    if (!els.length || !sc || sc.scrollWidth <= sc.clientWidth + 1 || sc.getAttribute("data-ck-stuck")) return;
+    sc.setAttribute("data-ck-stuck", "1");
+    sc.addEventListener("scroll", function () {
+      var k = svg.viewBox.baseVal.width / svg.getBoundingClientRect().width;
+      var t = "translate(" + (sc.scrollLeft * k).toFixed(1) + " 0)";
+      for (var j = 0; j < els.length; j++) els[j].setAttribute("transform", t);
+    }, { passive: true });
+  }
+
   function scan() {
     var list = document.querySelectorAll("svg[data-ck]");
-    for (var i = 0; i < list.length; i++) bind(list[i]);
+    for (var i = 0; i < list.length; i++) {
+      bind(list[i]);
+      stick(list[i]);
+      scrollToMark(list[i]);
+    }
   }
 
   // `afterSwap` runs in the same task as the swap, before the browser paints, which

@@ -127,6 +127,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/species-hourly", get(species_hourly_partial))
         .route("/pages/species-detections", get(species_detections_partial))
         .route("/pages/species-daily", get(species_daily_partial))
+        .route("/pages/species-year", get(species_year_partial))
         .route("/pages/species-info", get(species_info_partial))
         .route("/pages/species-companions", get(species_companions_partial))
         .route("/pages/species-hero", get(species_hero_partial))
@@ -749,7 +750,7 @@ async fn species_hourly_partial(
         Ok(Ok(hours)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_hourly_chart(&hours),
+            render_hourly_chart("species-hourly", &hours),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -775,21 +776,32 @@ async fn species_daily_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::species_daily_counts(conn, &name, 14))
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::species_daily_counts(conn, &name, 14)?;
+            // When the station was listening, so a day it was off is not drawn as a day this
+            // bird was quiet. Unreadable means unknown, which draws nothing.
+            let effort = match (days.first(), days.last()) {
+                (Some(a), Some(b)) => {
+                    super::listening::effort_by_date(conn, &a.date, &b.date).ok()
+                }
+                _ => None,
+            };
+            Ok::<_, birdnet_db::sqlite::DbError>((days, effort))
+        })
     })
     .await;
     match result {
         // Fourteen calendar days, zeros included: fourteen empty bars say
         // nothing a sentence does not say better.
-        Ok(Ok(days)) if days.iter().all(|d| d.count == 0) => (
+        Ok(Ok((days, _))) if days.iter().all(|d| d.count == 0) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
             r#"<p class="cht-empty">Not heard in the last 14 days.</p>"#.to_string(),
         ),
-        Ok(Ok(days)) => (
+        Ok(Ok((days, effort))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_daily_chart(&days),
+            render_daily_chart("species-daily", &days, None, effort.as_ref()),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -801,6 +813,68 @@ async fn species_daily_partial(
             super::error_states::failed_partial("this species' daily chart")
         }
     }
+}
+
+/// The year as a calendar for one species: a cell a day for the last 365 days, coloured by
+/// how many times it was heard, with the days the station was not listening hatched so they
+/// are not read as days the bird was quiet.
+async fn species_year_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl axum::response::IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::species_daily_counts(conn, &name, 365)?;
+            let effort = match (days.first(), days.last()) {
+                (Some(a), Some(b)) => super::listening::effort_by_date(conn, &a.date, &b.date).ok(),
+                _ => None,
+            };
+            Ok::<_, birdnet_db::sqlite::DbError>((days, effort))
+        })
+    })
+    .await;
+    let html = match result {
+        Ok(Ok((days, _))) if days.iter().all(|d| d.count == 0) => {
+            r#"<p class="cht-empty">Not heard in the last year.</p>"#.to_string()
+        }
+        Ok(Ok((days, effort))) => {
+            let counts: std::collections::BTreeMap<String, i64> = days
+                .iter()
+                .filter(|d| d.count > 0)
+                .map(|d| (d.date.clone(), d.count))
+                .collect();
+            let (from, to) = (
+                days.first().map_or("", |d| d.date.as_str()),
+                days.last().map_or("", |d| d.date.as_str()),
+            );
+            super::viz::heat::calendar(&super::viz::heat::Calendar {
+                id: "species-year",
+                from,
+                to,
+                counts: &counts,
+                effort: effort.as_ref(),
+                unit: "detections",
+                name: "This species through the year",
+            })
+        }
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species year calendar: query failed");
+            return super::error_states::failed_partial("this species' year");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species year calendar: task failed");
+            return super::error_states::failed_partial("this species' year");
+        }
+    };
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 async fn species_detections_partial(

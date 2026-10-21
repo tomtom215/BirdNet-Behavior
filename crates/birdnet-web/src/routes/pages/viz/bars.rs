@@ -108,7 +108,7 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
         .iter()
         .map(|&v| kit::text_width(&kit::compact(v), 10.0))
         .fold(0.0_f64, f64::max);
-    let (pad_l, pad_r) = (widest + 12.0, 6.0);
+    let (pad_l, pad_r) = (kit::axis_margin(widest), 6.0);
     let w = o.width;
     let plot_w = w - pad_l - pad_r;
     let plot_h = o.plot_h;
@@ -118,8 +118,8 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
     let x_of = |hour: f64| pad_l + hour / 24.0 * plot_w;
 
     let head = 22.0;
-    let axis_rows = if o.solar.is_some() { 34.0 } else { 20.0 };
-    let temp_h = if o.temps.len() >= 2 { 44.0 } else { 0.0 };
+    let axis_rows = if o.solar.is_some() { 36.0 } else { 20.0 };
+    let temp_h = if o.temps.len() >= 2 { 58.0 } else { 0.0 };
     let h_total = head + plot_h + axis_rows + temp_h;
 
     // Colour class per bar.
@@ -149,8 +149,9 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
     let mut svg = String::with_capacity(12 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{peak}" data-ck-label="Left and right move from hour to hour.">"#,
+        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="{scroll_label}"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-wide ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{peak}" data-ck-label="Left and right move from hour to hour.">"#,
         id = escape_html(o.id),
+        scroll_label = escape_html(&format!("{}, scrolls sideways on a narrow screen", o.name)),
     );
     svg.push_str(&svg_a11y(o.name, o.desc));
     let g = kit::id_safe(&format!("g-{}", o.id));
@@ -247,9 +248,10 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
             last_end = r;
             let _ = write!(
                 svg,
-                r#"<line class="ck-axis" x1="{x:.1}" y1="{plot_h:.1}" x2="{x:.1}" y2="{t:.1}"/><text class="mono ck-annot" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="10">{label}</text>"#,
-                t = plot_h + 20.0,
-                ty = plot_h + 31.0,
+                r#"<line class="ck-axis" x1="{x:.1}" y1="{t0:.1}" x2="{x:.1}" y2="{t1:.1}"/><text class="mono ck-annot" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="10">{label}</text>"#,
+                t0 = plot_h + 19.0,
+                t1 = plot_h + 23.0,
+                ty = plot_h + 33.0,
             );
         }
     }
@@ -261,33 +263,27 @@ pub(crate) fn hourly(o: &Hourly<'_>) -> String {
         let t_max = o.temps.iter().map(|t| t.1).fold(f64::NEG_INFINITY, f64::max);
         let span = (t_max - t_min).max(1.0);
         let base = plot_h + axis_rows + 6.0;
-        let ty = Linear::new((t_min, t_min + span), (base + temp_h - 16.0, base + 6.0));
+        let (y_top, y_bot) = (base + 4.0, base + 30.0);
+        let ty = Linear::new((t_min, t_min + span), (y_bot, y_top));
         let pts: Vec<(f64, f64)> = o.temps.iter().map(|&(hr, t)| (x_of(hr), ty.at(t))).collect();
         let line = kit::monotone_path(&pts, false);
-        let area = format!(
-            "{line} L{:.1},{b:.1} L{:.1},{b:.1} Z",
-            pts[pts.len() - 1].0,
-            pts[0].0,
-            b = base + temp_h - 16.0
-        );
+        let area = format!("{line} L{:.1},{y_bot:.1} L{:.1},{y_bot:.1} Z", pts[pts.len() - 1].0, pts[0].0);
         let _ = write!(
             svg,
-            r#"<text class="mono ck-lbl" x="{tx:.1}" y="{ly:.1}" text-anchor="end" font-size="10" {hi_attr}>{hi:.0}°</text><text class="mono ck-lbl" x="{tx:.1}" y="{ly2:.1}" text-anchor="end" font-size="10" {lo_attr}>{lo:.0}°</text><path class="ck-area ck-c5 ck-fill" d="{area}" opacity=".14"/><path class="ck-line ck-c5 ck-drawn" d="{line}" pathLength="1"/>"#,
+            r#"<text class="mono ck-lbl" x="{tx:.1}" y="{ly:.1}" text-anchor="end" font-size="10" {hi_attr}>{hi_text}</text><text class="mono ck-lbl" x="{tx:.1}" y="{ly2:.1}" text-anchor="end" font-size="10" {lo_attr}>{lo_text}</text><path class="ck-area ck-c5 ck-fill" d="{area}" opacity=".14"/><path class="ck-line ck-c5 ck-drawn" d="{line}" pathLength="1"/>"#,
             tx = pad_l - 6.0,
-            ly = base + 10.0,
-            ly2 = base + temp_h - 16.0,
-            hi = t_max,
-            lo = t_min,
-            // Marked, so the axis follows the reader's unit like every other
-            // temperature; the text is the Celsius reading it is made from.
+            ly = y_top + 4.0,
+            ly2 = y_bot,
             hi_attr = crate::display::temperature_attr(t_max, 0, false),
             lo_attr = crate::display::temperature_attr(t_min, 0, false),
+            hi_text = format_args!("{t_max:.0}°"),
+            lo_text = format_args!("{t_min:.0}°"),
         );
         let _ = write!(
             svg,
             r#"<text class="ck-lbl" x="{x:.1}" y="{ly:.1}" font-size="10">Temperature</text>"#,
             x = pad_l,
-            ly = base + temp_h - 2.0,
+            ly = base + 46.0,
         );
     }
 
@@ -405,6 +401,11 @@ pub(crate) struct Daily<'a> {
     pub listened: Option<&'a [bool]>,
     /// A hairline at the mean of the days listened, labelled.
     pub mean_line: bool,
+    /// Days from this index on have not happened yet (the current week): an empty slot that
+    /// says "Not yet", which is not a zero and not an unrecorded day.
+    pub future_from: Option<usize>,
+    /// Label the axis with the weekday (`Mon`) rather than the date (`9 Mar`).
+    pub weekday_labels: bool,
     /// A "Show as a table" disclosure.
     pub table: bool,
 }
@@ -419,12 +420,13 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     if n == 0 {
         return EMPTY.to_string();
     }
-    let off = |i: usize| o.listened.is_some_and(|l| l.get(i).is_some_and(|on| !on));
-    let max = o.days.iter().map(|d| d.1).max().unwrap_or(0).max(0);
+    let future = |i: usize| o.future_from.is_some_and(|f| i >= f);
+    let off = |i: usize| !future(i) && o.listened.is_some_and(|l| l.get(i).is_some_and(|on| !on));
+    let max = o.days.iter().enumerate().filter(|(i, _)| !future(*i)).map(|(_, d)| d.1).max().unwrap_or(0).max(0);
     let top = kit::count_ceiling(max as f64);
     let rules = kit::count_ticks(top, 4);
     let widest = rules.iter().map(|&v| kit::text_width(&kit::compact(v), 10.0)).fold(0.0_f64, f64::max);
-    let (pad_l, pad_r) = (widest + 12.0, 8.0);
+    let (pad_l, pad_r) = (kit::axis_margin(widest), 8.0);
     let (w, plot_h) = (o.width, o.plot_h);
     let plot_w = w - pad_l - pad_r;
     let slot = plot_w / n as f64;
@@ -432,13 +434,13 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     let y = Linear::new((0.0, top), (plot_h, 0.0));
     let head = 14.0;
     let h_total = head + plot_h + 22.0;
-    let counted: Vec<i64> = o.days.iter().enumerate().filter(|(i, _)| !off(*i)).map(|(_, d)| d.1).collect();
+    let counted: Vec<i64> = o.days.iter().enumerate().filter(|(i, _)| !off(*i) && !future(*i)).map(|(_, d)| d.1).collect();
     let mean = if counted.is_empty() { 0.0 } else { counted.iter().sum::<i64>() as f64 / counted.len() as f64 };
     let peak = o
         .days
         .iter()
         .enumerate()
-        .filter(|(i, _)| !off(*i))
+        .filter(|(i, _)| !off(*i) && !future(*i))
         .max_by_key(|&(i, d)| (d.1, std::cmp::Reverse(i)))
         .map_or(0, |(i, _)| i);
     let cls = kit::slot_class(o.slot);
@@ -453,9 +455,10 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     let mut svg = String::with_capacity(6 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{last}" data-ck-label="Left and right move from day to day.">"#,
+        r#"<div class="viz-chart ck"><div class="viz-scroll" tabindex="0" role="group" aria-label="{scroll_label}"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-wide ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{last}" data-ck-label="Left and right move from day to day.">"#,
         id = escape_html(o.id),
         last = n - 1,
+        scroll_label = escape_html(&format!("{}, scrolls sideways on a narrow screen", o.name)),
     );
     svg.push_str(&svg_a11y(o.name, o.desc));
     svg.push_str(&kit::gradient_defs(&g, std::slice::from_ref(&cls)));
@@ -484,7 +487,7 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     }
     svg.push_str("<g>");
     for (i, (_, c)) in o.days.iter().enumerate() {
-        if *c <= 0 || off(i) {
+        if *c <= 0 || off(i) || future(i) {
             continue;
         }
         let x = pad_l + i as f64 * slot + (slot - bar_w) / 2.0;
@@ -510,7 +513,7 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
             m = kit::compact((mean * 10.0).round() / 10.0),
         );
     }
-    if max > 0 && !off(peak) {
+    if max > 0 && !off(peak) && !future(peak) {
         let px = pad_l + peak as f64 * slot + slot / 2.0;
         // The mean's own label sits at the right edge; the peak steps aside if it would touch it.
         let near_avg_label = o.mean_line && px > pad_l + plot_w - 46.0 && (y.at(max as f64) - y.at(mean)).abs() < 16.0;
@@ -524,7 +527,10 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
         }
     }
     for i in super::timeline::axis_columns(n, 7) {
-        let (short, _) = label_of(&o.days[i].0);
+        let (mut short, long) = label_of(&o.days[i].0);
+        if o.weekday_labels {
+            short = long.chars().take(3).collect();
+        }
         let x = pad_l + i as f64 * slot + slot / 2.0;
         let anchor = if i == 0 && n > 1 { "start" } else if i + 1 == n && n > 1 { "end" } else { "middle" };
         let x = match anchor {
@@ -541,7 +547,9 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
     }
     for (i, (iso, c)) in o.days.iter().enumerate() {
         let (_, long) = label_of(iso);
-        let tip = if off(i) {
+        let tip = if future(i) {
+            kit::tip(&long, &[], Some("Not yet"))
+        } else if off(i) {
             kit::tip(&long, &[], Some("The station was not listening"))
         } else {
             let count_s = kit::thousands(*c);
@@ -573,7 +581,7 @@ pub(crate) fn daily(o: &Daily<'_>) -> String {
                 svg,
                 r#"<tr><th scope="row">{}</th><td class="num">{}</td></tr>"#,
                 escape_html(&label_of(iso).1),
-                if off(i) { "not listening".to_string() } else { kit::thousands(*c) },
+                if future(i) { "not yet".to_string() } else if off(i) { "not listening".to_string() } else { kit::thousands(*c) },
             );
         }
         svg.push_str("</tbody></table></div></details>");
