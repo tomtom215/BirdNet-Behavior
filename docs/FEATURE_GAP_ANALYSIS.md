@@ -7,14 +7,17 @@
 >   surviving maintained fork of the PHP/Python original this project descends
 >   from. Compared at `88985a3` (2026‑02‑28).
 > * [`tphakala/birdnet-go`](https://github.com/tphakala/birdnet-go) — an
->   independent Go rewrite of the same idea: more than twenty times
->   BirdNET-Pi's size and about two to three times this project's (table below).
+>   independent Go rewrite of the same idea: about twenty-five times
+>   BirdNET-Pi's size and about twice this project's by total lines (table below).
 >   Compared at `1e74c82` (2026‑09‑02), then re-checked at `780ce51`
 >   (2026‑10‑11), where the 239 commits between are triaged in **Part 5**;
->   `f4f019a` (2026‑10‑15), 37 more commits, **Part 7**; and `a1a77af`, 65 more,
->   found by the parity audit of 2026‑10‑20 and listed in **Part 8**.
->   `Nachtzuster/BirdNET-Pi` was re-checked on 2026‑10‑11 and was still at
->   `88985a3`; Part 8 did not re-check it.
+>   `f4f019a` (2026‑10‑15), 37 more commits, **Part 7**; `a1a77af`, 65 more,
+>   found by the parity audit of 2026‑10‑20 and listed in **Part 8**; and
+>   `30d163ded` (2026‑10‑20), 19 more. **Part 9 (2026‑10‑21)** is the first part
+>   whose upstream citations were opened and read; it re-verifies Part 8, classifies
+>   all 84 commits since `f4f019a`, and enumerates both upstreams' features.
+>   `Nachtzuster/BirdNET-Pi` was re-read in full on 2026‑10‑21 and is still at
+>   `88985a3`.
 
 ## How this was measured
 
@@ -30,9 +33,9 @@ were not counted again.
 
 | Project | Language | Lines | Notes |
 |---|---|---|---|
-| Nachtzuster/BirdNET-Pi | PHP + Python + shell | ~25 k, of which ~18 k is the fork's own code — the rest is vendored Adminer and file-manager PHP | 188 tracked files |
-| tphakala/birdnet-go | Go + Svelte | ~542 k Go (~265 k excluding `_test.go`) | 52 subtrees under `internal/`; 137 Go packages counting nested ones |
-| **BirdNet-Behavior** | Rust | ~200 k `.rs` at `ee795ed`; 276 926 `.rs` lines on 2026‑10‑20 (a different command, see above) | 8 crates + binary |
+| Nachtzuster/BirdNET-Pi | PHP + Python + shell | 24 961 at `88985a3` (re-counted 2026‑10‑21), of which 18 145 is the fork's own code — the rest is vendored Adminer and file-manager PHP | 188 tracked files |
+| tphakala/birdnet-go | Go + Svelte | 631 437 Go lines at `30d163ded` (292 215 excluding `_test.go`); ~542 k (~265 k) at `b184f689`, 2026‑09‑03 | 3 438 tracked files; 55 directories under `internal/` (52 subtrees at `b184f689`) |
+| **BirdNet-Behavior** | Rust | 293 541 `.rs` lines in 654 files at `ea2d439` (`git archive HEAD src crates`, 2026‑10‑21); 276 926 on 2026‑10‑20 by `find`; ~200 k at `ee795ed` | 8 crates + binary |
 
 Every row below carries the upstream file that is the evidence for the claim
 and the file in this repository that is the evidence for our state. A row that
@@ -564,7 +567,7 @@ rather than trading them away to close gaps.
 | **Time-series primitives** — tumbling/sliding/hopping/session windows, Shannon diversity, gap characterisation, peak detection | `crates/birdnet-timeseries/` | — |
 | **Repetition-based false-positive filter with derived effectiveness check** | `detection/corroboration.rs` — and `minimum_overlap()` *derives* the overlap at which each level stops being a no-op, rather than documenting it | birdnet-go's equivalent has levels but no self-check that a configured level is inert |
 | **Quarantine** for implausible detections rather than silent discard | `sqlite/queries/quarantine.rs`, `/quarantine` | — |
-| **Encrypted off-site backup with SigV4 signing implemented in-tree** | `integrations/src/offsite/` | upstream leans on SDKs |
+| **Encrypted off-site backup with SigV4 signing implemented in-tree** | `integrations/src/offsite/` | upstream leans on SDKs. *Corrected 2026‑10‑21 (9.6): birdnet-go also encrypts backups (`backup.encryption`); only the implementation is ours.* |
 | **Share links** — signed, expiring, single-detection public links | `routes/share.rs` | — |
 | **RSS and iCal feeds** of rare detections | `routes/feeds.rs` | — |
 | **`--doctor`, `--channel-report`, `--migration-report`** — self-diagnosis that measures rather than asserts | `src/doctor/` | birdnet-go has `support collect`; the measured channel report is ours |
@@ -691,7 +694,7 @@ MP3 encoder — not applicable (ffmpeg is our ingest and encoder). `8f0d3ec`,
 to a compiled-in two-entry catalogue. `0ee57b1`, `32e1f50` ultrasonic export and
 audible bats — wait on G‑14. `83ed7b9` running with zero acoustic models —
 declined: `inference/registry.rs` refuses an empty registry on purpose.
-`98b1c62` `lang` follows the UI language — not applicable (the UI is English).
+`98b1c62` `lang` follows the UI language — not applicable (the UI is English). *Corrected 2026‑10‑21: "the UI is English" is the gap, not a reason; birdnet-go ships 15 UI translations (A‑5).*
 
 ### Corrections to Part 2 this re-check found
 
@@ -768,24 +771,24 @@ project has, not that the diff was checked.
 | `335d8d1`, `c275285` reconcile-pass back-off | Not compared. |
 | `86a9863` unreadable cgroup memory limits reported as unknown | Not compared against `memory.rs`. |
 | the `go-audio-dsp`, `go-flac`, `go-mp3`, `go-m4a`, `go-opus` refactors; native AAC/MP3/Opus clip encoding with no FFmpeg; Node 26 CI | Implementation changes in a Go project. Native clip encoding would be a feature here, but the statement this row first made, that clips are WAV only, was wrong: clips are WAV, converted to MP3, FLAC or Ogg by `ffmpeg` or, failing that, `sox` (`crates/birdnet-core/src/audio/extraction/format.rs`, `convert.rs`). Opus and AAC are not offered; see P‑18. |
-| `9642f74`, `c77f11b` interface-language and settings-page fixes | Not applicable: this interface is English, and species names are the localised part (Part 5). |
+| `9642f74`, `c77f11b` interface-language and settings-page fixes | Not applicable: this interface is English, and species names are the localised part (Part 5). *Corrected 2026‑10‑21: see A‑5; the interface language is a gap.* |
 
 ## Part 8 — birdnet-go `f4f019a` → `a1a77af`, and the parity audit of 2026‑10‑20
 
 Sixty-five commits, and the 22 findings the audit listed, P‑1 … P‑22.
 
-**What was and was not checked.** The upstream columns are the audit's citations (a file and line in birdnet-go, one in BirdNET-Pi) and were **not re-read** for this part; upstream was not reachable from the session that wrote it. The `Ours` column was checked at the commit this was edited on: each cell names the file and says what a grep or a read of it showed. It was written first when none of P‑1 to P‑6 was in the tree; rows P‑1 to P‑4 and P‑6 were rewritten on 2026‑10‑20 after the work landed on this branch (commits named in each cell), and what each commit's tests did and did not cover is said in its cell. The verdicts are the document's (GAP, PARTIAL, SHIPPED, PARITY, DECLINED).
+**What was and was not checked.** The upstream columns are the audit's citations (a file and line in birdnet-go, one in BirdNET-Pi) and were **not re-read** for this part; upstream was not reachable from the session that wrote it. **They were re-read on 2026‑10‑21: see 9.1**, which corrects P‑3, P‑4, P‑6, P‑15, P‑17 and P‑20 (marked below). The `Ours` column was checked at the commit this was edited on: each cell names the file and says what a grep or a read of it showed. It was written first when none of P‑1 to P‑6 was in the tree; rows P‑1 to P‑4 and P‑6 were rewritten on 2026‑10‑20 after the work landed on this branch (commits named in each cell), and what each commit's tests did and did not cover is said in its cell. The verdicts are the document's (GAP, PARTIAL, SHIPPED, PARITY, DECLINED).
 
-Tallied from the last column, counting P‑2 once, as PARTIAL (its 0,0 default is fixed; fuzzing and a separate threshold are not): 4 SHIPPED (P‑1, P‑3, P‑5, P‑6), 7 PARTIAL (P‑2, P‑4, P‑7, P‑14, P‑15, P‑20, P‑22), 11 GAP.
+Tallied from the last column by script after the 2026‑10‑21 corrections, counting P‑2 once, as PARTIAL (its 0,0 default is fixed; fuzzing and a separate threshold are not): 4 SHIPPED (P‑1, P‑3, P‑5, P‑6), 6 PARTIAL (P‑2, P‑4, P‑7, P‑14, P‑15, P‑22), 12 GAP (P‑20 moved from PARTIAL to GAP).
 
 | # | Upstream (the audit's citation) | Ours (checked) | Verdict |
 |---|---|---|---|
 | P‑1 | Alert-rule cooldown per rule and species (`internal/alerting/engine.go:337,436,475`) | `alert_rules.cooldown_secs` (migration 55, `51eaaa71`) and the gate in `src/daemon/alert_cooldown.rs`, which runs on the detection's own time, applies to webhook actions only and gives its window back when the request never left. The rule form sets it (`49def1d8`): minutes, 5 by default, refused above 7 days. The export is version 3. Upstream's "per rule *and species*" is matched: the gate is keyed on both. | SHIPPED |
 | P‑2 | BirdWeather: the audit lists three differences. Ours posts coordinates 0,0 when no location is set; upstream can fuzz the posted location; upstream has an upload threshold separate from the detection threshold (`internal/conf/config.go:348-349`, `birdweather_client.go:258`) | The 0,0 default is fixed (`0b456c20`): `birdnet_integrations::birdweather::check_location` refuses a missing, non-finite, off-globe or exactly 0,0 position, the client is not built without one, `--doctor` has a "BirdWeather location" family, and an upload an earlier version parked at 0,0 is dropped. No fuzzing: the only "jitter" in `crates/birdnet-integrations/src/birdweather.rs` is retry back-off. No BirdWeather-specific threshold: the posts are the detections that passed the global one. | SHIPPED (the 0,0 default); GAP (fuzzing, separate threshold) |
-| P‑3 | Range-filter explorer: a route that lists the species the filter admits (`internal/api/v2/range/range.go:49-60`) | `GET /api/v2/species/occurrence` and the page `/species/occurrence` (`1f92c980`) give, per species, the model's probability, the threshold in force and the station's decision with its reason (range model, or the operator's lists), for the station's place and a week; a species page for a held-back bird links to it. Checked against the real V2.4 range model (a European station keeps the magpie and holds back a North American bird, and the reverse) and, with the operator's lists, against `filter_species`. Not run: the V3 geomodel variant, a Raspberry Pi, and the memory a second copy of the range model takes. | SHIPPED |
-| P‑4 | Container storage-persistence check (`a43718b`, `internal/health/checks/storage_persistence.go:54`) | The Station Health banner and header badge (`b1025a19`, shared list `station_issues`) and `--doctor`'s "Data volume" check (`45781dcd`) flag a data directory on the container's own writable layer, from the mount table. The shipped image declares `VOLUME /data`, so a bare `docker run` gets an anonymous volume, which is a mount and is not flagged although `docker rm -v` or `--rm` deletes it. Tested on `mountinfo` fixtures modelled on Docker's output, not in a container. | PARTIAL |
+| P‑3 | Range-filter explorer: a route that lists the species the filter admits (`internal/api/v2/range/range.go:49-60`) | `GET /api/v2/species/occurrence` and the page `/species/occurrence` (`1f92c980`) give, per species, the model's probability, the threshold in force and the station's decision with its reason (range model, or the operator's lists), for the station's place and a week; a species page for a held-back bird links to it. Checked against the real V2.4 range model (a European station keeps the magpie and holds back a North American bird, and the reverse) and, with the operator's lists, against `filter_species`. Not run: the V3 geomodel variant, a Raspberry Pi, and the memory a second copy of the range model takes. **Corrected 2026‑10‑21 (9.1, A‑14):** upstream's explorer is eight routes, including a what-if at any latitude, longitude, threshold and date, a CSV and a manual rebuild; ours answers for the station's own place and a week only. SHIPPED is for the explorer, not for those. | SHIPPED |
+| P‑4 | Container storage-persistence check (`a43718b`, `internal/health/checks/storage_persistence.go:54`) | The Station Health banner and header badge (`b1025a19`, shared list `station_issues`) and `--doctor`'s "Data volume" check (`45781dcd`) flag a data directory on the container's own writable layer, from the mount table. The shipped image declares `VOLUME /data`, so a bare `docker run` gets an anonymous volume, which is a mount and is not flagged although `docker rm -v` or `--rm` deletes it. Tested on `mountinfo` fixtures modelled on Docker's output, not in a container. **Added 2026‑10‑21 (9.1):** upstream judges four paths (config, database, models, clips); ours judges the directory holding the database only. | PARTIAL |
 | P‑5 | Support-bundle coordinates (`91618b8`, `internal/support/collector.go:245`) | The bundle shows `LATITUDE` and `LONGITUDE` to one decimal, in the configuration and wherever the journal printed them: `145f95e4`, `src/support.rs` (`coarse_coordinate`), gated by `the_stations_coordinates_leave_the_bundle_at_one_decimal`. | SHIPPED |
-| P‑6 | Session cookie `Secure` decided from the connection (`6596663`) | `birdnet_web::request_scheme` (`af748031`): a request is HTTPS when it arrived on the station's own TLS listener, when a trusted proxy says so (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or when `BNB_PUBLIC_URL` is `https://` and the request's `Host` is that address; `Secure` follows. A real TLS handshake is in the test. | SHIPPED |
+| P‑6 | Session cookie `Secure` decided from the connection (`6596663`) | `birdnet_web::request_scheme` (`af748031`): a request is HTTPS when it arrived on the station's own TLS listener, when a trusted proxy says so (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or when `BNB_PUBLIC_URL` is `https://` and the request's `Host` is that address; `Secure` follows. A real TLS handshake is in the test. **Cite corrected 2026‑10‑21 (9.1):** `6596663` is upstream's opt-in list of exact client IPs whose direct plain-HTTP sessions omit `Secure` (`security.plainhttpsessionclients`), a different mechanism that serves the same reported case. | SHIPPED |
 | P‑7 | Settings that take effect without a restart | `SETTING_SPECS` in `src/helpers/settings_overlay.rs` has 67 entries: 47 are `Wiring::Bridged` (overlaid onto the config, so they take effect on the next restart, as the enum's own comment says) and 20 are `Wiring::OwnedBy` (read from the `settings` table by the named subsystem). Whether each of the 20 reads it per use or once at start was not checked. Counted with `grep -c 'Wiring::Bridged'` and `grep -c 'Wiring::OwnedBy'` over the text of `SETTING_SPECS`. | PARTIAL |
 | P‑8 | Browser playback gain, high-pass and compressor (`frontend/src/lib/utils/audioNodes.ts:110-150`) | No Web Audio code in `crates/birdnet-web` (a grep of its `.js`, `.html` and `.rs` for `AudioContext`, `createGain` and `BiquadFilter` finds none). The player offers a pitch control only (N‑2). | GAP |
 | P‑9 | Opt-in iframe embedding (`internal/api/middleware/security.go:51-132`) | `content_security_policy` sends `frame-ancestors 'self'` (`crates/birdnet-web/src/security.rs:75`) and `X-Frame-Options: SAMEORIGIN`, both fixed; no setting changes them. | GAP |
@@ -794,11 +797,563 @@ Tallied from the last column, counting P‑2 once, as PARTIAL (its 0,0 default i
 | P‑12 | Per-species minimum interval between detections | No setting or table of that shape was found (a grep for `min_interval`, `minimum.interval` and `species_interval` in `crates` and `src` finds none). `species_thresholds` carries thresholds, by its name; its columns were not opened. | GAP |
 | P‑13 | A dashboard custom image or webcam snapshot with a title (BirdNET-Pi `scripts/overview.php:19-27`) | Nothing on a dashboard page. `custom_image_dir` is a per-species override. See N‑6. | GAP |
 | P‑14 | A hardware inventory in the support bundle | The bundle stages `uname -a` and `df -h` (`uname.txt`, `disk.txt`) beside the doctor report, which has a CPU check; no CPU model, memory or USB audio inventory member. The doctor report's contents were not compared item for item. | PARTIAL |
-| P‑15 | "Test connection" buttons for MQTT, eBird, weather and ntfy | `routes/admin/notification_test.rs` tests the push channel and BirdWeather. No route tests MQTT, eBird or weather. ntfy is a native push URL, so the push test sends to it; that was not run. | PARTIAL |
+| P‑15 | "Test connection" buttons for MQTT, eBird, weather and ntfy | `routes/admin/notification_test.rs` tests the push channel and BirdWeather singly, and its "test everything" run (`test_all`) also runs an MQTT and an e‑mail probe (DD‑24; gate `mqtt_and_email_are_tested_and_a_dead_broker_fails_the_run`). **eBird and weather are tested nowhere.** ntfy is a native push URL, so the push test sends to it; that was not run. (Corrected 2026‑10‑21: this cell said no route tests MQTT; 9.1.) | PARTIAL |
 | P‑16 | Temperature unit and 12/24-hour display | No setting for either was found (a grep of `crates` and `src` for `fahrenheit`, `temperature_unit`, `time_format` and `12h` finds only `routes/feeds.rs`, which was not opened). | GAP |
-| P‑17 | Spectrogram style and dynamic-range options | One colour map, `viridis` (`routes/spectrogram/colormap.rs`); no dynamic-range constant or setting was found in `routes/spectrogram/`. `raw_spectrogram` only removes the overlay label. | GAP |
+| P‑17 | Spectrogram style and dynamic-range options | One colour map, `viridis` (`routes/spectrogram/colormap.rs`), and a fixed 80 dB range (`mel.to_db(1.0, 80.0)`, `routes/spectrogram/render.rs:71`) — upstream's 80 / 100 / 120 dB options and four styles (`config.go:253-279`) have no setting here. `raw_spectrogram` only removes the overlay label. (Corrected 2026‑10‑21: this cell said no range constant existed; 9.1. Options for both were uncommitted in the shared tree that day.) | GAP |
 | P‑18 | Opus and AAC clip export | Clips are WAV, converted to MP3, FLAC or Ogg by `ffmpeg` or `sox` (`audio/extraction/format.rs`). Deferred on purpose: `UNATTENDED_DEPLOYMENT_AUDIT.md` S-15 calls it optional and low priority. | GAP |
 | P‑19 | AviCommons image provider (the licence is to check) | The providers are Wikipedia and Flickr (`species_images/`); AviCommons is named nowhere in the tree. Its licence was not checked. | GAP |
-| P‑20 | Season carry-over: "new this season" for a resident (`3582fc8`) | `species_tracking.rs` computes `new_this_season` (G‑16, served at `routes/species.rs`). Whether it treats a resident heard last season the way the upstream change does was not compared. | PARTIAL |
+| P‑20 | Season carry-over: "new this season" for a resident (`3582fc8`) | `species_tracking.rs` computes `new_this_season` (G‑16, served at `routes/species.rs`). **It does not** (9.1, read): `classify` sets `new_this_season = first_season == on_date`, with no carry-over from before the season boundary, so a resident heard on the last day of one season and the first of the next is "first this season" on the second. Upstream's fix (`3582fc843`) treats a species seen within the seasonal window (7 days by default) before the boundary as carried over. API-only today (G‑16). | GAP |
 | P‑21 | A weather JSON API | The weather providers shipped (G‑26), but no route serves the data: `openapi.json` has no weather path and a grep of the route tables finds none. | GAP |
 | P‑22 | A page to upload, generate and download TLS certificates (ACME declined here: `crates/birdnet-web/src/tls.rs:17-23`) | `--tls-mode` has `off`, `self-signed` and `manual`, set by flag, environment or config; the generated CA is a file on disk. No page uploads, generates or downloads a certificate. | PARTIAL |
+
+## Part 9 — full re-audit of 2026‑10‑21
+
+Parts 1–8 were written without being able to open either upstream (Part 8 says so
+of its own citations). Both are now cloned read-only, and this part is the first
+in the document whose upstream citations were **opened and read**: tphakala/birdnet-go
+at `30d163ded` (2026‑10‑20), Nachtzuster/BirdNET-Pi at `88985a3` (2026‑02‑28, unchanged
+since Part 1: `git log -1`), and this project at `ea2d439`.
+
+### 9.0 Method, and what was not checked
+
+Every table cell carries one of four evidence tags, because "I looked" covers four
+very different things:
+
+* **ran** — I executed it and saw the output (a command, the real binary, the
+  running fixture on `:8517`).
+* **read** — I opened the cited source or document at the cited place.
+* **grep** — presence or absence by search (`git grep … HEAD` for this project).
+  An absence found this way is "not found by that pattern", not "does not exist".
+* **not checked** — said so, so nobody has to guess.
+
+Rules this part followed:
+
+* **Ours is `ea2d439`, not the working tree.** Other agents had 46 uncommitted
+  files in the shared tree while this was written (spectrogram look options, a
+  per-species interval in `birdnet-db`, settings, `processor.rs`, `duplicate.rs`
+  among them). Any claim about "ours" was re-run as `git grep … HEAD` or
+  `git show HEAD:…` so it describes a commit, not a half-written edit. Where the
+  tree already differs, the row says "in flight".
+* **A parity claim needs an observed equivalent.** "Observed" means the route or
+  setting exists at HEAD and, for pages, answers on the fixture (`curl` status
+  and body on `:8517`). It does **not** mean the behaviour matches upstream's
+  beyond what a row states.
+* **No screenshots were reviewed.** This was a documentation task; no UI was
+  changed. The fixture was read with `curl`, not looked at.
+
+Not done, stated plainly:
+
+* No upstream program was run; nothing here compares BirdNET-Pi's or
+  birdnet-go's runtime output with ours beyond what Parts 5–8 and
+  `docs/book/guides/parity.md` already say.
+* birdnet-go's Svelte frontend (about 130 components) was listed and sampled,
+  not read page by page. Its `config.schema.json` was reduced to 450 leaf keys
+  and mapped by group (9.5), not key by key.
+* Of the 84 birdnet-go commits since `f4f019a`, those marked (m) in 9.3 were read
+  from their messages (`git show --format=%B -s`); the rest were triaged by subject
+  line alone. No diff was read in full.
+* Nothing was run on a Raspberry Pi, a real systemd host, or in a container.
+* The older rows (Parts 1–7) were checked mechanically, not re-derived (9.2).
+
+### 9.1 Part 8 re-verified against the upstream source
+
+Each upstream citation of P‑1 … P‑22 was opened; each `Ours` cell was re-checked at
+`ea2d439`. Rows not listed as changed were found as written.
+
+| # | Upstream citation, re-read | Verdict on the row | Evidence |
+|---|---|---|---|
+| P‑1 | `engine.go:337` is `cooldownExpiredLocked` in the detection-escalation path; `:436` and `:475` are `tryAcquireCooldown`. The key is `cooldownStateKey{ruleID, scope}` (`:119-139`): species-scoped only for an event rule on a detection event that names a species, per metric instance for metric rules. Upstream's cooldown guards every action a rule has; ours guards the webhook arm only (`processor.rs`, `AlertAction::Webhook` calls `alert_cooldowns.should_fire`; the Log and Suppress arms do not, and have nothing to rate-limit) | **Right.** All nine commits the Part 8 cells name are ancestors of HEAD (`git merge-base --is-ancestor`, nine times, all true); migration 55 is `version: 55` at `migration.rs:2310` | read, ran |
+| P‑2 | `config.go:348-349` is right (`Threshold`, `LocationAccuracy`, metres). `birdweather_client.go:258` is right for the fuzz: it is `func (b *BwClient) RandomizeLocation` (called at `:679`); it says nothing of the threshold, whose gate is `analysis/processor/actions_integrations.go:74`, in neither cited file | **Verdict stands** (0,0 fixed; no fuzz; no separate threshold). `git grep -i -e locationaccuracy -e location_accuracy -e birdweather_threshold HEAD` finds nothing. Ours posts the station's exact coordinates to a third party; that is a privacy difference, not only a missing option | read, grep |
+| P‑3 | `range.go:49-60` right. Upstream's explorer is eight routes: `status`, `species/scores`, `species/count`, `species/list`, `species/csv`, `POST species/test` (a **what-if** at any latitude, longitude, threshold and date), `POST rebuild`, and `GET /range/heatmap` (Part 6) | **Stays SHIPPED for the explorer, but the cell overstated parity.** Ours is `GET /api/v2/species/occurrence` and `/species/occurrence` (`species.rs:20`), for the station's own place and a week. Not matched: the what-if, the CSV, the manual rebuild. Recorded as A‑14 | read, grep |
+| P‑4 | `storage_persistence.go:54` is `Name()`; the check covers **four** key paths — config, database, models, clips (`:39`, the commit title) | Ours (`src/doctor/disk.rs::check_data_volume`, `birdnet_web::data_volume`) judges **one** directory: the one holding the database. A recordings directory or model directory elsewhere on the container layer is not examined. PARTIAL stands; its reason is now two-part (anonymous volume; one path of four) | read |
+| P‑5 | `collector.go:245` lists `latitude`, `longitude` among the redacted keys. `91618b8` is "keep date-time prefixes intact when scrubbing coordinates", a fix *to* the scrubber, not its origin | Right as written; `coarse_coordinate` is at `src/support.rs:105`, its gate at `:531` | read |
+| P‑6 | **The cited commit is a different mechanism.** `6596663` is `659666336` "keep session cookies Secure unless the client is listed": an **opt-in list of exact client IPs** (`security.plainhttpsessionclients`, hot-reloadable) whose direct plain-HTTP sessions omit `Secure`; with the list empty, behaviour is as before | Our `request_scheme` decides `Secure` from the connection instead, and so also serves upstream's scenario (a container calling `http://birdnet-go:8080` while browsers use an HTTPS proxy: its `Host` is not the public one, so it gets a non-`Secure` cookie). Residual: a plain-HTTP client that sends the *public* `Host` is still `Secure` and cannot be admitted, where upstream's list admits it. SHIPPED stands, as "different mechanism, same outcome for the reported case" | read |
+| P‑7 | Not a citation row. Counts re-derived **from the committed file**: `git show HEAD:src/helpers/settings_overlay.rs`, text of `SETTING_SPECS`: 67 entries, 47 `Wiring::Bridged`, 20 `Wiring::OwnedBy`. (A whole-file `grep -c` gives 57 and 27: it counts the enum, tests and comments too. The row's sentence naming the method is the right one.) Upstream marks settings "Hot-reloadable" in its config reference; ours says "next restart" on the Settings page | PARTIAL stands; per-key hot-reload of the 20 `OwnedBy` keys still **not checked** (the species lists are refreshed live: `SpeciesListsProvider`) | ran, read |
+| P‑8 | `audioNodes.ts:110-150` right (gain, high-pass biquad, optional compressor) | Right; `git grep -e AudioContext HEAD -- crates/birdnet-web` finds nothing | read, grep |
+| P‑9 | `security.go:51-132` right; the setting is `WebServer.AllowEmbedding` (`config.go:1707`), described there as the Home Assistant case | Right. `git grep -i allow_embedding HEAD` finds nothing; `frame-ancestors 'self'` is at `security.rs:75` | read, grep |
+| P‑10 | Upstream stores `ClientCert` / `ClientKey` paths (`config.go:764-765`) and a UI uploads them (`api/v2/integrations/mqtt_tls.go`, `GET`/`POST`/`DELETE /integrations/mqtt/tls/certificate`) | Right; `.with_no_client_auth()` at `publisher.rs:267` | read |
+| P‑11 | Upstream: `GET`/`DELETE /dynamic-thresholds`, `/:species`, `/:species/events`, `/stats` (`routes_enumeration_test.go:31-32,76-79`) | Right; `git grep -e dynamic_thresholds -e DynamicThresholds HEAD -- crates/birdnet-web/src` finds nothing | read, grep |
+| P‑12 | `SpeciesConfig{Threshold, Interval, Actions}` (`config.go:937-941`). **Upstream also has per-species `Actions`** (run a command on a detection of that species); the row names only the interval | At `ea2d439` ours has `species_thresholds(sci_name, confidence_threshold, created_at)` (`migration.rs:124`) and no interval. **In flight**: the shared tree exports a `set_species_interval` from `birdnet_db::sqlite`, uncommitted and not audited. Per-species actions are not in flight and are not covered by an alert rule's webhook, which fires per rule, not per species list entry | read, grep |
+| P‑13 | `overview.php:19-27` right (`CUSTOM_IMAGE` and `CUSTOM_IMAGE_TITLE`, read from the file at `install_config.sh:283-284`, edited at `advanced.php:490-493`) | Right. **The three mislabels N‑6 owes a correction are still there**: `settings/render/system.rs:199` ("BirdNET-Pi: CUSTOM_IMAGE"), `cli.rs:974`, `routes/images.rs:164` | read, grep |
+| P‑14 | Upstream added the inventory in `e05d97536` (USB devices and sound cards), `97ec7176f` (inference runtime, host environment) and masks USB serials (`91674440d`) | Right. Ours stages `uname -a` and `df -h` (`support.rs:372-373`); the doctor reports CPU cores | read |
+| P‑15 | `integrations.go:105,117,121,125`: test routes for MQTT, BirdWeather, weather, eBird | **Wrong cell.** It says "No route tests MQTT". `test_all` in `notification_test.rs` runs an MQTT and an e‑mail probe (DD‑24), and `mqtt_and_email_are_tested_and_a_dead_broker_fails_the_run` (`:536`) holds it. What is true: those two are inside the one "test everything" run, not separate buttons; **eBird and weather are not tested anywhere**. Corrected in place | read |
+| P‑16 | `config.go:186` (`Dashboard.TemperatureUnit`), `settings.ts:701` (`timeFormat`) | Right; weather is Celsius from the provider request (`weather.rs:389,408`) to the page (`WeatherSample.temp_c`, `overlays.rs:125`; `{temp:.0}°C`, `pages/health.rs:84`), and so is the CPU temperature (`routes/admin/system.rs:343`). `git grep -i -e temperature_unit -e fahrenheit HEAD` finds nothing | read, grep |
+| P‑17 | Upstream: four styles (`default`, `scientific_dark`, `high_contrast_dark`, `scientific`) and a dynamic range of 80, 100 or 120 dB (`config.go:253-279`) | **Wrong cell.** It says "no dynamic-range constant … was found". It is `mel.to_db(1.0, 80.0)` at `routes/spectrogram/render.rs:71`: a fixed 80 dB, upstream's "high contrast" value. **In flight**: the shared tree adds `spectrogram_colormap` and `spectrogram_range_db` (uncommitted). Corrected in place | read, grep |
+| P‑18 | `config.go:49`: `wav`, `flac`, `aac`, `opus`, `mp3`; ultrasonic captures only `wav` or `flac` | Right | read |
+| P‑19 | `imageprovider/avicommons.go` serves an **embedded dataset** (`imageprovider/data/latest.json`) with a per-photo licence and author, images from `static.avicommons.org` at 320 px; it reads the licence code (`cc-by-nc` …) per entry | Right. The licence question is real: entries carry non-commercial codes | read |
+| P‑20 | `3582fc843`: a species already seen within the window *before* the season boundary is "carried over", not new | **Verdict was too soft: PARTIAL → GAP.** Ours (`species_tracking.rs::classify`) sets `new_this_season = first_season == on_date`, where `first_season` is the first detection since `season_start`. A resident heard on 20 and 21 December is therefore "first this season" on the 21st, which is the defect upstream fixed. The tests cover a species last heard 66 days before the boundary (new, which upstream would also say: its carry-over window is `DefaultSeasonalTrackingWindowDays = 7`) and one already heard inside the season; none covers a species heard just before the boundary. Not run, read only; the effect is API-only today (G‑16). Corrected in place | read |
+| P‑21 | Upstream: `GET /weather/latest`, `/daily/:date`, `/hourly/:date`, `/hourly/:date/:hour`, `/detection/:id`, `/sun/:date`, `/moon/:date` | Right; no weather path in `openapi.json` (98 operations) | read, ran |
+| P‑22 | Upstream has `TLSModeAutoTLS` (Let's Encrypt, `config.go:1584`) as well as upload, generate, download and delete (`GET`/`POST`/`DELETE /tls/certificate`, `/download`, `/generate`) | Right; `tls.rs:17-23` is the "no ACME client here" paragraph | read |
+
+Tally after the corrections, by script over the Part 8 table's last column: 4 SHIPPED, 6 PARTIAL, 12 GAP, with P‑2 counted once as PARTIAL (see the header of Part 8).
+
+### 9.2 The older rows, checked mechanically
+
+* **Paths.** A script took every backticked file name in this document (186) and
+  looked each up in `git ls-files`. 172 resolve. The other 14 are upstream files
+  (`install_config.sh`, `plotly_streamlit.py`, `config.schema.json`, …), generated
+  names (`uname.txt`), or the one the audit got wrong (`src/integrations/mqtt/publisher.rs`,
+  already corrected at P‑10). **No `file:line` points past the end of its file.**
+* **Line numbers drift.** Of nine `file:line` citations into our source that I
+  opened, six are exact (`flickr/mod.rs:60`, `provider.rs:12`, `livestream.rs:444`,
+  `security.rs:75`, `publisher.rs:267`, `sources.rs:180`) and three had moved by
+  46 to 300 lines: `SpeciesImages::from_settings` is at `species_images/mod.rs:235`
+  (cited `:182`), `FLICKR_API_KEY` in the redaction list at `redact.rs:431` (cited
+  `:129`), `max_files_per_species` at `disk/manager.rs:93` (cited `:47`). A line
+  number into a living file is a promise nobody keeps; the rows were left as
+  written because the symbol is named beside each. A gate that checks a cited
+  symbol sits near its cited line would cost less than the next audit.
+* **Tallies.** Counted by script on this file: Part 1 has six rows (5 SHIPPED, 1 GAP);
+  Part 2 has 34 (24 SHIPPED, 5 GAP, 2 PARTIAL, 2 DECLINED, 1 IN PROGRESS) — the
+  "34 findings" sentence is right; Part 8's tally sentence was right before the
+  corrections above and is updated. Part 6's route count is right: 29 routes
+  registered in `analytics/handler.go` (8 species, 10 time, 1 confidence, `sun`,
+  `sources`, `range/heatmap`, 5 insights, `dashboard/kpis`, `database/overview`);
+  every one of the 17 route paths named by the 16 rows its table marks SHIPPED
+  exists in our route table (**route exists** — response fields were not re-compared).
+* **Sizes (header table).** Re-counted: birdnet-go at `30d163ded` is 631 437 lines
+  of Go in 3 438 tracked files (292 215 outside `_test.go`), 55 directories under
+  `internal/`; this project at `ea2d439` is 293 541 lines in 654 `.rs` files
+  (`git archive HEAD src crates`, tests included: 2.2× on total lines; against
+  birdnet-go's 292 215 non-test lines it is 1.0×, but ours was not counted without
+  tests, so that one is not like for like); BirdNET-Pi is
+  24 961 lines of PHP, Python and shell, 18 145 without vendored Adminer and the
+  file manager — both as the header says. The header's "about two to three times
+  this project's" was the ratio of an older Go count to an older Rust count and
+  is corrected there.
+* **Rows whose verdict I did not re-derive** (G‑1 … G‑34 apart from those P‑rows
+  touch, N‑1 … N‑5, Parts 5–7 rows): not re-checked beyond the three bullets above.
+  Part 7 says it triaged by subject line; it was not redone.
+
+### 9.3 birdnet-go `f4f019a` → `30d163ded`: 84 commits, classified
+
+Part 8 listed the 22 findings but never classified the 65 commits between `f4f019a`
+and `a1a77af`; the 19 since are new. Subject lines for all 84; messages read for the
+ones marked (m). Dependency, licence and CI bumps (`go-audio-dsp`, `go-flac`,
+`go-opus`, `go-m4a`, npm groups, `golangci-lint`, `mockery`, "update dependency
+licenses" ×8, `scorecard`, docker testing channel) are 18 commits and are not listed.
+
+| birdnet-go | What a user sees | Here | Verdict |
+|---|---|---|---|
+| `fc34a9706` (m), `83db2906a`, `e81763beb`, `61009d97e`, `8f09e5a9f` (m) | The privacy filter keeps speech out of the *whole saved clip* including pre-capture and post-capture, for every model and overlap; a second hit is needed at high overlap; the VAD default is 0.6; only voiced human sounds engage it for Perch labels (BirdNET's Human classes all still do) | Ours checks the clip's reach: `ClipReach` in `detection/privacy.rs:26`, `privacy_clip_reach` in the daemon config (`PIPE7`). Upstream's *deferral* (hold a detection until a speech detector has scanned the whole clip, 30 s limit) and the two-hit rule at overlap were **not compared**. No VAD here (G‑13) | PARITY (clip span, read); GAP (VAD, G‑13); not compared (the rest) |
+| `3582fc843` | "New this season" no longer flags residents | See P‑20 | GAP |
+| `2d05aa907`, `177dfd3d6` (m: cooldowns per species, pruned) | Alert cooldown per species; stale entries pruned | P‑1; ours prunes above `PRUNE_ABOVE = 512` (`alert_cooldown.rs`) | SHIPPED |
+| `14bc82557` (m) | With the alert engine on, dead legacy filter fields are replaced by a notice | Not applicable: one notification path here | n/a |
+| `8a652712e` (m) | A disabled push provider resolves no secrets and raises no error | Not compared (ours has no provider list to disable; destinations come from URLs) | not compared |
+| `659666336` (m), `4f13856b3` (m) | Secure cookies; OAuth redirects keep the proxy base path | P‑6; no OAuth here (G‑20) | SHIPPED / GAP |
+| `a43718b7e` | Warn on ephemeral container storage | P‑4 | PARTIAL |
+| `ad311867c` (m) | The install no longer mounts an unused HLS tmpfs and unmounts stacked ones (one dump showed 219 layers) | Not applicable: the unit sets `PrivateTmp=yes` and mounts nothing per start (`install.sh:2371-2379`, `:2454`, read); the one host tmpfs unit is for manual runs (`:1927-1967`) | n/a |
+| `91618b861`, `6d7a4c851`, `91674440d`, `aa841942a`, `a9dc76cab` (m), `ca8e77238`, `2700a9395` | Support dump: coordinates, USB serials, date-time prefixes, trusted-proxy lists, device tokens redacted or kept intact | Coordinates: P‑5 SHIPPED. USB serials: ours collects no USB inventory. `BIRDNET_TRUSTED_PROXIES` in the bundle: not checked | PARTIAL (not checked) |
+| `e05d97536`, `97ec7176f` | Support dump gains USB/sound-card inventory, ONNX runtime and host environment | P‑14 | PARTIAL |
+| `711c6c0a8` and the 14 spectrogram commits (`bba90b3f9`, `c06a56e88`, `7ac8612f4`, `f01f2d6a7`, `bf67ed470`, `66fcf7907`, `171e14908`, `0627ad0df`, `15cb04288`, `359fa4999`, `5bc07132c` …) | A native Go renderer replaces sox; 4xx for clips and widths it cannot serve; bat spectrograms at the clip's own rate; 503 for a recent clip still missing after a grace wait; stops retrying on a terminal reason | Ours renders spectrograms in Rust on demand (`routes/spectrogram/`); no sox. Whether a missing clip answers 404 or 503 here, and how a long clip's decode is bounded, were **not compared** | not applicable / not compared |
+| `f7ea8b702`, `a75dc27c5`, `7783081fb`, `80e97144b`, `54319d72a`, `e895f9d40`, `2b97854cc` | Frontend: the spectrogram loader stops stalling and over-requesting; one probe before retrying a failed audio load; opt-in loader timing warnings; capture-buffer lag diagnostics | Svelte-specific; the player here is `clip-player.js` (not read against these cases) | not applicable |
+| `1fa733477`, `bd52d32d0`, `91cdc237b`, `1c89bcc90`, `25db3dc48`, `709cd6bb5`, `30b47c71c` | Equalizer: a pass count of 0 means off; Q for low/high-pass; stored values kept on save; the response curve is computed by the backend and plotted | Ours has a per-source EQ with a response preview (`/admin/audio/sources/{id}/eq-preview`, G‑2) | PARITY (route exists; curves not compared) |
+| `df21c8f4e` (m), `71fb75eae`, `ef4b6a77a` | Clip format kept in step with the stored name; ultrasonic capture is never lossy | Not applicable: the stored name decides here (`extractor.rs:397`); no ultrasonic path (G‑14) | n/a |
+| `431181c9e` (m) | Disables KleidiAI kernels on ONNX Runtime before 1.27 (a memory leak on Apple M4/M5) | We ship ONNX Runtime 1.31.0 (`third_party/onnxruntime-1.31.0`), above the fixed version; we have a macOS package (`packaging/macos`) | not applicable (version above the fix) |
+| `c80a5ba68` | Faster first/last detection per species | Not compared (ours reads a summary table built by migration 30) | not compared |
+| `8fe0e3247` | One canonical UI path; bare `/settings` shows General | Server-rendered; `/admin` → 308 to `/station/…` | n/a |
+| `a1a77affe` | Error reports from builds older than six months are stopped | We send none (G‑25) | n/a |
+| `30d163ded`, `286426740`, `9eb4b96c6`, `cba1103ef`, `6126393ae`, `3a27e4072`, `bb3504d8d`, `a35aca29b`, `74a6bd74d` | Console logging no longer blocks; internal refactors and docs | Go-internal | n/a |
+| `9927b4c68` | eBird client sent `/v2/v2/…`; fixed | Ours builds `{base}/v2/data/obs/…` once (`ebird.rs:316`, `DEFAULT_BASE_URL` has no path) | PARITY (built against upstream's docs, not live: G‑27 says so) |
+
+Of the 84, the user-visible ones that need work here are **P‑20** (carry-over) and
+the two privacy items not compared (deferral until the whole clip is scanned; the
+two-hit rule at overlap). Nothing in the 84 is a new feature we lack that is not
+already an `A‑` or `P‑` row.
+
+### 9.4 Nachtzuster/BirdNET-Pi `88985a3`, enumerated
+
+Source of the list: `homepage/views.php` (every `view=` branch), `scripts/install_services.sh`
+(every unit and cron), `scripts/install_config.sh` (every key), `scripts/config.php` and
+`advanced.php` (every form field), `scripts/utils/notifications.py` (every notification
+rule), and the `scripts/*.sh` helpers. Each row names an equivalent that **exists at
+`ea2d439`** (route registered, setting read) or says it does not. "Fixture" means the page
+answered `200` on `:8517`.
+
+#### 9.4.1 Pages and tools
+
+| BirdNET-Pi | Ours | Verdict | Evidence |
+|---|---|---|---|
+| **Overview** (`overview.php`): newest detection, today's species with pictures, "new" and "rare" markers (`RARE_SPECIES_THRESHOLD`, days), `Combo-<date>.png` chart, the operator's one picture (`CUSTOM_IMAGE`) | Today (`/`): live signal, feed, top species, best recordings, Rare / First-today / Very-sure chips; the rare window is `rare_species_days` (web setting). Not carried: the one picture with a title (**N‑6**), the daily chart as a PNG file (ours are HTML/SVG; `git grep "Combo-" HEAD` finds nothing) | PARITY (page); GAP (N‑6) | ran, grep |
+| **Today's Detections** and `Kiosk`: search, delete, "protect", change identification | Today list: `/pages/today-lock`, `-unlock`, `-delete`, `-relabel`, the search box; `/kiosk` | PARITY | ran |
+| **Spectrogram** (live; `spectrogram_viewer.service`) | `/recordings?view=live`, `/ws/spectrogram` (in-process) | PARITY (route; not watched with audio) | ran |
+| **Best Recordings** (`stats.php`): best clips per species | Today's "Best recordings", `/pages/best-detections`, species pages | PARITY | ran |
+| **Species Stats** (Streamlit, port 8501) | `/species`, `/species/detail`, `/patterns`, `/pages/*` analytics, the DuckDB queries (Part 3). The Streamlit process itself is declined (Part 1) | PARITY (substance) | ran |
+| **Daily Charts** (`history.php`) | `/reports?tab=history`, `/pages/history-*` | PARITY | ran |
+| **Weekly Report** (`weekly_report.php`; cron Mon 01:00; Apprise copy) | `/reports`, `WEEKLY_REPORT_SCHEDULE`, `src/weekly_report.rs` | PARITY | ran |
+| **Recordings** (`play.php`): by date or by species; sort by name, count, confidence or date; rename a file's species; delete; protect; "only excluded" filter; "load 40 more" | `/recordings`, `/recordings/{file}`, lock / unlock / delete (`/pages/recordings-*`); sort options not compared | PARITY (not compared in detail) | ran |
+| **View Log** (gotty on `birdnet_log`) | `/admin/system/logs` and `/logs/page` | PARITY | ran |
+| **Tools → Settings** (`config.php`): model, "use metadata model v2", `SF_THRESH`, site name, latitude/longitude, time zone, language, BirdWeather ID, Apprise settings, image provider, info site, colour scheme | `/station/settings`, `/station/capture`, `/station/alerts` (Settings tabs). Colour scheme is per browser here, not per station | PARITY (see 9.4.3 for the key-by-key result) | ran |
+| **Tools → Advanced** (`advanced.php`): audio format, channels, recording card, RTSP streams (many), recording length, extraction length, overlap, confidence, sensitivity, privacy, disk policy, frequency shift, password, public URL, custom image, auto-update, rare threshold, raw spectrogram, three log levels, "run species count" | The same settings, spread over the Settings tabs and `/admin/audio`. Not carried: `FULL_DISK=keep` (**A‑4**), the custom image (**N‑6**), the update schedule (**A‑17**) | PARTIAL | ran, read |
+| **System Info** (phpsysinfo iframe) | `/station`, `/admin/system`, `/api/v2/system/*` | PARITY (Part 1 DECLINED row) | ran |
+| **System Controls**: Reboot, Update, Shutdown, Clear ALL data, Backup, Restore | Update: `POST /admin/update/apply` (manual). Clear: `/admin/system/clear-detections`, `clear-extracted`. Backup: `/admin/system/backup/full`, upload at `/station/data`. **Reboot and Shutdown: none** (**A‑16**) | PARTIAL | ran, read |
+| **Services**: restart / stop / disable each of livestream, Icecast, web terminal, log viewer, analysis, stats, recording, chart viewer, spectrogram viewer | `POST /admin/system/service/restart` (the whole station), `…/audio/sources/{id}/restart`. There are no separate services to stop: one binary | PARTIAL, by design | ran |
+| **File Manager**, **Database Maintenance** (Adminer) | Declined (Part 1) | DECLINED | read |
+| **Web Terminal** (gotty `-w`, port 8888, `su --pty -l <user>` after a `Login:` prompt) | Declined outright (Part 1). **Security divergence worth stating:** when `CADDY_PWD` is empty, BirdNET-Pi's Caddyfile has *no* `basicauth` block at all (`install_services.sh:194-211`), so the terminal's own OS-password prompt is the only gate; with a password set it is behind Caddy's `birdnet` user *and* the OS login. birdnet-go ships a browser terminal too (`webserver.enableterminal`, off by default, labelled "security risk" at `config.go:1709`, `GET /terminal/ws`). We have none | DECLINED | read |
+| **Custom / Excluded / Whitelist species lists**, **Species Management** | `/admin/species` (Allow, Exclusion, Always allowed), `/admin/species/manage` (N‑4). Entries are not read from BirdNET-Pi's `*_species_list.txt` files (`migration.md`) | PARITY | ran, read |
+| `GET /api/v1/image/<sci>` (`api.php`) | `/species/image/{scientific_name}` — a different path and a different JSON shape; a script written against BirdNET-Pi's breaks | PARTIAL (not a goal) | read |
+| `send_test_notification.py` | `/admin/notifications/test` | PARITY | ran |
+| `print_diagnostic_info.sh`, `dump_logs.sh` | `birdnet-behavior --doctor`, `--support-bundle`, `/admin/doctor` | PARITY | ran |
+| `species.py` (species list for a place, at a threshold) | `/species/occurrence` (adds the reason per species) | PARITY | ran |
+| `extra_info.sh` (Pi undervoltage via `vcgencmd get_throttled`) | `routes/health.rs` (OP‑3: "the Pi's power mask") | PARITY | read |
+| `HEARTBEAT_URL` | `heartbeat.rs`; the `heartbeat_url` setting | PARITY | read |
+| `INFO_SITE` (AllAboutBirds or eBird; `ebird.php` code table) | `info_site` setting; eBird links by species code (`species_pages.rs:1022-1038`) | PARITY | read |
+| Livestream (Icecast + `livestream.service`) | `/api/v2/stream`, HLS (G‑21). Icecast declined | PARITY | ran |
+| `avahi-alias@` + `http.service` (publish `<host>.local`) | A service-discovery record only (`src/helpers/system.rs:358`, `_http._tcp`, "<name> on %h"). Its log line says "station discoverable as birdnet.local", which the file does not do: it creates no host name | PARTIAL (**A‑19**: the message is wrong) | read |
+| Cron: `disk_check.sh` /5 min, `disk_species_clean.sh` 02:00, `cleanup.sh` /3 min, weekly report, **auto-update Sun 03:00** | In-process disk manager and per-species floor; `max_files_per_species`; stream retention; `WEEKLY_REPORT_SCHEDULE`. **No scheduled update** (A‑17) | PARTIAL | read |
+| zram swap (`install_zram_service.sh`) | `installer/` zram unit (`installer/test/service-unit.sh` §7) | PARITY | read |
+
+#### 9.4.2 The sixty keys of a default `birdnet.conf`, run through our `--doctor`
+
+`install_config.sh:23-297` writes 60 `KEY=` lines (57 upper-case plus three `LogLevel_*`). I
+extracted that block, filled in a latitude, longitude and `BIRDNET_USER`, and ran the real
+binary: `target/debug/birdnet-behavior --doctor -c <that file>`. **Result (ran): 20 keys are
+read, 40 are reported "is not a setting this station reads".** Only one of the 40
+(`SITE_NAME`) gets a "did you mean" (`SITENAME`).
+
+*Read (20):* `AUDIOFMT` (our default is `wav`; BirdNET-Pi's is `mp3`), `CADDY_PWD` (the sign-in
+name is `admin`, not BirdNET-Pi's `birdnet`; `common.php:73`), `CONFIDENCE`, `DATABASE_LANG`
+(read-time, N‑5), `EXTRACTION_LENGTH`, `FLICKR_API_KEY`, `FLICKR_FILTER_EMAIL`, `HEARTBEAT_URL`,
+`IMAGE_PROVIDER`, `INFO_SITE`, `LATITUDE`, `LONGITUDE`, `MAX_FILES_SPECIES`, `MODEL` (read; whether
+BirdNET-Pi's value, a `.tflite` file stem, selects our V2.4 ONNX classifier was **not checked**),
+`OVERLAP`, `PRIVACY_THRESHOLD` (different scale — `parity.md`), `RECORDING_LENGTH` (range-checked,
+sets nothing), `RECS_DIR`, `SENSITIVITY`, `SF_THRESH`.
+
+*Not read (40) — what each becomes here:*
+
+| BirdNET-Pi key | Here | What an operator sees if the file is copied across |
+|---|---|---|
+| `BIRDWEATHER_ID` | `BIRDWEATHER_TOKEN` (and the web setting) | **BirdWeather uploads stop, silently** apart from the doctor line |
+| `PURGE_THRESHOLD` | `DISK_PURGE_THRESHOLD` (the `--help` text and the Settings hint call it BirdNET-Pi's `DISK_PURGE_THRESHOLD`; BirdNET-Pi's is `PURGE_THRESHOLD`, `render/system.rs:144`, `cli.rs:923`) | purges at the default 95 % whatever the old value was |
+| `FULL_DISK` (`purge` / `keep`) | none (**A‑4**) | a `keep` station now deletes its oldest clips at the threshold; BirdNET-Pi stopped its services instead (`disk_check.sh:31-33`) |
+| `REC_CARD` | `ALSA_CARD` | the microphone is not selected |
+| `RTSP_STREAM`, `RTSP_STREAM_TO_LIVESTREAM` | `RTSP_URLS`, the audio sources table, `livestream_source` | streams are not carried over |
+| `CHANNELS` | the per-source channel layout (`audio_sources`) | — |
+| `SITE_NAME` | `SITENAME` / `STATION_NAME` | hinted |
+| `DATA_MODEL_VERSION` | `METADATA_MODEL_PATH` (v2 range filter) | `parity.md` |
+| `APPRISE_NOTIFY_EACH_DETECTION`, `_NEW_SPECIES`, `_NEW_SPECIES_EACH_DAY` | one `APPRISE_TRIGGER` (**A‑3**) | notifications default to "each detection"; a station that had two flags on gets one |
+| `APPRISE_NOTIFICATION_TITLE`, `APPRISE_WEEKLY_REPORT`, `APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES` | `APPRISE_TITLE_TEMPLATE`, `WEEKLY_REPORT_SCHEDULE`, `APPRISE_COOLDOWN` | defaults apply |
+| `APPRISE_ONLY_NOTIFY_SPECIES_NAMES` (**an exclusion list**, `notifications.py`) and `_2` (an inclusion list) | `APPRISE_WATCHLIST_EXCLUDE` and `APPRISE_WATCHLIST` | the names are swapped on purpose; a naive rename would invert both |
+| `BIRDNETPI_URL` | `BNB_PUBLIC_URL` (environment) | links in notifications fall back to `http://<hostname>.local` |
+| `FREQSHIFT_TOOL`, `_HI`, `_LO`, `_PITCH`, `_RECONNECT_DELAY` | none: a per-listener control (N‑2) | — |
+| `RAW_SPECTROGRAM`, `RARE_SPECIES_THRESHOLD` | web settings `raw_spectrogram`, `rare_species_days` | web-only; not read from the file |
+| `COLOR_SCHEME` | a per-browser theme | — |
+| `CUSTOM_IMAGE`, `CUSTOM_IMAGE_TITLE` | none (N‑6) | — |
+| `AUTOMATIC_UPDATE`, `SILENCE_UPDATE_INDICATOR` | none (A‑17); the badge is declined | — |
+| `ICE_PWD` | none (Icecast declined) | — |
+| `LogLevel_*` ×3 | `LOG_LEVEL`, `LOG_MODULES` | — |
+| `BIRDNET_USER`, `PROCESSED`, `EXTRACTED`, `IDFILE`, `LAST_RUN`, `THIS_RUN` | none; internal to BirdNET-Pi | — |
+
+**`docs/book/guides/migration.md:67` is wrong about this.** It says "BirdNET-Pi config keys
+(`ALSA_CARD`, `LATITUDE`/`LONGITUDE`, `OVERLAP`, `SF_THRESH`, `BIRDWEATHER_TOKEN`, …) are also
+understood when reading a `birdnet.conf`; see the mapping table in Configuration." Two of the
+five names are ours, not BirdNET-Pi's (BirdNET-Pi writes `REC_CARD` and `BIRDWEATHER_ID`), the
+Configuration page has no BirdNET-Pi mapping table, and the guide says nothing about the
+sign-in name, the purge key, `FULL_DISK`, or the notification flags. That is **A‑1**.
+
+#### 9.4.3 Notifications (Apprise)
+
+| BirdNET-Pi rule (`utils/notifications.py`) | Ours | Verdict |
+|---|---|---|
+| Message variables `$sciname $comname $confidencepct $confidence $listenurl $friendlyurl $date $time $week $latitude $longitude $cutoff $sens $flickrimage $image $overlap $reason` | All seventeen are substituted (`notification.rs:210-229`). `$confidence` prints two decimals here, the raw float there | PARITY (read) |
+| Three independent triggers: each detection; first of the day; seen ≤ 5 times in 7 days | One trigger mode (`TriggerMode`, `notification.rs:234`). The reasons are worded as BirdNET-Pi's (`detection`, `first time today`, `only seen N times in last 7d`) and N includes the current detection in both | PARTIAL (**A‑3**) |
+| Per-species minimum seconds between notifications | `APPRISE_COOLDOWN`, default 300 s, per species; plus a per-destination rate cap | PARITY |
+| Include and exclude species lists, matched on common names with spaces removed | Matched on common or scientific name | PARITY |
+| Image in the message (`attach=`) | `$image` is a URL in the text; whether each native sender attaches the picture was not checked | PARTIAL (not checked) |
+| Apprise config pasted in the UI (`apprise_input`) | `notify_urls` field and `apprise_config` path | PARITY |
+| Apprise itself | Native Discord, Slack, Telegram, ntfy, Gotify, Pushover and JSON webhook; the `apprise` CLI only for other schemes; an Apprise API server; SMTP e-mail; MQTT | PARITY (wider) |
+
+#### 9.4.4 What BirdNET-Pi gives a user that we deliberately do not (and where it is written down)
+
+Adminer, the file manager, the web terminal, phpsysinfo, Streamlit, Icecast, `git` self-update
+and its badge: Part 1's DECLINED table. Two that table does not state: the `Combo-<date>.png` /
+`Charts/` static chart images (nothing here writes a PNG chart), and Caddy's browsable
+`/By_Date/…` and `/Charts/` trees (`install_services.sh:161-168`), which made any clip
+reachable by a predictable URL with no sign-in. Ours serves clips at `/recordings/{file}` and
+signed `/r/{token}` share links. A bookmark or an external link to a `By_Date` URL does not
+survive the move.
+
+### 9.5 tphakala/birdnet-go `30d163ded`, enumerated
+
+Sources: `config.schema.json` (450 leaf keys, reduced by a script, grouped below), the
+golden route list in `internal/api/v2/routes_enumeration_test.go` (223 operations, plus
+the 5 insights routes and `dashboard/kpis` it omits and `internal/api/v2/analytics/handler.go`
+registers), `frontend/src/lib/desktop/{views,features}`, `cmd/`, `README.md`, `doc/wiki/`.
+Ours: `openapi.json` (98 documented operations) and the route table at `ea2d439`.
+
+#### 9.5.1 The settings tree, by group (450 leaves)
+
+| birdnet-go group (leaves) | Ours | Verdict |
+|---|---|---|
+| `realtime.audio.sources` / `rtsp.streams` (name, device/url, type, transport, channel mode, media mode, gain, per-stream EQ and quiet hours, models) | `/admin/audio` and the `audio_sources` table: kind, transport, channel layout (mono / left / right / stereo), gain, EQ chain, quiet window, `MODEL_ROUTES` (G‑2, G‑4, G‑7, G‑8, G‑10) | PARITY |
+| `realtime.rtsp.ffmpegParameters` (arbitrary ffmpeg arguments) | none (**A‑12**) | GAP |
+| `realtime.audio.ffmpegpath`, `soxpath` | `ffmpeg` and `sox` are looked up on `PATH` (`capture/process.rs:611`); no setting | GAP (minor, **A‑12**) |
+| `realtime.audio.export.*`: type, bitrate, length, pre-capture, gain, retention (policy, max age, max usage, min clips, keep spectrograms, interval), normalisation (EBU R128) | Type (wav, mp3, flac, ogg: P‑18 for Opus and AAC), length, pre-capture, normalisation (G‑5), retention by age (`CLIP_RETENTION_DAYS`), by disk use (`DISK_PURGE_THRESHOLD`) and a per-species floor. **No bitrate setting** (ffmpeg's default), no clip gain | PARTIAL (**A‑21**) |
+| `realtime.audio.soundlevel.*`, `equalizer.*`, `quietHours.*`, `watchdog.*` | G‑1, G‑2, G‑4, G‑9 | PARITY (SHIPPED rows) |
+| `birdnet.*` (sensitivity, threshold, overlap, location, **threads**, locale, range filter, model/label paths, XNNPACK, ONNX Runtime path, OpenVINO, backend, region) | Present except **threads**: the classifier session is built with the model's default of 2 intra-op threads (`ModelConfig::default`, `model.rs:78`; `daemon/config.rs:243` says "comes from the model's defaults") and no setting, flag or key changes it (`git grep -i thread HEAD -- src/cli.rs known_keys.rs` finds none). Backends: G‑11 | PARTIAL (**A‑7**) |
+| `birdnetv3.*`, `perch.*`, `bsg.*`, `bat.*`, `models.*` | G‑10 (Stages 1–5), G‑13, G‑14. Installing a model from the UI is **declined on purpose**: `api_write.rs:1353-1365` says why (a download needs a foreground progress channel) and points at `--install-model` | PARTIAL / DECLINED |
+| `realtime.species` (include, exclude, **config**: per species threshold, **interval**, **actions**) | Lists and per-species thresholds yes (`species_thresholds`); interval in flight; **actions** none | PARTIAL (P‑12) |
+| `realtime.dynamicthreshold.*` | G‑12 (learning); P‑11 (no view or reset) | PARTIAL |
+| `realtime.falsepositivefilter`, `bat.falsepositivefilter` | `CONFIRMATION_LEVEL` (corroboration) | PARITY |
+| `realtime.privacyfilter.*` | Rank and threshold rules, clip reach; no VAD (G‑13) | PARTIAL |
+| `realtime.dogbarkfilter.*` | G‑17 | PARITY |
+| `realtime.daylightfilter.*` | `--night-filter`, `--night-margin-mins`, `--night-extra-nocturnal` — the same family (species that cannot be calling at this hour); the rule's direction and species list were not compared | PARITY (not compared) |
+| `realtime.extendedcapture.*` | G‑6 | GAP |
+| `realtime.interval` (minimum seconds between detections of a species; **15 by default**) | `DUPLICATE_INTERVAL_SECS`, **off by default** (`parity.md` states the difference) | PARITY (default differs) |
+| `realtime.speciestracking.*` | G‑16; P‑20 | PARTIAL |
+| `realtime.birdweather.*` (threshold, location accuracy, retry) | token only (P‑2) | PARTIAL |
+| `realtime.ebird.*` | G‑27 | PARITY |
+| `realtime.weather.*` | G‑26 (four providers; OpenWeather declined). No weather API (P‑21), no per-detection weather (**A‑6**), no test button (A‑15), no °F (P‑16) | PARTIAL |
+| `realtime.mqtt.*` (retain, retry, TLS, client cert, Home Assistant discovery) | All but the client certificate (P‑10); per-source HA topics are Part 5 `aa86b38` | PARTIAL |
+| `realtime.monitoring.*` (CPU, memory, disk thresholds) | Station Health conditions and metric alert rules (G‑29) | PARITY |
+| `realtime.log` (a text file of detections for OBS) | none (**A‑8**) | GAP |
+| `realtime.logdeduplication`, `logging.*` (levels, per-module levels, console, **rotating file output**) | `LOG_LEVEL`, `LOG_MODULES`, journald or stdout, the capped `errors.jsonl` (G‑25). No rotating log file | PARTIAL (minor) |
+| `realtime.telemetry` (Prometheus listener), `diagnostics.profiling` | `GET /api/v2/metrics`, `docs/grafana-dashboard.json`; CPU profiling (G‑24) | PARITY |
+| `realtime.dashboard.*` | thumbnails and provider fallback: PARITY. Layout order/visibility: G‑22. Banner with picture, title, description, **map**, weather; **video embed**: GAP (N‑6, **A‑11**). Temperature unit, colour schemes, logo style: P‑16, G‑22. Spectrogram style and range: P‑17 (in flight). Default audio gain: P‑8. UI locale: **A‑5**. Summary limit: no setting | PARTIAL |
+| `notification.*` (providers with per-provider filters on type / priority / component, circuit breaker, health check, rate limit, templates; script and webhook endpoints with auth) | Native senders, circuit breaker and rate cap (`apprise.rs`), templates, `*_file` secrets (G‑28). Per-destination filters on type or priority and a script provider: none found (`git grep` on `filter`, `priority` in `dispatch/`) | PARTIAL |
+| `alerting.history_retention_days`, alert rules | `/admin/rules`, `/admin/metric-rules`, `/admin/notifications/prune`; P‑1 | PARITY |
+| `security.*`: basic auth, `oauthProviders` (Google, GitHub, Microsoft, generic OIDC with PKCE), **a built-in OAuth2 server** for API clients (`clientid`, `authcodeexp`, `accesstokenexp`), `allowsubnetbypass`, `privatemode`, `publicaccess.liveaudio`, trusted proxies, `plainhttpsessionclients`, TLS modes (off, manual, self-signed, autotls) | Accounts with session revocation (ours alone, 9.6); `--private-mode`; `--public-access`; trusted proxies (config only); TLS off / self-signed / manual; one static bearer token for the write API. **No OIDC (G‑20), no subnet bypass (A‑18), no ACME (declined), no OAuth2 server** | PARTIAL |
+| `webserver.*`: port, base path, `allowembedding`, livestream bitrate / rate / segment, `enableterminal` | `--listen`, base path (G‑19), HLS fixed (G‑21), no embedding switch (P‑9), terminal declined | PARTIAL |
+| `backup.*`: targets (local, FTP, SFTP, rsync, Google Drive), schedules, retention, encryption | G‑30: local, SFTP, S3-compatible and rsync, always encrypted off-site; upstream's FTP and Google Drive declined | PARITY |
+| `output.sqlite`, `output.mysql` | SQLite and DuckDB; MySQL declined (G‑31) | DECLINED |
+| `import.*`, `lowmemory.mode`, `sentry.*`, `taxonomySynonyms`, `main.timeas24h` | BirdNET-Pi import; memory capability gating (G‑33); Sentry declined (G‑25); synonyms (G‑15); 12/24-hour (P‑16) | mixed — see those rows |
+
+Not one of the 450 was mapped leaf by leaf; the groups above are the unit.
+
+#### 9.5.2 The REST API v2, by family
+
+Upstream registers **229** operations (223 in the golden list + 6 registered elsewhere). This
+project documents **98** in `openapi.json`, read-only by default with a bearer-gated write
+subset (`api_write.rs`). Counted by script by first path segment; upstream's count first.
+
+| Family (upstream count) | Ours | Verdict |
+|---|---|---|
+| `system` (42): info, resources, disks, processes, temperature, network interfaces, external media, jobs, models, inference, events, diagnostics run / report / errors, database stats / overview / backup jobs / **migration** / legacy cleanup | `/system/disk`, `/capture`, `/jobs`, `/network`, `/processes`, `/database/overview`; backup is a page and `POST`, not a job API. External media listing: none | PARTIAL |
+| `analytics` (21), `insights` (5), `dashboard` (1) | Part 6: every route but `range/heatmap` | PARITY (route exists) |
+| `streams` (14): sources, status, health + stream, audio level, analyze channels, test, quiet-hours status, HLS | HLS (5 routes, same paths); `/admin/audio/sources/{id}/probe`, `--channel-report` for the rest | PARTIAL |
+| `detections` (14): list, recent, one, delete, lock, review, comments, batch delete / lock / review / resolve, ignore / ignored, time-of-day, SSE stream | list, recent, detail, daily, delete / lock / review / comments / batch (bearer), WebSocket stream, export (CSV, Raven, BirdDB, eBird) | PARITY (shape differs) |
+| `alerts` (14) | The same functions as HTML routes plus export / import; no REST | PARTIAL (minor) |
+| `notifications` (10): list, read, acknowledge, unread count, SSE stream, ntfy server check | `/notifications` page and `/admin/notifications/*`; no unread-count API | PARTIAL (minor) |
+| `integrations` (10): BirdWeather, eBird, MQTT, weather tests; HA discovery trigger; MQTT certificate | P‑15, P‑10; discovery is published on connect | PARTIAL |
+| `settings` (9) | `GET`/`PUT /api/v2/settings` (bearer), schema drift gate (G‑34) | PARITY |
+| `models` (9): catalogue, install with progress, installed, delete, reinstall, regions + map | `GET /models/catalog` only (install declined, above) | PARTIAL / DECLINED |
+| `range` (8) | P‑3, A‑14 | PARTIAL |
+| `weather` (7) | none (P‑21) | GAP |
+| `media` (7), `spectrogram` (4), `audio` (4) | `/species/image/*`, `/spectrogram/{file}`, `/recordings/{file}`, `/stream` | PARITY |
+| `import` (7) | `/admin/migrate/*` (upload, validate, run, progress, batches) | PARITY |
+| `control` (7): restart, restart-source, restart-container, reload, rebuild-filter | `restart`, `restart-source` (bearer). No hot reload (P‑7), no rebuild | PARTIAL |
+| `dynamic-thresholds` (6) | none (P‑11) | GAP |
+| `tls` (5) | none (P‑22) | PARTIAL |
+| `species` (5), `taxonomy` (3), `search` (1) | `/species/*`, taxonomy browsing (G‑15), `/search`, `/species/search` | PARITY |
+| `support` (3), `health` (2), `ping`, `sse`, `soundlevels/stream` | `--support-bundle` and `/admin/support-bundle` (**`503` on the screenshot fixture**: "the station's diagnostics are not wired into this process"; the real binary was not driven), `/api/v2/health`, `/health/conditions`, `GET /api/v2/soundlevel` | PARITY (support route: see note) |
+| `auth` (4), `app` (2) | login / logout pages, onboarding | PARITY |
+| `filesystem` (1) | none (**A‑13**) | GAP (minor) |
+| `terminal` (1) | declined | DECLINED |
+
+#### 9.5.3 UI features
+
+Upstream's pages are: dashboard, live stream, notifications centre, species, analytics (summary,
+activity, trends, biodiversity, nocturnal, review; *weather* and *soundscape* are
+"coming soon" shells — `WeatherPage.svelte`, `SoundscapePage.svelte` render
+`AnalyticsComingSoon`, so they are **not** gaps), search, detections list, detection detail
+(review, verify, lock, comment), About, Help, report-a-bug, System (health, inference,
+database), Settings (ten pages), setup wizard, import / export, terminal.
+
+| Upstream | Ours | Verdict | Evidence |
+|---|---|---|---|
+| Dashboard with edit mode, "Currently hearing" card, new-species highlights, daily summary | Today (`/`) with "Right now", live signal, feed, customise (`/admin/today-layout/…`) | PARITY | ran |
+| Live stream page | `/recordings?view=live` | PARITY | ran |
+| Notifications centre | `/notifications`, `/pages/notif-*` | PARITY | ran |
+| Species pages, taxonomy | `/species`, `/species/detail`, life list, photos | PARITY | ran |
+| Analytics (the eleven chart families of `registry/charts.ts`: seasonal heat map, ridgeline, succession, dawn-chorus onset, nocturnal clock, time-of-day, trend, year over year, diversity, accumulation, phenology, confidence) | `/pages/*`, `/patterns`, `/reports`, the DuckDB queries | PARITY (more) | ran |
+| Review queue, verify / false positive, lock, comment | `/detection-reviews`, `/pages/detection-review*`, `/api/v2/detections/comments` (G‑23) | PARITY | ran |
+| Per-detection **weather badge** and moon badge | none on the detection page (`git grep -c -i weather HEAD -- …/detection_detail.rs` is 0); Today shows the current weather and a temperature line | GAP (**A‑6**) | grep |
+| **Audible bats** button, bat classifiers | G‑14 | GAP | read |
+| System health and inference pages; database overview | `/station` (health), `/admin/doctor`, `/api/v2/system/database/overview` | PARITY | ran |
+| One-click **support bundle** | `--support-bundle`; the web route exists but did not answer on the fixture | PARITY (CLI) | ran, read |
+| Setup wizard | `/onboarding` | PARITY | ran |
+| **UI in 15 languages** (cs, da, de, es, fi, fr, hu, it, lv, nb, nl, pl, pt, sk, sv; `frontend/static/messages/*.json`) | English only; species names in the station's language (N‑5). Part 5's "`98b1c62` … not applicable (the UI is English)" and Part 7's `9642f74` row treated this as out of scope; it is a gap against a project whose README lists it | GAP (**A‑5**) | read |
+| PWA install | `manifest.webmanifest`, `sw.js` | PARITY | ran |
+| Colour scheme picker (5 + custom), logo style | a light / dark / observatory theme per browser | GAP (cosmetic; G‑22) | read |
+| "Browser push notifications" (README) | **Not found in the source**: `git grep -i -e webpush -e vapid` over `internal/` and `frontend/src` finds nothing; the notification centre is fed by SSE. Ours has the same SSE-style centre | n/a (claim without code) | grep |
+| "File analysis" (`doc/wiki/file-analysis.md`: `birdnet-go file x.wav --threshold`) | **Not in the source either**: `cmd/` has no `file` or `directory` command and `git grep -i -e AnalyzeFile -e FileAnalysis` finds nothing; the wiki page is stale. Ours: `--watch-dir` with `--process-existing` | n/a (documented, absent) | grep |
+
+#### 9.5.4 CLI
+
+| birdnet-go | Ours | Verdict |
+|---|---|---|
+| `serve` (default) | the binary | PARITY |
+| `support collect` | `--support-bundle` | PARITY |
+| `benchmark` (inference timing for a machine) | none; `birdnet_inference_duration_seconds` is exported, nothing recommends an overlap (Part 5 `dee43f5`) | GAP (**A‑9**) |
+| `rangefilter print` (species list for a place and week) | `/species/occurrence` | PARITY |
+| `notify` (send a test notification) | `/admin/notifications/test` | PARITY |
+| `import-stage`, `perch-benchmark`, `gen-schema`, `license`, `authors`, `wiki-export` | build and maintenance tools | n/a |
+| (database doctor, `tools/db-doctor/db-doctor.py`) | `--check-db`, `--fix`, `/admin/doctor` | PARITY |
+
+#### 9.5.5 Defaults that differ, for anyone moving *from* birdnet-go
+
+From `internal/conf/defaults.go` against this project's defaults (`parity.md` has the
+three-way table and was not repeated): `birdnet.threshold` is 0.8 in code (0.7 on first run) and
+ours is 0.70; `birdnet.sensitivity` is 1.0 and is a slope, ours is 1.25 and is BirdNET-Pi's sigmoid
+setting; **`realtime.interval` is 15 s** (ours off); **`dynamicthreshold.enabled` is true**
+(ours: `BIRDNET_DYNAMIC_THRESHOLD`, off unless set); **`privacyfilter.enabled` is true** (ours:
+rank rule on); `export.retention.policy` is `usage` with `minclips` 10 and `keepspectrograms` true;
+`speciestracking.enabled` is true with a 7-day window. A birdnet-go station copied across counts
+more detections per species per hour than it did, unless `DUPLICATE_INTERVAL_SECS=15` is set.
+
+### 9.6 What this project has that neither reference has
+
+Part 3 lists twelve rows. Re-checked against both clones, with the grep named, only some of
+them survive a strict reading of "neither". Searched in `internal/`, `frontend/src/`, `cmd/`
+(birdnet-go) and `scripts/`, `homepage/` (BirdNET-Pi), tests, vendored code and translation
+files excluded; **0 matches in each** for the patterns given.
+
+| Capability (ours) | Ours | Pattern searched in both | Standing |
+|---|---|---|---|
+| Product-analytics primitives on detections: sessions, funnels, retention, sequence matching, next / previous species | `/analytics/sessions`, `/funnel`, `/retention`, `/sequence-count`, `/next-species`, `/previous-species`; `crates/birdnet-behavioral` | `retention curve`, `cohort`, `funnel analysis`, `sessioniz`, `markov`, `next.species` | **Neither has it** |
+| Quarantine of implausible detections for review | `/quarantine` | `quarantine` | **Neither** |
+| Signed, expiring, single-detection share links | `/r/{token}` | `share_token`, `ShareLink`, `share link` | **Neither** |
+| RSS and iCal feeds of rare detections | `/feeds/rare.rss`, `/feeds/rare.ics`, `/feeds/today.rss` | `text/calendar`, `VCALENDAR`, `rss+xml`, `<rss` | **Neither** |
+| A queryable log of operator actions | `audit_log` (`migration.rs:326`; 69 `audit(` call sites in `birdnet-web`), `/admin/audit` | `audit` | **Neither**: birdnet-go has a "security" log module and no table or page |
+| Several accounts, each with revocable sessions | `/admin/accounts` | `CreateUser`, `multiple user accounts` | **Neither**: birdnet-go's own comment says so (`api/auth/adapter.go:154`, "does not support multiple user accounts or authorization levels"); BirdNET-Pi has one `birdnet` user |
+| Command palette | `/pages/cmdk` (⌘K, `/`) | `command palette`, `cmdk` | **Neither** |
+| Year in review | `routes/pages/year_in_review.rs` | `year.in.review` | **Neither** |
+| A measured channel report and a preflight that checks the machine (`--channel-report`, `--doctor`, `--migration-report`) | `src/doctor/`, `src/channel_report.rs` | — | Neither has *this*; both have a support collector (`support collect`, `dump_logs.sh`) and birdnet-go a database doctor and a system diagnostics run |
+| Import reconciliation: a per-species before-and-after comparison, and removing one imported batch | `/admin/migrate/*`, `crates/birdnet-migrate` | `rollback` appears in birdnet-go for the *database* migration only | Neither, **by grep only** |
+
+Rows of Part 3 that fail "neither":
+
+* **Encrypted off-site backup.** birdnet-go has `backup.encryption` (schema) and its own
+  targets; G‑30 already says so. What is ours is the argon2 envelope and in-tree SigV4, which
+  are implementation choices an operator does not see.
+* **Phenology.** Part 3 itself says birdnet-go has `analytics/species/phenology`.
+* **Kiosk.** BirdNET-Pi has `view=Kiosk` (`views.php`); not claimed in Part 3, noted here so
+  it is not added.
+* **Self-update.** BirdNET-Pi has it (by `git`); birdnet-go does not (`internal/update` is
+  empty of Go files), so "neither" fails on one side.
+* **First-class BirdNET-Pi migration.** birdnet-go has an importer for BirdNET-Pi
+  (`/import/birdnet-pi`, `/import/validate`, progress and cancel); the reconciliation
+  report in the table above is the part that is ours.
+
+### 9.7 Newly found, and the verdicts changed
+
+Severity: **High** = changes what a migrating user sees or loses; **Medium** = a missing
+capability with a workaround, or a decision nobody has recorded; **Low** = niche or cosmetic.
+"Value" is an ordering by who is affected and how often, a judgement with no usage data behind
+it (**CONJECTURED**); the evidence column is what was actually checked.
+
+| # | Finding | Evidence | Severity | Verdict |
+|---|---|---|---|---|
+| A‑1 | **BirdNET-Pi's `birdnet.conf` does not carry across.** 40 of its 60 default keys are unread; renames that matter (`BIRDWEATHER_ID`→`BIRDWEATHER_TOKEN`, `PURGE_THRESHOLD`→`DISK_PURGE_THRESHOLD`, `REC_CARD`→`ALSA_CARD`, `RTSP_STREAM`, the three `APPRISE_NOTIFY_*`, the swapped include / exclude lists) get no hint (only `SITE_NAME` does). `migration.md:67` names keys BirdNET-Pi does not use and a mapping table that does not exist. The sign-in name changes from `birdnet` to `admin` and is not in the migration guide | ran (the real binary, 9.4.2), read | High | GAP |
+| A‑2 | The importer copies rows, not clips: an imported detection has no audio (`migration.md`, "Does not carry over: the audio"). `git grep -e By_Date -e Extracted HEAD -- crates/birdnet-migrate` finds nothing | read, grep | High | GAP |
+| A‑3 | BirdNET-Pi's three notification triggers are independent flags; ours is one mode. A station with "each detection" and "new species" both on gets one | read | Medium | PARTIAL |
+| A‑4 | `FULL_DISK=keep` (stop recording at the threshold instead of deleting) has no equivalent; `DISK_PURGE_THRESHOLD` always purges | read | Medium | GAP |
+| A‑5 | No UI translation. birdnet-go ships 15 non-English locales (`frontend/static/messages/*.json`) and lists them first among its features. Part 5 and Part 7 filed this as "not applicable (the UI is English)" | read | Medium | GAP — those two rows corrected |
+| A‑6 | No weather on a detection: upstream shows a weather badge per detection and serves `GET /weather/detection/:id`; ours shows current weather on Today and has a timeline overlay, and `detection_detail.rs` does not mention weather | grep | Low | GAP |
+| A‑7 | The classifier runs on 2 intra-op threads and nothing can change that (`model.rs:78`, `:1224`; `birdnet.threads` upstream, `config.go:1323`) | read, grep | Medium | GAP |
+| A‑8 | No text file of detections for an OBS "chat log" source (`realtime.log`, `defaults.go:224-225`, `doc/wiki/guide.md:235-238`) | grep | Low | GAP |
+| A‑9 | No `benchmark` and no advice on the overlap a machine can sustain (`cmd/benchmark`; Part 5 `dee43f5`) | read | Low | GAP |
+| A‑10 | No import from a birdnet-go database; `crates/birdnet-migrate` reads BirdNET-Pi only | grep | Medium | GAP |
+| A‑11 | Dashboard video embed and a banner with a location map (`VideoEmbedCard.svelte`, `BannerLocationMap.svelte`); with N‑6 / P‑13 | read | Low | GAP |
+| A‑12 | No arbitrary ffmpeg parameters per stream, no configurable `ffmpeg` / `sox` path (`config.go:695`, `ffmpegpath`, `soxpath`) | grep | Low | GAP |
+| A‑13 | No folder picker or external-media listing (`GET /filesystem/browse`, `/system/external-media`) | grep | Low | GAP |
+| A‑14 | The range-filter explorer has no what-if (latitude, longitude, threshold, date), no CSV, no manual rebuild (P‑3's remainder) | read | Low | GAP |
+| A‑15 | Test buttons: eBird and weather have none; MQTT and e‑mail are tested only inside "test everything" (P‑15's remainder) | read | Low | PARTIAL |
+| A‑16 | No Reboot / Shutdown. The unit forbids it (`SystemCallFilter=~… @reboot`, `NoNewPrivileges=yes`, `install.sh:2480-2493`), which is a reasonable decision that is written down nowhere a user would look | read | Medium | DECLINED by the unit — **undocumented** |
+| A‑17 | No scheduled update (`AUTOMATIC_UPDATE`, cron Sun 03:00 upstream). Update is a button (`/admin/update/apply`). No document records whether this is declined | grep | Medium | GAP (decide) |
+| A‑18 | No LAN "skip the sign-in" switch (`security.allowsubnetbypass`). The installer generates a password, which is the opposite choice | grep | Low | GAP (decide; a security trade) |
+| A‑19 | `maybe_install_avahi_service` logs "station discoverable as birdnet.local"; the file it writes advertises an `_http._tcp` service named "<site> on %h" and creates no host name. BirdNET-Pi's `avahi-alias` does publish one | read | Low | defect |
+| A‑20 | Part 3's "neither upstream has" is overstated for encrypted backup, phenology, and (by omission) is right for eight others (9.6) | grep | Low | doc |
+| A‑21 | No clip bitrate and no clip gain setting (`export.bitrate`, `export.gain`); ffmpeg's defaults decide | grep | Low | GAP |
+
+Verdicts changed in place in Part 8 by this part: **P‑20** PARTIAL → GAP; **P‑15** and **P‑17**
+cells corrected (wrong statements); **P‑6** cell now names the commit's real mechanism;
+**P‑3** and **P‑4** cells say what was not matched.
+
+### 9.8 The prioritised backlog
+
+Order is value to the user first (CONJECTURED, as above), then size. **S** = a day or less
+with a gate; **M** = a few days; **L** = a programme. "Upstream" is where to read how it is done.
+
+| Rank | ID | Upstream cite | Ours (state at `ea2d439`) | Size | Who benefits |
+|---|---|---|---|---|---|
+| 1 | A‑1 | BirdNET-Pi `install_config.sh:23-297`; `common.php:73` | 40/60 keys unread, 1 hinted | S (rename hints and the guide) → M (an importer that writes the settings table) | every BirdNET-Pi migrator |
+| 2 | A‑2 | `scripts/play.php` layout `Extracted/By_Date/<date>/<species>/` | rows only | M | BirdNET-Pi migrators who want playback |
+| 3 | P‑2 | `birdweather_client.go:255-283,679`; `actions_integrations.go:74` | exact coordinates, global threshold | S | anyone sharing to BirdWeather (privacy) |
+| 4 | A‑3 | `utils/notifications.py` | one trigger mode | S | Apprise users, migrators |
+| 5 | A‑5 | `frontend/static/messages/*.json` | English UI | L | non-English speakers |
+| 6 | P‑12 | `config.go:937-941` | threshold only; interval in flight | S–M | owners of noisy sites |
+| 7 | A‑4 | `disk_check.sh:31-33` | always purges | S | small-card stations that prefer data |
+| 8 | N‑6 / P‑13 / A‑11 | `overview.php:17-27`; `BannerCard.svelte` | none | S–M | wall displays; BirdNET-Pi parity |
+| 9 | P‑9 | `security.go:51-132`; `config.go:1707` | `frame-ancestors 'self'` | S | Home Assistant dashboards |
+| 10 | P‑11 | `routes_enumeration_test.go:31-32,76-79` | learned thresholds invisible; no UI switch | M | owners with `BIRDNET_DYNAMIC_THRESHOLD` |
+| 11 | A‑7 | `config.go:1323` | 2 threads fixed | S | Pi 4B / 5 owners |
+| 12 | P‑20 | `3582fc843` | boundary residents flagged | S | API consumers of G‑16 |
+| 13 | A‑6, P‑16 | `WeatherBadge.svelte`; `config.go:186` | none | S–M | everyone who uses weather; US users (°F, 12 h) |
+| 14 | P‑8 | `audioNodes.ts:110-150` | none | S–M | quiet recordings |
+| 15 | A‑17, A‑16, A‑18 | `automatic_update.cron`; `system_controls.php` | decisions not recorded | S (write the decision) | unattended stations |
+| 16 | P‑10 | `mqtt_tls.go` | no client cert | S | brokers that require one |
+| 17 | P‑17 | `config.go:253-279` | fixed 80 dB, one palette; options in flight | S | spectrogram readers |
+| 18 | A‑15, A‑14 | `integrations.go:105-125`; `range.go:733` | partial | S | operators |
+| 19 | A‑10 | `internal/imports/` | none | M | birdnet-go users |
+| 20 | A‑9 | `cmd/benchmark` | none | M | Pi owners tuning overlap |
+| 21 | G‑20 | `security.go`, `oauthProviders` | none | L | multi-user sites, SSO |
+| 22 | G‑13 | `realtime.privacyfilter.vad` | none | M–L | private sites |
+| 23 | P‑22 | `tls/` routes | flags and files only | M | LAN HTTPS |
+| 24 | A‑8, P‑21, A‑12, A‑13, A‑21, P‑14, P‑4 | as in their rows | none / partial | S each | streamers, integrators |
+| 25 | P‑18, P‑19 | `config.go:49`; `imageprovider/avicommons.go` | none | M | storage; photo coverage |
+| 26 | A‑19 | `avahi-alias@.service` | wrong log line | S | LAN discovery |
+| 27 | G‑6, G‑11, G‑14, P‑7 | their rows | their rows | L | as stated there |
+
+### 9.9 Tallies, counted by script
+
+Counted over the verdict of each finding in this file after Part 9 was added: the `N‑`
+headings (Part 1), the `G‑` headings (Part 2), the last column of the Part 8 table (P‑2,
+which is mixed, counted once as PARTIAL), and the last column of the table in 9.7. A row is a
+*finding*, not a feature: N‑6 and P‑13 are one gap, P‑3 and A‑14 are one remainder, and the A‑
+rows partly restate P‑rows, so the total overstates the number of distinct things missing.
+
+| Group | Rows | SHIPPED | PARTIAL | GAP | DECLINED | IN PROGRESS | other |
+|---|---|---|---|---|---|---|---|
+| N (Part 1) | 6 | 5 | 0 | 1 | 0 | 0 | 0 |
+| G (Part 2) | 34 | 24 | 2 | 5 | 2 | 1 | 0 |
+| P (Part 8, corrected) | 22 | 4 | 6 | 12 | 0 | 0 | 0 |
+| A (9.7, new) | 21 | 0 | 2 | 16 | 1 | 0 | 2 (one defect, one documentation error) |
+| **All** | **83** | **33** | **10** | **34** | **3** | **1** | **2** |
+
+So 45 of 83 findings (34 GAP, 10 PARTIAL, 1 IN PROGRESS) are open, before counting the
+Part 5 and Part 6 rows that are tracked in their own tables (Part 5's GAP / PARTIAL rows:
+`dee43f5`, `cd488cc`, `54b5545`, `0e7290d`, `92067fa`, `aa86b38`, `111fb34`, `0f46189`; Part 6's one GAP, `range/heatmap`).
+The script (run it with `python3 -I`) reads this file and prints the counts the table is made from:
+
+```python
+import re, sys
+from collections import Counter
+t = open("docs/FEATURE_GAP_ANALYSIS.md").read()
+word = lambda s: (re.match(r"(SHIPPED|GAP|PARTIAL|PARITY|DECLINED|IN PROGRESS|defect|doc)",
+                           s.strip().strip("*").strip()) or [None, "OTHER"])[1]
+c = Counter()
+for id_, _, v in re.findall(r"^#{3,4} ((?:N|G)‑\d+) · (.*?) — (.*)$", t, re.M):
+    c[(id_[0], word(v))] += 1
+for l in t[t.index("## Part 8"):t.index("## Part 9")].split("\n"):
+    if re.match(r"\| P‑\d+ ", l):
+        last = l.rstrip().rstrip("|").split("|")[-1]
+        c[("P", "PARTIAL" if l.startswith("| P‑2 ") else word(last))] += 1
+for l in t[t.index("### 9.7"):t.index("### 9.8")].split("\n"):
+    if re.match(r"\| A‑\d+ ", l):
+        c[("A", word(l.rstrip().rstrip("|").split("|")[-1]))] += 1
+print(sorted(c.items()))
+```
+
+### 9.10 For the next person
+
+1. Read A‑1 and A‑2 first: they are the findings where a migrating user's station behaves
+   differently on day one, and the documentation says the opposite.
+2. Delete the line numbers from the rows whose symbol is named beside them (9.2), or add a gate
+   that fails when a cited symbol is not within a few lines of its citation.
+3. Verify the unverified: whether BirdNET-Pi's `MODEL` value selects our V2.4 classifier;
+   the unit's behaviour on a real systemd host for A‑16; the speech-deferral and two-hit rules
+   from `fc34a9706` / `e81763beb`; the per-key hot-reload of the 20 `OwnedBy` settings.
+4. The working tree held other agents' uncommitted work (spectrogram options, a per-species
+   interval) while this was written. Re-run the `git grep … HEAD` checks in 9.1 against
+   whatever has merged before closing P‑12 and P‑17.
