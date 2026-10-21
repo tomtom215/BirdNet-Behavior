@@ -13,7 +13,7 @@ use birdnet_migrate::conf::{ConfFile, Plan, PlanInput, Verdict, plan};
 const DEFAULT_CONF: &str = include_str!("data/birdnet_pi_default.conf");
 
 /// A validator that accepts everything, for tests of the mapping alone.
-fn accepts_all(_setting: &str, _value: &str) -> Option<String> {
+const fn accepts_all(_setting: &str, _value: &str) -> Option<String> {
     None
 }
 

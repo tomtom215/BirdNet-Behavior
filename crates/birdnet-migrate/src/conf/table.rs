@@ -660,7 +660,7 @@ pub const RULES: &[Rule] = &[
 
 /// The keys whose values are credentials, derived from [`RULES`].
 #[cfg(test)]
-pub(crate) fn secret_keys() -> impl Iterator<Item = &'static str> {
+pub fn secret_keys() -> impl Iterator<Item = &'static str> {
     RULES.iter().filter(|r| r.secret).map(|r| r.pi_key)
 }
 
@@ -863,6 +863,10 @@ fn coordinate(raw: &str, conf: &ConfFile) -> Conv {
     };
     let other = |key: &str| conf.get(key).and_then(|v| v.trim().parse::<f64>().ok());
     let (lat, lon) = (other("LATITUDE"), other("LONGITUDE"));
+    #[allow(
+        clippy::float_cmp,
+        reason = "0 and -1 are sentinels BirdNET-Pi writes verbatim, and parse to exactly those values; a tolerance would also swallow real positions"
+    )]
     let unknown = matches!((lat, lon), (Some(a), Some(b))
         if (a == 0.0 && b == 0.0) || (a == -1.0 && b == -1.0));
     if unknown {
@@ -885,7 +889,7 @@ fn unescape_html(text: &str) -> String {
 }
 
 /// Decide one entry.
-pub(crate) fn decide(
+pub fn decide(
     entry: &ConfEntry,
     rule: Option<&Rule>,
     conf: &ConfFile,
@@ -907,7 +911,7 @@ pub(crate) fn decide(
     let mut config_lines = Vec::new();
 
     let Some(rule) = rule else {
-        row.why = "not a key BirdNET-Pi writes, or one this version does not know".to_owned();
+        "not a key BirdNET-Pi writes, or one this version does not know".clone_into(&mut row.why);
         return Decision {
             row,
             assignments,
@@ -925,7 +929,7 @@ pub(crate) fn decide(
         }
         Target::Nothing => {
             row.verdict = Verdict::NotCarried;
-            row.why = rule.caveat.to_owned();
+            rule.caveat.clone_into(&mut row.why);
         }
         Target::Setting { key, convert: how } => match convert(how, raw, conf) {
             Conv::Leave(why) => {
@@ -1018,23 +1022,24 @@ pub(crate) fn decide(
     match (rule.pi_key, raw) {
         ("MODEL", "BirdNET_GLOBAL_6K_V2.4_Model_FP16") => {
             row.verdict = Verdict::Left;
-            row.why = "BirdNET V2.4, which a new install here runs too (32-bit floats where \
+            "BirdNET V2.4, which a new install here runs too (32-bit floats where \
                        BirdNET-Pi uses 16-bit)."
-                .to_owned();
+                .clone_into(&mut row.why);
         }
         ("MODEL", "BirdNET_6K_GLOBAL_MODEL") => {
-            row.why = "BirdNET V1: this station does not offer it. It runs V2.4, a newer \
+            "BirdNET V1: this station does not offer it. It runs V2.4, a newer \
                        network with many more species; detections will differ."
-                .to_owned();
+                .clone_into(&mut row.why);
         }
         ("MODEL", "Perch_v2") => {
-            row.why = "Perch v2 can be chosen on the Classifier page; nothing is changed by \
+            "Perch v2 can be chosen on the Classifier page; nothing is changed by \
                        this import."
-                .to_owned();
+                .clone_into(&mut row.why);
         }
         ("DATA_MODEL_VERSION", "2") => {
             row.verdict = Verdict::Left;
-            row.why = "occurrence model 2, which this station uses with V2.4 as well.".to_owned();
+            "occurrence model 2, which this station uses with V2.4 as well."
+                .clone_into(&mut row.why);
         }
         _ => {}
     }
@@ -1088,7 +1093,7 @@ impl Rule {
 /// and this station's notification minimum defaults to 0.80, which would
 /// silently stop notifications for detections between the station's confidence
 /// and 0.80.
-pub(crate) fn implied(
+pub fn implied(
     conf: &ConfFile,
     current: &HashMap<String, String>,
     check: &dyn Fn(&str, &str) -> Option<String>,

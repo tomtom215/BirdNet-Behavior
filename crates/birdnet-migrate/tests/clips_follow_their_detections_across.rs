@@ -137,7 +137,9 @@ fn a_copy_puts_each_clip_flat_in_the_recordings_directory_and_leaves_the_tree_wh
         assert_eq!(copied, original);
     }
     assert!(
-        listing(dest.path()).iter().all(|n| !n.ends_with(".png")),
+        listing(dest.path())
+            .iter()
+            .all(|n| Path::new(n).extension().is_none_or(|e| e != "png")),
         "the picture is not copied: this station draws its own"
     );
     // The tree is untouched.
@@ -186,7 +188,9 @@ fn a_run_can_be_repeated_and_resumes() {
     assert_eq!(report.already_there, 1);
     assert_eq!(report.done, 3);
     assert!(
-        !listing(dest.path()).iter().any(|n| n.ends_with(".part")),
+        !listing(dest.path())
+            .iter()
+            .any(|n| Path::new(n).extension().is_some_and(|e| e == "part")),
         "the leftover temporary file is removed"
     );
 

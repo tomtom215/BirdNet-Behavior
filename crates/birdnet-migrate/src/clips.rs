@@ -392,12 +392,37 @@ fn inside(root: &Path, candidate: &Path) -> Option<(PathBuf, u64)> {
         return None;
     }
     let meta = fs::metadata(&real).ok()?;
-    meta.is_file().then(|| (real, meta.len()))
+    meta.is_file().then_some((real, meta.len()))
 }
 
 /// Name of the temporary file a copy is written to, beside its destination.
 fn temp_name(name: &str) -> String {
     format!(".bnb-import-{name}.part")
+}
+
+/// Whether `name` is one [`temp_name`] could have produced.
+///
+/// The suffix is compared exactly: these are names this module wrote itself,
+/// always lower case, and a file someone else named `.PART` is not ours to
+/// delete.
+#[allow(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "the names are written by temp_name in lower case; an exact match is the point, and a case-insensitive one would delete a stranger's file"
+)]
+fn is_temp_name(name: &str) -> bool {
+    name.ends_with(".part")
+}
+
+/// Whether a line of BirdNET-Pi's protected-clips list names a spectrogram.
+///
+/// BirdNET-Pi writes the `.png` suffix itself, in lower case, so the match is
+/// exact.
+#[allow(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "BirdNET-Pi writes the suffix itself in lower case; the filter is the same exact match it uses"
+)]
+fn is_png_name(line: &str) -> bool {
+    line.ends_with(".png")
 }
 
 /// Remove temporary files an earlier, stopped pass left in the destination.
@@ -408,7 +433,7 @@ fn clear_stale_temporaries(dest: &Path) {
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str()
             && name.starts_with(".bnb-import-")
-            && name.ends_with(".part")
+            && is_temp_name(name)
         {
             let _ = fs::remove_file(entry.path());
         }
@@ -616,7 +641,7 @@ fn pass(
         }
         finished += 1;
         if let (Some(p), Some(total)) = (progress, act_total)
-            && finished % 25 == 0
+            && finished.is_multiple_of(25)
         {
             p.update(crate::progress::MigrationProgress {
                 stage: crate::progress::MigrationStage::Importing,
@@ -690,7 +715,7 @@ pub fn protected_names(text: &str) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for line in text.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') || line.ends_with(".png") {
+        if line.is_empty() || line.starts_with('#') || is_png_name(line) {
             continue;
         }
         let name = line.rsplit('/').next().unwrap_or(line);
