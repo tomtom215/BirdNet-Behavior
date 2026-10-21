@@ -66,7 +66,7 @@ ROWS = [
       "us": ("48-week year, the same arithmetic", "crates/birdnet-core/src/civil.rs", r"pub const fn birdnet_week\(month: u32, day: u32\) -> u32")}),
     ("Week stored with a detection",
      {"pi": ("ISO week of the detection's date", "scripts/utils/classes.py", r"self\.week = self\.datetime\.isocalendar\(\)\[1\]"),
-      "go": ("(no week column)", "internal/conf/defaults.go", r'"main\.timeas24h", true'),
+      "go": ("none: no week field in `detection.Result` (absence)", None, None),
       "us": ("the 48-week-year week", "crates/birdnet-core/src/detection/daemon/process.rs", r"fn geomodel_week")}),
     ("No location configured",
      {"pi": ("passes the installer's 0.0, 0.0 to the model", "scripts/install_config.sh", r"LATITUDE=0\.0000"),
@@ -82,7 +82,7 @@ ROWS = [
       "us": ("0 (off); the rank rule is separate", "src/daemon/mod.rs", r"cli\.privacy_threshold,")}),
     ("Species include list",
      {"pi": ("non-empty list rejects everything not in it; exact scientific name", "scripts/utils/analysis.py", r"if sci_name not in include_list and len\(include_list\) != 0"),
-      "go": ("(no include list: the range filter plus an exclude list)", "internal/analysis/processor/processor.go", r"if isSpeciesExcluded\(commonName, scientificName, settings\.Realtime\.Species\.Exclude\)"),
+      "go": ("`species.include` means \"always include despite the range filter\": BirdNET-Pi's whitelist, not its include list", "internal/conf/config.go", r"Include \[\]string .*// Always include these species"),
       "us": ("common or scientific name, case-insensitive; a list that matches no species is ignored", "crates/birdnet-core/src/inference/species_filter.rs", r"species include list matches no known species")}),
     ("Species exclude list",
      {"pi": ("exact scientific name; beats include and whitelist", "scripts/utils/analysis.py", r"elif sci_name in exclude_list and len\(exclude_list\) != 0"),
@@ -90,18 +90,18 @@ ROWS = [
       "us": ("common or scientific name, case-insensitive; beats include and whitelist", "crates/birdnet-core/src/inference/species_filter.rs", r"let exclude = resolve_to_scientific\(self\.config\.exclude_list")}),
     ("Whitelist",
      {"pi": ("exempts a species from the occurrence list only", "scripts/utils/analysis.py", r"sci_name not in whitelist_list"),
-      "go": ("(none)", "internal/conf/defaults.go", r'"main\.name", "BirdNET-Go"'),
+      "go": ("`species.include` (see the include row): the same word, the opposite meaning", "internal/classifier/range_filter.go", r"len\(settings\.Realtime\.Species\.Include\)"),
       "us": ("exempts from the occurrence threshold only", "crates/birdnet-core/src/inference/species_filter.rs", r"passing\.extend\(resolve_to_scientific\(self\.config\.whitelist")}),
     ("Rows per bird per window / repeat suppression",
      {"pi": ("every window that clears the bar is a row", "scripts/utils/analysis.py", r"for sci_name, confidence in entries:"),
       "go": ("detections merged over `realtime.interval` = 15 s, best kept", "internal/conf/defaults.go", r'"realtime\.interval", 15'),
       "us": ("every window; `DUPLICATE_INTERVAL_SECS` 0 = off", "src/daemon/mod.rs", r"config\.and_then\(\|c\| c\.get_parsed::<i64>\(\"DUPLICATE_INTERVAL_SECS\"\)")}),
     ("Minimum corroboration (detections per species)",
-     {"pi": ("none", "scripts/birdnet_analysis.py", r"detections = run_analysis\(file\)"),
+     {"pi": ("none (absence; every window above the bar is a row)", None, None),
       "go": ("`falsepositivefilter.level` 0 = off", "internal/conf/defaults.go", r'"realtime\.falsepositivefilter\.level", 0'),
       "us": ("`CONFIRMATION_LEVEL` off", "src/cli.rs", r'default_value = "off", env = "BIRDNET_CONFIRMATION_LEVEL"')}),
     ("Dynamic (adaptive) threshold",
-     {"pi": ("none", "scripts/utils/analysis.py", r"if confidence >= conf\.getfloat\('CONFIDENCE'\)"),
+     {"pi": ("none (absence)", None, None),
       "go": ("ON: trigger 0.90, floor 0.20", "internal/conf/defaults.go", r'"realtime\.dynamicthreshold\.enabled", true'),
       "us": ("off (`BIRDNET_DYNAMIC_THRESHOLD`)", "src/daemon/config.rs", r'enabled: flag\("BIRDNET_DYNAMIC_THRESHOLD"\)\.unwrap_or\(defaults\.enabled\)')}),
     ("Resampler for audio not at the model's rate",
@@ -144,6 +144,9 @@ def main():
         out = []
         for proj in ("pi", "go", "us"):
             text, rel, pat = cells[proj]
+            if rel is None:   # an absence: nothing to cite, and said so
+                out.append(text)
+                continue
             ln = find(roots[proj], rel, pat)
             if ln is None:
                 bad += 1
