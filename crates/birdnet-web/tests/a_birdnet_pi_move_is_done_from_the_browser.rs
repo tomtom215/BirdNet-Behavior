@@ -156,13 +156,13 @@ async fn the_preview_changes_nothing_and_apply_writes_what_it_showed() {
     .await;
     assert_eq!(rows(&state), before, "a preview wrote a setting");
     assert!(html.contains("Nothing has been changed yet"), "{html}");
-    for secret in [
+    for canary in [
         "SECRETbwid42",
         "hunter2pass",
         "flickrSECRET",
         "DISCORDTOKEN",
     ] {
-        assert!(!html.contains(secret), "the preview shows {secret}");
+        assert!(!html.contains(canary), "the preview shows {canary}");
     }
     // The rows the owner has to read.
     // Names carry a break opportunity after each underscore; the words are the same.
@@ -179,13 +179,13 @@ async fn the_preview_changes_nothing_and_apply_writes_what_it_showed() {
     );
 
     let done = apply(&state, &token_of(&html)).await;
-    for secret in [
+    for canary in [
         "SECRETbwid42",
         "hunter2pass",
         "flickrSECRET",
         "DISCORDTOKEN",
     ] {
-        assert!(!done.contains(secret), "the result shows {secret}");
+        assert!(!done.contains(canary), "the result shows {canary}");
     }
     assert!(done.contains("Done."), "{done}");
     assert_eq!(

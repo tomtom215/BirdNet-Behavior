@@ -262,14 +262,7 @@ pub fn origin_only(value: &str) -> String {
 /// Keys outside the table that are safe to print. Anything else the table does
 /// not know is shown as "(not shown)": a file handed over for import may name a
 /// key this code has never seen, and what its value is, nobody here has read.
-const UNKNOWN_KEYS_SAFE_TO_SHOW: [&str; 6] = [
-    "TZ",
-    "LANG",
-    "LOG_LEVEL",
-    "SITE_NAME",
-    "BNB_LOG_LEVEL",
-    "BNB_PUBLIC_URL_SCHEME",
-];
+const UNKNOWN_KEYS_SAFE_TO_SHOW: [&str; 4] = ["TZ", "LANG", "LOG_LEVEL", "SITE_NAME"];
 
 /// How a value is displayed, for a key the table does or does not know.
 ///

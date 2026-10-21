@@ -114,7 +114,7 @@ const fn set(
     }
 }
 
-const fn secret(rule: Rule) -> Rule {
+const fn redacted_row(rule: Rule) -> Rule {
     Rule {
         secret: true,
         ..rule
@@ -213,7 +213,7 @@ pub const RULES: &[Rule] = &[
          (see \"Same audio, same detections\").",
     ),
     // ---- integrations --------------------------------------------------
-    secret(set(
+    redacted_row(set(
         "BIRDWEATHER_ID",
         "station ID for uploading detections and soundscapes to BirdWeather (`reporting.py`)",
         "birdweather_token",
@@ -221,7 +221,7 @@ pub const RULES: &[Rule] = &[
         "Uploads resume, with this station's position, as before. Without this the uploads \
          stop and nothing says so.",
     )),
-    secret(set(
+    redacted_row(set(
         "HEARTBEAT_URL",
         "address pinged after every analysis (`reporting.py`)",
         "heartbeat_url",
@@ -229,7 +229,7 @@ pub const RULES: &[Rule] = &[
         "Pinged on a schedule here rather than after every analysis. Such addresses carry \
          the monitor's key, so the preview shows only its scheme and host.",
     )),
-    secret(file(
+    redacted_row(file(
         "FLICKR_API_KEY",
         "key for the Flickr image provider",
         "FLICKR_API_KEY",
@@ -267,7 +267,7 @@ pub const RULES: &[Rule] = &[
          the names it was recorded with.",
     ),
     // ---- sign-in -------------------------------------------------------
-    secret(note(
+    redacted_row(note(
         "CADDY_PWD",
         "password of the `birdnet` user for BirdNET-Pi's web interface (Caddy basic auth, `common.php`)",
         "Not copied, so no import ever writes a password. This station's administrator is \
@@ -275,7 +275,7 @@ pub const RULES: &[Rule] = &[
          as this station's own `birdnet.conf`, `CADDY_PWD` becomes the password of `admin` the \
          next time the station starts.)",
     )),
-    secret(nothing(
+    redacted_row(nothing(
         "ICE_PWD",
         "password between BirdNET-Pi's streaming programs (Icecast)",
         "This station streams from inside one program; there is nothing to authenticate.",
@@ -295,7 +295,7 @@ pub const RULES: &[Rule] = &[
         "`default` is the system's default input, as in BirdNET-Pi. Clear the field to let \
          this station find a USB microphone by itself.",
     ),
-    secret(set(
+    redacted_row(set(
         "RTSP_STREAM",
         "comma-separated network audio streams that replace the sound card (`birdnet_recording.sh`)",
         "rtsp_urls",
@@ -589,22 +589,22 @@ pub const RULES: &[Rule] = &[
     nothing("LAST_RUN", "debugging aid", "Internal to BirdNET-Pi."),
     nothing("THIS_RUN", "debugging aid", "Internal to BirdNET-Pi."),
     // Written by releases of BirdNET-Pi before 2025.
-    secret(nothing(
+    redacted_row(nothing(
         "PUSHED_APP_KEY",
         "key for the Pushed.co service, dropped in 2022",
         "Pushed.co is not supported; use a notification address.",
     )),
-    secret(nothing(
+    redacted_row(nothing(
         "PUSHED_APP_SECRET",
         "secret for the Pushed.co service, dropped in 2022",
         "See `PUSHED_APP_KEY`.",
     )),
-    secret(nothing(
+    redacted_row(nothing(
         "DB_PWD",
         "password of a database BirdNET-Pi no longer uses",
         "This station uses SQLite.",
     )),
-    secret(nothing(
+    redacted_row(nothing(
         "DB_ROOT_PWD",
         "root password of a database BirdNET-Pi no longer uses",
         "See `DB_PWD`.",
