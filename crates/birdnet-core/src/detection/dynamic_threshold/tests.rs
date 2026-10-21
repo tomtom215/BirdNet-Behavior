@@ -439,6 +439,23 @@ fn a_reset_forgets_one_species_and_it_starts_again_at_level_one() {
     assert_eq!(level.map(|(_, s)| s.level), Some(1));
 }
 
+/// The tracker matches a name the way the stored rows are deleted: without
+/// regard to case. A reset typed `strix aluco` used to leave the tracker's
+/// `Strix aluco` in force while the table said it was gone.
+#[test]
+fn a_reset_finds_the_species_whatever_the_case_it_was_typed_in() {
+    let mut d = DynamicThresholds::new(on());
+    d.observe("Strix aluco", 0.9, 0);
+    d.observe("Turdus merula", 0.9, 0);
+    assert_eq!(d.apply_reset(&Reset::Species("strix ALUCO".into())), 1);
+    assert!(d.adjustment("Strix aluco", 1).is_none(), "still adjusted");
+    assert!(
+        d.adjustment("Turdus merula", 1).is_some(),
+        "a different species was forgotten with it"
+    );
+    assert_eq!(d.tracked_count(), 1);
+}
+
 /// Reset-all empties the tracker and says how many went.
 #[test]
 fn a_reset_of_everything_counts_what_it_forgot() {

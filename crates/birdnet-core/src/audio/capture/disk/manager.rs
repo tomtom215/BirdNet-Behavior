@@ -162,7 +162,51 @@ pub const HOLD_RESUME_MARGIN_PERCENT: f64 = 2.0;
 /// Whether `percent` used is far enough below `threshold` for a held recording
 /// to resume (see [`HOLD_RESUME_MARGIN_PERCENT`]).
 fn clear_of_threshold(percent: f64, threshold: f64) -> bool {
-    percent < threshold - HOLD_RESUME_MARGIN_PERCENT
+    percent < release_below(threshold)
+}
+
+/// The usage, in per cent, a held recording must fall **below** before it
+/// resumes: the threshold less [`HOLD_RESUME_MARGIN_PERCENT`].
+///
+/// The one place that number is computed, so the message that tells the
+/// operator what to do and the rule that decides are the same expression. They
+/// were not: both messages said "free space or raise the threshold and
+/// recording resumes", which is true only for a disk freed by more than the
+/// margin, or, for a raised threshold, after the restart that applying it needs
+/// (which clears the hold, as the hold is not stored).
+#[must_use]
+pub fn release_below(threshold: f64) -> f64 {
+    threshold - HOLD_RESUME_MARGIN_PERCENT
+}
+
+/// [`hold_advice`] without the absolute numbers, for a surface that does not
+/// know which threshold is in force (a command-line flag can override the
+/// setting the page shows).
+#[must_use]
+pub fn hold_advice_relative() -> String {
+    format!(
+        "Free space until usage is at least {HOLD_RESUME_MARGIN_PERCENT:.0} points below the \
+         purge threshold (the margin stops a disk at the threshold from starting and stopping \
+         recording) and recording resumes by itself. Or raise the threshold in Settings; that \
+         takes effect after a restart"
+    )
+}
+
+/// What an operator can do about a held recording, and when it resumes, for the
+/// log.
+///
+/// `threshold` is the configured purge threshold in per cent. Says the margin
+/// outright; a disk freed to 94 % under a 95 % threshold does not resume, and
+/// "recording resumes by itself" without the number is how that is mistaken for
+/// a fault.
+#[must_use]
+pub fn hold_advice(threshold: f64) -> String {
+    format!(
+        "Free space until usage is below {:.0} % (the {:.0} % threshold less a margin of {:.0}          points, so a disk at the threshold does not stop and start recording) and recording          resumes by itself. Or raise the threshold in Settings; that takes effect after a restart",
+        release_below(threshold),
+        threshold,
+        HOLD_RESUME_MARGIN_PERCENT,
+    )
 }
 
 /// Whether a purge pass is worth running, from what the last one achieved
@@ -413,9 +457,9 @@ impl DiskManager {
                 used_pct = format!("{percent:.1}"),
                 threshold = self.config.purge_threshold,
                 dir = %self.config.monitored_dir.display(),
+                advice = %hold_advice(f64::from(self.config.purge_threshold)),
                 "disk is full and the station is set to keep everything: recording is on \
-                 hold and no clip will be deleted. Free space or raise the threshold and \
-                 recording resumes by itself"
+                 hold and no clip will be deleted"
             );
         }
     }
@@ -996,6 +1040,23 @@ mod tests {
         let manager = always_full(dir.path(), FullDiskAction::Keep, None);
         assert!(manager.run_cycle());
         assert!(files.iter().all(|f| f.exists()));
+    }
+
+    /// M2: the advice and the rule are one expression. A message that says
+    /// "below 93 %" must be true at 92.9 and false at 93.0, whatever the
+    /// threshold; the old text promised a resume at "the threshold".
+    #[test]
+    fn the_hold_advice_states_the_number_the_release_rule_uses() {
+        for t in [50.0, 80.0, 95.0, 99.0] {
+            let edge = release_below(t);
+            assert!(clear_of_threshold(edge - 0.01, t), "{t}");
+            assert!(!clear_of_threshold(edge, t), "{t}");
+            let advice = hold_advice(t);
+            assert!(advice.contains(&format!("below {edge:.0} %")), "{advice}");
+            assert!(advice.contains(&format!("{t:.0} % threshold")), "{advice}");
+            assert!(advice.contains("restart"), "{advice}");
+        }
+        assert!(hold_advice_relative().contains("2 points below"));
     }
 
     /// A hold is lifted once the disk is clear of the threshold, not at the

@@ -396,7 +396,12 @@ impl DynamicThresholds {
     /// base. An entry that had already lapsed counts too, so the answer is
     /// "there was something to forget", not "it was in force".
     pub fn forget(&mut self, sci_name: &str) -> bool {
-        self.levels.remove(sci_name).is_some()
+        // Without regard to ASCII case, as the stored rows are deleted: a reset
+        // typed as `turdus merula` must reach the entry learned as `Turdus merula`.
+        let before = self.levels.len();
+        self.levels
+            .retain(|name, _| !name.eq_ignore_ascii_case(sci_name));
+        self.levels.len() != before
     }
 
     /// Forget everything, returning how many entries went.

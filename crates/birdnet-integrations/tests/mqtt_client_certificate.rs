@@ -338,6 +338,64 @@ fn an_unreadable_or_wrong_file_is_named_and_its_contents_are_not_quoted() {
     assert!(err.to_string().contains("/nonexistent/client.pem"), "{err}");
 }
 
+/// The parser prints the offending line as a list of decimal bytes
+/// (`[67, 65, 78, ...]`), so the text itself never appears: look for that
+/// rendering, and for the parser's own wording.
+fn leaks_nothing(rendered: &str) {
+    let as_bytes = "CANARY"
+        .bytes()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    for leak in [
+        "CANARY",
+        as_bytes.as_str(),
+        "section end marker",
+        "illegal section",
+    ] {
+        assert!(
+            !rendered.contains(leak),
+            "key material ({leak:?}) in the error: {rendered}"
+        );
+    }
+}
+
+/// L2: a private key pasted onto ONE line fails to parse, and the parser's own
+/// message is that line. It reached the error, the doctor and the journal.
+#[test]
+fn a_key_that_fails_to_parse_is_not_quoted_in_the_error() {
+    let pki = Pki::generate();
+    let canary = "QUFBQUJCQkJDQ0NDRERERA-CANARY-KEY-MATERIAL";
+    for body in [
+        // The section start with the key on the same line.
+        format!("-----BEGIN PRIVATE KEY----- {canary} -----END PRIVATE KEY-----\n"),
+        // A header with no end marker.
+        format!("-----BEGIN PRIVATE KEY-----\n{canary}\n"),
+        // A start line with trailing text.
+        format!("-----BEGIN PRIVATE KEY----- {canary}\n{canary}\n-----END PRIVATE KEY-----\n"),
+    ] {
+        let mangled = pki.path("mangled-key.pem");
+        std::fs::write(&mangled, &body).expect("write");
+        let mut cfg = config_for("127.0.0.1:1", &pki, Some(("client.pem", "client-key.pem")));
+        cfg.tls.as_mut().unwrap().client_key = Some(mangled);
+        let err = publish(&cfg, "birdnet/x", b"{}").expect_err("a key that does not parse");
+        let rendered = format!("{err} {err:?}");
+        assert!(rendered.contains("mangled-key.pem"), "{rendered}");
+        leaks_nothing(&rendered);
+
+        // The same file named as the certificate or the CA: "a mistyped path
+        // can point at anything, including a private key".
+        let mut cfg = config_for("127.0.0.1:1", &pki, Some(("client.pem", "client-key.pem")));
+        cfg.tls.as_mut().unwrap().client_cert = Some(pki.path("mangled-key.pem"));
+        let err = publish(&cfg, "birdnet/x", b"{}").expect_err("a certificate that does not parse");
+        leaks_nothing(&format!("{err} {err:?}"));
+        let mut cfg = config_for("127.0.0.1:1", &pki, None);
+        cfg.tls.as_mut().unwrap().ca_file = Some(pki.path("mangled-key.pem"));
+        let err = publish(&cfg, "birdnet/x", b"{}").expect_err("a CA that does not parse");
+        leaks_nothing(&format!("{err} {err:?}"));
+    }
+}
+
 #[test]
 fn the_doctor_check_agrees_with_a_real_connection() {
     // `check_tls` is what `--doctor` runs. It must accept exactly what a

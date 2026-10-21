@@ -100,6 +100,7 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_audio_format(config, &mut out);
     check_info_site(config, &mut out);
     check_full_disk(config, &mut out);
+    check_birdweather(config, &mut out);
     check_notify_trigger(config, &mut out);
     check_lang(config, &mut out);
     check_private_mode(config, &mut out);
@@ -870,6 +871,50 @@ fn check_full_disk(config: &Config, out: &mut Vec<Finding>) {
     }
 }
 
+/// The widest blur `BIRDWEATHER_LOCATION_ACCURACY` takes, in metres.
+///
+/// The same number as `birdnet_integrations::birdweather::MAX_LOCATION_ACCURACY_M`,
+/// which this crate cannot see; a test in the binary crate holds the two equal.
+pub const BIRDWEATHER_MAX_ACCURACY_M: f64 = 50_000.0;
+
+/// `BIRDWEATHER_THRESHOLD` and `BIRDWEATHER_LOCATION_ACCURACY`, each on its own.
+///
+/// Both are warnings, not errors: an `Error` makes [`is_usable`] false and
+/// `startup_config::choose` then reverts the whole station to its last-good
+/// file. Their consequences are already as large as they should be and
+/// different from each other, which is what the messages say. A bad threshold
+/// uploads with no extra bar. A bad blur radius **stops BirdWeather uploads**:
+/// the setting keeps the station's address off a public map, and the station
+/// refuses to post the exact position because the radius could not be read.
+fn check_birdweather(config: &Config, out: &mut Vec<Finding>) {
+    use crate::config::locale::parse_decimal;
+    if let Some(raw) = value_of(config, "BIRDWEATHER_THRESHOLD")
+        && !parse_decimal(raw).is_ok_and(|v| (0.0..=1.0).contains(&v))
+    {
+        out.push(Finding::warn(
+            "BIRDWEATHER_THRESHOLD",
+            format!(
+                "BIRDWEATHER_THRESHOLD={raw} is not a confidence from 0 to 1, so it is ignored \
+                 and every detection is uploaded to BirdWeather with no bar of its own"
+            ),
+            "set it to a fraction such as 0.85 (not 85), or remove the line".to_string(),
+        ));
+    }
+    if let Some(raw) = value_of(config, "BIRDWEATHER_LOCATION_ACCURACY")
+        && !parse_decimal(raw).is_ok_and(|v| (0.0..=BIRDWEATHER_MAX_ACCURACY_M).contains(&v))
+    {
+        out.push(Finding::warn(
+            "BIRDWEATHER_LOCATION_ACCURACY",
+            format!(
+                "BIRDWEATHER_LOCATION_ACCURACY={raw} is not a number of metres from 0 to \
+                 {BIRDWEATHER_MAX_ACCURACY_M}, so BirdWeather uploads are OFF until it is fixed: \
+                 the station will not post its exact position because the blur could not be read"
+            ),
+            "set it to metres, e.g. 500 (not 5km), or 0 for no blur, and restart".to_string(),
+        ));
+    }
+}
+
 /// The words `APPRISE_TRIGGER` (and the Notification trigger setting) take.
 ///
 /// Alone or in a list: `each`, `new-species`, `new-species-daily`, or `off`.
@@ -1001,6 +1046,46 @@ mod tests {
             let _ = writeln!(body, "{k}={v}");
         }
         Config::parse(&body).expect("parse")
+    }
+
+    /// H1: `--doctor` reports each BirdWeather key on its own, as a warning
+    /// (an error would roll the whole station back to its last-good file).
+    #[test]
+    fn birdweather_keys_are_reported_independently_as_warnings() {
+        let find = |pairs: &[(&str, &str)], key: &str| {
+            validate(&cfg(pairs)).into_iter().find(|f| f.key == key)
+        };
+        let t = find(&[("BIRDWEATHER_THRESHOLD", "85")], "BIRDWEATHER_THRESHOLD").expect("flagged");
+        assert_eq!(t.severity, Severity::Warning);
+        for bad in ["60000", "5km", "-5"] {
+            let a = find(
+                &[("BIRDWEATHER_LOCATION_ACCURACY", bad)],
+                "BIRDWEATHER_LOCATION_ACCURACY",
+            )
+            .unwrap_or_else(|| panic!("{bad} was not flagged"));
+            assert_eq!(a.severity, Severity::Warning);
+            assert!(a.message.contains("OFF"), "{}", a.message);
+        }
+        // One bad key does not hide the other.
+        let both = validate(&cfg(&[
+            ("BIRDWEATHER_THRESHOLD", "85"),
+            ("BIRDWEATHER_LOCATION_ACCURACY", "5km"),
+        ]));
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(is_usable(&both), "a warning must not roll the station back");
+        // The counterpart: good and blank values are clean.
+        for pairs in [
+            &[("BIRDWEATHER_THRESHOLD", "0.85")][..],
+            &[("BIRDWEATHER_THRESHOLD", "0,85")][..],
+            &[("BIRDWEATHER_LOCATION_ACCURACY", "50000")][..],
+            &[("BIRDWEATHER_LOCATION_ACCURACY", "0")][..],
+            &[
+                ("BIRDWEATHER_THRESHOLD", ""),
+                ("BIRDWEATHER_LOCATION_ACCURACY", " "),
+            ][..],
+        ] {
+            assert!(is_clean(&validate(&cfg(pairs))), "{pairs:?}");
+        }
     }
 
     #[test]

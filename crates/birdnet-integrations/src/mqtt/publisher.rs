@@ -237,9 +237,9 @@ fn client_identity(
     };
     let chain: Vec<rustls_pki_types::CertificateDer<'static>> =
         rustls_pki_types::CertificateDer::pem_file_iter(cert_path)
-            .map_err(|e| MqttError::Tls(format!("{}: {e}", cert_path.display())))?
+            .map_err(|e| MqttError::Tls(format!("{}: {}", cert_path.display(), pem_problem(&e))))?
             .collect::<Result<_, _>>()
-            .map_err(|e| MqttError::Tls(format!("{}: {e}", cert_path.display())))?;
+            .map_err(|e| MqttError::Tls(format!("{}: {}", cert_path.display(), pem_problem(&e))))?;
     if chain.is_empty() {
         return Err(MqttError::Tls(format!(
             "{}: no certificates found in this file",
@@ -248,11 +248,32 @@ fn client_identity(
     }
     let key = rustls_pki_types::PrivateKeyDer::from_pem_file(key_path).map_err(|e| {
         MqttError::Tls(format!(
-            "{}: no usable private key in this file ({e})",
-            key_path.display()
+            "{}: no usable private key in this file ({})",
+            key_path.display(),
+            pem_problem(&e)
         ))
     })?;
     Ok(Some((chain, key)))
+}
+
+/// What was wrong with a PEM file, in words that cannot contain its content.
+///
+/// `pem::Error`'s `Display` prints the offending line for a malformed section
+/// start and the expected end marker for a truncated one. In a key file that
+/// line can be the whole key: a key pasted onto one line fails to parse with the
+/// line as the message. The doctor, the journal and Station Health all print
+/// this error, so it names the kind of fault and nothing from the file.
+const fn pem_problem(error: &rustls_pki_types::pem::Error) -> &'static str {
+    use rustls_pki_types::pem::Error;
+    match error {
+        Error::Io(_) => "the file could not be read",
+        Error::NoItemsFound => "no PEM section found",
+        Error::MissingSectionEnd { .. } => "a PEM section has no end marker",
+        Error::IllegalSectionStart { .. } => "a PEM section starts with a malformed line",
+        Error::Base64Decode(_) => "a PEM section is not valid base64",
+        Error::SectionTooLarge => "a PEM section is too large",
+        _ => "the file is not valid PEM",
+    }
 }
 
 /// Check the TLS settings without connecting: that every file named is there,
@@ -299,7 +320,7 @@ fn tls_session(tls: &TlsConfig, server_name: &str) -> Result<rustls::ClientConne
         let mut cursor = std::io::BufReader::new(std::io::Cursor::new(pem));
         let certs: Vec<_> = rustls_pki_types::pem::PemObject::pem_reader_iter(&mut cursor)
             .collect::<Result<Vec<rustls_pki_types::CertificateDer<'static>>, _>>()
-            .map_err(|e| MqttError::Tls(format!("{}: {e}", path.display())))?;
+            .map_err(|e| MqttError::Tls(format!("{}: {}", path.display(), pem_problem(&e))))?;
         if certs.is_empty() {
             return Err(MqttError::Tls(format!(
                 "{}: no certificates found in this file",
