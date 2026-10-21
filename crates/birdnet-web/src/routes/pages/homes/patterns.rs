@@ -136,9 +136,16 @@ mod tests {
     fn the_terrain_leads_the_when_tab_once() {
         let html = when_content();
         assert_eq!(html.matches(r#"id="terrain""#).count(), 1);
-        let head = html.find("When the yard is alive").expect("the tab's heading");
+        let head = html
+            .find("When the yard is alive")
+            .expect("the tab's heading");
         let terrain = html.find(r#"id="terrain""#).expect("the terrain card");
-        let stream = html.find("Activity streamgraph").expect("the streamgraph card");
-        assert!(head < terrain && terrain < stream, "heading, terrain, then the old charts");
+        let stream = html
+            .find("Activity streamgraph")
+            .expect("the streamgraph card");
+        assert!(
+            head < terrain && terrain < stream,
+            "heading, terrain, then the old charts"
+        );
     }
 }

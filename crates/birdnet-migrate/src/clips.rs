@@ -224,7 +224,9 @@ impl std::fmt::Display for ClipError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoClipTree(why) => write!(f, "{why}"),
-            Self::BadDestination(why) => write!(f, "the recordings directory cannot be used: {why}"),
+            Self::BadDestination(why) => {
+                write!(f, "the recordings directory cannot be used: {why}")
+            }
             Self::DifferentFilesystems => write!(
                 f,
                 "BirdNET-Pi's clips and this station's recordings are on different disks, so \
@@ -360,7 +362,9 @@ fn index_tree(root: &Path) -> HashMap<String, PathBuf> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(kind) = entry.file_type() else { continue };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
             if kind.is_dir() {
                 // The pitch-shifted copies are not clips of their own.
                 if path.file_name().is_some_and(|n| n == "shifted") && dir == *root {
@@ -398,7 +402,9 @@ fn temp_name(name: &str) -> String {
 
 /// Remove temporary files an earlier, stopped pass left in the destination.
 fn clear_stale_temporaries(dest: &Path) {
-    let Ok(entries) = fs::read_dir(dest) else { return };
+    let Ok(entries) = fs::read_dir(dest) else {
+        return;
+    };
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str()
             && name.starts_with(".bnb-import-")
@@ -468,8 +474,7 @@ pub fn run(
     let root = find_by_date(&options.source)?;
     let acting = !options.dry_run && options.mode != Mode::Leave;
     if acting {
-        fs::create_dir_all(&options.dest)
-            .map_err(|e| ClipError::BadDestination(e.to_string()))?;
+        fs::create_dir_all(&options.dest).map_err(|e| ClipError::BadDestination(e.to_string()))?;
     }
     if options.mode != Mode::Leave && !acting && !options.dest.is_dir() {
         // A dry run may name a directory that does not exist yet; its parent
@@ -533,10 +538,13 @@ fn locate(
     index: &mut Option<HashMap<String, PathBuf>>,
 ) -> Option<(PathBuf, u64)> {
     let date_ok = w.date.len() == 10
-        && w.date
-            .bytes()
-            .enumerate()
-            .all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
+        && w.date.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        });
     if date_ok
         && let Some(species) = species_dir_name(&w.com_name)
         && let Some(hit) = inside(root, &root.join(&w.date).join(species).join(&w.file_name))
@@ -699,8 +707,12 @@ mod tests {
 
     #[test]
     fn plain_names_only() {
-        assert!(is_plain_audio_name("Eurasian_Blackbird-85-2026-03-01-birdnet-06:30:15.mp3"));
-        assert!(is_plain_audio_name("Pica_pica-91-2026-03-01-birdnet-RTSP_1-06:30:15.WAV"));
+        assert!(is_plain_audio_name(
+            "Eurasian_Blackbird-85-2026-03-01-birdnet-06:30:15.mp3"
+        ));
+        assert!(is_plain_audio_name(
+            "Pica_pica-91-2026-03-01-birdnet-RTSP_1-06:30:15.WAV"
+        ));
         for bad in [
             "",
             "..",
@@ -720,8 +732,14 @@ mod tests {
 
     #[test]
     fn a_species_directory_is_birdnet_pis() {
-        assert_eq!(species_dir_name("Black-capped Chickadee").as_deref(), Some("Black-capped_Chickadee"));
-        assert_eq!(species_dir_name("Cetti's Warbler").as_deref(), Some("Cettis_Warbler"));
+        assert_eq!(
+            species_dir_name("Black-capped Chickadee").as_deref(),
+            Some("Black-capped_Chickadee")
+        );
+        assert_eq!(
+            species_dir_name("Cetti's Warbler").as_deref(),
+            Some("Cettis_Warbler")
+        );
         assert_eq!(species_dir_name("a/b"), None);
         assert_eq!(species_dir_name(".."), None);
         assert_eq!(species_dir_name(""), None);

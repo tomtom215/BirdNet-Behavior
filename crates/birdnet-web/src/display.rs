@@ -201,7 +201,11 @@ pub fn format_temperature(
     let places = i32::try_from(decimals).unwrap_or(0);
     let scale = 10_f64.powi(places);
     let rounded = (value.abs() * scale).round() / scale;
-    let sign = if value < 0.0 && rounded != 0.0 { "-" } else { "" };
+    let sign = if value < 0.0 && rounded != 0.0 {
+        "-"
+    } else {
+        ""
+    };
     let letter = match (with_unit, unit) {
         (false, _) => "",
         (true, TemperatureUnit::Celsius) => "C",
@@ -264,7 +268,8 @@ pub fn clock_from_hours(hours: f64) -> String {
 pub fn datetime(stamp: &str) -> String {
     match stamp.split_once([' ', 'T']) {
         Some((date, time))
-            if date.len() == 10 && parse_clock(time.get(..time.len().min(8)).unwrap_or("")).is_some() =>
+            if date.len() == 10
+                && parse_clock(time.get(..time.len().min(8)).unwrap_or("")).is_some() =>
         {
             let (clock_part, rest) = time.split_at(time.len().min(8));
             format!(
@@ -379,8 +384,14 @@ mod tests {
         assert_eq!(clock_attr("nope"), "");
         assert_eq!(clock_attr("06:00"), r#"data-clk="06:00""#);
         let t = temperature(21.4, 0, true);
-        assert!(t.contains(r#"data-tc="21.4000""#) && t.contains(r#"data-dp="0""#), "{t}");
-        assert!(t.contains(r#"data-tu="1""#) && t.ends_with(">21°C</span>"), "{t}");
+        assert!(
+            t.contains(r#"data-tc="21.4000""#) && t.contains(r#"data-dp="0""#),
+            "{t}"
+        );
+        assert!(
+            t.contains(r#"data-tu="1""#) && t.ends_with(">21°C</span>"),
+            "{t}"
+        );
         assert!(!temperature(21.4, 0, false).contains("data-tu"));
     }
 
@@ -430,6 +441,9 @@ mod tests {
             assert!(!is_temperature_unit(bad), "{bad:?}");
         }
         assert_eq!(StationDisplay::default().time, TimeFormat::H24);
-        assert_eq!(StationDisplay::default().temperature, TemperatureUnit::Celsius);
+        assert_eq!(
+            StationDisplay::default().temperature,
+            TemperatureUnit::Celsius
+        );
     }
 }

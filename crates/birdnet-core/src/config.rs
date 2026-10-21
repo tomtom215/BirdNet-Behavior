@@ -266,7 +266,9 @@ impl Config {
         // when both are present and non-blank.
         let blank = |v: Option<&String>| v.is_none_or(|v| v.trim().is_empty());
         if blank(values.get("SEGMENT_DURATION"))
-            && let Some(length) = values.get("RECORDING_LENGTH").filter(|v| !v.trim().is_empty())
+            && let Some(length) = values
+                .get("RECORDING_LENGTH")
+                .filter(|v| !v.trim().is_empty())
         {
             let length = length.clone();
             values.insert("SEGMENT_DURATION".to_owned(), length);

@@ -356,7 +356,10 @@ async fn three_js(headers: axum::http::HeaderMap) -> axum::response::Response {
     let fresh = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(',').any(|t| t.trim().trim_start_matches("W/") == etag));
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|t| t.trim().trim_start_matches("W/") == etag)
+        });
     let common = [
         (header::ETAG, etag),
         (header::CACHE_CONTROL, IMMUTABLE),

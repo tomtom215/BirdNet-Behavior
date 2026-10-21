@@ -386,9 +386,7 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
     if let Some(raw) = given(&form.time_format)
         && !crate::display::is_time_format(&raw)
     {
-        problems.push(format!(
-            "Clock must be 24h or 12h. You entered “{raw}”."
-        ));
+        problems.push(format!("Clock must be 24h or 12h. You entered “{raw}”."));
     }
     if let Some(raw) = given(&form.temperature_unit)
         && !crate::display::is_temperature_unit(&raw)
@@ -1914,7 +1912,10 @@ mod tests {
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains(r#"<select id="raw_spectrogram" name="raw_spectrogram">"#));
-        assert!(html.contains(r#"<option value="true" selected>"#), "the stored choice shows");
+        assert!(
+            html.contains(r#"<option value="true" selected>"#),
+            "the stored choice shows"
+        );
         let form = SettingsForm {
             raw_spectrogram: Some("false".to_owned()),
             ..empty_form()
@@ -1922,7 +1923,9 @@ mod tests {
         let stored = HashMap::from([("raw_spectrogram".to_owned(), "true".to_owned())]);
         let items = build_settings_items(&form, &stored, Unset::AsShownByTheForm);
         assert!(
-            items.iter().any(|(k, v, _)| *k == "raw_spectrogram" && v == "false"),
+            items
+                .iter()
+                .any(|(k, v, _)| *k == "raw_spectrogram" && v == "false"),
             "turning it off is a change: {items:?}"
         );
     }
@@ -1957,16 +1960,43 @@ mod tests {
                 range_problems(&form)
             };
             let fmt = |v: f64| format!("{v}");
-            assert!(probe(&fmt(b.min)).is_empty(), "{}: the minimum is refused", b.form_key);
-            assert!(probe(&fmt(b.max)).is_empty(), "{}: the maximum is refused", b.form_key);
-            assert!(probe("").is_empty(), "{}: blank clears and is fine", b.form_key);
+            assert!(
+                probe(&fmt(b.min)).is_empty(),
+                "{}: the minimum is refused",
+                b.form_key
+            );
+            assert!(
+                probe(&fmt(b.max)).is_empty(),
+                "{}: the maximum is refused",
+                b.form_key
+            );
+            assert!(
+                probe("").is_empty(),
+                "{}: blank clears and is fine",
+                b.form_key
+            );
             let above = if b.whole { b.max + 1.0 } else { b.max + 0.5 };
             let below = if b.whole { b.min - 1.0 } else { b.min - 0.5 };
-            assert_eq!(probe(&fmt(above)).len(), 1, "{}: {above} is allowed", b.form_key);
-            assert_eq!(probe(&fmt(below)).len(), 1, "{}: {below} is allowed", b.form_key);
+            assert_eq!(
+                probe(&fmt(above)).len(),
+                1,
+                "{}: {above} is allowed",
+                b.form_key
+            );
+            assert_eq!(
+                probe(&fmt(below)).len(),
+                1,
+                "{}: {below} is allowed",
+                b.form_key
+            );
             assert_eq!(probe("lots").len(), 1, "{}: text is allowed", b.form_key);
             if b.whole {
-                assert_eq!(probe("1.5").len(), 1, "{}: a fraction is allowed", b.form_key);
+                assert_eq!(
+                    probe("1.5").len(),
+                    1,
+                    "{}: a fraction is allowed",
+                    b.form_key
+                );
             }
         }
     }

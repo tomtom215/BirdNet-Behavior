@@ -41,9 +41,11 @@ fn every_key_of_a_default_file_has_a_row_and_none_is_unknown() {
     let plan = plan_of(DEFAULT_CONF);
     let keys = DEFAULT_CONF
         .lines()
-        .filter(|l| l.split('=').next().is_some_and(|k| {
-            !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        }) && l.contains('='))
+        .filter(|l| {
+            l.split('=').next().is_some_and(|k| {
+                !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }) && l.contains('=')
+        })
         .count();
     assert_eq!(keys, 60, "the fixture is BirdNET-Pi's 60 default keys");
     let from_the_file = plan
@@ -58,11 +60,21 @@ fn every_key_of_a_default_file_has_a_row_and_none_is_unknown() {
             "{} fell through to the unknown-key row",
             r.pi_key
         );
-        if matches!(r.verdict, Verdict::NotCarried | Verdict::Attention | Verdict::Refused) {
-            assert!(!r.why.is_empty(), "{} is not carried over and says nothing", r.pi_key);
+        if matches!(
+            r.verdict,
+            Verdict::NotCarried | Verdict::Attention | Verdict::Refused
+        ) {
+            assert!(
+                !r.why.is_empty(),
+                "{} is not carried over and says nothing",
+                r.pi_key
+            );
         }
     }
-    assert_eq!(plan.unreadable_lines, 1, "the stray closing brace the extraction left");
+    assert_eq!(
+        plan.unreadable_lines, 1,
+        "the stray closing brace the extraction left"
+    );
 }
 
 /// The counterpart: a key BirdNET-Pi does not write is said to be unknown, not
@@ -72,7 +84,11 @@ fn a_key_nobody_knows_is_reported_as_unknown() {
     let plan = plan_of("MY_OWN_SETTING=1\n");
     let r = row(&plan, "MY_OWN_SETTING");
     assert_eq!(r.verdict, Verdict::NotCarried);
-    assert!(r.why.starts_with("not a key BirdNET-Pi writes"), "{}", r.why);
+    assert!(
+        r.why.starts_with("not a key BirdNET-Pi writes"),
+        "{}",
+        r.why
+    );
 }
 
 /// `APPRISE_ONLY_NOTIFY_SPECIES_NAMES` is the **exclusion** list and `_2` the
@@ -104,9 +120,18 @@ fn the_birdweather_id_becomes_the_token_and_is_not_shown() {
     assert_eq!(plan.value_of("birdweather_token"), Some("abcSECRET123"));
     let r = row(&plan, "BIRDWEATHER_ID");
     assert_eq!(r.shown, "(hidden, 12 characters)");
-    assert_eq!(r.becomes, [("birdweather_token".to_owned(), "(hidden, 12 characters)".to_owned())]);
+    assert_eq!(
+        r.becomes,
+        [(
+            "birdweather_token".to_owned(),
+            "(hidden, 12 characters)".to_owned()
+        )]
+    );
     let printed = format!("{plan:?}");
-    assert!(!printed.contains("abcSECRET123"), "a Debug print leaked it: {printed}");
+    assert!(
+        !printed.contains("abcSECRET123"),
+        "a Debug print leaked it: {printed}"
+    );
 }
 
 /// Every credential in the table is hidden wherever the plan is displayed.
@@ -131,9 +156,20 @@ fn no_credential_in_the_default_file_reaches_a_display_string() {
 /// takes the same rule as a rank. `int(6000 * p / 100)`, at least 10.
 #[test]
 fn the_privacy_percentage_becomes_the_same_rule_as_a_rank() {
-    for (given, rank) in [("0", "10"), ("0.1", "10"), ("1", "60"), ("2", "120"), ("3", "180"), ("0.5", "30")] {
+    for (given, rank) in [
+        ("0", "10"),
+        ("0.1", "10"),
+        ("1", "60"),
+        ("2", "120"),
+        ("3", "180"),
+        ("0.5", "30"),
+    ] {
         let plan = plan_of(&format!("PRIVACY_THRESHOLD={given}\n"));
-        assert_eq!(plan.value_of("privacy_rank"), Some(rank), "PRIVACY_THRESHOLD={given}");
+        assert_eq!(
+            plan.value_of("privacy_rank"),
+            Some(rank),
+            "PRIVACY_THRESHOLD={given}"
+        );
         assert_eq!(
             plan.value_of("privacy_threshold"),
             Some("0"),
@@ -156,8 +192,14 @@ fn the_three_notification_switches_become_one_list_of_rules() {
     assert_eq!(triggers(0, 1, 0).as_deref(), Some("new-species"));
     assert_eq!(triggers(0, 0, 1).as_deref(), Some("new-species-daily"));
     assert_eq!(triggers(1, 1, 0).as_deref(), Some("each,new-species"));
-    assert_eq!(triggers(0, 1, 1).as_deref(), Some("new-species,new-species-daily"));
-    assert_eq!(triggers(1, 1, 1).as_deref(), Some("each,new-species,new-species-daily"));
+    assert_eq!(
+        triggers(0, 1, 1).as_deref(),
+        Some("new-species,new-species-daily")
+    );
+    assert_eq!(
+        triggers(1, 1, 1).as_deref(),
+        Some("each,new-species,new-species-daily")
+    );
     assert_eq!(
         triggers(0, 0, 0).as_deref(),
         Some("off"),
@@ -210,7 +252,11 @@ fn keep_with_a_species_cap_is_flagged() {
     assert!(r.why.contains("MAX_FILES_SPECIES"), "{}", r.why);
     let r = row(&plan, "MAX_FILES_SPECIES");
     assert_eq!(r.verdict, Verdict::Attention);
-    assert!(r.why.contains("most **confident**"), "the rule differs: {}", r.why);
+    assert!(
+        r.why.contains("most **confident**"),
+        "the rule differs: {}",
+        r.why
+    );
 
     // Counterpart: no cap, no warning.
     let plan = plan_of("FULL_DISK=keep\nMAX_FILES_SPECIES=0\n");
@@ -273,17 +319,27 @@ fn the_audio_format_is_carried_only_if_this_station_writes_it() {
 
 #[test]
 fn the_weekly_report_switch_is_a_day_or_off() {
-    assert_eq!(plan_of("APPRISE_WEEKLY_REPORT=1\n").value_of("weekly_report_schedule"), Some("monday"));
-    assert_eq!(plan_of("APPRISE_WEEKLY_REPORT=0\n").value_of("weekly_report_schedule"), Some("disabled"));
+    assert_eq!(
+        plan_of("APPRISE_WEEKLY_REPORT=1\n").value_of("weekly_report_schedule"),
+        Some("monday")
+    );
+    assert_eq!(
+        plan_of("APPRISE_WEEKLY_REPORT=0\n").value_of("weekly_report_schedule"),
+        Some("disabled")
+    );
 }
 
 /// Keys only `birdnet.conf` can carry are handed back as lines to put there.
 #[test]
 fn keys_this_station_reads_only_from_its_config_file_come_back_as_lines() {
-    let plan = plan_of("IMAGE_PROVIDER=FLICKR\nFLICKR_API_KEY=k123\nFLICKR_FILTER_EMAIL=me@example.com\n");
+    let plan =
+        plan_of("IMAGE_PROVIDER=FLICKR\nFLICKR_API_KEY=k123\nFLICKR_FILTER_EMAIL=me@example.com\n");
     assert_eq!(plan.assignments.len(), 0);
     let keys: Vec<&str> = plan.config_lines.iter().map(|l| l.key).collect();
-    assert_eq!(keys, ["IMAGE_PROVIDER", "FLICKR_API_KEY", "FLICKR_FILTER_EMAIL"]);
+    assert_eq!(
+        keys,
+        ["IMAGE_PROVIDER", "FLICKR_API_KEY", "FLICKR_FILTER_EMAIL"]
+    );
     assert_eq!(row(&plan, "FLICKR_API_KEY").verdict, Verdict::ConfigFile);
 }
 

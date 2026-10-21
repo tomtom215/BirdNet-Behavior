@@ -250,6 +250,9 @@ mod tests {
         assert_eq!(summary.destinations, 4);
         assert_eq!(summary.schemes, ["discord", "mailto", "tgram", "ntfy"]);
         let printed = format!("{summary:?}");
-        assert!(!printed.contains("SECRET") && !printed.contains("pass"), "{printed}");
+        assert!(
+            !printed.contains("SECRET") && !printed.contains("pass"),
+            "{printed}"
+        );
     }
 }

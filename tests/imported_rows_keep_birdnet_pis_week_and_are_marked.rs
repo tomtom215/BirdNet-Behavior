@@ -58,7 +58,11 @@ fn the_imported_week_is_birdnet_pis_and_the_row_says_it_was_imported() {
     // this test would pass whatever the importer did.
     for (date, iso, ours) in DAYS {
         assert_eq!(birdnet_week_from_date(date), Some(ours), "{date}");
-        assert_ne!(i64::from(ours), iso, "{date}: the calendars must differ here");
+        assert_ne!(
+            i64::from(ours),
+            iso,
+            "{date}: the calendars must differ here"
+        );
     }
 
     let summary = BirdNetPiImporter
@@ -83,7 +87,10 @@ fn the_imported_week_is_birdnet_pis_and_the_row_says_it_was_imported() {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .expect("imported row");
-        assert_eq!(week, iso, "{date}: the importer must keep BirdNET-Pi's week");
+        assert_eq!(
+            week, iso,
+            "{date}: the importer must keep BirdNET-Pi's week"
+        );
         assert!(batch.is_some(), "{date}: an imported row carries its batch");
     }
 
@@ -103,5 +110,8 @@ fn the_imported_week_is_birdnet_pis_and_the_row_says_it_was_imported() {
             |r| r.get(0),
         )
         .expect("count");
-    assert_eq!(natives, 1, "only the row this station recorded has no batch");
+    assert_eq!(
+        natives, 1,
+        "only the row this station recorded has no batch"
+    );
 }

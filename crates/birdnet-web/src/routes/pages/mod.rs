@@ -456,7 +456,10 @@ pub(crate) fn civil_twilight_local(
     #[allow(clippy::cast_precision_loss)]
     let offset_h = local_utc_offset_secs() as f64 / 3600.0;
     let local = |m: Option<u32>| m.map(|m| wrap_hour(f64::from(m) / 60.0 + offset_h));
-    Some((local(solar.civil_dawn_utc_min), local(solar.civil_dusk_utc_min)))
+    Some((
+        local(solar.civil_dawn_utc_min),
+        local(solar.civil_dusk_utc_min),
+    ))
 }
 
 /// Fold an hour-of-day into `[0, 24)` after a UTC→local shift.

@@ -170,7 +170,10 @@ fn mix(mut x: u64) -> u64 {
 
 /// A uniform in `[0, 1)` from `(day, salt)`.
 fn hashed_unit(day: i64, salt: u64) -> f64 {
-    (mix((day as u64).wrapping_mul(0x1000_0000_1B3).wrapping_add(salt)) >> 11) as f64
+    (mix((day as u64)
+        .wrapping_mul(0x1000_0000_1B3)
+        .wrapping_add(salt))
+        >> 11) as f64
         / (1u64 << 53) as f64
 }
 
@@ -587,7 +590,11 @@ fn seed(conn: &Connection, today_days: i64) {
         let sunrise = sunrise_hour(doy);
         let weather = day_weather(days_ago, doy);
         let listening = listening_fraction(days_ago);
-        let day_factor = if days_ago == SILENT_DAY { 0.03 } else { weather.activity };
+        let day_factor = if days_ago == SILENT_DAY {
+            0.03
+        } else {
+            weather.activity
+        };
 
         for sp in &species {
             // Species only appear once they've been "discovered" for the year.
@@ -662,7 +669,11 @@ fn seed(conn: &Connection, today_days: i64) {
 
         // Hourly weather for the last two months, today up to the current hour.
         if days_ago < 60 {
-            let last_hour = if days_ago == 0 { (cutoff_today / 3600) as usize } else { 23 };
+            let last_hour = if days_ago == 0 {
+                (cutoff_today / 3600) as usize
+            } else {
+                23
+            };
             for hour in 0..=last_hour {
                 let diurnal = 4.5 * (std::f64::consts::TAU * (hour as f64 - 9.0) / 24.0).sin();
                 let _ = tx.execute(
@@ -700,7 +711,8 @@ fn seed(conn: &Connection, today_days: i64) {
 /// The station's location, so the sun lines and the night bands draw (see `seed`).
 fn seed_location(conn: &Connection) {
     for (k, v) in [("latitude", "51.4778"), ("longitude", "-0.0015")] {
-        let _ = birdnet_db::settings::set(conn, k, v, birdnet_db::settings::SettingsCategory::Location);
+        let _ =
+            birdnet_db::settings::set(conn, k, v, birdnet_db::settings::SettingsCategory::Location);
     }
 }
 
@@ -746,15 +758,35 @@ fn seed_profile_stress(conn: &Connection, today_days: i64) {
         "Eurasian",
         "Tit",
     ];
-    let words = ["Northern", "Southern", "Western", "Eastern", "Common", "Lesser", "Greater", "Spotted", "Crested", "Rufous"];
-    let kinds = ["Warbler", "Sparrow", "Finch", "Thrush", "Wren", "Swift", "Tanager", "Flycatcher", "Bunting", "Vireo"];
+    let words = [
+        "Northern", "Southern", "Western", "Eastern", "Common", "Lesser", "Greater", "Spotted",
+        "Crested", "Rufous",
+    ];
+    let kinds = [
+        "Warbler",
+        "Sparrow",
+        "Finch",
+        "Thrush",
+        "Wren",
+        "Swift",
+        "Tanager",
+        "Flycatcher",
+        "Bunting",
+        "Vireo",
+    ];
     let mut species: Vec<(String, String)> = Vec::new();
     for (i, n) in long_names.iter().enumerate() {
         species.push(((*n).to_string(), format!("Stressus longus{i}")));
     }
     for i in 0..56 {
         species.push((
-            format!("{} {} {}", words[i % 10], kinds[(i / 10 + i) % 10], i / 20 + 1).replace(" 1", ""),
+            format!(
+                "{} {} {}",
+                words[i % 10],
+                kinds[(i / 10 + i) % 10],
+                i / 20 + 1
+            )
+            .replace(" 1", ""),
             format!("Stressus bird{i}"),
         ));
     }
@@ -763,7 +795,11 @@ fn seed_profile_stress(conn: &Connection, today_days: i64) {
         let (y, m, d) = civil_from_days(today_days - days_ago);
         let date = format!("{y:04}-{m:02}-{d:02}");
         let doy = day_of_year(y, m, d);
-        let season = 0.6 + 0.4 * (std::f64::consts::TAU * (f64::from(doy) - 110.0) / 365.0).cos().abs();
+        let season = 0.6
+            + 0.4
+                * (std::f64::consts::TAU * (f64::from(doy) - 110.0) / 365.0)
+                    .cos()
+                    .abs();
         for (k, (com, sci)) in species.iter().enumerate() {
             // A long tail: the first few species are common, the rest are heard now and then.
             let lambda = 6.0 / (1.0 + k as f64 * 0.35) * season;
@@ -1084,7 +1120,10 @@ async fn main() {
     // `BNB_FIXTURE_PROFILE` = `empty` (nothing heard), `one` (one detection), `stress`
     // (sixty species with very long names, a year of them, and an hour with 1.6 million
     // detections in it). Anything else is the usual fixture.
-    match std::env::var("BNB_FIXTURE_PROFILE").unwrap_or_default().as_str() {
+    match std::env::var("BNB_FIXTURE_PROFILE")
+        .unwrap_or_default()
+        .as_str()
+    {
         "empty" => seed_profile_empty(&conn),
         "one" => seed_profile_one(&conn, today_days),
         "stress" => seed_profile_stress(&conn, today_days),
@@ -1221,7 +1260,11 @@ async fn main() {
                     learned("Parus major", 1, 1, -3, 30, 27),
                 ],
             )?;
-            for (sci, secs) in [("Strix aluco", 60), ("Turdus merula", 5), ("Pica pica", 3600)] {
+            for (sci, secs) in [
+                ("Strix aluco", 60),
+                ("Turdus merula", 5),
+                ("Pica pica", 3600),
+            ] {
                 birdnet_db::sqlite::set_species_interval(c, sci, secs)?;
             }
             Ok::<(), birdnet_db::sqlite::DbError>(())

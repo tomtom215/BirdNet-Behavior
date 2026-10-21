@@ -782,7 +782,10 @@ mod tests {
             windows("2026-01-01", "2026-12-21", 30),
             "Turdus merula",
         );
-        assert!(s.new_this_season, "the only real detection is today's: {s:?}");
+        assert!(
+            s.new_this_season,
+            "the only real detection is today's: {s:?}"
+        );
     }
 
     /// The headline picks the strongest claim, not the first flag set.

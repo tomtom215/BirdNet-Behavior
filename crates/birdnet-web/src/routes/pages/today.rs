@@ -1149,7 +1149,8 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let tempkey_oob = if temps.is_empty() {
         r#"<span id="td-tempkey" hx-swap-oob="true"></span>"#.to_string()
     } else {
-        r#"<span id="td-tempkey" hx-swap-oob="true"> · temperature runs along the bottom</span>"#.to_string()
+        r#"<span id="td-tempkey" hx-swap-oob="true"> · temperature runs along the bottom</span>"#
+            .to_string()
     };
     let strip = super::viz::day_strip(&hourly, &top, &temps, solar, super::now_hour_local());
     (

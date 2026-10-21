@@ -228,9 +228,21 @@ fn list_html(l: &ListPlan) -> String {
             s,
             ". {} {} not {} and matched nothing in BirdNET-Pi either; {} skipped",
             l.file.unusable.len(),
-            if l.file.unusable.len() == 1 { "line is" } else { "lines are" },
-            if l.file.unusable.len() == 1 { "a scientific name" } else { "scientific names" },
-            if l.file.unusable.len() == 1 { "it is" } else { "they are" }
+            if l.file.unusable.len() == 1 {
+                "line is"
+            } else {
+                "lines are"
+            },
+            if l.file.unusable.len() == 1 {
+                "a scientific name"
+            } else {
+                "scientific names"
+            },
+            if l.file.unusable.len() == 1 {
+                "it is"
+            } else {
+                "they are"
+            }
         );
     }
     if l.file.blank_lines > 0 && l.kind == ListKind::Include {
@@ -405,6 +417,9 @@ mod inline_markup_tests {
 
     #[test]
     fn names_break_after_underscores() {
-        assert_eq!(breakable("APPRISE_NOTIFY_EACH"), "APPRISE_<wbr>NOTIFY_<wbr>EACH");
+        assert_eq!(
+            breakable("APPRISE_NOTIFY_EACH"),
+            "APPRISE_<wbr>NOTIFY_<wbr>EACH"
+        );
     }
 }

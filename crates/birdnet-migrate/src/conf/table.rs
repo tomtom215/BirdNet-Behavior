@@ -505,9 +505,21 @@ pub const RULES: &[Rule] = &[
         "BirdNET-Pi makes a shifted copy of a clip on demand. `freq_shift_hz` here rewrites \
          every **new** clip as it is saved, which is not the same, so it is not set.",
     ),
-    nothing("FREQSHIFT_HI", "upper frequency for the `ffmpeg` shift", "See `FREQSHIFT_TOOL`."),
-    nothing("FREQSHIFT_LO", "lower frequency for the `ffmpeg` shift", "See `FREQSHIFT_TOOL`."),
-    nothing("FREQSHIFT_PITCH", "pitch change for the `sox` shift, in hundredths of a semitone", "See `FREQSHIFT_TOOL`."),
+    nothing(
+        "FREQSHIFT_HI",
+        "upper frequency for the `ffmpeg` shift",
+        "See `FREQSHIFT_TOOL`.",
+    ),
+    nothing(
+        "FREQSHIFT_LO",
+        "lower frequency for the `ffmpeg` shift",
+        "See `FREQSHIFT_TOOL`.",
+    ),
+    nothing(
+        "FREQSHIFT_PITCH",
+        "pitch change for the `sox` shift, in hundredths of a semitone",
+        "See `FREQSHIFT_TOOL`.",
+    ),
     nothing(
         "FREQSHIFT_RECONNECT_DELAY",
         "milliseconds the live page waits when it switches the live stream's shift",
@@ -546,28 +558,104 @@ pub const RULES: &[Rule] = &[
         "`sox` log level of BirdNET-Pi's spectrogram service",
         "See `LogLevel_BirdnetRecordingService`.",
     ),
-    nothing("BIRDNET_USER", "the Unix user BirdNET-Pi runs as", "Internal to BirdNET-Pi."),
-    nothing("RECS_DIR", "where BirdNET-Pi records and finds its audio", "This station's recordings directory is its own. Give the old folder to the recordings step of the move to bring the clips across."),
-    nothing("PROCESSED", "where analysed recordings wait to be deleted", "Internal to BirdNET-Pi."),
-    nothing("EXTRACTED", "where BirdNET-Pi keeps its clips (`By_Date/...`)", "Not read by this station. Give the old install's folder to the recordings step of the move to bring the clips across."),
-    nothing("IDFILE", "BirdNET-Pi's list of species identified so far", "Internal to BirdNET-Pi."),
+    nothing(
+        "BIRDNET_USER",
+        "the Unix user BirdNET-Pi runs as",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "RECS_DIR",
+        "where BirdNET-Pi records and finds its audio",
+        "This station's recordings directory is its own. Give the old folder to the recordings step of the move to bring the clips across.",
+    ),
+    nothing(
+        "PROCESSED",
+        "where analysed recordings wait to be deleted",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "EXTRACTED",
+        "where BirdNET-Pi keeps its clips (`By_Date/...`)",
+        "Not read by this station. Give the old install's folder to the recordings step of the move to bring the clips across.",
+    ),
+    nothing(
+        "IDFILE",
+        "BirdNET-Pi's list of species identified so far",
+        "Internal to BirdNET-Pi.",
+    ),
     nothing("LAST_RUN", "debugging aid", "Internal to BirdNET-Pi."),
     nothing("THIS_RUN", "debugging aid", "Internal to BirdNET-Pi."),
     // Written by releases of BirdNET-Pi before 2025.
-    secret(nothing("PUSHED_APP_KEY", "key for the Pushed.co service, dropped in 2022", "Pushed.co is not supported; use a notification address.")),
-    secret(nothing("PUSHED_APP_SECRET", "secret for the Pushed.co service, dropped in 2022", "See `PUSHED_APP_KEY`.")),
-    secret(nothing("DB_PWD", "password of a database BirdNET-Pi no longer uses", "This station uses SQLite.")),
-    secret(nothing("DB_ROOT_PWD", "root password of a database BirdNET-Pi no longer uses", "See `DB_PWD`.")),
-    nothing("DO_RECORDING", "switch for BirdNET-Pi's recorder", "Internal to BirdNET-Pi."),
-    nothing("DO_EXTRACTIONS", "switch for BirdNET-Pi's clip extraction", "Internal to BirdNET-Pi."),
-    nothing("BIRDNETLOG_URL", "address of BirdNET-Pi's log viewer", "There is no separate log viewer."),
-    nothing("WEBTERMINAL_URL", "address of BirdNET-Pi's web terminal", "This station has no web terminal."),
-    nothing("EXTRACTIONLOG_URL", "address of BirdNET-Pi's extraction log", "There is no separate log viewer."),
-    nothing("EXTRACTIONS_URL", "address of BirdNET-Pi's extractions", "Clips are served by this station itself."),
-    nothing("VENV", "BirdNET-Pi's Python environment", "Internal to BirdNET-Pi."),
-    nothing("INSTALL_DATE", "when BirdNET-Pi was installed", "Internal to BirdNET-Pi."),
-    nothing("ANALYZED", "where BirdNET-Pi keeps analysed files", "Internal to BirdNET-Pi."),
-    nothing("TIMESTAMP_FORMAT", "date format in an old release's file names", "Internal to BirdNET-Pi."),
+    secret(nothing(
+        "PUSHED_APP_KEY",
+        "key for the Pushed.co service, dropped in 2022",
+        "Pushed.co is not supported; use a notification address.",
+    )),
+    secret(nothing(
+        "PUSHED_APP_SECRET",
+        "secret for the Pushed.co service, dropped in 2022",
+        "See `PUSHED_APP_KEY`.",
+    )),
+    secret(nothing(
+        "DB_PWD",
+        "password of a database BirdNET-Pi no longer uses",
+        "This station uses SQLite.",
+    )),
+    secret(nothing(
+        "DB_ROOT_PWD",
+        "root password of a database BirdNET-Pi no longer uses",
+        "See `DB_PWD`.",
+    )),
+    nothing(
+        "DO_RECORDING",
+        "switch for BirdNET-Pi's recorder",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "DO_EXTRACTIONS",
+        "switch for BirdNET-Pi's clip extraction",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "BIRDNETLOG_URL",
+        "address of BirdNET-Pi's log viewer",
+        "There is no separate log viewer.",
+    ),
+    nothing(
+        "WEBTERMINAL_URL",
+        "address of BirdNET-Pi's web terminal",
+        "This station has no web terminal.",
+    ),
+    nothing(
+        "EXTRACTIONLOG_URL",
+        "address of BirdNET-Pi's extraction log",
+        "There is no separate log viewer.",
+    ),
+    nothing(
+        "EXTRACTIONS_URL",
+        "address of BirdNET-Pi's extractions",
+        "Clips are served by this station itself.",
+    ),
+    nothing(
+        "VENV",
+        "BirdNET-Pi's Python environment",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "INSTALL_DATE",
+        "when BirdNET-Pi was installed",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "ANALYZED",
+        "where BirdNET-Pi keeps analysed files",
+        "Internal to BirdNET-Pi.",
+    ),
+    nothing(
+        "TIMESTAMP_FORMAT",
+        "date format in an old release's file names",
+        "Internal to BirdNET-Pi.",
+    ),
 ];
 
 /// The keys whose values are credentials, derived from [`RULES`].
@@ -685,7 +773,11 @@ fn convert(how: Convert, raw: &str, conf: &ConfFile) -> Conv {
         Convert::AudioFormat => {
             let lower = raw.to_ascii_lowercase();
             if matches!(lower.as_str(), "wav" | "mp3" | "flac" | "ogg") {
-                if lower == raw { same(raw) } else { changed(lower, "lower case") }
+                if lower == raw {
+                    same(raw)
+                } else {
+                    changed(lower, "lower case")
+                }
             } else {
                 Conv::Refuse(format!(
                     "this station writes wav, mp3, flac and ogg; {raw} is not one of them, \
@@ -718,7 +810,10 @@ fn convert(how: Convert, raw: &str, conf: &ConfFile) -> Conv {
             if text == raw {
                 same(raw)
             } else {
-                changed(text, "HTML entities written by BirdNET-Pi's form are decoded")
+                changed(
+                    text,
+                    "HTML entities written by BirdNET-Pi's form are decoded",
+                )
             }
         }
         Convert::NameList => {
@@ -731,7 +826,11 @@ fn convert(how: Convert, raw: &str, conf: &ConfFile) -> Conv {
                 Conv::Leave("blank in the file, so there is nothing to carry over".to_owned())
             } else {
                 let joined = names.join(", ");
-                if joined == raw { same(raw) } else { changed(joined, "tidied") }
+                if joined == raw {
+                    same(raw)
+                } else {
+                    changed(joined, "tidied")
+                }
             }
         }
         Convert::TriggerSwitches => {
@@ -739,7 +838,10 @@ fn convert(how: Convert, raw: &str, conf: &ConfFile) -> Conv {
             let rules = [
                 (on("APPRISE_NOTIFY_EACH_DETECTION"), "each"),
                 (on("APPRISE_NOTIFY_NEW_SPECIES"), "new-species"),
-                (on("APPRISE_NOTIFY_NEW_SPECIES_EACH_DAY"), "new-species-daily"),
+                (
+                    on("APPRISE_NOTIFY_NEW_SPECIES_EACH_DAY"),
+                    "new-species-daily",
+                ),
             ];
             let list: Vec<&str> = rules.iter().filter(|(a, _)| *a).map(|(_, n)| *n).collect();
             if list.is_empty() {
@@ -764,9 +866,7 @@ fn coordinate(raw: &str, conf: &ConfFile) -> Conv {
     let unknown = matches!((lat, lon), (Some(a), Some(b))
         if (a == 0.0 && b == 0.0) || (a == -1.0 && b == -1.0));
     if unknown {
-        Conv::Leave(
-            "a position of 0, 0 is BirdNET-Pi's \"unknown\"; it is not copied".to_owned(),
-        )
+        Conv::Leave("a position of 0, 0 is BirdNET-Pi's \"unknown\"; it is not copied".to_owned())
     } else {
         let _ = this;
         same(raw)
@@ -808,7 +908,11 @@ pub(crate) fn decide(
 
     let Some(rule) = rule else {
         row.why = "not a key BirdNET-Pi writes, or one this version does not know".to_owned();
-        return Decision { row, assignments, config_lines };
+        return Decision {
+            row,
+            assignments,
+            config_lines,
+        };
     };
 
     match rule.target {
@@ -823,54 +927,64 @@ pub(crate) fn decide(
             row.verdict = Verdict::NotCarried;
             row.why = rule.caveat.to_owned();
         }
-        Target::Setting { key, convert: how } => {
-            match convert(how, raw, conf) {
-                Conv::Leave(why) => {
-                    row.verdict = Verdict::Left;
-                    row.why = why;
-                }
-                Conv::Refuse(why) => {
+        Target::Setting { key, convert: how } => match convert(how, raw, conf) {
+            Conv::Leave(why) => {
+                row.verdict = Verdict::Left;
+                row.why = why;
+            }
+            Conv::Refuse(why) => {
+                row.verdict = Verdict::Refused;
+                row.why = why;
+            }
+            Conv::Set {
+                value,
+                converted,
+                note,
+            } => {
+                if let Some(problem) = check(key, &value) {
                     row.verdict = Verdict::Refused;
-                    row.why = why;
-                }
-                Conv::Set { value, converted, note } => {
-                    if let Some(problem) = check(key, &value) {
-                        row.verdict = Verdict::Refused;
-                        row.why = problem;
+                    row.why = problem;
+                } else {
+                    row.verdict = if converted {
+                        Verdict::Converted
                     } else {
-                        row.verdict = if converted { Verdict::Converted } else { Verdict::Imported };
-                        row.why = join_sentences(&[&note, rule.caveat_for_row()]);
-                        let shown_value = if secret { hide(&value) } else { value.clone() };
-                        row.becomes.push((key.to_owned(), shown_value));
-                        row.was = current.get(key).map(|v| {
-                            if secret { hide(v) } else { v.clone() }
+                        Verdict::Imported
+                    };
+                    row.why = join_sentences(&[&note, rule.caveat_for_row()]);
+                    let shown_value = if secret { hide(&value) } else { value.clone() };
+                    row.becomes.push((key.to_owned(), shown_value));
+                    row.was = current
+                        .get(key)
+                        .map(|v| if secret { hide(v) } else { v.clone() });
+                    assignments.push(Assignment {
+                        setting: key,
+                        value,
+                        secret,
+                    });
+                    for (extra, v) in how.also() {
+                        row.becomes.push(((*extra).to_owned(), (*v).to_owned()));
+                        assignments.push(Assignment {
+                            setting: extra,
+                            value: (*v).to_owned(),
+                            secret: false,
                         });
-                        assignments.push(Assignment { setting: key, value, secret });
-                        for (extra, v) in how.also() {
-                            row.becomes.push(((*extra).to_owned(), (*v).to_owned()));
-                            assignments.push(Assignment {
-                                setting: extra,
-                                value: (*v).to_owned(),
-                                secret: false,
-                            });
-                        }
-                        if rule.pi_key == "MAX_FILES_SPECIES" && value_is_positive(raw) {
-                            row.verdict = Verdict::Attention;
-                        }
-                        if rule.pi_key == "FULL_DISK"
-                            && raw.eq_ignore_ascii_case("keep")
-                            && conf.get("MAX_FILES_SPECIES").is_some_and(value_is_positive)
-                        {
-                            row.why.push_str(
-                                " MAX_FILES_SPECIES is also set, and that cap still removes \
+                    }
+                    if rule.pi_key == "MAX_FILES_SPECIES" && value_is_positive(raw) {
+                        row.verdict = Verdict::Attention;
+                    }
+                    if rule.pi_key == "FULL_DISK"
+                        && raw.eq_ignore_ascii_case("keep")
+                        && conf.get("MAX_FILES_SPECIES").is_some_and(value_is_positive)
+                    {
+                        row.why.push_str(
+                            " MAX_FILES_SPECIES is also set, and that cap still removes \
                                  old clips on this station as it did on BirdNET-Pi.",
-                            );
-                            row.verdict = Verdict::Attention;
-                        }
+                        );
+                        row.verdict = Verdict::Attention;
                     }
                 }
             }
-        }
+        },
         Target::ConfigFile { key, convert: how } => match convert(how, raw, conf) {
             Conv::Leave(why) => {
                 row.verdict = Verdict::Left;
@@ -884,10 +998,17 @@ pub(crate) fn decide(
                 row.verdict = Verdict::ConfigFile;
                 row.why = format!(
                     "Put {key}={} in this station's birdnet.conf. {}",
-                    if secret { "(the value above)" } else { value.as_str() },
+                    if secret {
+                        "(the value above)"
+                    } else {
+                        value.as_str()
+                    },
                     rule.caveat
                 );
-                row.becomes.push((key.to_owned(), if secret { hide(&value) } else { value.clone() }));
+                row.becomes.push((
+                    key.to_owned(),
+                    if secret { hide(&value) } else { value.clone() },
+                ));
                 config_lines.push(ConfigLine { key, value, secret });
             }
         },
@@ -918,7 +1039,11 @@ pub(crate) fn decide(
         _ => {}
     }
 
-    Decision { row, assignments, config_lines }
+    Decision {
+        row,
+        assignments,
+        config_lines,
+    }
 }
 
 fn value_is_positive(v: &str) -> bool {
@@ -971,7 +1096,8 @@ pub(crate) fn implied(
 ) -> Vec<Row> {
     let mut rows = Vec::new();
     let notifies = conf.entries.iter().any(|e| {
-        e.key.starts_with("APPRISE_NOTIFY_") || e.key == "APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES"
+        e.key.starts_with("APPRISE_NOTIFY_")
+            || e.key == "APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES"
     });
     if notifies {
         let (setting, value) = ("notify_confidence", "0");
@@ -1027,7 +1153,11 @@ pub fn mapping_table_markdown() -> String {
             Target::Note => "not carried over (see the note)".to_owned(),
             Target::Nothing => "no equivalent".to_owned(),
         };
-        let secret = if r.secret { " *(a secret; never shown or logged)*" } else { "" };
+        let secret = if r.secret {
+            " *(a secret; never shown or logged)*"
+        } else {
+            ""
+        };
         let _ = writeln!(
             out,
             "| `{}`{} | {} | {} | {} |",

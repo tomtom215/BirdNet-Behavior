@@ -10,10 +10,7 @@ use std::fmt::Write as _;
 use axum::Router;
 
 use super::atoms::avatar;
-use super::{
-    escape_html, group_thousands, simple_url_encode,
-    today_date_string,
-};
+use super::{escape_html, group_thousands, simple_url_encode, today_date_string};
 use crate::state::AppState;
 
 /// Mount the Year in Review page route.
@@ -322,20 +319,46 @@ mod tests {
         assert!(html.contains("Northern Cardinal"));
         assert!(html.contains("leaderboard"));
         // The year is a calendar, a cell a day from 1 January to today.
-        assert!(html.contains("The year in activity") && html.contains("cal-svg"), "{html}");
-        assert_eq!(html.matches("data-tip=").count(), 142, "1 Jan to 22 May is 142 days");
+        assert!(
+            html.contains("The year in activity") && html.contains("cal-svg"),
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("data-tip=").count(),
+            142,
+            "1 Jan to 22 May is 142 days"
+        );
     }
 
     /// The calendar tells a day the station was off from a day it heard nothing, from the
     /// ledger: here the 21st was listened to and the 19th was not.
     #[test]
     fn the_year_calendar_says_which_days_the_station_was_off() {
-        let daily = vec![birdnet_db::sqlite::DailyCount { date: "2026-05-20".into(), count: 30 }];
+        let daily = vec![birdnet_db::sqlite::DailyCount {
+            date: "2026-05-20".into(),
+            count: 30,
+        }];
         let effort: std::collections::BTreeMap<String, f64> =
-            [("2026-05-20", 86_400.0), ("2026-05-21", 86_400.0)].iter().map(|(d, s)| ((*d).to_string(), *s)).collect();
-        let html = render_content("2026-05-22", &daily, &[], &[], Some(&effort), &birdnet_core::i18n::NameLocalizer::english());
-        assert!(html.contains("Tue 19 May 2026&#10;The station was not listening"), "{html}");
-        assert!(html.contains("Thu 21 May 2026&#10;Listened all day and heard none"), "{html}");
+            [("2026-05-20", 86_400.0), ("2026-05-21", 86_400.0)]
+                .iter()
+                .map(|(d, s)| ((*d).to_string(), *s))
+                .collect();
+        let html = render_content(
+            "2026-05-22",
+            &daily,
+            &[],
+            &[],
+            Some(&effort),
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(
+            html.contains("Tue 19 May 2026&#10;The station was not listening"),
+            "{html}"
+        );
+        assert!(
+            html.contains("Thu 21 May 2026&#10;Listened all day and heard none"),
+            "{html}"
+        );
     }
 
     /// Two equal days: the busiest is the first, whatever order a fold meets

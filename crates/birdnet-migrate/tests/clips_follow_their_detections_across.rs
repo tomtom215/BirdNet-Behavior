@@ -9,9 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use birdnet_migrate::clips::{
-    ClipError, DiskRoom, Mode, Options, Report, Wanted, WantedRows, run,
-};
+use birdnet_migrate::clips::{ClipError, DiskRoom, Mode, Options, Report, Wanted, WantedRows, run};
 
 /// One synthetic BirdNET-Pi station.
 struct Tree {
@@ -20,18 +18,48 @@ struct Tree {
 }
 
 fn clip_name(com: &str, pct: u32, date: &str, time: &str, ext: &str) -> String {
-    format!("{}-{pct}-{date}-birdnet-{time}.{ext}", com.replace('\'', "").replace(' ', "_"))
+    format!(
+        "{}-{pct}-{date}-birdnet-{time}.{ext}",
+        com.replace('\'', "").replace(' ', "_")
+    )
 }
 
 impl Tree {
     /// `BirdSongs/Extracted/By_Date/...` with clips of known content.
     fn new() -> Self {
         let home = tempfile::tempdir().expect("tempdir");
-        let mut tree = Self { home, rows: Vec::new() };
-        tree.add("Eurasian Blackbird", "2026-03-01", "06:30:15", "mp3", b"blackbird-one");
-        tree.add("Eurasian Blackbird", "2026-03-02", "07:01:02", "mp3", b"blackbird-two!");
-        tree.add("Cetti's Warbler", "2026-03-02", "05:55:55", "wav", b"cettis");
-        tree.add("Black-capped Chickadee", "2026-03-03", "08:00:00", "mp3", b"chickadee-audio");
+        let mut tree = Self {
+            home,
+            rows: Vec::new(),
+        };
+        tree.add(
+            "Eurasian Blackbird",
+            "2026-03-01",
+            "06:30:15",
+            "mp3",
+            b"blackbird-one",
+        );
+        tree.add(
+            "Eurasian Blackbird",
+            "2026-03-02",
+            "07:01:02",
+            "mp3",
+            b"blackbird-two!",
+        );
+        tree.add(
+            "Cetti's Warbler",
+            "2026-03-02",
+            "05:55:55",
+            "wav",
+            b"cettis",
+        );
+        tree.add(
+            "Black-capped Chickadee",
+            "2026-03-03",
+            "08:00:00",
+            "mp3",
+            b"chickadee-audio",
+        );
         tree
     }
 
@@ -42,7 +70,10 @@ impl Tree {
     /// Write a clip, its picture, and the row that names it.
     fn add(&mut self, com: &str, date: &str, time: &str, ext: &str, audio: &[u8]) -> String {
         let name = clip_name(com, 85, date, time, ext);
-        let dir = self.by_date().join(date).join(com.replace('\'', "").replace(' ', "_"));
+        let dir = self
+            .by_date()
+            .join(date)
+            .join(com.replace('\'', "").replace(' ', "_"));
         fs::create_dir_all(&dir).expect("species dir");
         fs::write(dir.join(&name), audio).expect("clip");
         fs::write(dir.join(format!("{name}.png")), b"png").expect("picture");
@@ -75,7 +106,11 @@ fn go(tree: &Tree, o: &Options) -> Result<Report, ClipError> {
 
 fn listing(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
-        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
         .unwrap_or_default();
     names.sort();
     names
@@ -106,7 +141,11 @@ fn a_copy_puts_each_clip_flat_in_the_recordings_directory_and_leaves_the_tree_wh
         "the picture is not copied: this station draws its own"
     );
     // The tree is untouched.
-    assert!(tree.by_date().join("2026-03-01/Eurasian_Blackbird").is_dir());
+    assert!(
+        tree.by_date()
+            .join("2026-03-01/Eurasian_Blackbird")
+            .is_dir()
+    );
 }
 
 #[test]
@@ -130,11 +169,18 @@ fn a_run_can_be_repeated_and_resumes() {
     // A previous run copied one clip and died while writing another.
     let first = &tree.rows[0];
     fs::copy(
-        tree.by_date().join(&first.date).join("Eurasian_Blackbird").join(&first.file_name),
+        tree.by_date()
+            .join(&first.date)
+            .join("Eurasian_Blackbird")
+            .join(&first.file_name),
         dest.path().join(&first.file_name),
     )
     .expect("one clip is already there");
-    fs::write(dest.path().join(".bnb-import-half.wav.part"), b"half a clip").expect("leftover");
+    fs::write(
+        dest.path().join(".bnb-import-half.wav.part"),
+        b"half a clip",
+    )
+    .expect("leftover");
 
     let report = go(&tree, &opts(&tree, dest.path(), Mode::Copy, false)).expect("run");
     assert_eq!(report.already_there, 1);
@@ -172,7 +218,11 @@ fn a_hard_link_costs_no_space_and_is_the_same_file() {
     let report = go(&tree, &opts(&tree, &dest, Mode::Hardlink, false)).expect("run");
     assert_eq!(report.done, 4, "{report:?}");
     let w = &tree.rows[0];
-    let original = tree.by_date().join(&w.date).join("Eurasian_Blackbird").join(&w.file_name);
+    let original = tree
+        .by_date()
+        .join(&w.date)
+        .join("Eurasian_Blackbird")
+        .join(&w.file_name);
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
@@ -192,18 +242,27 @@ fn a_move_removes_the_original_only_after_the_copy_is_whole() {
     assert_eq!((report.done, report.originals_removed), (4, 4));
     for w in &tree.rows {
         assert!(dest.path().join(&w.file_name).is_file());
-        assert!(!tree
-            .by_date()
-            .join(&w.date)
-            .join(w.com_name.replace('\'', "").replace(' ', "_"))
-            .join(&w.file_name)
-            .exists());
+        assert!(
+            !tree
+                .by_date()
+                .join(&w.date)
+                .join(w.com_name.replace('\'', "").replace(' ', "_"))
+                .join(&w.file_name)
+                .exists()
+        );
     }
     // A dry run of a move removes nothing.
     let tree = Tree::new();
     let dest = tempfile::tempdir().expect("dest");
     go(&tree, &opts(&tree, dest.path(), Mode::Move, true)).expect("dry");
-    assert!(tree.by_date().join("2026-03-01/Eurasian_Blackbird").read_dir().expect("dir").count() > 0);
+    assert!(
+        tree.by_date()
+            .join("2026-03-01/Eurasian_Blackbird")
+            .read_dir()
+            .expect("dir")
+            .count()
+            > 0
+    );
 }
 
 #[test]
@@ -220,15 +279,27 @@ fn leave_reports_and_touches_nothing() {
 #[test]
 fn a_clip_filed_somewhere_else_in_the_tree_is_found_by_its_name() {
     let mut tree = Tree::new();
-    let name = tree.add("Eurasian Blackbird", "2026-03-04", "06:00:00", "mp3", b"moved-about");
-    let from = tree.by_date().join("2026-03-04/Eurasian_Blackbird").join(&name);
+    let name = tree.add(
+        "Eurasian Blackbird",
+        "2026-03-04",
+        "06:00:00",
+        "mp3",
+        b"moved-about",
+    );
+    let from = tree
+        .by_date()
+        .join("2026-03-04/Eurasian_Blackbird")
+        .join(&name);
     let to_dir = tree.by_date().join("2026-03-05/Common_Blackbird");
     fs::create_dir_all(&to_dir).expect("dir");
     fs::rename(&from, to_dir.join(&name)).expect("move");
     let dest = tempfile::tempdir().expect("dest");
     let report = go(&tree, &opts(&tree, dest.path(), Mode::Copy, false)).expect("run");
     assert_eq!(report.done, 5, "{report:?}");
-    assert_eq!(fs::read(dest.path().join(&name)).expect("clip"), b"moved-about");
+    assert_eq!(
+        fs::read(dest.path().join(&name)).expect("clip"),
+        b"moved-about"
+    );
 }
 
 #[test]
@@ -242,7 +313,10 @@ fn a_clip_that_is_not_in_the_tree_is_missing_not_an_error() {
     let dest = tempfile::tempdir().expect("dest");
     let report = go(&tree, &opts(&tree, dest.path(), Mode::Copy, false)).expect("run");
     assert_eq!(report.missing, 1);
-    assert_eq!(report.missing_sample, ["Ghost_Owl-90-2026-03-09-birdnet-01:00:00.wav"]);
+    assert_eq!(
+        report.missing_sample,
+        ["Ghost_Owl-90-2026-03-09-birdnet-01:00:00.wav"]
+    );
     assert_eq!(report.done, 4);
 }
 
@@ -251,12 +325,19 @@ fn a_clip_that_is_not_in_the_tree_is_missing_not_an_error() {
 fn the_shifted_directory_is_not_a_source() {
     let tree = Tree::new();
     let w = tree.rows[0].clone();
-    let shifted = tree.by_date().join("shifted").join(&w.date).join("Eurasian_Blackbird");
+    let shifted = tree
+        .by_date()
+        .join("shifted")
+        .join(&w.date)
+        .join("Eurasian_Blackbird");
     fs::create_dir_all(&shifted).expect("dir");
     fs::write(shifted.join(&w.file_name), b"a shifted copy").expect("shifted");
     // Take the real one away: the row must be missing, not satisfied by the copy.
     fs::remove_file(
-        tree.by_date().join(&w.date).join("Eurasian_Blackbird").join(&w.file_name),
+        tree.by_date()
+            .join(&w.date)
+            .join("Eurasian_Blackbird")
+            .join(&w.file_name),
     )
     .expect("remove");
     let dest = tempfile::tempdir().expect("dest");
@@ -271,7 +352,14 @@ fn a_hostile_file_name_is_refused_and_nothing_is_written_outside() {
     let mut tree = Tree::new();
     let outside = tree.home.path().join("secret.wav");
     fs::write(&outside, b"not a clip").expect("outside");
-    for bad in ["../../../secret.wav", "/etc/passwd", "a/../../secret.wav", "..", ".hidden.wav", "x\0.wav"] {
+    for bad in [
+        "../../../secret.wav",
+        "/etc/passwd",
+        "a/../../secret.wav",
+        "..",
+        ".hidden.wav",
+        "x\0.wav",
+    ] {
         tree.rows.push(Wanted {
             date: "2026-03-01".into(),
             com_name: "Eurasian Blackbird".into(),
@@ -342,9 +430,22 @@ fn not_enough_room_stops_before_anything_is_written() {
     let tree = Tree::new();
     let dest = tempfile::tempdir().expect("dest");
     let mut o = opts(&tree, dest.path(), Mode::Copy, false);
-    o.room = Some(DiskRoom { used_bytes: 100, available_bytes: 10, purge_threshold_percent: 99.0 });
+    o.room = Some(DiskRoom {
+        used_bytes: 100,
+        available_bytes: 10,
+        purge_threshold_percent: 99.0,
+    });
     let err = go(&tree, &o).expect_err("no room");
-    assert!(matches!(err, ClipError::NoRoom { crosses_threshold: false, .. }), "{err}");
+    assert!(
+        matches!(
+            err,
+            ClipError::NoRoom {
+                crosses_threshold: false,
+                ..
+            }
+        ),
+        "{err}"
+    );
     assert!(listing(dest.path()).is_empty());
 }
 
@@ -354,27 +455,57 @@ fn not_enough_room_stops_before_anything_is_written() {
 fn a_copy_that_would_start_the_purge_is_refused() {
     let tree = Tree::new();
     let dest = tempfile::tempdir().expect("dest");
-    let total_bytes: u64 = tree.rows.iter().map(|w| {
-        fs::metadata(tree.by_date().join(&w.date).join(w.com_name.replace('\'', "").replace(' ', "_")).join(&w.file_name))
+    let total_bytes: u64 = tree
+        .rows
+        .iter()
+        .map(|w| {
+            fs::metadata(
+                tree.by_date()
+                    .join(&w.date)
+                    .join(w.com_name.replace('\'', "").replace(' ', "_"))
+                    .join(&w.file_name),
+            )
             .expect("meta")
             .len()
-    }).sum();
+        })
+        .sum();
     // 1000 bytes reachable, 920 used: the 48 bytes of clips fit in the 80 left but land at 96.8 %.
     let mut o = opts(&tree, dest.path(), Mode::Copy, false);
-    o.room = Some(DiskRoom { used_bytes: 920, available_bytes: 80, purge_threshold_percent: 95.0 });
+    o.room = Some(DiskRoom {
+        used_bytes: 920,
+        available_bytes: 80,
+        purge_threshold_percent: 95.0,
+    });
     assert_eq!(total_bytes, 48);
     let err = go(&tree, &o).expect_err("refused");
-    assert!(matches!(err, ClipError::NoRoom { crosses_threshold: true, .. }), "{err}");
+    assert!(
+        matches!(
+            err,
+            ClipError::NoRoom {
+                crosses_threshold: true,
+                ..
+            }
+        ),
+        "{err}"
+    );
     assert!(err.to_string().contains("starts deleting"), "{err}");
     assert!(listing(dest.path()).is_empty());
 
     // Counterpart: the same copy with the threshold higher goes ahead.
-    o.room = Some(DiskRoom { used_bytes: 920, available_bytes: 80, purge_threshold_percent: 99.0 });
+    o.room = Some(DiskRoom {
+        used_bytes: 920,
+        available_bytes: 80,
+        purge_threshold_percent: 99.0,
+    });
     assert_eq!(go(&tree, &o).expect("fits").done, 4);
     // And a link needs no room at all, however full the disk is.
     let dest2 = tree.home.path().join("linked");
     let mut l = opts(&tree, &dest2, Mode::Hardlink, false);
-    l.room = Some(DiskRoom { used_bytes: 999, available_bytes: 1, purge_threshold_percent: 95.0 });
+    l.room = Some(DiskRoom {
+        used_bytes: 999,
+        available_bytes: 1,
+        purge_threshold_percent: 95.0,
+    });
     assert_eq!(go(&tree, &l).expect("links").done, 4);
 }
 
@@ -385,7 +516,10 @@ fn clips_older_than_the_retention_are_counted() {
     let mut o = opts(&tree, dest.path(), Mode::Copy, true);
     o.retention_cutoff = Some("2026-03-03".into());
     let report = go(&tree, &o).expect("dry");
-    assert_eq!(report.older_than_retention, 3, "the 1st and 2nd (x2) are before the 3rd");
+    assert_eq!(
+        report.older_than_retention, 3,
+        "the 1st and 2nd (x2) are before the 3rd"
+    );
 }
 
 /// The rows a pass asks about are the imported ones that name a clip still
@@ -396,8 +530,11 @@ fn only_imported_detections_that_name_a_clip_are_wanted() {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
     for _ in 0..2 {
-        conn.execute("INSERT INTO import_batches (source_kind) VALUES ('birdnet-pi')", [])
-            .expect("batch");
+        conn.execute(
+            "INSERT INTO import_batches (source_kind) VALUES ('birdnet-pi')",
+            [],
+        )
+        .expect("batch");
     }
     let insert = |time: &str, file: Option<&str>, batch: Option<i64>, pruned: Option<i64>| {
         conn.execute(

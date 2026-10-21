@@ -18,14 +18,14 @@
 // The funnel is the one viz used only by the analytics-gated dawn card, so it
 // is gated to match — keeping the slim `--no-default-features` build free of an
 // unused renderer.
-#[cfg(feature = "analytics")]
-pub(crate) mod funnel;
 pub(crate) mod bars;
 #[cfg(feature = "analytics")]
 pub(crate) mod bursts;
 pub(crate) mod cograph;
 #[cfg(feature = "analytics")]
 pub(crate) mod flow;
+#[cfg(feature = "analytics")]
+pub(crate) mod funnel;
 pub(crate) mod heat;
 pub(crate) mod kit;
 pub(crate) mod matrix;
@@ -35,13 +35,13 @@ pub(crate) mod timeline;
 #[cfg(feature = "analytics")]
 pub(crate) mod trend;
 
+pub(crate) use cograph::CoGraph;
 #[cfg(feature = "analytics")]
 pub(crate) use funnel::{Morning, Voice, morning_order};
-pub(crate) use cograph::CoGraph;
 pub(crate) use matrix::{LINK_CHOICES, co_figure, cooccurrence_matrix};
+pub(crate) use timeline::{accumulation_curve, day_strip, streamgraph};
 #[cfg(feature = "analytics")]
 pub(crate) use trend::{TrendOpts, TrendPoint, trend_chart};
-pub(crate) use timeline::{accumulation_curve, day_strip, streamgraph};
 
 use crate::routes::pages::escape_html;
 

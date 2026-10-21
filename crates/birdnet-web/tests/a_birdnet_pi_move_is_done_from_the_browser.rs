@@ -35,10 +35,7 @@ async fn send(state: &AppState, req: Request<Body>) -> (StatusCode, String) {
             .get_or_insert_with(|| build_router(state.clone()))
             .clone()
     });
-    let res = app
-        .oneshot(req)
-        .await
-        .expect("response");
+    let res = app.oneshot(req).await.expect("response");
     let status = res.status();
     let bytes = axum::body::to_bytes(res.into_body(), 8 << 20)
         .await
@@ -50,9 +47,13 @@ async fn send(state: &AppState, req: Request<Body>) -> (StatusCode, String) {
 fn multipart(parts: &[(&str, Option<&str>, &str)]) -> Body {
     let mut out = String::new();
     for (name, file, content) in parts {
-        out.push_str(&format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\""));
+        out.push_str(&format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\""
+        ));
         if let Some(file) = file {
-            out.push_str(&format!("; filename=\"{file}\"\r\nContent-Type: text/plain"));
+            out.push_str(&format!(
+                "; filename=\"{file}\"\r\nContent-Type: text/plain"
+            ));
         }
         out.push_str(&format!("\r\n\r\n{content}\r\n"));
     }
@@ -88,7 +89,10 @@ async fn apply(state: &AppState, token: &str) -> String {
 }
 
 fn token_of(html: &str) -> String {
-    let at = html.find("&quot;token&quot;: ").or_else(|| html.find("\"token\": ")).expect("an Apply button with a token");
+    let at = html
+        .find("&quot;token&quot;: ")
+        .or_else(|| html.find("\"token\": "))
+        .expect("an Apply button with a token");
     html[at..]
         .chars()
         .skip_while(|c| !c.is_ascii_digit())
@@ -130,8 +134,16 @@ async fn the_preview_changes_nothing_and_apply_writes_what_it_showed() {
         &state,
         &[
             ("conf_files", Some("birdnet.conf"), CONF),
-            ("conf_files", Some("apprise.txt"), "discord://1/DISCORDTOKEN\n"),
-            ("conf_files", Some("exclude_species_list.txt"), "Passer domesticus_House Sparrow\n"),
+            (
+                "conf_files",
+                Some("apprise.txt"),
+                "discord://1/DISCORDTOKEN\n",
+            ),
+            (
+                "conf_files",
+                Some("exclude_species_list.txt"),
+                "Passer domesticus_House Sparrow\n",
+            ),
             ("conf_text", None, ""),
             ("source_dir", None, ""),
         ],
@@ -139,7 +151,12 @@ async fn the_preview_changes_nothing_and_apply_writes_what_it_showed() {
     .await;
     assert_eq!(rows(&state), before, "a preview wrote a setting");
     assert!(html.contains("Nothing has been changed yet"), "{html}");
-    for secret in ["SECRETbwid42", "hunter2pass", "flickrSECRET", "DISCORDTOKEN"] {
+    for secret in [
+        "SECRETbwid42",
+        "hunter2pass",
+        "flickrSECRET",
+        "DISCORDTOKEN",
+    ] {
         assert!(!html.contains(secret), "the preview shows {secret}");
     }
     // The rows the owner has to read.
@@ -147,26 +164,56 @@ async fn the_preview_changes_nothing_and_apply_writes_what_it_showed() {
     let plain = html.replace("<wbr>", "");
     assert!(plain.contains("birdweather_token"), "{html}");
     assert!(html.contains("(hidden, 12 characters)"), "{html}");
-    assert!(plain.contains("notify_species_exclude"), "the exclusion list went to the exclusion setting");
-    assert!(html.contains("each,new-species"), "the switches became a list of rules");
+    assert!(
+        plain.contains("notify_species_exclude"),
+        "the exclusion list went to the exclusion setting"
+    );
+    assert!(
+        html.contains("each,new-species"),
+        "the switches became a list of rules"
+    );
 
     let done = apply(&state, &token_of(&html)).await;
-    for secret in ["SECRETbwid42", "hunter2pass", "flickrSECRET", "DISCORDTOKEN"] {
+    for secret in [
+        "SECRETbwid42",
+        "hunter2pass",
+        "flickrSECRET",
+        "DISCORDTOKEN",
+    ] {
         assert!(!done.contains(secret), "the result shows {secret}");
     }
     assert!(done.contains("Done."), "{done}");
-    assert_eq!(setting(&state, "confidence_threshold").as_deref(), Some("0.65"));
+    assert_eq!(
+        setting(&state, "confidence_threshold").as_deref(),
+        Some("0.65")
+    );
     assert_eq!(setting(&state, "full_disk_action").as_deref(), Some("keep"));
     assert_eq!(setting(&state, "purge_threshold").as_deref(), Some("90"));
-    assert_eq!(setting(&state, "birdweather_token").as_deref(), Some("SECRETbwid42"));
+    assert_eq!(
+        setting(&state, "birdweather_token").as_deref(),
+        Some("SECRETbwid42")
+    );
     assert_eq!(setting(&state, "audio_format").as_deref(), Some("mp3"));
-    assert_eq!(setting(&state, "notify_trigger").as_deref(), Some("each,new-species"));
+    assert_eq!(
+        setting(&state, "notify_trigger").as_deref(),
+        Some("each,new-species")
+    );
     assert_eq!(setting(&state, "notify_confidence").as_deref(), Some("0"));
-    assert_eq!(setting(&state, "notify_species_exclude").as_deref(), Some("House Sparrow"));
+    assert_eq!(
+        setting(&state, "notify_species_exclude").as_deref(),
+        Some("House Sparrow")
+    );
     assert_eq!(setting(&state, "notify_species_only"), None);
-    assert_eq!(setting(&state, "species_exclude").as_deref(), Some("Passer domesticus"));
+    assert_eq!(
+        setting(&state, "species_exclude").as_deref(),
+        Some("Passer domesticus")
+    );
     let apprise = setting(&state, "apprise_config").expect("the apprise file is pointed at");
-    assert!(std::fs::read_to_string(&apprise).expect("the file").contains("DISCORDTOKEN"));
+    assert!(
+        std::fs::read_to_string(&apprise)
+            .expect("the file")
+            .contains("DISCORDTOKEN")
+    );
     // The password is not a setting and is not stored anywhere an import wrote.
     assert!(state.with_db(|conn| {
         let mut stmt = conn.prepare("SELECT value FROM settings").expect("prepare");
@@ -186,26 +233,46 @@ async fn a_stale_or_made_up_token_applies_nothing() {
     let (_d, state) = station();
     let first = preview(&state, &[("conf_files", Some("birdnet.conf"), CONF)]).await;
     let first_token = token_of(&first);
-    let second = preview(&state, &[("conf_files", Some("birdnet.conf"), "CONFIDENCE=0.5\n")]).await;
+    let second = preview(
+        &state,
+        &[("conf_files", Some("birdnet.conf"), "CONFIDENCE=0.5\n")],
+    )
+    .await;
     let second_token = token_of(&second);
     assert_ne!(first_token, second_token);
 
     let before = rows(&state);
-    assert!(apply(&state, &first_token).await.contains("no longer waiting"));
+    assert!(
+        apply(&state, &first_token)
+            .await
+            .contains("no longer waiting")
+    );
     assert!(apply(&state, "999999").await.contains("no longer waiting"));
     assert_eq!(rows(&state), before);
 
     // The second still works, once.
     assert!(apply(&state, &second_token).await.contains("Done."));
-    assert_eq!(setting(&state, "confidence_threshold").as_deref(), Some("0.5"));
-    assert!(apply(&state, &second_token).await.contains("no longer waiting"), "applied twice");
+    assert_eq!(
+        setting(&state, "confidence_threshold").as_deref(),
+        Some("0.5")
+    );
+    assert!(
+        apply(&state, &second_token)
+            .await
+            .contains("no longer waiting"),
+        "applied twice"
+    );
 }
 
 /// Nothing handed over is said, not previewed as an empty plan.
 #[tokio::test]
 async fn nothing_to_read_is_said() {
     let (_d, state) = station();
-    let html = preview(&state, &[("conf_files", Some(""), ""), ("conf_text", None, "   ")]).await;
+    let html = preview(
+        &state,
+        &[("conf_files", Some(""), ""), ("conf_text", None, "   ")],
+    )
+    .await;
     assert!(html.contains("Choose your birdnet.conf"), "{html}");
     let html = preview(&state, &[("source_dir", None, "relative/path")]).await;
     assert!(html.contains("not a full path"), "{html}");
@@ -216,13 +283,29 @@ async fn nothing_to_read_is_said() {
 #[tokio::test]
 async fn the_percentage_slip_is_refused_in_the_preview() {
     let (_d, state) = station();
-    let html = preview(&state, &[("conf_files", Some("birdnet.conf"), "CONFIDENCE=75\nSENSITIVITY=1.2\n")]).await;
+    let html = preview(
+        &state,
+        &[(
+            "conf_files",
+            Some("birdnet.conf"),
+            "CONFIDENCE=75\nSENSITIVITY=1.2\n",
+        )],
+    )
+    .await;
     assert!(html.contains("Not accepted here"), "{html}");
     assert!(html.contains("if you meant 75%, enter 0.75"), "{html}");
     let done = apply(&state, &token_of(&html)).await;
     assert!(done.contains("Done."), "{done}");
-    assert_eq!(setting(&state, "confidence_threshold"), None, "the refused value was stored");
-    assert_eq!(setting(&state, "sensitivity").as_deref(), Some("1.2"), "the good one was not held back");
+    assert_eq!(
+        setting(&state, "confidence_threshold"),
+        None,
+        "the refused value was stored"
+    );
+    assert_eq!(
+        setting(&state, "sensitivity").as_deref(),
+        Some("1.2"),
+        "the good one was not held back"
+    );
 }
 
 /// Species lists are added to.
@@ -240,7 +323,11 @@ async fn a_species_list_is_added_to_not_replaced() {
     });
     let html = preview(
         &state,
-        &[("conf_files", Some("exclude_species_list.txt"), "Passer domesticus_House Sparrow\nColumba livia_Rock Dove\n")],
+        &[(
+            "conf_files",
+            Some("exclude_species_list.txt"),
+            "Passer domesticus_House Sparrow\nColumba livia_Rock Dove\n",
+        )],
     )
     .await;
     assert!(html.contains("1 of them is new"), "{html}");
@@ -255,7 +342,10 @@ async fn a_species_list_is_added_to_not_replaced() {
 
 fn pi_tree(root: &std::path::Path) -> Vec<(String, String, String)> {
     // (date, common name, file name)
-    let species = [("Eurasian Blackbird", "Eurasian_Blackbird"), ("Cetti's Warbler", "Cettis_Warbler")];
+    let species = [
+        ("Eurasian Blackbird", "Eurasian_Blackbird"),
+        ("Cetti's Warbler", "Cettis_Warbler"),
+    ];
     let mut rows = Vec::new();
     for (i, (com, dir)) in species.iter().enumerate() {
         let date = format!("2026-03-0{}", i + 1);
@@ -271,8 +361,11 @@ fn pi_tree(root: &std::path::Path) -> Vec<(String, String, String)> {
 
 fn import_rows(state: &AppState, rows: &[(String, String, String)]) {
     state.with_db(|conn| {
-        conn.execute("INSERT INTO import_batches (source_kind) VALUES ('birdnet-pi')", [])
-            .expect("batch");
+        conn.execute(
+            "INSERT INTO import_batches (source_kind) VALUES ('birdnet-pi')",
+            [],
+        )
+        .expect("batch");
         for (i, (date, com, name)) in rows.iter().enumerate() {
             conn.execute(
                 "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, \
@@ -317,8 +410,14 @@ async fn the_recordings_are_checked_first_then_brought_across_and_play() {
         &format!("clips_source={source}&clips_mode=copy"),
     )
     .await;
-    assert!(checked.contains("Nothing has been changed yet"), "{checked}");
-    assert!(checked.contains("<strong>2</strong> recordings would be copied"), "{checked}");
+    assert!(
+        checked.contains("Nothing has been changed yet"),
+        "{checked}"
+    );
+    assert!(
+        checked.contains("<strong>2</strong> recordings would be copied"),
+        "{checked}"
+    );
     assert!(
         std::fs::read_dir(&recordings).map_or(true, |d| d.count() == 0),
         "the check wrote a file"
@@ -363,7 +462,10 @@ async fn the_recordings_are_checked_first_then_brought_across_and_play() {
         &format!("clips_source={source}&clips_mode=copy"),
     )
     .await;
-    assert!(again.contains("<strong>0</strong> recordings would be copied"), "{again}");
+    assert!(
+        again.contains("<strong>0</strong> recordings would be copied"),
+        "{again}"
+    );
     assert!(again.contains("2 are already here"), "{again}");
 }
 
@@ -374,13 +476,26 @@ async fn a_folder_that_is_not_a_clip_tree_is_said_and_a_relative_path_refused() 
     let html = post_form(
         &state,
         "/admin/migrate/clips/preview",
-        &format!("clips_source={}&clips_mode=copy", encode(&nothing.path().display().to_string())),
+        &format!(
+            "clips_source={}&clips_mode=copy",
+            encode(&nothing.path().display().to_string())
+        ),
     )
     .await;
     assert!(html.contains("By_Date"), "{html}");
-    let html = post_form(&state, "/admin/migrate/clips/preview", "clips_source=sub%2Fdir&clips_mode=copy").await;
+    let html = post_form(
+        &state,
+        "/admin/migrate/clips/preview",
+        "clips_source=sub%2Fdir&clips_mode=copy",
+    )
+    .await;
     assert!(html.contains("not a full path"), "{html}");
-    let html = post_form(&state, "/admin/migrate/clips/preview", "clips_source=%2Ftmp&clips_mode=bogus").await;
+    let html = post_form(
+        &state,
+        "/admin/migrate/clips/preview",
+        "clips_source=%2Ftmp&clips_mode=bogus",
+    )
+    .await;
     assert!(html.contains("Choose what to do"), "{html}");
 }
 
@@ -388,10 +503,18 @@ async fn a_folder_that_is_not_a_clip_tree_is_said_and_a_relative_path_refused() 
 #[tokio::test]
 async fn the_data_page_offers_the_three_steps() {
     let (_d, state) = station();
-    let req = Request::builder().uri("/station/data").body(Body::empty()).expect("request");
+    let req = Request::builder()
+        .uri("/station/data")
+        .body(Body::empty())
+        .expect("request");
     let (status, html) = send(&state, req).await;
     assert_eq!(status, StatusCode::OK);
-    for needle in ["Bring your BirdNET-Pi settings", "conf-files", "Your recordings", "clips-source"] {
+    for needle in [
+        "Bring your BirdNET-Pi settings",
+        "conf-files",
+        "Your recordings",
+        "clips-source",
+    ] {
         assert!(html.contains(needle), "the Data page lacks {needle}");
     }
 }

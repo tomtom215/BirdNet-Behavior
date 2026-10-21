@@ -43,7 +43,11 @@ fn order(v: Verdict) -> u8 {
 }
 
 fn print_row(r: &Row) {
-    let value = if r.shown.is_empty() { "(blank)" } else { &r.shown };
+    let value = if r.shown.is_empty() {
+        "(blank)"
+    } else {
+        &r.shown
+    };
     println!("{:<12} {} = {}", r.verdict.label(), r.pi_key, value);
     for (setting, v) in &r.becomes {
         println!("{:<12}   -> {setting} = {v}", "");
@@ -124,12 +128,10 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
 
     // Read-only for the preview, so asking cannot create or migrate anything.
-    let current = rusqlite::Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map(|c| settings_of(&c))
-    .unwrap_or_default();
+    let current =
+        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map(|c| settings_of(&c))
+            .unwrap_or_default();
     let prepared = prepare(&bundle, &current, &data_dir);
     print_prepared(&prepared);
 
@@ -151,14 +153,20 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
     let conn = match birdnet_db::sqlite::open_or_create(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("The database {} could not be opened: {e}", db_path.display());
+            eprintln!(
+                "The database {} could not be opened: {e}",
+                db_path.display()
+            );
             return 1;
         }
     };
     if let Some(text) = &prepared.apprise_file {
         let target = apprise_file_path(&data_dir);
         if let Err(e) = write_private(&target, text) {
-            eprintln!("{} could not be written: {e}. Nothing was changed.", target.display());
+            eprintln!(
+                "{} could not be written: {e}. Nothing was changed.",
+                target.display()
+            );
             return 1;
         }
     }
@@ -262,7 +270,10 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
     let settings = match open() {
         Ok(c) => settings_of(&c),
         Err(e) => {
-            eprintln!("The database {} could not be opened: {e}", db_path.display());
+            eprintln!(
+                "The database {} could not be opened: {e}",
+                db_path.display()
+            );
             return 1;
         }
     };
@@ -275,14 +286,18 @@ pub fn run_import_clips(cli: &Cli, config: Option<&birdnet_core::config::Config>
         .get("purge_threshold")
         .and_then(|v| v.trim().parse::<f64>().ok())
         .unwrap_or(95.0);
-    let probe = if dest.is_dir() { dest.clone() } else { dest.parent().map_or(dest.clone(), Path::to_path_buf) };
-    let room = birdnet_core::audio::capture::disk_usage(&probe).ok().map(|u| {
-        clips::DiskRoom {
+    let probe = if dest.is_dir() {
+        dest.clone()
+    } else {
+        dest.parent().map_or(dest.clone(), Path::to_path_buf)
+    };
+    let room = birdnet_core::audio::capture::disk_usage(&probe)
+        .ok()
+        .map(|u| clips::DiskRoom {
             used_bytes: u.used_bytes,
             available_bytes: u.available_bytes,
             purge_threshold_percent: threshold,
-        }
-    });
+        });
     let options = Options {
         source,
         dest,
@@ -391,9 +406,15 @@ mod tests {
         let code = run_import_conf(&cli_for(&pi, true), Some(&config_for(&db)));
         assert_eq!(code, 0);
         let s = settings(&db);
-        assert_eq!(s.get("confidence_threshold").map(String::as_str), Some("0.65"));
+        assert_eq!(
+            s.get("confidence_threshold").map(String::as_str),
+            Some("0.65")
+        );
         assert_eq!(s.get("full_disk_action").map(String::as_str), Some("keep"));
-        assert_eq!(s.get("birdweather_token").map(String::as_str), Some("bwSECRETid"));
+        assert_eq!(
+            s.get("birdweather_token").map(String::as_str),
+            Some("bwSECRETid")
+        );
     }
 
     /// A value the Settings page would refuse stops the whole import.
@@ -402,7 +423,11 @@ mod tests {
         let work = tempfile::tempdir().expect("dir");
         let pi = work.path().join("pi");
         std::fs::create_dir(&pi).unwrap();
-        std::fs::write(pi.join("birdnet.conf"), "CONFIDENCE=0.65\nSENSITIVITY=1.2\n").unwrap();
+        std::fs::write(
+            pi.join("birdnet.conf"),
+            "CONFIDENCE=0.65\nSENSITIVITY=1.2\n",
+        )
+        .unwrap();
         let db = work.path().join("birds.db");
         // 75 is refused by the preview, so the plan sets nothing for it and the
         // rest still apply; a *forced* refusal needs the form to refuse a value

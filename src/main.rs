@@ -244,7 +244,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // A BirdNET-Pi file copied across as it is draws forty of those.
             // The lines above each say what to do; this says that there is a
             // way to do all of it at once.
-            if unknown_keys.iter().filter(|u| u.birdnet_pi.is_some()).count() >= 5 {
+            if unknown_keys
+                .iter()
+                .filter(|u| u.birdnet_pi.is_some())
+                .count()
+                >= 5
+            {
                 tracing::info!(
                     config = %cli.config.display(),
                     "this looks like a BirdNET-Pi birdnet.conf: Station, Data in the browser, or \

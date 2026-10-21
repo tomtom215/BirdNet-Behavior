@@ -1755,7 +1755,9 @@ impl AppState {
 
     /// What would bring this process back after a restart request.
     #[must_use]
-    pub fn restart_support(&self) -> crate::routes::admin::system_controls::service::RestartSupport {
+    pub fn restart_support(
+        &self,
+    ) -> crate::routes::admin::system_controls::service::RestartSupport {
         crate::routes::admin::system_controls::service::RestartSupport {
             under_systemd: self.inner.supervised_by_systemd,
             self_exec: self.inner.self_restart,

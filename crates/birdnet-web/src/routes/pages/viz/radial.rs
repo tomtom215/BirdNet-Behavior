@@ -822,7 +822,10 @@ mod tests {
         assert_eq!((ribbons.len(), arcs.len()), (3, 3));
         let holds = |tokens: &[String], focus: &[String]| focus.iter().all(|f| tokens.contains(f));
         for (tokens, focus) in &ribbons {
-            let ends: Vec<&String> = tokens.iter().filter(|t| t.chars().all(|c| c.is_ascii_digit())).collect();
+            let ends: Vec<&String> = tokens
+                .iter()
+                .filter(|t| t.chars().all(|c| c.is_ascii_digit()))
+                .collect();
             assert_eq!(ends.len(), 2, "a ribbon belongs to two species: {tokens:?}");
             let lit_ribbons = ribbons.iter().filter(|(t, _)| holds(t, focus)).count();
             let lit_arcs: Vec<usize> = arcs
@@ -832,9 +835,16 @@ mod tests {
                 .map(|(i, _)| i)
                 .collect();
             assert_eq!(lit_ribbons, 1, "only itself: {focus:?}");
-            assert_eq!(lit_arcs.len(), 2, "its two species, not three: {focus:?} lit arcs {lit_arcs:?}");
+            assert_eq!(
+                lit_arcs.len(),
+                2,
+                "its two species, not three: {focus:?} lit arcs {lit_arcs:?}"
+            );
             for e in ends {
-                assert!(lit_arcs.contains(&e.parse::<usize>().expect("species")), "an end of the ribbon stays lit");
+                assert!(
+                    lit_arcs.contains(&e.parse::<usize>().expect("species")),
+                    "an end of the ribbon stays lit"
+                );
             }
         }
     }

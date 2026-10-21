@@ -943,7 +943,10 @@ fn the_vendored_exemption_covers_pinned_third_party_code_and_nothing_of_ours() {
             "VENDORED_DIRS excuses `{dir}` ({why}): only a directory under static/vendor/ may be excused"
         );
         let d = root().join(dir);
-        assert!(d.is_dir(), "VENDORED_DIRS excuses `{dir}`, and there is no such directory");
+        assert!(
+            d.is_dir(),
+            "VENDORED_DIRS excuses `{dir}`, and there is no such directory"
+        );
         for lib in std::fs::read_dir(&d).expect("vendor dir").flatten() {
             if !lib.path().is_dir() {
                 continue;
@@ -959,11 +962,15 @@ fn the_vendored_exemption_covers_pinned_third_party_code_and_nothing_of_ours() {
     }
     // Ours is never excused: the scan still reaches the terrain's own script.
     assert!(
-        !VENDORED_DIRS.iter().any(|(d, _)| "static/terrain.js".starts_with(d)),
+        !VENDORED_DIRS
+            .iter()
+            .any(|(d, _)| "static/terrain.js".starts_with(d)),
         "terrain.js must be scanned"
     );
     assert!(
-        source_files().iter().any(|p| p.ends_with("static/terrain.js")),
+        source_files()
+            .iter()
+            .any(|p| p.ends_with("static/terrain.js")),
         "the file walk no longer reaches static/terrain.js"
     );
 }

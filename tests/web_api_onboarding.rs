@@ -683,7 +683,9 @@ async fn every_preference_card_is_a_real_radio_input() {
 fn sources_of(state: &AppState) -> Vec<(String, String)> {
     state.with_db(|c| {
         let mut stmt = c
-            .prepare("SELECT kind, device_id FROM audio_sources WHERE disabled_at IS NULL ORDER BY id")
+            .prepare(
+                "SELECT kind, device_id FROM audio_sources WHERE disabled_at IS NULL ORDER BY id",
+            )
             .unwrap();
         stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .unwrap()
@@ -708,7 +710,10 @@ async fn save_persists_the_station_name_and_the_language() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert_eq!(setting(&state, "station_name").as_deref(), Some("Back garden"));
+    assert_eq!(
+        setting(&state, "station_name").as_deref(),
+        Some("Back garden")
+    );
     assert_eq!(setting(&state, "database_lang").as_deref(), Some("de"));
 }
 
@@ -755,9 +760,15 @@ async fn a_network_stream_chosen_in_the_wizard_becomes_an_audio_source() {
     );
     assert_eq!(
         sources_of(&state),
-        [("rtsp".to_owned(), "rtsp://camera.local:554/stream".to_owned())]
+        [(
+            "rtsp".to_owned(),
+            "rtsp://camera.local:554/stream".to_owned()
+        )]
     );
-    assert_eq!(setting(&state, "onboarding_complete").as_deref(), Some("true"));
+    assert_eq!(
+        setting(&state, "onboarding_complete").as_deref(),
+        Some("true")
+    );
 }
 
 /// A sound card named by hand is added as a USB microphone.
@@ -816,12 +827,20 @@ async fn a_refused_microphone_saves_nothing_and_goes_back_to_that_step() {
         let resp = post_form(build_router(state.clone()), "/onboarding/save", body).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{body}");
         assert_eq!(
-            resp.headers().get(header::LOCATION).unwrap().to_str().unwrap(),
+            resp.headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             format!("/onboarding?error={code}"),
             "{body}"
         );
         assert!(sources_of(&state).is_empty(), "{body}");
-        assert_eq!(setting(&state, "latitude"), None, "{body}: nothing else was saved");
+        assert_eq!(
+            setting(&state, "latitude"),
+            None,
+            "{body}: nothing else was saved"
+        );
         assert_eq!(setting(&state, "onboarding_complete"), None, "{body}");
     }
 }
@@ -868,12 +887,20 @@ async fn an_unreadable_source_table_is_not_drawn_as_a_station_with_no_microphone
     let state = state_with_source(Some("Backyard feeder"), "plughw:1,0");
     state.with_db(|c| c.execute("DROP TABLE audio_sources", []).unwrap());
     let resp = build_router(state)
-        .oneshot(Request::builder().uri("/onboarding").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/onboarding")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = String::from_utf8(
-        axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec(),
+        axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec(),
     )
     .unwrap();
     assert!(!body.contains("No audio source configured"), "{body}");
@@ -887,7 +914,12 @@ async fn unreadable_settings_are_not_drawn_as_defaults() {
     let state = fresh_state();
     state.with_db(|c| c.execute("DROP TABLE settings", []).unwrap());
     let resp = build_router(state)
-        .oneshot(Request::builder().uri("/onboarding").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/onboarding")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -897,7 +929,10 @@ async fn unreadable_settings_are_not_drawn_as_defaults() {
 /// station and a station with a source both draw the wizard.
 #[tokio::test]
 async fn a_readable_station_still_draws_the_wizard() {
-    for state in [fresh_state(), state_with_source(Some("Feeder"), "plughw:1,0")] {
+    for state in [
+        fresh_state(),
+        state_with_source(Some("Feeder"), "plughw:1,0"),
+    ] {
         let html = fetch_wizard(state).await;
         assert!(html.contains("ob-stepper"));
     }
@@ -928,8 +963,14 @@ async fn the_model_step_offers_the_install_when_nothing_is_installed() {
     let html = fetch_wizard(state).await;
     let step = model_step(&html);
     assert!(step.contains(r#"data-cls-state="missing""#), "{step}");
-    assert!(step.contains("data-cls-install"), "the button is there: {step}");
-    assert!(step.contains("MB"), "and says how big the download is: {step}");
+    assert!(
+        step.contains("data-cls-install"),
+        "the button is there: {step}"
+    );
+    assert!(
+        step.contains("MB"),
+        "and says how big the download is: {step}"
+    );
     assert!(!step.contains("Listening"), "nothing is listening: {step}");
 }
 
@@ -958,7 +999,10 @@ async fn installed_but_not_loaded_is_not_reported_as_listening() {
     let step = model_step(&step_html);
     assert!(step.contains(r#"data-cls-state="needs-restart""#), "{step}");
     assert!(step.contains("data-cls-restart"), "{step}");
-    assert!(!step.contains("data-cls-install"), "nothing left to install: {step}");
+    assert!(
+        !step.contains("data-cls-install"),
+        "nothing left to install: {step}"
+    );
 }
 
 // ── the page after Finish ───────────────────────────────────────────────
@@ -970,7 +1014,10 @@ async fn fetch(state: AppState, uri: &str) -> (StatusCode, String) {
         .unwrap();
     let status = resp.status();
     let body = String::from_utf8(
-        axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec(),
+        axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec(),
     )
     .unwrap();
     (status, body)
@@ -981,7 +1028,9 @@ async fn fetch(state: AppState, uri: &str) -> (StatusCode, String) {
 #[tokio::test]
 async fn the_page_after_finish_offers_the_restart_when_a_save_is_waiting() {
     let state = fresh_state();
-    state.pending_restart().mark_booted("2000-01-01 00:00:00".to_owned());
+    state
+        .pending_restart()
+        .mark_booted("2000-01-01 00:00:00".to_owned());
     post_form(
         build_router(state.clone()),
         "/onboarding/save",

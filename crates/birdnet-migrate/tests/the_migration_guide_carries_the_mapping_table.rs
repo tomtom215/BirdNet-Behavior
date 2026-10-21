@@ -69,7 +69,10 @@ fn every_birdnet_pi_key_the_page_names_is_in_the_table() {
         "APPRISE_ONLY_NOTIFY_SPECIES_NAMES",
     ] {
         assert!(text.contains(key), "the page does not mention {key}");
-        assert!(table.contains(&format!("`{key}`")), "the table has no row for {key}");
+        assert!(
+            table.contains(&format!("`{key}`")),
+            "the table has no row for {key}"
+        );
     }
     // The names the page used to claim BirdNET-Pi wrote, and does not.
     for not_birdnet_pi in ["ALSA_CARD", "BIRDWEATHER_TOKEN"] {

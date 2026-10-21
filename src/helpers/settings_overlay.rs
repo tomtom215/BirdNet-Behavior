@@ -1763,7 +1763,10 @@ mod tests {
             .map(|e| e.key)
             .filter(|k| !specs.iter().any(|(ui, _, _)| ui == k))
             .collect();
-        assert!(stale.is_empty(), "applies.rs rows for settings that no longer exist: {stale:?}");
+        assert!(
+            stale.is_empty(),
+            "applies.rs rows for settings that no longer exist: {stale:?}"
+        );
         for (ui, wiring, _) in &specs {
             let applies = table.iter().find(|e| e.key == *ui).map(|e| e.applies);
             if matches!(wiring, Wiring::Bridged(_)) {

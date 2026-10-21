@@ -58,10 +58,14 @@ fn every_unread_key_of_birdnet_pis_default_file_is_told_where_it_went() {
     assert!(remedy_of("REC_CARD").starts_with("rename it to ALSA_CARD"));
     assert!(remedy_of("RTSP_STREAM").starts_with("rename it to RTSP_URLS"));
     assert!(
-        remedy_of("APPRISE_ONLY_NOTIFY_SPECIES_NAMES").starts_with("rename it to APPRISE_WATCHLIST_EXCLUDE"),
+        remedy_of("APPRISE_ONLY_NOTIFY_SPECIES_NAMES")
+            .starts_with("rename it to APPRISE_WATCHLIST_EXCLUDE"),
         "the name that misleads is the exclusion list"
     );
-    assert!(remedy_of("APPRISE_ONLY_NOTIFY_SPECIES_NAMES_2").starts_with("rename it to APPRISE_WATCHLIST"));
+    assert!(
+        remedy_of("APPRISE_ONLY_NOTIFY_SPECIES_NAMES_2")
+            .starts_with("rename it to APPRISE_WATCHLIST")
+    );
     assert!(remedy_of("APPRISE_NOTIFY_NEW_SPECIES").contains("APPRISE_TRIGGER"));
     assert!(remedy_of("COLOR_SCHEME").starts_with("it has no equivalent here"));
     assert!(remedy_of("CUSTOM_IMAGE").contains("dashboard_image"));
@@ -84,11 +88,20 @@ fn the_doctors_table_and_the_importers_agree() {
         );
         // The kinds agree where the doctor says something.
         match (rule.target, hint) {
-            (Target::Setting { .. } | Target::ConfigFile { .. }, Some(PiEquivalent::None { .. })) => {
-                panic!("{}: the importer sets it and the doctor says it has no equivalent", rule.pi_key)
+            (
+                Target::Setting { .. } | Target::ConfigFile { .. },
+                Some(PiEquivalent::None { .. }),
+            ) => {
+                panic!(
+                    "{}: the importer sets it and the doctor says it has no equivalent",
+                    rule.pi_key
+                )
             }
             (Target::Nothing, Some(PiEquivalent::Renamed { .. })) => {
-                panic!("{}: the importer drops it and the doctor says rename it", rule.pi_key)
+                panic!(
+                    "{}: the importer drops it and the doctor says rename it",
+                    rule.pi_key
+                )
             }
             _ => {}
         }
@@ -139,7 +152,10 @@ fn what_the_importer_hides_the_support_bundle_hides() {
     for (rule_key, sample) in [
         ("BIRDWEATHER_ID", "abcdef0123456789"),
         ("RTSP_STREAM", "rtsp://cam:hunter2@192.168.1.20:554/h264"),
-        ("HEARTBEAT_URL", "https://hc-ping.com/9a1b2c3d-1111-2222-3333-444455556666"),
+        (
+            "HEARTBEAT_URL",
+            "https://hc-ping.com/9a1b2c3d-1111-2222-3333-444455556666",
+        ),
         ("FLICKR_API_KEY", "0123456789abcdef"),
     ] {
         let rule = RULES.iter().find(|r| r.pi_key == rule_key).expect("rule");

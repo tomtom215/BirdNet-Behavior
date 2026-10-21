@@ -382,7 +382,10 @@ mod tests {
             checks[0].remediation.as_deref().unwrap_or("")
         );
         assert!(!text.contains("bundled"), "no model is bundled: {text}");
-        assert!(text.contains("--install-model"), "names the CLI route: {text}");
+        assert!(
+            text.contains("--install-model"),
+            "names the CLI route: {text}"
+        );
         assert!(text.contains("Settings"), "names the browser route: {text}");
     }
 
