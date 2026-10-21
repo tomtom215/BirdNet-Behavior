@@ -89,6 +89,8 @@ on:
       # The config job checks every workflow (timeouts and their
       # `# observed` annotations), so an edit to any of them re-runs it.
       - ".github/workflows/**"
+      # The pip hashes the config job installs from.
+      - "tools/ci/requirements-ci.txt"
   pull_request:
     branches: ["main", "master"]
     paths:
@@ -104,6 +106,8 @@ on:
       # The config job checks every workflow (timeouts and their
       # `# observed` annotations), so an edit to any of them re-runs it.
       - ".github/workflows/**"
+      # The pip hashes the config job installs from.
+      - "tools/ci/requirements-ci.txt"
   schedule:
     # Mondays at 09:00 UTC.
     - cron: "0 9 * * 1"
@@ -151,8 +155,11 @@ jobs:
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-mutants@27.1.0
+      # By hash, not only by version: `pyyaml==6.0.3` would install whatever file
+      # PyPI serves under that number. The file lists the sha256 of each release
+      # file; `--require-hashes` makes pip refuse anything else.
       - name: Install PyYAML
-        run: pip install --quiet pyyaml==6.0.3
+        run: pip install --quiet --require-hashes -r tools/ci/requirements-ci.txt
       - name: Check the CI configuration
         # `cargo mutants --list` parses the workspace; it builds nothing, so the
         # whole job is dominated by checkout and the tool install.
