@@ -8,6 +8,10 @@
 //!
 //! The source file is **never modified**.
 
+mod clip_import;
+mod conf_handlers;
+pub mod conf_import;
+mod conf_view;
 mod render;
 
 use axum::extract::{DefaultBodyLimit, State};
@@ -164,8 +168,45 @@ const MAX_UPLOAD_BYTES: usize = 4 * 1024 * 1024 * 1024;
 pub fn router() -> Router<AppState> {
     let migration_state: MigrationState = Arc::new(Mutex::new(None));
     let staged_upload: StagedUpload = Arc::new(Mutex::new(None));
+    let staged_conf: conf_import::StagedConf = Arc::new(Mutex::new(None));
+    let conf_lines: conf_import::ConfigLines = Arc::new(Mutex::new(None));
 
     Router::new()
+        .route(
+            "/admin/migrate/conf/preview",
+            axum::routing::post({
+                let sc = Arc::clone(&staged_conf);
+                move |state, multipart| conf_handlers::preview_handler(state, multipart, sc)
+            })
+            // Eight small text files at most; far below the database upload's ceiling.
+            .layer(DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
+        .route(
+            "/admin/migrate/conf/apply",
+            axum::routing::post({
+                let sc = Arc::clone(&staged_conf);
+                let cl = Arc::clone(&conf_lines);
+                move |state, user, form| conf_handlers::apply_handler(state, user, sc, cl, form)
+            }),
+        )
+        .route(
+            "/admin/migrate/clips/preview",
+            axum::routing::post(clip_import::preview_handler),
+        )
+        .route(
+            "/admin/migrate/clips/run",
+            axum::routing::post({
+                let ms = Arc::clone(&migration_state);
+                move |state, form| clip_import::run_handler(state, ms, form)
+            }),
+        )
+        .route(
+            "/admin/migrate/conf/lines",
+            get({
+                let cl = Arc::clone(&conf_lines);
+                move |query| conf_handlers::lines_handler(cl, query)
+            }),
+        )
         .route("/admin/migrate", get(migration_page))
         .route(
             "/admin/migrate/validate",
@@ -200,7 +241,7 @@ pub fn router() -> Router<AppState> {
             "/admin/migrate/progress",
             get({
                 let ms = Arc::clone(&migration_state);
-                move || progress_handler(ms)
+                move |query| progress_handler(ms, query)
             }),
         )
         .route("/admin/migrate/batches", get(batches_handler))
@@ -918,8 +959,19 @@ const fn rebuild_analytics_after_import(_state: &AppState, _progress: &ProgressH
 // GET /admin/migrate/progress
 // ---------------------------------------------------------------------------
 
+/// Which step is asking: the history import (the default) or the recordings.
+#[derive(Debug, Deserialize)]
+struct ProgressQuery {
+    #[serde(rename = "for")]
+    step: Option<String>,
+}
+
 #[allow(clippy::unused_async)] // required by axum Handler trait
-async fn progress_handler(migration_state: MigrationState) -> Html<String> {
+async fn progress_handler(
+    migration_state: MigrationState,
+    axum::extract::Query(query): axum::extract::Query<ProgressQuery>,
+) -> Html<String> {
+    let clips = query.step.as_deref() == Some("clips");
     let snap: Option<MigrationProgress> = {
         let guard = migration_state
             .lock()
@@ -927,12 +979,18 @@ async fn progress_handler(migration_state: MigrationState) -> Html<String> {
         guard.as_ref().map(ProgressHandle::snapshot)
     };
     let Some(p) = snap else {
-        return Html(
+        return Html(if clips {
+            r#"<div id="clips-progress" class="amig-empty">Nothing is running.</div>"#.to_string()
+        } else {
             r#"<div id="migrate-progress" class="amig-empty">No migration in progress.</div>"#
-                .to_string(),
-        );
+                .to_string()
+        });
     };
-    Html(render::progress_bar(&p))
+    Html(if clips {
+        render::clips_progress_bar(&p)
+    } else {
+        render::progress_bar(&p)
+    })
 }
 
 #[cfg(test)]

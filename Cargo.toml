@@ -405,6 +405,10 @@ serde_json.workspace = true
 # a transitive dep via birdnet-db, so this is a visibility declaration
 # rather than a new dependency.
 rusqlite.workspace = true
+# The `--import-birdnet-pi-conf` / `--import-birdnet-pi-clips` commands read
+# the mapping table and plan the clip import with the same code the admin
+# page runs.
+birdnet-migrate.workspace = true
 
 [dev-dependencies]
 hound.workspace = true
@@ -416,10 +420,6 @@ rusqlite.workspace = true
 tower.workspace = true
 birdnet-web.workspace = true
 birdnet-db.workspace = true
-# `tests/analytics_divergence.rs` drives a real BirdNET-Pi import end to end, to
-# prove provenance and clock reconciliation survive all the way into the DuckDB
-# analytics store — the only place a researcher would actually read them.
-birdnet-migrate.workspace = true
 serde_json.workspace = true
 proptest.workspace = true
 syn.workspace = true
