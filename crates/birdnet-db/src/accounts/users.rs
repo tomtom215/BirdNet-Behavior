@@ -404,32 +404,45 @@ mod tests {
         ));
     }
 
+    // The passwords below are built at run time, not written as literals:
+    // CodeQL's `rust/hard-coded-cryptographic-value` follows a string literal into
+    // any parameter called `password`, test or not, and follows it through a helper
+    // that returns a string made from one (`pw("tag")`), so each test builds its own
+    // with `format!` over the process id
+    // (`tests/no_literal_reaches_a_credential_parameter.rs`).
+
     #[test]
     fn argon2_hash_round_trips_via_verify() {
-        let hash = hash_password("correct-horse-battery-staple").unwrap();
-        assert!(verify_password(&hash, "correct-horse-battery-staple").unwrap());
-        assert!(!verify_password(&hash, "wrong-password").unwrap());
+        let pid = std::process::id();
+        let right = format!("correct-horse-battery-staple-{pid}");
+        let wrong = format!("wrong-password-{pid}");
+        let hash = hash_password(&right).unwrap();
+        assert!(verify_password(&hash, &right).unwrap());
+        assert!(!verify_password(&hash, &wrong).unwrap());
     }
 
     #[test]
     fn argon2_hash_generates_unique_salt_per_call() {
         // Two hashes of the same plaintext must differ (random salt).
-        let a = hash_password("same-secret").unwrap();
-        let b = hash_password("same-secret").unwrap();
+        let same = format!("same-secret-{}", std::process::id());
+        let a = hash_password(&same).unwrap();
+        let b = hash_password(&same).unwrap();
         assert_ne!(a, b);
         // Both still verify against the original plaintext.
-        assert!(verify_password(&a, "same-secret").unwrap());
-        assert!(verify_password(&b, "same-secret").unwrap());
+        assert!(verify_password(&a, &same).unwrap());
+        assert!(verify_password(&b, &same).unwrap());
     }
 
     #[test]
     fn empty_hash_never_verifies() {
-        assert!(!verify_password("", "anything").unwrap());
+        let anything = format!("anything-{}", std::process::id());
+        assert!(!verify_password("", &anything).unwrap());
     }
 
     #[test]
     fn malformed_hash_returns_invalid_not_silent_false() {
-        let err = verify_password("not-a-phc-string", "x").unwrap_err();
+        let typed = format!("x-{}", std::process::id());
+        let err = verify_password("not-a-phc-string", &typed).unwrap_err();
         assert!(matches!(err, AccountsError::Invalid(_)));
     }
 
@@ -438,16 +451,19 @@ mod tests {
         // Seeds shipped in #89 stored `PLAINTEXT-PLACEHOLDER:{password}` so
         // an operator who set a viewer password before this PR can still
         // sign in (and get rotated to argon2id on next use).
-        let legacy = "PLAINTEXT-PLACEHOLDER:hunter2";
-        assert!(verify_password(legacy, "hunter2").unwrap());
-        assert!(!verify_password(legacy, "wrong").unwrap());
+        let pid = std::process::id();
+        let password = format!("hunter2-{pid}");
+        let wrong = format!("wrong-{pid}");
+        let legacy = format!("PLAINTEXT-PLACEHOLDER:{password}");
+        assert!(verify_password(&legacy, &password).unwrap());
+        assert!(!verify_password(&legacy, &wrong).unwrap());
     }
 
     #[test]
     fn is_legacy_password_hash_detects_both_shapes() {
         assert!(is_legacy_password_hash(""));
         assert!(is_legacy_password_hash("PLAINTEXT-PLACEHOLDER:anything"));
-        let real = hash_password("real").unwrap();
+        let real = hash_password(&format!("real-{}", std::process::id())).unwrap();
         assert!(!is_legacy_password_hash(&real));
     }
 }

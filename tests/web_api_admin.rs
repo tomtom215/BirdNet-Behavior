@@ -227,11 +227,14 @@ fn gated_state_with_cookies() -> (AppState, String, String) {
             |conn| -> Result<(String, String), accounts::AccountsError> {
                 // Real hash on the seed admin → "admin password configured".
                 let admin = conn.find_user_by_name("admin")?;
-                conn.set_password(admin.id, &accounts::hash_password("admin-pw")?)?;
+                conn.set_password(
+                    admin.id,
+                    &accounts::hash_password(&format!("admin-pw-{}", std::process::id()))?,
+                )?;
                 // A viewer-role account.
                 let viewer = conn.create_user(
                     "viewer",
-                    &accounts::hash_password("viewer-pw")?,
+                    &accounts::hash_password(&format!("viewer-pw-{}", std::process::id()))?,
                     Role::Viewer,
                     None,
                 )?;

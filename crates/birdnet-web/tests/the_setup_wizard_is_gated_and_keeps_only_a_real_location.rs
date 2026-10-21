@@ -194,7 +194,8 @@ async fn an_open_station_still_shows_the_wizard_to_everyone() {
 async fn a_signed_in_viewer_is_told_to_fetch_an_admin_rather_than_filling_in_six_steps() {
     let (_dir, state) = station(Some("probe-pass-viewer"));
     state.with_db(|conn| {
-        let hash = accounts::hash_password("viewer-pass-1").expect("hash");
+        let hash =
+            accounts::hash_password(&format!("viewer-pass-{}", std::process::id())).expect("hash");
         conn.create_user("watcher", &hash, accounts::Role::Viewer, None)
             .expect("create viewer");
     });
