@@ -606,7 +606,6 @@ pub struct AlertRule {
 /// Lightweight struct for inserting a new rule.
 // `PartialEq` so an import round trip can be asserted whole rather than field
 // by field; not `Eq`, because the confidence bounds are `f64`.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewAlertRule {
     /// Human-readable rule name.

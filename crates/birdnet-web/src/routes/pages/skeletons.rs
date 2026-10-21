@@ -103,25 +103,6 @@ pub const fn ridgeline() -> &'static str {
 </div>"#
 }
 
-/// Diversity bars under the ridgeline — 52 thin bars.
-#[must_use]
-pub fn diversity_bars() -> String {
-    let mut out = String::from(
-        r#"<div class="bnb-skel-bars" data-style="--n:52;height:60px;" role="status" aria-busy="true" aria-label="Loading weekly diversity">"#,
-    );
-    // Pre-baked heights so it looks like a real distribution.
-    let h = [
-        18, 22, 24, 28, 30, 36, 44, 56, 68, 78, 82, 86, 88, 82, 70, 62, 54, 48, 42, 38, 36, 32, 30,
-        28, 28, 26, 24, 26, 28, 30, 32, 36, 40, 44, 50, 58, 64, 70, 74, 76, 72, 68, 60, 54, 46, 40,
-        34, 28, 24, 22, 20, 18,
-    ];
-    for &p in &h {
-        let _ = write!(out, r#"<span data-style="height:{p}%"></span>"#);
-    }
-    out.push_str("</div>");
-    out
-}
-
 /// Per-species ribbons list (dawn chorus right rail). N rows.
 #[must_use]
 pub fn species_ribbons(n: usize) -> String {
@@ -144,7 +125,7 @@ pub fn species_ribbons(n: usize) -> String {
 
 /// 24-bar hourly chart (species circadian, hour×day mini-grid spine).
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
+#[allow(clippy::cast_precision_loss)]
 pub fn hourly_bars(n: usize) -> String {
     let n = n.clamp(8, 96);
     let mut out = format!(

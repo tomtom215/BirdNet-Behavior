@@ -114,7 +114,6 @@ type Station = (Option<f64>, Option<f64>);
 type SiteCounts = std::collections::HashMap<(i64, i64), u64>;
 
 impl CsvImporter {
-    #[allow(clippy::too_many_lines)]
     fn run(
         source_path: &Path,
         dest_path: &Path,

@@ -9,11 +9,7 @@
 //!
 //! Geometry-heavy SVG generation; the lint allows cover the benign coordinate
 //! arithmetic, matching `routes::pages::viz`.
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::suboptimal_flops
-)]
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use std::fmt::Write as _;
 

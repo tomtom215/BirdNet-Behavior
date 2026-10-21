@@ -116,7 +116,6 @@ pub fn assess_environment(samples: &[f32], sample_rate: u32) -> EnvironmentalAss
 // ---------------------------------------------------------------------------
 
 /// Compute rain probability from high-frequency filtered signal.
-#[allow(clippy::cast_precision_loss)]
 fn rain_probability(hf: &[f32], original: &[f32], _sample_rate: u32) -> f32 {
     let hf_energies = frame_energies(hf);
     let total_energies = frame_energies(original);
@@ -313,13 +312,7 @@ mod tests {
     #[test]
     fn highpass_attenuates_low_frequencies() {
         // 100 Hz sine at 48kHz → should be heavily attenuated by 4kHz HPF
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
+        #[allow(clippy::cast_precision_loss)]
         let samples: Vec<f32> = (0..4096)
             .map(|i| (2.0 * PI * 100.0 * i as f32 / 48_000.0).sin())
             .collect();
@@ -335,13 +328,7 @@ mod tests {
     #[test]
     fn lowpass_attenuates_high_frequencies() {
         // 10 kHz sine at 48kHz → should be heavily attenuated by 500 Hz LPF
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
+        #[allow(clippy::cast_precision_loss)]
         let samples: Vec<f32> = (0..4096)
             .map(|i| (2.0 * PI * 10_000.0 * i as f32 / 48_000.0).sin())
             .collect();

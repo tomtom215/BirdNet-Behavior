@@ -35,11 +35,6 @@ impl Extractor {
     ///
     /// Returns [`ExtractionError`] if the source cannot be decoded, the
     /// output directory cannot be created, or writing fails.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
     pub fn extract_detection(
         &self,
         source_file: &Path,
@@ -61,11 +56,7 @@ impl Extractor {
     /// # Errors
     ///
     /// As [`Self::extract_detection`].
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
+    #[allow(clippy::cast_precision_loss)]
     pub fn extract_detection_clip(
         &self,
         source_file: &Path,

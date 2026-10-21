@@ -21,7 +21,6 @@
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::manual_clamp,
-    clippy::suboptimal_flops,
     clippy::uninlined_format_args,
     clippy::use_self,
     dead_code

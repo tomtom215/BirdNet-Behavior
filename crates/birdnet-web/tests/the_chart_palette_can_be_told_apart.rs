@@ -45,7 +45,6 @@
     clippy::many_single_char_names,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::suboptimal_flops,
     clippy::doc_markdown,
     clippy::similar_names
 )]

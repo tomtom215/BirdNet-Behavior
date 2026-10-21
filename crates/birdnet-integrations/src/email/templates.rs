@@ -66,7 +66,6 @@ pub fn plain_body(detection: &DetectionEmail) -> String {
 }
 
 /// Build an HTML email body with inline CSS (wide client compatibility).
-#[allow(clippy::too_many_lines)]
 pub fn html_body(detection: &DetectionEmail) -> String {
     let station = escape(
         detection
@@ -76,7 +75,7 @@ pub fn html_body(detection: &DetectionEmail) -> String {
     );
     let common = escape(&detection.common_name);
     let sci = escape(&detection.scientific_name);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(clippy::cast_possible_truncation)]
     let conf_pct = u32::try_from((detection.confidence * 100.0).round() as i64).unwrap_or(0);
     let date = escape(&detection.date);
     let time = escape(&detection.time);

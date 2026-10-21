@@ -88,13 +88,7 @@ impl SolarDay {
         let (rise, set) = compute_sunrise_sunset(location.lat, location.lon, doy, year, 0.833_f64);
         let (dawn, dusk) = compute_sunrise_sunset(location.lat, location.lon, doy, year, 6.0_f64);
 
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         // Normalize the minute-of-day into [0, 1440) before the cast. For
         // longitudes well away from Greenwich the raw UTC sunrise/sunset minute
         // is legitimately negative (event falls on the previous UTC day, e.g.

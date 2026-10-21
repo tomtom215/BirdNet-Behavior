@@ -159,13 +159,7 @@ mod tests {
         vec![amplitude; n]
     }
 
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_lossless
-    )]
+    #[allow(clippy::cast_precision_loss)]
     fn tone(freq_hz: f32, amplitude: f32, n_samples: usize, sample_rate: u32) -> Vec<f32> {
         (0..n_samples)
             .map(|i| amplitude * (2.0 * PI * freq_hz * i as f32 / sample_rate as f32).sin())
