@@ -21,19 +21,26 @@ use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
-use axum::response::Html;
+use axum::response::{Html, IntoResponse as _, Response};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use super::{escape_html, simple_url_encode};
 use crate::occurrence::{
-    DEFAULT_LIMIT, MODEL_WEEKS, OccurrenceReport, Selection, Unavailable, Verdict, parse_count,
+    MODEL_WEEKS, OccurrenceReport, Selected, Selection, Unavailable, Verdict, parse_count,
     parse_week, percent_text, select, sentence,
 };
 use crate::state::AppState;
 
 /// Most species the lookup shows in full before asking for a narrower name.
 const MOST_ANSWERS: usize = 8;
+
+/// Species in the admitted list before "Show the next". The list is a browse aid
+/// beneath the answer, not the answer: 100 rows ran to about 4,900 px on a phone
+/// (one column, two lines a row) before the first control, and a reader looking for
+/// one bird has the lookup above it. 25 is about 1,200 px there. The JSON API pages
+/// by [`crate::occurrence::DEFAULT_LIMIT`]; this page's rows are heavier.
+const LIST_PAGE: usize = 25;
 
 /// The page's address.
 pub const PATH: &str = "/species/occurrence";
@@ -50,6 +57,9 @@ struct PageQuery {
     q: Option<String>,
     week: Option<String>,
     offset: Option<String>,
+    /// `1` on the request "Show the next" makes through htmx: only the next rows
+    /// are wanted, to be appended to the list already on the page.
+    more: Option<String>,
 }
 
 /// The twelve months, for the week selector.
@@ -110,7 +120,7 @@ async fn occurrence_page(
     State(state): State<AppState>,
     Query(params): Query<PageQuery>,
     headers: HeaderMap,
-) -> Html<String> {
+) -> Response {
     let current = crate::routes::species::current_model_week();
     let mut notes: Vec<String> = Vec::new();
     let week = match parse_week(params.week.as_deref()) {
@@ -134,6 +144,11 @@ async fn occurrence_page(
         .filter(|q| !q.is_empty())
         .map(str::to_owned);
 
+    // "Show the next" through htmx asks for the following rows alone, to be appended
+    // to the list already on the page. Without script the same link is a link, and
+    // `more` alone (no htmx header) is just a page at that offset.
+    let rows_only = params.more.as_deref() == Some("1") && headers.contains_key("hx-request");
+
     let body = match state.occurrence_source() {
         None => unavailable_card(
             "No range filter to ask",
@@ -145,6 +160,10 @@ async fn occurrence_page(
                 Err(reason) => unavailable_for(&reason),
                 Ok(report) => {
                     let names = state.names_handle();
+                    if rows_only {
+                        return Html(admitted_more(&report, query.as_deref(), offset, &names))
+                            .into_response();
+                    }
                     let also: std::collections::HashSet<String> =
                         super::name_search::also_species(&names, query.as_deref())
                             .into_iter()
@@ -154,6 +173,16 @@ async fn occurrence_page(
             }
         }
     };
+
+    if rows_only {
+        // The filter could not answer: the list stays as it is, and the slot that
+        // held the control says why there is no more.
+        return Html(format!(
+            r#"<div class="occ-more" id="occ-more" hx-swap-oob="true">{}</div>"#,
+            r#"<p class="bnb-meta" role="status">The range filter could not be asked just now. Reload the page to try again.</p>"#
+        ))
+        .into_response();
+    }
 
     let form = lookup_form(query.as_deref(), week, current);
     let content = format!(
@@ -173,6 +202,7 @@ async fn occurrence_page(
         "species",
         &headers,
     )
+    .into_response()
 }
 
 /// The lookup form: a GET, so every answer is a link that can be shared.
@@ -321,6 +351,89 @@ fn answer_card(
     )
 }
 
+/// The species the station admits this week, most likely first.
+fn admitted_selection(report: &OccurrenceReport) -> Selected<'_> {
+    select(
+        report,
+        &Selection {
+            q: None,
+            admitted: Some(true),
+        },
+        &std::collections::HashSet::new(),
+    )
+}
+
+/// The rows `offset..offset + LIST_PAGE` of the admitted list, as `<li>`s.
+fn admitted_rows(
+    picked: &Selected<'_>,
+    offset: usize,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
+    let mut out = String::new();
+    for score in picked.species.iter().skip(offset).take(LIST_PAGE) {
+        let _ = write!(
+            out,
+            r#"<li><span class="occ-li-name">{name}<span class="bnb-meta"> <i>{sci}</i></span></span><span class="bnb-meta occ-li-pct">{pct}</span></li>"#,
+            name = escape_html(names.name(&score.scientific_name, &score.common_name)),
+            sci = escape_html(&score.scientific_name),
+            pct = percent_text(score.probability),
+        );
+    }
+    out
+}
+
+/// The "Show the next" control for the page after `offset`, inside the slot htmx
+/// swaps (`oob` adds the attribute that makes the slot an out-of-band swap in a
+/// fragment). Empty when the list is at its end.
+///
+/// A plain link to the next page of rows, so that without script it works as a
+/// link; htmx asks for the rows alone and appends them to the list in place. The
+/// link keeps one `id` from page to page: htmx puts keyboard focus back on the
+/// element with the id it left, so pressing it again from the keyboard works.
+fn more_control(
+    week: u32,
+    query: Option<&str>,
+    offset: usize,
+    matched: usize,
+    oob: bool,
+) -> String {
+    let shown_to = offset + LIST_PAGE;
+    let link = if shown_to < matched {
+        let q = query
+            .map(|q| format!("&amp;q={}", simple_url_encode(q)))
+            .unwrap_or_default();
+        format!(
+            r##"<p><a class="bnb-btn" id="occ-more-link" href="{PATH}?week={week}{q}&amp;offset={shown_to}#occ-admitted-h" hx-get="{PATH}?week={week}{q}&amp;offset={shown_to}&amp;more=1" hx-target="#occ-list" hx-swap="beforeend" hx-push-url="false">Show the next {LIST_PAGE}</a></p>"##
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<div class="occ-more" id="occ-more"{oob}>{link}</div>"#,
+        oob = if oob { r#" hx-swap-oob="true""# } else { "" },
+    )
+}
+
+/// What htmx appends when "Show the next" is pressed: the rows, the control for
+/// the page after them (swapped into its slot), and the count for a screen reader
+/// (swapped into the page's status region, which is why it is not a region of
+/// its own: a live region that is replaced is not announced).
+fn admitted_more(
+    report: &OccurrenceReport,
+    query: Option<&str>,
+    offset: usize,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
+    let picked = admitted_selection(report);
+    let shown_to = (offset + LIST_PAGE).min(picked.matched);
+    format!(
+        r##"{rows}{more}<span hx-swap-oob="innerHTML:#occ-status">Showing {shown_to} of {matched}.</span>"##,
+        rows = admitted_rows(&picked, offset, names),
+        more = more_control(report.week, query, offset, picked.matched, true),
+        matched = picked.matched,
+    )
+}
+
 /// The species the station admits, a page at a time.
 fn admitted_list(
     report: &OccurrenceReport,
@@ -328,14 +441,7 @@ fn admitted_list(
     offset: usize,
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
-    let picked = select(
-        report,
-        &Selection {
-            q: None,
-            admitted: Some(true),
-        },
-        &std::collections::HashSet::new(),
-    );
+    let picked = admitted_selection(report);
     let mut out = format!(
         r#"<section class="occ-admitted" aria-labelledby="occ-admitted-h"><h2 class="occ-h" id="occ-admitted-h">Birds this station admits in {}</h2><p class="bnb-meta occ-count">{} of the {} species the range model scores.</p>"#,
         week_prose(report.week),
@@ -350,28 +456,12 @@ fn admitted_list(
         );
         return out;
     }
-    out.push_str(r#"<ul class="occ-list">"#);
-    for score in picked.species.iter().skip(offset).take(DEFAULT_LIMIT) {
-        let _ = write!(
-            out,
-            r#"<li><span class="occ-li-name">{name}<span class="bnb-meta"> <i>{sci}</i></span></span><span class="bnb-meta occ-li-pct">{pct}</span></li>"#,
-            name = escape_html(names.name(&score.scientific_name, &score.common_name)),
-            sci = escape_html(&score.scientific_name),
-            pct = percent_text(score.probability),
-        );
-    }
-    out.push_str("</ul>");
-    let shown_to = offset + DEFAULT_LIMIT;
-    if shown_to < picked.matched {
-        let q = query
-            .map(|q| format!("&amp;q={}", simple_url_encode(q)))
-            .unwrap_or_default();
-        let _ = write!(
-            out,
-            r#"<p><a class="bnb-btn" href="{PATH}?week={week}{q}&amp;offset={shown_to}#occ-admitted-h">Show the next {DEFAULT_LIMIT}</a></p>"#,
-            week = report.week,
-        );
-    }
+    let _ = write!(
+        out,
+        r#"<ul class="occ-list" id="occ-list">{rows}</ul>{more}<p class="sr-only" id="occ-status" role="status"></p>"#,
+        rows = admitted_rows(&picked, offset, names),
+        more = more_control(report.week, query, offset, picked.matched, false),
+    );
     out.push_str("</section>");
     out
 }
