@@ -313,6 +313,22 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
             v::AUDIO_FORMATS.join(", ")
         ));
     }
+    if let Some(raw) = given(&form.spectrogram_colormap)
+        && !crate::routes::spectrogram::is_colormap(&raw)
+    {
+        problems.push(format!(
+            "Spectrogram colour map must be one of viridis, magma, inferno, grey, \
+             grey_inverted. You entered “{raw}”."
+        ));
+    }
+    if let Some(raw) = given(&form.spectrogram_range_db)
+        && !crate::routes::spectrogram::is_range_db(&raw)
+    {
+        problems.push(format!(
+            "Spectrogram dynamic range must be one of 60, 80, 100, 120 (dB). You \
+             entered “{raw}”."
+        ));
+    }
     if let Some(raw) = given(&form.info_site)
         && !v::is_info_site(&raw)
     {
@@ -1049,6 +1065,16 @@ pub(crate) fn build_settings_items(
     push!(
         form.email_from_name,
         "email_from_name",
+    push!(
+        form.spectrogram_colormap,
+        "spectrogram_colormap",
+        SettingsCategory::System
+    );
+    push!(
+        form.spectrogram_range_db,
+        "spectrogram_range_db",
+        SettingsCategory::System
+    );
         SettingsCategory::Notifications
     );
     push!(
@@ -1498,6 +1524,8 @@ mod tests {
             email_smtp_port: None,
             email_smtp_user: None,
             email_smtp_pass: None,
+            spectrogram_colormap: None,
+            spectrogram_range_db: None,
             email_from: None,
             email_to: None,
             email_from_name: None,

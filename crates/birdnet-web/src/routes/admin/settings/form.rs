@@ -66,6 +66,8 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "max_files_per_species",
     "purge_threshold",
     "raw_spectrogram",
+    "spectrogram_colormap",
+    "spectrogram_range_db",
     "extraction_length",
     "rare_species_days",
     "stream_retention_secs",
@@ -208,6 +210,12 @@ pub struct SettingsForm {
     /// BirdNET-Pi's `RAW_SPECTROGRAM`, with one honest difference: theirs also
     /// removes axes, and this renderer has never drawn any.
     pub raw_spectrogram: Option<String>,
+    /// Colour map the spectrograms are drawn in: `viridis` (the default),
+    /// `magma`, `inferno`, `grey` or `grey_inverted`.
+    pub spectrogram_colormap: Option<String>,
+    /// Dynamic range of the spectrograms in dB: `60`, `80` (the default), `100`
+    /// or `120`. Cells further than this below the loudest are drawn as the floor.
+    pub spectrogram_range_db: Option<String>,
     /// Seconds of audio saved around each detection (BirdNET-Pi:
     /// `EXTRACTION_LENGTH`). The field existed in `ExtractionConfig` from the
     /// start and was never reachable from the UI, so every station ran the

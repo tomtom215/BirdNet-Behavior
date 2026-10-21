@@ -1,7 +1,8 @@
 //! Spectrogram generation and encoding.
 
-use super::colormap::viridis;
+use super::colormap::Colormap;
 use super::font::draw_text;
+use super::look::Look;
 use super::png::write_png_rgba;
 
 /// Optional label to overlay on the spectrogram.
@@ -19,7 +20,7 @@ pub struct SpectrogramLabel {
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn generate_spectrogram_png(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    generate_spectrogram_png_with_label(path, None, None)
+    generate_spectrogram_png_with_label(path, None, None, Look::default())
 }
 
 /// Generate a PNG spectrogram with an optional text overlay.
@@ -29,10 +30,14 @@ pub(super) fn generate_spectrogram_png(path: &std::path::Path) -> Result<Vec<u8>
 /// the Recordings grid asks for these small previews so it doesn't ship a
 /// multi-thousand-pixel image per row. `None` renders at native resolution (one
 /// column per mel frame), unchanged.
+///
+/// `look` is the colour map and the dynamic range (see [`Look`]); the default
+/// is what this function always drew.
 pub fn generate_spectrogram_png_with_label(
     path: &std::path::Path,
     label: Option<&SpectrogramLabel>,
     thumb_width: Option<u32>,
+    look: Look,
 ) -> Result<Vec<u8>, String> {
     use birdnet_core::audio::decode::{SPECTROGRAM_DECODE_SAMPLE_CAP, decode_file_capped};
     use birdnet_core::audio::spectrogram::{MelConfig, mel_spectrogram};
@@ -67,8 +72,9 @@ pub fn generate_spectrogram_png_with_label(
     let mel = mel_spectrogram(&audio.samples, audio.sample_rate, &config)
         .map_err(|e| format!("spectrogram error: {e}"))?;
 
-    // Convert to dB.
-    let mel_db = mel.to_db(1.0, 80.0);
+    // Convert to dB, flooring everything more than the chosen range below the
+    // loudest cell.
+    let mel_db = mel.to_db(1.0, f32::from(look.range_db));
 
     // Extract into row-major Vec<Vec<f32>>.
     let spec: Vec<Vec<f32>> = (0..mel_db.n_mels)
@@ -80,11 +86,11 @@ pub fn generate_spectrogram_png_with_label(
     // drop any overlay — a tiny tile has no room for text. Full renders unchanged.
     if let Some(w) = thumb_width {
         let thumb = downsample_width(&spec, w as usize);
-        return encode_spectrogram_png_labeled(&thumb, None);
+        return encode_spectrogram_png_labeled(&thumb, None, look.colormap);
     }
 
     // Encode to PNG with optional label.
-    encode_spectrogram_png_labeled(&spec, label)
+    encode_spectrogram_png_labeled(&spec, label, look.colormap)
 }
 
 /// Max-pool a spectrogram's time axis down to `target_w` columns.
@@ -121,13 +127,14 @@ fn downsample_width(spec: &[Vec<f32>], target_w: usize) -> Vec<Vec<f32>> {
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn encode_spectrogram_png(spec: &[Vec<f32>]) -> Result<Vec<u8>, String> {
-    encode_spectrogram_png_labeled(spec, None)
+    encode_spectrogram_png_labeled(spec, None, Colormap::default())
 }
 
 /// Encode a spectrogram with an optional text overlay.
 fn encode_spectrogram_png_labeled(
     spec: &[Vec<f32>],
     label: Option<&SpectrogramLabel>,
+    colormap: Colormap,
 ) -> Result<Vec<u8>, String> {
     if spec.is_empty() || spec[0].is_empty() {
         return Err("empty spectrogram".to_string());
@@ -159,14 +166,14 @@ fn encode_spectrogram_png_labeled(
         });
     let range = (max_val - min_val).max(1e-6);
 
-    // Build RGBA pixel buffer (viridis-like: dark blue -> green -> yellow).
+    // Build the RGBA pixel buffer through the chosen colour map.
     let mut pixels: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
 
     // Spectrogram rows are low-frequency first; for display flip vertically.
     for row in spec.iter().rev() {
         for &val in row {
             let t = ((val - min_val) / range).clamp(0.0, 1.0);
-            let (r, g, b) = viridis(t);
+            let (r, g, b) = colormap.rgb(t);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }

@@ -367,6 +367,18 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::System,
     ),
     (
+        "spectrogram_colormap",
+        // Read from the settings table by the spectrogram route on each render,
+        // and part of its cache key, so a change shows on the next image.
+        Wiring::OwnedBy("the spectrogram renderer"),
+        SettingsCategory::System,
+    ),
+    (
+        "spectrogram_range_db",
+        Wiring::OwnedBy("the spectrogram renderer"),
+        SettingsCategory::System,
+    ),
+    (
         "rare_species_days",
         Wiring::OwnedBy("the rare-species feeds"),
         SettingsCategory::System,

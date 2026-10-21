@@ -78,6 +78,48 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     let maxfiles = get_setting(s, "max_files_per_species");
     let purge = get_setting(s, "purge_threshold");
     let raw_spec = get_setting(s, "raw_spectrogram");
+/// The `<option>`s of the spectrogram colour-map picker, the stored one chosen.
+///
+/// A stored value that is no colour map selects the default, which is what the
+/// renderer draws for it.
+fn spectrogram_colormap_options(stored: &str) -> String {
+    let choices = crate::routes::spectrogram::colormap_choices();
+    let chosen = choices
+        .iter()
+        .find(|(value, _)| *value == stored.trim())
+        .map_or("viridis", |(value, _)| *value);
+    choices
+        .iter()
+        .map(|(value, label)| {
+            let selected = if *value == chosen { " selected" } else { "" };
+            format!(r#"<option value="{value}"{selected}>{label}</option>"#)
+        })
+        .collect()
+}
+
+/// The `<option>`s of the spectrogram dynamic-range picker (dB).
+fn spectrogram_range_options(stored: &str) -> String {
+    use crate::routes::spectrogram::{DEFAULT_RANGE_DB, RANGES_DB};
+    let chosen = stored
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|n| RANGES_DB.contains(n))
+        .unwrap_or(DEFAULT_RANGE_DB);
+    RANGES_DB
+        .iter()
+        .map(|db| {
+            let selected = if *db == chosen { " selected" } else { "" };
+            let note = if *db == DEFAULT_RANGE_DB {
+                " (default)"
+            } else {
+                ""
+            };
+            format!(r#"<option value="{db}"{selected}>{db} dB{note}</option>"#)
+        })
+        .collect()
+}
+
     let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
     let rare_days = get_setting(s, "rare_species_days");
     let extract_len = get_setting(s, "extraction_length");
@@ -88,6 +130,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     let site = get_setting(s, "site_name");
     let isite = get_setting(s, "info_site");
     // Command-line only until 0.12.0, so a non-English station could not pick
+    let colormap_options = spectrogram_colormap_options(&get_setting(s, "spectrogram_colormap"));
+    let range_options = spectrogram_range_options(&get_setting(s, "spectrogram_range_db"));
     // its own language from the UI at all.
     let lang_picker = language_picker(s.get("database_lang").map_or("", String::as_str), names);
     let is_ebird = if isite == "ebird" { " selected" } else { "" };
@@ -180,6 +224,24 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
       </div>
       <div>
         <label for="stream_max_mb">Streaming Folder Limit (MB)</label>
+    <div class="grid-2">
+      <div>
+        <label for="spectrogram_colormap">Spectrogram colours</label>
+        <select id="spectrogram_colormap" name="spectrogram_colormap">{colormap_options}</select>
+        <p class="hint">Louder is always lighter, so the order survives a grey print.
+          Viridis is what earlier versions drew. The inverted grey puts a white floor
+          under black calls, the look of a printed figure. Applies to the next
+          image shown.</p>
+      </div>
+      <div>
+        <label for="spectrogram_range_db">Spectrogram dynamic range</label>
+        <select id="spectrogram_range_db" name="spectrogram_range_db">{range_options}</select>
+        <p class="hint">Cells more than this far below the loudest are drawn as the
+          floor. A smaller range gives more contrast and drops faint calls into the
+          background; a larger one keeps them. 80 dB is what earlier versions used
+          (birdnet-go offers 80, 100 and 120).</p>
+      </div>
+    </div>
         <input id="stream_max_mb" name="stream_max_mb" type="number"
                value="{streammax}" min="0" step="64">
         <p class="hint">Hard ceiling on that same temporary folder — oldest segments go first if it is exceeded. It usually lives in RAM, so this stops a busy or backed-up station filling it. 0 removes the ceiling.</p>

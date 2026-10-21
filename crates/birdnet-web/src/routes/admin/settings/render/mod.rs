@@ -151,6 +151,8 @@ fn fixed_form_default(key: &str) -> &'static str {
         "stream_retention_secs" => "600",
         "weekly_report_schedule" => "monday",
         _ => "",
+        "spectrogram_colormap" => "viridis",
+        "spectrogram_range_db" => "80",
     }
 }
 
