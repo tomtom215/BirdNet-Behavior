@@ -4,7 +4,7 @@
 //! returns it as an `image/png` response.
 //!
 //! Rendered PNGs are cached in memory keyed by filename, modification time, the
-//! overlay label and the look (colour map and dynamic range, see [`look`]), so the common case — the same recordings re-requested as
+//! overlay label and the look (colour map and dynamic range, see `look`), so the common case — the same recordings re-requested as
 //! the list and detail pages are browsed — is served without re-decoding the
 //! WAV or recomputing the mel transform. The cache is bounded by total bytes
 //! and evicts oldest-first. Because the endpoint is public and the label is

@@ -6,7 +6,7 @@
 //! and `71°F`, a bird club in Berlin wants `16:31` and `21°C`, and one browser
 //! on the same station may want the other. Neither choice can be honoured by
 //! forty pages each formatting their own, so there is one formatter and one
-//! test ([`tests/the_clock_and_temperature_are_printed_in_one_place.rs`]) that
+//! test (`tests/the_clock_and_temperature_are_printed_in_one_place.rs`) that
 //! fails when a page prints a time or a temperature by hand.
 //!
 //! # How a choice reaches a page

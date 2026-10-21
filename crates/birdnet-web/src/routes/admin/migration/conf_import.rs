@@ -13,7 +13,7 @@
 //!
 //! `preview` reads what the owner handed over and shows the plan; it changes
 //! nothing. The files — which hold credentials — are kept in memory only, in
-//! one slot, for [`STAGE_TTL`] and under a token the confirm button carries,
+//! one slot, for `STAGE_TTL` and under a token the confirm button carries,
 //! exactly as the database upload is staged: a second upload in between
 //! replaces the first, and the token stops one admin confirming another's. Apply
 //! takes the slot, so a double submit applies once.

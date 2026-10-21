@@ -8,7 +8,7 @@
 //!
 //! This module is the server's half: the counts, which the page asks for as JSON, a table of the
 //! same numbers, and the card they live in. The terrain's shape is a pure function of the
-//! counts ([`build`]), which is what the tests hold.
+//! counts (`build`), which is what the tests hold.
 //!
 //! | Path | Purpose |
 //! |------|---------|

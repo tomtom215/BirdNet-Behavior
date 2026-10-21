@@ -99,7 +99,7 @@ impl DuplicateGate {
         self.admit_with(sci_name, at_secs, None)
     }
 
-    /// As [`admit`](Self::admit), for a species that may have an interval of
+    /// As `admit`, for a species that may have an interval of
     /// its own.
     ///
     /// `species_interval_secs` is the operator's per-species minimum

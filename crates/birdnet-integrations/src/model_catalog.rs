@@ -450,7 +450,7 @@ fn fetch_verified(
     fetch_verified_with(client, url, expected, dest, 0, &mut |_| {})
 }
 
-/// [`fetch_verified`], reporting each megabyte received to `progress`.
+/// `fetch_verified`, reporting each megabyte received to `progress`.
 ///
 /// `fallback_total` is used when the server sends no `Content-Length`.
 fn fetch_verified_with(
@@ -577,7 +577,7 @@ fn fetch_unless_installed(
     fetch_unless_installed_with(client, url, expected, dest, &mut |_| {})
 }
 
-/// [`fetch_unless_installed`], reporting progress when it does fetch.
+/// `fetch_unless_installed`, reporting progress when it does fetch.
 fn fetch_unless_installed_with(
     client: &reqwest::blocking::Client,
     url: &str,
@@ -594,7 +594,7 @@ fn fetch_unless_installed_with(
 
 /// Write bytes the binary carries to `dest`, only if they hash to `expected`.
 ///
-/// The same discipline as [`fetch_verified`] for a file that needs no network:
+/// The same discipline as `fetch_verified` for a file that needs no network:
 /// the bytes land on a `.part` path nothing loads and are renamed into place
 /// once they match, so a binary built with data that disagrees with the digest
 /// pinned beside it fails here rather than naming the wrong birds.

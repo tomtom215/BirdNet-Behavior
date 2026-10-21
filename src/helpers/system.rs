@@ -410,7 +410,7 @@ pub fn start_live_spectrogram(
 
 /// What the Avahi service file does, and does not do, for the log line.
 ///
-/// The file advertises a **service** (`_http._tcp`, named "<name> on <host>")
+/// The file advertises a **service** (`_http._tcp`, named `<name> on <host>`)
 /// so that a browser or phone that lists web services on the network finds the
 /// station. It creates no host name: `<hostname>.local` resolves because
 /// `avahi-daemon` publishes the machine's own name, whatever services are
