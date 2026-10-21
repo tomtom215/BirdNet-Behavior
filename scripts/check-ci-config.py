@@ -939,12 +939,14 @@ def check_tools_are_pinned(
 
 def named_lockfiles(workflows_glob: str) -> list[tuple[str, str]]:
     """`(where, path)` for every lockfile a workflow relies on: the `--lockfile=`
-    arguments of a scan, and the `package-lock.json` beside every `npm ci`."""
+    arguments of a scan (less a `parser:` prefix), and the `package-lock.json`
+    beside every `npm ci`."""
     found: list[tuple[str, str]] = []
     for workflow in sorted(glob.glob(workflows_glob)):
         text = open(workflow, encoding="utf-8").read()
         for path in re.findall(r"--lockfile=(\S+)", text):
-            found.append((workflow, path))
+            # `requirements.txt:tools/x/requirements.txt` names the parser, then the file.
+            found.append((workflow, re.sub(r"^[A-Za-z][\w.-]*:", "", path)))
         for node in _walk_dicts(yaml.safe_load(text)):
             run = node.get("run")
             if isinstance(run, str) and re.search(r"\bnpm ci\b", run):
