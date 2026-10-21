@@ -229,6 +229,26 @@ fn substitute(template: &str, ctx: &NotificationContext) -> String {
         .replace("$overlap", &number(ctx.overlap))
 }
 
+/// Which of the three notification rules are switched on.
+///
+/// `BirdNET-Pi` has three independent switches — `APPRISE_NOTIFY_EACH_DETECTION`,
+/// `APPRISE_NOTIFY_NEW_SPECIES` (seen at most five times in seven days) and
+/// `APPRISE_NOTIFY_NEW_SPECIES_EACH_DAY` — each of which sends its own message
+/// (`utils/notifications.py`), and all of them off means no notifications at
+/// all. This is the same three switches, so a station that had two of them on
+/// can say so; see [`TriggerMode::Several`] for how the messages differ.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TriggerSet {
+    /// Every detection.
+    pub each: bool,
+    /// A species seen five times or fewer in the last seven days, this
+    /// detection included.
+    pub new_species: bool,
+    /// The first detection of a species each day.
+    pub first_today: bool,
+}
+
 /// Notification trigger modes controlling when notifications are sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerMode {
@@ -238,19 +258,83 @@ pub enum TriggerMode {
     NewSpecies,
     /// Send on the first detection of each species per day.
     NewSpeciesDaily,
+    /// More than one rule on: a detection notifies when **any** of them says
+    /// so, in one message whose `$reason` names every rule that matched.
+    ///
+    /// `BirdNET-Pi` sends one message per matching rule, so a rare bird heard
+    /// for the first time today arrives twice there. Here it arrives once with
+    /// both reasons, which says what the two messages said and does not make
+    /// the phone buzz twice. Only ever holds two or three rules on; one rule is
+    /// the plain variant above and none is [`Self::Off`].
+    Several(TriggerSet),
+    /// No rule: nothing is notified. `BirdNET-Pi` with all three switches at 0.
+    Off,
 }
 
 impl TriggerMode {
     /// Parse a trigger mode from a string.
     ///
-    /// Accepts: `"each"`, `"new-species"`, `"new-species-daily"`.
-    /// Unknown values fall back to `EachDetection`.
+    /// Accepts one rule — `"each"`, `"new-species"`, `"new-species-daily"` —
+    /// or several separated by commas (`"each,new-species"`), or `"off"` for
+    /// none. Unknown values fall back to `EachDetection`, as they always have;
+    /// in a list, a word that names no rule is skipped and the rest are used.
     #[must_use]
     pub fn parse(s: &str) -> Self {
-        match s.trim().to_lowercase().as_str() {
-            "new-species" | "new_species" => Self::NewSpecies,
-            "new-species-daily" | "new_species_daily" => Self::NewSpeciesDaily,
-            _ => Self::EachDetection,
+        let mut set = TriggerSet::default();
+        let mut recognised = false;
+        for word in s.split([',', '+', ' ', ';']).filter(|w| !w.is_empty()) {
+            match word.trim().to_lowercase().as_str() {
+                "each" | "detection" => set.each = true,
+                "new-species" | "new_species" => set.new_species = true,
+                "new-species-daily" | "new_species_daily" => set.first_today = true,
+                "off" | "none" | "never" => {}
+                _ => continue,
+            }
+            recognised = true;
+        }
+        if !recognised {
+            return Self::EachDetection;
+        }
+        Self::from_set(set)
+    }
+
+    /// The mode for a set of rules, in its plainest form.
+    #[must_use]
+    pub const fn from_set(set: TriggerSet) -> Self {
+        match (set.each, set.new_species, set.first_today) {
+            (false, false, false) => Self::Off,
+            (true, false, false) => Self::EachDetection,
+            (false, true, false) => Self::NewSpecies,
+            (false, false, true) => Self::NewSpeciesDaily,
+            _ => Self::Several(set),
+        }
+    }
+
+    /// The rules this mode has on.
+    #[must_use]
+    pub const fn rules(&self) -> TriggerSet {
+        match self {
+            Self::EachDetection => TriggerSet {
+                each: true,
+                new_species: false,
+                first_today: false,
+            },
+            Self::NewSpecies => TriggerSet {
+                each: false,
+                new_species: true,
+                first_today: false,
+            },
+            Self::NewSpeciesDaily => TriggerSet {
+                each: false,
+                new_species: false,
+                first_today: true,
+            },
+            Self::Several(set) => *set,
+            Self::Off => TriggerSet {
+                each: false,
+                new_species: false,
+                first_today: false,
+            },
         }
     }
 }
@@ -261,6 +345,20 @@ impl fmt::Display for TriggerMode {
             Self::EachDetection => write!(f, "each"),
             Self::NewSpecies => write!(f, "new-species"),
             Self::NewSpeciesDaily => write!(f, "new-species-daily"),
+            Self::Off => write!(f, "off"),
+            Self::Several(set) => {
+                let mut words = Vec::with_capacity(3);
+                if set.each {
+                    words.push("each");
+                }
+                if set.new_species {
+                    words.push("new-species");
+                }
+                if set.first_today {
+                    words.push("new-species-daily");
+                }
+                write!(f, "{}", words.join(","))
+            }
         }
     }
 }
@@ -398,23 +496,34 @@ impl NotificationFilter {
             return None;
         }
 
-        // Trigger mode check.
-        match self.trigger {
-            TriggerMode::EachDetection => Some("detection".to_owned()),
-            TriggerMode::NewSpecies => {
-                let count = counter.map_or(0, |c| c.this_weeks_count_for(sci_name));
-                // Notify when species has fewer than 5 detections this week.
-                // The current detection has not been inserted yet, so count
-                // represents previous detections.
-                (count < 5)
-                    .then(|| format!("only seen {} times in last 7d", count.saturating_add(1)))
-            }
-            TriggerMode::NewSpeciesDaily => {
-                let count = counter.map_or(0, |c| c.todays_count_for(sci_name));
-                // First detection of the day for this species.
-                (count == 0).then(|| "first time today".to_owned())
+        // Trigger check: every rule that is on gets its say, in BirdNET-Pi's
+        // order (`utils/notifications.py`: each detection, first time today,
+        // then seen N times), and a detection notifies when any of them does.
+        let rules = self.trigger.rules();
+        let mut reasons: Vec<String> = Vec::new();
+        if rules.each {
+            reasons.push("detection".to_owned());
+        }
+        if rules.first_today {
+            let count = counter.map_or(0, |c| c.todays_count_for(sci_name));
+            // First detection of the day for this species.
+            if count == 0 {
+                reasons.push("first time today".to_owned());
             }
         }
+        if rules.new_species {
+            let count = counter.map_or(0, |c| c.this_weeks_count_for(sci_name));
+            // Notify when species has fewer than 5 detections this week.
+            // The current detection has not been inserted yet, so count
+            // represents previous detections.
+            if count < 5 {
+                reasons.push(format!(
+                    "only seen {} times in last 7d",
+                    count.saturating_add(1)
+                ));
+            }
+        }
+        (!reasons.is_empty()).then(|| reasons.join(", "))
     }
 }
 
@@ -710,6 +819,164 @@ mod tests {
             TriggerMode::NewSpeciesDaily
         );
         assert_eq!(TriggerMode::parse("unknown"), TriggerMode::EachDetection);
+    }
+
+    /// A list of rules, in any order and spelling `parse` already took, is the
+    /// same set; each plain spelling still means what it did.
+    #[test]
+    fn trigger_mode_parses_a_list_of_rules() {
+        let both = TriggerMode::Several(TriggerSet {
+            each: false,
+            new_species: true,
+            first_today: true,
+        });
+        assert_eq!(TriggerMode::parse("new-species,new-species-daily"), both);
+        assert_eq!(
+            TriggerMode::parse(" New_Species_Daily , new-species "),
+            both
+        );
+        assert_eq!(TriggerMode::parse("new-species new-species-daily"), both);
+        assert_eq!(
+            TriggerMode::parse("each,new-species,new-species-daily").rules(),
+            TriggerSet {
+                each: true,
+                new_species: true,
+                first_today: true
+            }
+        );
+        // One rule named twice is still one rule, in its plain form.
+        assert_eq!(TriggerMode::parse("each,each"), TriggerMode::EachDetection);
+        // A word that is no rule is skipped among words that are; all unknown
+        // is the old fallback.
+        assert_eq!(
+            TriggerMode::parse("new-species,bogus"),
+            TriggerMode::NewSpecies
+        );
+        assert_eq!(
+            TriggerMode::parse("bogus,worse"),
+            TriggerMode::EachDetection
+        );
+        assert_eq!(TriggerMode::parse(""), TriggerMode::EachDetection);
+    }
+
+    /// `off` is a real answer: `BirdNET-Pi` with all three switches at 0 sends
+    /// nothing, and a migrated station must not start sending.
+    #[test]
+    fn off_is_no_notifications_at_all() {
+        for word in ["off", "none", "never", "OFF"] {
+            assert_eq!(TriggerMode::parse(word), TriggerMode::Off, "{word}");
+        }
+        let f = filter(TriggerMode::Off);
+        assert_eq!(f.notify_reason("Pica pica", "Eurasian Magpie", None), None);
+        assert_eq!(
+            f.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(0, 0))),
+            None,
+            "a first-ever bird is still not announced"
+        );
+    }
+
+    /// What a mode prints is what it parses back to, for every combination.
+    #[test]
+    fn a_mode_survives_being_written_down() {
+        for bits in 0_u8..8 {
+            let set = TriggerSet {
+                each: bits & 1 != 0,
+                new_species: bits & 2 != 0,
+                first_today: bits & 4 != 0,
+            };
+            let mode = TriggerMode::from_set(set);
+            assert_eq!(TriggerMode::parse(&mode.to_string()), mode, "{mode}");
+            assert_eq!(mode.rules(), set);
+        }
+    }
+
+    /// The oracle: `utils/notifications.py`, transcribed. For each of its three
+    /// switches and every count a detection can have, the set of reasons it
+    /// would have sent a message for is the set of reasons this filter gives.
+    ///
+    /// BirdNET-Pi counts **after** the insert (`get_todays_count_for(...)`,
+    /// `get_this_weeks_count_for(...)` include the detection announced), this
+    /// filter is handed the counts **before** it, so the counts differ by one:
+    /// `0 < n <= 1` there is `before == 0` here and `0 < n <= 5` is
+    /// `before < 5`.
+    #[test]
+    fn it_notifies_when_birdnet_pi_would_and_for_the_same_reasons() {
+        fn birdnet_pi(
+            each: bool,
+            new_species: bool,
+            each_day: bool,
+            todays_count: u64,
+            weeks_count: u64,
+        ) -> Vec<String> {
+            let mut reasons = Vec::new();
+            if each {
+                reasons.push("detection".to_owned());
+            }
+            if each_day && 0 < todays_count && todays_count <= 1 {
+                reasons.push("first time today".to_owned());
+            }
+            if new_species && 0 < weeks_count && weeks_count <= 5 {
+                reasons.push(format!("only seen {weeks_count} times in last 7d"));
+            }
+            reasons
+        }
+        for bits in 0_u8..8 {
+            let (each, new_species, each_day) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
+            let mode = TriggerMode::from_set(TriggerSet {
+                each,
+                new_species,
+                first_today: each_day,
+            });
+            let f = filter(mode.clone());
+            for today_before in 0..4_u64 {
+                for week_before in 0..9_u64 {
+                    let expected = birdnet_pi(
+                        each,
+                        new_species,
+                        each_day,
+                        today_before + 1,
+                        week_before + 1,
+                    );
+                    let got = f.notify_reason(
+                        "Pica pica",
+                        "Eurasian Magpie",
+                        Some(&Counts(today_before, week_before)),
+                    );
+                    let expected = (!expected.is_empty()).then(|| expected.join(", "));
+                    assert_eq!(
+                        got, expected,
+                        "mode {mode}, {today_before} earlier today, {week_before} earlier this week"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Two rules in one message: the reasons of every rule that matched, and
+    /// no message when none did.
+    #[test]
+    fn several_rules_send_one_message_with_every_reason() {
+        let f = filter(TriggerMode::parse("new-species,new-species-daily"));
+        assert_eq!(
+            f.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(0, 2)))
+                .as_deref(),
+            Some("first time today, only seen 3 times in last 7d")
+        );
+        assert_eq!(
+            f.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(1, 2)))
+                .as_deref(),
+            Some("only seen 3 times in last 7d")
+        );
+        assert_eq!(
+            f.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(0, 9)))
+                .as_deref(),
+            Some("first time today")
+        );
+        assert_eq!(
+            f.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(3, 9))),
+            None,
+            "a resident heard for the third time today matches neither rule"
+        );
     }
 
     #[test]

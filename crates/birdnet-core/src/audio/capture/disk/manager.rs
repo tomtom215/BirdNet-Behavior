@@ -123,6 +123,10 @@ pub struct DiskManagerConfig {
     /// Keep a share of the raw segments the age drain removes (R-4); `None`
     /// keeps nothing. Only meaningful on the transient stream directory.
     pub raw_keep: Option<RawKeep>,
+    /// Where to publish that recording is on hold because the disk is full and
+    /// [`FullDiskAction::Keep`] was chosen; `None` publishes nowhere. The
+    /// capture supervisor reads it and stops its sources while it is set.
+    pub hold_flag: Option<Arc<AtomicBool>>,
 }
 
 impl Default for DiskManagerConfig {
@@ -143,8 +147,22 @@ impl Default for DiskManagerConfig {
                 floor: DEFAULT_PURGE_SPECIES_FLOOR,
             },
             raw_keep: None,
+            hold_flag: None,
         }
     }
+}
+
+/// How far below the threshold usage must fall before a held recording
+/// resumes, in percentage points.
+///
+/// Without a margin a disk sitting at the threshold would stop and restart
+/// capture every cycle as one clip lands and the next is not written.
+pub const HOLD_RESUME_MARGIN_PERCENT: f64 = 2.0;
+
+/// Whether `percent` used is far enough below `threshold` for a held recording
+/// to resume (see [`HOLD_RESUME_MARGIN_PERCENT`]).
+fn clear_of_threshold(percent: f64, threshold: f64) -> bool {
+    percent < threshold - HOLD_RESUME_MARGIN_PERCENT
 }
 
 /// Whether a purge pass is worth running, from what the last one achieved
@@ -213,6 +231,7 @@ impl std::fmt::Debug for DiskManagerConfig {
             .field("ineffective_flag", &self.ineffective_flag.is_some())
             .field("purge_policy", &self.purge_policy)
             .field("raw_keep", &self.raw_keep)
+            .field("hold_flag", &self.hold_flag.is_some())
             .finish()
     }
 }
@@ -260,9 +279,11 @@ impl DiskManager {
     ///
     /// # Errors
     ///
-    /// Returns [`CaptureError`] if disk usage cannot be determined, or if the
-    /// action is `Keep` and the threshold is exceeded (signals the caller to
-    /// stop recording).
+    /// Returns [`CaptureError`] if disk usage cannot be determined.
+    ///
+    /// With [`FullDiskAction::Keep`] over the threshold this deletes nothing
+    /// and returns `Ok(0)`; the hold is signalled through
+    /// [`DiskManagerConfig::hold_flag`], which the capture supervisor reads.
     pub fn check_and_purge(&self) -> Result<u32, CaptureError> {
         let usage = disk_usage(&self.config.monitored_dir)?;
         let percent = usage.used_percent();
@@ -281,6 +302,11 @@ impl DiskManager {
                 g.should_purge(percent, threshold);
             }
             self.publish_ineffective(false);
+            // A held recording resumes only once usage is clear of the
+            // threshold by a margin (see `HOLD_RESUME_MARGIN_PERCENT`).
+            if clear_of_threshold(percent, threshold) {
+                self.release_hold(percent);
+            }
             return Ok(0);
         }
 
@@ -291,9 +317,15 @@ impl DiskManager {
         );
 
         match self.config.full_disk_action {
-            FullDiskAction::Keep => Err(CaptureError::Config(
-                "disk full: stopping recording (full_disk_action=Keep)".into(),
-            )),
+            FullDiskAction::Keep => {
+                // BirdNET-Pi's `FULL_DISK=keep`: delete nothing and stop
+                // recording (`disk_check.sh` ran `stop_core_services.sh`).
+                // The deletion arms below are not reached, which is the whole
+                // promise of the setting: whatever else happens to the disk,
+                // no clip is removed because it is full.
+                self.hold_recording(percent);
+                Ok(0)
+            }
             FullDiskAction::Purge => {
                 // PR-7: a pass that removed recordings and moved usage by
                 // nothing proved the space is elsewhere; deleting more finds
@@ -360,6 +392,44 @@ impl DiskManager {
                 }
                 Ok(removed)
             }
+        }
+    }
+
+    /// Stop recording until the disk has room again. Says so once per hold,
+    /// loudly, because a station that has stopped listening must not be able
+    /// to do it quietly.
+    fn hold_recording(&self, percent: f64) {
+        let Some(flag) = &self.config.hold_flag else {
+            tracing::error!(
+                used_pct = format!("{percent:.1}"),
+                dir = %self.config.monitored_dir.display(),
+                "disk is over the threshold and the station is set to keep everything, but \
+                 nothing here can stop the recording; no clip was deleted"
+            );
+            return;
+        };
+        if !flag.swap(true, Ordering::Relaxed) {
+            tracing::error!(
+                used_pct = format!("{percent:.1}"),
+                threshold = self.config.purge_threshold,
+                dir = %self.config.monitored_dir.display(),
+                "disk is full and the station is set to keep everything: recording is on \
+                 hold and no clip will be deleted. Free space or raise the threshold and \
+                 recording resumes by itself"
+            );
+        }
+    }
+
+    /// Let a held recording resume.
+    fn release_hold(&self, percent: f64) {
+        if let Some(flag) = &self.config.hold_flag
+            && flag.swap(false, Ordering::Relaxed)
+        {
+            tracing::warn!(
+                used_pct = format!("{percent:.1}"),
+                dir = %self.config.monitored_dir.display(),
+                "the disk has room again: recording resumes"
+            );
         }
     }
 
@@ -841,6 +911,118 @@ mod tests {
     fn full_disk_action_equality() {
         assert_eq!(FullDiskAction::Purge, FullDiskAction::Purge);
         assert_ne!(FullDiskAction::Purge, FullDiskAction::Keep);
+    }
+
+    /// A directory of flat clips named as the extractor names them.
+    fn clips(dir: &std::path::Path, n: u32) -> Vec<PathBuf> {
+        (0..n)
+            .map(|i| {
+                let p = dir.join(format!(
+                    "Eurasian_Robin-85-2026-03-01-birdnet-06:00:{i:02}.wav"
+                ));
+                std::fs::write(&p, create_minimal_wav_header()).expect("write clip");
+                filetime::set_file_mtime(
+                    &p,
+                    filetime::FileTime::from_unix_time(1_000_000 + i64::from(i), 0),
+                )
+                .expect("mtime");
+                p
+            })
+            .collect()
+    }
+
+    /// A disk that is always over its threshold: 0 % is below any real usage.
+    fn always_full(
+        dir: &std::path::Path,
+        action: FullDiskAction,
+        hold_flag: Option<Arc<AtomicBool>>,
+    ) -> DiskManager {
+        DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.to_path_buf(),
+            purge_threshold: 0,
+            full_disk_action: action,
+            purge_policy: PurgePolicy::OldestFirst,
+            hold_flag,
+            ..DiskManagerConfig::default()
+        })
+    }
+
+    /// `FULL_DISK=keep`: the disk is full, and not one clip is removed for it.
+    #[test]
+    fn keep_deletes_no_clip_however_full_the_disk_is() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = clips(dir.path(), 12);
+        let hold = Arc::new(AtomicBool::new(false));
+        let manager = always_full(dir.path(), FullDiskAction::Keep, Some(Arc::clone(&hold)));
+
+        for _ in 0..3 {
+            assert!(manager.run_cycle());
+        }
+        assert!(
+            files.iter().all(|f| f.exists()),
+            "a station set to keep everything lost a clip to a full disk"
+        );
+        assert!(
+            hold.load(Ordering::Relaxed),
+            "recording must be held when the disk is full and nothing is deleted"
+        );
+    }
+
+    /// The counterpart that makes the one above mean something: the same
+    /// files, the same full disk, and `Purge` removes clips. Without it
+    /// "nothing was deleted" could be the fixture finding nothing to delete.
+    #[test]
+    fn purge_on_the_same_full_disk_does_delete_clips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = clips(dir.path(), 12);
+        let hold = Arc::new(AtomicBool::new(false));
+        let manager = always_full(dir.path(), FullDiskAction::Purge, Some(Arc::clone(&hold)));
+
+        assert!(manager.run_cycle());
+        let left = files.iter().filter(|f| f.exists()).count();
+        assert!(left < 12, "the purge removed nothing from a full disk");
+        assert!(
+            !hold.load(Ordering::Relaxed),
+            "a purging station never holds its recording"
+        );
+    }
+
+    /// Keep with no flag to raise (a caller that cannot stop recording) still
+    /// deletes nothing: the promise does not depend on the signal.
+    #[test]
+    fn keep_without_a_hold_flag_still_deletes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = clips(dir.path(), 5);
+        let manager = always_full(dir.path(), FullDiskAction::Keep, None);
+        assert!(manager.run_cycle());
+        assert!(files.iter().all(|f| f.exists()));
+    }
+
+    /// A hold is lifted once the disk is clear of the threshold, not at the
+    /// first reading under it.
+    #[test]
+    fn a_hold_lifts_only_clear_of_the_threshold() {
+        assert!(!clear_of_threshold(95.0, 95.0));
+        assert!(!clear_of_threshold(94.9, 95.0));
+        assert!(
+            !clear_of_threshold(93.0, 95.0),
+            "exactly the margin is not clear"
+        );
+        assert!(clear_of_threshold(92.9, 95.0));
+
+        // End to end on a real disk: a threshold of 100 is far above any
+        // reading, so a hold left over from before is lifted.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hold = Arc::new(AtomicBool::new(true));
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            purge_threshold: 100,
+            full_disk_action: FullDiskAction::Keep,
+            hold_flag: Some(Arc::clone(&hold)),
+            ..DiskManagerConfig::default()
+        });
+        manager.check_and_purge().expect("check");
+        assert!(!hold.load(Ordering::Relaxed), "recording should resume");
     }
 
     #[test]

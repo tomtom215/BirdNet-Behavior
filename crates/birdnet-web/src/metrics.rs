@@ -261,6 +261,11 @@ pub struct MetricsRegistry {
     /// usage by nothing (PR-7): the card is full of something the purge
     /// cannot reach, and it has stopped deleting. Shared with the manager.
     purge_ineffective: Arc<AtomicBool>,
+    /// Set by the recordings disk manager when the disk is full and the station
+    /// is set to keep everything (`FULL_DISK=keep`): recording is on hold and
+    /// no clip is deleted. Shared with the manager, read by the capture
+    /// supervisor.
+    recording_held: Arc<AtomicBool>,
     /// HTTP responses served, by status class (`2xx`, `4xx`, …).
     http_responses: RwLock<HashMap<String, AtomicU64>>,
     /// Web request latency.
@@ -308,6 +313,7 @@ impl MetricsRegistry {
             analytics_mirror_last_failure: AtomicU64::new(0),
             analytics_mirror_last_error: RwLock::new(None),
             purge_ineffective: Arc::new(AtomicBool::new(false)),
+            recording_held: Arc::new(AtomicBool::new(false)),
             http_responses: RwLock::new(HashMap::new()),
             http_duration: Histogram::new(),
         }
@@ -469,6 +475,20 @@ impl MetricsRegistry {
     #[must_use]
     pub fn purge_ineffective(&self) -> bool {
         self.purge_ineffective.load(Ordering::Relaxed)
+    }
+
+    /// The flag the recordings disk manager raises when the disk is full and
+    /// the station keeps everything (`FULL_DISK=keep`), and the capture
+    /// supervisor honours by not recording.
+    #[must_use]
+    pub fn recording_held_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.recording_held)
+    }
+
+    /// Whether recording is on hold because the disk is full.
+    #[must_use]
+    pub fn recording_held(&self) -> bool {
+        self.recording_held.load(Ordering::Relaxed)
     }
 
     /// Record a detection the DuckDB copy refused (OP-7).
@@ -801,6 +821,7 @@ impl MetricsRegistry {
             orphaned_clips: self.orphaned_clips(),
             analytics_mirror_failures: self.analytics_mirror_failures(),
             purge_ineffective: self.purge_ineffective(),
+            recording_held: self.recording_held(),
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
@@ -892,6 +913,9 @@ pub struct MetricsSnapshot {
     pub analytics_mirror_failures: u64,
     /// Whether the last disk purge removed recordings without lowering usage.
     pub purge_ineffective: bool,
+    /// Whether recording is on hold because the disk is full and the station
+    /// keeps everything.
+    pub recording_held: bool,
     /// HTTP responses by status class.
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
@@ -1193,6 +1217,14 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         out,
         "birdnet_purge_ineffective {}",
         u8::from(snap.purge_ineffective)
+    );
+
+    out.push_str("# HELP birdnet_recording_held 1 when the disk is full and the station is set to keep everything (FULL_DISK=keep): recording is on hold and no clip is being deleted.\n");
+    out.push_str("# TYPE birdnet_recording_held gauge\n");
+    let _ = writeln!(
+        out,
+        "birdnet_recording_held {}",
+        u8::from(snap.recording_held)
     );
 
     out.push_str("# HELP birdnet_analytics_mirror_failures_total Detections the database accepted and the DuckDB analytics copy refused since process start.\n");
