@@ -1222,13 +1222,18 @@ fn add_source(conn: &rusqlite::Connection, kind: SourceKind, device: &str, label
 async fn mic_test(Form(form): Form<MicTestForm>) -> Response {
     let device = form.device.trim().to_owned();
     let outcome = tokio::task::spawn_blocking(move || {
-        let listed = birdnet_core::audio::capture::alsa::list_capture_devices()
-            .iter()
-            .any(|d| d.spec() == device);
-        if !listed {
+        // What is recorded from is the card the station itself listed, never the
+        // text the form sent: the lookup is the allow-list, and what leaves it is
+        // the station's own spelling of the device.
+        let Some(card) = listed_card(
+            birdnet_core::audio::capture::alsa::list_capture_devices()
+                .iter()
+                .map(birdnet_core::audio::capture::alsa::CaptureDevice::spec),
+            &device,
+        ) else {
             return Err("That sound card is not listed any more. Press Look again.".to_owned());
-        }
-        birdnet_core::audio::capture::probe::measure_level(&device).map_err(|e| e.to_string())
+        };
+        birdnet_core::audio::capture::probe::measure_level(&card).map_err(|e| e.to_string())
     })
     .await;
     let body = match outcome {
@@ -1245,6 +1250,15 @@ async fn mic_test(Form(form): Form<MicTestForm>) -> Response {
         }
     };
     ([(header::CACHE_CONTROL, "no-store")], axum::Json(body)).into_response()
+}
+
+/// The entry of `listed` (the station's own device specs) that equals `wanted`.
+///
+/// Returns the listed spelling, not `wanted`: the two compare equal, but only the
+/// first was produced by this station from `/proc/asound`, so it is the one that is
+/// handed to `arecord`.
+fn listed_card(listed: impl IntoIterator<Item = String>, wanted: &str) -> Option<String> {
+    listed.into_iter().find(|spec| spec == wanted)
 }
 
 /// The form the microphone test posts.
@@ -2234,6 +2248,43 @@ static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The microphone test records only from a card the station listed: a device
+    /// string that is not in the list is refused (nothing reaches `arecord`), one
+    /// that is in the list is returned as the list spelled it.
+    #[test]
+    fn the_microphone_test_takes_only_a_listed_card() {
+        let listed = || {
+            [
+                "plughw:CARD=Device,DEV=0".to_owned(),
+                "plughw:CARD=Mic,DEV=0".to_owned(),
+            ]
+        };
+        assert_eq!(
+            listed_card(listed(), "plughw:CARD=Mic,DEV=0").as_deref(),
+            Some("plughw:CARD=Mic,DEV=0"),
+            "a listed card still works"
+        );
+        for refused in [
+            "plughw:CARD=Nope,DEV=0",
+            "plughw:CARD=Mic,DEV=0 ",
+            "-D",
+            "/dev/null",
+            "plughw:CARD=Mic,DEV=0;reboot",
+            "",
+        ] {
+            assert_eq!(
+                listed_card(listed(), refused),
+                None,
+                "{refused:?} is not in the list and must be refused"
+            );
+        }
+        assert_eq!(
+            listed_card(std::iter::empty::<String>(), "plughw:CARD=Mic,DEV=0"),
+            None,
+            "with no sound card at all nothing is testable"
+        );
+    }
 
     /// Both of the wizard's style blocks (the steps, and the done page) carry
     /// their own rules, because neither loads the app stylesheet. A link inside
