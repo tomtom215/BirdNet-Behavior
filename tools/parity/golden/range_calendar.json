@@ -1,0 +1,909 @@
+{
+ "sf_thresh": 0.03,
+ "stations": {
+  "London": [
+   51.48,
+   -0.13
+  ],
+  "Ithaca": [
+   42.48,
+   -76.45
+  ],
+  "Helsinki": [
+   60.2,
+   24.9
+  ],
+  "Sydney": [
+   -33.87,
+   151.21
+  ],
+  "Sao_Paulo": [
+   -23.55,
+   -46.63
+  ],
+  "Nairobi": [
+   -1.29,
+   36.82
+  ],
+  "Hokkaido": [
+   43.06,
+   141.35
+  ],
+  "Austin": [
+   30.27,
+   -97.74
+  ]
+ },
+ "years": {
+  "2024": {
+   "London": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 305,
+     "mean_species": 16.54,
+     "max_species": 123
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 35.23,
+     "max_species": 62
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 37.88,
+     "max_species": 85
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 341,
+     "mean_species": 8.06,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 29.81,
+     "max_species": 47
+    },
+    "list_size_pi_default": [
+     101,
+     202
+    ],
+    "list_size_ours": [
+     128,
+     154
+    ]
+   },
+   "Ithaca": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 310,
+     "mean_species": 29.08,
+     "max_species": 185
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 28.11,
+     "max_species": 57
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 40.04,
+     "max_species": 132
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 266,
+     "mean_species": 12.57,
+     "max_species": 131
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 27.47,
+     "max_species": 71
+    },
+    "list_size_pi_default": [
+     51,
+     199
+    ],
+    "list_size_ours": [
+     64,
+     157
+    ]
+   },
+   "Helsinki": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 300,
+     "mean_species": 19.36,
+     "max_species": 120
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 17.32,
+     "max_species": 35
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 28.97,
+     "max_species": 120
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 365,
+     "mean_species": 18.2,
+     "max_species": 120
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 338,
+     "mean_species": 10.77,
+     "max_species": 60
+    },
+    "list_size_pi_default": [
+     157,
+     277
+    ],
+    "list_size_ours": [
+     154,
+     240
+    ]
+   },
+   "Sydney": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 235,
+     "mean_species": 4.75,
+     "max_species": 37
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 50.69,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 47.84,
+     "max_species": 57
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 344,
+     "mean_species": 1.53,
+     "max_species": 3
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 46.31,
+     "max_species": 56
+    },
+    "list_size_pi_default": [
+     91,
+     119
+    ],
+    "list_size_ours": [
+     141,
+     160
+    ]
+   },
+   "Sao_Paulo": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 307,
+     "mean_species": 17.38,
+     "max_species": 134
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 140.68,
+     "max_species": 188
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 142.34,
+     "max_species": 196
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 366,
+     "mean_species": 10.61,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 131.72,
+     "max_species": 190
+    },
+    "list_size_pi_default": [
+     307,
+     547
+    ],
+    "list_size_ours": [
+     485,
+     526
+    ]
+   },
+   "Nairobi": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 310,
+     "mean_species": 9.96,
+     "max_species": 52
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 122.13,
+     "max_species": 153
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 118.47,
+     "max_species": 129
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 364,
+     "mean_species": 1.81,
+     "max_species": 7
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 116.66,
+     "max_species": 127
+    },
+    "list_size_pi_default": [
+     341,
+     377
+    ],
+    "list_size_ours": [
+     445,
+     491
+    ]
+   },
+   "Hokkaido": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 293,
+     "mean_species": 8.63,
+     "max_species": 58
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 46.51,
+     "max_species": 53
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 48.45,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 366,
+     "mean_species": 34.85,
+     "max_species": 70
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 13.6,
+     "max_species": 26
+    },
+    "list_size_pi_default": [
+     312,
+     368
+    ],
+    "list_size_ours": [
+     302,
+     334
+    ]
+   },
+   "Austin": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 310,
+     "mean_species": 21.59,
+     "max_species": 127
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 37.02,
+     "max_species": 48
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 45.32,
+     "max_species": 112
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 349,
+     "mean_species": 14.14,
+     "max_species": 105
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 31.18,
+     "max_species": 48
+    },
+    "list_size_pi_default": [
+     93,
+     241
+    ],
+    "list_size_ours": [
+     108,
+     163
+    ]
+   }
+  },
+  "2026": {
+   "London": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 335,
+     "mean_species": 19.02,
+     "max_species": 123
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 35.48,
+     "max_species": 62
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 38.73,
+     "max_species": 85
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 342,
+     "mean_species": 9.05,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 29.67,
+     "max_species": 47
+    },
+    "list_size_pi_default": [
+     101,
+     202
+    ],
+    "list_size_ours": [
+     128,
+     154
+    ]
+   },
+   "Ithaca": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 332,
+     "mean_species": 33.12,
+     "max_species": 185
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 28.63,
+     "max_species": 57
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 42.14,
+     "max_species": 132
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 271,
+     "mean_species": 14.43,
+     "max_species": 131
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 27.71,
+     "max_species": 71
+    },
+    "list_size_pi_default": [
+     51,
+     199
+    ],
+    "list_size_ours": [
+     64,
+     157
+    ]
+   },
+   "Helsinki": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 326,
+     "mean_species": 22.18,
+     "max_species": 120
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 17.44,
+     "max_species": 35
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 31.01,
+     "max_species": 120
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 362,
+     "mean_species": 19.85,
+     "max_species": 120
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 333,
+     "mean_species": 11.16,
+     "max_species": 60
+    },
+    "list_size_pi_default": [
+     157,
+     277
+    ],
+    "list_size_ours": [
+     154,
+     240
+    ]
+   },
+   "Sydney": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 254,
+     "mean_species": 5.4,
+     "max_species": 39
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 51.07,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 47.88,
+     "max_species": 57
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 350,
+     "mean_species": 1.56,
+     "max_species": 3
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 46.32,
+     "max_species": 56
+    },
+    "list_size_pi_default": [
+     91,
+     119
+    ],
+    "list_size_ours": [
+     141,
+     160
+    ]
+   },
+   "Sao_Paulo": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 335,
+     "mean_species": 19.81,
+     "max_species": 134
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 140.1,
+     "max_species": 188
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 141.99,
+     "max_species": 199
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 365,
+     "mean_species": 11.4,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 130.59,
+     "max_species": 193
+    },
+    "list_size_pi_default": [
+     307,
+     547
+    ],
+    "list_size_ours": [
+     485,
+     526
+    ]
+   },
+   "Nairobi": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 341,
+     "mean_species": 11.42,
+     "max_species": 52
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 122.53,
+     "max_species": 153
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 118.44,
+     "max_species": 129
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 361,
+     "mean_species": 1.84,
+     "max_species": 7
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 116.6,
+     "max_species": 127
+    },
+    "list_size_pi_default": [
+     341,
+     377
+    ],
+    "list_size_ours": [
+     445,
+     491
+    ]
+   },
+   "Hokkaido": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 322,
+     "mean_species": 9.94,
+     "max_species": 58
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 46.6,
+     "max_species": 53
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 48.89,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 365,
+     "mean_species": 35.4,
+     "max_species": 70
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 13.49,
+     "max_species": 26
+    },
+    "list_size_pi_default": [
+     312,
+     368
+    ],
+    "list_size_ours": [
+     302,
+     334
+    ]
+   },
+   "Austin": {
+    "days": 365,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 341,
+     "mean_species": 24.76,
+     "max_species": 128
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 365,
+     "mean_species": 37.03,
+     "max_species": 48
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 365,
+     "mean_species": 46.82,
+     "max_species": 115
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 351,
+     "mean_species": 15.67,
+     "max_species": 107
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 365,
+     "mean_species": 31.15,
+     "max_species": 51
+    },
+    "list_size_pi_default": [
+     93,
+     241
+    ],
+    "list_size_ours": [
+     108,
+     163
+    ]
+   }
+  },
+  "2028": {
+   "London": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 287,
+     "mean_species": 16.17,
+     "max_species": 123
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 35.36,
+     "max_species": 62
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 37.9,
+     "max_species": 88
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 339,
+     "mean_species": 8.35,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 29.55,
+     "max_species": 46
+    },
+    "list_size_pi_default": [
+     101,
+     202
+    ],
+    "list_size_ours": [
+     128,
+     154
+    ]
+   },
+   "Ithaca": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 286,
+     "mean_species": 28.14,
+     "max_species": 190
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 28.35,
+     "max_species": 57
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 40.03,
+     "max_species": 137
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 264,
+     "mean_species": 12.96,
+     "max_species": 136
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 27.07,
+     "max_species": 67
+    },
+    "list_size_pi_default": [
+     51,
+     199
+    ],
+    "list_size_ours": [
+     64,
+     157
+    ]
+   },
+   "Helsinki": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 284,
+     "mean_species": 18.6,
+     "max_species": 120
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 17.37,
+     "max_species": 35
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 28.9,
+     "max_species": 120
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 366,
+     "mean_species": 18.48,
+     "max_species": 120
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 336,
+     "mean_species": 10.42,
+     "max_species": 49
+    },
+    "list_size_pi_default": [
+     157,
+     277
+    ],
+    "list_size_ours": [
+     154,
+     240
+    ]
+   },
+   "Sydney": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 219,
+     "mean_species": 4.69,
+     "max_species": 37
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 50.87,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 47.8,
+     "max_species": 57
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 344,
+     "mean_species": 1.52,
+     "max_species": 3
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 46.29,
+     "max_species": 56
+    },
+    "list_size_pi_default": [
+     91,
+     119
+    ],
+    "list_size_ours": [
+     141,
+     160
+    ]
+   },
+   "Sao_Paulo": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 289,
+     "mean_species": 17.18,
+     "max_species": 134
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 140.38,
+     "max_species": 188
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 142.06,
+     "max_species": 196
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 366,
+     "mean_species": 10.95,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 131.11,
+     "max_species": 190
+    },
+    "list_size_pi_default": [
+     307,
+     547
+    ],
+    "list_size_ours": [
+     485,
+     526
+    ]
+   },
+   "Nairobi": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 292,
+     "mean_species": 9.46,
+     "max_species": 52
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 122.32,
+     "max_species": 153
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 118.42,
+     "max_species": 129
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 366,
+     "mean_species": 1.8,
+     "max_species": 7
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 116.61,
+     "max_species": 127
+    },
+    "list_size_pi_default": [
+     341,
+     377
+    ],
+    "list_size_ours": [
+     445,
+     491
+    ]
+   },
+   "Hokkaido": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 275,
+     "mean_species": 8.34,
+     "max_species": 58
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 46.55,
+     "max_species": 53
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 48.54,
+     "max_species": 76
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 366,
+     "mean_species": 35.04,
+     "max_species": 70
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 13.5,
+     "max_species": 26
+    },
+    "list_size_pi_default": [
+     312,
+     368
+    ],
+    "list_size_ours": [
+     302,
+     334
+    ]
+   },
+   "Austin": {
+    "days": 366,
+    "calendar_only__pi_v2_iso_vs_ours": {
+     "days_differ": 292,
+     "mean_species": 20.56,
+     "max_species": 128
+    },
+    "model_version_only__pi_v1_vs_pi_v2_at_iso_week": {
+     "days_differ": 366,
+     "mean_species": 37.03,
+     "max_species": 48
+    },
+    "pi_default_vs_ours__symmetric_difference": {
+     "days_differ": 366,
+     "mean_species": 45.02,
+     "max_species": 113
+    },
+    "pi_default_vs_ours__admitted_by_pi_only": {
+     "days_differ": 351,
+     "mean_species": 14.37,
+     "max_species": 106
+    },
+    "pi_default_vs_ours__admitted_by_ours_only": {
+     "days_differ": 366,
+     "mean_species": 30.65,
+     "max_species": 46
+    },
+    "list_size_pi_default": [
+     93,
+     241
+    ],
+    "list_size_ours": [
+     108,
+     163
+    ]
+   }
+  }
+ }
+}
