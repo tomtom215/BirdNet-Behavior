@@ -226,6 +226,7 @@ fn config_for(addr: &str, ca_file: Option<&Path>) -> MqttConfig {
             // `localhost`, which is exactly the home-LAN-without-DNS shape
             // `server_name` exists for.
             server_name: Some("localhost".to_string()),
+            ..TlsConfig::default()
         }),
         ..MqttConfig::default()
     }

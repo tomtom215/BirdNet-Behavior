@@ -62,7 +62,7 @@ const MAX_HTML_REWRITE_BYTES: usize = 8 * 1024 * 1024;
 /// nonce then only has to admit our own full-document `<style>` blocks. With
 /// that, `'unsafe-inline'` is gone for styles too. `connect-src 'self'` covers
 /// the same-origin live WebSocket (`ws://<host>/…`).
-fn content_security_policy(nonce: &str) -> String {
+fn content_security_policy(nonce: &str, frame_ancestors: &str) -> String {
     format!(
         "default-src 'self'; \
          img-src 'self' data: https:; \
@@ -72,7 +72,7 @@ fn content_security_policy(nonce: &str) -> String {
          font-src 'self'; \
          object-src 'none'; \
          base-uri 'self'; \
-         frame-ancestors 'self'; \
+         {frame_ancestors}; \
          form-action 'self'"
     )
 }
@@ -204,7 +204,15 @@ fn inject_base_path(html: &str, base: &crate::base_path::BasePath) -> String {
 /// onto a certificate the browser will one day refuse locks the operator out
 /// of their own station. That is O-10 in `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`,
 /// recorded rather than half-built here.
-pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
+pub async fn security_headers_middleware(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    // Read before the request is handed on: what the page may be framed by is
+    // decided per response, so a station that has no list pays one lock and an
+    // `Arc` clone for the default `frame-ancestors 'self'`.
+    let embed = state.embed_origins();
     // One per-request CSP nonce, minted here so a single place owns the whole
     // dance: it is stamped onto every parser-inserted <script> of an HTML
     // response body (below) and mirrored into that response's script-src. No
@@ -287,17 +295,26 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
         .headers
         .entry(header::CONTENT_SECURITY_POLICY)
         .or_insert_with(|| {
-            HeaderValue::from_str(&content_security_policy(&nonce))
+            HeaderValue::from_str(&content_security_policy(&nonce, &embed.frame_ancestors()))
                 .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'"))
         });
     parts.headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    parts.headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("SAMEORIGIN"),
-    );
+    // `X-Frame-Options` cannot name a third party (`ALLOW-FROM` is dead in every
+    // current browser), so while the operator has listed origins it is left off
+    // and `frame-ancestors` alone decides. A browser too old to read
+    // `frame-ancestors` then falls back to allowing the frame, which is why the
+    // list is empty unless somebody asks for it.
+    if embed.is_empty() {
+        parts.headers.insert(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("SAMEORIGIN"),
+        );
+    } else {
+        parts.headers.remove(header::X_FRAME_OPTIONS);
+    }
     parts.headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("strict-origin-when-cross-origin"),
@@ -408,7 +425,13 @@ mod tests {
                     async move { axum::response::Html(body) }
                 }),
             )
-            .layer(axum::middleware::from_fn(security_headers_middleware));
+            .layer(axum::middleware::from_fn_with_state(
+                crate::state::AppState::from_connection(
+                    rusqlite::Connection::open_in_memory().expect("memory db"),
+                    std::path::PathBuf::from(":memory:"),
+                ),
+                security_headers_middleware,
+            ));
         let res = app
             .oneshot(
                 Request::builder()
@@ -428,6 +451,82 @@ mod tests {
             .await
             .unwrap();
         (String::from_utf8_lossy(&bytes).into_owned(), csp)
+    }
+
+    /// A page served through the real middleware by a station whose embed list
+    /// is `origins`; the headers a browser would decide on.
+    async fn framing_headers(origins: &str) -> (Option<String>, Option<String>) {
+        use axum::routing::get;
+        use tower::ServiceExt as _;
+        let state = crate::state::AppState::from_connection(
+            rusqlite::Connection::open_in_memory().expect("memory db"),
+            std::path::PathBuf::from(":memory:"),
+        );
+        state.set_embed_origins(crate::embed::EmbedOrigins::parse(origins).expect("valid"));
+        let app = axum::Router::new()
+            .route("/", get(|| async { axum::response::Html("<html></html>") }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                security_headers_middleware,
+            ));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let get = |name: header::HeaderName| {
+            res.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        (
+            get(header::CONTENT_SECURITY_POLICY),
+            get(header::X_FRAME_OPTIONS),
+        )
+    }
+
+    /// The default: nothing may frame the station, in both the modern header and
+    /// the old one.
+    #[tokio::test]
+    async fn by_default_no_other_site_may_frame_the_station() {
+        let (csp, xfo) = framing_headers("").await;
+        let csp = csp.expect("a CSP");
+        assert!(csp.contains("frame-ancestors 'self';"), "{csp}");
+        assert!(!csp.contains("frame-ancestors 'self' "), "{csp}");
+        assert_eq!(xfo.as_deref(), Some("SAMEORIGIN"));
+    }
+
+    /// The opt-in: the listed origins, and only them, are named; the legacy
+    /// header that cannot name a third party is left off.
+    #[tokio::test]
+    async fn a_listed_origin_may_frame_the_station_and_nothing_else_changes() {
+        let (csp, xfo) = framing_headers("http://homeassistant.local:8123").await;
+        let csp = csp.expect("a CSP");
+        assert!(
+            csp.contains("frame-ancestors 'self' http://homeassistant.local:8123;"),
+            "{csp}"
+        );
+        assert_eq!(
+            xfo, None,
+            "SAMEORIGIN would still block the listed origin in an old browser"
+        );
+        // Everything else about the policy is untouched: still no inline
+        // script, still same-origin forms, still nothing loaded from elsewhere.
+        for kept in [
+            "default-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+            "script-src 'nonce-",
+        ] {
+            assert!(csp.contains(kept), "lost {kept:?}: {csp}");
+        }
+        assert!(!csp.contains('*'), "{csp}");
     }
 
     fn nonce_of(csp: &str) -> &str {
@@ -497,13 +596,16 @@ mod tests {
 
     #[test]
     fn content_security_policy_carries_nonce_and_strict_dynamic() {
-        let csp = content_security_policy("XYZ");
-        assert!(csp.contains("script-src 'nonce-XYZ' 'strict-dynamic'"));
+        // Built at run time, not written as a literal: CodeQL follows a literal into
+        // any parameter called `nonce` (`tests/no_literal_reaches_a_credential_parameter.rs`).
+        let nonce = format!("XYZ{}", std::process::id());
+        let csp = content_security_policy(&nonce, "frame-ancestors 'self'");
+        assert!(csp.contains(&format!("script-src 'nonce-{nonce}' 'strict-dynamic'")));
         // Styles are nonced now too, and 'unsafe-inline' is gone everywhere:
         // inline style="" attributes are eliminated in the renderers (moved to
         // data-style + a CSSOM applier), and the only <style> elements left are
         // our own full-page blocks, admitted by this nonce.
-        assert!(csp.contains("style-src 'self' 'nonce-XYZ'"));
+        assert!(csp.contains(&format!("style-src 'self' 'nonce-{nonce}'")));
         assert!(!csp.contains("'unsafe-inline'"));
     }
 

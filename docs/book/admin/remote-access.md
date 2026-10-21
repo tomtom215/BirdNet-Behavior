@@ -256,6 +256,42 @@ BIRDNET_CORS_ALLOWED_ORIGINS=https://dashboard.example.com
 
 List origins by name; `*` is not supported. The station logs an error, ignores that entry and keeps the others, because a wildcard would let any website read the API. State-changing requests are protected by a CSRF guard regardless of this setting.
 
+## Embedding the station in another page
+
+By default no other website can show the station inside a frame: every page
+carries `Content-Security-Policy: frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN`. That is the right default for a page with an
+admin sign-in behind it, because a site that can frame the station can lay
+invisible controls over it to trick a visitor into clicking (clickjacking). It
+also means a Home Assistant card or a Grafana panel cannot show the live view.
+
+To allow it, name the places that may, in `birdnet.conf` or under **Settings →
+Online services**:
+
+```text
+EMBED_ORIGINS=http://homeassistant.local:8123, https://abcd1234.ui.nabu.casa
+```
+
+- Each entry is a full origin, `http` or `https`, host and optional port, no
+  path. `https://*.ui.nabu.casa` covers every subdomain of a domain you name.
+- There is **no way to allow every site**. A bare `*`, a scheme alone and a
+  wildcard over a whole top-level domain (`https://*.com`) are refused.
+  tphakala/birdnet-go's `allowembedding` is a switch for all sites at once; here
+  you list the sites, because everyone who asks for this knows where they are
+  embedding from.
+- One entry the station cannot read refuses the **whole** list, and then no site
+  may embed; the journal and `--doctor` say which entry. Dropping just the bad
+  one would silently narrow what you typed.
+- With a list set, `X-Frame-Options` is left off (it cannot name a third party)
+  and `frame-ancestors` alone decides: `'self'` plus your origins. Nothing else
+  in the policy changes.
+- Applies after a restart.
+
+What you get in the frame is the station as an anonymous visitor sees it. The
+sign-in cookie is `SameSite=Lax`, which a browser does not send from inside a
+frame on another site, so signing in does not carry into the frame — the same
+rule that stops the page framing the station from using your session.
+
 ## A safer alternative: a private tunnel
 
 For remote access without opening any ports, a mesh VPN like **Tailscale** or **WireGuard** is the easiest secure option: install it on the Pi and your phone/laptop, and reach `http://<tailscale-ip>:8502` as if you were on the same LAN — encrypted, no public exposure, no certificates to manage.

@@ -42,7 +42,6 @@ use birdnet_core::config::redact::REDACTED;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::routes::admin::settings::form::SETTINGS_FORM_KEYS;
 use crate::state::AppState;
 
 /// Every bearer-authenticated mutating endpoint, as `(method, path)`.
@@ -63,6 +62,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v2/control/restart-source"),
     ("POST", "/api/v2/detections/comments"),
     ("POST", "/api/v2/detections/comments/delete"),
+    ("POST", "/api/v2/dynamic-thresholds/reset"),
 ];
 
 /// Read endpoints that live behind the same bearer gate.
@@ -125,6 +125,84 @@ pub fn router() -> Router<AppState> {
             get(list_comments).post(add_comment),
         )
         .route("/api/v2/detections/comments/delete", post(delete_comment))
+        .route(
+            "/api/v2/dynamic-thresholds/reset",
+            post(reset_learned_thresholds),
+        )
+}
+
+/// What to forget: one species by scientific name, or everything.
+///
+/// tphakala/birdnet-go spells these `DELETE /dynamic-thresholds/{species}` and
+/// `DELETE /dynamic-thresholds?confirm=true`. This table is exact paths and
+/// `POST`/`PUT` only (the CSRF skip is keyed on the path), so the same two
+/// operations are one `POST` with a body. Resetting everything keeps upstream's
+/// guard: it must say `"confirm": true`.
+#[derive(Debug, Deserialize)]
+struct ResetBody {
+    species: Option<String>,
+    all: Option<bool>,
+    confirm: Option<bool>,
+}
+
+async fn reset_learned_thresholds(
+    State(state): State<AppState>,
+    Json(body): Json<ResetBody>,
+) -> (StatusCode, Json<Value>) {
+    use birdnet_core::detection::dynamic_threshold::Reset;
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": m })));
+    let species = body
+        .species
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let which = match (species, body.all.unwrap_or(false)) {
+        (Some(_), true) => return bad("name a species or set \"all\", not both"),
+        (Some(name), false) => Reset::Species(name.to_owned()),
+        (None, true) if body.confirm == Some(true) => Reset::All,
+        (None, true) => {
+            return bad("resetting every species needs \"confirm\": true");
+        }
+        (None, false) => {
+            return bad("name a \"species\" (scientific name), or set \"all\" and \"confirm\"");
+        }
+    };
+    state
+        .run_blocking(
+            move |state| match crate::routes::dynamic_thresholds::reset(state, &which) {
+                Ok(outcome) => {
+                    let (action, target) = match &which {
+                        Reset::Species(s) => ("species.learned_threshold.reset", Some(s.as_str())),
+                        Reset::All => ("species.learned_threshold.reset_all", None),
+                    };
+                    crate::audit::audit(
+                        state,
+                        None,
+                        action,
+                        target,
+                        Some(&format!("{VIA_API} rows={}", outcome.rows_deleted)),
+                    );
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "reset": match &which {
+                                Reset::Species(s) => json!(s),
+                                Reset::All => json!("all"),
+                            },
+                            "rows_deleted": outcome.rows_deleted,
+                            "daemon_notified": outcome.daemon_notified,
+                        })),
+                    )
+                }
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": crate::routes::log_internal("learned thresholds not reset", &e)
+                    })),
+                ),
+            },
+        )
+        .await
 }
 
 /// The comment to write.
@@ -856,7 +934,7 @@ async fn read_settings(State(state): State<AppState>) -> (StatusCode, Json<Value
                     // Named so a caller can tell "this station has no SMTP password"
                     // from "you are not allowed to read it".
                     "redacted": masked,
-                    "writable_keys": SETTINGS_FORM_KEYS,
+                    "writable_keys": crate::routes::admin::settings::form::all_form_keys(),
                 })),
             )
         })
@@ -891,9 +969,10 @@ async fn write_settings(
 
     // Unknown keys are refused rather than ignored. A caller who misspells
     // `confidence_treshold` and gets a 200 has been told their change landed.
+    let writable = crate::routes::admin::settings::form::all_form_keys();
     let unknown: Vec<&String> = object
         .keys()
-        .filter(|k| !SETTINGS_FORM_KEYS.contains(&k.as_str()))
+        .filter(|k| !writable.contains(&k.as_str()))
         .collect();
     if !unknown.is_empty() {
         return (
@@ -901,7 +980,7 @@ async fn write_settings(
             Json(json!({
                 "error": "unknown setting keys",
                 "unknown": unknown,
-                "writable_keys": SETTINGS_FORM_KEYS,
+                "writable_keys": writable,
             })),
         );
     }
@@ -1039,19 +1118,19 @@ async fn restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
             // refused — and before the SIGTERM, so it survives the restart.
             crate::audit::audit(state, None, "system.restart", None, Some(VIA_API));
 
-            match request_restart(state.supervised_by_systemd()) {
+            match request_restart(state.restart_support()) {
                 RestartOutcome::Signalled => (
                     StatusCode::OK,
                     Json(json!({
                         "restarting": true,
-                        "note": "SIGTERM sent; systemd Restart=always brings a fresh instance up"
+                        "note": "SIGTERM sent; systemd Restart=always, or the binary running itself again, brings a fresh instance up"
                     })),
                 ),
                 RestartOutcome::NotUnderSystemd => (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({
                         "restarting": false,
-                        "error": "not running under systemd, so nothing would restart this process"
+                        "error": "not running under systemd and not able to restart itself, so nothing would restart this process"
                     })),
                 ),
             }
@@ -1226,34 +1305,35 @@ async fn database_overview(State(state): State<AppState>) -> (StatusCode, Json<V
             let tables = s.table_sizes(TABLE_SIZES_TTL, u64::try_from(now).unwrap_or(0), || {
                 s.with_read_db(birdnet_db::sqlite::table_sizes)
             })?;
-            Ok::<_, birdnet_db::sqlite::connection::DbError>((
-                read,
-                tables,
-                s.db_path().to_path_buf(),
-            ))
+            // The file's size and its write-ahead log's: two `stat`s, taken here with
+            // the reads rather than on a runtime worker.
+            let file_size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
+            let db_path = s.db_path().to_path_buf();
+            let wal = {
+                let mut p = db_path.clone().into_os_string();
+                p.push("-wal");
+                file_size(std::path::Path::new(&p))
+            };
+            let size = file_size(&db_path);
+            Ok::<_, birdnet_db::sqlite::connection::DbError>((read, tables, db_path, size, wal))
         })
         .await;
-    let ((engine, total, rate, integrity, vacuum), (measured_at, tables), path) = match result {
-        Ok(read) => read,
-        Err(e) => {
-            tracing::warn!(error = %e, "database overview could not be read");
-            return (
-                StatusCode::OK,
-                Json(json!({
-                    "engine": "sqlite",
-                    "status": "disconnected",
-                    "tables": [],
-                    "detection_rate_24h": [],
-                })),
-            );
-        }
-    };
-    let file_size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
-    let wal = {
-        let mut p = path.clone().into_os_string();
-        p.push("-wal");
-        file_size(std::path::Path::new(&p))
-    };
+    let ((engine, total, rate, integrity, vacuum), (measured_at, tables), path, size, wal) =
+        match result {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(error = %e, "database overview could not be read");
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "engine": "sqlite",
+                        "status": "disconnected",
+                        "tables": [],
+                        "detection_rate_24h": [],
+                    })),
+                );
+            }
+        };
     let table_total: i64 = tables.iter().map(|t| t.size_bytes).sum();
     #[allow(clippy::cast_precision_loss)]
     let write_avg_ms = (write.count > 0).then(|| write.sum_secs * 1000.0 / write.count as f64);
@@ -1280,7 +1360,7 @@ async fn database_overview(State(state): State<AppState>) -> (StatusCode, Json<V
             "engine": "sqlite",
             "status": "connected",
             "location": path.display().to_string(),
-            "size_bytes": file_size(&path),
+            "size_bytes": size,
             "total_detections": total,
             "total_tables": tables.len(),
             "sqlite": {

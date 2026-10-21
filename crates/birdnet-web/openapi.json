@@ -4,7 +4,7 @@
     "title": "BirdNet-Behavior HTTP API",
     "version": "0.17.1",
     "summary": "JSON API for a BirdNet-Behavior acoustic monitoring station: open read-only endpoints, plus a small token-authenticated write surface.",
-    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the eighteen bearer-token endpoints (ten writes and eight reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
+    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen bearer-token endpoints (eleven writes and eight reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
     "license": {
       "name": "CC BY-NC-SA 4.0",
       "url": "https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE"
@@ -29,6 +29,10 @@
     {
       "name": "species",
       "description": "Per-species rollups, search and images."
+    },
+    {
+      "name": "weather",
+      "description": "Hourly weather cached by the optional weather poll."
     },
     {
       "name": "recordings",
@@ -1911,7 +1915,7 @@
           "control"
         ],
         "summary": "Restart the station",
-        "description": "Sends this process `SIGTERM` after a short delay, so the response is written before the socket closes; systemd's `Restart=always` brings a fresh instance up. The request body is ignored.\n\nAnswers `503` when the process is not running under systemd, because nothing would then bring the station back — a `200` there would tell the caller the opposite of what is about to happen. The attempt is recorded in the audit log either way.",
+        "description": "Sends this process `SIGTERM` after a short delay, so the response is written before the socket closes. Under systemd, `Restart=always` brings a fresh instance up; a station started by hand (or in a container without a restart policy) runs itself again in place with the same program and arguments once it has shut down cleanly. The request body is ignored.\n\nAnswers `503` only when neither is possible, because nothing would then bring the station back — a `200` there would tell the caller the opposite of what is about to happen. The attempt is recorded in the audit log either way.",
         "operationId": "restartStation",
         "security": [
           {
@@ -1920,7 +1924,7 @@
         ],
         "responses": {
           "200": {
-            "description": "`SIGTERM` sent; systemd will start a fresh instance.",
+            "description": "`SIGTERM` sent; systemd, or the binary itself, will start a fresh instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1947,7 +1951,7 @@
             "description": "This station has no `BNB_API_TOKEN`, so the control API does not exist."
           },
           "503": {
-            "description": "Not running under systemd, so nothing would restart the process. Nothing was signalled.",
+            "description": "Not running under systemd and not able to restart itself, so nothing would restart the process. Nothing was signalled.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2332,7 +2336,8 @@
                             "type": "boolean"
                           },
                           "new_this_season": {
-                            "type": "boolean"
+                            "type": "boolean",
+                            "description": "Nothing since the season began, and nothing in the 7 days before it either: a resident the season turned over is not an arrival."
                           },
                           "returning_after_absence": {
                             "type": "boolean"
@@ -2585,6 +2590,1012 @@
                         "no-detection-daemon"
                       ],
                       "description": "`no-location`: the station has no coordinates. `no-range-model`: no range model is loaded, so the filter is off and every species the classifier knows is a candidate. `range-model-failed`: the model is configured and would not run (the station's log has the reason). `no-detection-daemon`: this process is not running the detection daemon."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dynamic-thresholds": {
+      "get": {
+        "tags": [
+          "species"
+        ],
+        "summary": "What the station has learned about each species",
+        "description": "With dynamic thresholds on, a species the station has heard confidently — and that passed every other check — is held to a lower confidence bar for a while, so its quiet and distant calls are still recorded. This lists those learned levels, one per species, by scientific name. The data are the `dynamic_thresholds` table the detection daemon rewrites whenever a level changes. Same purpose as birdnet-go's `GET /api/v2/dynamic-thresholds`; there is no `/events` history, because this station stores the current level and when it was first learned and last confirmed, not every change.\n\nA species whose level has lapsed stays listed with `active: false` until the daemon next rewrites the table. `enabled` is `null` in a process with no detection daemon, `false` when the feature is off (rows left from an earlier run have no effect). An unreadable table is `500`, never an empty list.",
+        "operationId": "listDynamicThresholds",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Most rows to return.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Rows to skip, for paging.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "required": false,
+            "description": "`true` for only the levels in force, `false` for only lapsed ones.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The learned levels, by scientific name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "data"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "config": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "The running tracker's configuration; `null` when this process runs no detection daemon.",
+                      "properties": {
+                        "trigger": {
+                          "type": "number",
+                          "description": "Confidence at or above which a recorded detection confirms its species."
+                        },
+                        "min": {
+                          "type": "number",
+                          "description": "The floor: no level takes a threshold below it."
+                        },
+                        "valid_hours": {
+                          "type": "integer",
+                          "description": "Hours a level lasts without another confirmation."
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Rows matching the filter, before paging."
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "scientific_name",
+                          "level",
+                          "multiplier",
+                          "confirmations",
+                          "first_learned",
+                          "last_confirmed",
+                          "expires_at",
+                          "active",
+                          "base_threshold",
+                          "base_is",
+                          "effective_threshold"
+                        ],
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string",
+                            "example": "Strix aluco"
+                          },
+                          "display_name": {
+                            "type": "string",
+                            "description": "The species' name in the station's language."
+                          },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3,
+                            "description": "How many steps the threshold has been lowered. Each level multiplies the base threshold: 1 → ×0.75, 2 → ×0.50, 3 → ×0.25, never below the configured floor."
+                          },
+                          "multiplier": {
+                            "type": "number",
+                            "description": "The level's multiplier."
+                          },
+                          "confirmations": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Confident detections counted in the current episode."
+                          },
+                          "first_learned": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "When the current episode began."
+                          },
+                          "last_confirmed": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "expires_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "When the level lapses unless the species is confirmed again."
+                          },
+                          "active": {
+                            "type": "boolean",
+                            "description": "Whether the level is still in force (`expires_at` is in the future)."
+                          },
+                          "base_threshold": {
+                            "type": "number",
+                            "description": "The threshold before the level: the species' own if the operator set one, otherwise the station's."
+                          },
+                          "base_is": {
+                            "type": "string",
+                            "enum": [
+                              "species",
+                              "station"
+                            ]
+                          },
+                          "effective_threshold": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "The threshold the species is held to now, for the station's own classifier (a classifier with a threshold of its own is judged by that instead). `null` once the level has lapsed."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dynamic-thresholds/stats": {
+      "get": {
+        "tags": [
+          "species"
+        ],
+        "summary": "Counts of learned levels",
+        "description": "How many species carry a learned level, how many are still in force, how many have reached the deepest level, and the distribution by level (levels 0 to 3, active levels only).",
+        "operationId": "dynamicThresholdStats",
+        "responses": {
+          "200": {
+            "description": "Counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "total_count",
+                    "active_count",
+                    "at_maximum_count",
+                    "level_distribution"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "config": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "The running tracker's configuration; `null` when this process runs no detection daemon.",
+                      "properties": {
+                        "trigger": {
+                          "type": "number",
+                          "description": "Confidence at or above which a recorded detection confirms its species."
+                        },
+                        "min": {
+                          "type": "number",
+                          "description": "The floor: no level takes a threshold below it."
+                        },
+                        "valid_hours": {
+                          "type": "integer",
+                          "description": "Hours a level lasts without another confirmation."
+                        }
+                      }
+                    },
+                    "total_count": {
+                      "type": "integer"
+                    },
+                    "active_count": {
+                      "type": "integer"
+                    },
+                    "at_maximum_count": {
+                      "type": "integer"
+                    },
+                    "level_distribution": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "level": {
+                            "type": "integer"
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dynamic-thresholds/{species}": {
+      "get": {
+        "tags": [
+          "species"
+        ],
+        "summary": "One species' learned level",
+        "description": "The learned level for one species, by scientific name (matched without regard to case). `404` when nothing is stored for it.",
+        "operationId": "getDynamicThreshold",
+        "parameters": [
+          {
+            "name": "species",
+            "in": "path",
+            "required": true,
+            "description": "Scientific name, such as `Strix aluco`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The species' learned level.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "scientific_name",
+                    "level",
+                    "multiplier",
+                    "confirmations",
+                    "first_learned",
+                    "last_confirmed",
+                    "expires_at",
+                    "active",
+                    "base_threshold",
+                    "base_is",
+                    "effective_threshold"
+                  ],
+                  "properties": {
+                    "scientific_name": {
+                      "type": "string",
+                      "example": "Strix aluco"
+                    },
+                    "display_name": {
+                      "type": "string",
+                      "description": "The species' name in the station's language."
+                    },
+                    "level": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3,
+                      "description": "How many steps the threshold has been lowered. Each level multiplies the base threshold: 1 → ×0.75, 2 → ×0.50, 3 → ×0.25, never below the configured floor."
+                    },
+                    "multiplier": {
+                      "type": "number",
+                      "description": "The level's multiplier."
+                    },
+                    "confirmations": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Confident detections counted in the current episode."
+                    },
+                    "first_learned": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the current episode began."
+                    },
+                    "last_confirmed": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the level lapses unless the species is confirmed again."
+                    },
+                    "active": {
+                      "type": "boolean",
+                      "description": "Whether the level is still in force (`expires_at` is in the future)."
+                    },
+                    "base_threshold": {
+                      "type": "number",
+                      "description": "The threshold before the level: the species' own if the operator set one, otherwise the station's."
+                    },
+                    "base_is": {
+                      "type": "string",
+                      "enum": [
+                        "species",
+                        "station"
+                      ]
+                    },
+                    "effective_threshold": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "The threshold the species is held to now, for the station's own classifier (a classifier with a threshold of its own is judged by that instead). `null` once the level has lapsed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing is stored for that species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/weather/latest": {
+      "get": {
+        "tags": [
+          "weather"
+        ],
+        "summary": "The newest cached weather hour",
+        "description": "Weather the station's weather poll has cached, one row per hour, whichever provider supplied it. Values are metric whatever the station's display setting, with the unit in the field name; one a provider does not supply is `null`, never `0`. Not stored, so not offered: humidity, feels-like, gusts, visibility, a description or an icon. The poll is off unless `BNB_WEATHER_ENABLED=1`, and the station keeps 30 days; a station without data answers `404` here (or an empty `hours` list for a day). A row carries no position. birdnet-go also serves `daily`, `sun` and `moon`; those are sunrise, sunset and moon phase, not weather, and a public sunrise time gives the station's longitude away, so they are not offered.",
+        "operationId": "weatherLatest",
+        "responses": {
+          "200": {
+            "description": "The newest cached hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "string",
+                      "description": "The hour, UTC, as `2026-10-21T14:00:00Z`."
+                    },
+                    "temperature_c": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Air temperature, °C."
+                    },
+                    "precipitation_mm": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Precipitation during the hour, mm."
+                    },
+                    "wind_speed_kt": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Mean wind speed, knots."
+                    },
+                    "wind_direction_deg": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Degrees clockwise from true north."
+                    },
+                    "pressure_hpa": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Pressure at mean sea level, hPa."
+                    },
+                    "cloud_cover_pct": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "weather_code": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "WMO weather interpretation code."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing is cached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The weather table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/weather/hourly/{date}": {
+      "get": {
+        "tags": [
+          "weather"
+        ],
+        "summary": "The cached weather hours of one UTC day",
+        "description": "Every cached hour whose stamp falls on this UTC date, in order (the same bounds the Today page's day strip uses). A day with nothing cached is `200` with `count: 0`, so an empty day and an unreadable table are told apart (`500`).\n\nWeather the station's weather poll has cached, one row per hour, whichever provider supplied it. Values are metric whatever the station's display setting, with the unit in the field name; one a provider does not supply is `null`, never `0`. Not stored, so not offered: humidity, feels-like, gusts, visibility, a description or an icon. The poll is off unless `BNB_WEATHER_ENABLED=1`, and the station keeps 30 days; a station without data answers `404` here (or an empty `hours` list for a day). A row carries no position. birdnet-go also serves `daily`, `sun` and `moon`; those are sunrise, sunset and moon phase, not weather, and a public sunrise time gives the station's longitude away, so they are not offered.",
+        "operationId": "weatherHourlyDay",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "path",
+            "required": true,
+            "description": "A real calendar date, `YYYY-MM-DD`, read as UTC.",
+            "schema": {
+              "type": "string",
+              "example": "2026-10-21"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The day's hours.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "date",
+                    "timezone",
+                    "count",
+                    "hours"
+                  ],
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "enum": [
+                        "UTC"
+                      ]
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "hours": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "at": {
+                            "type": "string",
+                            "description": "The hour, UTC, as `2026-10-21T14:00:00Z`."
+                          },
+                          "temperature_c": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Air temperature, °C."
+                          },
+                          "precipitation_mm": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Precipitation during the hour, mm."
+                          },
+                          "wind_speed_kt": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Mean wind speed, knots."
+                          },
+                          "wind_direction_deg": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Degrees clockwise from true north."
+                          },
+                          "pressure_hpa": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Pressure at mean sea level, hPa."
+                          },
+                          "cloud_cover_pct": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 0,
+                            "maximum": 100
+                          },
+                          "weather_code": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "WMO weather interpretation code."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a real calendar date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The weather table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/weather/hourly/{date}/{hour}": {
+      "get": {
+        "tags": [
+          "weather"
+        ],
+        "summary": "One cached weather hour",
+        "description": "The hour starting at `{hour}`:00 UTC on `{date}`.\n\nWeather the station's weather poll has cached, one row per hour, whichever provider supplied it. Values are metric whatever the station's display setting, with the unit in the field name; one a provider does not supply is `null`, never `0`. Not stored, so not offered: humidity, feels-like, gusts, visibility, a description or an icon. The poll is off unless `BNB_WEATHER_ENABLED=1`, and the station keeps 30 days; a station without data answers `404` here (or an empty `hours` list for a day). A row carries no position. birdnet-go also serves `daily`, `sun` and `moon`; those are sunrise, sunset and moon phase, not weather, and a public sunrise time gives the station's longitude away, so they are not offered.",
+        "operationId": "weatherHourlyHour",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "path",
+            "required": true,
+            "description": "A real calendar date, `YYYY-MM-DD`, read as UTC.",
+            "schema": {
+              "type": "string",
+              "example": "2026-10-21"
+            }
+          },
+          {
+            "name": "hour",
+            "in": "path",
+            "required": true,
+            "description": "0 to 23, UTC.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 23
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "string",
+                      "description": "The hour, UTC, as `2026-10-21T14:00:00Z`."
+                    },
+                    "temperature_c": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Air temperature, °C."
+                    },
+                    "precipitation_mm": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Precipitation during the hour, mm."
+                    },
+                    "wind_speed_kt": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Mean wind speed, knots."
+                    },
+                    "wind_direction_deg": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Degrees clockwise from true north."
+                    },
+                    "pressure_hpa": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Pressure at mean sea level, hPa."
+                    },
+                    "cloud_cover_pct": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "weather_code": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "WMO weather interpretation code."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad date or hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "That hour is not cached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The weather table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/weather/detection": {
+      "get": {
+        "tags": [
+          "weather"
+        ],
+        "summary": "The weather when a detection was heard",
+        "description": "The cached hour containing the instant a detection was recorded, found by the same key the detections API uses (there is no surrogate id). birdnet-go addresses it by `/weather/detection/{id}`.\n\nWeather the station's weather poll has cached, one row per hour, whichever provider supplied it. Values are metric whatever the station's display setting, with the unit in the field name; one a provider does not supply is `null`, never `0`. Not stored, so not offered: humidity, feels-like, gusts, visibility, a description or an icon. The poll is off unless `BNB_WEATHER_ENABLED=1`, and the station keeps 30 days; a station without data answers `404` here (or an empty `hours` list for a day). A row carries no position. birdnet-go also serves `daily`, `sun` and `moon`; those are sunrise, sunset and moon phase, not weather, and a public sunrise time gives the station's longitude away, so they are not offered.",
+        "operationId": "weatherForDetection",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The detection's date, `YYYY-MM-DD` (the station's local date)."
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "`HH:MM:SS`, local."
+          },
+          {
+            "name": "sci_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The detection and the hour's weather.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detection": {
+                      "type": "object"
+                    },
+                    "heard_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "weather": {
+                      "type": "object",
+                      "properties": {
+                        "at": {
+                          "type": "string",
+                          "description": "The hour, UTC, as `2026-10-21T14:00:00Z`."
+                        },
+                        "temperature_c": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Air temperature, °C."
+                        },
+                        "precipitation_mm": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Precipitation during the hour, mm."
+                        },
+                        "wind_speed_kt": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Mean wind speed, knots."
+                        },
+                        "wind_direction_deg": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Degrees clockwise from true north."
+                        },
+                        "pressure_hpa": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Pressure at mean sea level, hPa."
+                        },
+                        "cloud_cover_pct": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "weather_code": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "WMO weather interpretation code."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A key field is missing or malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such detection, or no weather cached for its hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A table could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
                   }
                 }
@@ -2949,7 +3960,7 @@
           "recordings"
         ],
         "summary": "Spectrogram PNG for a recording",
-        "description": "Renders (and caches) a mel spectrogram PNG of a recording. Optional label parameters overlay the species, confidence and time.",
+        "description": "Renders (and caches) a mel spectrogram PNG of a recording. Optional label parameters overlay the species, confidence and time. The colour map and dynamic range are the station's `spectrogram_colormap` and `spectrogram_range_db` settings. The answer carries an ETag and `Cache-Control: private, no-cache`, so a changed setting reaches a client that already holds the image; a matching `If-None-Match` is answered 304.",
         "operationId": "serveSpectrogram",
         "parameters": [
           {
@@ -2997,6 +4008,9 @@
               }
             }
           },
+          "304": {
+            "description": "The client already holds this render (its ETag matched)."
+          },
           "400": {
             "description": "Invalid filename."
           },
@@ -3008,6 +4022,53 @@
           },
           "503": {
             "description": "Renderer temporarily unavailable (too many concurrent renders)."
+          }
+        }
+      }
+    },
+    "/dashboard-image": {
+      "get": {
+        "tags": [
+          "recordings"
+        ],
+        "summary": "The station's Today-page picture",
+        "description": "The file named by the `dashboard_image` setting (a site photograph or a camera snapshot), served as the PNG, JPEG, GIF or WebP it is by its first bytes. Anything else, a missing file, a directory or a file over 8 MiB is 404. ETag and `Cache-Control: private, no-cache`; a matching `If-None-Match` is 304.",
+        "operationId": "serveDashboardImage",
+        "responses": {
+          "200": {
+            "description": "The picture.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client already holds this version (its ETag matched)."
+          },
+          "404": {
+            "description": "No picture is configured, or the file is not a usable picture."
           }
         }
       }
@@ -6061,6 +7122,104 @@
           },
           "404": {
             "description": "No comment has that id."
+          }
+        }
+      }
+    },
+    "/dynamic-thresholds/reset": {
+      "post": {
+        "tags": [
+          "species"
+        ],
+        "summary": "Forget what was learned",
+        "description": "Forgets the learned level of one species, or of all of them, so each starts again from its own threshold and is learned afresh by its next confident detection. The stored rows are deleted and the running detection daemon is asked to forget them too, before its next decision; the detections themselves are untouched.\n\nbirdnet-go spells this `DELETE /dynamic-thresholds/{species}` and `DELETE /dynamic-thresholds?confirm=true`; the token-gated surface here is a table of exact `POST`/`PUT` paths, so it is one `POST` with a body. Resetting everything keeps upstream's guard: it must say `\"confirm\": true`. Resetting a species with nothing stored is `200` with `rows_deleted: 0`. Also available to a signed-in admin on Admin → Capture → *Learned thresholds*.",
+        "operationId": "resetDynamicThresholds",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "species": {
+                    "type": "string",
+                    "description": "Scientific name to forget.",
+                    "example": "Strix aluco"
+                  },
+                  "all": {
+                    "type": "boolean",
+                    "description": "Forget every species. Needs `confirm`."
+                  },
+                  "confirm": {
+                    "type": "boolean",
+                    "description": "Must be `true` with `all`."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reset": {
+                      "type": "string",
+                      "description": "The scientific name, or `all`."
+                    },
+                    "rows_deleted": {
+                      "type": "integer"
+                    },
+                    "daemon_notified": {
+                      "type": "boolean",
+                      "description": "`false` in a process with no detection daemon (nothing in memory to forget)."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither a species nor a confirmed `all`, or both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "500": {
+            "description": "The stored rows could not be deleted; nothing was changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

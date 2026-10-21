@@ -41,6 +41,8 @@
 //! re-exported here so this module's callers and its own history are
 //! unchanged.
 
+mod hardware;
+
 use birdnet_core::process::run_with_timeout;
 use std::time::Duration;
 
@@ -371,6 +373,13 @@ pub fn build_with_recent_log(
 
     push(stage(&dir, "uname.txt", &capture("uname", &["-a"])));
     push(stage(&dir, "disk.txt", &capture("df", &["-h"])));
+    // CPU, memory, board and the USB/sound devices, read from /proc and /sys
+    // without a serial number (see `hardware`).
+    push(stage(
+        &dir,
+        "hardware.json",
+        &hardware::inventory_json(Path::new("/")),
+    ));
     push(stage(
         &dir,
         "journal.log",
@@ -431,7 +440,10 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
             );
             println!();
             println!("It contains the diagnostic report, the station's version, a redacted");
-            println!("copy of the configuration, the station's own error log, and the last");
+            println!("copy of the configuration, the hardware inventory (CPU, memory, USB and");
+            println!(
+                "sound devices; no serial numbers), the station's own error log, and the last"
+            );
             println!("{JOURNAL_LINES} journal lines.");
             println!("Passwords, tokens and URL credentials are masked as {REDACTED} —");
             println!("check it before posting anywhere public all the same.");

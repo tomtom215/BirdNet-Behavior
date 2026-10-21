@@ -34,6 +34,8 @@ pub mod accounts;
 pub mod audio;
 pub mod backup;
 pub mod backup_recovery;
+pub mod classifier;
+pub mod data_source_test;
 pub mod doctor;
 pub mod eq_curve;
 pub mod images;
@@ -141,6 +143,8 @@ pub fn router() -> Router<AppState> {
         .merge(settings::router())
         // Audio / microphone setup
         .merge(audio::router())
+        // The classifier panel: install the species model from the browser
+        .merge(classifier::router())
         // Backups, restore & system admin
         .merge(backup_recovery::router())
         .merge(doctor::router())
@@ -156,6 +160,7 @@ pub fn router() -> Router<AppState> {
         .merge(notifications::router())
         // Notification testing
         .merge(notification_test::router())
+        .merge(data_source_test::router())
         // Backup management
         .merge(backup::router())
         // System controls (clear data)

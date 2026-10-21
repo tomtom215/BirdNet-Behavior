@@ -101,6 +101,18 @@ pub struct TlsConfig {
     /// broker whose certificate names a hostname, which is the common shape on
     /// a home LAN with no internal DNS.
     pub server_name: Option<String>,
+    /// PEM file holding the *client's* certificate (and any intermediates), for
+    /// a broker that requires mutual TLS (`require_certificate true` in
+    /// Mosquitto, AWS IoT, EMQX with `verify_peer`). Set together with
+    /// [`client_key`](Self::client_key): one without the other is refused
+    /// before any connection, not silently connected without.
+    ///
+    /// tphakala/birdnet-go's `realtime.mqtt.tls.clientcert`.
+    pub client_cert: Option<std::path::PathBuf>,
+    /// PEM file holding the private key for [`client_cert`](Self::client_cert)
+    /// (PKCS#8, PKCS#1 or SEC1). It is read only to present the certificate: the
+    /// key never appears in an error message, whatever is wrong with the file.
+    pub client_key: Option<std::path::PathBuf>,
 }
 
 impl Default for MqttConfig {

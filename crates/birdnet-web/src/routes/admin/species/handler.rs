@@ -292,20 +292,31 @@ fn list_changed(
 /// One helper because the three threshold handlers all end by re-rendering the
 /// same partial, and a suggestion computed in only two of them would appear
 /// and vanish as the operator worked.
+///
+/// `Err` when the thresholds themselves could not be read: an empty list is
+/// drawn as "No per-species thresholds configured", which invites adding a row
+/// that a failed read made look absent. The suggestions are a hint derived from
+/// reviews and claim nothing when they are missing, so a failure there is
+/// logged and shown as none.
 fn load_thresholds_and_suggestions(
     state: &AppState,
-) -> (
-    Vec<birdnet_db::sqlite::SpeciesThreshold>,
-    Vec<SuggestedThreshold>,
-) {
+) -> Result<
+    (
+        Vec<birdnet_db::sqlite::SpeciesThreshold>,
+        Vec<SuggestedThreshold>,
+    ),
+    birdnet_db::sqlite::DbError,
+> {
     state.with_read_db(|conn| {
-        let thresholds = birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default();
+        let thresholds = birdnet_db::sqlite::get_species_thresholds(conn)?;
         let configured: std::collections::HashMap<&str, f64> = thresholds
             .iter()
             .map(|t| (t.sci_name.as_str(), t.confidence_threshold))
             .collect();
-        let suggestions = birdnet_db::sqlite::reviewed_detections_by_species(conn)
-            .unwrap_or_default()
+        let reviewed = birdnet_db::sqlite::reviewed_detections_by_species(conn)
+            .inspect_err(|e| tracing::warn!(error = %e, "threshold suggestions not readable"))
+            .unwrap_or_default();
+        let suggestions = reviewed
             .into_iter()
             .filter_map(|(sci_name, com_name, reviews)| {
                 birdnet_db::thresholds::suggest_threshold(&reviews).map(|suggestion| {
@@ -319,18 +330,27 @@ fn load_thresholds_and_suggestions(
                 })
             })
             .collect();
-        (thresholds, suggestions)
+        Ok((thresholds, suggestions))
     })
 }
 
+/// The thresholds partial, or the inline failure note when they cannot be read.
+fn thresholds_response(state: &AppState) -> Response {
+    match load_thresholds_and_suggestions(state) {
+        Ok((thresholds, suggestions)) => {
+            Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "per-species thresholds not readable");
+            crate::routes::pages::error_states::failed_partial("the per-species thresholds")
+                .into_response()
+        }
+    }
+}
+
 /// Return the HTMX partial fragment listing all current per-species confidence thresholds.
-pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
-    state
-        .run_blocking(move |state| {
-            let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
-            Html(render_thresholds_partial(&thresholds, &suggestions))
-        })
-        .await
+pub async fn thresholds_partial(State(state): State<AppState>) -> Response {
+    state.run_blocking(|state| thresholds_response(state)).await
 }
 
 /// Per-species threshold submission.
@@ -364,7 +384,6 @@ pub async fn set_threshold(
 ) -> axum::response::Response {
     state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
-    use axum::response::IntoResponse as _;
     let sci_name = form.sci_name.trim().to_string();
     if sci_name.is_empty() {
         return not_applied(&Toast::error("Choose a species for the threshold."));
@@ -401,8 +420,7 @@ pub async fn set_threshold(
         Some(&sci_name),
         Some(&format!("threshold={threshold}")),
     );
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
-    Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+    thresholds_response(state)
 })
 .await
 }
@@ -425,7 +443,6 @@ pub async fn delete_threshold(
 ) -> axum::response::Response {
     state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
-    use axum::response::IntoResponse as _;
     if let Err(e) =
         state.with_db(|conn| birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name))
     {
@@ -442,8 +459,7 @@ pub async fn delete_threshold(
         Some(&form.sci_name),
         None,
     );
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
-    Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+    thresholds_response(state)
 })
 .await
 }

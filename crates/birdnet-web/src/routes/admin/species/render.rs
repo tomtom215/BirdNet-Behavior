@@ -112,6 +112,10 @@ pub fn render_species_partial(
     out.push_str(
         r#"<div id="thresholds-section" hx-get="/admin/species/thresholds" hx-trigger="load" hx-swap="innerHTML"></div>"#,
     );
+    // What dynamic thresholds have learned (loaded via HTMX)
+    out.push_str(
+        r#"<div id="learned-section" hx-get="/admin/species/learned" hx-trigger="load" hx-swap="innerHTML"></div>"#,
+    );
     // Per-species minimum intervals (loaded via HTMX)
     out.push_str(
         r#"<div id="intervals-section" hx-get="/admin/species/intervals" hx-trigger="load" hx-swap="innerHTML"></div>"#,

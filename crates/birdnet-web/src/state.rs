@@ -230,6 +230,10 @@ struct AppStateInner {
     /// a GitHub Actions runner sets. See
     /// `routes::admin::system_controls::service::supervised_by_systemd`.
     supervised_by_systemd: bool,
+    /// Whether the binary can restart itself by running its own program again
+    /// when nothing supervises it ([`crate::restart`]). `false` — the default —
+    /// in every test, so a request to restart can never end a test process.
+    self_restart: bool,
     /// Admission for the live `WebSockets` (origin and cap).
     live_sockets: crate::live_sockets::LiveSockets,
     /// Failed sign-ins per client address (O-6), consulted before Argon2
@@ -250,6 +254,14 @@ struct AppStateInner {
     /// when it starts the detection daemon, which is after the state exists;
     /// `None` in a process with no daemon. See [`crate::occurrence`].
     occurrence: std::sync::RwLock<Option<Arc<dyn crate::occurrence::OccurrenceSource>>>,
+    /// The running detection daemon's learned-threshold tracker, as the web
+    /// crate may see and reset it (`None` in a process with no daemon).
+    dynamic_thresholds: std::sync::RwLock<
+        Option<Arc<birdnet_core::detection::dynamic_threshold::DynamicThresholdHandle>>,
+    >,
+    /// The origins allowed to frame the station (`P-9`); empty unless the
+    /// operator listed some. Read on every response by the security headers.
+    embed_origins: std::sync::RwLock<Arc<crate::embed::EmbedOrigins>>,
     /// What the boot journal found changed since the last start (UP-3):
     /// empty on a first or ordinary start.
     boot_anomalies: std::sync::RwLock<Vec<crate::boot_journal::Anomaly>>,
@@ -268,6 +280,12 @@ struct AppStateInner {
     /// [`crate::routes::api_write::TABLE_SIZES_TTL`].
     table_sizes:
         std::sync::Mutex<Option<(std::time::Instant, u64, Vec<birdnet_db::sqlite::TableSize>)>>,
+    /// Which classifier the station listens with and whether the browser can
+    /// install one: the setup wizard's model step and the Capture tab's panel.
+    classifier_setup: crate::classifier_setup::ClassifierSetup,
+    /// When the station finished starting, for telling which saved settings it
+    /// has not picked up yet.
+    pending_restart: crate::pending_restart::PendingRestart,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -356,6 +374,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                self_restart: false,
                 live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
@@ -364,12 +383,16 @@ impl AppState {
                     crate::notification_probes::NotificationProbes::default(),
                 ),
                 occurrence: std::sync::RwLock::new(None),
+                dynamic_thresholds: std::sync::RwLock::new(None),
+                embed_origins: std::sync::RwLock::new(Arc::new(crate::embed::EmbedOrigins::none())),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
                 nearby: std::sync::RwLock::new(None),
                 table_sizes: std::sync::Mutex::new(None),
+                classifier_setup: crate::classifier_setup::ClassifierSetup::default(),
+                pending_restart: crate::pending_restart::PendingRestart::default(),
             }),
         })
     }
@@ -619,6 +642,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                self_restart: false,
                 live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
@@ -627,12 +651,16 @@ impl AppState {
                     crate::notification_probes::NotificationProbes::default(),
                 ),
                 occurrence: std::sync::RwLock::new(None),
+                dynamic_thresholds: std::sync::RwLock::new(None),
+                embed_origins: std::sync::RwLock::new(Arc::new(crate::embed::EmbedOrigins::none())),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
                 nearby: std::sync::RwLock::new(None),
                 table_sizes: std::sync::Mutex::new(None),
+                classifier_setup: crate::classifier_setup::ClassifierSetup::default(),
+                pending_restart: crate::pending_restart::PendingRestart::default(),
             }),
         })
     }
@@ -680,6 +708,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                self_restart: false,
                 live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
@@ -688,12 +717,16 @@ impl AppState {
                     crate::notification_probes::NotificationProbes::default(),
                 ),
                 occurrence: std::sync::RwLock::new(None),
+                dynamic_thresholds: std::sync::RwLock::new(None),
+                embed_origins: std::sync::RwLock::new(Arc::new(crate::embed::EmbedOrigins::none())),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
                 nearby: std::sync::RwLock::new(None),
                 table_sizes: std::sync::Mutex::new(None),
+                classifier_setup: crate::classifier_setup::ClassifierSetup::default(),
+                pending_restart: crate::pending_restart::PendingRestart::default(),
             }),
         }
     }
@@ -926,6 +959,17 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_supervised_by_systemd");
         Self {
             inner: rebuild_inner(inner, |s| s.supervised_by_systemd = supervised),
+        }
+    }
+
+    /// Record that the binary re-executes itself to restart when it is not under
+    /// systemd. Decided once at start-up by the binary; absent, a restart is
+    /// refused unless systemd supervises the process.
+    #[must_use]
+    pub fn with_self_restart(self, self_restart: bool) -> Self {
+        let inner = unwrap_inner(self.inner, "with_self_restart");
+        Self {
+            inner: rebuild_inner(inner, |s| s.self_restart = self_restart),
         }
     }
 
@@ -1703,6 +1747,15 @@ impl AppState {
         self.inner.supervised_by_systemd
     }
 
+    /// What would bring this process back after a restart request.
+    #[must_use]
+    pub fn restart_support(&self) -> crate::routes::admin::system_controls::service::RestartSupport {
+        crate::routes::admin::system_controls::service::RestartSupport {
+            under_systemd: self.inner.supervised_by_systemd,
+            self_exec: self.inner.self_restart,
+        }
+    }
+
     /// Shared handle to the ingest-halt latch, for the maintenance loop to set
     /// when the daily integrity check confirms the database is corrupt.
     ///
@@ -1751,6 +1804,46 @@ impl AppState {
     pub fn occurrence_source(&self) -> Option<Arc<dyn crate::occurrence::OccurrenceSource>> {
         self.inner
             .occurrence
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// Install the origins allowed to frame the station (the binary does this
+    /// at start, from the validated `EMBED_ORIGINS` setting).
+    pub fn set_embed_origins(&self, origins: crate::embed::EmbedOrigins) {
+        if let Ok(mut guard) = self.inner.embed_origins.write() {
+            *guard = Arc::new(origins);
+        }
+    }
+
+    /// The origins allowed to frame the station; empty by default.
+    #[must_use]
+    pub fn embed_origins(&self) -> Arc<crate::embed::EmbedOrigins> {
+        self.inner.embed_origins.read().map_or_else(
+            |_| Arc::new(crate::embed::EmbedOrigins::none()),
+            |guard| Arc::clone(&guard),
+        )
+    }
+
+    /// Install the learned-threshold handle (the detection daemon does this when
+    /// its event processor starts).
+    pub fn set_dynamic_threshold_handle(
+        &self,
+        handle: Arc<birdnet_core::detection::dynamic_threshold::DynamicThresholdHandle>,
+    ) {
+        if let Ok(mut guard) = self.inner.dynamic_thresholds.write() {
+            *guard = Some(handle);
+        }
+    }
+
+    /// The learned-threshold handle, if this process runs a detection daemon.
+    #[must_use]
+    pub fn dynamic_threshold_handle(
+        &self,
+    ) -> Option<Arc<birdnet_core::detection::dynamic_threshold::DynamicThresholdHandle>> {
+        self.inner
+            .dynamic_thresholds
             .read()
             .ok()
             .and_then(|guard| guard.clone())
@@ -2002,6 +2095,18 @@ impl AppState {
     #[must_use]
     pub fn detection_daemon_running(&self) -> bool {
         self.inner.detection_daemon_running.load(Ordering::Relaxed)
+    }
+
+    /// The classifier's install state, for the setup wizard and the Capture tab.
+    #[must_use]
+    pub fn classifier_setup(&self) -> &crate::classifier_setup::ClassifierSetup {
+        &self.inner.classifier_setup
+    }
+
+    /// Which saved settings are newer than the running station.
+    #[must_use]
+    pub fn pending_restart(&self) -> &crate::pending_restart::PendingRestart {
+        &self.inner.pending_restart
     }
 }
 

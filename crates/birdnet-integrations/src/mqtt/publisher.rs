@@ -201,6 +201,73 @@ fn connect(config: &MqttConfig) -> Result<TcpStream, MqttError> {
     Ok(stream)
 }
 
+/// The client certificate chain and key for mutual TLS, if configured.
+///
+/// Both files or neither: a certificate with no key (or a key with no
+/// certificate) is a half-finished configuration, and connecting without
+/// client authentication would turn it into a handshake failure at the broker
+/// that names neither file. Errors name the file and say what is wrong with it,
+/// and never quote its contents: a mistyped path can point at anything,
+/// including a private key.
+fn client_identity(
+    tls: &TlsConfig,
+) -> Result<
+    Option<(
+        Vec<rustls_pki_types::CertificateDer<'static>>,
+        rustls_pki_types::PrivateKeyDer<'static>,
+    )>,
+    MqttError,
+> {
+    use rustls_pki_types::pem::PemObject as _;
+    let (cert_path, key_path) = match (&tls.client_cert, &tls.client_key) {
+        (None, None) => return Ok(None),
+        (Some(c), Some(k)) => (c, k),
+        (Some(c), None) => {
+            return Err(MqttError::Tls(format!(
+                "{}: a client certificate needs its private key too (the client key setting is empty)",
+                c.display()
+            )));
+        }
+        (None, Some(k)) => {
+            return Err(MqttError::Tls(format!(
+                "{}: a client key needs its certificate too (the client certificate setting is empty)",
+                k.display()
+            )));
+        }
+    };
+    let chain: Vec<rustls_pki_types::CertificateDer<'static>> =
+        rustls_pki_types::CertificateDer::pem_file_iter(cert_path)
+            .map_err(|e| MqttError::Tls(format!("{}: {e}", cert_path.display())))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| MqttError::Tls(format!("{}: {e}", cert_path.display())))?;
+    if chain.is_empty() {
+        return Err(MqttError::Tls(format!(
+            "{}: no certificates found in this file",
+            cert_path.display()
+        )));
+    }
+    let key = rustls_pki_types::PrivateKeyDer::from_pem_file(key_path).map_err(|e| {
+        MqttError::Tls(format!(
+            "{}: no usable private key in this file ({e})",
+            key_path.display()
+        ))
+    })?;
+    Ok(Some((chain, key)))
+}
+
+/// Check the TLS settings without connecting: that every file named is there,
+/// parses, and (for a client certificate) that the key belongs to it.
+///
+/// The doctor's check. The same code path as a real connection up to the socket,
+/// so what this accepts is what a publish will get past.
+///
+/// # Errors
+///
+/// [`MqttError::Tls`] naming the file at fault.
+pub fn check_tls(tls: &TlsConfig, server_name: &str) -> Result<(), MqttError> {
+    tls_session(tls, server_name).map(|_| ())
+}
+
 /// Build the rustls session for one connection.
 ///
 /// Trust anchors are the platform store plus anything in `ca_file`. Which
@@ -263,8 +330,13 @@ fn tls_session(tls: &TlsConfig, server_name: &str) -> Result<rustls::ClientConne
     )
     .with_safe_default_protocol_versions()
     .map_err(|e| MqttError::Tls(e.to_string()))?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    .with_root_certificates(roots);
+    let config = match client_identity(tls)? {
+        Some((chain, key)) => config
+            .with_client_auth_cert(chain, key)
+            .map_err(|e| MqttError::Tls(format!("client certificate and key do not match: {e}")))?,
+        None => config.with_no_client_auth(),
+    };
 
     let name = rustls_pki_types::ServerName::try_from(server_name.to_string())
         .map_err(|e| MqttError::Tls(format!("{server_name:?} is not a valid server name: {e}")))?;

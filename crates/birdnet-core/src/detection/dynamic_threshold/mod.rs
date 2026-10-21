@@ -88,6 +88,18 @@ pub const LEARN_COOLDOWN_MS: i64 = 15 * 60 * 1000;
 /// species with no learned level indistinguishable from one that has expired.
 const LEVEL_MULTIPLIERS: [f32; (MAX_LEVEL as usize) + 1] = [1.0, 0.75, 0.50, 0.25];
 
+/// The multiplier a level applies to the base threshold (`1.0` past the top,
+/// which cannot be reached; level 0 is `1.0` by construction).
+#[must_use]
+pub fn level_multiplier(level: u8) -> f64 {
+    f64::from(
+        LEVEL_MULTIPLIERS
+            .get(level as usize)
+            .copied()
+            .unwrap_or(1.0),
+    )
+}
+
 /// Configuration for the dynamic threshold.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DynamicThresholdConfig {
@@ -243,12 +255,8 @@ impl DynamicThresholds {
         if now_ms >= state.expires_at_ms {
             return None;
         }
-        let multiplier = LEVEL_MULTIPLIERS
-            .get(state.level as usize)
-            .copied()
-            .unwrap_or(1.0);
         Some(Adjustment {
-            multiplier: f64::from(multiplier),
+            multiplier: level_multiplier(state.level),
             floor: f64::from(self.config.min),
         })
     }
@@ -381,6 +389,31 @@ impl DynamicThresholds {
         }
     }
 
+    /// Forget what was learned about one species. `true` if it had an entry.
+    ///
+    /// The operator's reset: the next confirmation starts the species again at
+    /// level 1 (see [`Self::observe`]), and until then its threshold is the
+    /// base. An entry that had already lapsed counts too, so the answer is
+    /// "there was something to forget", not "it was in force".
+    pub fn forget(&mut self, sci_name: &str) -> bool {
+        self.levels.remove(sci_name).is_some()
+    }
+
+    /// Forget everything, returning how many entries went.
+    pub fn forget_all(&mut self) -> usize {
+        let n = self.levels.len();
+        self.levels.clear();
+        n
+    }
+
+    /// Carry out one operator reset, returning how many entries went.
+    pub fn apply_reset(&mut self, reset: &Reset) -> usize {
+        match reset {
+            Reset::Species(name) => usize::from(self.forget(name)),
+            Reset::All => self.forget_all(),
+        }
+    }
+
     /// How many species currently carry a live level.
     #[must_use]
     pub fn live_count(&self, now_ms: i64) -> usize {
@@ -401,6 +434,9 @@ impl DynamicThresholds {
         self.levels.len()
     }
 }
+
+mod control;
+pub use control::{DynamicThresholdHandle, Reset};
 
 #[cfg(test)]
 mod tests;

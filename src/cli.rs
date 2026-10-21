@@ -328,6 +328,38 @@ pub struct Cli {
     #[arg(long)]
     pub migration_report: bool,
 
+    /// Read a BirdNET-Pi installation's settings and show what each becomes here.
+    ///
+    /// Give the BirdNET-Pi folder (`~/BirdNET-Pi`) or its `birdnet.conf`. Reads
+    /// that file and, beside it, `apprise.txt`, `body.txt` and the three species
+    /// list files, and prints every key with what it becomes, what is converted
+    /// on the way and what has no equivalent. Changes nothing unless
+    /// `--apply-import` is also given, which writes the settings through the
+    /// same checks as the Settings page. The same as Station, Data, in the
+    /// browser. Credentials are never printed.
+    #[arg(long, value_name = "PATH")]
+    pub import_birdnet_pi_conf: Option<PathBuf>,
+
+    /// Bring BirdNET-Pi's recordings across, for the detections already imported.
+    ///
+    /// Give BirdNET-Pi's clip folder: `~/BirdSongs`, or the `Extracted` or
+    /// `By_Date` folder inside it. Looks only; add `--apply-import` to do it,
+    /// and `--clips-mode` to choose copy, link or move. Refuses a copy that
+    /// would take the disk past the purge threshold.
+    #[arg(long, value_name = "PATH")]
+    pub import_birdnet_pi_clips: Option<PathBuf>,
+
+    /// What `--import-birdnet-pi-clips` does with each recording: `copy`
+    /// (BirdNET-Pi keeps its own), `hardlink` (no extra space; same disk only),
+    /// `move` (BirdNET-Pi loses them) or `leave` (count them, change nothing).
+    #[arg(long, value_name = "MODE", default_value = "copy")]
+    pub clips_mode: String,
+
+    /// Do what `--import-birdnet-pi-conf` and `--import-birdnet-pi-clips` show.
+    /// Without it they change nothing.
+    #[arg(long)]
+    pub apply_import: bool,
+
     /// Attempt safe automatic repairs, then run the diagnostic.
     ///
     /// Implies `--doctor` (use with `--doctor-json` for machine-readable
@@ -620,7 +652,9 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_HEARTBEAT_URL")]
     pub heartbeat_url: Option<String>,
 
-    /// Notification trigger mode: "each", "new-species", "new-species-daily".
+    /// Notification trigger: "each", "new-species", "new-species-daily", or "off";
+    /// several may be listed, separated by commas ("each,new-species").
+    /// `BirdNET-Pi`'s three `APPRISE_NOTIFY_*` switches are this list.
     #[arg(long, default_value = "each", env = "BIRDNET_NOTIFY_TRIGGER")]
     pub notify_trigger: String,
 
@@ -920,7 +954,9 @@ pub struct Cli {
     /// data disk crosses this, clips are deleted from the most-recorded species
     /// first (lowest confidence, then oldest, within it), no species is taken
     /// below `--purge-species-floor`, and locked clips are never touched.
-    /// `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
+    /// `BirdNET-Pi` equivalent: `PURGE_THRESHOLD`. What happens at the threshold
+    /// is the config key `FULL_DISK` (`purge`, the default, or `keep`, which
+    /// stops recording and deletes nothing), as in BirdNET-Pi.
     ///
     /// `0` leaves the resolution to the config file / admin settings, then the
     /// 95 % default — the flag is only "set" when given, so it never silently
@@ -979,7 +1015,8 @@ pub struct Cli {
     /// Path to Apprise config file (alternative/addition to --apprise-url).
     ///
     /// When set, uses the `apprise` CLI tool with `-c <file>` for notifications.
-    /// `BirdNET-Pi` equivalent: `APPRISE_CONFIG_FILE` config option.
+    /// `BirdNET-Pi` equivalent: its `apprise.txt`, which importing a BirdNET-Pi
+    /// `birdnet.conf` brings across (Station, Data, or `--import-birdnet-pi-conf`).
     #[arg(long, env = "BIRDNET_APPRISE_CONFIG")]
     pub apprise_config: Option<PathBuf>,
 
@@ -1042,6 +1079,17 @@ pub struct Cli {
     /// certificate works here as a trust anchor. Config key: `MQTT_CA_FILE`.
     #[arg(long, env = "BIRDNET_MQTT_CA_FILE")]
     pub mqtt_ca_file: Option<PathBuf>,
+
+    /// PEM file with this station's client certificate, for a broker that
+    /// requires mutual TLS. Needs `--mqtt-client-key`; implies `--mqtt-tls`.
+    /// Config key: `MQTT_CLIENT_CERT`.
+    #[arg(long, env = "BIRDNET_MQTT_CLIENT_CERT")]
+    pub mqtt_client_cert: Option<PathBuf>,
+
+    /// PEM file with the private key for `--mqtt-client-cert`.
+    /// Config key: `MQTT_CLIENT_KEY`.
+    #[arg(long, env = "BIRDNET_MQTT_CLIENT_KEY")]
+    pub mqtt_client_key: Option<PathBuf>,
 
     /// Hostname to validate the broker's certificate against.
     ///

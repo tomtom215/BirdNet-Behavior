@@ -35,6 +35,7 @@ use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 struct DynamicThresholdState {
     tracker: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
     enabled: bool,
+    handle: Arc<birdnet_core::detection::dynamic_threshold::DynamicThresholdHandle>,
 }
 
 impl DynamicThresholdState {
@@ -48,8 +49,22 @@ impl DynamicThresholdState {
         state: &birdnet_web::state::AppState,
     ) -> Self {
         let enabled = tracker.config().enabled;
+        // Registered whether or not the feature is on: the web API reports
+        // "off" from this rather than guessing it from an empty table, and an
+        // operator's reset of rows left from an earlier run still has to
+        // reach the (empty) tracker.
+        let handle = std::sync::Arc::new(
+            birdnet_core::detection::dynamic_threshold::DynamicThresholdHandle::new(
+                tracker.config(),
+            ),
+        );
+        state.set_dynamic_threshold_handle(std::sync::Arc::clone(&handle));
         if !enabled {
-            return Self { tracker, enabled };
+            return Self {
+                tracker,
+                enabled,
+                handle,
+            };
         }
         let now_ms = crate::daemon::disposition::epoch_ms();
         match state.with_db(birdnet_db::dynamic_thresholds::load_all) {
@@ -83,7 +98,39 @@ impl DynamicThresholdState {
                 );
             }
         }
-        Self { tracker, enabled }
+        Self {
+            tracker,
+            enabled,
+            handle,
+        }
+    }
+
+    /// Apply the resets the operator asked for since the last event, before the
+    /// next decision is made.
+    ///
+    /// The web side has already deleted the stored rows, so the table reads
+    /// right straight away; what it cannot do is reach this tracker. Applied
+    /// here, ahead of any decision, a detection arriving after the reset is
+    /// judged without the forgotten level. The table is then rewritten from the
+    /// tracker, which also removes a row this thread wrote from a snapshot taken
+    /// before the web side deleted it.
+    fn apply_resets(&mut self, state: &birdnet_web::state::AppState) {
+        let requests = self.handle.drain();
+        if requests.is_empty() {
+            return;
+        }
+        let mut forgotten = 0;
+        for request in &requests {
+            forgotten += self.tracker.apply_reset(request);
+        }
+        tracing::info!(
+            requests = requests.len(),
+            forgotten,
+            "operator reset of learned thresholds applied"
+        );
+        if self.enabled {
+            self.persist(crate::daemon::disposition::epoch_ms(), state);
+        }
     }
 
     /// The tracker to judge against, or `None` when the feature is off.
@@ -109,6 +156,11 @@ impl DynamicThresholdState {
         if !self.enabled || !self.tracker.observe(sci_name, confidence, now_ms) {
             return;
         }
+        self.persist(now_ms, state);
+    }
+
+    /// Write the tracker's live set to the table.
+    fn persist(&self, now_ms: i64, state: &birdnet_web::state::AppState) {
         let rows: Vec<birdnet_db::dynamic_thresholds::LearnedThreshold> = self
             .tracker
             .snapshot(now_ms)
@@ -540,6 +592,7 @@ pub(super) fn event_processor(
             tracing::info!("event channel closed, stopping event processor");
             break;
         };
+        dynamic.apply_resets(&state);
         let species_thresholds = species_thresholds.current(&state);
         let now_ms = crate::daemon::disposition::epoch_ms();
 
@@ -1351,7 +1404,14 @@ pub(super) fn event_processor(
         // (DD-32). Both reference projects do it in this order; without the
         // soundscape nothing posted there can be listened to, so nothing
         // there can be verified.
-        if let Some(ref bw) = birdweather {
+        //
+        // Held to `BIRDWEATHER_THRESHOLD` when one is set (P-2): the public map
+        // gets only what the operator is prepared to see there, while the
+        // station's own log keeps everything it recorded. Not counted as a
+        // dropped notification: nothing failed, the operator asked for fewer.
+        if let Some(ref bw) = birdweather
+            && bw.wants(detection.confidence)
+        {
             // The station's local wall clock with the offset in force — what
             // both references send. `Date`/`Time` labelled `Z` was a lie by
             // one offset on every station outside UTC.
@@ -1365,13 +1425,16 @@ pub(super) fn event_processor(
                 let (start_secs, end_secs) = clip.detection_span();
                 birdweather_soundscape_upload(clip, &timestamp, start_secs, end_secs)
             });
+            // Blurred (or exact) once, here: the same position is on the
+            // parked copy if the post has to be replayed.
+            let bw_position = bw.post_location();
             let mut post = birdnet_integrations::birdweather::DetectionPost {
                 timestamp,
                 common_name: detection.common_name.clone(),
                 scientific_name: detection.scientific_name.clone(),
                 confidence: detection.confidence,
-                lat: bw.coordinates().0,
-                lon: bw.coordinates().1,
+                lat: bw_position.0,
+                lon: bw_position.1,
                 soundscape: None,
                 algorithm: provenance.algorithm.map(str::to_owned),
             };
@@ -3659,6 +3722,157 @@ mod tests {
         (port, captured)
     }
 
+    /// Drive the processor with a `BirdWeather` client and no clip, returning
+    /// the detection posts the stub saw once things have settled.
+    async fn birdweather_posts_for(
+        client: birdnet_integrations::birdweather::Client,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        expected: usize,
+    ) -> (Vec<serde_json::Value>, i64) {
+        let tmp = tempfile::tempdir().unwrap();
+        let (port, captured) = spawn_stub_birdweather(1);
+        let client = client.with_base_url(&format!("http://127.0.0.1:{port}"));
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        run_processor_integrated(
+            &state,
+            events,
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            test_provenance(&state),
+            Some(client),
+            Extractor::new(ExtractionConfig::default()),
+        )
+        .await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while captured.lock().unwrap().len() < expected && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        // Long enough for a post that should *not* happen to show itself.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let posts = captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.0.ends_with("/detections"))
+            .map(|r| serde_json::from_slice(&r.2).expect("a JSON body"))
+            .collect();
+        let rows = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        (posts, rows)
+    }
+
+    /// P-2: `BIRDWEATHER_THRESHOLD` keeps a detection that is good enough for
+    /// the station's log off the public map, without touching the log.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_birdweather_threshold_holds_back_the_upload_but_not_the_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let client = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13)
+            .unwrap()
+            .with_min_confidence(0.9);
+        let sure = make_event(
+            "Pica pica",
+            "Eurasian Magpie",
+            0.95,
+            tmp.path().join("a.wav"),
+            "c1",
+        );
+        let unsure = make_event(
+            "Parus major",
+            "Great Tit",
+            0.80,
+            tmp.path().join("b.wav"),
+            "c2",
+        );
+        let (posts, rows) = birdweather_posts_for(client, vec![sure, unsure], 1).await;
+        assert_eq!(rows, 2, "the station keeps both detections");
+        assert_eq!(
+            posts.len(),
+            1,
+            "only the one over the bar is uploaded: {posts:?}"
+        );
+        assert_eq!(posts[0]["scientificName"], "Pica pica");
+    }
+
+    /// The counterpart: with no bar, both are uploaded.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_a_birdweather_threshold_every_detection_is_uploaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let client = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13).unwrap();
+        let sure = make_event(
+            "Pica pica",
+            "Eurasian Magpie",
+            0.95,
+            tmp.path().join("a.wav"),
+            "c1",
+        );
+        let unsure = make_event(
+            "Parus major",
+            "Great Tit",
+            0.80,
+            tmp.path().join("b.wav"),
+            "c2",
+        );
+        let (posts, _) = birdweather_posts_for(client, vec![sure, unsure], 2).await;
+        assert_eq!(posts.len(), 2, "{posts:?}");
+    }
+
+    /// P-2: the position BirdWeather is given is blurred when asked, and exact
+    /// when not. 300 m is about 0.0027 degrees of latitude.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_posted_position_is_blurred_only_when_asked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let events = |tag: &str| {
+            (0..6)
+                .map(|i| {
+                    let mut ev = make_event(
+                        &format!("Pica pica{i}"),
+                        "Eurasian Magpie",
+                        0.95,
+                        tmp.path().join(format!("{tag}{i}.wav")),
+                        tag,
+                    );
+                    ev.detection.time = format!("09:00:0{i}");
+                    ev
+                })
+                .collect::<Vec<_>>()
+        };
+        let exact = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13).unwrap();
+        let (posts, _) = birdweather_posts_for(exact, events("x"), 6).await;
+        assert_eq!(posts.len(), 6);
+        assert!(
+            posts.iter().all(|p| p["lat"] == 51.48 && p["lon"] == -0.13),
+            "an unblurred station moved: {posts:?}"
+        );
+
+        let blurred = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13)
+            .unwrap()
+            .with_location_accuracy(300.0);
+        let (posts, _) = birdweather_posts_for(blurred, events("y"), 6).await;
+        assert_eq!(posts.len(), 6);
+        let moved = posts
+            .iter()
+            .filter(|p| p["lat"] != 51.48 || p["lon"] != -0.13)
+            .count();
+        assert!(
+            moved >= 5,
+            "the blur left {moved} of 6 posts in place: {posts:?}"
+        );
+        for p in &posts {
+            let dlat = (p["lat"].as_f64().unwrap() - 51.48).abs() * 111_195.0;
+            let dlon = (p["lon"].as_f64().unwrap() + 0.13).abs()
+                * 111_195.0
+                * 51.48_f64.to_radians().cos();
+            assert!(
+                (dlat * dlat + dlon * dlon).sqrt() <= 301.5,
+                "outside 300 m: {p}"
+            );
+        }
+    }
+
     /// DD-32: a detection sent to `BirdWeather` is preceded by its clip as a
     /// soundscape, carries that soundscape's id and the detection's place in
     /// it, is stamped with the station's local time and offset rather than a
@@ -4814,6 +5028,201 @@ mod tests {
             learned(&state),
             vec![("Strix aluco".to_string(), 1)],
             "an accepted detection at 0.95 should have confirmed its species once"
+        );
+    }
+
+    /// A processor with the learned-threshold tracker on, kept running so a test
+    /// can act between events. Returns the sender and the thread to join.
+    fn live_processor(
+        state: &birdnet_web::state::AppState,
+    ) -> (
+        mpsc::Sender<birdnet_core::detection::daemon::DetectionEvent>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let broadcast = state.detection_broadcast();
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let rt_handle = tokio::runtime::Handle::current();
+        let st = state.clone();
+        let provenance = test_provenance(state);
+        let handle = tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                rx,
+                st,
+                broadcast,
+                None,
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                dynamic_on(),
+                provenance,
+                None,
+            );
+        });
+        (tx, handle)
+    }
+
+    /// The first learned row for `sci`, once it exists (20 s at most).
+    async fn learned_row(
+        state: &birdnet_web::state::AppState,
+        sci: &str,
+        newer_than_ms: i64,
+    ) -> Option<birdnet_db::dynamic_thresholds::LearnedThreshold> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            let row = state
+                .with_db(birdnet_db::dynamic_thresholds::load_all)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|r| r.sci_name == sci && r.first_learned_ms > newer_than_ms);
+            if row.is_some() {
+                return row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        None
+    }
+
+    /// P-11: an operator's reset reaches the tracker in memory, not only the
+    /// table. A reset that deleted rows alone would be undone at once: the
+    /// processor rewrites the table from memory, and judges by memory.
+    ///
+    /// Observed through the persisted `first_learned_ms`: a tracker that was
+    /// reset starts the species again, so its next confirmation writes a new row
+    /// learned *later*; one that was not told still holds the old entry, sees
+    /// the confirmation as a repeat inside the cooldown, and writes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reset_reaches_the_tracker_so_the_species_is_learned_again_from_scratch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let (tx, worker) = live_processor(&state);
+        let ev = |time: &str, id: &str| {
+            let mut e = make_event(
+                "Strix aluco",
+                "Tawny Owl",
+                0.95,
+                tmp.path().join("r.wav"),
+                id,
+            );
+            e.detection.time = time.to_owned();
+            e
+        };
+
+        tx.send(ev("02:00:00", "c1")).unwrap();
+        let first = learned_row(&state, "Strix aluco", 0)
+            .await
+            .expect("learned once");
+        assert_eq!((first.level, first.confirmations), (1, 1));
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let outcome = birdnet_web::routes::dynamic_thresholds::reset(
+            &state,
+            &birdnet_core::detection::dynamic_threshold::Reset::Species("Strix aluco".into()),
+        )
+        .expect("the reset is written");
+        assert_eq!(outcome.rows_deleted, 1);
+        assert!(outcome.daemon_notified, "the running tracker was not told");
+        assert!(learned(&state).is_empty(), "the table is cleared at once");
+
+        tx.send(ev("02:00:30", "c2")).unwrap();
+        let again = learned_row(&state, "Strix aluco", first.first_learned_ms)
+            .await
+            .expect("a tracker that was reset learns the species again");
+        assert_eq!((again.level, again.confirmations), (1, 1));
+        drop(tx);
+        worker.await.unwrap();
+    }
+
+    /// The counterpart: with no reset, a second confirmation inside the cooldown
+    /// is a repeat, so the row is left exactly as it was. Without this the test
+    /// above would pass on a processor that re-learned on every event.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_a_reset_a_repeat_confirmation_leaves_the_learned_row_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let (tx, worker) = live_processor(&state);
+        let ev = |time: &str, id: &str| {
+            let mut e = make_event(
+                "Strix aluco",
+                "Tawny Owl",
+                0.95,
+                tmp.path().join("r.wav"),
+                id,
+            );
+            e.detection.time = time.to_owned();
+            e
+        };
+        tx.send(ev("02:00:00", "c1")).unwrap();
+        let first = learned_row(&state, "Strix aluco", 0)
+            .await
+            .expect("learned");
+        tx.send(ev("02:00:30", "c2")).unwrap();
+        drop(tx);
+        worker.await.unwrap();
+        let rows = state
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].first_learned_ms, first.first_learned_ms);
+    }
+
+    /// Resetting everything clears every species, the tracker's and the table's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reset_of_everything_forgets_every_species() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let (tx, worker) = live_processor(&state);
+        for (i, (sci, com)) in [
+            ("Strix aluco", "Tawny Owl"),
+            ("Pica pica", "Eurasian Magpie"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut e = make_event(sci, com, 0.95, tmp.path().join("r.wav"), "c");
+            e.detection.time = format!("02:00:0{i}");
+            tx.send(e).unwrap();
+        }
+        let a = learned_row(&state, "Strix aluco", 0).await.expect("owl");
+        let b = learned_row(&state, "Pica pica", 0).await.expect("magpie");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let outcome = birdnet_web::routes::dynamic_thresholds::reset(
+            &state,
+            &birdnet_core::detection::dynamic_threshold::Reset::All,
+        )
+        .unwrap();
+        assert_eq!(outcome.rows_deleted, 2);
+        // One species is heard again: only it comes back; the other stays forgotten.
+        let mut e = make_event(
+            "Strix aluco",
+            "Tawny Owl",
+            0.95,
+            tmp.path().join("r.wav"),
+            "c3",
+        );
+        e.detection.time = "02:05:00".into();
+        tx.send(e).unwrap();
+        learned_row(&state, "Strix aluco", a.first_learned_ms)
+            .await
+            .expect("owl again");
+        drop(tx);
+        worker.await.unwrap();
+        let names: Vec<String> = learned(&state).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(
+            names,
+            ["Strix aluco"],
+            "the magpie came back from a reset ({b:?})"
         );
     }
 

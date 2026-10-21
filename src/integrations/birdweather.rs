@@ -44,6 +44,59 @@ pub fn birdweather_location(
     })
 }
 
+/// The upload bar and the blur radius from their config values.
+///
+/// Unset or empty is "none" (`None`, `0.0`): a station that has not asked for
+/// either uploads and positions exactly as before. A value that is not usable is
+/// an `Err` naming the key, and the caller falls back to "none" for **that**
+/// setting only, with a warning. Out-of-range is refused rather than clamped:
+/// `75` typed for 75 % clamps to 1 and would stop every upload.
+///
+/// # Errors
+///
+/// A sentence naming the key and what is wrong with its value.
+pub(crate) fn birdweather_options(
+    threshold: Option<&str>,
+    accuracy: Option<&str>,
+) -> Result<(Option<f32>, f64), String> {
+    let blank = |v: Option<&str>| {
+        v.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let bar = match blank(threshold) {
+        None => None,
+        Some(text) => {
+            let v = birdnet_core::config::locale::parse_decimal(&text).map_err(|_| {
+                format!("BIRDWEATHER_THRESHOLD={text:?} is not a number between 0 and 1")
+            })?;
+            if !(0.0..=1.0).contains(&v) {
+                return Err(format!(
+                    "BIRDWEATHER_THRESHOLD={text:?} is outside 0 to 1 (for 75 %, write 0.75)"
+                ));
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            Some(v as f32).filter(|c| *c > 0.0)
+        }
+    };
+    let metres = match blank(accuracy) {
+        None => 0.0,
+        Some(text) => {
+            let v = birdnet_core::config::locale::parse_decimal(&text).map_err(|_| {
+                format!("BIRDWEATHER_LOCATION_ACCURACY={text:?} is not a number of metres")
+            })?;
+            let max = birdnet_integrations::birdweather::MAX_LOCATION_ACCURACY_M;
+            if !(0.0..=max).contains(&v) {
+                return Err(format!(
+                    "BIRDWEATHER_LOCATION_ACCURACY={text:?} is outside 0 to {max} metres"
+                ));
+            }
+            v
+        }
+    };
+    Ok((bar, metres))
+}
+
 /// Create a `BirdWeather` client from CLI flags and/or config file values.
 ///
 /// Returns `None` if no station token is configured, and `None` — with one
@@ -87,8 +140,38 @@ pub fn create_birdweather_client(
                 .map(String::from)
         });
 
+    // The two BirdWeather-only settings (P-2). Read as literal `config.get`s,
+    // for `tests/every_config_key_is_known.rs`.
+    let (min_confidence, accuracy_m) = match birdweather_options(
+        config.and_then(|c| c.get("BIRDWEATHER_THRESHOLD")),
+        config.and_then(|c| c.get("BIRDWEATHER_LOCATION_ACCURACY")),
+    ) {
+        Ok(options) => options,
+        Err(why) => {
+            tracing::warn!("{why}; BirdWeather uploads are not affected by that setting");
+            (None, 0.0)
+        }
+    };
+
     match birdnet_integrations::birdweather::Client::new(&token, lat, lon) {
         Ok(client) => {
+            let client = match min_confidence {
+                Some(c) => client.with_min_confidence(c),
+                None => client,
+            };
+            let client = client.with_location_accuracy(accuracy_m);
+            if let Some(bar) = client.min_confidence() {
+                tracing::info!(
+                    bar,
+                    "BirdWeather: only detections at or above this confidence are uploaded"
+                );
+            }
+            if client.location_accuracy() > 0.0 {
+                tracing::info!(
+                    metres = client.location_accuracy(),
+                    "BirdWeather: the posted position is blurred by up to this far"
+                );
+            }
             let client = if let Some(url) = base_override {
                 let client = client.with_base_url(&url);
                 tracing::info!(
@@ -111,6 +194,25 @@ pub fn create_birdweather_client(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_birdweather_options_are_off_unless_set_and_refused_when_out_of_range() {
+        use super::birdweather_options as opts;
+        assert_eq!(opts(None, None), Ok((None, 0.0)));
+        assert_eq!(opts(Some(""), Some("  ")), Ok((None, 0.0)));
+        assert_eq!(opts(Some("0"), Some("0")), Ok((None, 0.0)), "0 is none");
+        assert_eq!(opts(Some("0,85"), Some("250")), Ok((Some(0.85), 250.0)));
+        assert!(opts(Some("75"), None).unwrap_err().contains("0.75"));
+        assert!(opts(Some("-0.1"), None).is_err());
+        assert!(opts(Some("high"), None).is_err());
+        assert!(opts(None, Some("-5")).is_err());
+        assert!(opts(None, Some("50001")).is_err());
+        assert!(opts(None, Some("1.5km")).is_err());
+        assert!(
+            opts(None, Some("50000")).is_ok(),
+            "the cap itself is allowed"
+        );
+    }
+
     use super::{birdweather_location, create_birdweather_client};
     use crate::integrations::test_support::{config_with, default_cli};
 

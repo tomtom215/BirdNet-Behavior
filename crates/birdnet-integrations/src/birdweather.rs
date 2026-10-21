@@ -146,6 +146,78 @@ pub fn check_location(lat: Option<f64>, lon: Option<f64>) -> Result<(f64, f64), 
     Ok((lat, lon))
 }
 
+/// The widest blur radius [`Client::with_location_accuracy`] accepts, in metres.
+///
+/// A radius of 50 km already hides which town a station is in; above
+/// that it hides which country, and a number that large is a typo (kilometres
+/// typed into a metres field).
+pub const MAX_LOCATION_ACCURACY_M: f64 = 50_000.0;
+
+/// The mean Earth radius, metres. The destination below is computed on a sphere
+/// of this radius, so a point `d` metres out is `d` metres out by haversine too.
+/// (birdnet-go divides by 111 000 m per degree, 0.2 % short, so its "within N
+/// metres" is N + 0.2 %: the haversine test below put a 5 km blur 9 m out.)
+const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+/// Two independent uniform numbers in `[0, 1)` from the operating system's
+/// generator.
+fn random_pair() -> (f64, f64) {
+    use ring::rand::{SecureRandom as _, SystemRandom};
+    let mut bytes = [0_u8; 16];
+    // A failing system generator leaves the bytes zero, which maps to the
+    // lowest corner of the disc, a consistent offset rather than none. It does
+    // not happen on any platform this builds for.
+    let _ = SystemRandom::new().fill(&mut bytes);
+    let unit = |b: &[u8]| {
+        let n = u64::from_le_bytes(b.try_into().unwrap_or([0; 8])) >> 11;
+        #[allow(clippy::cast_precision_loss)]
+        {
+            n as f64 / (1_u64 << 53) as f64
+        }
+    };
+    (unit(&bytes[..8]), unit(&bytes[8..]))
+}
+
+/// A position blurred by up to `radius_m` metres, from two uniform draws in
+/// `[0, 1)`.
+///
+/// The offset is uniform over a **disc** of that radius (the square-root of the
+/// first draw sets the distance, so points are not bunched at the centre; the
+/// second sets the bearing), measured along the Earth's surface, so a metre is a
+/// metre at 60° north too. birdnet-go offsets each axis independently by up to
+/// ±radius, which puts a point up to 1.41 × the radius away at the equator and
+/// less than the radius east-west near the poles; the disc is what "within N
+/// metres" says. The result is rounded to five decimal places (about 1 m) and
+/// kept on the globe: latitude clamped to ±90°, longitude wrapped. (birdnet-go
+/// floors to four, about 11 m, which moves a point by up to that much *on top
+/// of* the radius and makes a 5 m radius a lie.)
+///
+/// **A caveat that is the same here as upstream:** each post draws a new
+/// offset, so someone collecting many posts from one station can average them
+/// back towards its true position. The blur hides a single post, not a station
+/// that posts for a year.
+#[must_use]
+pub fn fuzz_location(lat: f64, lon: f64, radius_m: f64, u: f64, v: f64) -> (f64, f64) {
+    if !(radius_m.is_finite() && radius_m > 0.0) {
+        return (lat, lon);
+    }
+    let distance = radius_m * u.clamp(0.0, 1.0).sqrt();
+    let bearing = v.clamp(0.0, 1.0) * std::f64::consts::TAU;
+    // The spherical destination point: exact at any latitude, including the
+    // one where a degree of longitude is no distance at all.
+    let (phi1, lambda1) = (lat.to_radians(), lon.to_radians());
+    let delta = distance / EARTH_RADIUS_M;
+    let phi2 = (phi1.sin() * delta.cos() + phi1.cos() * delta.sin() * bearing.cos()).asin();
+    let lambda2 = lambda1
+        + (bearing.sin() * delta.sin() * phi1.cos()).atan2(delta.cos() - phi1.sin() * phi2.sin());
+    let round = |x: f64| (x * 100_000.0).round() / 100_000.0;
+    let new_lat = round(phi2.to_degrees()).clamp(-90.0, 90.0);
+    let mut new_lon = round(lambda2.to_degrees());
+    // `atan2` can leave the longitude a turn or more out; bring it back.
+    new_lon = (new_lon + 180.0).rem_euclid(360.0) - 180.0;
+    (new_lat, new_lon)
+}
+
 /// `BirdWeather` API client.
 #[derive(Clone)]
 pub struct Client {
@@ -161,6 +233,12 @@ pub struct Client {
     lat: f64,
     /// Station longitude.
     lon: f64,
+    /// Blur posted positions by up to this many metres; `0.0` posts the exact
+    /// position. See [`fuzz_location`].
+    location_accuracy_m: f64,
+    /// Upload only detections at or above this confidence; `None` uploads every
+    /// detection the station records. See [`Client::with_min_confidence`].
+    min_confidence: Option<f32>,
 }
 
 impl std::fmt::Debug for Client {
@@ -171,6 +249,8 @@ impl std::fmt::Debug for Client {
             .field("base_url", &self.base_url)
             .field("lat", &self.lat)
             .field("lon", &self.lon)
+            .field("location_accuracy_m", &self.location_accuracy_m)
+            .field("min_confidence", &self.min_confidence)
             .finish_non_exhaustive()
     }
 }
@@ -346,7 +426,75 @@ impl Client {
             http,
             lat,
             lon,
+            location_accuracy_m: 0.0,
+            min_confidence: None,
         })
+    }
+
+    /// Blur the position posted with each detection by up to `metres`.
+    ///
+    /// tphakala/birdnet-go's `birdweather.locationaccuracy`. The position goes
+    /// on a **public map**, and a station in a garden is a station at an address.
+    /// Anything that is not a positive, finite number of metres (and anything
+    /// above [`MAX_LOCATION_ACCURACY_M`]) leaves the position exact, which is
+    /// also the default: a station that has not asked for this posts what it
+    /// always did.
+    #[must_use]
+    pub fn with_location_accuracy(mut self, metres: f64) -> Self {
+        self.location_accuracy_m = if metres.is_finite() && metres > 0.0 {
+            metres.min(MAX_LOCATION_ACCURACY_M)
+        } else {
+            0.0
+        };
+        self
+    }
+
+    /// The blur radius in metres; `0.0` means the position is posted exactly.
+    #[must_use]
+    pub const fn location_accuracy(&self) -> f64 {
+        self.location_accuracy_m
+    }
+
+    /// Upload only detections at or above `confidence`: a bar for the public
+    /// map that is higher than the station's own.
+    ///
+    /// tphakala/birdnet-go's `birdweather.threshold`. A station keeps a 0.7
+    /// detection for its own log and reviews it; BirdWeather's community map is
+    /// where a wrong 0.7 reads as fact. Setting this *below* the station's
+    /// threshold changes nothing, since a detection the station dropped is never
+    /// offered. A non-finite value or one outside `0..=1` is ignored (no extra
+    /// bar) rather than clamped: `75` typed for 75 % would otherwise clamp to 1
+    /// and silently stop every upload.
+    #[must_use]
+    pub fn with_min_confidence(mut self, confidence: f32) -> Self {
+        self.min_confidence =
+            (confidence.is_finite() && (0.0..=1.0).contains(&confidence) && confidence > 0.0)
+                .then_some(confidence);
+        self
+    }
+
+    /// The upload bar, if one was set.
+    #[must_use]
+    pub const fn min_confidence(&self) -> Option<f32> {
+        self.min_confidence
+    }
+
+    /// Whether a detection with this `confidence` is to be uploaded.
+    #[must_use]
+    pub fn wants(&self, confidence: f32) -> bool {
+        self.min_confidence.is_none_or(|floor| confidence >= floor)
+    }
+
+    /// The position to post for the next detection: the station's, blurred if
+    /// a radius was set. A fresh offset each call, as birdnet-go draws one per
+    /// post.
+    #[must_use]
+    pub fn post_location(&self) -> (f64, f64) {
+        if self.location_accuracy_m <= 0.0 {
+            return (self.lat, self.lon);
+        }
+        let (u, v) = random_pair();
+        fuzz_location(self.lat, self.lon, self.location_accuracy_m, u, v)
     }
 
     /// Redirect this client at a different API base.
@@ -752,6 +900,150 @@ mod tests {
             .with_base_url("http://127.0.0.1:9000/api/v1/");
         // Trailing slash trimmed so the joined URL has exactly one separator.
         assert_eq!(client.base_url(), "http://127.0.0.1:9000/api/v1");
+    }
+
+    // ── location fuzzing and the upload bar (P-2) ──────────────────────
+
+    /// Great-circle distance in metres (haversine, mean radius).
+    fn metres_between(a: (f64, f64), b: (f64, f64)) -> f64 {
+        let (la1, lo1, la2, lo2) = (
+            a.0.to_radians(),
+            a.1.to_radians(),
+            b.0.to_radians(),
+            b.1.to_radians(),
+        );
+        let h = ((la2 - la1) / 2.0).sin().powi(2)
+            + la1.cos() * la2.cos() * ((lo2 - lo1) / 2.0).sin().powi(2);
+        2.0 * 6_371_000.0 * h.sqrt().asin()
+    }
+
+    /// Slack for rounding to five decimals: up to 0.55 m on each axis, 0.8 m together.
+    const ROUNDING_M: f64 = 1.5;
+
+    #[test]
+    fn a_fuzzed_position_stays_inside_the_radius_everywhere() {
+        // On a grid of draws, at the equator, at 60 N (where a degree of
+        // longitude is half as long), in the southern hemisphere, and close
+        // to a pole. The per-axis square birdnet-go draws fails the equator
+        // case (1.41 x the radius at the corners); a latitude-blind disc fails
+        // the 60 N case.
+        for (lat, lon) in [(0.0, 10.0), (60.0, 24.0), (-33.9, 151.2), (89.0, 5.0)] {
+            for radius in [5.0, 100.0, 5_000.0] {
+                for i in 0..=20 {
+                    for j in 0..20 {
+                        let (u, v) = (f64::from(i) / 20.0, f64::from(j) / 20.0);
+                        let got = fuzz_location(lat, lon, radius, u, v);
+                        let d = metres_between((lat, lon), got);
+                        assert!(
+                            d <= radius + ROUNDING_M,
+                            "({lat},{lon}) r={radius} u={u} v={v}: moved {d:.1} m to {got:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_blur_actually_blurs_and_reaches_the_edge() {
+        // The counterpart: a function that returned the input would satisfy
+        // the bound above. The farthest draw (u = 1) must be close to the
+        // radius, and a mid draw must have moved.
+        let far = fuzz_location(51.5, -0.1, 1_000.0, 1.0, 0.25);
+        let d = metres_between((51.5, -0.1), far);
+        assert!(
+            d > 990.0 && d <= 1_001.0,
+            "the edge of the disc is {d:.1} m out"
+        );
+        let mid = fuzz_location(51.5, -0.1, 1_000.0, 0.25, 0.6);
+        assert!(metres_between((51.5, -0.1), mid) > 100.0);
+    }
+
+    #[test]
+    fn fuzzing_keeps_a_position_on_the_globe() {
+        let at_pole = fuzz_location(90.0, 0.0, 50_000.0, 1.0, 0.0);
+        assert!(at_pole.0 <= 90.0 && at_pole.0 >= -90.0, "{at_pole:?}");
+        let near_date_line = fuzz_location(10.0, 179.99999, 5_000.0, 1.0, 0.25);
+        assert!(
+            (-180.0..=180.0).contains(&near_date_line.1),
+            "{near_date_line:?}"
+        );
+        let west = fuzz_location(10.0, -179.99999, 5_000.0, 1.0, 0.75);
+        assert!((-180.0..=180.0).contains(&west.1), "{west:?}");
+    }
+
+    #[test]
+    fn a_zero_radius_or_nonsense_leaves_the_position_exact() {
+        for r in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(fuzz_location(51.5, -0.1, r, 0.7, 0.3), (51.5, -0.1), "{r}");
+        }
+    }
+
+    #[test]
+    fn a_client_posts_the_exact_position_unless_asked_to_blur() {
+        let plain = Client::new("t", 51.5, -0.1).unwrap();
+        assert_eq!(plain.location_accuracy(), 0.0);
+        for _ in 0..20 {
+            assert_eq!(plain.post_location(), (51.5, -0.1));
+        }
+        let blurred = Client::new("t", 51.5, -0.1)
+            .unwrap()
+            .with_location_accuracy(500.0);
+        let draws: Vec<(f64, f64)> = (0..50).map(|_| blurred.post_location()).collect();
+        assert!(
+            draws.iter().any(|p| *p != (51.5, -0.1)),
+            "a blurred client posted the exact position fifty times"
+        );
+        assert!(
+            draws.windows(2).any(|w| w[0] != w[1]),
+            "every post carried the same offset: it is not drawn per post"
+        );
+        for p in &draws {
+            assert!(
+                metres_between((51.5, -0.1), *p) <= 500.0 + ROUNDING_M,
+                "{p:?}"
+            );
+        }
+        // The station's own coordinates are untouched: the doctor and the
+        // dashboard read them, and they must not drift.
+        assert_eq!(blurred.coordinates(), (51.5, -0.1));
+    }
+
+    #[test]
+    fn a_blur_radius_that_is_nonsense_is_off_and_a_huge_one_is_capped() {
+        for bad in [0.0, -1.0, f64::NAN, f64::NEG_INFINITY] {
+            let c = Client::new("t", 51.5, -0.1)
+                .unwrap()
+                .with_location_accuracy(bad);
+            assert_eq!(c.location_accuracy(), 0.0, "{bad}");
+        }
+        let c = Client::new("t", 51.5, -0.1)
+            .unwrap()
+            .with_location_accuracy(1.0e9);
+        assert!((c.location_accuracy() - MAX_LOCATION_ACCURACY_M).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_upload_bar_is_inclusive_and_absent_by_default() {
+        let none = Client::new("t", 51.5, -0.1).unwrap();
+        assert!(none.wants(0.0) && none.wants(0.01), "no bar, no filtering");
+        let c = Client::new("t", 51.5, -0.1)
+            .unwrap()
+            .with_min_confidence(0.85);
+        assert!(!c.wants(0.84) && c.wants(0.85) && c.wants(0.99));
+        assert_eq!(c.min_confidence(), Some(0.85));
+    }
+
+    #[test]
+    fn a_bar_typed_as_a_percentage_is_ignored_not_clamped_to_one() {
+        // 75 typed for 75 % would clamp to 1.0 and stop every upload for good.
+        for bad in [75.0_f32, 1.01, -0.5, f32::NAN, f32::INFINITY, 0.0] {
+            let c = Client::new("t", 51.5, -0.1)
+                .unwrap()
+                .with_min_confidence(bad);
+            assert_eq!(c.min_confidence(), None, "{bad}");
+            assert!(c.wants(0.3), "{bad} blocked a 0.3 detection");
+        }
     }
 
     #[test]

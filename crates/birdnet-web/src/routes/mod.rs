@@ -11,6 +11,7 @@ pub mod auth_pages;
 pub mod charts;
 pub mod dashboard_image;
 pub mod detections;
+pub mod dynamic_thresholds;
 pub mod export;
 pub mod feeds;
 pub mod health;
@@ -29,6 +30,7 @@ pub mod spectrogram_ws;
 pub mod static_files;
 pub mod system;
 pub mod timeseries;
+pub mod weather;
 pub mod websocket;
 
 use axum::Router;
@@ -75,6 +77,8 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", detections::router())
         .nest("/api/v2", analysis_runs::router())
         .nest("/api/v2", species::router())
+        .nest("/api/v2", dynamic_thresholds::router())
+        .nest("/api/v2", weather::router())
         .nest("/api/v2", analytics::router())
         .nest("/api/v2", timeseries::router())
         .nest("/api/v2", system::router())

@@ -137,15 +137,48 @@ async fn test_page(State(state): State<AppState>) -> Html<String> {
 }
 
 fn render_test_page_for(state: &AppState) -> String {
-    render_test_page(&PushChannel::of(state), birdweather_configured(state))
+    render_test_page(
+        &PushChannel::of(state),
+        birdweather_state(state),
+        &super::data_source_test::cards(state),
+    )
 }
 
-/// Whether the BirdWeather channel has a token set.
+/// What the station knows about its BirdWeather token.
+///
+/// Three facts: a settings read that failed is not a token that is not set, and
+/// the page that said "Not configured" and disabled the button for a station
+/// whose settings it could not read sent the operator to retype a token that was
+/// there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BirdweatherToken {
+    /// A non-empty token is stored.
+    Set(String),
+    /// The setting is absent or empty.
+    NotSet,
+    /// The settings could not be read.
+    Unreadable,
+}
+
+impl BirdweatherToken {
+    const fn is_set(&self) -> bool {
+        matches!(self, Self::Set(_))
+    }
+}
+
+/// The stored token.
 ///
 /// Still a settings read, and correctly so: `ping_birdweather` reads the token
 /// at request time, so the settings row *is* what that test uses.
-fn birdweather_configured(state: &AppState) -> bool {
-    state.with_read_db(|conn| get_setting(conn, "birdweather_token").is_ok_and(|v| !v.is_empty()))
+fn birdweather_state(state: &AppState) -> BirdweatherToken {
+    match state.with_read_db(|conn| get_setting(conn, "birdweather_token")) {
+        Ok(token) if !token.is_empty() => BirdweatherToken::Set(token),
+        Ok(_) | Err(birdnet_db::settings::SettingsError::NotFound(_)) => BirdweatherToken::NotSet,
+        Err(e) => {
+            tracing::warn!(error = %e, "notification test: the BirdWeather token could not be read");
+            BirdweatherToken::Unreadable
+        }
+    }
 }
 
 /// Render the channels Send-test body (no document shell).
@@ -154,10 +187,12 @@ fn birdweather_configured(state: &AppState) -> bool {
 /// (`crate::routes::pages::homes::station_tabs`), which renders the
 /// confirm-before-you-rely-on-it test UI in the main shell.
 pub(crate) fn channels_test_body(state: &AppState) -> String {
-    test_notifications_body(&PushChannel::of(state), birdweather_configured(state))
+    let mut body = test_notifications_body(&PushChannel::of(state), birdweather_state(state));
+    body.push_str(&super::data_source_test::cards(state));
+    body
 }
 
-fn render_test_page(push: &PushChannel, bw_ok: bool) -> String {
+fn render_test_page(push: &PushChannel, bw: BirdweatherToken, data_sources: &str) -> String {
     // The page's own title lives here, not in the body: the body is also the
     // Station Alerts tab's "Channels" section, under that tab's heading, and
     // a second `<h1>` there put the tab's outline out of order.
@@ -166,8 +201,8 @@ fn render_test_page(push: &PushChannel, bw_ok: bool) -> String {
         "notifications",
         "Test",
         &format!(
-            r#"<h1 class="nt-title">Test Notification Channels</h1>{}"#,
-            test_notifications_body(push, bw_ok)
+            r#"<h1 class="nt-title">Test Notification Channels</h1>{}{data_sources}"#,
+            test_notifications_body(push, bw)
         ),
     )
 }
@@ -191,7 +226,8 @@ static NOTIFICATION_TEST_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
 /// Page-specific body (scoped `<style>` + cards). The shared shell supplies the
 /// chrome, the nav (with the Notifications tab active), and the
 /// `Admin › Notifications › Test` breadcrumb.
-fn test_notifications_body(push: &PushChannel, bw_ok: bool) -> String {
+fn test_notifications_body(push: &PushChannel, bw: BirdweatherToken) -> String {
+    let bw_ok = bw.is_set();
     let push_ok = push.configured();
     let push_status = if push_ok {
         let lines = push.lines();
@@ -204,10 +240,10 @@ fn test_notifications_body(push: &PushChannel, bw_ok: bool) -> String {
     } else {
         "No destination resolved".to_owned()
     };
-    let bw_status = if bw_ok {
-        "Configured"
-    } else {
-        "Not configured"
+    let bw_status = match bw {
+        BirdweatherToken::Set(_) => "Configured",
+        BirdweatherToken::NotSet => "Not configured",
+        BirdweatherToken::Unreadable => "Could not be read",
     };
     let push_icon = if push_ok { "✅" } else { "⚠️" };
     let bw_icon = if bw_ok { "✅" } else { "⚠️" };
@@ -245,10 +281,14 @@ fn test_notifications_body(push: &PushChannel, bw_ok: bool) -> String {
     } else {
         r#"Disabled until this station resolves a destination: set Notification URLs, an Apprise server URL, or an Apprise config file in <a href="/admin/settings">Settings</a> and restart."#
     };
-    let bw_hint = if bw_ok {
-        "Configured — ping to confirm your token."
-    } else {
-        r#"Disabled until you set the BirdWeather token in <a href="/admin/settings">Settings</a>."#
+    let bw_hint = match bw {
+        BirdweatherToken::Set(_) => "Configured — ping to confirm your token.",
+        BirdweatherToken::NotSet => {
+            r#"Disabled until you set the BirdWeather token in <a href="/admin/settings">Settings</a>."#
+        }
+        BirdweatherToken::Unreadable => {
+            r#"The station could not read its settings, so it cannot say whether a token is set. This is a fault, not a missing token — <a href="/station">check the station</a>."#
+        }
     };
 
     let mut html = String::with_capacity(4096);
@@ -355,13 +395,9 @@ async fn test_push(State(state): State<AppState>) -> (StatusCode, Html<String>) 
     }
 }
 
-/// The stored BirdWeather token, if one is set. Blocks on the database.
-fn birdweather_token(state: &AppState) -> Option<String> {
-    state.with_read_db(|conn| {
-        get_setting(conn, "birdweather_token")
-            .ok()
-            .filter(|v| !v.is_empty())
-    })
+/// The stored BirdWeather token. Blocks on the database.
+fn birdweather_token(state: &AppState) -> BirdweatherToken {
+    birdweather_state(state)
 }
 
 async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<String>) {
@@ -369,14 +405,24 @@ async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<St
 
     // O-18: toast the test outcome on every branch.
     match token {
-        None => (
+        BirdweatherToken::NotSet => (
             StatusCode::OK,
             toast::with(
                 Html(result_html(false, "BirdWeather token not configured")),
                 Toast::warn("BirdWeather token not configured."),
             ),
         ),
-        Some(tok) => {
+        BirdweatherToken::Unreadable => (
+            StatusCode::OK,
+            toast::with(
+                Html(result_html(
+                    false,
+                    "The station's settings could not be read, so the token could not be tested",
+                )),
+                Toast::error("BirdWeather: the settings could not be read."),
+            ),
+        ),
+        BirdweatherToken::Set(tok) => {
             let res = ping_birdweather(&tok).await;
             match res {
                 Ok(msg) => (
@@ -410,14 +456,19 @@ async fn test_all(State(state): State<AppState>) -> (StatusCode, Html<String>) {
         lines.push("&#x26a0;&#xfe0f; Push: no destination resolved (skipped)".to_owned());
     }
 
-    let bw_token = state.run_blocking(birdweather_token).await;
-    if let Some(tok) = bw_token {
-        match ping_birdweather(&tok).await {
+    match state.run_blocking(birdweather_token).await {
+        BirdweatherToken::Set(tok) => match ping_birdweather(&tok).await {
             Ok(msg) => lines.push(format!("&#x2705; BirdWeather: {}", escape_html(&msg))),
             Err(e) => lines.push(format!("&#x274c; BirdWeather: {}", escape_html(&e))),
+        },
+        BirdweatherToken::NotSet => {
+            lines.push("&#x26a0;&#xfe0f; BirdWeather: not configured (skipped)".to_owned());
         }
-    } else {
-        lines.push("&#x26a0;&#xfe0f; BirdWeather: not configured (skipped)".to_owned());
+        BirdweatherToken::Unreadable => {
+            lines.push(
+                "&#x26a0;&#xfe0f; BirdWeather: settings could not be read (skipped)".to_owned(),
+            );
+        }
     }
 
     // MQTT and email are the binary's to build (CLI and config file), so it
@@ -543,6 +594,7 @@ mod tests {
             email: Some(NotificationProbes::fixed(Ok(
                 "sent to ops@example.org".into()
             ))),
+            ..NotificationProbes::default()
         });
         let html = run_test_all(&state).await;
         assert!(html.contains("MQTT: connection refused"), "{html}");
@@ -554,6 +606,7 @@ mod tests {
                 "published to birdnet/test".into()
             ))),
             email: None,
+            ..NotificationProbes::default()
         });
         let html = run_test_all(&state).await;
         assert!(
@@ -561,6 +614,27 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("Email: not configured (skipped)"), "{html}");
+    }
+
+    /// A token value that is not a literal in the source.
+    fn token() -> String {
+        format!("tok-{}", std::process::id())
+    }
+
+    /// A settings table that cannot be read is neither a configured token nor a
+    /// missing one: the card says it could not look, and does not tell the
+    /// operator to type a token that may be there.
+    #[test]
+    fn an_unreadable_token_is_not_reported_as_not_configured() {
+        let body = test_notifications_body(&PushChannel::default(), BirdweatherToken::Unreadable);
+        assert!(body.contains("Could not be read"), "{body}");
+        assert!(
+            !body.contains("Disabled until you set the BirdWeather token"),
+            "{body}"
+        );
+        assert!(!body.contains("Not configured"), "{body}");
+        let missing = test_notifications_body(&PushChannel::default(), BirdweatherToken::NotSet);
+        assert!(missing.contains("Not configured"), "{missing}");
     }
 
     /// A station with one native route resolved and no Apprise server.
@@ -588,8 +662,14 @@ mod tests {
         // enumerable `.result-banner` variants instead of computed inline colours.
         // Check the page body, not `render_test_page` (the shared shell adds
         // `data-confirm-style` attributes a naive `style="` check would flag).
-        assert!(!test_notifications_body(&native_only(), true).contains("style=\""));
-        assert!(!test_notifications_body(&PushChannel::default(), false).contains("style=\""));
+        assert!(
+            !test_notifications_body(&native_only(), BirdweatherToken::Set(token()))
+                .contains("style=\"")
+        );
+        assert!(
+            !test_notifications_body(&PushChannel::default(), BirdweatherToken::NotSet)
+                .contains("style=\"")
+        );
         assert!(!result_html(true, "ok").contains("style=\""));
         assert!(!result_html(false, "err").contains("style=\""));
     }
@@ -601,7 +681,7 @@ mod tests {
         // pointing at the exact Settings field to fill in. (Check the `disabled>`
         // attribute, not the bare word "disabled" — the `.btn-disabled` CSS class
         // is always present in the page's <style> block.)
-        let body = test_notifications_body(&PushChannel::default(), false);
+        let body = test_notifications_body(&PushChannel::default(), BirdweatherToken::NotSet);
         assert!(body.contains("disabled>")); // buttons carry the disabled attribute
         // Tooltips name the reason.
         assert!(
@@ -616,7 +696,7 @@ mod tests {
 
     #[test]
     fn enabled_buttons_are_not_disabled_and_have_action_tooltips() {
-        let body = test_notifications_body(&native_only(), true);
+        let body = test_notifications_body(&native_only(), BirdweatherToken::Set(token()));
         // No channel button carries the disabled attribute when both are configured.
         assert!(!body.contains("disabled>"));
         assert!(
@@ -646,7 +726,7 @@ mod tests {
 
     #[test]
     fn the_page_names_the_destinations_it_resolved() {
-        let body = test_notifications_body(&native_only(), false);
+        let body = test_notifications_body(&native_only(), BirdweatherToken::NotSet);
         assert!(
             body.contains("ntfy https://ntfy.sh (1 topic(s))"),
             "the resolved destination must be named: {body}"
@@ -665,7 +745,7 @@ mod tests {
             apprise_cli: false,
             apprise_server: false,
         };
-        let body = test_notifications_body(&hostile, false);
+        let body = test_notifications_body(&hostile, BirdweatherToken::NotSet);
         assert!(!body.contains("<script>"), "{body}");
         assert!(body.contains("&lt;script&gt;"));
     }

@@ -1,6 +1,6 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eighteen token-gated endpoints — ten writes and eight reads — under [Changing a station](#changing-a-station).
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen token-gated endpoints — eleven writes and eight reads — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
@@ -193,7 +193,8 @@ The rest of the export family (`detections/export/raven`, the per-clip Raven and
 | `GET /api/v2/species/image/{scientific_name}/file` | — | The cached picture itself (a custom image first, then the provider's), with a five-minute `private` cache header on the picture and on the `404` |
 | `GET /api/v2/recordings` | `species` (matched against the file name), `limit` (default 50, at most 500), `offset` | List the files in the recordings directory: `filename`, `size_bytes`, `modified_secs`, `content_type` |
 | `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip, honouring `Range` requests (`206`); the type follows the extension (WAV, MP3, FLAC, Ogg, AAC) |
-| `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached; with the `raw_spectrogram` setting on, never labelled |
+| `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached, in the station's `spectrogram_colormap` and `spectrogram_range_db`; with the `raw_spectrogram` setting on, never labelled. `ETag` and `Cache-Control: private, no-cache`; a matching `If-None-Match` is `304` |
+| `GET /api/v2/dashboard-image` | — | The file named by the `dashboard_image` setting, as the PNG, JPEG, GIF or WebP it is by its first bytes; `404` for anything else, a missing file or one over 8 MiB. `ETag`, `private, no-cache`, `304` on a match |
 
 
 ### Why isn't a bird heard here?
@@ -401,7 +402,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all eighteen answer `404`: the write surface does not exist rather
+Until you do, all nineteen answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
@@ -440,6 +441,7 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `GET` | `/api/v2/detections/comments` | Read one detection's comment thread, oldest first |
 | `POST` | `/api/v2/detections/comments` | Add a comment (1–2000 characters) |
 | `POST` | `/api/v2/detections/comments/delete` | Withdraw one comment by `id` |
+| `POST` | `/api/v2/dynamic-thresholds/reset` | Forget what the station learned about one species (`{"species": "Strix aluco"}`) or all of them (`{"all": true, "confirm": true}`) |
 | `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
 | `PUT` | `/api/v2/settings` | Change one or more settings |
 | `POST` | `/api/v2/control/restart` | Restart the station |

@@ -19,6 +19,7 @@
 //! | GET    | /admin/species/manage | Per-species storage and bulk actions (`N-4`) |
 
 pub mod handler;
+pub mod learned;
 pub mod manage;
 pub mod render;
 
@@ -68,6 +69,15 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/species/thresholds/delete",
             axum::routing::post(handler::delete_threshold),
+        )
+        .route("/admin/species/learned", get(learned::learned_partial))
+        .route(
+            "/admin/species/learned/reset",
+            axum::routing::post(learned::reset_one),
+        )
+        .route(
+            "/admin/species/learned/reset-all",
+            axum::routing::post(learned::reset_everything),
         )
         .route("/admin/species/intervals", get(handler::intervals_partial))
         .route(

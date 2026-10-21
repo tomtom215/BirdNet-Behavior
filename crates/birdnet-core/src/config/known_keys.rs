@@ -34,6 +34,8 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "BIRDNET_DYNAMIC_THRESHOLD_HOURS",
     "BIRDNET_DYNAMIC_THRESHOLD_MIN",
     "BIRDNET_DYNAMIC_THRESHOLD_TRIGGER",
+    "BIRDWEATHER_LOCATION_ACCURACY",
+    "BIRDWEATHER_THRESHOLD",
     "BIRDWEATHER_TOKEN",
     "BIRDWEATHER_URL",
     "BNB_API_TOKEN",
@@ -53,10 +55,12 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "EBIRD_BACK_DAYS",
     "EBIRD_DIST_KM",
     "EBIRD_REGION",
+    "EMBED_ORIGINS",
     "EXTRACTION_LENGTH",
     "FLICKR_API_KEY",
     "FLICKR_FILTER_EMAIL",
     "FREQ_SHIFT",
+    "FULL_DISK",
     "HEARTBEAT_URL",
     "IMAGE_CACHE_DIR",
     "IMAGE_PROVIDER",
@@ -89,6 +93,9 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "MODEL_SAMPLE_RATE",
     "MODEL_THRESHOLD",
     "MQTT_CA_FILE",
+    "MQTT_CLIENT_CERT",
+    "MQTT_CLIENT_KEY",
+    "MQTT_HA_DISCOVERY",
     "MQTT_HOST",
     "MQTT_PASSWORD",
     "MQTT_PORT",
@@ -179,6 +186,402 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
 /// kept `--doctor` from ever exiting 0.
 pub const INSTALLER_KEYS: &[&str] = &["BIRDNET_LISTEN", "CADDY_USER"];
 
+/// What a key BirdNET-Pi writes into `birdnet.conf` is here.
+///
+/// A `birdnet.conf` carried over from BirdNET-Pi has sixty default keys and
+/// this station reads twenty of them under the same name. For the rest an
+/// operator was told only "not a setting this station reads", which is true and
+/// sends them nowhere. [`birdnet_pi_equivalent`] says where each goes, or that
+/// it goes nowhere and why. The full table, with how each value changes, is
+/// `birdnet_migrate::conf::RULES`; a test in the binary's crate holds the two
+/// to each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PiEquivalent {
+    /// The same thing under another key of this station's `birdnet.conf`.
+    Renamed {
+        /// This station's key.
+        ours: &'static str,
+        /// What else is different, or empty.
+        note: &'static str,
+    },
+    /// Not a `birdnet.conf` key here; a setting in the browser, which importing
+    /// the file (Station, Data) or `--import-birdnet-pi-conf` carries across.
+    Setting {
+        /// What to look for on the Settings page.
+        name: &'static str,
+        /// What else is different, or empty.
+        note: &'static str,
+    },
+    /// Nothing here does this, or it needs more than renaming.
+    None {
+        /// Why, and what to do instead.
+        reason: &'static str,
+    },
+}
+
+/// BirdNET-Pi's `birdnet.conf` keys that this station does not read under the
+/// same name, and what each is here. Sorted by key.
+pub const BIRDNET_PI_KEYS: &[(&str, PiEquivalent)] = &[
+    (
+        "ACTIVATE_FREQSHIFT_IN_LIVESTREAM",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi shifts the live audio's pitch for the listener; this station's FREQ_SHIFT rewrites every new clip, which is not the same",
+        },
+    ),
+    (
+        "ANALYZED",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's folder of analysed files; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_COOLDOWN",
+            note: "also in seconds; this station's default is 300, BirdNET-Pi's is no limit, so set it",
+        },
+    ),
+    (
+        "APPRISE_NOTIFICATION_BODY",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_BODY_TEMPLATE",
+            note: "",
+        },
+    ),
+    (
+        "APPRISE_NOTIFICATION_TITLE",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_TITLE_TEMPLATE",
+            note: "",
+        },
+    ),
+    (
+        "APPRISE_NOTIFY_EACH_DETECTION",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_TRIGGER",
+            note: "one list of rules, for example each,new-species; all three switches at 0 is APPRISE_TRIGGER=off",
+        },
+    ),
+    (
+        "APPRISE_NOTIFY_NEW_SPECIES",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_TRIGGER",
+            note: "one list of rules, for example each,new-species; all three switches at 0 is APPRISE_TRIGGER=off",
+        },
+    ),
+    (
+        "APPRISE_NOTIFY_NEW_SPECIES_EACH_DAY",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_TRIGGER",
+            note: "one list of rules, for example each,new-species-daily; all three switches at 0 is APPRISE_TRIGGER=off",
+        },
+    ),
+    (
+        "APPRISE_ONLY_NOTIFY_SPECIES_NAMES",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_WATCHLIST_EXCLUDE",
+            note: "BirdNET-Pi's key is the EXCLUSION list despite its name",
+        },
+    ),
+    (
+        "APPRISE_ONLY_NOTIFY_SPECIES_NAMES_2",
+        PiEquivalent::Renamed {
+            ours: "APPRISE_WATCHLIST",
+            note: "BirdNET-Pi's _2 key is the INCLUSION list",
+        },
+    ),
+    (
+        "APPRISE_WEEKLY_REPORT",
+        PiEquivalent::Renamed {
+            ours: "WEEKLY_REPORT_SCHEDULE",
+            note: "a weekday here: 1 is monday, 0 is disabled",
+        },
+    ),
+    (
+        "AUTOMATIC_UPDATE",
+        PiEquivalent::None {
+            reason: "this station does not update itself from the network; updates are applied from the update page",
+        },
+    ),
+    (
+        "BIRDNETLOG_URL",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's log viewer address; this station has no separate log viewer",
+        },
+    ),
+    (
+        "BIRDNETPI_URL",
+        PiEquivalent::None {
+            reason: "read from the environment as BNB_PUBLIC_URL; notification links are built from it",
+        },
+    ),
+    (
+        "BIRDNET_USER",
+        PiEquivalent::None {
+            reason: "the Unix user BirdNET-Pi runs as; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "BIRDWEATHER_ID",
+        PiEquivalent::Renamed {
+            ours: "BIRDWEATHER_TOKEN",
+            note: "without it BirdWeather uploads stop",
+        },
+    ),
+    (
+        "CHANNELS",
+        PiEquivalent::None {
+            reason: "channels are per audio source here (see --channel-report)",
+        },
+    ),
+    (
+        "COLOR_SCHEME",
+        PiEquivalent::None {
+            reason: "light or dark is chosen per browser here",
+        },
+    ),
+    (
+        "CUSTOM_IMAGE",
+        PiEquivalent::Setting {
+            name: "dashboard_image",
+            note: "a path to a file on this device, not a web address",
+        },
+    ),
+    (
+        "CUSTOM_IMAGE_TITLE",
+        PiEquivalent::Setting {
+            name: "dashboard_image_title",
+            note: "",
+        },
+    ),
+    (
+        "DATA_MODEL_VERSION",
+        PiEquivalent::None {
+            reason: "this station uses occurrence model 2 with V2.4; version 1 is not offered, so the same SF_THRESH admits a somewhat different list of species",
+        },
+    ),
+    (
+        "DB_PWD",
+        PiEquivalent::None {
+            reason: "a database password; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "DB_ROOT_PWD",
+        PiEquivalent::None {
+            reason: "a database password; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "DO_EXTRACTIONS",
+        PiEquivalent::None {
+            reason: "a BirdNET-Pi switch; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "DO_RECORDING",
+        PiEquivalent::None {
+            reason: "a BirdNET-Pi switch; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "EXTRACTED",
+        PiEquivalent::None {
+            reason: "where BirdNET-Pi keeps its clips; this station keeps clips in its own recordings folder, and the recordings step of the move brings the old ones across",
+        },
+    ),
+    (
+        "EXTRACTIONLOG_URL",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's extraction log address; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "EXTRACTIONS_URL",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's clip address; clips are served by this station itself",
+        },
+    ),
+    (
+        "FREQSHIFT_HI",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi shifts a clip's pitch on request; this station's FREQ_SHIFT rewrites every new clip, which is not the same",
+        },
+    ),
+    (
+        "FREQSHIFT_LO",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi shifts a clip's pitch on request; this station's FREQ_SHIFT rewrites every new clip, which is not the same",
+        },
+    ),
+    (
+        "FREQSHIFT_PITCH",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi shifts a clip's pitch on request; this station's FREQ_SHIFT rewrites every new clip, which is not the same",
+        },
+    ),
+    (
+        "FREQSHIFT_RECONNECT_DELAY",
+        PiEquivalent::None {
+            reason: "belongs to BirdNET-Pi's live-audio pitch shift, which has no equivalent",
+        },
+    ),
+    (
+        "FREQSHIFT_TOOL",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi shifts a clip's pitch on request; this station's FREQ_SHIFT rewrites every new clip, which is not the same",
+        },
+    ),
+    (
+        "ICE_PWD",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's streaming programs authenticate to each other; this station streams from one program",
+        },
+    ),
+    (
+        "IDFILE",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's list of species identified so far; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "INSTALL_DATE",
+        PiEquivalent::None {
+            reason: "when BirdNET-Pi was installed; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "LAST_RUN",
+        PiEquivalent::None {
+            reason: "a BirdNET-Pi debugging aid; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "LogLevel_BirdnetRecordingService",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's three log levels are for the programs it runs; this station has one, LOG_LEVEL",
+        },
+    ),
+    (
+        "LogLevel_LiveAudioStreamService",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's three log levels are for the programs it runs; this station has one, LOG_LEVEL",
+        },
+    ),
+    (
+        "LogLevel_SpectrogramViewerService",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's three log levels are for the programs it runs; this station has one, LOG_LEVEL",
+        },
+    ),
+    (
+        "PROCESSED",
+        PiEquivalent::None {
+            reason: "where BirdNET-Pi parks analysed recordings; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "PURGE_THRESHOLD",
+        PiEquivalent::Renamed {
+            ours: "DISK_PURGE_THRESHOLD",
+            note: "without it the station purges at 95 %",
+        },
+    ),
+    (
+        "PUSHED_APP_KEY",
+        PiEquivalent::None {
+            reason: "Pushed.co is not supported; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "PUSHED_APP_SECRET",
+        PiEquivalent::None {
+            reason: "Pushed.co is not supported; written by older BirdNET-Pi releases and no longer used by BirdNET-Pi itself",
+        },
+    ),
+    (
+        "RARE_SPECIES_THRESHOLD",
+        PiEquivalent::Setting {
+            name: "rare_species_days",
+            note: "days without a sighting",
+        },
+    ),
+    (
+        "RAW_SPECTROGRAM",
+        PiEquivalent::Setting {
+            name: "raw_spectrogram",
+            note: "",
+        },
+    ),
+    (
+        "REC_CARD",
+        PiEquivalent::Renamed {
+            ours: "ALSA_CARD",
+            note: "without it the microphone is not selected",
+        },
+    ),
+    (
+        "RTSP_STREAM",
+        PiEquivalent::Renamed {
+            ours: "RTSP_URLS",
+            note: "comma-separated here too",
+        },
+    ),
+    (
+        "RTSP_STREAM_TO_LIVESTREAM",
+        PiEquivalent::None {
+            reason: "streams are not numbered here; choose the default live source again",
+        },
+    ),
+    (
+        "SILENCE_UPDATE_INDICATOR",
+        PiEquivalent::None {
+            reason: "there is no update indicator",
+        },
+    ),
+    (
+        "SITE_NAME",
+        PiEquivalent::Renamed {
+            ours: "SITENAME",
+            note: "",
+        },
+    ),
+    (
+        "THIS_RUN",
+        PiEquivalent::None {
+            reason: "a BirdNET-Pi debugging aid; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "TIMESTAMP_FORMAT",
+        PiEquivalent::None {
+            reason: "a file-name format of an old BirdNET-Pi release; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "VENV",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's Python environment; internal to BirdNET-Pi; nothing here needs it",
+        },
+    ),
+    (
+        "WEBTERMINAL_URL",
+        PiEquivalent::None {
+            reason: "BirdNET-Pi's web terminal address; this station has no web terminal",
+        },
+    ),
+];
+
+/// What BirdNET-Pi's `key` is on this station, if it is one of BirdNET-Pi's
+/// keys that this station does not read under that name.
+#[must_use]
+pub fn birdnet_pi_equivalent(key: &str) -> Option<&'static PiEquivalent> {
+    BIRDNET_PI_KEYS
+        .binary_search_by_key(&key, |(k, _)| k)
+        .ok()
+        .map(|i| &BIRDNET_PI_KEYS[i].1)
+}
+
 /// Whether `key` is one this station reads.
 #[must_use]
 pub fn is_known(key: &str) -> bool {
@@ -244,6 +647,37 @@ mod tests {
         );
         assert!(is_known("CONFIDENCE"));
         assert!(!is_known("CONFIDENC"));
+    }
+
+    #[test]
+    fn the_birdnet_pi_table_is_sorted_and_names_keys_that_exist_here() {
+        let keys: Vec<&str> = BIRDNET_PI_KEYS.iter().map(|(k, _)| *k).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(keys, sorted, "BIRDNET_PI_KEYS must be sorted and unique");
+        for (pi, eq) in BIRDNET_PI_KEYS {
+            assert!(
+                !is_known(pi),
+                "{pi} is read here under that name, so it needs no entry"
+            );
+            if let PiEquivalent::Renamed { ours, .. } = eq {
+                assert!(is_known(ours), "{pi} points at {ours}, which nothing reads");
+            }
+        }
+    }
+
+    #[test]
+    fn a_birdnet_pi_key_is_looked_up_and_one_of_ours_is_not() {
+        assert!(matches!(
+            birdnet_pi_equivalent("BIRDWEATHER_ID"),
+            Some(PiEquivalent::Renamed {
+                ours: "BIRDWEATHER_TOKEN",
+                ..
+            })
+        ));
+        assert!(birdnet_pi_equivalent("CONFIDENCE").is_none());
+        assert!(birdnet_pi_equivalent("NOT_A_KEY").is_none());
     }
 
     #[test]

@@ -100,6 +100,27 @@ pub fn load_all(conn: &Connection) -> Result<Vec<LearnedThreshold>, DbError> {
     Ok(rows)
 }
 
+/// Delete one species' stored level, returning how many rows went (0 or 1).
+///
+/// # Errors
+///
+/// Returns [`DbError`] on `SQLite` failure.
+pub fn delete_one(conn: &Connection, sci_name: &str) -> Result<usize, DbError> {
+    Ok(conn.execute(
+        "DELETE FROM dynamic_thresholds WHERE sci_name = ?1",
+        params![sci_name],
+    )?)
+}
+
+/// Delete every stored level, returning how many rows went.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on `SQLite` failure.
+pub fn delete_all(conn: &Connection) -> Result<usize, DbError> {
+    Ok(conn.execute("DELETE FROM dynamic_thresholds", [])?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +140,21 @@ mod tests {
             first_learned_ms: 0,
             last_confirmed_ms: expires - 1000,
         }
+    }
+
+    #[test]
+    fn deleting_one_or_all_reports_what_went() {
+        let conn = db();
+        replace_all(
+            &conn,
+            &[row("Turdus merula", 2, 5000), row("Strix aluco", 1, 9000)],
+        )
+        .expect("write");
+        assert_eq!(delete_one(&conn, "Strix aluco").unwrap(), 1);
+        assert_eq!(delete_one(&conn, "Strix aluco").unwrap(), 0);
+        assert_eq!(load_all(&conn).unwrap().len(), 1);
+        assert_eq!(delete_all(&conn).unwrap(), 1);
+        assert_eq!(delete_all(&conn).unwrap(), 0);
     }
 
     #[test]

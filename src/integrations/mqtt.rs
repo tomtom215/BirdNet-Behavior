@@ -25,8 +25,10 @@ fn resolve_tls(
             .map(std::path::PathBuf::from)
             .filter(|p| !p.as_os_str().is_empty())
     });
+    let client_cert = client_path(cli.mqtt_client_cert.clone(), config, "MQTT_CLIENT_CERT");
     let enabled = cli.mqtt_tls
         || ca_file.is_some()
+        || client_cert.is_some()
         || config
             .and_then(|c| c.get_parsed::<bool>("MQTT_TLS").ok())
             .unwrap_or(false);
@@ -41,7 +43,39 @@ fn resolve_tls(
                 .map(String::from)
                 .filter(|s| !s.is_empty())
         }),
+        client_cert: client_path(cli.mqtt_client_cert.clone(), config, "MQTT_CLIENT_CERT"),
+        client_key: client_path(cli.mqtt_client_key.clone(), config, "MQTT_CLIENT_KEY"),
     })
+}
+
+/// A path from a flag or, failing that, a non-empty config key.
+fn client_path(
+    flag: Option<std::path::PathBuf>,
+    config: Option<&birdnet_core::config::Config>,
+    key: &str,
+) -> Option<std::path::PathBuf> {
+    flag.or_else(|| {
+        config
+            .and_then(|c| c.get(key))
+            .map(std::path::PathBuf::from)
+    })
+    .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// The broker host and TLS settings the station would connect with, without
+/// building a client or touching the network. `None` when no host is configured.
+///
+/// For `--doctor`: the same resolution [`create_mqtt_client`] performs, so what
+/// is checked is what will be used.
+pub fn broker_plan(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<(String, Option<birdnet_integrations::mqtt::TlsConfig>)> {
+    let host = cli
+        .mqtt_host
+        .clone()
+        .or_else(|| config?.get("MQTT_HOST").map(String::from))?;
+    Some((host, resolve_tls(cli, config)))
 }
 
 /// Resolve the broker port.
@@ -176,7 +210,12 @@ pub fn publish_ha_discovery(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) {
-    if !cli.mqtt_ha_discovery {
+    // The flag, or `MQTT_HA_DISCOVERY` in the configuration — which the
+    // settings page writes, so a station without a terminal can switch it on.
+    let configured = config
+        .and_then(|c| c.get_parsed::<bool>("MQTT_HA_DISCOVERY").ok())
+        .unwrap_or(false);
+    if !cli.mqtt_ha_discovery && !configured {
         return;
     }
 

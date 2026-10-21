@@ -173,7 +173,9 @@ fn normalise_at(at: &str) -> String {
 /// The API key is read from the config the same way every other credential is,
 /// which means `BIRDNET_WEATHER_API_KEY_FILE` mounts it from a file — see
 /// `birdnet_core::config::secret_file`. Nothing here logs it.
-fn resolve_provider(config: Option<&Config>) -> Result<upstream::Provider, upstream::WeatherError> {
+pub(super) fn resolve_provider(
+    config: Option<&Config>,
+) -> Result<upstream::Provider, upstream::WeatherError> {
     // Each key is read as a literal `config.get("KEY")` rather than through a
     // helper closure. `tests/every_config_key_is_known.rs` finds reads by their
     // shape, and a closure hides the name from it — which is exactly how it
@@ -187,12 +189,12 @@ fn resolve_provider(config: Option<&Config>) -> Result<upstream::Provider, upstr
     )
 }
 
-fn resolve_lat(config: Option<&Config>) -> Option<f64> {
+pub(super) fn resolve_lat(config: Option<&Config>) -> Option<f64> {
     resolve_decimal_env("BNB_STATION_LAT")
         .or_else(|| config.and_then(|cfg| cfg.get_parsed::<f64>("LATITUDE").ok()))
 }
 
-fn resolve_lon(config: Option<&Config>) -> Option<f64> {
+pub(super) fn resolve_lon(config: Option<&Config>) -> Option<f64> {
     resolve_decimal_env("BNB_STATION_LON")
         .or_else(|| config.and_then(|cfg| cfg.get_parsed::<f64>("LONGITUDE").ok()))
 }
