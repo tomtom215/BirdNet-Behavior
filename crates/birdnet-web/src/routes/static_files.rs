@@ -56,6 +56,8 @@ const LISTEN_FX_CSS: &[u8] = include_bytes!("../../static/css/listen-fx.css");
 const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
 
 /// Type-to-filter for the admin settings page (embedded at compile time).
+/// Hover, focus, keyboard and entrance for every chart (see the script's header).
+const CHART_KIT_JS: &[u8] = include_bytes!("../../static/chart-kit.js");
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
 
 /// Select-all for the search page's bulk action bar (embedded at compile time).
@@ -171,6 +173,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/listen-fx.js", get(listen_fx_js))
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
+        .route("/static/chart-kit.js", get(chart_kit_js))
         .route("/static/sw.js", get(service_worker_js))
         // `/favicon.ico` is the browser's *fallback* request: a document with
         // no `rel="icon"` asks for it unprompted, and this server used to
@@ -298,6 +301,17 @@ async fn chart_text_js() -> impl IntoResponse {
             // Same policy as the other app scripts: it ships with the binary and
             // is requested with `?v=<version>`, so a day is safe.
             (header::CACHE_CONTROL, "public, max-age=86400"),
+async fn chart_kit_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        CHART_KIT_JS,
+    )
+}
+
         ],
         CHART_TEXT_JS,
     )
@@ -491,3 +505,19 @@ mod tests {
         assert!(!js.contains(".innerHTML"));
     }
 }
+    /// The chart kit renders species names into tooltips and a live region: only
+    /// ever as text. And it must not write a `style` attribute, which the CSP
+    /// forbids; `style.setProperty` goes through the CSSOM, which it allows.
+    #[test]
+    fn chart_kit_embedded_and_safe() {
+        let js = std::str::from_utf8(CHART_KIT_JS).unwrap();
+        assert!(js.contains("svg[data-ck]"));
+        assert!(!js.contains(".innerHTML"));
+        assert!(!js.contains("insertAdjacentHTML"));
+        assert!(!js.contains("setAttribute(\"style\""));
+        assert!(!js.contains("cssText"));
+        // Plain script: no module syntax, no network.
+        assert!(!js.contains("import "));
+        assert!(!js.contains("fetch("));
+    }
+

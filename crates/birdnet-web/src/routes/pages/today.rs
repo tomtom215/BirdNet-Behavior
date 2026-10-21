@@ -1031,14 +1031,12 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let rows = birdnet_db::sqlite::todays_detections(
-                conn,
-                &today,
-                None,
-                TodayFilter::All,
-                1000,
-                0,
-            )?;
+            // The hour totals come from the database, not from counting the rows of a
+            // page of the day's detections: that page stops at 1000, and a busy station
+            // passes it before lunch, so the chart quietly stopped adding up.
+            let rows = birdnet_db::sqlite::hourly_activity(conn, &today)?;
+            // The species heard most each hour, for the tooltip.
+            let by_hour = birdnet_db::sqlite::today_species_hour_heatmap(conn, &today, 1000)?;
             // O-23 weather samples for the in-strip temperature line. Reads
             // the cached Open-Meteo rows — empty when the poll job hasn't
             // populated them, in which case the strip simply has no line.
@@ -1049,33 +1047,35 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
                 conn.range(&from, &to).unwrap_or_default()
             };
             let solar = super::solar_times_local(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, samples, solar))
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, by_hour, samples, solar))
         })
     })
     .await;
 
     // See `error_states::failed_partial` for why this is a 200.
-    let Ok(Ok((rows, samples, solar))) = result else {
+    let Ok(Ok((rows, by_hour, samples, solar))) = result else {
         tracing::warn!("today daystrip: query or task failed");
         return super::error_states::failed_partial("today's timeline");
     };
 
-    if rows.is_empty() {
+    if rows.iter().all(|r| r.count <= 0) {
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
             // Clear the header stats out-of-band too, so a deleted last
             // detection doesn't strand stale numbers.
+    let names = state.names_handle();
             r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"></div><div class="bnb-meta tdl-strip-empty"><span>No detections yet today.</span></div>"#
                 .to_string(),
         );
     }
 
     let mut hourly = [0i64; 24];
-    for d in &rows {
-        let hi = parse_hour_fraction(&d.time) as usize;
-        if hi < 24 {
-            hourly[hi] += 1;
+    for r in &rows {
+        if let Ok(hi) = r.hour.parse::<usize>()
+            && hi < 24
+        {
+            hourly[hi] += r.count;
         }
     }
 
@@ -1108,22 +1108,25 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let tempkey_oob = if temps.is_empty() {
         r#"<span id="td-tempkey" hx-swap-oob="true"></span>"#.to_string()
     } else {
-        r#"<span id="td-tempkey" hx-swap-oob="true"> · the <span class="x-tempkey">amber line</span> is temperature</span>"#.to_string()
+        r#"<span id="td-tempkey" hx-swap-oob="true"> · temperature runs along the bottom</span>"#.to_string()
     };
-    let strip = super::viz::day_strip(&hourly, &temps, solar, super::now_hour_local());
+    let strip = super::viz::day_strip(&hourly, &top, &temps, solar, super::now_hour_local());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
         format!("{stats_oob}{tempkey_oob}{strip}"),
+    // Per hour, the three species with the most detections, in the station's language.
+    let mut top: [Vec<(String, i64)>; 24] = std::array::from_fn(|_| Vec::new());
+    for (name, hour, count) in &by_hour {
+        if let Some(slot) = top.get_mut(usize::from(*hour)) {
+            slot.push((names.name_of_stored(name).to_owned(), *count));
+        }
+    }
+    for slot in &mut top {
+        slot.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        slot.truncate(3);
+    }
     )
-}
-
-/// Parse "HH:MM:SS" into a fractional hour in [0, 24). Best-effort.
-fn parse_hour_fraction(t: &str) -> f64 {
-    let mut it = t.split(':');
-    let h: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let m: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    h + m / 60.0
 }
 
 /// Render a single detection row into the HTML buffer.

@@ -3,6 +3,8 @@
 //! Pure functions, styled by the design tokens in `static/css/app.css`, grouped
 //! by visual family:
 //!
+//! - `kit` — what every chart shares: scales, round numbers, monotone curves, dates and
+//!   the `data-*` contract `static/chart-kit.js` reads (see `docs/design/charts.md`).
 //! - `matrix` — the co-occurrence intensity grid.
 //! - `timeline` — Cartesian time-series charts (streamgraph, accumulation
 //!   curve, migration ridgeline, the 24-hour day strip).
@@ -17,6 +19,9 @@
 // unused renderer.
 #[cfg(feature = "analytics")]
 pub(crate) mod funnel;
+pub(crate) mod bars;
+pub(crate) mod heat;
+pub(crate) mod kit;
 pub(crate) mod matrix;
 pub(crate) mod radial;
 pub(crate) mod timeline;

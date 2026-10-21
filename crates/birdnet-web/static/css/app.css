@@ -4679,6 +4679,110 @@ a.sr-about       { color: var(--fg-3); }
 .viz-table-scroll { overflow-x: auto; margin-top: var(--space-8); }
 .viz-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .viz-table th[scope="row"] { text-align: left; font-weight: var(--fw-regular); }
+/* charts ─────────────────────────────────────────────────────────────────────
+   The chart kit's stylesheet (static/chart-kit.js, routes/pages/viz/kit.rs,
+   docs/design/charts.md). Colour and ink come from the chart tokens and nothing
+   else: --chart-1..8/-other, --seq-*, --seq-moss-*, --div-*, --chart-grid/-axis/
+   -label/-annot/-track/-gap/-crosshair/-tip-*, --chart-stroke/-gap-w/-bar-r/-dim.
+   Every chart is complete with no script; this only styles it and gives the
+   script something to light up. */
+.ck { position: relative; }
+svg[data-ck] { touch-action: pan-y; cursor: crosshair; outline-offset: 3px; border-radius: var(--r-xs); }
+svg[data-ck="marks"] { cursor: default; }
+
+/* The colour classes: one custom property, --c, that the marks, the gradients and
+   the legend swatches all read, so a slot is named once. */
+.ck-c1 { --c: var(--chart-1); } .ck-c2 { --c: var(--chart-2); }
+.ck-c3 { --c: var(--chart-3); } .ck-c4 { --c: var(--chart-4); }
+.ck-c5 { --c: var(--chart-5); } .ck-c6 { --c: var(--chart-6); }
+.ck-c7 { --c: var(--chart-7); } .ck-c8 { --c: var(--chart-8); }
+.ck-cother { --c: var(--chart-other); }
+.ck-q1 { --c: var(--seq-1); } .ck-q2 { --c: var(--seq-2); } .ck-q3 { --c: var(--seq-3); }
+.ck-q4 { --c: var(--seq-4); } .ck-q5 { --c: var(--seq-5); } .ck-q6 { --c: var(--seq-6); }
+.ck-q7 { --c: var(--seq-7); }
+.ck-m1 { --c: var(--seq-moss-1); } .ck-m2 { --c: var(--seq-moss-2); }
+.ck-m3 { --c: var(--seq-moss-3); } .ck-m4 { --c: var(--seq-moss-4); }
+.ck-m5 { --c: var(--seq-moss-5); } .ck-m6 { --c: var(--seq-moss-6); }
+.ck-m7 { --c: var(--seq-moss-7); }
+.ck-sw { background: var(--c); }
+.ck-fill { fill: var(--c); }
+/* A mark that fills from a gradient: full colour at its data end, a little toward
+   the card at its base, so a bar reads as lit from above and not as a flat block. */
+.ck-gr .a { stop-color: var(--c); }
+.ck-gr .b { stop-color: var(--c); stop-color: color-mix(in oklab, var(--c) 78%, var(--chart-gap)); }
+
+/* Ink */
+.ck-grid        { stroke: var(--chart-grid); stroke-width: 1px; fill: none; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
+.ck-grid-strong { stroke: var(--chart-grid-strong); stroke-width: 1px; fill: none; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
+.ck-axis        { stroke: var(--chart-axis); stroke-width: 1px; fill: none; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
+.ck-lbl         { fill: var(--chart-label); }
+.ck-annot       { fill: var(--chart-annot); }
+.ck-track       { fill: var(--chart-track); }
+.ck-seam        { stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.ck-halo        { paint-order: stroke; stroke: var(--chart-gap); stroke-width: 3px; stroke-linejoin: round; }
+.ck-line        { fill: none; stroke: var(--c, var(--chart-1)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.ck-ghost       { fill: none; stroke: var(--chart-axis); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
+.ck-area        { stroke: none; }
+.ck-ring        { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
+.ck-hit         { fill: none; pointer-events: all; }
+.ck-peak        { fill: none; stroke: var(--chart-annot); stroke-width: 2px; pointer-events: none; }
+.ck-pill        { fill: var(--chart-annot); }
+.ck-pill-t      { fill: var(--chart-gap); }
+.ck-bandlbl     { fill: var(--fg); font-weight: var(--fw-medium); pointer-events: none; }
+.ck-cursor      { stroke: var(--chart-crosshair); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.ck-dot         { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
+
+/* One thing in the foreground, the rest at --chart-dim. */
+[data-ck-s], svg [data-ck-i] { transition: opacity var(--dur-base) var(--ease-out); }
+svg.ck-focus [data-ck-s] { opacity: var(--chart-dim); }
+svg.ck-focus [data-ck-s].ck-sel { opacity: 1; }
+svg.ck-focus-i [data-ck-i]:not(.ck-sel):not(.ck-hit) { opacity: var(--chart-dim); }
+/* The mark under the pointer or the key: a neutral ring, so it works on any fill. */
+svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+
+/* Tooltip: a dark card on the light theme, a lifted one on dark; it takes no room. */
+.ck-tip {
+  position: absolute; left: 0; top: 0; z-index: var(--z-tooltip); box-sizing: border-box;
+  max-width: min(280px, calc(100% - 4px)); min-width: 120px;
+  padding: var(--space-8) var(--space-10); border-radius: var(--r-sm);
+  background: var(--chart-tip-bg); color: var(--chart-tip-fg);
+  border: var(--bw-strong) solid var(--chart-tip-border); box-shadow: var(--shadow-md);
+  font-size: var(--fs-xs); line-height: 1.35; pointer-events: none;
+  opacity: 0; visibility: hidden; transition: opacity var(--dur-fast) var(--ease-out), visibility 0s linear var(--dur-fast);
+}
+.ck-tip.on { opacity: 1; visibility: visible; transition-delay: 0s; }
+.ck-tip-h { font-weight: var(--fw-medium); margin-bottom: var(--space-4); }
+.ck-tip-r { display: flex; align-items: center; gap: var(--space-6); }
+.ck-tip-r + .ck-tip-r { margin-top: 1px; }
+.ck-key { flex: none; width: 10px; height: 3px; border-radius: var(--r-3xs); }
+.ck-key.is-none { background: none; }
+.ck-tip-l { flex: 1; min-width: 0; overflow-wrap: anywhere; color: color-mix(in oklab, var(--chart-tip-fg) 74%, transparent); }
+.ck-tip-v { margin-left: var(--space-10); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.ck-tip-r.is-strong .ck-tip-l { color: var(--chart-tip-fg); }
+.ck-tip-r.is-total { margin-top: var(--space-4); padding-top: var(--space-4); border-top: var(--bw-strong) solid var(--chart-tip-border); }
+.ck-tip-n { margin-top: var(--space-4); color: color-mix(in oklab, var(--chart-tip-fg) 74%, transparent); }
+
+/* The legend as buttons: hover or focus previews a series, a click pins it. */
+.ck-leg { appearance: none; background: none; border: 0; margin: 0; padding: var(--space-2) var(--space-6); font: inherit; color: inherit; cursor: pointer; border-radius: var(--r-xs); transition: opacity var(--dur-base) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.ck-leg:hover { background: var(--bg-2); }
+.ck-leg[aria-pressed="true"] { background: var(--bg-2); box-shadow: inset 0 0 0 var(--bw-strong) var(--chart-axis); }
+.ck-focused .ck-leg:not(.ck-sel) { opacity: var(--chart-dim); }
+.viz-legend.ck-legend { gap: var(--space-4) var(--space-8); margin-inline: calc(var(--space-6) * -1); }
+
+/* Entrance. Only here, so reduced motion (the OS, and the operator's Motion
+   setting) turns all of it off in the same two places as every other animation.
+   `backwards` fill: the end state is the plain drawing, with no animation on it. */
+@keyframes ck-grow   { from { transform: scaleY(0); } }
+@keyframes ck-reveal { from { clip-path: inset(0 100% 0 0); } }
+@keyframes ck-draw   { from { stroke-dasharray: 1; stroke-dashoffset: 1; } to { stroke-dasharray: 1; stroke-dashoffset: 0; } }
+@keyframes ck-fade   { from { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .ck-grow { transform-box: fill-box; transform-origin: 50% 100%; animation: ck-grow var(--dur-slower) var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 14ms); }
+  :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .ck-reveal { animation: ck-reveal 900ms var(--ease-out) backwards; }
+  :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .ck-drawn { animation: ck-draw 900ms var(--ease-out) backwards; }
+  :root:not([data-motion="reduced"]) svg.ck-in:not(.ck-still) .ck-fadein { animation: ck-fade var(--dur-slower) var(--ease-out) 500ms backwards; }
+}
+/* /charts */
 .viz-table .viz-swatch { margin-right: var(--space-4); vertical-align: baseline; }
 /* The dawn chorus: the ring chart, then which ring is which bird. */
 .dc-polar-col { display: flex; flex-direction: column; align-items: center; gap: var(--space-12); width: 100%; }

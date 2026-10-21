@@ -99,41 +99,172 @@ struct Species {
     intro: u32,
 }
 
-/// Hourly sampling weight for a species profile.
-fn hour_weight(profile: Profile, hour: u32) -> f64 {
-    let h = f64::from(hour);
+/// Local sunrise hour (UTC, for the fixture's Greenwich station) on day-of-year
+/// `doy`: about 04:30 at midsummer and 08:15 at midwinter. Dawn singers follow it,
+/// so the chorus drifts through the year the way a real one does.
+fn sunrise_hour(doy: u32) -> f64 {
+    6.4 - 1.85 * (std::f64::consts::TAU * (f64::from(doy) - 172.0) / 365.0).cos()
+}
+
+/// Hourly sampling weight for a species profile, at the middle of `hour`.
+fn hour_weight(profile: Profile, hour: u32, sunrise: f64) -> f64 {
+    let h = f64::from(hour) + 0.5;
+    let dawn = sunrise + 0.6;
     match profile {
         Profile::Diurnal => {
             // gentle bell across daylight with a dawn bump
-            let day = (-((h - 11.0) / 5.5).powi(2)).exp();
-            let dawn = 0.6 * (-((h - 6.0) / 1.3).powi(2)).exp();
-            (day + dawn).max(0.01)
+            let day = (-((h - 12.0) / 5.5).powi(2)).exp();
+            let bump = 0.6 * (-((h - dawn) / 1.3).powi(2)).exp();
+            (day + bump).max(0.01)
         }
-        Profile::Dawn => (-((h - 6.0) / 1.4).powi(2)).exp().max(0.01),
+        Profile::Dawn => (-((h - dawn) / 1.4).powi(2)).exp().max(0.01),
         Profile::Nocturnal => {
             // peaks around midnight, wraps across 0
-            let d = (h - 0.0).min((24.0 - h).abs());
+            let d = h.min(24.0 - h);
             (-(d / 3.2).powi(2)).exp().max(0.005)
         }
         Profile::Migratory => {
-            let day = (-((h - 8.0) / 3.5).powi(2)).exp();
+            let day = (-((h - (dawn + 1.5)) / 3.5).powi(2)).exp();
             day.max(0.01)
         }
     }
 }
 
-/// Seasonal multiplier (1.0 baseline) by day-of-year for migratory species.
-fn seasonal(profile: Profile, doy: u32) -> f64 {
-    match profile {
-        Profile::Migratory => {
-            let d = f64::from(doy);
+/// A seasonal multiplier by day-of-year, per species: residents sing up in spring and
+/// visit feeders in winter, a robin is scarce in January, an owl calls in the winter,
+/// a warbler passes through twice a year. (Greenwich-ish; the point is that a year of
+/// the fixture is not a flat line, which hid every defect a trend chart can have.)
+fn season_factor(sp: &Species, doy: u32) -> f64 {
+    let d = f64::from(doy);
+    // A bump on a circular year, 1.0 at `peak`.
+    let bump = |peak: f64, width: f64| {
+        let off = (d - peak + 182.5).rem_euclid(365.0) - 182.5;
+        (-(off / width).powi(2)).exp()
+    };
+    match (sp.profile, sp.sci) {
+        (Profile::Migratory, _) => {
             // spring (DOY ~100–135) and fall (~240–290) bumps
             let spring = 1.6 * (-((d - 118.0) / 16.0).powi(2)).exp();
             let fall = 1.4 * (-((d - 265.0) / 20.0).powi(2)).exp();
             (spring + fall).max(0.02)
         }
+        (_, "Turdus migratorius") => 0.12 + 1.0 * bump(150.0, 55.0),
+        (_, "Melospiza melodia") => 0.15 + 1.1 * bump(135.0, 45.0),
+        (_, "Agelaius phoeniceus") => 0.10 + 1.3 * bump(120.0, 40.0),
+        (_, "Zenaida macroura") => 0.40 + 0.8 * bump(170.0, 80.0),
+        (_, "Spinus tristis") => 0.50 + 0.9 * bump(220.0, 60.0),
+        (_, "Cyanocitta cristata") => 0.80 + 0.5 * bump(285.0, 40.0),
+        (Profile::Nocturnal, _) => 0.20 + 2.2 * bump(30.0, 30.0),
+        (Profile::Diurnal, _) => 0.55 + 0.45 * bump(135.0, 70.0) + 0.15 * bump(20.0, 40.0),
         _ => 1.0,
     }
+}
+
+/// A well-mixed 64-bit hash, so "the weather on day N" is a pure function of N.
+fn mix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// A uniform in `[0, 1)` from `(day, salt)`.
+fn hashed_unit(day: i64, salt: u64) -> f64 {
+    (mix((day as u64).wrapping_mul(0x1000_0000_1B3).wrapping_add(salt)) >> 11) as f64
+        / (1u64 << 53) as f64
+}
+
+/// What the day was like, deterministically: it drives both the weather table and how
+/// much the birds sang (rain keeps them quiet).
+struct DayWeather {
+    temp_c: f64,
+    precip_mm: f64,
+    wind_kt: f64,
+    /// Multiplier on every species' rate that day.
+    activity: f64,
+}
+
+fn day_weather(days_ago: i64, doy: u32) -> DayWeather {
+    let seasonal = 11.0 - 9.0 * (std::f64::consts::TAU * (f64::from(doy) - 20.0) / 365.0).cos();
+    // Warm and cold spells run for days, not hours.
+    let spell = 3.5 * (days_ago as f64 / 9.0).sin();
+    let temp_c = seasonal + spell + (hashed_unit(days_ago, 1) - 0.5) * 3.0;
+    // Wet spells too: a bit under a third of days have measurable rain, in runs.
+    let wet = (days_ago as f64 / 5.3).sin() + (hashed_unit(days_ago, 2) - 0.5) * 1.2;
+    let precip_mm = if wet > 0.55 { (wet - 0.55) * 14.0 } else { 0.0 };
+    let wind_kt = 3.0 + hashed_unit(days_ago, 3) * 10.0 + precip_mm;
+    let base = if precip_mm > 6.0 {
+        0.3
+    } else if precip_mm > 1.0 {
+        0.55
+    } else if wind_kt > 14.0 {
+        0.8
+    } else if temp_c < 0.0 {
+        0.7
+    } else {
+        1.0
+    };
+    DayWeather {
+        temp_c,
+        precip_mm,
+        wind_kt,
+        activity: base * (0.9 + 0.2 * hashed_unit(days_ago, 4)),
+    }
+}
+
+/// Days (counted back from today) on which the station was switched off: no
+/// recording, so no detections and, importantly, no *effort*: "not listening" is not
+/// "quiet" and a chart has to be able to say which.
+const OFF_DAYS: [i64; 8] = [12, 13, 41, 88, 143, 200, 201, 250];
+/// Days it listened for only part of the day, and how much of it.
+const PARTIAL_DAYS: [(i64, f64); 4] = [(6, 0.4), (22, 0.6), (70, 0.25), (160, 0.5)];
+/// A day it listened all day and heard almost nothing (a fog, a gale): quiet, not off.
+const SILENT_DAY: i64 = 30;
+/// Flocks and fall-outs: `(days ago, scientific name, multiplier)`.
+const BURSTS: [(i64, &str, f64); 6] = [
+    (3, "Spinus tristis", 4.0),
+    (4, "Spinus tristis", 3.0),
+    (9, "Cyanocitta cristata", 5.0),
+    (40, "Zenaida macroura", 3.5),
+    (120, "Agelaius phoeniceus", 4.0),
+    (230, "Turdus migratorius", 3.0),
+];
+
+/// Fraction of the day the station listened.
+fn listening_fraction(days_ago: i64) -> f64 {
+    if OFF_DAYS.contains(&days_ago) {
+        0.0
+    } else {
+        PARTIAL_DAYS
+            .iter()
+            .find(|(d, _)| *d == days_ago)
+            .map_or(1.0, |(_, f)| *f)
+    }
+}
+
+/// A standard normal from two uniforms (Box–Muller).
+fn gauss(rng: &mut Rng) -> f64 {
+    let (u, v) = (rng.unit().max(1e-12), rng.unit());
+    (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+}
+
+/// A Poisson draw: exact below 25, normal approximation above it.
+fn poisson(rng: &mut Rng, lambda: f64) -> u32 {
+    if lambda <= 0.0 {
+        return 0;
+    }
+    if lambda < 25.0 {
+        let limit = (-lambda).exp();
+        let (mut k, mut p) = (0_u32, 1.0_f64);
+        loop {
+            p *= rng.unit();
+            if p <= limit {
+                return k;
+            }
+            k += 1;
+        }
+    }
+    (lambda + lambda.sqrt() * gauss(rng)).round().max(0.0) as u32
 }
 
 fn species_table() -> Vec<Species> {
@@ -422,7 +553,23 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
 fn seed(conn: &Connection, today_days: i64) {
     let species = species_table();
     let mut rng = Rng::new(0xB17D_5EED_u64.rotate_left(7) ^ 0x9E37_79B9);
-    let (lat, lon) = (42.3601, -71.0589); // Boston-ish
+    // The station is at Greenwich, not Boston: the fixture's clock is UTC and its
+    // detection times are naive "local" strings, so a station whose local time is UTC
+    // is the only one whose sunrise lands where its dawn chorus does. The sun lines on
+    // Today and the night bands on Patterns are drawn from these two settings.
+    let (lat, lon) = (51.4778, -0.0015);
+    for (k, v) in [("latitude", "51.4778"), ("longitude", "-0.0015")] {
+        let _ = birdnet_db::settings::set(conn, k, v, birdnet_db::settings::SettingsCategory::Location);
+    }
+
+    // Today stops at the clock: a station cannot have heard what has not happened yet,
+    // and the Today chart has a "now" marker that would otherwise sit left of its own
+    // bars. Before 07:00 the fixture pretends it is 07:00, so a gate run just after
+    // midnight still has a morning to draw.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let cutoff_today = (now_secs % 86_400).max(7 * 3600) as u32;
 
     let tx = conn.unchecked_transaction().expect("txn");
 
@@ -433,11 +580,16 @@ fn seed(conn: &Connection, today_days: i64) {
     let mut src_n = 0u64;
 
     for offset in 0..365i64 {
-        let day = today_days - (364 - offset); // oldest first, offset 364 == today
+        let days_ago = 364 - offset;
+        let day = today_days - days_ago; // oldest first, offset 364 == today
         let (y, m, d) = civil_from_days(day);
         let date = format!("{y:04}-{m:02}-{d:02}");
         let doy = day_of_year(y, m, d);
         let week = (doy / 7 + 1).min(52);
+        let sunrise = sunrise_hour(doy);
+        let weather = day_weather(days_ago, doy);
+        let listening = listening_fraction(days_ago);
+        let day_factor = if days_ago == SILENT_DAY { 0.03 } else { weather.activity };
 
         for sp in &species {
             // Species only appear once they've been "discovered" for the year.
@@ -445,26 +597,34 @@ fn seed(conn: &Connection, today_days: i64) {
                 continue;
             }
             let rare_factor = if sp.rare { 0.5 } else { 1.0 };
-            let lambda = sp.weight * seasonal(sp.profile, doy) * rare_factor * 4.0;
-            // Crude Poisson via fractional Bernoulli trials (integer-bounded).
-            let trials = (lambda.ceil() as u32).min(30);
-            let mut count = 0u32;
-            for t in 0..trials {
-                let p = (lambda - f64::from(t)).clamp(0.0, 1.0);
-                if rng.unit() < p {
-                    count += 1;
-                }
-            }
+            let burst = BURSTS
+                .iter()
+                .find(|(ago, sci, _)| *ago == days_ago && *sci == sp.sci)
+                .map_or(1.0, |b| b.2);
+            // A species has its own good and bad days on top of the weather's.
+            let own = (0.35 * gauss(&mut rng)).exp();
+            let lambda = sp.weight
+                * season_factor(sp, doy)
+                * rare_factor
+                * 11.0
+                * day_factor
+                * listening
+                * burst
+                * own;
+            let count = poisson(&mut rng, lambda).min(400);
             for _ in 0..count {
                 // sample hour by profile weight (rejection sampling)
                 let hour = loop {
                     let h = rng.range(0, 23);
-                    if rng.unit() < hour_weight(sp.profile, h) {
+                    if rng.unit() < hour_weight(sp.profile, h, sunrise) {
                         break h;
                     }
                 };
                 let minute = rng.range(0, 59);
                 let second = rng.range(0, 59);
+                if days_ago == 0 && hour * 3600 + minute * 60 + second > cutoff_today {
+                    continue; // has not happened yet
+                }
                 let time = format!("{hour:02}:{minute:02}:{second:02}");
                 let conf = (sp.base_conf + (rng.unit() - 0.5) * 0.28).clamp(0.51, 0.99);
                 let source = SOURCES[(src_n % SOURCES.len() as u64) as usize];
@@ -482,6 +642,44 @@ fn seed(conn: &Connection, today_days: i64) {
                      (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source, Duration_Secs)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                     params![date, time, sp.sci, sp.com, conf, lat, lon, 0.7, week, 1.25, 0.0, file, source, dur],
+                );
+            }
+        }
+
+        // What the station listened to that day. A day with no row is a day it was
+        // off; a day with a row and no detections was a quiet one.
+        if listening > 0.0 {
+            let secs = 86_400.0 * listening;
+            let _ = tx.execute(
+                "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, 'local', ?2)",
+                params![date, secs],
+            );
+            if days_ago < 120 {
+                let _ = tx.execute(
+                    "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, 'RTSP_2', ?2)",
+                    params![date, secs * 0.9],
+                );
+            }
+        }
+
+        // Hourly weather for the last two months, today up to the current hour.
+        if days_ago < 60 {
+            let last_hour = if days_ago == 0 { (cutoff_today / 3600) as usize } else { 23 };
+            for hour in 0..=last_hour {
+                let diurnal = 4.5 * (std::f64::consts::TAU * (hour as f64 - 9.0) / 24.0).sin();
+                let _ = tx.execute(
+                    "INSERT OR REPLACE INTO weather (at, temp_c, precip_mm, wind_kt, wind_dir_deg, pressure_hpa, cloud_pct, code)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        format!("{date}T{hour:02}:00:00Z"),
+                        weather.temp_c + diurnal,
+                        weather.precip_mm / 24.0,
+                        weather.wind_kt,
+                        ((days_ago * 37) % 360) as i64,
+                        1013.0 - weather.precip_mm,
+                        if weather.precip_mm > 1.0 { 90 } else { 30 },
+                        if weather.precip_mm > 1.0 { 61 } else { 1 },
+                    ],
                 );
             }
         }

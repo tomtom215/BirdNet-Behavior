@@ -120,10 +120,43 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 
 /// Compute the hour × day-of-week heatmap SVG, or `None` on a query error.
 fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
-    state
+    let cells = state
         .with_read_db(|conn| weekly_heatmap(conn, days))
-        .ok()
-        .map(|cells| render_heatmap_svg(&cells))
+        .ok()?;
+    let today = state
+        .with_read_db(|conn| {
+            conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0))
+        })
+        .ok();
+    // How many days of each weekday the window held and the station listened on, so a
+    // weekday it was off for is not drawn as a quiet one, and a 90-day window's thirteen
+    // Mondays are compared with its twelve Tuesdays per day and not in total.
+    let n = days as usize;
+    let effort = today.as_deref().and_then(|end| {
+        let from = super::listening::first_date(end, n)?;
+        state
+            .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end))
+            .ok()
+    });
+    let listened = match (today.as_deref(), effort.as_ref()) {
+        (Some(end), Some(e)) => super::listening::listened_days(e, end, n),
+        _ => None,
+    };
+    let mut occurrences = [0_u32; 7];
+    for d in 0..n {
+        let on = listened.as_ref().is_none_or(|l| l.get(d).copied().unwrap_or(true));
+        let dow = today
+            .as_deref()
+            .and_then(|end| {
+                super::viz::kit::epoch_day(end).map(|e| ((e - (n as i64 - 1 - d as i64) + 4).rem_euclid(7)) as usize)
+            })
+            // Without a date, spread the days over the week evenly.
+            .unwrap_or(d % 7);
+        if on {
+            occurrences[dow] += 1;
+        }
+    }
+    Some(render_heatmap_svg(&cells, occurrences, listened.is_some(), days))
 }
 
 async fn heatmap_grid_partial(
@@ -147,10 +180,14 @@ async fn heatmap_grid_partial(
 
 /// Compute the by-hour bar chart, or `None` on a query error.
 fn compute_hourly_totals(state: &AppState, days: u32) -> Option<String> {
-    state
-        .with_read_db(|conn| hourly_totals(conn, days))
-        .ok()
-        .map(|totals| render_hourly_bars(&totals))
+    let totals = state.with_read_db(|conn| hourly_totals(conn, days)).ok()?;
+    // Today's sun, on a window short enough for today's sun to stand for it.
+    let solar = if days <= 14 {
+        state.with_read_db(super::solar_times_local)
+    } else {
+        None
+    };
+    Some(render_hourly_bars(&totals, solar, days))
 }
 
 async fn hourly_totals_partial(
@@ -172,7 +209,8 @@ async fn hourly_totals_partial(
 // GET /pages/activity-streamgraph — per-species stacked activity
 // ---------------------------------------------------------------------------
 
-/// Compute the per-species activity streamgraph (top 8), or `None` on error.
+/// Compute the per-species activity streamgraph (top 8, and the rest as one band), or
+/// `None` on error.
 fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
     let map = state
         .with_read_db(|conn| species_sparklines(conn, days))
@@ -185,12 +223,24 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
             .cmp(&a.1.iter().sum::<i64>())
             .then_with(|| a.0.cmp(&b.0))
     });
-    series.truncate(8);
+    // The eight busiest are drawn one by one; every other species is one more band,
+    // so a day's thickness is still that day's detections and not "the top eight's".
+    let rest = series.split_off(series.len().min(8));
     // Ordered and cut on the stored names; drawn in the station's language.
-    let series: Vec<(String, Vec<i64>)> = series
+    let mut series: Vec<(String, Vec<i64>)> = series
         .into_iter()
         .map(|(name, days)| (state.names().name_of_stored(&name).to_owned(), days))
         .collect();
+    if !rest.is_empty() {
+        let len = rest.iter().map(|(_, d)| d.len()).max().unwrap_or(0);
+        let mut other = vec![0_i64; len];
+        for (_, days) in &rest {
+            for (slot, n) in other.iter_mut().zip(days) {
+                *slot += n;
+            }
+        }
+        series.push((format!("{} other species", rest.len()), other));
+    }
     // The sparkline series ends at today (local), which is what labels the
     // axis. Without it the chart showed no period at all.
     let today = state.with_read_db(|conn| {
@@ -199,7 +249,21 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
         })
         .ok()
     });
-    Some(super::viz::streamgraph(&series, today.as_deref()))
+    // When the station was not listening, so a day that pinches to nothing because the
+    // power was out is not read as a silent day. Unknown (no ledger) claims nothing.
+    let n_days = series.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
+    let listened = today.as_deref().and_then(|end| {
+        let from = super::listening::first_date(end, n_days)?;
+        let effort = state
+            .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end))
+            .ok()?;
+        super::listening::listened_days(&effort, end, n_days)
+    });
+    Some(super::viz::streamgraph(
+        &series,
+        today.as_deref(),
+        listened.as_deref(),
+    ))
 }
 
 async fn streamgraph_partial(
@@ -242,242 +306,93 @@ pub fn prewarm(state: &AppState) {
 // SVG heatmap renderer
 // ---------------------------------------------------------------------------
 
-const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-#[allow(clippy::too_many_lines)]
-fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
+/// The activity grid: see [`super::viz::heat::hour_by_weekday`].
+fn render_heatmap_svg(
+    cells: &[HeatmapCell],
+    occurrences: [u32; 7],
+    coverage_known: bool,
+    window_days: u32,
+) -> String {
     if cells.is_empty() {
         return r#"<p class="hm-empty">
             No data available for the selected period.
         </p>"#
             .to_string();
     }
-
-    // Build lookup: (dow, hour) → count
-    let mut grid = [[0i64; 24]; 7];
-    let mut max_count = 0i64;
+    let mut counts = [[0_i64; 24]; 7];
     for cell in cells {
-        let dow = (cell.dow as usize).min(6);
-        let hour = (cell.hour as usize).min(23);
-        grid[dow][hour] = cell.count;
-        if cell.count > max_count {
-            max_count = cell.count;
+        // A malformed row (a bad `Time`, imported) is skipped, not indexed: `panic = "abort"`.
+        if let (Some(row), Some(slot)) = (
+            usize::try_from(cell.dow).ok().and_then(|d| counts.get_mut(d)),
+            usize::try_from(cell.hour).ok(),
+        ) && let Some(c) = row.get_mut(slot)
+        {
+            *c = cell.count;
         }
     }
-
-    let cell_w = 32;
-    let cell_h = 22;
-    let label_w = 36;
-    let label_h = 20;
-    let svg_w = label_w + 24 * cell_w + 20;
-    // 26, not 40: the legend ends 16px under the last row, and the extra 14 drew
-    // a blank band under it (about 28px once the SVG is scaled to its card).
-    let svg_h = label_h + 7 * cell_h + 26;
-
-    let mut svg = format!(
-        r#"<div class="hm-scroll" tabindex="0" role="group" aria-label="Hour by day-of-week activity grid, scrolls sideways">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}"
-     width="{svg_w}" height="{svg_h}" preserveAspectRatio="xMinYMin meet"
-     class="hm-svg">
-  <!-- Background -->
-  <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
-"#
-    );
-
-    // Hour labels (0..23)
-    for h in 0..24_usize {
-        let x = label_w + h * cell_w + cell_w / 2;
-        let _ = write!(
-            svg,
-            r#"  <text x="{x}" y="{y}" text-anchor="middle" font-size="9"
-                fill="var(--fg-4)">{h:02}</text>
-"#,
-            y = label_h - 4,
-        );
-    }
-
-    // Day-of-week labels and cells
-    for dow in 0..7_usize {
-        let y_label = label_h + dow * cell_h + cell_h / 2 + 4;
-        let _ = write!(
-            svg,
-            r#"  <text x="{x}" y="{y_label}" text-anchor="end" font-size="10"
-                fill="var(--fg-3)">{day}</text>
-"#,
-            x = label_w - 4,
-            day = DAYS[dow],
-        );
-
-        for (hour, &count) in grid[dow].iter().enumerate() {
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss,
-                clippy::cast_possible_wrap,
-                clippy::cast_lossless
-            )]
-            let intensity = if max_count > 0 {
-                count as f64 / max_count as f64
-            } else {
-                0.0
-            };
-            let color = heat_color(intensity);
-            let x = label_w + hour * cell_w;
-            let y = label_h + dow * cell_h;
-            let title = format!("{} {}:00 — {} detections", DAYS[dow], hour, count);
-            let _ = write!(
-                svg,
-                r#"  <rect x="{x}" y="{y}" width="{cw}" height="{ch}" fill="{color}"
-                      rx="2" ry="2">
-                    <title>{title}</title></rect>
-"#,
-                cw = cell_w - 2,
-                ch = cell_h - 2,
-            );
-        }
-    }
-
-    // Legend
-    let legend_y = label_h + 7 * cell_h + 10;
-    let _ = writeln!(
-        svg,
-        r#"  <text x="{label_w}" y="{legend_y}" font-size="9" fill="var(--fg-4)">Low</text>"#,
-    );
-    for i in 0..20_usize {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let color = heat_color(i as f64 / 19.0);
-        let lx = label_w + 30 + i * 12;
-        let _ = writeln!(
-            svg,
-            r#"  <rect x="{lx}" y="{ly}" width="12" height="10" fill="{color}"/>"#,
-            ly = legend_y - 8,
-        );
-    }
-    let _ = writeln!(
-        svg,
-        r#"  <text x="{lx}" y="{legend_y}" font-size="9" fill="var(--fg-4)">High</text>"#,
-        lx = label_w + 30 + 20 * 12 + 4,
-    );
-
-    svg.push_str("</svg></div>");
-    svg
+    super::viz::heat::hour_by_weekday(&super::viz::heat::HourByWeekday {
+        id: "heat-hour-weekday",
+        counts,
+        occurrences,
+        coverage_known,
+        window_days,
+    })
 }
 
-/// Map a 0.0–1.0 intensity to the app's one "how much" colour: the sequential
-/// ramp `--heat-lo` → `--heat-mid` → `--heat-hi`, interpolated in `OKLab`.
-///
-/// The ramp is one hue family (sand, orange, brick in light; brown, amber, gold
-/// in dark) whose lightness only ever moves one way, so a cell reads as "more"
-/// by value alone and the scale survives greyscale and colour blindness. Its
-/// stops are held by `tests/the_chart_palette_can_be_told_apart.rs`: the lowest is
-/// at least 8 ΔE from an empty cell, the highest is 3:1 against the card.
-///
-/// This used to mix `--dawn` over the surface and then `--rare` over `--dawn`.
-/// In light that read beige to red; in dark, where the surface is blue-grey and
-/// `--dawn` is neon amber, the low end was purple, the middle salmon and the top
-/// orange (lightness went up, down and up again), and a key that said "darker
-/// means more" was wrong in one theme. `in oklab`, not `in oklch`: mixing hues
-/// the short way round the wheel turned the low cells pink.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+/// Map a 0.0–1.0 intensity to the sequential ramp: kept for the dashboard's species
+/// widget (an HTML grid, not an SVG), which paints one `--seq-N` step per cell.
 pub(crate) fn heat_color(t: f64) -> String {
     let t = t.clamp(0.0, 1.0);
     if t < 0.001 {
         return "var(--surface-2)".to_string(); // empty cell
     }
-    if t < 0.5 {
-        let pct = (t / 0.5 * 100.0).round() as i32;
-        format!("color-mix(in oklab, var(--heat-mid) {pct}%, var(--heat-lo))")
-    } else {
-        let pct = ((t - 0.5) / 0.5 * 100.0).round() as i32;
-        format!("color-mix(in oklab, var(--heat-hi) {pct}%, var(--heat-mid))")
-    }
+    format!("var(--seq-{})", super::viz::kit::seq_step(t))
 }
 
 // ---------------------------------------------------------------------------
 // Hourly bar chart renderer
 // ---------------------------------------------------------------------------
 
-fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
+fn render_hourly_bars(
+    totals: &[birdnet_db::sqlite::HourTotal],
+    solar: Option<(f64, f64)>,
+    window_days: u32,
+) -> String {
     if totals.is_empty() {
         return r#"<p class="hm-empty">
             No data available for the selected period.
         </p>"#
             .to_string();
     }
-
-    let max = totals.iter().map(|h| h.count).max().unwrap_or(1);
-    let bar_w = 24;
-    let chart_h = 120;
-    let label_h = 20;
-    let svg_w = 24 * bar_w + 40;
-    let svg_h = chart_h + label_h + 10;
-
-    let mut svg = format!(
-        r#"<div class="hm-scroll" tabindex="0" role="group" aria-label="Detections by hour, scrolls sideways">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}"
-             width="{svg_w}" height="{svg_h}" preserveAspectRatio="xMinYMin meet"
-             class="hm-svg-block">
-  <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
-"#
-    );
-
-    // Build a lookup by hour
-    // An hour outside 0–23 comes from a malformed `Time` (the BirdNET-Pi
-    // importer copies those through), and is skipped: indexing with it
-    // panicked, and `panic = "abort"` took the station down with the page.
-    let mut by_hour = [0i64; 24];
+    // An hour outside 0–23 comes from a malformed `Time` (the BirdNET-Pi importer
+    // copies those through), and is skipped: indexing with it panicked, and
+    // `panic = "abort"` took the station down with the page.
+    let mut by_hour = [0_i64; 24];
     for h in totals {
         if let Some(slot) = by_hour.get_mut(usize::from(h.hour)) {
             *slot = h.count;
         }
     }
-
-    for (hour, &count) in by_hour.iter().enumerate() {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let bar_h = if max > 0 {
-            (count as f64 / max as f64 * chart_h as f64).round() as u32
-        } else {
-            0
-        };
-        let x = 20 + hour * bar_w;
-        let y = chart_h - bar_h as usize;
-        // One hue for the hours the page is about (dawn 5-8, dusk 18-21), a
-        // neutral for the rest. It was amber against green, which is the pair a
-        // reader who cannot tell red from green cannot tell apart, and amber is
-        // 2.35:1 on the card with nothing printed on the bar to carry it.
-        let color = if (5..=8).contains(&hour) || (18..=21).contains(&hour) {
-            "var(--chart-1)"
-        } else {
-            "var(--chart-other)"
-        };
-        let _ = write!(
-            svg,
-            r#"  <rect x="{x}" y="{y}" width="{bw}" height="{bar_h}"
-                  fill="{color}" rx="2">
-                <title>{hour:02}:00 — {count} detections</title></rect>
-  <text x="{lx}" y="{ly}" text-anchor="middle" font-size="8" fill="var(--fg-4)">
-    {hour:02}</text>
-"#,
-            bw = bar_w - 2,
-            lx = x + bar_w / 2,
-            ly = chart_h + label_h,
-        );
-    }
-
-    svg.push_str("</svg></div>");
-    svg
+    // One hue for the hours the page is about (dawn 5-8, dusk 18-21), a neutral for
+    // the rest. It was amber against green, which is the pair a reader who cannot
+    // tell red from green cannot tell apart.
+    super::viz::bars::hourly(&super::viz::bars::Hourly {
+        id: "hourly-totals",
+        name: "Detections by hour of the day",
+        desc: &format!(
+            "Detections for each hour of the day over the last {window_days} days; dawn and dusk hours are in colour, the rest grey."
+        ),
+        unit: "detections",
+        counts: by_hour,
+        fill: super::viz::bars::Fill::DawnDusk,
+        width: 760.0,
+        plot_h: 150.0,
+        solar,
+        now_h: None,
+        top: None,
+        temps: &[],
+        table: true,
+    })
 }
 
 #[cfg(test)]
@@ -489,39 +404,25 @@ mod tests {
         assert_eq!(heat_color(0.0), "var(--surface-2)");
     }
 
-    /// The ramp is the three `--heat-*` stops and nothing else, so what is
-    /// painted is what the palette test graded: the busiest cell is exactly
-    /// `--heat-hi`, the halfway one exactly `--heat-mid`, the least one drawn
-    /// exactly `--heat-lo`. And it is interpolated in `OKLab`, never `OKLCH`, which
-    /// took the short way round the hue wheel and turned the low end pink.
+    /// The widget's cells take a step of the one sequential ramp (`--seq-1` … `--seq-7`),
+    /// never a literal and never a retired token, rising with the share of the busiest cell.
     #[test]
-    fn heat_color_is_the_three_stops_in_oklab() {
-        assert_eq!(
-            heat_color(1.0),
-            "color-mix(in oklab, var(--heat-hi) 100%, var(--heat-mid))"
-        );
-        assert_eq!(
-            heat_color(0.5),
-            "color-mix(in oklab, var(--heat-hi) 0%, var(--heat-mid))"
-        );
-        assert_eq!(
-            heat_color(0.25),
-            "color-mix(in oklab, var(--heat-mid) 50%, var(--heat-lo))"
-        );
-        assert_eq!(
-            heat_color(0.01),
-            "color-mix(in oklab, var(--heat-mid) 2%, var(--heat-lo))"
-        );
-        for t in [0.01, 0.2, 0.5, 0.8, 1.0] {
-            let c = heat_color(t);
-            assert!(!c.contains("oklch"), "{c}");
-            assert!(!c.contains("--dawn") && !c.contains("--rare"), "{c}");
+    fn heat_color_is_a_step_of_the_sequential_ramp() {
+        assert_eq!(heat_color(1.0), "var(--seq-7)");
+        assert_eq!(heat_color(0.001), "var(--seq-1)");
+        let mut last = 0;
+        for i in 1..=100 {
+            let c = heat_color(f64::from(i) / 100.0);
+            let n: usize = c.trim_start_matches("var(--seq-").trim_end_matches(')').parse().expect("a step");
+            assert!((1..=7).contains(&n) && n >= last, "{c}");
+            last = n;
+            assert!(!c.contains("oklch") && !c.contains("--heat") && !c.contains("--dawn"), "{c}");
         }
     }
 
     #[test]
     fn render_heatmap_svg_empty() {
-        let html = render_heatmap_svg(&[]);
+        let html = render_heatmap_svg(&[], [1; 7], true, 7);
         assert!(html.contains("No data"));
     }
 
@@ -539,14 +440,28 @@ mod tests {
                 count: 5,
             },
         ];
-        let svg = render_heatmap_svg(&cells);
+        let svg = render_heatmap_svg(&cells, [1; 7], true, 7);
         assert!(svg.contains("<svg"));
         assert!(svg.contains("Mon"));
+        assert!(svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;10"), "{svg}");
+    }
+
+    /// A row from an imported database with a weekday or hour outside the grid is
+    /// skipped; indexing with it aborted the process.
+    #[test]
+    fn a_malformed_cell_is_skipped_not_indexed() {
+        let cells = vec![
+            HeatmapCell { dow: 9, hour: 7, count: 10 },
+            HeatmapCell { dow: 1, hour: 99, count: 10 },
+            HeatmapCell { dow: 1, hour: 7, count: 3 },
+        ];
+        let svg = render_heatmap_svg(&cells, [1; 7], false, 7);
+        assert!(svg.contains("Mon 07:00\u{2013}08:00&#10;Detections&#9;3"), "{svg}");
     }
 
     #[test]
     fn render_hourly_bars_empty() {
-        let html = render_hourly_bars(&[]);
+        let html = render_hourly_bars(&[], None, 7);
         assert!(html.contains("No data"));
     }
 
@@ -556,9 +471,12 @@ mod tests {
         let totals = vec![
             HourTotal { hour: 7, count: 20 },
             HourTotal { hour: 8, count: 15 },
+            // Imported, malformed: skipped rather than indexed.
+            HourTotal { hour: 99, count: 5 },
         ];
-        let svg = render_hourly_bars(&totals);
+        let svg = render_hourly_bars(&totals, Some((6.5, 18.5)), 7);
         assert!(svg.contains("<svg"));
-        assert!(svg.contains("20 detections"));
+        assert!(svg.contains("Detections&#9;20"), "{svg}");
+        assert!(svg.contains("sunrise 6:30"), "{svg}");
     }
 }

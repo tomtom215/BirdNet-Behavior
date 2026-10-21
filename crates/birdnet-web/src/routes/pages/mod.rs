@@ -40,6 +40,7 @@ pub mod history;
 pub mod homes;
 pub mod life_list;
 pub(crate) mod listen;
+pub(crate) mod listening;
 pub mod migration;
 pub(crate) mod name_search;
 pub(crate) mod nav;
@@ -687,6 +688,12 @@ mod tests {
                 r#"<script nonce="{nonce}" src="/static/chart-text.js?v={version}" defer></script>"#
             )),
             "the layout must load chart-text.js, versioned, deferred and nonced"
+        );
+        assert!(
+            html.contains(&format!(
+                r#"<script nonce="{nonce}" src="/static/chart-kit.js?v={version}" defer></script>"#
+            )),
+            "the layout must load chart-kit.js, versioned, deferred and nonced"
         );
     }
 

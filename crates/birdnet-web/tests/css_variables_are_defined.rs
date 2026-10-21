@@ -50,6 +50,13 @@ const SET_AT_RUNTIME: &[(&str, &str)] = &[
          a `data-style` attribute and applied via CSSOM",
     ),
     (
+        "--i",
+        "a chart mark's place in its row, emitted by the chart renderers \
+         (`routes::pages::viz`) as a `data-style` attribute and applied via \
+         CSSOM; it staggers the entrance animation (`.ck-grow`), and without \
+         it every mark simply enters at once",
+    ),
+    (
         "--bnb-more-x",
         "the right edge of the More button, measured by the menu script",
     ),
