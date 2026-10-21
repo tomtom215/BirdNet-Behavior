@@ -95,12 +95,36 @@ impl DuplicateGate {
     /// a backlog an *earlier* recording routinely arrives after a later one. A
     /// signed `at - last < interval` test would admit every one of those.
     pub(super) fn admit(&mut self, sci_name: &str, at_secs: i64) -> DuplicateVerdict {
-        if !self.is_enabled() {
+        self.admit_with(sci_name, at_secs, None)
+    }
+
+    /// As [`admit`](Self::admit), for a species that may have an interval of
+    /// its own.
+    ///
+    /// `species_interval_secs` is the operator's per-species minimum
+    /// (`species_intervals`, migration 56). A positive value **replaces** the
+    /// station's interval for that species — it is not added to it, and it
+    /// applies even when the station's own interval is off, which is how
+    /// tphakala/birdnet-go's `species.config.<name>.interval` behaves ("0 =
+    /// use the global default"). `None`, zero or a negative number falls back
+    /// to the station's interval, so a bad stored value can never switch the
+    /// gate on for a species by accident.
+    pub(super) fn admit_with(
+        &mut self,
+        sci_name: &str,
+        at_secs: i64,
+        species_interval_secs: Option<i64>,
+    ) -> DuplicateVerdict {
+        let interval_secs = match species_interval_secs {
+            Some(own) if own > 0 => own,
+            _ => self.interval_secs,
+        };
+        if interval_secs <= 0 {
             return DuplicateVerdict::Admit;
         }
         if let Some(&last) = self.last_admitted.get(sci_name) {
             let gap = at_secs.saturating_sub(last).abs();
-            if gap < self.interval_secs {
+            if gap < interval_secs {
                 return DuplicateVerdict::Suppress {
                     since_last_secs: gap,
                 };
@@ -108,6 +132,78 @@ impl DuplicateGate {
         }
         self.last_admitted.insert(sci_name.to_owned(), at_secs);
         DuplicateVerdict::Admit
+    }
+}
+
+/// The operator's per-species minimum intervals, re-read from the database on
+/// a short TTL.
+///
+/// `/admin/species` writes them at runtime, so — exactly as for the per-species
+/// confidence thresholds — a snapshot taken at start would make the page
+/// confirm a save that changed nothing until the next restart. The first read
+/// is at construction, not after the first TTL, so a station that restarts with
+/// an interval already set honours it from its first detection.
+pub(super) struct SpeciesIntervals {
+    map: HashMap<String, i64>,
+    refreshed: std::time::Instant,
+}
+
+impl SpeciesIntervals {
+    /// How stale the map may get before the next detection re-reads it.
+    const TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Read the table once.
+    pub(super) fn load(state: &birdnet_web::state::AppState) -> Self {
+        let mut this = Self {
+            map: HashMap::new(),
+            refreshed: std::time::Instant::now(),
+        };
+        this.reread(state);
+        this
+    }
+
+    /// A failed read keeps the previous map: dropping every interval on a
+    /// transient `SQLITE_BUSY` would silently record the repeats the operator
+    /// asked not to see.
+    fn reread(&mut self, state: &birdnet_web::state::AppState) {
+        match state.with_db(birdnet_db::sqlite::get_species_interval_map) {
+            Ok(fresh) => self.map = fresh,
+            Err(e) => tracing::warn!(
+                error = %e,
+                "could not read per-species intervals; keeping the previous set"
+            ),
+        }
+        self.refreshed = std::time::Instant::now();
+    }
+
+    /// The species' own interval, refreshed if stale.
+    pub(super) fn get(
+        &mut self,
+        state: &birdnet_web::state::AppState,
+        sci_name: &str,
+    ) -> Option<i64> {
+        if self.refreshed.elapsed() >= Self::TTL {
+            self.reread(state);
+        }
+        self.map.get(sci_name).copied()
+    }
+
+    /// Make the next read look a TTL old.
+    #[cfg(test)]
+    pub(super) fn age_for_test(&mut self) {
+        self.refreshed = std::time::Instant::now()
+            .checked_sub(Self::TTL)
+            .expect("the monotonic clock is older than the TTL");
+    }
+
+    /// How many species have an interval of their own.
+    pub(super) fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Whether no species has one.
+    pub(super) fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
 
@@ -226,6 +322,60 @@ mod tests {
         assert!(!g.is_enabled(), "a negative interval reported as enabled");
         assert!(admitted(&mut g, "Turdus merula", "05:00:00"));
         assert!(admitted(&mut g, "Turdus merula", "05:00:01"));
+    }
+
+    // ── a species' own interval (migration 56) ──────────────────────────
+
+    /// Whether the gate admitted `sci` at `hms` under a species interval.
+    fn admitted_under(g: &mut DuplicateGate, sci: &str, hms: &str, own: Option<i64>) -> bool {
+        g.admit_with(sci, t(hms), own) == DuplicateVerdict::Admit
+    }
+
+    #[test]
+    fn a_species_interval_applies_when_the_station_has_none() {
+        // The station's interval is off (the default). One noisy species is
+        // limited to once a minute; every other species is untouched. This is
+        // birdnet-go's `species.config.<name>.interval`.
+        let mut g = DuplicateGate::new(0);
+        assert!(admitted_under(&mut g, "Strix aluco", "02:00:00", Some(60)));
+        assert!(!admitted_under(&mut g, "Strix aluco", "02:00:59", Some(60)));
+        assert!(admitted_under(&mut g, "Strix aluco", "02:01:00", Some(60)));
+        // A species with no interval of its own is not gated at all.
+        assert!(admitted_under(&mut g, "Turdus merula", "02:00:00", None));
+        assert!(admitted_under(&mut g, "Turdus merula", "02:00:01", None));
+    }
+
+    #[test]
+    fn a_species_interval_replaces_the_stations_and_does_not_add_to_it() {
+        // Longer than the station's: the owl is held for 60 s although the
+        // station would admit it again after 10.
+        let mut g = DuplicateGate::new(10);
+        assert!(admitted_under(&mut g, "Strix aluco", "02:00:00", Some(60)));
+        assert!(!admitted_under(&mut g, "Strix aluco", "02:00:30", Some(60)));
+        // Shorter than the station's: the blackbird is admitted again after 5 s
+        // although the station's interval is 10.
+        assert!(admitted_under(&mut g, "Turdus merula", "05:00:00", Some(5)));
+        assert!(admitted_under(&mut g, "Turdus merula", "05:00:05", Some(5)));
+    }
+
+    #[test]
+    fn a_zero_or_negative_species_interval_means_the_stations() {
+        // "0 = use the default" upstream; a negative number is a typo and must
+        // not turn the gate on or off for the species.
+        for own in [Some(0), Some(-5), None] {
+            let mut g = DuplicateGate::new(10);
+            assert!(admitted_under(&mut g, "Pica pica", "09:00:00", own));
+            assert!(
+                !admitted_under(&mut g, "Pica pica", "09:00:05", own),
+                "{own:?} did not fall back to the station's 10 s"
+            );
+            let mut off = DuplicateGate::new(0);
+            assert!(admitted_under(&mut off, "Pica pica", "09:00:00", own));
+            assert!(
+                admitted_under(&mut off, "Pica pica", "09:00:01", own),
+                "{own:?} switched the gate on under a station with none"
+            );
+        }
     }
 
     // ── out-of-order arrival ────────────────────────────────────────────

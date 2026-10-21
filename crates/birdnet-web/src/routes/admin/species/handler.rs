@@ -8,7 +8,8 @@ use serde::Deserialize;
 use birdnet_db::settings::{SettingsCategory, SettingsError, ensure_settings_table, get, set};
 
 use super::render::{
-    SuggestedThreshold, render_filter_test_page, render_species_partial, render_thresholds_partial,
+    SuggestedThreshold, render_filter_test_page, render_intervals_partial, render_species_partial,
+    render_thresholds_partial,
 };
 use crate::state::AppState;
 
@@ -445,6 +446,145 @@ pub async fn delete_threshold(
     Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
 })
 .await
+}
+
+// ---------------------------------------------------------------------------
+// Minimum-interval handlers
+// ---------------------------------------------------------------------------
+
+/// The longest per-species interval the form accepts: one day. Anything longer
+/// is a unit slip (milliseconds, or minutes typed into a seconds field), and a
+/// species held for more than a day is not "recorded again" in any useful sense.
+pub const MAX_SPECIES_INTERVAL_SECS: i64 = 86_400;
+
+/// Re-read the table for a re-render. A failed read is an error, not an empty
+/// list: an empty table renders as "No species has an interval of its own",
+/// which would be a claim about the station that a database fault must not make.
+fn load_intervals(
+    state: &AppState,
+) -> Result<Vec<birdnet_db::sqlite::SpeciesInterval>, birdnet_db::sqlite::DbError> {
+    state.with_read_db(birdnet_db::sqlite::get_species_intervals)
+}
+
+fn intervals_response(state: &AppState) -> Response {
+    match load_intervals(state) {
+        Ok(rows) => Html(render_intervals_partial(&rows)).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "per-species intervals not readable");
+            crate::routes::pages::error_states::failed_partial("the per-species intervals")
+                .into_response()
+        }
+    }
+}
+
+/// Return the HTMX partial listing every per-species minimum interval.
+pub async fn intervals_partial(State(state): State<AppState>) -> Response {
+    state.run_blocking(|state| intervals_response(state)).await
+}
+
+/// Per-species interval submission.
+#[derive(Debug, Deserialize)]
+pub struct IntervalForm {
+    /// Scientific name of the species the interval is for.
+    pub sci_name: String,
+    /// Seconds, as typed. A string so a slip is answered with a toast rather
+    /// than the bare `422` serde would give a non-number (htmx discards it).
+    pub seconds: String,
+}
+
+/// Parse the interval field: whole seconds, 1 to [`MAX_SPECIES_INTERVAL_SECS`].
+fn parse_interval(raw: &str) -> Result<i64, String> {
+    let raw = raw.trim();
+    match raw.parse::<i64>() {
+        Ok(n) if (1..=MAX_SPECIES_INTERVAL_SECS).contains(&n) => Ok(n),
+        Ok(0) => Err(
+            "An interval of 0 means no interval; remove the species' row instead. Nothing was saved."
+                .to_owned(),
+        ),
+        Ok(n) if n > MAX_SPECIES_INTERVAL_SECS => Err(format!(
+            "An interval is at most {MAX_SPECIES_INTERVAL_SECS} seconds (one day); {n} looks like a unit slip. Nothing was saved."
+        )),
+        _ => Err(
+            "An interval is a whole number of seconds, such as 60. Nothing was saved.".to_owned(),
+        ),
+    }
+}
+
+/// Set a per-species minimum interval and return the updated partial.
+///
+/// Answers a refusal with a toast and the page unchanged, never a `4xx`: see
+/// [`set_threshold`].
+pub async fn set_interval(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Form(form): Form<IntervalForm>,
+) -> Response {
+    state
+        .run_blocking(move |state| {
+            use crate::routes::pages::toast::{Toast, not_applied};
+            let sci_name = form.sci_name.trim().to_owned();
+            if sci_name.is_empty() {
+                return not_applied(&Toast::error("Choose a species for the interval."));
+            }
+            let secs = match parse_interval(&form.seconds) {
+                Ok(n) => n,
+                Err(msg) => return not_applied(&Toast::error(msg)),
+            };
+            if let Err(e) = state
+                .with_db(|conn| birdnet_db::sqlite::set_species_interval(conn, &sci_name, secs))
+            {
+                tracing::warn!(error = %e, species = %sci_name, "species interval not saved");
+                return not_applied(&Toast::error(format!(
+                    "The interval for {sci_name} was not saved: the database refused the write."
+                )));
+            }
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.interval.set",
+                Some(&sci_name),
+                Some(&format!("min_interval_secs={secs}")),
+            );
+            intervals_response(state)
+        })
+        .await
+}
+
+/// Form carrying the species whose interval should be removed.
+#[derive(Debug, Deserialize)]
+pub struct IntervalDeleteForm {
+    /// Scientific name of the species whose interval is to be removed.
+    pub sci_name: String,
+}
+
+/// Remove a per-species minimum interval and return the updated partial.
+pub async fn delete_interval(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Form(form): Form<IntervalDeleteForm>,
+) -> Response {
+    state
+        .run_blocking(move |state| {
+            use crate::routes::pages::toast::{Toast, not_applied};
+            if let Err(e) = state.with_db(|conn| {
+                birdnet_db::sqlite::delete_species_interval(conn, &form.sci_name)
+            }) {
+                tracing::warn!(error = %e, species = %form.sci_name, "species interval not removed");
+                return not_applied(&Toast::error(format!(
+                    "The interval for {} was not removed: the database refused the write.",
+                    form.sci_name
+                )));
+            }
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.interval.delete",
+                Some(&form.sci_name),
+                None,
+            );
+            intervals_response(state)
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------

@@ -69,4 +69,13 @@ pub fn router() -> Router<AppState> {
             "/admin/species/thresholds/delete",
             axum::routing::post(handler::delete_threshold),
         )
+        .route("/admin/species/intervals", get(handler::intervals_partial))
+        .route(
+            "/admin/species/intervals/set",
+            axum::routing::post(handler::set_interval),
+        )
+        .route(
+            "/admin/species/intervals/delete",
+            axum::routing::post(handler::delete_interval),
+        )
 }

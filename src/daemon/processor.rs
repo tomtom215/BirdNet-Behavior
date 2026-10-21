@@ -514,6 +514,7 @@ pub(super) fn event_processor(
     let apprise_gate = apprise.as_ref().map(|a| a.blocking_lock().gatekeeper());
     let mut dynamic = DynamicThresholdState::new(dynamic, &state);
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
+    let mut species_intervals = crate::daemon::duplicate::SpeciesIntervals::load(&state);
     // One post per rule and species per cooldown window; shared with the post
     // tasks so a request that never left can give its window back.
     let alert_cooldowns = crate::daemon::alert_cooldown::AlertCooldowns::default();
@@ -525,6 +526,12 @@ pub(super) fn event_processor(
         tracing::info!(
             interval_secs = duplicate_interval_secs,
             "duplicate-prediction interval enabled"
+        );
+    }
+    if !species_intervals.is_empty() {
+        tracing::info!(
+            species = species_intervals.len(),
+            "per-species minimum intervals in force"
         );
     }
 
@@ -773,7 +780,11 @@ pub(super) fn event_processor(
         if let Some(at_secs) =
             crate::daemon::duplicate::detection_secs(&detection.date, &detection.time)
             && let crate::daemon::duplicate::DuplicateVerdict::Suppress { since_last_secs } =
-                duplicates.admit(&detection.scientific_name, at_secs)
+                duplicates.admit_with(
+                    &detection.scientific_name,
+                    at_secs,
+                    species_intervals.get(&state, &detection.scientific_name),
+                )
         {
             tracing::debug!(
                 correlation_id,
@@ -4626,6 +4637,87 @@ mod tests {
             "the quarantined chunk consumed the interval and the real \
              detection was dropped as its duplicate"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_species_interval_limits_that_species_through_the_processor() {
+        // The station's interval is off. The tawny owl has 60 s in
+        // `species_intervals`; the blackbird has none. Through the real
+        // processor: five owl chunks and five blackbird chunks, three seconds
+        // apart. The owl is recorded once, the blackbird five times.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        state
+            .with_db(|c| birdnet_db::sqlite::set_species_interval(c, "Strix aluco", 60))
+            .unwrap();
+
+        let mut events = Vec::new();
+        for hms in ["02:00:00", "02:00:03", "02:00:06", "02:00:09", "02:00:12"] {
+            events.push(event_at("Strix aluco", hms, tmp.path()));
+            events.push(event_at("Turdus merula", hms, tmp.path()));
+        }
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 0).await;
+
+        let count = |sci: &str| -> i64 {
+            state.with_db(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM detections WHERE Sci_Name = ?1",
+                    [sci],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            })
+        };
+        assert_eq!(
+            count("Strix aluco"),
+            1,
+            "the owl's own interval was not applied"
+        );
+        assert_eq!(
+            count("Turdus merula"),
+            5,
+            "a species without an interval was gated"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_species_interval_is_admitted_again_once_it_has_passed_through_the_processor() {
+        // Counterpart: the interval is a gap, not a mute. 60 s later the owl is
+        // recorded again.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        state
+            .with_db(|c| birdnet_db::sqlite::set_species_interval(c, "Strix aluco", 60))
+            .unwrap();
+        let events = ["02:00:00", "02:00:30", "02:01:00", "02:01:59", "02:02:00"]
+            .iter()
+            .map(|hms| event_at("Strix aluco", hms, tmp.path()))
+            .collect();
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 0).await;
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            3,
+            "02:00:00, 02:01:00 and 02:02:00 are 60 s apart; the two between are not"
+        );
+    }
+
+    #[test]
+    fn a_species_interval_set_while_the_station_runs_is_picked_up() {
+        // The admin page writes the row at runtime; the cache must re-read.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut cache = crate::daemon::duplicate::SpeciesIntervals::load(&state);
+        assert_eq!(cache.get(&state, "Strix aluco"), None);
+        state
+            .with_db(|c| birdnet_db::sqlite::set_species_interval(c, "Strix aluco", 45))
+            .unwrap();
+        assert_eq!(
+            cache.get(&state, "Strix aluco"),
+            None,
+            "re-read before the TTL has passed"
+        );
+        cache.age_for_test();
+        assert_eq!(cache.get(&state, "Strix aluco"), Some(45));
     }
 
     // ── the taxon-aware daylight filter, through the processor ──────────

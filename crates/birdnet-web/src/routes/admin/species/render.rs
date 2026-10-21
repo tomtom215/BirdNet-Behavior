@@ -112,6 +112,10 @@ pub fn render_species_partial(
     out.push_str(
         r#"<div id="thresholds-section" hx-get="/admin/species/thresholds" hx-trigger="load" hx-swap="innerHTML"></div>"#,
     );
+    // Per-species minimum intervals (loaded via HTMX)
+    out.push_str(
+        r#"<div id="intervals-section" hx-get="/admin/species/intervals" hx-trigger="load" hx-swap="innerHTML"></div>"#,
+    );
     out
 }
 
@@ -225,6 +229,62 @@ pub fn render_thresholds_partial(
 </div>"##,
     );
 
+    out
+}
+
+/// How a number of seconds reads in the interval table: "45 s", "5 min", "2 h".
+fn human_interval(secs: i64) -> String {
+    if secs % 3600 == 0 {
+        format!("{} h", secs / 3600)
+    } else if secs % 60 == 0 {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs} s")
+    }
+}
+
+/// Render the per-species minimum-interval section as an HTMX partial.
+pub fn render_intervals_partial(intervals: &[birdnet_db::sqlite::SpeciesInterval]) -> String {
+    let mut out = String::with_capacity(2048);
+    out.push_str(r#"<div class="card">
+  <div class="section-title">Per-Species Minimum Interval</div>
+  <p class="hint">The fewest seconds that must pass before a species is recorded again; a repeat inside it is <b>dropped</b> — no row, no clip, no notification, and not counted. It <b>replaces</b> the station-wide <code>DUPLICATE_INTERVAL_SECS</code> for that species (off unless set) and applies even when the station-wide one is off, so a tawny owl calling all night can be held to one detection a minute while everything else is untouched. It is measured from the last <i>recorded</i> detection, not the last heard. Notification cooldowns are separate and only ever limit messages, never rows. Changes take effect within a minute; no restart needed.</p>"#);
+    if intervals.is_empty() {
+        out.push_str(
+            r#"<p class="empty-note mb">No species has an interval of its own. The station-wide interval, if any, applies to all.</p>"#,
+        );
+    } else {
+        out.push_str(
+            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species</th><th scope="col">Minimum interval</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
+        );
+        for i in intervals {
+            let esc = escape_html(&i.sci_name);
+            let shown = human_interval(i.min_interval_secs);
+            let _ = write!(
+                out,
+                r##"<tr>
+  <td>{esc}</td>
+  <td class="cell-center">{shown}</td>
+  <td class="cell-right">
+    <form hx-post="/admin/species/intervals/delete" hx-target="#intervals-section" hx-swap="innerHTML" class="inline-form">
+      <input type="hidden" name="sci_name" value="{esc}">
+      <button type="submit" class="btn btn-danger del-btn">Remove</button>
+    </form>
+  </td>
+</tr>"##
+            );
+        }
+        out.push_str("</tbody></table>");
+    }
+    out.push_str(
+        r##"<form hx-post="/admin/species/intervals/set" hx-target="#intervals-section" hx-swap="innerHTML" class="add-row">
+    <input type="text" name="sci_name" placeholder="Scientific name (e.g. Strix aluco)" class="grow-2" aria-label="Scientific name">
+    <input type="number" name="seconds" value="60" min="1" max="86400" step="1"
+           placeholder="Seconds (1&#8211;86400)" class="grow cap" aria-label="Minimum interval in seconds">
+    <button type="submit" class="btn btn-primary">Set</button>
+  </form>
+</div>"##,
+    );
     out
 }
 

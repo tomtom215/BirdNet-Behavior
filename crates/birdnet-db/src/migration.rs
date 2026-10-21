@@ -2331,6 +2331,26 @@ pub const MIGRATIONS: &[Migration] = &[
                      ADD COLUMN cooldown_secs INTEGER NOT NULL DEFAULT 0
                      CHECK (cooldown_secs >= 0);",
     },
+    Migration {
+        version: 56,
+        description: "Per-species minimum interval between detections",
+        // tphakala/birdnet-go's `realtime.species.config.<name>.interval`: the
+        // fewest seconds that must pass before the same species is recorded
+        // again, overriding the station-wide `DUPLICATE_INTERVAL_SECS` for that
+        // species (`0` there means "use the default"; here a row is only ever
+        // written for a species that has one, and a species without a row uses
+        // the station's interval). Seconds, because the daemon compares the
+        // value to detection timestamps that are already seconds.
+        //
+        // A table of its own rather than a column on `species_thresholds`: that
+        // table's `confidence_threshold` is `NOT NULL`, so an interval for a
+        // species with no custom threshold would need an invented one.
+        up_sql: "CREATE TABLE IF NOT EXISTS species_intervals (
+            sci_name TEXT PRIMARY KEY,
+            min_interval_secs INTEGER NOT NULL CHECK (min_interval_secs > 0),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
