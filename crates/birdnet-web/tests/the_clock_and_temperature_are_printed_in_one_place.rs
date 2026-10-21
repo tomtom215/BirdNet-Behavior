@@ -79,16 +79,33 @@ const EXEMPT: &[(&str, &str, &str)] = &[
         "{hh:02}:{mm:02}:{ss:02}",
         "a session timestamp in the audit trail, ISO",
     ),
+    // Absolute hours labelled UTC, in a JSON API's own error text.
+    (
+        "routes/weather.rs",
+        "{hour:02}:00 UTC",
+        "a JSON error message naming a UTC hour of the weather cache; labelled UTC, machine-facing, not the display clock",
+    ),
+    // The charts that form a clock from seconds after midnight in one helper.
+    (
+        "routes/pages/viz/bursts.rs",
+        "secs / 3600 % 24",
+        "the one place a burst's clock is formed; its only caller is a tooltip (data-tip), which is plain text",
+    ),
+    (
+        "routes/pages/viz/funnel.rs",
+        "secs / 3600 % 24",
+        "the one place a morning's clock is formed; the SVG labels carry display::clock_attr so they follow the reader's format, and the tooltips and the aria description are plain text",
+    ),
     // Labels naming the unit as a choice, and text that cannot carry markup.
+    (
+        "routes/admin/settings/render/system.rs",
+        "Fahrenheit (°F)",
+        "the settings page names the two units as its choices",
+    ),
     (
         "routes/admin/settings/render/system.rs",
         "Celsius (°C)",
         "the settings page names the two units as its choices",
-    ),
-    (
-        "routes/pages/viz/bars.rs",
-        "{hi_attr}",
-        "the temperature axis: each label is marked data-tc on the same element, so it follows the unit",
     ),
     (
         "routes/admin/quality.rs",

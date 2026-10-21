@@ -181,11 +181,12 @@ pub fn morning_order(voices: &[Voice], mornings: &[Morning], hours: (u32, u32)) 
             let xx = x(f64::from(t));
             let _ = write!(
                 s,
-                r#"<line class="mo-typical" x1="{xx:.1}" y1="{y1:.1}" x2="{xx:.1}" y2="{y2:.1}"/><text class="mo-typ-t mono ck-annot ck-halo" x="{xx:.1}" y="{ty:.1}" text-anchor="middle">{label}</text>"#,
+                r#"<line class="mo-typical" x1="{xx:.1}" y1="{y1:.1}" x2="{xx:.1}" y2="{y2:.1}"/><text class="mo-typ-t mono ck-annot ck-halo" x="{xx:.1}" y="{ty:.1}" text-anchor="middle" {clk}>{label}</text>"#,
                 y1 = band_mid(k) - 16.0,
                 y2 = band_mid(k) + 16.0,
                 ty = band_mid(k) - 20.0,
                 label = clock(t),
+                clk = crate::display::clock_attr(&clock(t)),
             );
         }
     }
@@ -224,9 +225,10 @@ pub fn morning_order(voices: &[Voice], mornings: &[Morning], hours: (u32, u32)) 
                 let lx = if cx > W * 0.75 { cx - 9.0 } else { cx + 9.0 };
                 let _ = write!(
                     s,
-                    r#"<text class="mo-now-t mono ck-annot ck-halo" x="{lx:.1}" y="{ly:.1}" text-anchor="{anchor}" data-ck-s="m{mi}">{label}</text>"#,
+                    r#"<text class="mo-now-t mono ck-annot ck-halo" x="{lx:.1}" y="{ly:.1}" text-anchor="{anchor}" data-ck-s="m{mi}" {clk}>{label}</text>"#,
                     ly = cy + 15.0,
                     label = clock(t),
+                    clk = crate::display::clock_attr(&clock(t)),
                 );
             }
             index += 1;

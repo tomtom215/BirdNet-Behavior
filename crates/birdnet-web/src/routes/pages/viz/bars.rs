@@ -298,8 +298,18 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             ly2 = y_bot,
             hi_attr = crate::display::temperature_attr(t_max, 0, false),
             lo_attr = crate::display::temperature_attr(t_min, 0, false),
-            hi_text = format_args!("{t_max:.0}°"),
-            lo_text = format_args!("{t_min:.0}°"),
+            hi_text = crate::display::format_temperature(
+                t_max,
+                0,
+                crate::display::TemperatureUnit::Celsius,
+                false
+            ),
+            lo_text = crate::display::format_temperature(
+                t_min,
+                0,
+                crate::display::TemperatureUnit::Celsius,
+                false
+            ),
         );
         let _ = write!(
             svg,

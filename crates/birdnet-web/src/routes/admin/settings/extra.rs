@@ -473,7 +473,7 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         config_key: "BIRDWEATHER_LOCATION_ACCURACY",
         group: Group::Online,
         label: "Blur the BirdWeather position by up to (metres)",
-        help: "BirdWeather shows the position on a public map. With a distance here, each upload carries a position moved a random distance up to this far, in a random direction, so the map does not show your address. Empty or 0 posts the exact position. Someone who collects many uploads can average the blur away.",
+        help: "BirdWeather shows the position on a public map. With a distance here, every upload carries your position moved by one fixed offset (up to this far, in one direction, drawn once from a secret kept beside the database), so the map does not show your address. The offset is the same on every upload, so collecting many uploads does not average it away; it is not hidden from anyone who learns it, and changing this distance or losing the secret draws a new one. Empty or 0 posts the exact position. A value that cannot be used (such as 5km, or more than 50000) turns BirdWeather uploads off instead of posting the exact position.",
         kind: Kind::Int { min: 0, max: 50000 },
         category: SettingsCategory::Notifications,
     },
