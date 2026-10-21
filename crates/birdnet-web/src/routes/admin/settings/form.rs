@@ -202,6 +202,12 @@ pub struct SettingsForm {
     pub image_cache_dir: Option<String>,
     /// Filesystem path to operator-supplied custom species images (overrides Wikipedia cache).
     pub custom_image_dir: Option<String>,
+    /// Absolute path of a picture shown on the Today page (a site photograph
+    /// or a camera snapshot another program keeps current). BirdNET-Pi's
+    /// `CUSTOM_IMAGE`; not the per-species `custom_image_dir`.
+    pub dashboard_image: Option<String>,
+    /// The title shown over that picture (`CUSTOM_IMAGE_TITLE`).
+    pub dashboard_image_title: Option<String>,
     /// Maximum number of WAV recordings stored per species before the oldest are rotated.
     pub max_files_per_species: Option<String>,
     /// Disk-use threshold (percentage, 0–100) at which the oldest recordings are purged
@@ -216,12 +222,6 @@ pub struct SettingsForm {
     /// `magma`, `inferno`, `grey` or `grey_inverted`.
     pub spectrogram_colormap: Option<String>,
     /// Dynamic range of the spectrograms in dB: `60`, `80` (the default), `100`
-    /// Absolute path of a picture shown on the Today page (a site photograph
-    /// or a camera snapshot another program keeps current). BirdNET-Pi's
-    /// `CUSTOM_IMAGE`; not the per-species `custom_image_dir`.
-    pub dashboard_image: Option<String>,
-    /// The title shown over that picture (`CUSTOM_IMAGE_TITLE`).
-    pub dashboard_image_title: Option<String>,
     /// or `120`. Cells further than this below the loudest are drawn as the floor.
     pub spectrogram_range_db: Option<String>,
     /// Seconds of audio saved around each detection (BirdNET-Pi:

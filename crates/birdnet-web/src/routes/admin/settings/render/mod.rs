@@ -147,12 +147,12 @@ fn fixed_form_default(key: &str) -> &'static str {
         "recording_schedule" => "all-day",
         "segment_duration" => "15",
         "sf_thresh" => "0.03",
+        "spectrogram_colormap" => "viridis",
+        "spectrogram_range_db" => "80",
         "stream_max_mb" => "512",
         "stream_retention_secs" => "600",
         "weekly_report_schedule" => "monday",
         _ => "",
-        "spectrogram_colormap" => "viridis",
-        "spectrogram_range_db" => "80",
     }
 }
 

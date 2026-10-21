@@ -91,11 +91,11 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", hls::router())
         .nest("/api/v2", health::router())
         .merge(livestream::stream_router())
+        .merge(dashboard_image::router())
         .merge(pages::router())
         .merge(redirects::router())
         .merge(feeds::router())
         .merge(share::router())
-        .merge(dashboard_image::router())
         .merge(auth_pages::router())
         .merge(static_files::router())
         // Friendly branded 404 for any unmatched path (e.g. a mistyped page URL).

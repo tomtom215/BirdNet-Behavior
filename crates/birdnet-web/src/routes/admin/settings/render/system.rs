@@ -69,17 +69,6 @@ fn language_picker(stored: &str, names: &NameLocalizer) -> String {
     )
 }
 
-pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &NameLocalizer) {
-    // Default 0 = keep audio forever, which is what every station does
-    // today; age-based retention is strictly opt-in.
-    let days = get_setting(s, "clip_retention_days");
-    let imgcache = get_setting(s, "image_cache_dir");
-    let customimg = get_setting(s, "custom_image_dir");
-    let dash_image = get_setting(s, "dashboard_image");
-    let dash_title = get_setting(s, "dashboard_image_title");
-    let maxfiles = get_setting(s, "max_files_per_species");
-    let purge = get_setting(s, "purge_threshold");
-    let raw_spec = get_setting(s, "raw_spectrogram");
 /// The `<option>`s of the spectrogram colour-map picker, the stored one chosen.
 ///
 /// A stored value that is no colour map selects the default, which is what the
@@ -122,7 +111,20 @@ fn spectrogram_range_options(stored: &str) -> String {
         .collect()
 }
 
+pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &NameLocalizer) {
+    // Default 0 = keep audio forever, which is what every station does
+    // today; age-based retention is strictly opt-in.
+    let days = get_setting(s, "clip_retention_days");
+    let imgcache = get_setting(s, "image_cache_dir");
+    let customimg = get_setting(s, "custom_image_dir");
+    let dash_image = get_setting(s, "dashboard_image");
+    let dash_title = get_setting(s, "dashboard_image_title");
+    let maxfiles = get_setting(s, "max_files_per_species");
+    let purge = get_setting(s, "purge_threshold");
+    let raw_spec = get_setting(s, "raw_spectrogram");
     let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
+    let colormap_options = spectrogram_colormap_options(&get_setting(s, "spectrogram_colormap"));
+    let range_options = spectrogram_range_options(&get_setting(s, "spectrogram_range_db"));
     let rare_days = get_setting(s, "rare_species_days");
     let extract_len = get_setting(s, "extraction_length");
     // Defaults mirror `helpers::system::DEFAULT_STREAM_*` so the form shows what
@@ -132,8 +134,6 @@ fn spectrogram_range_options(stored: &str) -> String {
     let site = get_setting(s, "site_name");
     let isite = get_setting(s, "info_site");
     // Command-line only until 0.12.0, so a non-English station could not pick
-    let colormap_options = spectrogram_colormap_options(&get_setting(s, "spectrogram_colormap"));
-    let range_options = spectrogram_range_options(&get_setting(s, "spectrogram_range_db"));
     // its own language from the UI at all.
     let lang_picker = language_picker(s.get("database_lang").map_or("", String::as_str), names);
     let is_ebird = if isite == "ebird" { " selected" } else { "" };
@@ -219,15 +219,6 @@ fn spectrogram_range_options(stored: &str) -> String {
     </div>
     <div class="grid-2">
       <div>
-        <label for="stream_retention_secs">Raw Segment Retention (seconds)</label>
-        <input id="stream_retention_secs" name="stream_retention_secs" type="number"
-               value="{streamret}" min="0" step="60">
-        <p class="hint">How long raw capture segments stay in the temporary streaming folder before being cleared. They are only needed until the detector has read them; the default (600) is far longer than that. 0 disables the timed clean-up.</p>
-      </div>
-      <div>
-        <label for="stream_max_mb">Streaming Folder Limit (MB)</label>
-    <div class="grid-2">
-      <div>
         <label for="spectrogram_colormap">Spectrogram colours</label>
         <select id="spectrogram_colormap" name="spectrogram_colormap">{colormap_options}</select>
         <p class="hint">Louder is always lighter, so the order survives a grey print.
@@ -244,6 +235,15 @@ fn spectrogram_range_options(stored: &str) -> String {
           (birdnet-go offers 80, 100 and 120).</p>
       </div>
     </div>
+    <div class="grid-2">
+      <div>
+        <label for="stream_retention_secs">Raw Segment Retention (seconds)</label>
+        <input id="stream_retention_secs" name="stream_retention_secs" type="number"
+               value="{streamret}" min="0" step="60">
+        <p class="hint">How long raw capture segments stay in the temporary streaming folder before being cleared. They are only needed until the detector has read them; the default (600) is far longer than that. 0 disables the timed clean-up.</p>
+      </div>
+      <div>
+        <label for="stream_max_mb">Streaming Folder Limit (MB)</label>
         <input id="stream_max_mb" name="stream_max_mb" type="number"
                value="{streammax}" min="0" step="64">
         <p class="hint">Hard ceiling on that same temporary folder — oldest segments go first if it is exceeded. It usually lives in RAM, so this stops a busy or backed-up station filling it. 0 removes the ceiling.</p>

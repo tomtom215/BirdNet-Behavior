@@ -164,13 +164,14 @@ pub fn router() -> Router<AppState> {
         .route("/static/poll-visibility.js", get(poll_visibility_js))
         .route("/static/base-path.js", get(base_path_js))
         .route("/static/clip-player.js", get(clip_player_js))
+        .route("/static/listen-fx.js", get(listen_fx_js))
         .route("/static/chart-text.js", get(chart_text_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
+        .route("/static/css/listen-fx.css", get(listen_fx_css))
         .route("/static/fonts/{file}", get(font_file))
-        .route("/static/listen-fx.js", get(listen_fx_js))
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
         .route("/static/chart-kit.js", get(chart_kit_js))
@@ -179,7 +180,6 @@ pub fn router() -> Router<AppState> {
         // no `rel="icon"` asks for it unprompted, and this server used to
         // answer 404. `templates/layout.html` carries explicit icon links and
         // so escaped it — but seven full documents are rendered outside that
-        .route("/static/css/listen-fx.css", get(listen_fx_css))
         // layout (login, share and its 404, onboarding, kiosk, the standalone
         // audio player, the admin shell, the log viewer) and none of them did.
         // Every one showed a blank tab and logged a 404 to the console.
@@ -352,6 +352,29 @@ async fn search_select_js() -> impl IntoResponse {
     )
 }
 
+async fn listen_fx_css() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LISTEN_FX_CSS,
+    )
+}
+
+async fn listen_fx_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Requested with `?v=<version>` like the other app scripts.
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LISTEN_FX_JS,
+    )
+}
+
 async fn clip_player_js() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -382,29 +405,6 @@ async fn htmx_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, IMMUTABLE),
         ],
         HTMX_JS,
-async fn listen_fx_css() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        LISTEN_FX_CSS,
-    )
-}
-
-async fn listen_fx_js() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/javascript"),
-            // Requested with `?v=<version>` like the other app scripts.
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        LISTEN_FX_JS,
-    )
-}
-
     )
 }
 

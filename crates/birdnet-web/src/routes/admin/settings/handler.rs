@@ -1036,6 +1036,16 @@ pub(crate) fn build_settings_items(
         SettingsCategory::System
     );
     push!(
+        form.spectrogram_colormap,
+        "spectrogram_colormap",
+        SettingsCategory::System
+    );
+    push!(
+        form.spectrogram_range_db,
+        "spectrogram_range_db",
+        SettingsCategory::System
+    );
+    push!(
         form.purge_threshold,
         "purge_threshold",
         SettingsCategory::System
@@ -1089,16 +1099,6 @@ pub(crate) fn build_settings_items(
     push!(
         form.email_from_name,
         "email_from_name",
-    push!(
-        form.spectrogram_colormap,
-        "spectrogram_colormap",
-        SettingsCategory::System
-    );
-    push!(
-        form.spectrogram_range_db,
-        "spectrogram_range_db",
-        SettingsCategory::System
-    );
         SettingsCategory::Notifications
     );
     push!(
@@ -1494,6 +1494,10 @@ mod tests {
     fn empty_form() -> SettingsForm {
         SettingsForm {
             raw_spectrogram: None,
+            spectrogram_colormap: None,
+            spectrogram_range_db: None,
+            dashboard_image: None,
+            dashboard_image_title: None,
             extraction_length: None,
             rare_species_days: None,
             alsa_device: None,
@@ -1548,10 +1552,6 @@ mod tests {
             email_smtp_port: None,
             email_smtp_user: None,
             email_smtp_pass: None,
-            spectrogram_colormap: None,
-            spectrogram_range_db: None,
-            dashboard_image: None,
-            dashboard_image_title: None,
             email_from: None,
             email_to: None,
             email_from_name: None,
