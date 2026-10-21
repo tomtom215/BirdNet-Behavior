@@ -33,6 +33,11 @@
 //!   (so `/etc/passwd` renamed `x.jpg`, or the path typed with a slip, is
 //!   refused). SVG is not on the list: it can carry script.
 //!
+//! These are decided on the opened file, not on the earlier `stat` (the path can
+//! change in between): it is opened without blocking, so a path swapped for a
+//! FIFO is refused rather than waited on, and it is streamed, not read into
+//! memory, because the route is public.
+//!
 //! The content type sent is the sniffed one. The answer carries an `ETag` of
 //! the file's size and modification time, so the page's poll costs a `304`
 //! when the camera has not written a new frame.
@@ -53,6 +58,9 @@ pub const TITLE_KEY: &str = "dashboard_image_title";
 /// The largest file served. A camera frame is a few hundred kilobytes; eight
 /// mebibytes holds a 24-megapixel JPEG and no more.
 pub const MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How much of the picture is read at a time when it is sent.
+const STREAM_CHUNK: usize = 64 * 1024;
 
 /// The longest title kept.
 pub const MAX_TITLE_CHARS: usize = 120;
@@ -183,19 +191,69 @@ pub fn stat(path: &str) -> Stat {
     }
 }
 
-/// Read the file and check it is a picture. `None` when it is not.
-fn read_picture(path: &str) -> Option<(Vec<u8>, &'static str)> {
-    use std::io::Read as _;
-    // The size was checked from metadata; the read is bounded again so a file
-    // that grows between the two cannot be read past the limit.
-    let file = std::fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_BYTES {
+/// A picture opened and checked, ready to stream.
+struct OpenPicture {
+    file: std::fs::File,
+    /// The length `fstat` gave on the open handle (not the earlier `stat`'s).
+    len: u64,
+    kind: &'static str,
+}
+
+/// Open for reading without being able to be made to wait.
+///
+/// `stat` has already said "regular file", but the path can change between that
+/// and this: swapped for a FIFO (by anyone who can write the directory), a plain
+/// blocking `open` of it parks the blocking-pool thread until something opens the
+/// other end, which may be never. `O_NONBLOCK` makes the open return at once; a
+/// regular file is unaffected by it. A symlink is followed on purpose: pointing
+/// the setting at `latest.jpg -> frame-0412.jpg` is how a camera script keeps
+/// the picture current, and `stat` above follows it too.
+#[cfg(unix)]
+fn open_nonblocking(path: &str) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &str) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
+/// Open the file and check it is a picture. `None` when it is not.
+///
+/// Everything is decided on the open handle, so what was checked is what is
+/// served: the type from `fstat` (a FIFO or device swapped in after `stat` is
+/// refused here), the size from `fstat`, the picture type from the first bytes.
+/// The body is then streamed ([`serve_image`]) rather than read into memory:
+/// this route is public, and an uncached request used to hold up to 8 MiB.
+fn open_picture(path: &str) -> Option<OpenPicture> {
+    use std::io::{Read as _, Seek as _};
+    let mut file = open_nonblocking(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_BYTES {
         return None;
     }
-    let kind = sniff(&bytes)?;
-    Some((bytes, kind))
+    // `sniff` looks at twelve bytes at most.
+    let mut head = [0_u8; 16];
+    let mut have = 0;
+    while have < head.len() {
+        match file.read(&mut head[have..]) {
+            Ok(0) => break,
+            Ok(n) => have += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    let kind = sniff(&head[..have])?;
+    file.seek(std::io::SeekFrom::Start(0)).ok()?;
+    Some(OpenPicture {
+        file,
+        len: meta.len(),
+        kind,
+    })
 }
 
 fn headers_with(etag: &str) -> HeaderMap {
@@ -235,13 +293,21 @@ async fn serve_image(State(state): State<AppState>, request: HeaderMap) -> Respo
     {
         return (StatusCode::NOT_MODIFIED, headers_with(&etag)).into_response();
     }
-    let Ok(Some((bytes, kind))) = tokio::task::spawn_blocking(move || read_picture(&path)).await
-    else {
+    let Ok(Some(picture)) = tokio::task::spawn_blocking(move || open_picture(&path)).await else {
         return (StatusCode::NOT_FOUND, "no picture").into_response();
     };
     let mut headers = headers_with(&etag);
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
-    (StatusCode::OK, headers, bytes).into_response()
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(picture.kind));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(picture.len));
+    // Streamed, and bounded again by the length `fstat` gave: a file that grows
+    // while it is sent is cut off at that length rather than read past it.
+    let reader =
+        tokio::io::AsyncReadExt::take(tokio::fs::File::from_std(picture.file), picture.len);
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+        reader,
+        STREAM_CHUNK,
+    ));
+    (StatusCode::OK, headers, body).into_response()
 }
 
 /// The block's HTML for a configured picture, or the empty string when none is
@@ -401,6 +467,117 @@ mod tests {
         assert!(
             matches!(stat("/dev/zero"), Stat::Unusable(_)),
             "a device is not a file"
+        );
+    }
+    /// A tiny PNG-shaped file: the signature is all `sniff` reads.
+    fn write_picture(path: &std::path::Path, len: usize) {
+        let mut bytes = vec![0_u8; len];
+        bytes[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// `stat` said "regular file", and then the path became a FIFO. A blocking
+    /// `open` of a FIFO nobody writes to never returns, so one request would park
+    /// a blocking-pool thread for good. The open must come back — with `None`.
+    ///
+    /// Waited for on an OS thread: with the thread stuck, nothing here drives a
+    /// timer, so a runtime timeout would hang instead of failing. If the open
+    /// does block, the FIFO is opened for writing to release it before the
+    /// assertion fires, so the test process can end.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_swapped_for_a_fifo_is_refused_instead_of_waited_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("snap.png");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(
+            made.is_ok_and(|s| s.success()),
+            "mkfifo is needed to make the fixture"
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.to_str().unwrap().to_owned();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_picture(&path).is_none());
+        });
+        let answered = rx.recv_timeout(std::time::Duration::from_secs(3));
+        if answered.is_err() {
+            // Release the stuck reader before failing.
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        assert_eq!(
+            answered,
+            Ok(true),
+            "opening a FIFO blocked (or was served as a picture)"
+        );
+    }
+
+    /// The counterparts: a regular file and a symlink to one (how a camera script
+    /// keeps `latest.jpg` current) are opened and sniffed.
+    #[cfg(unix)]
+    #[test]
+    fn a_regular_file_and_a_symlink_to_one_are_still_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("frame-1.png");
+        write_picture(&real, 100);
+        let link = dir.path().join("latest.png");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        for p in [&real, &link] {
+            let opened = open_picture(p.to_str().unwrap()).expect("a picture");
+            assert_eq!((opened.len, opened.kind), (100, "image/png"), "{p:?}");
+        }
+        // Not a picture by its first bytes, or empty: refused as before.
+        let text = dir.path().join("x.png");
+        std::fs::write(&text, b"root:x:0:0:root:/root:/bin/bash").unwrap();
+        assert!(open_picture(text.to_str().unwrap()).is_none());
+        std::fs::write(&text, b"").unwrap();
+        assert!(open_picture(text.to_str().unwrap()).is_none());
+    }
+
+    /// An uncached request used to read the whole file (up to 8 MiB) into memory
+    /// before answering. It is sent in chunks now, with the length declared.
+    #[tokio::test]
+    async fn the_picture_is_streamed_not_held_in_memory() {
+        use tower::ServiceExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snap.png");
+        let size = 3 * 1024 * 1024;
+        write_picture(&file, size);
+        let state = crate::state::AppState::new(dir.path().join("birds.db")).unwrap();
+        state
+            .with_db(|c| {
+                birdnet_db::settings::set(
+                    c,
+                    PATH_KEY,
+                    file.to_str().unwrap(),
+                    birdnet_db::settings::SettingsCategory::System,
+                )
+            })
+            .unwrap();
+        let res = router()
+            .with_state(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v2/dashboard-image")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(res.headers()[header::CONTENT_LENGTH], size.to_string());
+        let mut stream = res.into_body().into_data_stream();
+        let (mut total, mut biggest, mut chunks) = (0_usize, 0_usize, 0_usize);
+        while let Some(chunk) = tokio_stream::StreamExt::next(&mut stream).await {
+            let chunk = chunk.unwrap();
+            total += chunk.len();
+            biggest = biggest.max(chunk.len());
+            chunks += 1;
+        }
+        assert_eq!(total, size, "every byte arrived");
+        assert!(
+            chunks > 1 && biggest <= STREAM_CHUNK,
+            "one chunk of {biggest} bytes in {chunks}: the file was held whole"
         );
     }
 }
