@@ -84,4 +84,4 @@ on a best-effort basis. Security reports get acknowledged within
 ## 6. Commercial support
 
 There is no commercial support offering at present. If you need it, open
-a discussion to gauge interest.
+an issue to gauge interest.

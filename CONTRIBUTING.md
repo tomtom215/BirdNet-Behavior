@@ -57,6 +57,17 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
 
 ## Getting a working tree
 
+- **Prerequisites** (a fresh Debian/Ubuntu machine): `git`, [Rust 1.95 or newer](https://rustup.rs)
+  (`rust-toolchain.toml` selects `stable` and `rustup` installs it on the first `cargo`
+  command), and `cmake` and a C++ compiler (`sudo apt-get install cmake g++`) for the
+  bundled DuckDB. `ffmpeg` is optional: CI installs it, and the tests that drive it skip
+  when it is absent. The browser gates additionally need Node 20 or newer
+  (`tools/visual-qa/README.md`). Then:
+  ```bash
+  git clone https://github.com/tomtom215/BirdNet-Behavior.git && cd BirdNet-Behavior
+  export CARGO_INCREMENTAL=0
+  cargo test -p birdnet-core --all-features --lib    # a first, small green run
+  ```
 - **A cold build takes about 12 minutes and several GB.** The workspace statically
   links ONNX Runtime and a bundled libduckdb (an rlib of about 480 MB), and every
   integration test is its own binary of 200-300 MB. Keep 20 GB free,

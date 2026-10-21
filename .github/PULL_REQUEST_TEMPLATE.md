@@ -26,8 +26,8 @@ Add new automated tests when the change can be covered by them.
 ## Quality gates (must be green before merge)
 
 - [ ] `cargo fmt --check --all`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [ ] `cargo test --workspace --all-features` (or the tests covering your change; see CONTRIBUTING.md)
 - [ ] `cargo deny check` (run locally if changing dependencies)
 - [ ] `birdnet-behavior --doctor` still exits 0 on a known-good config
 
