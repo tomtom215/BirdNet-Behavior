@@ -1409,7 +1409,7 @@ mod tests {
         // and the rules list is dumped wholesale in more than one diagnostic.
         // A derived `Debug` on `WebhookAuth` would put a live API key in every
         // one of them, and into any support bundle taken afterwards.
-        let secrets = [
+        let canaries = [
             WebhookAuth::Bearer("SUPERSECRETTOKEN".into()),
             WebhookAuth::Basic {
                 user: "ada".into(),
@@ -1420,7 +1420,7 @@ mod tests {
                 value: "SUPERSECRETKEY".into(),
             },
         ];
-        for auth in secrets {
+        for auth in canaries {
             let rule = authed_rule("dbg", Some(auth.clone()));
             let rendered = format!("{:?} {:#?}", rule.action, rule.action);
             for needle in ["SUPERSECRETTOKEN", "SUPERSECRETPASSWORD", "SUPERSECRETKEY"] {

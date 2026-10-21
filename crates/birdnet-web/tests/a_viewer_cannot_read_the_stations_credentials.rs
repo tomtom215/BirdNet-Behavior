@@ -119,10 +119,10 @@ async fn a_viewer_sees_the_forms_with_every_credential_masked() {
     for uri in ["/admin/settings", "/station/alerts", "/station/capture"] {
         let (status, html) = get(&app, uri, &viewer).await;
         assert_eq!(status, StatusCode::OK, "{uri} is still readable");
-        for secret in [SMTP_PASS, BW_TOKEN, CAM_PASS] {
+        for canary in [SMTP_PASS, BW_TOKEN, CAM_PASS] {
             assert!(
-                !html.contains(secret),
-                "{uri} showed a viewer the credential {secret}"
+                !html.contains(canary),
+                "{uri} showed a viewer the credential {canary}"
             );
         }
     }
