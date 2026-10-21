@@ -175,7 +175,9 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
             );
             if let Some(text) = config_lines_text(&prepared) {
                 let target = data_dir.join("birdnet-from-birdnet-pi.conf");
-                match stage_private(&target, &text).and_then(|f| f.install()) {
+                match stage_private(&target, &text).and_then(
+                    birdnet_web::routes::admin::migration::conf_import::StagedFile::install,
+                ) {
                     Ok(()) => println!(
                         "Some keys are read only from birdnet.conf; their lines, with the real \
                          values, are in {} (private; add them to /etc/birdnet/birdnet.conf).",
@@ -560,7 +562,7 @@ mod tests {
                 .path()
                 .join("station/recordings")
                 .read_dir()
-                .map_or(false, |mut d| d.next().is_some()),
+                .is_ok_and(|mut d| d.next().is_some()),
             "something was written"
         );
     }

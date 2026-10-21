@@ -1165,7 +1165,11 @@ mod tests {
             .expect("read dir")
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.ends_with(".part"))
+            .filter(|n| {
+                std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|e| e == "part")
+            })
             .collect();
         assert!(
             left.is_empty(),
@@ -1519,7 +1523,7 @@ mod tests {
                     },
                 );
                 let _ = sock.write_all(header.as_bytes());
-                let block = [7u8; 64 * 1024];
+                let block = vec![7u8; 64 * 1024];
                 for _ in 0..chunks {
                     if sock.write_all(&block).is_err() {
                         break;

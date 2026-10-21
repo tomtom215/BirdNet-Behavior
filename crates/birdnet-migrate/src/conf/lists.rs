@@ -263,6 +263,7 @@ mod tests {
     /// check was a scan of everything read so far.
     #[test]
     fn a_long_list_is_read_in_linear_time() {
+        use std::fmt::Write as _;
         let word = |mut n: usize| {
             let mut w = String::new();
             for _ in 0..5 {
@@ -273,7 +274,7 @@ mod tests {
         };
         let mut text = String::new();
         for i in 0..40_000 {
-            text.push_str(&format!("Genus {}\n", word(i)));
+            let _ = writeln!(text, "Genus {}", word(i));
         }
         let started = std::time::Instant::now();
         let list = SpeciesList::parse(&text);

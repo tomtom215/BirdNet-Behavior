@@ -510,9 +510,10 @@ fn a_default_file_says_notifications_will_be_off() {
 /// planned: the preview prints a row per key.
 #[test]
 fn a_huge_file_is_capped_and_read_quickly() {
+    use std::fmt::Write as _;
     let mut text = String::new();
     for i in 0..200_000 {
-        text.push_str(&format!("KEY_{i}=v\n"));
+        let _ = writeln!(text, "KEY_{i}=v");
     }
     let started = std::time::Instant::now();
     let plan = plan_of(&text);

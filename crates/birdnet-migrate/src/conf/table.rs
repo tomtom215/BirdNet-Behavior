@@ -375,7 +375,8 @@ pub const RULES: &[Rule] = &[
         "full_disk_action",
         Convert::FullDisk,
         "`keep` here stops recording and deletes nothing when the disk is full, and records \
-         again by itself once there is room. `purge` removes the oldest clips of the \
+         again by itself once usage is 2 percentage points below the purge threshold (a \
+         raised threshold applies after a restart). `purge` removes the oldest clips of the \
          most-recorded species first, never below 5 clips of a species, never a locked clip.",
     ),
     set(

@@ -444,9 +444,11 @@ pub struct StagedFile {
     target: PathBuf,
 }
 
-/// Write `text` next to `target`, readable by the service user alone from the
-/// moment it exists (`0600` at creation, never widened and narrowed), under a
-/// temporary name nobody else has: [`StagedFile::install`] moves it into place.
+/// Write `text` next to `target` under a temporary name, privately.
+///
+/// The file is `0600` from the moment it exists (never widened and narrowed)
+/// and its name is one nobody else has; [`StagedFile::install`] moves it into
+/// place.
 ///
 /// # Errors
 ///
@@ -505,9 +507,10 @@ impl StagedFile {
     }
 }
 
-/// [`apply`], and the file the settings point at, in the order that tells the
-/// truth if something fails: validate everything, write the file under a
-/// temporary name, save the settings, and only then move the file into place.
+/// [`apply`], and the file the settings point at, in an order that tells the truth.
+///
+/// Validate everything, write the file under a temporary name, save the
+/// settings, and only then move the file into place.
 ///
 /// A refusal or a failed save leaves this station exactly as it was, the file
 /// that was already there included. (The first version wrote the file first and

@@ -217,10 +217,11 @@ pub fn is_url_key(key: &str) -> bool {
         || upper.ends_with("_ENDPOINT")
 }
 
-/// An address as `scheme://host[:port]`, with the user name, password, path and
-/// query left out; a list of addresses (`RTSP_STREAM` is comma-separated) as
-/// those, comma-separated. A value that is no address at all is
-/// [`hide`]n.
+/// An address as `scheme://host[:port]` and nothing more.
+///
+/// The user name, password, path and query are left out. A list of addresses
+/// (`RTSP_STREAM` is comma-separated) comes back as those, comma-separated, and
+/// a value that is no address at all is [`hide`]n.
 ///
 /// The host is shown because it is what a person recognises ("hc-ping.com",
 /// "192.168.1.20:554") and what decides where a request goes; the rest is where

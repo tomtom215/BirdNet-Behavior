@@ -43,15 +43,17 @@ type MigrationState = Arc<Mutex<Option<ProgressHandle>>>;
 /// that window both started, shared one temporary file name, and each could
 /// clear the other's temporaries.
 fn claim_slot(slot: &MigrationState) -> Option<ProgressHandle> {
-    let mut guard = slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if guard.as_ref().is_some_and(|p| !p.snapshot().is_terminal()) {
-        return None;
-    }
     let progress = ProgressHandle::new();
     progress.set_stage(MigrationStage::Detecting, "Starting…");
-    *guard = Some(progress.clone());
+    {
+        let mut guard = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.as_ref().is_some_and(|p| !p.snapshot().is_terminal()) {
+            return None;
+        }
+        *guard = Some(progress.clone());
+    }
     Some(progress)
 }
 
@@ -1079,15 +1081,16 @@ mod tests {
         for _ in 0..50 {
             let slot: MigrationState = Arc::new(Mutex::new(None));
             let barrier = Arc::new(Barrier::new(8));
-            let threads: Vec<_> = (0..8)
-                .map(|_| {
-                    let (slot, barrier) = (Arc::clone(&slot), Arc::clone(&barrier));
-                    std::thread::spawn(move || {
-                        barrier.wait();
-                        claim_slot(&slot).is_some()
-                    })
-                })
-                .collect();
+            // Spawned in a loop and joined afterwards: a lazy chain would join
+            // each before the next started and never fill the barrier.
+            let mut threads = Vec::new();
+            for _ in 0..8 {
+                let (slot, barrier) = (Arc::clone(&slot), Arc::clone(&barrier));
+                threads.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_slot(&slot).is_some()
+                }));
+            }
             let winners = threads
                 .into_iter()
                 .map(|t| t.join().expect("thread"))

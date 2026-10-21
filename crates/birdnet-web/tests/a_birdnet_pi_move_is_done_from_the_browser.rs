@@ -572,7 +572,11 @@ async fn pasted_text_is_held_to_the_size_of_a_settings_file() {
     assert!(html.contains("not one"), "{}", &html[..html.len().min(400)]);
     assert!(!html.contains("Apply these settings"));
 
-    let many: String = (0..5_000).map(|i| format!("KEY_{i}=v\n")).collect();
+    let many = (0..5_000).fold(String::new(), |mut text, i| {
+        use std::fmt::Write as _;
+        let _ = writeln!(text, "KEY_{i}=v");
+        text
+    });
     let html = preview(&state, &[("conf_text", None, &many)]).await;
     assert!(html.contains("more keys than a birdnet.conf has"), "capped");
     assert!(html.matches("<tr>").count() <= 1_100, "a row per key");
