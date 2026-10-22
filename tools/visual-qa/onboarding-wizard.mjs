@@ -51,7 +51,7 @@ async function open() {
       // The pre-fix last step: a heading that claims it, and a skip button on every step.
       if (MUTATE === 'buttons') {
         body = body.replace('Ready to <em>save</em>.', 'You\'re <em>listening</em>.')
-          .replace("skip.style.display = step === total ? 'none' : '';", '');
+          .replace("skip.classList.toggle('ob-gone', step === total);", '');
       }
       await route.fulfill({ response: res, body });
     });

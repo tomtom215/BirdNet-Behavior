@@ -1521,6 +1521,16 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .vu { display:flex; align-items:flex-end; gap:2px; height:26px; margin-left:auto; }
   .vu i { width:3px; background:var(--moss); border-radius:1px; animation:vu 1.1s ease-in-out infinite; }
   @keyframes vu { 0%,100% { height:20%; } 50% { height:95%; } }
+  /* The Welcome sonar. These rings were SVG SMIL <animate> elements, which Firefox
+     runs as a style change on a presentation attribute and the page's CSP
+     (style-src-attr) refuses: about 94 violation reports a second and rings that
+     never faded. A keyframe rule in this nonce'd block is not a style attribute.
+     Same motion: radius 30 to 110 and stroke-opacity .7 to 0 over 5 s, three rings
+     1.6 s apart, and before its turn a ring sits as drawn. */
+  @keyframes ob-sonar { from { r:30px; stroke-opacity:.7; } to { r:110px; stroke-opacity:0; } }
+  .sonar-rings circle { animation: ob-sonar 5s linear infinite; }
+  .sonar-rings circle:nth-child(2) { animation-delay:1.6s; }
+  .sonar-rings circle:nth-child(3) { animation-delay:3.2s; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
   .summary-row { display:flex; justify-content:space-between; gap:16px; padding:11px 0; border-top:0.5px solid var(--hairline); font-size:14px; }
   .summary-row:first-child { border-top:0; }
@@ -1530,6 +1540,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   @media (prefers-reduced-motion: reduce) {
     .ob-step, .vu i, .calib i, .sonar * { animation:none !important; }
   }
+  :root[data-motion="reduced"] .sonar * { animation:none !important; }
   /* O-25: static inline style= attributes folded into this page's own <style>
      block (faithful, value-preserving). */
   .ob-center { display:flex; align-items:center; justify-content:center; }
@@ -1554,6 +1565,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .ob-summary { cursor:pointer; }
   .ob-calib-m { margin:14px 0; }
   .ob-hidden-init { visibility:hidden; }
+  .ob-gone { display:none !important; }
   /* Staggered VU / calibration bar animation delays (were per-<i> inline). */
   .vu i:nth-child(1) { animation-delay:0s; }   .vu i:nth-child(2) { animation-delay:.1s; }
   .vu i:nth-child(3) { animation-delay:.2s; }  .vu i:nth-child(4) { animation-delay:.05s; }
@@ -1666,10 +1678,10 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
         </div>
         <div class="ob-aside">
           <svg class="sonar" width="240" height="240" viewBox="0 0 240 240" aria-hidden="true">
-            <g fill="none" stroke="var(--moss)" stroke-width="1">
-              <circle cx="120" cy="120" r="30"><animate attributeName="r" values="30;110" dur="5s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.7;0" dur="5s" repeatCount="indefinite"/></circle>
-              <circle cx="120" cy="120" r="30"><animate attributeName="r" values="30;110" dur="5s" begin="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.7;0" dur="5s" begin="1.6s" repeatCount="indefinite"/></circle>
-              <circle cx="120" cy="120" r="30"><animate attributeName="r" values="30;110" dur="5s" begin="3.2s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.7;0" dur="5s" begin="3.2s" repeatCount="indefinite"/></circle>
+            <g class="sonar-rings" fill="none" stroke="var(--moss)" stroke-width="1">
+              <circle cx="120" cy="120" r="30"/>
+              <circle cx="120" cy="120" r="30"/>
+              <circle cx="120" cy="120" r="30"/>
             </g>
             <rect x="96" y="96" width="48" height="48" rx="8" fill="var(--surface)" stroke="var(--border-2)" stroke-width="0.5"/>
             <g stroke="var(--moss)" stroke-width="2" stroke-linecap="round">
@@ -1881,12 +1893,14 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     });
     cur.textContent = step;
     refreshSkipNote();
-    back.style.visibility = step === 1 ? 'hidden' : 'visible';
+    // Classes, not `el.style`: WebKit counts a style written through the CSSOM as an
+    // inline style and the CSP (style-src-attr) reports it.
+    back.classList.toggle('ob-hidden-init', step === 1);
     next.textContent = step === total ? 'Finish & save →' : 'Continue →';
     // The skip button submits the form exactly as it stands, which is what the
     // last step's own button does; offering both there was two buttons for one
     // action under two names.
-    skip.style.display = step === total ? 'none' : '';
+    skip.classList.toggle('ob-gone', step === total);
     // Step changes were entirely silent to assistive tech: the content of the
     // page swapped with nothing announced.
     if (announce) { announce.textContent = 'Step ' + step + ' of ' + total + ': ' + (NAMES[step - 1] || ''); }
@@ -2244,21 +2258,16 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   var firstPanel = document.querySelector('[data-cls-panel]');
   if (firstPanel) { modelState(firstPanel.getAttribute('data-cls-state')); }
 
-  // Reduced motion. The stylesheet's `@media (prefers-reduced-motion: reduce)`
-  // block sets `animation: none` on `.sonar *`, which has no effect on the
-  // Welcome sonar: those rings are SMIL <animate> elements, not CSS
-  // animations. And the block never saw the app's own Display preference,
-  // because theme-guard.js — the only script this page loads — mirrors theme
-  // and density but not `bnb-motion`. Honour both here.
+  // Reduced motion. The sonar is a CSS animation, which this page's own
+  // `@media (prefers-reduced-motion: reduce)` block stops for the OS setting.
+  // The app's own Display preference is another matter: theme-guard.js — the
+  // only script this page loads — mirrors theme and density but not
+  // `bnb-motion`, so it is stamped here, and `[data-motion="reduced"]` stops it.
   try {
     var reduce = (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       || localStorage.getItem('bnb-motion') === 'reduced';
     if (reduce) {
       document.documentElement.setAttribute('data-motion', 'reduced');
-      document.querySelectorAll('animate, animateTransform, animateMotion').forEach(function (a) {
-        if (a.endElement) { try { a.endElement(); } catch (_) {} }
-        a.setAttribute('dur', 'indefinite');
-      });
     }
   } catch (_) { /* storage blocked or no matchMedia — motion stays as declared */ }
 
