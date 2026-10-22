@@ -161,7 +161,7 @@ async fn the_trend_is_the_last_fourteen_calendar_days() {
     let (wide, narrow) = page
         .split_once("<div class=\"viz-chart ck viz-chart--narrow\">")
         .unwrap_or_else(|| panic!("no narrow drawing: {page}"));
-    for magpie in [wide, narrow] {
+    for magpie in <[&str; 2]>::from((wide, narrow)) {
         // One reachable day per calendar day: 14 of them, in order, each at its own
         // index, each saying the date it is.
         let tips: Vec<(usize, &str)> = magpie

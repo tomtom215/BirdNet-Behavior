@@ -1047,7 +1047,7 @@ pub(crate) fn load_settings_for(
 /// always were, and the page says nothing false about sources it cannot see.
 ///
 /// One line per source, `kind<TAB>name<TAB>device`, the device masked; see
-/// [`super::render::audio_sources_note`].
+/// `render::audio::sources_note`.
 fn audio_sources_summary(state: &AppState) -> Option<String> {
     let rows = state
         .with_read_db(birdnet_db::audio_sources::AudioSourceStore::list)
