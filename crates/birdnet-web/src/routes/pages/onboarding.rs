@@ -784,6 +784,14 @@ struct OnboardingForm {
     longitude: String,
     #[serde(default)]
     timezone: String,
+    /// The latitude the look-up answered for, which `timezone` belongs to.
+    /// Empty when the zone was not produced by the look-up. See
+    /// [`timezone_belongs_to_location`].
+    #[serde(default)]
+    timezone_latitude: String,
+    /// As `timezone_latitude`, for the longitude.
+    #[serde(default)]
+    timezone_longitude: String,
     #[serde(default)]
     notification_mode: String,
     #[serde(default)]
@@ -997,6 +1005,42 @@ pub fn plausible_timezone(raw: &str) -> bool {
     true
 }
 
+/// Whether the time zone the page carries is the one for the location being
+/// saved.
+///
+/// "Look up my approximate location" fills the latitude, the longitude and a
+/// hidden time zone, and records which coordinates the zone is for
+/// (`timezone_latitude`/`timezone_longitude`). A person who then types other
+/// coordinates leaves the hidden zone behind: 50.0/5.0 was saved with
+/// `America/Los_Angeles`, and Diagnostics then told them to run `timedatectl
+/// set-timezone America/Los_Angeles`. The page script clears the zone when the
+/// coordinates change; this is the same check on the server, for a script that
+/// did not run.
+///
+/// * No marker at all: the zone did not come from the look-up (a hand-made
+///   request, an older page), so there is nothing to compare it with and it is
+///   judged on its own, by [`plausible_timezone`].
+/// * A marker: the saved coordinates must be the ones it names, to the
+///   precision of the look-up, and a zone with no saved coordinates is dropped.
+fn timezone_belongs_to_location(
+    marker_lat: &str,
+    marker_lon: &str,
+    coordinates: Option<&(String, String)>,
+) -> bool {
+    let (marker_lat, marker_lon) = (marker_lat.trim(), marker_lon.trim());
+    if marker_lat.is_empty() && marker_lon.is_empty() {
+        return true;
+    }
+    let Some((lat, lon)) = coordinates else {
+        return false;
+    };
+    let same = |marker: &str, saved: &str| {
+        let parse = |t: &str| birdnet_core::config::locale::normalize_decimal(t).parse::<f64>();
+        matches!((parse(marker), parse(saved)), (Ok(a), Ok(b)) if (a - b).abs() < 1e-4)
+    };
+    same(marker_lat, lat) && same(marker_lon, lon)
+}
+
 /// Persist the wizard's choices and mark onboarding complete, then return to the
 /// dashboard. Only non-empty values are written; the DB settings overlay applies
 /// latitude/longitude and the confidence threshold on the next start.
@@ -1099,7 +1143,18 @@ async fn onboarding_save(
                 "onboarding: language not stored; the station has no names for it"
             );
         }
-        if plausible_timezone(tz) {
+        if !tz.is_empty()
+            && !timezone_belongs_to_location(
+                &form.timezone_latitude,
+                &form.timezone_longitude,
+                coordinates.as_ref(),
+            )
+        {
+            tracing::info!(
+                timezone = tz,
+                "onboarding: time zone not stored; it was looked up for a different location than the one saved"
+            );
+        } else if plausible_timezone(tz) {
             items.push(("timezone", tz, SettingsCategory::Location));
         } else if !tz.is_empty() {
             tracing::warn!(
@@ -1652,6 +1707,8 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
             <div class="ob-field"><label for="ob-lon">Longitude</label><input id="ob-lon" name="longitude" type="text" placeholder="e.g. -71.0589" inputmode="decimal" value="{{longitude}}"></div>
           </div>
           <input type="hidden" name="timezone" id="ob-tz">
+          <input type="hidden" name="timezone_latitude" id="ob-tz-lat">
+          <input type="hidden" name="timezone_longitude" id="ob-tz-lon">
           <p class="bnb-meta ob-mt-6" id="ob-loc-pill" role="status">Look it up, or type your coordinates — you can change this any time in Settings.</p>
           <div class="ob-field ob-mt-16"><label for="ob-name">Station name <span class="bnb-meta">(optional)</span></label><input id="ob-name" name="station_name" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Back garden" value="{{station_name}}"></div>
           <div class="ob-field"><label for="ob-lang">Language for bird names</label><select id="ob-lang" name="database_lang">{{lang_options}}</select></div>
@@ -1712,9 +1769,9 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     <section class="ob-step" data-step="7">
       <div class="ob-two">
         <div>
-          <div class="ob-eyebrow">All set</div>
-          <h1 class="ob-h">You're <em>listening</em>.</h1>
-          <p class="ob-p">Here is what you chose. Press <strong>Finish</strong> below to save it — nothing has been written yet. The next screen has one button that restarts the station so it starts listening with all of it.</p>
+          <div class="ob-eyebrow">Last step</div>
+          <h1 class="ob-h">Ready to <em>save</em>.</h1>
+          <p class="ob-p">Here is what you chose. Press <strong>Finish &amp; save</strong> below to save it — nothing has been written yet. The next screen says whether the station is listening, and has one button that restarts it if what you chose needs that.</p>
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Model</span><span id="ob-sum-model">Checking…</span></div>
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
@@ -1735,7 +1792,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
           <div class="bnb-card pad">
             <div class="ob-eyebrow">What happens next</div>
             <ul class="ob-bullets ob-mt-6">
-              <li><span class="tick">1</span> Press Finish; your answers are written to the station.</li>
+              <li><span class="tick">1</span> Press Finish &amp; save; your answers are written to the station.</li>
               <li><span class="tick">2</span> Press the restart button on the next screen.</li>
               <li><span class="tick">3</span> Detections appear on the dashboard as birds are heard.</li>
             </ul>
@@ -1756,7 +1813,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
          Enter but not on Space, so a keyboard user pressing Space on something
          announced as a button scrolled the page instead. -->
     <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 7</p>
-    <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
+    <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Skip the rest and finish</button>
     <button type="button" class="bnb-btn primary" id="ob-next">Continue →</button>
     <button type="submit" class="bnb-btn primary ob-nosubmit">Save setup</button>
     <!-- What "use the defaults" does about the password, said where the choice
@@ -1786,7 +1843,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   var announce = document.getElementById('ob-announce');
   var NAMES = ['Welcome', 'Model', 'Location', 'Microphone', 'Accuracy', 'Alerts', 'Done'];
 
-  // "Use the defaults and finish" finishes with both password boxes as they are:
+  // "Skip the rest and finish" finishes with both password boxes as they are:
   // blank keeps the station open (the dashboard keeps saying so), anything typed
   // must be long enough and typed twice, and is saved. Say which, beside the button.
   var skipNote = document.getElementById('ob-skip-note');
@@ -1826,6 +1883,10 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     refreshSkipNote();
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
     next.textContent = step === total ? 'Finish & save →' : 'Continue →';
+    // The skip button submits the form exactly as it stands, which is what the
+    // last step's own button does; offering both there was two buttons for one
+    // action under two names.
+    skip.style.display = step === total ? 'none' : '';
     // Step changes were entirely silent to assistive tech: the content of the
     // page swapped with nothing announced.
     if (announce) { announce.textContent = 'Step ' + step + ' of ' + total + ': ' + (NAMES[step - 1] || ''); }
@@ -1901,7 +1962,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   skip.addEventListener('click', function (e) {
     e.preventDefault();
     if (!passwordOk()) { return; }
-    if (window.confirm('Finish setup now with the values shown? You can change all of them later under Settings.')) { finish(); }
+    if (window.confirm('Finish setup now? What you have filled in so far is saved; every step you skip keeps the station as it is now. You can change all of it later under Settings.')) { finish(); }
   });
 
   // Single-select radio cards; mirror the chosen value into the form's hidden
@@ -2042,6 +2103,23 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     return isFinite(a) && isFinite(o) && Math.abs(a) <= 90 && Math.abs(o) <= 180
         && /^[+-]?\d*\.?\d+$/.test(la) && /^[+-]?\d*\.?\d+$/.test(lo);
   }
+  // The look-up's time zone is for the coordinates it answered with. Once the
+  // person types others, the zone is no longer theirs to keep: it was saved as
+  // America/Los_Angeles for 50.0, 5.0 before this. The server compares the
+  // markers again (`timezone_belongs_to_location`), so this is the early half.
+  function forgetTimezone() {
+    var tz = document.getElementById('ob-tz');
+    var zl = document.getElementById('ob-tz-lat');
+    var zo = document.getElementById('ob-tz-lon');
+    if (!tz || !tz.value || !zl || !zo) { return; }
+    var la = parseFloat(String(document.getElementById('ob-lat').value).replace(',', '.'));
+    var lo = parseFloat(String(document.getElementById('ob-lon').value).replace(',', '.'));
+    var same = Math.abs(la - parseFloat(zl.value)) < 1e-4 && Math.abs(lo - parseFloat(zo.value)) < 1e-4;
+    if (!same) {
+      tz.value = ''; zl.value = ''; zo.value = '';
+      if (pillEl) { pillEl.classList.remove('moss'); }
+    }
+  }
   function markCoords() {
     var la = document.getElementById('ob-lat'), lo = document.getElementById('ob-lon');
     if (!la || !lo) { return true; }
@@ -2059,7 +2137,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   }
   ['ob-lat', 'ob-lon'].forEach(function (id) {
     var el = document.getElementById(id);
-    if (el) { el.addEventListener('input', function () { markCoords(); refreshSummary(); }); }
+    if (el) { el.addEventListener('input', function () { forgetTimezone(); markCoords(); refreshSummary(); }); }
   });
   refreshSummary();
 
@@ -2077,7 +2155,13 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
         .then(function (d) {
           if (d.lat != null) { document.getElementById('ob-lat').value = d.lat; }
           if (d.lon != null) { document.getElementById('ob-lon').value = d.lon; }
-          if (d.timezone) { document.getElementById('ob-tz').value = d.timezone; }
+          // The zone is for these coordinates and no others; typing different
+          // ones below clears it (see `forgetTimezone`).
+          if (d.timezone) {
+            document.getElementById('ob-tz').value = d.timezone;
+            document.getElementById('ob-tz-lat').value = d.lat != null ? String(d.lat) : '';
+            document.getElementById('ob-tz-lon').value = d.lon != null ? String(d.lon) : '';
+          }
           if (pill) {
             var where = [d.city, d.country].filter(Boolean).join(', ');
             pill.textContent = '✓ ' + (where || 'Location found') + (d.timezone ? ' · ' + d.timezone : '');
