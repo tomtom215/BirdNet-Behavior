@@ -226,9 +226,25 @@ async fn a_viewer_cannot_read_the_live_log_and_is_not_offered_it() {
     let app = station();
     let viewer = sign_in(&app, "viewer", &viewer_password()).await;
     let admin = sign_in(&app, "admin", &admin_password()).await;
+    // The status only, never the body: if the gate let a viewer in, the stream
+    // would never end and reading it would hang the test instead of failing it.
     for uri in ["/admin/system/logs", "/admin/system/logs/page"] {
-        let (status, _) = get(&app, uri, &viewer).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "a viewer may GET {uri}");
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(header::COOKIE, &viewer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "a viewer may GET {uri}"
+        );
     }
     // Counterpart: the administrator reaches both (the stream answers at once
     // with its headers; the body is not read, it never ends).

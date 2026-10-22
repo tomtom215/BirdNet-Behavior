@@ -674,6 +674,11 @@ pub async fn save_settings(
                     crate::routes::pages::escape_html(note)
                 )
             });
+            let zone_note = if items.iter().any(|(k, v, _)| *k == TIMEZONE_CLEARED_KEY && v.is_empty()) {
+                r#"<span class="save-note dim"> The time zone recorded at setup was for the old location, so it was cleared; Diagnostics will no longer compare it with this station's clock.</span>"#
+            } else {
+                ""
+            };
             let alert = if picture_note.is_some() {
                 "alert-warn"
             } else {
@@ -686,7 +691,7 @@ pub async fn save_settings(
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
                 </svg>
                 Settings saved ({saved} values updated).
-                {when}{picture_html}
+                {when}{zone_note}{picture_html}
             </div>"#
             ));
             // O-18: toast the success outcome via OOB. The follow-up action is
@@ -1507,8 +1512,34 @@ pub(crate) fn build_settings_items(
 
     // The table-driven settings: same rule, only what changed.
     items.extend(super::extra::changed(&form.extra, existing));
+
+    // The time zone the setup wizard recorded was looked up for the coordinates
+    // it saved with it. Moving the station here leaves it behind, and
+    // Diagnostics compares it with the host clock and advises on it: 50.0/5.0
+    // beside `America/Los_Angeles` told someone to set their clock to California.
+    // This form has no time-zone field of its own (nothing here can say what the
+    // new place's zone is), so a zone recorded for the old place is cleared
+    // rather than kept. The wizard makes the same decision on its own form.
+    let moved = items
+        .iter()
+        .any(|(k, _, _)| matches!(*k, "latitude" | "longitude"));
+    if moved
+        && existing
+            .get("timezone")
+            .is_some_and(|z| !z.trim().is_empty())
+    {
+        items.push((
+            TIMEZONE_CLEARED_KEY,
+            String::new(),
+            SettingsCategory::Location,
+        ));
+    }
     items
 }
+
+/// The settings key of the time zone the wizard records; see
+/// [`build_settings_items`] for why a move clears it.
+const TIMEZONE_CLEARED_KEY: &str = "timezone";
 
 #[cfg(test)]
 mod tests {
