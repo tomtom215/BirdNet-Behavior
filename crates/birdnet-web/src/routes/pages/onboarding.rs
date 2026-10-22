@@ -1585,7 +1585,11 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   @media (max-width:520px) {
     .ob-root { padding:0 14px; }
     .ob-pip .nm { display:none; }
-    .ob-stepper .bar { width:14px; }
+    /* Seven dots and six connectors are 369px at a fixed 14px connector, wider than a 360px
+       phone's content box (the whole wizard scrolled sideways by 23px, 8px at 375): the
+       connectors take what is left, down to 4px, so the row always fits. */
+    .ob-stepper { gap:4px; }
+    .ob-stepper .bar { flex:1 1 4px; min-width:4px; width:auto; }
     .ob-two { grid-template-columns:1fr; gap:18px; }
     .ob-latlon { grid-template-columns:1fr; }
     .ob-cards.cols2 { grid-template-columns:1fr; }

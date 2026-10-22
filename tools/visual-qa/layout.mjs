@@ -42,7 +42,7 @@
 // Env:
 //   BASE      base url                       (default http://127.0.0.1:8502)
 //   THEMES    csv of light,dark              (default light,dark)
-//   VPS       csv of desktop,mobile          (default desktop,mobile)
+//   VPS       csv of desktop,mobile,narrow,tiny  (default desktop,mobile,narrow)
 //   ONLY      substring filter on route name
 //   CSS_OVERRIDE  serve this file in place of /static/css/app.css (an older one, to
 //             see a new check fail against the stylesheet it was written for)
@@ -61,8 +61,12 @@ const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
 const VP_TABLE = {
   desktop: { viewport: { width: 1440, height: 900 }, hasTouch: false },
   mobile: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+  // A 360px phone is the commonest Android width and 375 the iPhone SE's; the setup wizard's
+  // stepper was a fixed 383px and scrolled the whole wizard sideways on both while 390 passed.
+  narrow: { viewport: { width: 360, height: 780 }, hasTouch: true, isMobile: true },
+  tiny: { viewport: { width: 320, height: 568 }, hasTouch: true, isMobile: true },
 };
-const VPS = (process.env.VPS || 'desktop,mobile').split(',').filter((v) => VP_TABLE[v]);
+const VPS = (process.env.VPS || 'desktop,mobile,narrow').split(',').filter((v) => VP_TABLE[v]);
 const ONLY = process.env.ONLY || '';
 const MIN_ROUTES = Number(process.env.MIN_ROUTES || 30);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
