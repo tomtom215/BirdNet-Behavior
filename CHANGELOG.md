@@ -565,6 +565,43 @@ is described under *Changed* or *Fixed*.
 
 ### Fixed
 
+- **A long identifier no longer widens the page on a phone.** The hint under Notification
+  Cooldown quotes `APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES`, one 385 px
+  word in a 292 px box, which grew `/station/alerts` and `/admin/settings` to 434 px on a
+  390 px phone and dragged the fixed tab bar (and its last tab) out of view. Hints, table
+  cells, code chips and file names now wrap anywhere. The layout gate gained the check it
+  lacked (a page wider than the screen, named by the element that reaches furthest) and
+  went red on the old stylesheet before the fix.
+- **Form controls look the same in every browser.** A placeholder had no style of its own and
+  measured 2.35:1 in WebKit (Safari's engine), 3.8:1 in Firefox and 4.08:1 in Chromium's dark theme; it is now
+  the quiet-text colour (at least 5.6:1) and the token gate grades it on the real fields. The
+  Listen sliders are one drawing in Chromium, Firefox and WebKit, and number fields (the
+  alert rules' hour start and end) lose the permanent stepper arrows in Firefox and WebKit
+  (the arrow keys still step).
+- **Phone layouts.** The species page's 14-day chart is drawn twice, a wide one for a card
+  and a narrow, taller one for a phone, so its labels no longer sit on the baseline, the
+  last label is not cut to "2. 0…" and the average is not written across the busiest bar;
+  the thresholds and minimum-interval tables fit a phone (their Remove buttons were cut off
+  at the card edge) and the name field takes a row of its own; the Companions table's second
+  heading is no longer clipped; "Even out clip volume" shows its chosen option; the Data
+  page's snapshot rows, Export buttons and "Save settings" no longer wrap mid-word; Year in
+  review's Milestones card stops stretching to the height of the leaderboard; the setup
+  wizard's sticky stepper is transparent until the page scrolls under it; the 3D terrain is
+  fitted to its canvas on any shape of screen (the near edge ran off the bottom of a desktop
+  one and the mesh was cropped on a phone), and its axis labels sit on a plate so a ridge
+  does not take their contrast.
+- **The published manual passes axe at every version.** The in-text link underline lived in
+  `custom.css`, which the versioned build reads from each tag, so the root and `v0.17.1`
+  manuals (a release made before the rule) failed `link-in-text-block` 16 times; it is in
+  `a11y.css`, which every tree gets.
+- **Visual-QA gates that were wrong in both directions.** The sweep reported a stuck
+  "Loading…" on `/patterns` in all four states for text inside a closed disclosure (the
+  placeholder now ships empty and the script writes it when asked; the sweep asks the browser
+  whether it is visible, with a self-test that the check still bites on a visible one), and
+  `interactions.mjs` failed at some hours of the day because the fixture seeded today only
+  up to the clock: today now always holds at least 24 detections, and `BNB_FIXTURE_NOW`
+  runs the fixture at another time of day.
+
 - **The manual and the product's own sentences name the screens the Settings section has.**
   README, five manual pages, the `.env.example` comment and the settings page's own hint
   still sent readers to "Station → Data", "Settings → Home Assistant & MQTT", "Settings →

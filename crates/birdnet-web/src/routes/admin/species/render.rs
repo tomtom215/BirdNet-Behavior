@@ -43,7 +43,19 @@ static SPECIES_LISTS_STYLE: crate::seal::Sealed = crate::seal::Sealed::new(
       .cell-left { text-align:left; }
       .cell-center { text-align:center; }
       .cell-right { text-align:right; }
-      .del-btn { padding:0.2rem 0.6rem; font-size:0.75rem; }
+      .del-btn { padding:0.2rem 0.6rem; font-size:0.75rem; white-space:nowrap; }
+      /* Below 520px the global `table { display:block; white-space:nowrap }` made the species,
+         threshold and Remove columns a sideways scroller whose button was cut off at the card's
+         edge ('Remov'), and the name field in the add row was too narrow for its placeholder
+         ('Scientific name (e.g'). `data-fits-phone` (app.css) makes the table a table again,
+         wrapping; the cells are tighter, and the name takes a row of its own while the number
+         and the button share the next. */
+      @media (max-width:520px) {
+        .thr-table th, .thr-table td { padding-left:var(--space-6); padding-right:var(--space-6); }
+        .add-row { flex-wrap:wrap; }
+        .add-row .grow-2 { flex:1 1 100%; }
+        .add-row .grow.cap { flex:1 1 0; min-width:0; max-width:none; }
+      }
     </style>",
 );
 
@@ -198,7 +210,7 @@ pub fn render_thresholds_partial(
         );
     } else {
         out.push_str(
-            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species</th><th scope="col">Threshold</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
+            r#"<table class="thr-table" data-fits-phone><thead><tr><th class="cell-left" scope="col">Species</th><th scope="col">Threshold</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
         );
         for t in thresholds {
             let esc = escape_html(&t.sci_name);
@@ -259,7 +271,7 @@ pub fn render_intervals_partial(intervals: &[birdnet_db::sqlite::SpeciesInterval
         );
     } else {
         out.push_str(
-            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species and interval</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
+            r#"<table class="thr-table" data-fits-phone><thead><tr><th class="cell-left" scope="col">Species and interval</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
         );
         for i in intervals {
             let esc = escape_html(&i.sci_name);

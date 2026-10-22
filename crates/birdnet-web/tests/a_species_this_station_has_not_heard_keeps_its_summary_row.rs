@@ -155,47 +155,54 @@ async fn the_trend_is_the_last_fourteen_calendar_days() {
     );
     assert!(!blackbird.contains("ck-hit"), "{blackbird}");
 
-    let magpie = get("Eurasian%20Magpie").await;
-    // One reachable day per calendar day: 14 of them, in order, each at its own
-    // index, each saying the date it is.
-    let tips: Vec<(usize, &str)> = magpie
-        .split("<rect class=\"ck-hit\"")
-        .skip(1)
-        .map(|rect| {
-            let index = rect
-                .split("data-ck-i=\"")
-                .nth(1)
-                .and_then(|r| r.split('"').next())
-                .and_then(|n| n.parse::<usize>().ok())
-                .expect("each day carries its index");
-            let tip = rect
-                .split("data-tip=\"")
-                .nth(1)
-                .and_then(|r| r.split('"').next())
-                .expect("each day carries its tooltip");
-            (index, tip)
-        })
-        .collect();
-    assert_eq!(tips.len(), 14, "{magpie}");
-    for (position, (index, tip)) in tips.iter().enumerate() {
-        assert_eq!(*index, position, "days are out of order: {tips:?}");
+    let page = get("Eurasian%20Magpie").await;
+    // The chart is drawn twice, a wide drawing for a card and a narrow one for a phone
+    // (`.viz-chart--narrow`); CSS shows one. Each must tell the same fourteen days.
+    let (wide, narrow) = page
+        .split_once("<div class=\"viz-chart ck viz-chart--narrow\">")
+        .unwrap_or_else(|| panic!("no narrow drawing: {page}"));
+    for magpie in [wide, narrow] {
+        // One reachable day per calendar day: 14 of them, in order, each at its own
+        // index, each saying the date it is.
+        let tips: Vec<(usize, &str)> = magpie
+            .split("<rect class=\"ck-hit\"")
+            .skip(1)
+            .map(|rect| {
+                let index = rect
+                    .split("data-ck-i=\"")
+                    .nth(1)
+                    .and_then(|r| r.split('"').next())
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .expect("each day carries its index");
+                let tip = rect
+                    .split("data-tip=\"")
+                    .nth(1)
+                    .and_then(|r| r.split('"').next())
+                    .expect("each day carries its tooltip");
+                (index, tip)
+            })
+            .collect();
+        assert_eq!(tips.len(), 14, "{magpie}");
+        for (position, (index, tip)) in tips.iter().enumerate() {
+            assert_eq!(*index, position, "days are out of order: {tips:?}");
+            assert!(
+                tip.starts_with(&format!("{}&#10;", expected[position])),
+                "day {position} should be {:?}, the tooltip says {tip:?}",
+                expected[position]
+            );
+            // The magpie was heard once, today, and on no other day.
+            let heard = u8::from(position == 13);
+            assert!(
+                tip.contains(&format!("Detections&#9;{heard}&#10;")),
+                "day {position} should show {heard} detection(s): {tip:?}"
+            );
+        }
+        // Today's bar is the one drawn, and the last: the only bar is at index 13.
+        assert_eq!(magpie.matches("class=\"ck-grow\"").count(), 1, "{magpie}");
         assert!(
-            tip.starts_with(&format!("{}&#10;", expected[position])),
-            "day {position} should be {:?}, the tooltip says {tip:?}",
-            expected[position]
+            magpie.contains("data-ck-i=\"13\" data-style=\"--i:13\"/>"),
+            "{magpie}"
         );
-        // The magpie was heard once, today, and on no other day.
-        let heard = u8::from(position == 13);
-        assert!(
-            tip.contains(&format!("Detections&#9;{heard}&#10;")),
-            "day {position} should show {heard} detection(s): {tip:?}"
-        );
+        assert!(magpie.contains("data-ck-start=\"13\""), "{magpie}");
     }
-    // Today's bar is the one drawn, and the last: the only bar is at index 13.
-    assert_eq!(magpie.matches("class=\"ck-grow\"").count(), 1, "{magpie}");
-    assert!(
-        magpie.contains("data-ck-i=\"13\" data-style=\"--i:13\"/>"),
-        "{magpie}"
-    );
-    assert!(magpie.contains("data-ck-start=\"13\""), "{magpie}");
 }

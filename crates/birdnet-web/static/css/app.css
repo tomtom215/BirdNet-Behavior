@@ -1749,7 +1749,9 @@ footer a:hover { color: var(--moss-ink); }
 /* Compact control widths for short numeric inputs / selects (O-25 sweep) */
 .bnb-w-num    { max-width: 120px; }
 .bnb-w-num-xs { max-width: 80px; }
-.bnb-w-select { max-width: 180px; }
+/* 180px cut the chosen option off ("Off — save clips exactly a"): a select is as wide as
+   its longest option, up to a readable measure and never wider than its card. */
+.bnb-w-select { max-width: min(100%, 26rem); }
 
 /* Inline key/value (settings preview, kpi sub-text) */
 .bnb-kv {
@@ -6288,3 +6290,69 @@ input[type="range"]::-moz-range-thumb {
 input[type="range"]:hover::-webkit-slider-thumb { background: var(--moss-ink); }
 input[type="range"]:hover::-moz-range-thumb { background: var(--moss-ink); }
 input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
+
+/* ── fixD1: the daily chart drawn for a card and for a phone ────────────────
+   The species page draws its 14-day chart twice (charts.rs, render_daily_chart_pair):
+   700 units across for a card, 360 for a phone, where the first would be 0.44 of a
+   pixel a unit, a plot 48px tall and every label enlarged onto the axis. One is shown;
+   the other is display: none, so it is out of the tab order and the accessibility tree. */
+.viz-chart--narrow { display: none; }
+@media (max-width: 640px) {
+  .viz-chart--wide { display: none; }
+  .viz-chart--narrow { display: block; }
+}
+
+/* A table that is meant to be read whole on a phone says so with `data-fits-phone` (qa.mjs
+   reports one that still needs a sideways scroll). The global `table { display: block;
+   white-space: nowrap }` below 980px made the Companions table's second heading
+   ("CO-OCCURRENCE DAYS") run off the card and the thresholds table's Remove buttons
+   ("Remov"); below 520px such a table is a table again and its cells wrap. */
+@media (max-width: 520px) {
+  table[data-fits-phone] { display: table; white-space: normal; }
+}
+
+/* ── fixD1: the Data page on a phone ────────────────────────────────────────
+   Measured at 390px: a snapshot's file name wrapped mid-word over five lines with
+   Download and Delete squeezed beside it, the Export buttons broke "Export" and
+   its arrow onto two lines, and "Save settings" wrapped inside a 99px button.
+   A button's words stay on one line and the button keeps its width; the snapshot
+   row gives its text the whole width and puts the two actions on a line of their own. */
+.save-row { flex-wrap: wrap; }
+.save-row > .btn, .bkr-export-row > .bnb-btn, .bkr-snap-row > .bnb-btn { flex: none; white-space: nowrap; }
+@media (max-width: 520px) {
+  .bkr-snap-row { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: var(--space-4); }
+  .bkr-snap-row > :nth-child(2) { grid-column: 2 / -1; }
+  .bkr-snap-row > :nth-child(3) { grid-column: 2; justify-self: start; }
+  .bkr-snap-row > :nth-child(4) { grid-column: 3; }
+  .bkr-snap-row .bnb-meta .mono { display: block; }
+}
+
+/* ── fixD1: two cards in a row take their own height ────────────────────────
+   Year in review pairs the leaderboard (ten rows) with Milestones (four): the grid
+   stretched the short one to the tall one's height and left ~170px of empty card. */
+.yir-cols { align-items: start; }
+
+/* ── fixD1: the setup wizard's sticky stepper is not a band of another tone ─
+   The strip is the page colour at 92% over the page's own two washes, so on step 1
+   it read as a paler rectangle against the green and amber corners. At the top of
+   the page it is transparent; as the page scrolls under it, it takes the colour and
+   blur it needs to keep the steps readable over what passes beneath (the same
+   scroll-driven pattern as `.topnav` above). Where that is not available, or motion
+   is reduced, the page's own rule stands, and the strip stays solid. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: scroll()) {
+    :root:not([data-motion="reduced"]) .ob-root .ob-stepper {
+      background-color: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
+      animation: bnb-ob-stepper-stuck linear both; animation-timeline: scroll(root block); animation-range: 0 40px;
+    }
+  }
+}
+@keyframes bnb-ob-stepper-stuck {
+  from { background-color: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  to   { background-color: color-mix(in oklab, var(--bg) 92%, transparent); backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); }
+}
+
+/* ── fixD1: the terrain's axis labels stay readable over the ridges ─────────
+   The day and hour labels are HTML laid over the canvas, so a ridge drawn under
+   "60 d ago" took its contrast away. A small plate of the stage's own colour. */
+.tr-lbl { background: color-mix(in oklab, var(--surface-sunken) 78%, transparent); padding: 0 var(--space-4); border-radius: var(--r-2xs); }

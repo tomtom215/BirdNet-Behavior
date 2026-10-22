@@ -10,7 +10,7 @@ use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use super::atoms::{avatar, conf_bar, conf_pill, sparkline, species_code, species_color};
-use super::charts::{render_daily_chart, render_hourly_chart};
+use super::charts::{render_daily_chart_pair, render_hourly_chart};
 use super::{SPECIES_DETAIL_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
 
@@ -797,7 +797,7 @@ async fn species_daily_partial(
         Ok(Ok((days, effort))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_daily_chart("species-daily", &days, None, effort.as_ref()),
+            render_daily_chart_pair("species-daily", &days, None, effort.as_ref()),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -1307,7 +1307,7 @@ async fn species_companions_partial(
                 );
             }
             let mut html = String::from(
-                r"<table><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
+                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
             );
             for c in &companions {
                 let enc = simple_url_encode(&c.companion);

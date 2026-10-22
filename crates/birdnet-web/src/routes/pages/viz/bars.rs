@@ -450,6 +450,9 @@ pub struct Daily<'a> {
     pub weekday_labels: bool,
     /// A "Show as a table" disclosure.
     pub table: bool,
+    /// Further classes for the chart's outer `div`, each with a leading space (` viz-wide`), or
+    /// empty. A chart drawn twice, once for a wide card and once for a phone, says which is which.
+    pub class: &'a str,
 }
 
 /// A day-by-day column chart: one bar per day on an axis from zero, the busiest day
@@ -518,7 +521,8 @@ pub fn daily(o: &Daily<'_>) -> String {
     let mut svg = String::with_capacity(6 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{last}" data-ck-label="Left and right move from day to day.">"#,
+        r#"<div class="viz-chart ck{class}"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{last}" data-ck-label="Left and right move from day to day.">"#,
+        class = escape_html(o.class),
         id = escape_html(o.id),
         last = n - 1,
     );
@@ -619,7 +623,11 @@ pub fn daily(o: &Daily<'_>) -> String {
             );
         }
     }
-    for i in super::timeline::axis_columns(n, 7) {
+    // At most seven labels, and fewer where the drawing is narrow: a label ("11 Oct") is about
+    // 36 units wide and wants room either side, so a 360-unit drawing takes five. Six or seven in it
+    // touched, and the text-fitting script then hid the last, the one that says "today".
+    let max_labels = ((plot_w / 66.0).floor() as usize).clamp(2, 7);
+    for i in super::timeline::axis_columns(n, max_labels) {
         let (mut short, long) = label_of(&o.days[i].0);
         if o.weekday_labels {
             short = long.chars().take(3).collect();
@@ -849,6 +857,7 @@ mod tests {
             future_from: None,
             weekday_labels: false,
             table: false,
+            class: "",
         })
     }
 

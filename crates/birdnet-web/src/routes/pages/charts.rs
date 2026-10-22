@@ -52,6 +52,81 @@ pub(crate) fn render_daily_chart(
     end: Option<&str>,
     effort: Option<&std::collections::BTreeMap<String, f64>>,
 ) -> String {
+    daily_chart(id, days, end, effort, Layout::WIDE)
+}
+
+/// [`render_daily_chart`] drawn twice: the wide drawing for a card, and a narrower, taller one
+/// for a phone. A drawing is scaled to its card, and the wide one is 700 units across: on a
+/// 390 px phone that is 0.44 of a pixel a unit, a plot 48 px tall, labels the text-fitting
+/// script has to double so that they stand on the axis and over the bars, and an average label
+/// that was placed in units and is written across the tallest bar once enlarged. The narrow one
+/// is 360 units, so it is drawn at about its own size on a phone and nothing is enlarged. CSS
+/// (`.viz-chart--wide` / `.viz-chart--narrow`) shows one of them; the other is `display: none`,
+/// which takes it out of the tab order and the accessibility tree.
+///
+/// `id` names the wide one; the narrow one is `{id}-narrow`.
+pub(crate) fn render_daily_chart_pair(
+    id: &str,
+    days: &[birdnet_db::sqlite::DailyCount],
+    end: Option<&str>,
+    effort: Option<&std::collections::BTreeMap<String, f64>>,
+) -> String {
+    if days.is_empty() {
+        return render_daily_chart(id, days, end, effort);
+    }
+    let narrow_id = format!("{id}-narrow");
+    format!(
+        "{}{}",
+        daily_chart(
+            id,
+            days,
+            end,
+            effort,
+            Layout::WIDE.shown(" viz-chart--wide")
+        ),
+        daily_chart(
+            &narrow_id,
+            days,
+            end,
+            effort,
+            Layout::NARROW.shown(" viz-chart--narrow")
+        ),
+    )
+}
+
+/// How big a daily chart is drawn, in viewBox units, and what its outer `div` is called.
+#[derive(Clone, Copy)]
+struct Layout {
+    width: f64,
+    plot_h: f64,
+    class: &'static str,
+}
+
+impl Layout {
+    const WIDE: Self = Self {
+        width: 700.0,
+        plot_h: 110.0,
+        class: "",
+    };
+    /// Close to the width of a card on a 390 px phone, so the scale is about one.
+    const NARROW: Self = Self {
+        width: 360.0,
+        plot_h: 120.0,
+        class: "",
+    };
+
+    const fn shown(self, class: &'static str) -> Self {
+        Self { class, ..self }
+    }
+}
+
+fn daily_chart(
+    id: &str,
+    days: &[birdnet_db::sqlite::DailyCount],
+    end: Option<&str>,
+    effort: Option<&std::collections::BTreeMap<String, f64>>,
+    layout: Layout,
+) -> String {
     if days.is_empty() {
         return r#"<p class="cht-empty">No detection data yet.</p>"#.to_string();
     }
@@ -66,13 +141,14 @@ pub(crate) fn render_daily_chart(
         unit: "detections",
         days: &filled,
         slot: 0,
-        width: 700.0,
-        plot_h: 110.0,
+        width: layout.width,
+        plot_h: layout.plot_h,
         listened: listened.as_deref(),
         mean_line: true,
         future_from: None,
         weekday_labels: false,
         table: false,
+        class: layout.class,
     })
 }
 
@@ -302,6 +378,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The species page draws its 14-day chart twice, for a card and for a phone, and each
+    /// drawing stands on its own: its bars are inside its own box, it has its own ids (a
+    /// duplicated gradient or `data-ck-id` is a defect `qa.mjs` counts), and the narrow one is
+    /// the narrower and the taller (it is there to be drawn at about its own size on a phone).
+    ///
+    /// Observed failing against the single wide drawing: with `render_daily_chart` in place of
+    /// the pair there is no `viz-chart--narrow` to split on, and the first assertion fails.
+    #[test]
+    fn the_pair_is_two_whole_drawings_with_their_own_names() {
+        let days = daily(14, |i| i64::try_from(i % 7).unwrap_or(0) + 1);
+        let pair = render_daily_chart_pair("species-daily", &days, None, None);
+        let (wide, narrow) = pair
+            .split_once(r#"<div class="viz-chart ck viz-chart--narrow">"#)
+            .expect("a narrow drawing after the wide one");
+        assert!(wide.starts_with(r#"<div class="viz-chart ck viz-chart--wide">"#));
+        assert!(wide.contains(r#"data-ck-id="species-daily""#));
+        assert!(narrow.contains(r#"data-ck-id="species-daily-narrow""#));
+        assert!(!narrow.contains(r#"data-ck-id="species-daily""#));
+        // Every id the wide one defines is absent from the narrow one.
+        for part in wide.split(r#" id=""#).skip(1) {
+            let id = part.split('"').next().unwrap_or_default();
+            assert!(
+                !narrow.contains(&format!(r#" id="{id}""#)),
+                "id {id:?} is defined twice on the page"
+            );
+        }
+        for (name, one) in [("wide", wide), ("narrow", narrow)] {
+            let (vx, _, vw, _) = view_box(one);
+            let spans = bar_spans(one);
+            assert_eq!(spans.len(), 14, "{name}: every day draws a bar");
+            assert!(
+                spans.iter().all(|(l, r)| *l >= vx && *r <= vx + vw),
+                "{name}: a bar leaves its viewBox"
+            );
+        }
+        let (_, _, ww, wh) = view_box(wide);
+        let (_, _, nw, nh) = view_box(narrow);
+        assert!(
+            nw < ww && nh > wh,
+            "narrow {nw}x{nh} against wide {ww}x{wh}"
+        );
+    }
+
+    /// With nothing to draw the pair is the one sentence, not two.
+    #[test]
+    fn the_pair_of_an_empty_run_is_one_sentence() {
+        let pair = render_daily_chart_pair("t", &[], None, None);
+        assert_eq!(pair.matches("cht-empty").count(), 1);
     }
 
     /// The counterpart: proving bars *fit* is worthless if the renderer could satisfy it

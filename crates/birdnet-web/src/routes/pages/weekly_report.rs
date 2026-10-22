@@ -312,6 +312,7 @@ fn render_weekly_chart(
         future_from,
         weekday_labels: true,
         table: false,
+        class: "",
     })
 }
 
