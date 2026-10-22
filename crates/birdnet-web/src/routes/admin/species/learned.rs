@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::{Html, IntoResponse as _, Response};
 use serde::Deserialize;
@@ -169,7 +169,7 @@ pub struct ResetForm {
 pub async fn reset_one(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ResetForm>,
+    HtmxForm(form): HtmxForm<ResetForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {

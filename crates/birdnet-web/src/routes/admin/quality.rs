@@ -21,6 +21,7 @@
 
 use std::fmt::Write as _;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::Html;
 use axum::{Router, routing::get};
@@ -119,7 +120,7 @@ struct ExcludeForm {
 async fn exclude_phantom(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    axum::Form(form): axum::Form<ExcludeForm>,
+    HtmxForm(form): HtmxForm<ExcludeForm>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse as _;
 

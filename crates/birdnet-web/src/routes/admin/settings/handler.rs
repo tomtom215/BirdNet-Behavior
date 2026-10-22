@@ -1,6 +1,6 @@
 //! Settings route handlers (GET / POST).
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -531,7 +531,7 @@ fn stream_url_problems(form: &SettingsForm) -> Vec<String> {
 pub async fn save_settings(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SettingsForm>,
+    HtmxForm(form): HtmxForm<SettingsForm>,
 ) -> Result<Html<String>, StatusCode> {
     let mut form = form;
     state.run_blocking(move |state| {

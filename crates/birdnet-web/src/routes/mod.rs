@@ -14,6 +14,7 @@ pub mod detections;
 pub mod dynamic_thresholds;
 pub mod export;
 pub mod feeds;
+pub mod form;
 pub mod health;
 pub mod hls;
 pub mod images;

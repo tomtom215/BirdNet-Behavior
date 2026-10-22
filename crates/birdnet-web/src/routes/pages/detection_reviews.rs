@@ -18,7 +18,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -405,7 +406,7 @@ fn render_verdict_row(
 async fn detection_review_set(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ReviewForm>,
+    HtmxForm(form): HtmxForm<ReviewForm>,
 ) -> axum::response::Response {
     if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         // `state.set_detection_review`, not `with_db(set_detection_review)`:
@@ -472,7 +473,7 @@ fn refused_review<T, E: std::fmt::Display>(
 async fn detection_review_clear(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ClearForm>,
+    HtmxForm(form): HtmxForm<ClearForm>,
 ) -> axum::response::Response {
     // Paired write — see `detection_review_set`. Clearing must reach both
     // stores or the exclusion outlives the verdict that justified it.
@@ -505,7 +506,7 @@ async fn detection_review_clear(
 async fn detection_review_inline(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ReviewForm>,
+    HtmxForm(form): HtmxForm<ReviewForm>,
 ) -> axum::response::Response {
     let current = if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         let (date, time, sci, com) = (

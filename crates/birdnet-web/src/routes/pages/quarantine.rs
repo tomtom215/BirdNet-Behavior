@@ -17,7 +17,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -78,6 +79,7 @@ pub struct ActionForm {
     /// Current filter (forwarded for list re-render).
     pub filter: Option<String>,
     /// Current offset (forwarded for list re-render).
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     pub offset: Option<u32>,
 }
 
@@ -469,7 +471,7 @@ fn row_audio_player(file_name: Option<&str>) -> String {
 async fn quarantine_approve(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ActionForm>,
+    HtmxForm(form): HtmxForm<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
     // Normalised, never echoed: this is written into an `hx-get` attribute,
@@ -527,7 +529,7 @@ async fn quarantine_approve(
 async fn quarantine_reject(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ActionForm>,
+    HtmxForm(form): HtmxForm<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
     // Normalised, never echoed: this is written into an `hx-get` attribute,
@@ -571,7 +573,7 @@ async fn quarantine_reject(
 async fn quarantine_delete(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ActionForm>,
+    HtmxForm(form): HtmxForm<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
     // Normalised, never echoed: this is written into an `hx-get` attribute,

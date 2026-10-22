@@ -386,9 +386,13 @@ async fn testing_a_rule_that_could_not_be_read_is_not_a_rule_that_is_gone() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("could not be read"), "{body}");
 
-    // Counterpart: a rule that is not there is not there.
-    let (status, _, _) = send(&station(&[], nothing), "POST", uri, "").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Counterpart: a rule that is not there is not there. That is a stale page
+    // (the rule was deleted elsewhere), and a 404 would swap nothing, so it too
+    // arrives as a 200 that says so, and does not claim a fault in the station.
+    let (status, _, body) = send(&station(&[], nothing), "POST", uri, "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("no longer exists"), "{body}");
+    assert!(!body.contains("could not be read"), "{body}");
 }
 
 // ── signing in ──────────────────────────────────────────────────────────────

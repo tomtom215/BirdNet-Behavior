@@ -19,7 +19,7 @@
 
 use std::net::IpAddr;
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::Router;
 use axum::extract::{Extension, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -84,7 +84,7 @@ async fn login_submit(
     scheme: Option<Extension<crate::request_scheme::RequestScheme>>,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
-    Form(form): Form<LoginForm>,
+    HtmxForm(form): HtmxForm<LoginForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {

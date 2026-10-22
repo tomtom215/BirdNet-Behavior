@@ -18,7 +18,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Router, routing::get};
@@ -1277,7 +1278,7 @@ fn after_write(
 async fn delete_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
@@ -1313,7 +1314,7 @@ async fn delete_detection(
 async fn relabel_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<RelabelForm>,
+    HtmxForm(form): HtmxForm<RelabelForm>,
 ) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
     let row = crate::state::RowRef {
@@ -1354,7 +1355,7 @@ async fn relabel_detection(
 async fn lock_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let result = tokio::task::spawn_blocking(move || {
         let result = state.set_detection_lock(&row, true);
@@ -1385,7 +1386,7 @@ async fn lock_detection(
 async fn unlock_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let result = tokio::task::spawn_blocking(move || {
         let result = state.set_detection_lock(&row, false);

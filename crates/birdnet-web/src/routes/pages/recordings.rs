@@ -25,7 +25,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -639,7 +640,7 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
 async fn lock_clip(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, true);
     let result = tokio::task::spawn_blocking(move || {
@@ -670,7 +671,7 @@ async fn lock_clip(
 async fn unlock_clip(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, false);
     let result = tokio::task::spawn_blocking(move || {
@@ -723,7 +724,7 @@ fn clip_write(
 async fn delete_clip(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     // Paired write: the analytics copy is incremental and cannot notice a
     // removal on its own. See `AppState::delete_detection`, which also

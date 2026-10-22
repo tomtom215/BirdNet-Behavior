@@ -45,6 +45,7 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize)]
 struct CorrelationQuery {
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     days: Option<u32>,
     species: Option<String>,
     /// How many of the strongest links the chord diagram draws (`0` = all of them).

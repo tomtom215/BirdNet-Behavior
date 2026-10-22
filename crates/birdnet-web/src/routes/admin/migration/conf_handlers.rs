@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::extract::{Multipart, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse as _, Response};
@@ -19,6 +19,16 @@ use crate::auth_middleware::RequestUser;
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
 
+/// The form could not be read to the end (cut off, or larger than the station
+/// accepts). A `400` is never swapped by htmx, so it is said in the result slot.
+fn unreadable(e: &dyn std::fmt::Display) -> Html<String> {
+    tracing::warn!(error = %e, "settings-file preview: the form could not be read");
+    Html(view::error(
+        "The files did not arrive whole, or are larger than this station accepts. A BirdNET-Pi \
+         settings file is a few kilobytes, so choose just the birdnet.conf, or paste it.",
+    ))
+}
+
 /// `POST /admin/migrate/conf/preview`: read what was handed over and show the
 /// plan. Changes nothing.
 pub(super) async fn preview_handler(
@@ -29,17 +39,24 @@ pub(super) async fn preview_handler(
     let mut bundle = Bundle::default();
     let mut pasted = String::new();
     let mut source_dir = String::new();
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-    {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Ok(unreadable(&e)),
+        };
         match field.name() {
             Some("conf_text") => {
-                pasted = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                pasted = match field.text().await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(unreadable(&e)),
+                };
             }
             Some("source_dir") => {
-                source_dir = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                source_dir = match field.text().await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(unreadable(&e)),
+                };
             }
             Some("conf_files") => {
                 // An untouched file input still posts a part, with no name.
@@ -50,7 +67,10 @@ pub(super) async fn preview_handler(
                 else {
                     continue;
                 };
-                let bytes = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let bytes = match field.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => return Ok(unreadable(&e)),
+                };
                 if bytes.len() as u64 > MAX_FILE_BYTES {
                     return Ok(Html(view::error(&format!(
                         "{name} is {} bytes. A BirdNET-Pi settings file is a few kilobytes, so \
@@ -139,7 +159,7 @@ pub(super) async fn apply_handler(
     request_user: RequestUser,
     staged: StagedConf,
     lines: ConfigLines,
-    Form(form): Form<TokenForm>,
+    HtmxForm(form): HtmxForm<TokenForm>,
 ) -> Result<Html<String>, StatusCode> {
     let taken = {
         let mut guard = staged

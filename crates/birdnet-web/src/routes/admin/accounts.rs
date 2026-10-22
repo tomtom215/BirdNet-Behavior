@@ -17,7 +17,7 @@
 
 use std::fmt::Write as _;
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Response};
@@ -313,7 +313,7 @@ struct CreateUserForm {
 async fn create_user(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<CreateUserForm>,
+    HtmxForm(form): HtmxForm<CreateUserForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -471,7 +471,7 @@ async fn set_password(
     scheme: Option<axum::extract::Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
-    Form(form): Form<PasswordForm>,
+    HtmxForm(form): HtmxForm<PasswordForm>,
 ) -> Response {
     state.run_blocking(move |state| {
     if form.password.len() < 10 {
@@ -1082,7 +1082,7 @@ mod tests {
                 None,
                 axum::http::HeaderMap::new(),
                 Path(id),
-                Form(PasswordForm {
+                HtmxForm(PasswordForm {
                     password: "another-long-password".to_owned(),
                 }),
             )

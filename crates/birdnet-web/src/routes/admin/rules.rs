@@ -22,10 +22,11 @@
 
 use std::fmt::Write as _;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Html;
-use axum::{Form, Router, routing::get};
+use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use birdnet_db::alert_rules::{
@@ -244,7 +245,7 @@ fn plan_import(
 async fn import_rules(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<ImportForm>,
+    HtmxForm(form): HtmxForm<ImportForm>,
 ) -> Result<Html<String>, StatusCode> {
     let (ready, metric_ready, outcome) = match plan_import(&form.rules_json) {
         Ok(v) => v,
@@ -672,7 +673,16 @@ async fn test_rule(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let rule = match read {
         Ok(Some(rule)) => rule,
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        // The rule was deleted in another tab or by another person, and this page is
+        // stale. A 404 here would swap nothing (htmx discards a 4xx body), so the
+        // button would do nothing at all; say what happened in the result slot.
+        Ok(None) => {
+            return Ok(Html(
+                "<div class=\"rule-error\">That rule no longer exists, so there is nothing to \
+                 test. Reload the page to see the current list.</div>"
+                    .to_owned(),
+            ));
+        }
         // htmx swaps no 4xx/5xx body, and 404 would say the rule is gone: a
         // read that failed is answered in the result slot, where the test's
         // outcome is read.
@@ -759,7 +769,7 @@ async fn rules_list_partial(State(state): State<AppState>) -> axum::response::Re
 async fn create_rule(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<RuleForm>,
+    HtmxForm(form): HtmxForm<RuleForm>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse as _;
     // Normalise empty strings to None
@@ -1015,7 +1025,7 @@ async fn metric_rules_list_partial(State(state): State<AppState>) -> axum::respo
 async fn create_metric_rule(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<MetricRuleForm>,
+    HtmxForm(form): HtmxForm<MetricRuleForm>,
 ) -> Html<String> {
     use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
 

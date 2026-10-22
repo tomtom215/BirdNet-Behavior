@@ -20,7 +20,7 @@
 
 use std::fmt::Write as _;
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Response};
@@ -290,7 +290,7 @@ struct CreateForm {
     device_id: String,
     #[serde(default)]
     label: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     sample_rate: Option<u32>,
     #[serde(default)]
     rtsp_transport: Option<String>,
@@ -490,7 +490,7 @@ fn parse_eq_field(raw: Option<&str>, sample_rate: u32) -> Result<Option<String>,
 async fn create(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<CreateForm>,
+    HtmxForm(form): HtmxForm<CreateForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -821,7 +821,7 @@ async fn update(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Path(id): Path<String>,
-    Form(form): Form<CreateForm>,
+    HtmxForm(form): HtmxForm<CreateForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -1693,7 +1693,7 @@ mod tests {
         let mut form = eq_form("usb-alsa", "plughw:3,0");
         form.eq_chain = Some("highpass:120; notch:50:20".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -1717,7 +1717,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(id.clone()),
-            Form(bad),
+            HtmxForm(bad),
         )
         .await;
         assert_refused(&refused);
@@ -1732,9 +1732,14 @@ mod tests {
         let mut clear = eq_form("usb-alsa", "plughw:3,0");
         clear.eq_chain = Some(String::new());
         assert_eq!(
-            update(State(state.clone()), actor(&state), Path(id), Form(clear))
-                .await
-                .status(),
+            update(
+                State(state.clone()),
+                actor(&state),
+                Path(id),
+                HtmxForm(clear)
+            )
+            .await
+            .status(),
             StatusCode::OK
         );
         assert_eq!(stored_chain(&state, "plughw:3,0"), "");
@@ -1806,7 +1811,7 @@ mod tests {
                 create(
                     State(state.clone()),
                     actor(&state),
-                    Form(eq_form("rtsp", url))
+                    HtmxForm(eq_form("rtsp", url))
                 )
                 .await
                 .status(),
@@ -1820,7 +1825,7 @@ mod tests {
             let refused = create(
                 State(state.clone()),
                 actor(&state),
-                Form(eq_form("rtsp", url)),
+                HtmxForm(eq_form("rtsp", url)),
             )
             .await;
             assert_refused(&refused);
@@ -1837,7 +1842,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(row.id.clone()),
-            Form(eq_form("rtsp", "rtp://10.0.0.9:5006")),
+            HtmxForm(eq_form("rtsp", "rtp://10.0.0.9:5006")),
         )
         .await;
         assert_refused(&refused);
@@ -1868,7 +1873,7 @@ mod tests {
         let mut form = eq_form("rtsp", url);
         form.media_mode = Some("audio".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -1887,7 +1892,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(row.id.clone()),
-            Form(bad),
+            HtmxForm(bad),
         )
         .await;
         assert_refused(&refused);
@@ -1900,7 +1905,7 @@ mod tests {
                 State(state.clone()),
                 actor(&state),
                 Path(row.id),
-                Form(back)
+                HtmxForm(back)
             )
             .await
             .status(),
@@ -1925,7 +1930,7 @@ mod tests {
         let mut form = eq_form("usb-alsa", "plughw:4,0");
         form.sample_rate = Some(8_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
-        let refused = create(State(state.clone()), actor(&state), Form(form)).await;
+        let refused = create(State(state.clone()), actor(&state), HtmxForm(form)).await;
         assert_refused(&refused);
 
         // The counterpart: the same stage on a source that *can* carry it is
@@ -1934,7 +1939,7 @@ mod tests {
         ok.sample_rate = Some(48_000);
         ok.eq_chain = Some("peaking:6000:1:3".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(ok))
+            create(State(state.clone()), actor(&state), HtmxForm(ok))
                 .await
                 .status(),
             StatusCode::OK
@@ -1953,7 +1958,7 @@ mod tests {
         form.sample_rate = Some(48_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -1969,7 +1974,13 @@ mod tests {
         let mut down = eq_form("usb-alsa", "plughw:6,0");
         down.sample_rate = Some(8_000);
         down.eq_chain = Some("peaking:6000:1:3".to_string());
-        let refused = update(State(state.clone()), actor(&state), Path(id), Form(down)).await;
+        let refused = update(
+            State(state.clone()),
+            actor(&state),
+            Path(id),
+            HtmxForm(down),
+        )
+        .await;
         // The check must use the rate this PATCH sets, not the stored one.
         assert_refused(&refused);
         assert_eq!(stored_chain(&state, "plughw:6,0"), "peaking:6000:1:3");
@@ -1984,7 +1995,7 @@ mod tests {
             create(
                 State(state.clone()),
                 actor(&state),
-                Form(eq_form("usb-alsa", "plughw:7,0"))
+                HtmxForm(eq_form("usb-alsa", "plughw:7,0"))
             )
             .await
             .status(),
@@ -2097,7 +2108,7 @@ mod tests {
         form.quiet_start = Some("22:00".to_string());
         form.quiet_end = Some("06:00".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -2134,7 +2145,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(id.clone()),
-            Form(half),
+            HtmxForm(half),
         )
         .await;
         assert_refused(&refused);
@@ -2149,9 +2160,14 @@ mod tests {
         clear.quiet_start = Some(String::new());
         clear.quiet_end = Some(String::new());
         assert_eq!(
-            update(State(state.clone()), actor(&state), Path(id), Form(clear))
-                .await
-                .status(),
+            update(
+                State(state.clone()),
+                actor(&state),
+                Path(id),
+                HtmxForm(clear)
+            )
+            .await
+            .status(),
             StatusCode::OK
         );
         assert_eq!(
@@ -2181,9 +2197,9 @@ mod tests {
             quiet_start: None,
             quiet_end: None,
         };
-        let first = create(State(state.clone()), actor(&state), Form(form())).await;
+        let first = create(State(state.clone()), actor(&state), HtmxForm(form())).await;
         assert_eq!(first.status(), StatusCode::OK, "first add succeeds");
-        let second = create(State(state.clone()), actor(&state), Form(form())).await;
+        let second = create(State(state.clone()), actor(&state), HtmxForm(form())).await;
         // The same device cannot be added twice.
         assert_refused(&second);
         let count = state.with_db(AudioSourceStore::list).unwrap().len();

@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::Html;
 use birdnet_migrate::clips::{self, ClipError, DiskRoom, Mode, Options, Report, Wanted};
@@ -377,7 +377,7 @@ fn hx_vals(source: &str, mode: &str, pi_folder: &str) -> String {
 /// `POST /admin/migrate/clips/preview`: the dry run.
 pub(super) async fn preview_handler(
     State(state): State<AppState>,
-    Form(form): Form<ClipForm>,
+    HtmxForm(form): HtmxForm<ClipForm>,
 ) -> Html<String> {
     let result = state
         .run_blocking(move |state| {
@@ -436,7 +436,7 @@ pub(super) async fn preview_handler(
 pub(super) async fn run_handler(
     State(state): State<AppState>,
     migration_state: Arc<Mutex<Option<ProgressHandle>>>,
-    Form(form): Form<ClipForm>,
+    HtmxForm(form): HtmxForm<ClipForm>,
 ) -> Html<String> {
     let Some(progress) = super::claim_slot(&migration_state) else {
         return err(super::ALREADY_RUNNING);

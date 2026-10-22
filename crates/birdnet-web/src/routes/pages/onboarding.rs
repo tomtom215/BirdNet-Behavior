@@ -49,13 +49,14 @@
 use std::fmt::Write as _;
 
 use crate::client_ip::ClientIp;
+use crate::routes::form::HtmxForm;
+use axum::Router;
 use axum::extract::State;
 use axum::extract::{Extension, Request};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, Redirect};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
-use axum::{Form, Router};
 
 use birdnet_core::audio::capture::alsa::CaptureDevice;
 use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, NewAudioSource, SourceKind};
@@ -1049,7 +1050,7 @@ async fn onboarding_save(
     client: Option<Extension<ClientIp>>,
     scheme: Option<Extension<crate::request_scheme::RequestScheme>>,
     headers: axum::http::HeaderMap,
-    Form(form): Form<OnboardingForm>,
+    HtmxForm(form): HtmxForm<OnboardingForm>,
 ) -> Response {
     state.run_blocking(move |state| {
     // The microphone choice is checked before anything is written, like the
@@ -1274,7 +1275,7 @@ fn add_source(conn: &rusqlite::Connection, kind: SourceKind, device: &str, label
 /// pointed at an arbitrary device string. Answers `200` with `ok: false` and the
 /// reason for every failure, because the page script shows the message and htmx
 /// is not involved.
-async fn mic_test(Form(form): Form<MicTestForm>) -> Response {
+async fn mic_test(HtmxForm(form): HtmxForm<MicTestForm>) -> Response {
     let device = form.device.trim().to_owned();
     let outcome = tokio::task::spawn_blocking(move || {
         // What is recorded from is the card the station itself listed, never the

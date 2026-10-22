@@ -14,10 +14,11 @@ pub mod conf_import;
 mod conf_view;
 mod render;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::Html;
-use axum::{Form, Router, routing::get};
+use axum::{Router, routing::get};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -362,7 +363,7 @@ struct DeleteBatchForm {
 /// half the application and not the other half.
 async fn delete_batch_handler(
     State(state): State<AppState>,
-    Form(form): Form<DeleteBatchForm>,
+    HtmxForm(form): HtmxForm<DeleteBatchForm>,
 ) -> Html<String> {
     let batch_id = form.batch_id;
     let list_state = state.clone();
@@ -478,7 +479,7 @@ struct ProvenanceForm {
 /// than merging everything because the disagreement is invisible.
 async fn provenance_handler(
     State(state): State<AppState>,
-    Form(form): Form<ProvenanceForm>,
+    HtmxForm(form): HtmxForm<ProvenanceForm>,
 ) -> Html<String> {
     let exclude = form.exclude.as_deref() == Some("true");
     let write_state = state.clone();
@@ -549,25 +550,8 @@ struct MigrateForm {
     source_label: Option<String>,
     /// The source station's UTC offset in seconds, if the operator gave one.
     /// Absent means "same clock as this station", which shifts nothing.
-    #[serde(default, deserialize_with = "empty_string_as_none")]
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     source_utc_offset_secs: Option<i64>,
-}
-
-/// Treat a blank form field as absent rather than as a parse error.
-///
-/// An HTML number input that the operator left alone posts `""`, which serde
-/// would otherwise reject — turning "I did not answer the optional question"
-/// into a 422 on the whole import.
-fn empty_string_as_none<'de, D>(d: D) -> Result<Option<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let raw = Option::<String>::deserialize(d)?;
-    Ok(raw
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse().ok()))
 }
 
 /// This station's configured coordinates, for the import's location check.
@@ -619,7 +603,7 @@ fn import_options(form: &MigrateForm) -> birdnet_migrate::ImportOptions {
 
 async fn validate_handler(
     State(state): State<AppState>,
-    Form(form): Form<MigrateForm>,
+    HtmxForm(form): HtmxForm<MigrateForm>,
 ) -> Result<Html<String>, StatusCode> {
     let source_path = PathBuf::from(&form.source_path);
     // The station's own coordinates, so the report can say whether this file
@@ -640,6 +624,30 @@ async fn validate_handler(
 // ---------------------------------------------------------------------------
 // POST /admin/migrate/upload  (multipart upload → validate + run)
 // ---------------------------------------------------------------------------
+
+/// The upload stopped arriving: the connection dropped, or the file is larger
+/// than the station accepts. Answered in the result slot, because a `400` or
+/// `413` is never swapped by htmx and the person would see the progress bar
+/// stop and nothing else.
+fn upload_cut_off(e: &dyn std::fmt::Display) -> Html<String> {
+    tracing::warn!(error = %e, "migration upload stopped arriving");
+    Html(render::upload_error(
+        "The upload stopped before the whole file arrived, or the file is larger than this \
+         station accepts. Nothing was imported. Try again, or import it from a folder on the \
+         station instead.",
+    ))
+}
+
+/// The station could not do something with the upload that only the station
+/// can see (a full disk, a folder it cannot write); said plainly, with the
+/// detail in the log.
+fn upload_refused(what: &str, e: &dyn std::fmt::Display) -> Html<String> {
+    tracing::error!(error = %e, what, "migration upload could not be staged");
+    Html(render::upload_error(&format!(
+        "The station could not {what}. Nothing was imported. Check that the disk is not full, \
+         then try again."
+    )))
+}
 
 async fn upload_handler(
     State(state): State<AppState>,
@@ -667,20 +675,27 @@ async fn upload_handler(
     let staging = staging_dir(state.db_path());
     let tmp = tokio::task::spawn_blocking(move || StagedFile::create_in(&staging))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let tmp = match tmp {
+        Ok(t) => t,
+        Err(e) => return Ok(upload_refused("make room to receive the upload", &e)),
+    };
     let tmp_path = tmp.path().to_path_buf();
 
     let mut bytes_written: u64 = 0;
     let mut found_field = false;
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-    {
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Ok(upload_cut_off(&e)),
+        };
         match field.name() {
             Some("source_label") => {
-                let text = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let text = match field.text().await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(upload_cut_off(&e)),
+                };
                 let text = text.trim();
                 if !text.is_empty() {
                     source_label = Some(text.to_owned());
@@ -688,7 +703,10 @@ async fn upload_handler(
                 continue;
             }
             Some("source_utc_offset_secs") => {
-                let text = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let text = match field.text().await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(upload_cut_off(&e)),
+                };
                 // A field the operator left alone posts "": absent, not zero.
                 // Zero is a real answer ("the source ran on UTC") and must stay
                 // distinguishable from "I did not say".
@@ -701,18 +719,25 @@ async fn upload_handler(
         if let Some(name) = field.file_name() {
             file_name = name.to_string();
         }
-        let mut out = tokio::fs::File::create(&tmp_path)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        while let Some(chunk) = field.chunk().await.map_err(|_| StatusCode::BAD_REQUEST)? {
-            out.write_all(&chunk)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            bytes_written += chunk.len() as u64;
+        let mut out = match tokio::fs::File::create(&tmp_path).await {
+            Ok(f) => f,
+            Err(e) => return Ok(upload_refused("save the uploaded file", &e)),
+        };
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    if let Err(e) = out.write_all(&chunk).await {
+                        return Ok(upload_refused("save the uploaded file", &e));
+                    }
+                    bytes_written += chunk.len() as u64;
+                }
+                Ok(None) => break,
+                Err(e) => return Ok(upload_cut_off(&e)),
+            }
         }
-        out.flush()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Err(e) = out.flush().await {
+            return Ok(upload_refused("save the uploaded file", &e));
+        }
         found_field = true;
     }
 
@@ -805,6 +830,7 @@ async fn upload_handler(
 /// with. See [`StagedUpload`].
 #[derive(serde::Deserialize)]
 struct ConfirmForm {
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     token: Option<u64>,
 }
 
@@ -818,7 +844,7 @@ async fn upload_confirm_handler(
     State(state): State<AppState>,
     migration_state: MigrationState,
     staged: StagedUpload,
-    Form(form): Form<ConfirmForm>,
+    HtmxForm(form): HtmxForm<ConfirmForm>,
 ) -> Result<Html<String>, StatusCode> {
     // Before the staging is taken: a caller dropped at this await (a client
     // that hung up) must leave the upload staged, not discard it.
@@ -917,7 +943,7 @@ async fn upload_confirm_handler(
 
 async fn run_handler(
     State(state): State<AppState>,
-    Form(form): Form<MigrateForm>,
+    HtmxForm(form): HtmxForm<MigrateForm>,
     migration_state: MigrationState,
 ) -> Result<Html<String>, StatusCode> {
     let options = import_options(&form);

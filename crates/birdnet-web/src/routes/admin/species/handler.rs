@@ -1,6 +1,6 @@
 //! Species list management handlers.
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::{Html, IntoResponse as _, Response};
 use serde::Deserialize;
@@ -111,7 +111,7 @@ pub struct SpeciesNameForm {
 pub async fn add_exclude(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -137,7 +137,7 @@ pub async fn add_exclude(
 pub async fn remove_exclude(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -163,7 +163,7 @@ pub async fn remove_exclude(
 pub async fn add_include(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -189,7 +189,7 @@ pub async fn add_include(
 pub async fn remove_include(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -218,7 +218,7 @@ pub async fn remove_include(
 pub async fn add_whitelist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -241,7 +241,7 @@ pub async fn add_whitelist(
 pub async fn remove_whitelist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -380,7 +380,7 @@ pub struct ThresholdForm {
 pub async fn set_threshold(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ThresholdForm>,
+    HtmxForm(form): HtmxForm<ThresholdForm>,
 ) -> axum::response::Response {
     state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
@@ -439,7 +439,7 @@ pub struct ThresholdDeleteForm {
 pub async fn delete_threshold(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ThresholdDeleteForm>,
+    HtmxForm(form): HtmxForm<ThresholdDeleteForm>,
 ) -> axum::response::Response {
     state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
@@ -535,7 +535,7 @@ fn parse_interval(raw: &str) -> Result<i64, String> {
 pub async fn set_interval(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<IntervalForm>,
+    HtmxForm(form): HtmxForm<IntervalForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -579,7 +579,7 @@ pub struct IntervalDeleteForm {
 pub async fn delete_interval(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<IntervalDeleteForm>,
+    HtmxForm(form): HtmxForm<IntervalDeleteForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
