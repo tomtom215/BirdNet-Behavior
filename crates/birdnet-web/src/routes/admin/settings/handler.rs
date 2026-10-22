@@ -881,7 +881,7 @@ async fn ask_provider(
 ///
 /// Returns `{"lat": ..., "lon": ..., "city": ..., "country": ..., "timezone": ...}`
 /// on success, or `502` with an error message on failure. The request tells a
-/// third-party service (see [`GEO_PROVIDERS`]) the station's public IP address
+/// third-party service (see `GEO_PROVIDERS`) the station's public IP address
 /// and nothing else; the wizard says so next to the button and the manual
 /// repeats it.
 ///

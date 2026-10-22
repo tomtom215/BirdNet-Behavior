@@ -29,7 +29,7 @@
 //! for. `*.co.uk`, `*.github.io`, `*.pages.dev` and `*.ui.nabu.casa` cover
 //! everyone who registers a name under them — every Home Assistant Cloud
 //! customer is a subdomain of `ui.nabu.casa` — so each would let strangers
-//! frame the station. Such an entry is refused ([`shared_suffix`]) with the
+//! frame the station. Such an entry is refused (`shared_suffix`) with the
 //! host to list instead. The list is a short hand-kept one of the multi-tenant
 //! suffixes people actually meet, plus the generic second levels of the country
 //! codes (`co.uk`, `com.au`, …); it is **not** the Public Suffix List, which this
