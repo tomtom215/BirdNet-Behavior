@@ -275,7 +275,7 @@ it says otherwise.
 12. **Floating pins:** every `uses:` line is commit-pinned (133 of 133, counted); the
     `ubuntu:24.04` container `install-smoke.yml` starts with `docker run` is a tag, and
     `taiki-e/install-action` and `EmbarkStudios/cargo-deny-action` choose their own tool builds.
-13. **Dependencies.** `ort` 2.0.0-rc.15, `tokio` 1.54.0, `rustls` 0.23.46, `zip` 9.0.5
+13. **Dependencies.** `ort` 2.0.0-rc.15, `tokio` 1.54.1 (1.54.0 carries RUSTSEC-2026-0384), `rustls` 0.23.46, `zip` 9.0.5
     (build-time only), htmx 2.0.11 (npm also publishes a 4.0.0, not evaluated). Four packages
     have newer releases their parents hold back (`comfy-table`, `generic-array`, `matchit`,
     `psm`: from the previous `cargo update --dry-run`, not re-run).

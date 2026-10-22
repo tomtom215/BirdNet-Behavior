@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`tokio` 1.54.1 (RUSTSEC-2026-0384).** 1.54.0 has a race between `tokio::time::Interval`
+  and the runtime's time driver that can free a timer's waker while the driver is firing it (a
+  use-after-free in safe Rust). The station uses `Interval` in twelve places, among them the
+  systemd watchdog ping, the heartbeat, the dead-man timer, the maintenance scheduler and the
+  MQTT presence pings. The advisory was issued 2026-10-22 and is fixed in 1.54.1; the
+  lockfile now pins it. `Sleep` and `Timeout` are not affected.
 - **Admin forms no longer print a stored credential.** Settings and Audio showed saved
   passwords, tokens and camera addresses in clear in the page source. A secret now shows as
   `***REDACTED***` (or empty), an unchanged mask saves back to the stored value, and a mask
