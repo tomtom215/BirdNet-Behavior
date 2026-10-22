@@ -225,14 +225,12 @@ impl SpeciesIntervals {
             .expect("the monotonic clock is older than the TTL");
     }
 
-    /// How many species have an interval of their own.
-    pub(super) fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    /// Whether no species has one.
-    pub(super) fn is_empty(&self) -> bool {
-        self.map.is_empty()
+    /// How many species have an interval of their own, or `None` when none
+    /// does: the figure the processor announces at start, and nothing to
+    /// announce when there is none. A function of its own so the "none" case is
+    /// a value a test can read, not a branch of a log call.
+    pub(super) fn in_force(&self) -> Option<usize> {
+        (!self.map.is_empty()).then_some(self.map.len())
     }
 }
 

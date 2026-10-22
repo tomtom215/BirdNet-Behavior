@@ -616,11 +616,8 @@ pub(super) fn event_processor(
             "duplicate-prediction interval enabled"
         );
     }
-    if !species_intervals.is_empty() {
-        tracing::info!(
-            species = species_intervals.len(),
-            "per-species minimum intervals in force"
-        );
+    if let Some(species) = species_intervals.in_force() {
+        tracing::info!(species, "per-species minimum intervals in force");
     }
 
     loop {
@@ -5060,6 +5057,29 @@ mod tests {
             state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
             3,
             "02:00:00, 02:01:00 and 02:02:00 are 60 s apart; the two between are not"
+        );
+    }
+
+    /// What the processor announces at start: nothing while no species has an
+    /// interval of its own, and the count once some do. Both halves, so neither
+    /// a constant `None` nor a constant `Some(_)` nor an inverted test passes.
+    #[test]
+    fn the_start_up_note_counts_the_species_that_have_an_interval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        assert_eq!(
+            crate::daemon::duplicate::SpeciesIntervals::load(&state).in_force(),
+            None,
+            "no row, nothing to announce"
+        );
+        for (name, secs) in [("Strix aluco", 60), ("Turdus merula", 30)] {
+            state
+                .with_db(|c| birdnet_db::sqlite::set_species_interval(c, name, secs))
+                .unwrap();
+        }
+        assert_eq!(
+            crate::daemon::duplicate::SpeciesIntervals::load(&state).in_force(),
+            Some(2)
         );
     }
 
