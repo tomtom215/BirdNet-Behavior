@@ -33,24 +33,31 @@ pub(super) async fn detections_partial(
     let today = today_date_string();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        // What the empty feed may claim, from the capture status the hero pill
+        // and the first-run checklist read. Resolved before the feed's own
+        // read so the three cannot disagree; only used when the feed is empty.
+        let yard = yard_state(
+            crate::routes::pages::today::live_capture_state(&state),
+            state.detection_daemon_running(),
+        );
         state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
             // Propagated, not defaulted: without the map the "first ever" badge
             // is simply absent, which reads as *this was not a first*.
             let first_seen = birdnet_db::sqlite::species_first_detection(conn)?;
             let floor = crate::routes::pages::confidence::station_floor(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen, floor))
+            Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen, floor, yard))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, first_seen, floor))) => {
+        Ok(Ok((detections, first_seen, floor, yard))) => {
             if detections.is_empty() {
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    crate::routes::pages::empty_states::quiet_yard(),
+                    crate::routes::pages::empty_states::quiet_yard_while(yard),
                 );
             }
             // The key to the bars below, once, where they first appear.
@@ -69,6 +76,25 @@ pub(super) async fn detections_partial(
             tracing::warn!(error = %e, "live feed: task failed");
             crate::routes::pages::error_states::failed_partial("the live feed")
         }
+    }
+}
+
+/// What the empty feed may say, from the capture status and the detector.
+///
+/// Pure, so the table can be read off a test.
+pub(super) const fn yard_state(
+    capture: crate::routes::pages::today::CaptureState,
+    detector_running: bool,
+) -> crate::routes::pages::empty_states::YardState {
+    use crate::routes::pages::empty_states::YardState;
+    use crate::routes::pages::today::CaptureState;
+    match capture {
+        CaptureState::NoSource => YardState::NoMicrophone,
+        CaptureState::Down => YardState::NotRecording,
+        CaptureState::Unreadable => YardState::Unknown,
+        CaptureState::Unknown => YardState::Starting,
+        CaptureState::Up if detector_running => YardState::Listening,
+        CaptureState::Up => YardState::DetectorOff,
     }
 }
 
