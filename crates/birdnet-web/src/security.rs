@@ -358,7 +358,7 @@ pub async fn security_headers_middleware(
 
 /// Reject state-changing requests whose `Origin`/`Referer` is cross-site, or
 /// that the browser itself labels as coming from another site (`Sec-Fetch-Site`,
-/// see [`fetch_metadata_refuses`]).
+/// see `fetch_metadata_refuses`).
 pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
     if is_state_changing(req.method())
         && !is_bearer_api_request(req.uri().path(), req.headers())

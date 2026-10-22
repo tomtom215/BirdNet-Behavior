@@ -177,7 +177,7 @@ fn alsa_devices_of(rows: &[birdnet_db::audio_sources::AudioSource]) -> Vec<Strin
 
 /// Every source the station's database holds that has not been removed, read
 /// the way capture reads them. `None` when the table cannot be consulted (see
-/// [`effective_alsa_devices`]).
+/// `effective_alsa_devices`).
 fn database_sources(
     config: Option<&Config>,
 ) -> Option<Vec<birdnet_db::audio_sources::AudioSource>> {
