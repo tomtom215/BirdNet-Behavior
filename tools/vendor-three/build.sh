@@ -27,10 +27,10 @@ out="$root/crates/birdnet-web/static/vendor/three/three.module.min.js"
 THREE_VERSION=0.186.1
 THREE_TARBALL_SHA256=8cd068708ea44f2c73c944b1cead2ba2f0d5c15c8fc194e5700f4e4f4a033fe7
 
-mode=write
+mode="write"
 case "${1:-}" in
   "") ;;
-  --check) mode=check ;;
+  --check) mode="check" ;;
   *) echo "usage: $0 [--check]" >&2; exit 2 ;;
 esac
 
