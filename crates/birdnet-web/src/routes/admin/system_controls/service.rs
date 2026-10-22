@@ -96,7 +96,7 @@ pub fn request_restart(support: RestartSupport) -> RestartOutcome {
     // fresh instance. `kill` of our own PID needs no privilege (same uid), so it
     // works even with every capability dropped.
     let pid = std::process::id().to_string();
-    tracing::info!(%pid, "restart requested; SIGTERM self, systemd Restart=always brings us back");
+    tracing::info!(%pid, "{}", restart_log_message(support));
     let reexec_requested = !support.under_systemd;
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
@@ -105,6 +105,18 @@ pub fn request_restart(support: RestartSupport) -> RestartOutcome {
         send_term(&mut kill, reexec_requested);
     });
     outcome
+}
+
+/// The line logged when a restart is requested: what will bring the process
+/// back, which is not always systemd. It used to say "systemd Restart=always
+/// brings us back" on a station that nobody supervises, where the process runs
+/// itself again, and the log is where someone looks to see what happened.
+fn restart_log_message(support: RestartSupport) -> &'static str {
+    if support.under_systemd {
+        "restart requested; SIGTERM self, systemd Restart=always brings us back"
+    } else {
+        "restart requested; SIGTERM self, then this process runs itself again once it has shut down"
+    }
 }
 
 /// Run the `kill` that signals this process, and say whether it went out.
@@ -299,7 +311,28 @@ fn check_systemd_service_active(service: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestartOutcome, RestartSupport, restart_fragment, restart_outcome, send_term};
+    use super::{
+        RestartOutcome, RestartSupport, restart_fragment, restart_log_message, restart_outcome,
+        send_term,
+    };
+
+    /// The line in the log says what will actually bring the process back.
+    #[test]
+    fn the_restart_log_line_is_true_for_both_ways_back() {
+        let systemd = restart_log_message(RestartSupport {
+            under_systemd: true,
+            self_exec: false,
+        });
+        assert!(systemd.contains("systemd Restart=always"), "{systemd}");
+        let itself = restart_log_message(RestartSupport {
+            under_systemd: false,
+            self_exec: true,
+        });
+        assert!(
+            itself.contains("runs itself again") && !itself.contains("systemd"),
+            "an unsupervised station is not brought back by systemd: {itself}"
+        );
+    }
 
     /// The re-exec request is made before the SIGTERM, so a SIGTERM that does
     /// not go out must take it back; one that does must not. One test, because
