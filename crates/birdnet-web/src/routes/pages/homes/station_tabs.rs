@@ -110,6 +110,7 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
 {classifier}
 <h2 class="st-h3" id="audio">Audio sources</h2>
 {sources}
+{folder_note}
 <h2 class="st-h3" id="species">Which birds count <span class="st-h3-note">· <a href="/admin/species/test">preview the filter</a> before it affects live detections</span></h2>
 {species}
 <h2 class="st-h3" id="detection">Capture settings <span class="st-h3-note">· the single home for the detection threshold</span></h2>
@@ -118,6 +119,7 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
         tabs = station_subtabs("capture"),
         classifier = crate::routes::admin::classifier::host_html(state, user.is_admin()),
         sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
+        folder_note = crate::watch_folder::capture_note(state.watch_dir().as_deref()),
         species = crate::routes::admin::species::handler::species_body(state),
         settings_css = SETTINGS_FORM_CSS,
         form = section_form(&[

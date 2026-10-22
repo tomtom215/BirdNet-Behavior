@@ -101,6 +101,9 @@ struct Snapshot {
     occurrence: OccurrenceFilterState,
     /// Classifiers failing every window (`e853776`), by id.
     failing_classifiers: Vec<String>,
+    /// What a scan of the watch folder found, when the folder is known and
+    /// readable.
+    recordings_folder: Option<crate::watch_folder::FolderScan>,
 }
 
 /// Render the operator Health surface for the public Station Health tab.
@@ -222,6 +225,9 @@ async fn gather(state: &AppState) -> Snapshot {
                 .filter(|(_, h)| h.is_failing())
                 .map(|(id, _)| id)
                 .collect(),
+            recordings_folder: state
+                .watch_dir()
+                .and_then(|dir| crate::watch_folder::scan(&dir)),
         }
     })
     .await
@@ -257,6 +263,7 @@ async fn gather(state: &AppState) -> Snapshot {
             candidates: None,
         },
         failing_classifiers: Vec::new(),
+        recordings_folder: None,
     })
 }
 
@@ -387,6 +394,7 @@ fn facts(s: &Snapshot) -> super::station_issues::Facts<'_> {
         source_names: &s.source_names,
         filter_admits_nothing: s.occurrence.admits_nothing(),
         failing_classifiers: &s.failing_classifiers,
+        recordings_folder: s.recordings_folder.as_ref(),
     }
 }
 
@@ -879,6 +887,7 @@ mod tests {
                 candidates: None,
             },
             failing_classifiers: Vec::new(),
+            recordings_folder: None,
         }
     }
 

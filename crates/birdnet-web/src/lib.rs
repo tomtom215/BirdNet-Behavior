@@ -39,3 +39,4 @@ pub mod system_info;
 pub mod tls;
 pub mod tracking;
 pub mod urls;
+pub mod watch_folder;

@@ -292,6 +292,9 @@ struct AppStateInner {
     /// When the station finished starting, for telling which saved settings it
     /// has not picked up yet.
     pending_restart: crate::pending_restart::PendingRestart,
+    /// The folder the detection daemon watches for new recordings, once it has
+    /// started. `None` before that, and in a process with no daemon.
+    watch_dir: std::sync::RwLock<Option<PathBuf>>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -401,6 +404,7 @@ impl AppState {
                 table_sizes: std::sync::Mutex::new(None),
                 classifier_setup: crate::classifier_setup::ClassifierSetup::default(),
                 pending_restart: crate::pending_restart::PendingRestart::default(),
+                watch_dir: std::sync::RwLock::new(None),
             }),
         })
     }
@@ -671,6 +675,7 @@ impl AppState {
                 table_sizes: std::sync::Mutex::new(None),
                 classifier_setup: crate::classifier_setup::ClassifierSetup::default(),
                 pending_restart: crate::pending_restart::PendingRestart::default(),
+                watch_dir: std::sync::RwLock::new(None),
             }),
         })
     }
@@ -739,6 +744,7 @@ impl AppState {
                 table_sizes: std::sync::Mutex::new(None),
                 classifier_setup: crate::classifier_setup::ClassifierSetup::default(),
                 pending_restart: crate::pending_restart::PendingRestart::default(),
+                watch_dir: std::sync::RwLock::new(None),
             }),
         }
     }
@@ -2153,6 +2159,25 @@ impl AppState {
     #[must_use]
     pub fn pending_restart(&self) -> &crate::pending_restart::PendingRestart {
         &self.inner.pending_restart
+    }
+
+    /// Record the folder the detection daemon watches, for the pages that say
+    /// where recordings are looked for and count what is in it.
+    pub fn set_watch_dir(&self, dir: PathBuf) {
+        if let Ok(mut slot) = self.inner.watch_dir.write() {
+            *slot = Some(dir);
+        }
+    }
+
+    /// The folder the detection daemon watches for recordings, once it has
+    /// started.
+    #[must_use]
+    pub fn watch_dir(&self) -> Option<PathBuf> {
+        self.inner
+            .watch_dir
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 }
 
