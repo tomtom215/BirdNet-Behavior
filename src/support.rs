@@ -52,6 +52,7 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long `tar` may take to build the bundle.
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(300);
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -108,14 +109,15 @@ pub const SETTING_VALUE_CAP: usize = 1_024;
 pub const STATE_MEMBER_CAP: usize = 64 * 1024;
 
 /// Keep `lines` to [`STATE_MEMBER_CAP`] bytes, saying what was left out.
-fn capped(lines: Vec<String>) -> String {
+fn capped(lines: &[String]) -> String {
     let mut out = String::new();
     for (i, line) in lines.iter().enumerate() {
         if out.len() + line.len() + 1 > STATE_MEMBER_CAP {
-            out.push_str(&format!(
-                "(… {} more rows not shown: this member is capped at {STATE_MEMBER_CAP} bytes)\n",
+            let _ = writeln!(
+                out,
+                "(… {} more rows not shown: this member is capped at {STATE_MEMBER_CAP} bytes)",
                 lines.len() - i
-            ));
+            );
             return out;
         }
         out.push_str(line);
@@ -149,7 +151,7 @@ pub fn redacted_settings(rows: &[(String, String)]) -> String {
         })
         .collect();
     lines.sort();
-    capped(lines)
+    capped(&lines)
 }
 
 /// The station's microphones and streams (the `audio_sources` table), one line
@@ -193,7 +195,7 @@ pub fn redacted_audio_sources(rows: &[birdnet_db::audio_sources::AudioSource]) -
     if lines.is_empty() {
         return "(no audio sources are stored)\n".to_owned();
     }
-    capped(lines)
+    capped(&lines)
 }
 
 /// The two database-backed members, `(settings.redacted, audio-sources.redacted)`.
@@ -1009,6 +1011,7 @@ FLICKR_FILTER_EMAIL=me@example.com",
 
     /// A station database as the wizard leaves it: settings, and one stream.
     fn browser_configured_station(dir: &Path) -> Config {
+        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
         let db = dir.join("birds.db");
         let conn = rusqlite::Connection::open(&db).expect("open");
         birdnet_db::migration::migrate(&conn).expect("migrate");
@@ -1021,7 +1024,6 @@ FLICKR_FILTER_EMAIL=me@example.com",
             )
             .expect("setting");
         }
-        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
         conn.insert(&NewAudioSource::defaults(
             "cam1",
             SourceKind::Rtsp,

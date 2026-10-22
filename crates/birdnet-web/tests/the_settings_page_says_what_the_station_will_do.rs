@@ -8,7 +8,7 @@
 //! an active row, capture reads the list alone (`src/capture.rs`). A station
 //! set up with the wizard has one the moment it has a microphone, so a camera
 //! address typed there was saved, badged "applies after restart", and did
-//! nothing for ever: the log said "capture sources resolved from audio_sources
+//! nothing for ever: the log said "capture sources resolved from `audio_sources`
 //! table count=1" and the Audio page said "0 streams".
 //!
 //! The list is the one place that decides what the station records from, so the

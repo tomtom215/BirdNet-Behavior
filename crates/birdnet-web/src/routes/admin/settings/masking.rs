@@ -45,17 +45,17 @@ use birdnet_core::config::redact::{REDACTED, redact_value};
 use super::form::SettingsForm;
 
 /// Said under a secret's box, so a person knows the dots are not a bug.
-pub(crate) const SECRET_HINT: &str = "A saved value is never shown again; the box holds a \
+pub const SECRET_HINT: &str = "A saved value is never shown again; the box holds a \
     placeholder. Leave it as it is to keep the saved value, type a new one to replace it, or \
     empty the box to remove it.";
 
 /// Said under an address that may carry a password.
-pub(crate) const ADDRESS_HINT: &str = "A password in an address is hidden as ***REDACTED***. \
+pub const ADDRESS_HINT: &str = "A password in an address is hidden as ***REDACTED***. \
     Leave that as it is to keep the saved password; to change it, type the whole address again.";
 
 /// How a settings key holds a credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Holds {
+pub enum Holds {
     /// The whole value is secret.
     Secret,
     /// The value is one or more addresses, any of which may carry a secret.
@@ -65,10 +65,10 @@ pub(crate) enum Holds {
 /// The hand-written secrets. The table-driven ones are the
 /// [`Kind::Secret`](super::extra::Kind::Secret) extras, read from their table so
 /// a new one cannot be forgotten here.
-pub(crate) const SECRET_KEYS: &[&str] = &["email_smtp_pass", "birdweather_token"];
+pub const SECRET_KEYS: &[&str] = &["email_smtp_pass", "birdweather_token"];
 
 /// The hand-written address fields that can carry a credential.
-pub(crate) const ADDRESS_KEYS: &[&str] = &[
+pub const ADDRESS_KEYS: &[&str] = &[
     "rtsp_url",
     "rtsp_urls",
     "apprise_url",
@@ -80,10 +80,10 @@ pub(crate) const ADDRESS_KEYS: &[&str] = &[
 /// path of a file on the station. Listed so the test that makes every
 /// secret-looking key say what it is has somewhere to put these.
 #[cfg(test)]
-pub(crate) const SECRET_LOOKING_BUT_NOT: &[&str] = &["mqtt_client_key"];
+pub const SECRET_LOOKING_BUT_NOT: &[&str] = &["mqtt_client_key"];
 
 /// How `key` holds a credential, or `None` when it does not.
-pub(crate) fn holds(key: &str) -> Option<Holds> {
+pub fn holds(key: &str) -> Option<Holds> {
     if SECRET_KEYS.contains(&key)
         || super::extra::find(key).is_some_and(|e| matches!(e.kind, super::extra::Kind::Secret))
     {
@@ -105,12 +105,12 @@ enum Piece<'a> {
 /// `value` cut at commas and whitespace, separators kept, so putting the
 /// pieces back together gives `value` exactly.
 fn pieces(value: &str) -> Vec<Piece<'_>> {
-    let is_sep = |c: char| c == ',' || c.is_whitespace();
+    let splits = |c: char| c == ',' || c.is_whitespace();
     let mut out = Vec::new();
     let mut start = 0;
-    let mut in_sep = value.chars().next().is_some_and(is_sep);
+    let mut in_sep = value.chars().next().is_some_and(splits);
     for (i, c) in value.char_indices() {
-        if is_sep(c) != in_sep {
+        if splits(c) != in_sep {
             let run = &value[start..i];
             out.push(if in_sep {
                 Piece::Sep(run)
@@ -133,7 +133,7 @@ fn pieces(value: &str) -> Vec<Piece<'_>> {
 }
 
 /// Every address in a list masked, the separators between them untouched.
-pub(crate) fn mask_addresses(value: &str) -> String {
+pub fn mask_addresses(value: &str) -> String {
     pieces(value)
         .into_iter()
         .map(|p| match p {
@@ -148,7 +148,9 @@ pub(crate) fn mask_addresses(value: &str) -> String {
 ///
 /// A secret with nothing saved stays empty, so an empty box still means "not
 /// set". A viewer's forms are masked more broadly by `mask_credentials`.
-pub(crate) fn mask_for_admin(raw: &HashMap<String, String>) -> HashMap<String, String> {
+pub fn mask_for_admin<S: std::hash::BuildHasher>(
+    raw: &HashMap<String, String, S>,
+) -> HashMap<String, String> {
     raw.iter()
         .map(|(k, v)| {
             let shown = match holds(k) {
@@ -236,7 +238,10 @@ fn resolve_addresses(submitted: &str, stored: &str) -> Option<String> {
 
 /// Put the stored value back in place of every mask the form was shown, in
 /// `form`, before it is checked or diffed. See the module doc.
-pub(crate) fn resolve(form: &mut SettingsForm, existing: &HashMap<String, String>) {
+pub fn resolve<S: std::hash::BuildHasher>(
+    form: &mut SettingsForm,
+    existing: &HashMap<String, String, S>,
+) {
     macro_rules! each {
         ($($field:ident),* $(,)?) => {$(
             if let Some(v) = form.$field.as_mut() {
@@ -258,7 +263,11 @@ pub(crate) fn resolve(form: &mut SettingsForm, existing: &HashMap<String, String
     }
 }
 
-fn restore(key: &str, value: &mut String, existing: &HashMap<String, String>) {
+fn restore<S: std::hash::BuildHasher>(
+    key: &str,
+    value: &mut String,
+    existing: &HashMap<String, String, S>,
+) {
     let Some(kind) = holds(key) else { return };
     let stored = existing.get(key).map_or("", String::as_str);
     if let Some(resolved) = resolve_value(kind, value, stored) {
@@ -271,7 +280,7 @@ fn restore(key: &str, value: &mut String, existing: &HashMap<String, String>) {
 ///
 /// The messages name the field and never the value, which usually holds a
 /// camera password.
-pub(crate) fn leftover_problems(form: &SettingsForm) -> Vec<String> {
+pub fn leftover_problems(form: &SettingsForm) -> Vec<String> {
     let mut named: Vec<(&str, &str)> = Vec::new();
     macro_rules! each {
         ($($field:ident),* $(,)?) => {$(

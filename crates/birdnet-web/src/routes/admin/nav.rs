@@ -131,8 +131,9 @@ pub const GROUPS: &[&str] = &["Health", "Capture", "Alerts", "Data", "Settings",
 /// answers `403`), so a viewer's copy of the nav leaves them out.
 pub const VIEWER_HIDDEN: &[&str] = &["doctor"];
 
-/// Pages a viewer is refused that are linked from the body of other pages (a
-/// quick link, a rail button), not from the nav row. [`without_viewer_hidden`]
+/// Refused pages that other pages link to in their body, not in the nav row.
+///
+/// A quick link or a rail button. [`without_viewer_hidden`]
 /// removes those anchors from a viewer's copy too, for the same reason it
 /// removes the nav entries: a link that only ever answers `403` reads as a
 /// broken station.
@@ -214,15 +215,12 @@ fn without_anchor_to(html: &str, href: &str) -> String {
         let before = &rest[..at];
         let open = before.rfind("<a").filter(|&o| !before[o..].contains('>'));
         let close = rest[at..].find("</a>");
-        match (open, close) {
-            (Some(o), Some(c)) => {
-                out.push_str(&rest[..o]);
-                rest = &rest[at + c + "</a>".len()..];
-            }
-            _ => {
-                out.push_str(&rest[..at + needle.len()]);
-                rest = &rest[at + needle.len()..];
-            }
+        if let (Some(o), Some(c)) = (open, close) {
+            out.push_str(&rest[..o]);
+            rest = &rest[at + c + "</a>".len()..];
+        } else {
+            out.push_str(&rest[..at + needle.len()]);
+            rest = &rest[at + needle.len()..];
         }
     }
     out.push_str(rest);

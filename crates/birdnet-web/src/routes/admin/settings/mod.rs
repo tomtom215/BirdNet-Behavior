@@ -15,7 +15,7 @@ pub mod applies;
 pub mod extra;
 pub mod form;
 pub mod handler;
-pub(crate) mod masking;
+pub mod masking;
 pub mod render;
 
 use axum::{Router, routing::get};

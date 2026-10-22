@@ -439,11 +439,11 @@ async fn shown_fields(app: &axum::Router, cookie: &str) -> Vec<(String, String)>
 }
 
 fn set_field(fields: &mut [(String, String)], key: &str, value: &str) {
-    fields
+    let entry = fields
         .iter_mut()
         .find(|(k, _)| k == key)
-        .unwrap_or_else(|| panic!("the form has no {key} field"))
-        .1 = value.to_owned();
+        .unwrap_or_else(|| panic!("the form has no {key} field"));
+    value.clone_into(&mut entry.1);
 }
 
 fn field<'a>(fields: &'a [(String, String)], key: &str) -> &'a str {

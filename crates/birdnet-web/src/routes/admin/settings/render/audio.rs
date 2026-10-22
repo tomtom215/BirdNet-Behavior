@@ -51,9 +51,10 @@ fn sources_note(summary: &str) -> String {
             crate::routes::pages::escape_html(device)
         );
     }
-    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     format!(
-        r##"<div class="set-sources">
+        r#"<div class="set-sources">
       <p><b>This station's microphones and streams are kept on
       <a href="/station/capture#audio">Capture → Audio &amp; Microphones</a></b>:
       {mics} and {streams}, listed here as they are saved. Add, change or remove
@@ -63,7 +64,7 @@ fn sources_note(summary: &str) -> String {
       settings only fill that list the first time the station starts with it
       empty. Once it has a source they are ignored, so this page does not offer
       them: there is one place to edit what the station records from.</p>
-    </div>"##,
+    </div>"#,
         mics = plural(mics, "microphone", "microphones"),
         streams = plural(streams, "network stream", "network streams"),
     )
@@ -95,9 +96,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     );
     // Capture reads the audio-source table alone once it has an active row, so
     // the addresses below it are offered only while it has none.
-    let capture_addresses = match s.get(super::AUDIO_SOURCES_KEY) {
-        Some(summary) => sources_note(summary),
-        None => format!(r#"    <div class="grid-2">
+    let capture_addresses = s.get(super::AUDIO_SOURCES_KEY).map_or_else(
+        || format!(r#"    <div class="grid-2">
       <div>
         <label for="alsa_device">Microphone address</label>
         <input id="alsa_device" name="alsa_device" value="{alsa}" placeholder="e.g. plughw:1,0">
@@ -120,7 +120,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <p class="hint">Each URL becomes an independent capture pipeline (RTSP_1-, RTSP_2- prefixed filenames). Overrides single RTSP URL above when set. {address_hint}</p>
     </div>
 "#),
-    };
+        |summary| sources_note(summary),
+    );
     write!(out, r#"
   <section class="card" id="set-audio" aria-labelledby="set-audio-h">
     <h2 class="section-title" id="set-audio-h">Audio Capture</h2>
