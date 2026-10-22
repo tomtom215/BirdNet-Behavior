@@ -14,7 +14,7 @@ const swPath = process.argv[2];
 const source = fs.readFileSync(swPath, 'utf8');
 const ORIGIN = 'https://station.test';
 
-function makeCaches() {
+function makeCaches(precached) {
   const stores = new Map();
   return {
     stores,
@@ -25,7 +25,7 @@ function makeCaches() {
       return {
         match: async (r) => entries.get(key(r)),
         put: async (r, res) => { entries.set(key(r), res); },
-        addAll: async () => {},
+        addAll: async (urls) => { precached.push(...urls); },
       };
     },
     keys: async () => [...stores.keys()],
@@ -42,13 +42,14 @@ function basic(body, { headers = {}, redirected = false, status = 200 } = {}) {
   return res;
 }
 
-function boot(network) {
+function boot(network, scriptPath = '/static/sw.js') {
   const listeners = {};
-  const caches = makeCaches();
+  const precached = [];
+  const caches = makeCaches(precached);
   let skips = 0;
   const sandbox = {
     self: {
-      location: { href: `${ORIGIN}/static/sw.js?v=test`, origin: ORIGIN },
+      location: { href: `${ORIGIN}${scriptPath}?v=test`, origin: ORIGIN },
       addEventListener: (type, fn) => { listeners[type] = fn; },
       skipWaiting() { skips += 1; },
       clients: { claim() {} },
@@ -58,7 +59,7 @@ function boot(network) {
     URL, Response, Headers, Promise, console,
   };
   vm.runInNewContext(source, sandbox);
-  return { listeners, caches, skips: () => skips };
+  return { listeners, caches, skips: () => skips, precached };
 }
 
 // Ask the worker for `path`. Reports whether it took the request on at all, and
@@ -138,6 +139,22 @@ out.skip_waiting = {
   from_no_origin: post(net, { type: 'SKIP_WAITING' }, undefined),
   another_message: post(net, { type: 'SOMETHING_ELSE' }, ORIGIN),
   no_data: post(net, undefined, ORIGIN),
+};
+
+// What the install asks the network for. Served from the root, every URL is
+// `/static/…`; served from `<base>/static/sw.js` (BIRDNET_BASE_PATH) every one
+// is `<base>/static/…`. A URL outside the prefix on a station under one is a
+// request to the host, which on a shared host is another application's.
+async function installRequests(scriptPath) {
+  const worker = boot(async () => basic('x'), scriptPath);
+  let done;
+  worker.listeners.install({ waitUntil: (p) => { done = p; } });
+  await done;
+  return worker.precached;
+}
+out.precache = {
+  root: await installRequests('/static/sw.js'),
+  under_bn: await installRequests('/bn/static/sw.js'),
 };
 
 console.log(JSON.stringify(out));

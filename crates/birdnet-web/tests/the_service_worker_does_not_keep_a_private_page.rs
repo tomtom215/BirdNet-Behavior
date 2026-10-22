@@ -108,3 +108,82 @@ fn the_worker_skips_waiting_for_its_own_origin_only() {
     assert_eq!(skip["another_message"], 0, "{out}");
     assert_eq!(skip["no_data"], 0, "{out}");
 }
+
+/// The install-time precache holds static files and no page.
+///
+/// `Cache.addAll` stores whatever the server answers, `Cache-Control: no-store`
+/// included, and the install runs in a browser that may be signed in. A `/` in
+/// the list therefore put a private station's dashboard into Cache Storage
+/// where it stayed after sign-out until the next release replaced the cache. It
+/// was never read back (see the top of `static/sw.js`: the worker's scope is
+/// `/static/`), so nothing served it, but it was on the disk. The real-browser
+/// witness is `tools/visual-qa/sw-state.mjs` ("no HTML document is kept in Cache
+/// Storage"); this is the check that needs no browser.
+///
+/// Observed failing against the worker that listed `'/'`: the first assertion.
+#[test]
+fn the_install_precache_holds_static_files_and_no_page() {
+    let sw = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static/sw.js"),
+    )
+    .expect("sw.js is readable");
+    let precache = sw
+        .split_once("const PRECACHE = [")
+        .expect("sw.js has a PRECACHE list")
+        .1
+        .split_once("];")
+        .expect("PRECACHE is closed")
+        .0;
+    let entries: Vec<&str> = precache
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//") && !l.is_empty())
+        .map(|l| l.trim_end_matches(','))
+        .collect();
+    // The counterpart: a parse that found nothing would pass the loop below.
+    assert!(entries.len() >= 5, "PRECACHE parsed to {entries:?}");
+    for entry in entries {
+        let url = entry.trim_matches(|c| c == '\'' || c == '`');
+        assert!(
+            url.starts_with("/static/"),
+            "PRECACHE lists {url}, which is not a static file; Cache.addAll would keep the \
+             page whatever its Cache-Control says"
+        );
+    }
+}
+
+/// The install precache asks for `<base>/static/…`, where `<base>` is the
+/// reverse-proxy prefix the worker was served under.
+///
+/// With root-absolute URLs a station under `BIRDNET_BASE_PATH=/bn` made nine
+/// requests to the *host's* `/static/…` (another application's, on a shared
+/// host), `Cache.addAll` rejected on the first 404, and the install failed,
+/// which discards the registration: nothing was registered, noisily. The root
+/// deployment is the counterpart and must not gain a prefix.
+///
+/// Observed failing against a worker that precached `PRECACHE` unprefixed:
+/// `under_bn` held `/static/…` URLs.
+#[test]
+fn the_install_precache_follows_the_base_path() {
+    let Some(out) = run_harness() else { return };
+    let urls = |key: &str| -> Vec<String> {
+        out["precache"][key]
+            .as_array()
+            .unwrap_or_else(|| panic!("no precache list for {key}: {out}"))
+            .iter()
+            .map(|u| u.as_str().expect("a url").to_owned())
+            .collect()
+    };
+    let root = urls("root");
+    let bn = urls("under_bn");
+    assert!(root.len() >= 5, "the install precached {root:?}");
+    assert_eq!(root.len(), bn.len(), "{out}");
+    assert!(
+        root.iter().all(|u| u.starts_with("/static/")),
+        "served from the root, the precache must stay at /static/: {root:?}"
+    );
+    assert!(
+        bn.iter().all(|u| u.starts_with("/bn/static/")),
+        "served from /bn/static/sw.js, every precache URL must be under /bn: {bn:?}"
+    );
+}

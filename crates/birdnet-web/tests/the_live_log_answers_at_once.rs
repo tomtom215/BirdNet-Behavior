@@ -4,7 +4,7 @@
 //! `GET /admin/system/logs` is a Server-Sent Events stream. Its only periodic
 //! output is a keep-alive comment every 15 seconds, and on a quiet log the
 //! backlog it replays is empty — so for up to 15 seconds the response had
-//! headers and no body. Chromium and WebKit fire an `EventSource`'s `open` on
+//! headers and no body. Chromium and `WebKit` fire an `EventSource`'s `open` on
 //! the headers; **Firefox fires it on the first body byte**, and the viewer
 //! (`/admin/system/logs/page`) sat at "Connecting…" over a healthy stream.
 //! `tools/visual-qa/interactions.mjs` ("live logs: the stream connects") is the
