@@ -553,6 +553,34 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
     handle
 }
 
+/// How few detections "today" may hold, whatever the time of day. The Today page pages its
+/// feed (`Load more`), and `interactions.mjs` needs more than one page of it; a fixture
+/// that seeds only what has happened by the clock holds six rows at 05:00 UTC and turned
+/// that gate red at certain hours of the day.
+const MIN_TODAY_ROWS: usize = 24;
+
+/// The shortest stretch of the day the top-up below may spread `MIN_TODAY_ROWS` over, so a run
+/// just after midnight still has an hour chart with several bars in it. It is the one place
+/// the fixture draws detections the clock has not reached yet (by under three hours, and only
+/// when fewer than `MIN_TODAY_ROWS` have happened).
+const MIN_TODAY_WINDOW_SECS: u32 = 10_800;
+
+/// The fixture's idea of the current time in unix seconds. `BNB_FIXTURE_NOW=<seconds>`
+/// replaces the clock the SEEDING reads, so a gate can be run as if it were 02:00 or 23:00
+/// without waiting for it. The server itself still reads the real clock, so choose a time
+/// on the real UTC date; on another date the page's "today" is not the fixture's.
+fn fixture_now_secs() -> u64 {
+    if let Some(v) = std::env::var("BNB_FIXTURE_NOW")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        return v;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 fn seed(conn: &Connection, today_days: i64) {
     let species = species_table();
     let mut rng = Rng::new(0xB17D_5EED_u64.rotate_left(7) ^ 0x9E37_79B9);
@@ -565,12 +593,14 @@ fn seed(conn: &Connection, today_days: i64) {
 
     // Today stops at the clock: a station cannot have heard what has not happened yet,
     // and the Today chart has a "now" marker that would otherwise sit left of its own
-    // bars. Before 07:00 the fixture pretends it is 07:00, so a gate run just after
-    // midnight still has a morning to draw.
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let cutoff_today = (now_secs % 86_400).max(7 * 3600) as u32;
+    // bars. Early in the day that leaves too few rows to page through, so when fewer than
+    // `MIN_TODAY_ROWS` have happened the rest of the day's schedule is compressed into the
+    // hours that have (see the top-up after the loop) rather than dropped.
+    let cutoff_today = (fixture_now_secs() % 86_400) as u32;
+    // Detections of today that fell after the clock, kept for that top-up:
+    // (seconds into the day, species index).
+    let mut late_today: Vec<(u32, usize)> = Vec::new();
+    let mut kept_today = 0usize;
 
     let tx = conn.unchecked_transaction().expect("txn");
 
@@ -596,7 +626,7 @@ fn seed(conn: &Connection, today_days: i64) {
             weather.activity
         };
 
-        for sp in &species {
+        for (sp_idx, sp) in species.iter().enumerate() {
             // Species only appear once they've been "discovered" for the year.
             if (offset as u32) < sp.intro {
                 continue;
@@ -627,8 +657,13 @@ fn seed(conn: &Connection, today_days: i64) {
                 };
                 let minute = rng.range(0, 59);
                 let second = rng.range(0, 59);
-                if days_ago == 0 && hour * 3600 + minute * 60 + second > cutoff_today {
-                    continue; // has not happened yet
+                if days_ago == 0 {
+                    let at = hour * 3600 + minute * 60 + second;
+                    if at > cutoff_today {
+                        late_today.push((at, sp_idx));
+                        continue; // has not happened yet
+                    }
+                    kept_today += 1;
                 }
                 let time = format!("{hour:02}:{minute:02}:{second:02}");
                 let conf = (sp.base_conf + (rng.unit() - 0.5) * 0.28).clamp(0.51, 0.99);
@@ -693,7 +728,61 @@ fn seed(conn: &Connection, today_days: i64) {
             }
         }
     }
+    // Top-up: if fewer than `MIN_TODAY_ROWS` of today's detections had happened by the
+    // clock, bring the first of the rest forward and spread them evenly over the hours that
+    // have (at least `MIN_TODAY_WINDOW_SECS` of them), so today always has a page and a bit
+    // to scroll and the hour chart has bars at any time of day. At the usual hour nothing
+    // here runs.
+    if kept_today < MIN_TODAY_ROWS {
+        late_today.sort_unstable();
+        let window = cutoff_today.max(MIN_TODAY_WINDOW_SECS);
+        let (y, m, d) = civil_from_days(today_days);
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        let week = (day_of_year(y, m, d) / 7 + 1).min(52);
+        let take = (MIN_TODAY_ROWS - kept_today).min(late_today.len());
+        for (i, &(at, sp_idx)) in late_today.iter().take(take).enumerate() {
+            let sp = &species[sp_idx];
+            // Evenly, so no two share a second (the table is keyed on the time, and a dropped
+            // insert would leave the count short) and every hour of the window has some.
+            let secs = (((i as f64 + 0.5) / take as f64) * f64::from(window)) as u32;
+            let time = format!(
+                "{:02}:{:02}:{:02}",
+                secs / 3600,
+                secs % 3600 / 60,
+                secs % 60
+            );
+            let source = SOURCES[(src_n % SOURCES.len() as u64) as usize];
+            src_n += 1;
+            let conf = sp.base_conf.clamp(0.51, 0.99);
+            let file = format!(
+                "{}-{:.0}-{date}-birdnet-{source}-{time}.wav",
+                sp.com.replace(' ', "_"),
+                conf * 100.0
+            );
+            let _ = tx.execute(
+                "INSERT OR IGNORE INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source, Duration_Secs)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                params![date, time, sp.sci, sp.com, conf, lat, lon, 0.7, week, 1.25, 0.0, file, source, 6.0 + f64::from(at % 9)],
+            );
+        }
+    }
     tx.commit().expect("commit detections");
+    {
+        let (y, m, d) = civil_from_days(today_days);
+        let today: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Date = ?1",
+                params![format!("{y:04}-{m:02}-{d:02}")],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        assert!(
+            today >= MIN_TODAY_ROWS as i64,
+            "the fixture must hold at least {MIN_TODAY_ROWS} detections for today, found {today}"
+        );
+        eprintln!("today holds {today} detections (clock cutoff {cutoff_today} s into the day)");
+    }
 
     // A handful of locked (pinned) recordings so the lock affordance shows.
     let _ = conn.execute(
@@ -1109,10 +1198,7 @@ async fn main() {
     let conn = Connection::open(&path).expect("open sqlite");
     birdnet_db::migration::migrate(&conn).expect("migrate");
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = fixture_now_secs();
     let today_days = (now / 86_400) as i64;
 
     eprintln!("seeding synthetic dataset…");
