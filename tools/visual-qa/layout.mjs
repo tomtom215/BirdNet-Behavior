@@ -20,7 +20,8 @@
 //             wider than 380px: a flex/grid child that shrank to nothing.
 //   escape    a button, link, field or select whose right edge is more than 2px
 //             beyond the card (or list item) that holds it, where that card does
-//             not itself scroll sideways.
+//             not itself scroll sideways; or one cut off by an `overflow: hidden`
+//             ancestor (the Live view's source menu, sliced at the card's edge).
 //   tiny      a visible text node set below 9px (the floor the legibility gate
 //             holds SVG labels to; HTML text had none).
 //   widen     the document is wider than the viewport (scrollingElement.scrollWidth
@@ -42,7 +43,7 @@
 // Env:
 //   BASE      base url                       (default http://127.0.0.1:8502)
 //   THEMES    csv of light,dark              (default light,dark)
-//   VPS       csv of desktop,mobile,narrow,tiny  (default desktop,mobile,narrow)
+//   VPS       csv of desktop,mobile,narrow,tiny  (default all four: 1440, 390, 360 and 320 px wide)
 //   ONLY      substring filter on route name
 //   CSS_OVERRIDE  serve this file in place of /static/css/app.css (an older one, to
 //             see a new check fail against the stylesheet it was written for)
@@ -64,9 +65,12 @@ const VP_TABLE = {
   // A 360px phone is the commonest Android width and 375 the iPhone SE's; the setup wizard's
   // stepper was a fixed 383px and scrolled the whole wizard sideways on both while 390 passed.
   narrow: { viewport: { width: 360, height: 780 }, hasTouch: true, isMobile: true },
+  // 320px is the iPhone SE (1st generation) and the narrowest Android: the Today source menu was
+  // drawn under its Listen-live link, the live feed's play buttons ended 16px past the screen and
+  // three Station tabs had a field or button past its card, with 360 and 390 clean.
   tiny: { viewport: { width: 320, height: 568 }, hasTouch: true, isMobile: true },
 };
-const VPS = (process.env.VPS || 'desktop,mobile,narrow').split(',').filter((v) => VP_TABLE[v]);
+const VPS = (process.env.VPS || 'desktop,mobile,narrow,tiny').split(',').filter((v) => VP_TABLE[v]);
 const ONLY = process.env.ONLY || '';
 const MIN_ROUTES = Number(process.env.MIN_ROUTES || 30);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -205,6 +209,28 @@ function inPage() {
     const h = holder.getBoundingClientRect();
     if (r.right > h.right + 2 && r.left < h.right) {
       res.escape.push(`${sel(el)} "${(el.textContent || el.value || '').trim().slice(0, 24)}" ends ${Math.round(r.right - h.right)}px past ${sel(holder)}`);
+    }
+  }
+
+  // escape, second form: a control cut off by an ancestor that clips. The loop above reads only
+  // the card or list item that holds the control and treats a clipping card as fine, so the Live
+  // view's source menu, wider than its `overflow: hidden` card at 320px, was drawn with its right
+  // edge sliced off and the gate green. Nothing that scrolls is reported (the user can reach the
+  // rest), and neither is a control the clip hides on purpose (`.sr-only`, under 2px).
+  for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea')) {
+    if (res.escape.length >= 10) break;
+    if (!shown(el) || el.closest(SKIP) || (el.closest('details:not([open])') && !el.closest('summary'))) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) continue;
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const o = getComputedStyle(p).overflowX;
+      if (o === 'auto' || o === 'scroll') break;
+      if (o !== 'hidden' && o !== 'clip') continue;
+      const h = p.getBoundingClientRect();
+      if (h.width > 0 && r.left < h.right && r.right > h.right + 2) {
+        res.escape.push(`${sel(el)} "${(el.textContent || el.value || '').trim().slice(0, 24)}" is cut off ${Math.round(r.right - h.right)}px by the overflow of ${sel(p)}`);
+        break;
+      }
     }
   }
 

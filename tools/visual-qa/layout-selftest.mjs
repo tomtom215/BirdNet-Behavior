@@ -24,6 +24,9 @@
 //             `.hint`, the original defect, must not widen the page at all, which
 //             is the stylesheet's job and fails on the CSS before the fix.
 //
+//   escape    (second form) a control wider than the `overflow: hidden` box around it is
+//             reported; the same control in a box that scrolls, or one that fits, is not.
+//
 // Env: BASE (default http://127.0.0.1:8502), CHROMIUM_PATH.
 import { chromium } from 'playwright';
 import { inPage } from './layout.mjs';
@@ -156,6 +159,32 @@ await fresh();
 await plant({ tag: 'div', cls: 'card', kids: [{ tag: 'p', cls: 'hint', id: 'zz-hint', text: WORD }] });
 const hinted = await widen();
 check(hinted.length === 0, `a long identifier in a hint wraps instead of widening the page (${hinted.join(' | ') || 'none'})`);
+
+// escape, second form: a control wider than the `overflow: hidden` box around it is cut off.
+// Counterparts: the same control in a box that scrolls is reachable, and a control that fits a
+// clipping box is fine. The Live view's source menu was the first kind, with the gate green.
+const escaped = async () => (await page.evaluate(inPage)).escape;
+const boxed = (overflowX, buttonWidth) => ({
+  tag: 'div',
+  style: { overflowX, width: '200px', margin: '0' },
+  kids: [{ tag: 'button', id: 'zz-cut', text: 'Wide button', style: { width: buttonWidth, display: 'block' } }],
+});
+await fresh();
+check((await escaped()).length === 0, 'precondition: the fresh Today page has no control past its box');
+await plant(boxed('hidden', '300px'));
+const cut = await escaped();
+check(
+  cut.length === 1 && cut[0].includes('button#zz-cut') && cut[0].includes('cut off'),
+  `a control wider than its overflow: hidden box is reported and named (${cut.join(' | ') || 'none'})`,
+);
+await fresh();
+await plant(boxed('auto', '300px'));
+const reachable = await escaped();
+check(reachable.length === 0, `the same control in a box that scrolls sideways is not reported (${reachable.join(' | ') || 'none'})`);
+await fresh();
+await plant(boxed('hidden', '150px'));
+const fits = await escaped();
+check(fits.length === 0, `a control that fits its clipping box is not reported (${fits.join(' | ') || 'none'})`);
 
 await browser.close();
 if (failed) process.exit(1);
