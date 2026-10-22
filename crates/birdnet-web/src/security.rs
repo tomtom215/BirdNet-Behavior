@@ -34,7 +34,7 @@
 //! quoted elsewhere knows it is stale.
 
 use axum::extract::Request;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -356,11 +356,13 @@ pub async fn security_headers_middleware(
     Response::from_parts(parts, body)
 }
 
-/// Reject state-changing requests whose `Origin`/`Referer` is cross-site.
+/// Reject state-changing requests whose `Origin`/`Referer` is cross-site, or
+/// that the browser itself labels as coming from another site (`Sec-Fetch-Site`,
+/// see [`fetch_metadata_refuses`]).
 pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
     if is_state_changing(req.method())
         && !is_bearer_api_request(req.uri().path(), req.headers())
-        && !is_same_origin(req.headers(), req.uri())
+        && (!is_same_origin(req.headers(), req.uri()) || fetch_metadata_refuses(req.headers()))
     {
         return (
             StatusCode::FORBIDDEN,
@@ -437,6 +439,40 @@ pub(crate) fn is_same_origin(headers: &HeaderMap, uri: &axum::http::Uri) -> bool
     let authority = header_str(headers, &header::HOST)
         .or_else(|| uri.authority().map(axum::http::uri::Authority::as_str));
     authority.is_some_and(|authority| authority_matches(claimed, authority))
+}
+
+/// Whether the browser's own `Sec-Fetch-Site` label marks a state-changing
+/// request as one this station must not act on.
+///
+/// [`is_same_origin`] answers from `Origin`/`Referer`, and a request carrying
+/// neither passes it as "not a browser" (a browser always attaches `Origin` to
+/// a cross-origin `POST`). `Sec-Fetch-Site` is a second, independent witness
+/// that the browser sets and a page's script cannot override (it is a
+/// forbidden header name), so it is read here as defence in depth:
+///
+/// * `cross-site` is refused outright;
+/// * `same-site` (a sibling sub-domain, or another port on the same host — not
+///   this origin) is refused when no `Origin`/`Referer` exists to show the
+///   request really names this station; with one, [`is_same_origin`] has
+///   already compared it;
+/// * `same-origin` and `none` (a user-initiated navigation) are allowed, and so
+///   is an absent header or a value this code does not know — a non-browser
+///   client (`curl`, a script, the CLI) sends none, and the guard must not
+///   start refusing it.
+///
+/// Applied to the same requests as the origin check and exempt for the same
+/// bearer calls; it is not applied to the `WebSocket` upgrade, which is a `GET`.
+fn fetch_metadata_refuses(headers: &HeaderMap) -> bool {
+    let Some(site) = header_str(headers, &HeaderName::from_static("sec-fetch-site")) else {
+        return false;
+    };
+    let named_origin =
+        headers.contains_key(header::ORIGIN) || headers.contains_key(header::REFERER);
+    match site.trim().to_ascii_lowercase().as_str() {
+        "cross-site" => true,
+        "same-site" => !named_origin,
+        _ => false,
+    }
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &header::HeaderName) -> Option<&'a str> {
@@ -903,5 +939,149 @@ mod tests {
             ]),
             &h1()
         ));
+    }
+
+    /// The guard, as the server mounts it, in front of two handlers that only
+    /// say they ran. Returns the status for one request.
+    async fn guarded_post(path: &str, headers: &[(&str, &str)]) -> StatusCode {
+        use axum::routing::{post, put};
+        use tower::ServiceExt as _;
+        let app = axum::Router::new()
+            .route("/admin/system/restart", post(|| async { "ran" }))
+            .route("/api/v2/settings", put(|| async { "ran" }))
+            .layer(axum::middleware::from_fn(csrf_guard_middleware));
+        let method = if path.starts_with("/api/") {
+            "PUT"
+        } else {
+            "POST"
+        };
+        let mut req = Request::builder().method(method).uri(path);
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        app.oneshot(req.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// Seen failing with `fetch_metadata_refuses` returning `false`: these
+    /// requests carry neither `Origin` nor `Referer`, so they passed
+    /// `is_same_origin` as "not a browser" and ran.
+    #[tokio::test]
+    async fn the_browsers_own_cross_site_label_is_refused_without_an_origin() {
+        let restart = "/admin/system/restart";
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[("host", "pi.local"), ("sec-fetch-site", "cross-site")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        // A sibling sub-domain or another port: the same site, not this origin.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[("host", "pi.local"), ("sec-fetch-site", "same-site")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        // Case and padding are not a way round it.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[("host", "pi.local"), ("sec-fetch-site", " Cross-Site ")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// The counterpart: everything that must keep working still does, so the
+    /// refusal above is a discriminator and not a blanket alarm.
+    #[tokio::test]
+    async fn the_other_fetch_metadata_cases_and_non_browsers_are_unchanged() {
+        let restart = "/admin/system/restart";
+        for site in ["same-origin", "none", "no-such-value"] {
+            assert_eq!(
+                guarded_post(restart, &[("host", "pi.local"), ("sec-fetch-site", site)]).await,
+                StatusCode::OK,
+                "{site}"
+            );
+        }
+        // curl, a script, the CLI: no Sec-Fetch headers at all.
+        assert_eq!(
+            guarded_post(restart, &[("host", "pi.local")]).await,
+            StatusCode::OK
+        );
+        // A same-origin browser POST, labelled as one.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[
+                    ("host", "pi.local"),
+                    ("origin", "http://pi.local"),
+                    ("sec-fetch-site", "same-origin"),
+                ]
+            )
+            .await,
+            StatusCode::OK
+        );
+        // `same-site` with an Origin that names this station was compared by
+        // the origin check and passes only if it matches.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[
+                    ("host", "pi.local"),
+                    ("origin", "http://pi.local"),
+                    ("sec-fetch-site", "same-site"),
+                ]
+            )
+            .await,
+            StatusCode::OK
+        );
+        // A foreign Origin is still refused whatever the label says.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[
+                    ("host", "pi.local"),
+                    ("origin", "http://evil.test"),
+                    ("sec-fetch-site", "same-origin"),
+                ]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// The bearer exemption is unchanged: a token-holder calling the write API
+    /// from another site (a hosted dashboard) is not this guard's business.
+    #[tokio::test]
+    async fn a_bearer_api_call_is_not_stopped_by_the_fetch_metadata_label() {
+        assert_eq!(
+            guarded_post(
+                "/api/v2/settings",
+                &[
+                    ("host", "pi.local"),
+                    ("authorization", "Bearer 0123456789abcdef0123456789abcdef"),
+                    ("sec-fetch-site", "cross-site"),
+                ]
+            )
+            .await,
+            StatusCode::OK
+        );
+        // Without the bearer credential the same request is refused.
+        assert_eq!(
+            guarded_post(
+                "/api/v2/settings",
+                &[("host", "pi.local"), ("sec-fetch-site", "cross-site")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
     }
 }
