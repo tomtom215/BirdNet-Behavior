@@ -218,8 +218,19 @@ operations in `openapi.json`) date from 2026-10-21 and were not repeated.
 (it cannot run here); an upgrade or fresh install on a real systemd host
 (`installer/test/upgrade-e2e.sh`); a real Raspberry Pi, soundcard, GPU or screen reader; iOS
 or macOS Safari (only Playwright's Linux WebKit); birdnet-go (its source was read, never run).
-The final CodeQL pass over `rust`, `actions`, `javascript` and `python` was **running when this
-section was written** and is not recorded here.
+
+CodeQL: the pinned bundle (v2.27.2, `security-extended`, `--build-mode=none`, the version
+codeql-action v4.39.0 uses) was run locally on a `git archive` export of `033c6c9` for `actions`,
+`python`, `javascript` and `rust`. It reported **13 alerts** where the same procedure
+reproduced 117 CodeQL alerts on the original list: 11 `rust/path-injection`, 1
+`rust/command-line-injection` and 1 `js/http-to-file-access`, i.e. exactly the 13 that
+`tools/code-scanning/dismiss.sh` lists, with their reasons re-read against the current code
+for the four whose line numbers moved (`state.rs`, `cache.rs`, `backup_recovery.rs`). Every
+other rule on the list (`hard-coded-cryptographic-value`, `cleartext-logging`,
+`log-injection`, `non-https-url`, the `js/` rules) is gone. This is a local reproduction, not
+GitHub's analysis: GitHub's alert states change only after an analysis of the default branch,
+and a dismissal is tied to a code fingerprint, so a changed line can reopen one. The Scorecard items that only a
+maintainer can settle are listed in `dismiss.sh`'s closing text.
 
 ## 5. Open items, with severity
 

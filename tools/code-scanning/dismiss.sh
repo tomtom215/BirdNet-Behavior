@@ -12,6 +12,10 @@
 #     tools/code-scanning/dismiss.sh            # prints
 #     APPLY=1 tools/code-scanning/dismiss.sh    # dismisses
 #
+# Re-run 2026-10-22 on a clean export of 033c6c9 (same bundle, same suite): 13 CodeQL alerts remain,
+# exactly the rust/path-injection (11), rust/command-line-injection (1) and js/http-to-file-access (1)
+# dismissed below; four of the lines moved, and their reasons were re-read against the code.
+#
 # Alert numbers are GitHub's, as of 2026-10-21. A dismissal is tied to the code's fingerprint, not
 # the line: moving a dismissed line does not reopen it, changing it can. Re-read the code before
 # dismissing; the reason has to be true on the day, not on the day this file was written.
