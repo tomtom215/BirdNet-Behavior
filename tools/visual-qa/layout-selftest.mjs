@@ -48,8 +48,27 @@ async function fresh() {
 const overlaps = async () => (await page.evaluate(inPage)).overlap;
 
 await fresh();
-const geometry = await page.evaluate((name) => {
-  const a = document.querySelector('#detections-table .feed-row .who .sci');
+// Which Today row to put the long line in. A row whose common name wraps to two lines on a
+// phone has its scientific name a line lower, so a long one passes under the play button's
+// glyph with only a sliver of vertical overlap, which the gate rightly does not call a
+// collision. The case needs a row where the two lines share a band; the fixture's first row
+// depends on the time of day it was seeded, so this finds one rather than assuming row 0.
+const ROW = await page.evaluate((name) => {
+  const rows = [...document.querySelectorAll('#detections-table .feed-row')];
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i].querySelector('.who .sci');
+    const play = rows[i].querySelector('button.x-fplay');
+    if (!a || !play || !a.firstChild || !play.firstChild) continue;
+    const band = (node) => { const g = document.createRange(); g.selectNodeContents(node); const r = g.getBoundingClientRect(); return [r.top, r.bottom]; };
+    const [t0, t1] = band(a.firstChild);
+    const [p0, p1] = band(play.firstChild);
+    if (Math.min(t1, p1) - Math.max(t0, p0) >= 6) return i;
+  }
+  return -1;
+}, NAME);
+check(ROW >= 0, `the fixture has a Today row whose scientific name shares a line with its play button (row ${ROW})`);
+const geometry = await page.evaluate(([name, row]) => {
+  const a = document.querySelectorAll('#detections-table .feed-row')[row]?.querySelector('.who .sci');
   const play = a && a.closest('.feed-row').querySelector('button.x-fplay');
   if (!a || !play) return null;
   a.textContent = name;
@@ -57,7 +76,7 @@ const geometry = await page.evaluate((name) => {
   rg.selectNodeContents(a.firstChild);
   const t = rg.getBoundingClientRect();
   return { textRight: t.right, boxRight: a.getBoundingClientRect().right, playLeft: play.getBoundingClientRect().left };
-}, NAME);
+}, [NAME, ROW]);
 check(geometry !== null, 'the fixture has a Today feed row to put a long line in');
 if (geometry) {
   // The precondition: without it the case proves nothing about clipping.
@@ -85,12 +104,12 @@ check(
 // The long line again, this time not clipped: it is painted under the play
 // button, and the gate that stays silent about the clipped one must speak here.
 await fresh();
-await page.evaluate((name) => {
-  const sci = document.querySelector('#detections-table .feed-row .who .sci');
+await page.evaluate(([name, row]) => {
+  const sci = document.querySelectorAll('#detections-table .feed-row')[row].querySelector('.who .sci');
   sci.textContent = name;
   sci.style.overflow = 'visible';
   sci.style.textOverflow = 'clip';
-}, NAME);
+}, [NAME, ROW]);
 const unclipped = await overlaps();
 check(
   unclipped.length > 0,
