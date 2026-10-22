@@ -68,6 +68,19 @@ use crate::cli::Cli;
 /// that the bundle stays attachable to an issue.
 const JOURNAL_LINES: &str = "2000";
 
+/// One configuration or settings value as the bundle shows it: a secret by its
+/// key is [`REDACTED`], a coordinate is coarsened, anything else is masked by
+/// the shape of its value.
+fn shown_value(key: &str, value: &str) -> String {
+    if is_secret_key(key) {
+        REDACTED.to_owned()
+    } else if is_coordinate_key(key) {
+        coarse_coordinate(value).unwrap_or_else(|| REDACTED.to_owned())
+    } else {
+        redact_value(value)
+    }
+}
+
 /// Render the configuration with every secret masked.
 ///
 /// Sorted, so two bundles from the same station diff cleanly.
@@ -75,19 +88,146 @@ const JOURNAL_LINES: &str = "2000";
 pub fn redacted_config(config: &Config) -> String {
     let mut lines: Vec<String> = config
         .iter()
-        .map(|(k, v)| {
-            let shown = if is_secret_key(k) {
-                REDACTED.to_owned()
-            } else if is_coordinate_key(k) {
-                coarse_coordinate(v).unwrap_or_else(|| REDACTED.to_owned())
-            } else {
-                redact_value(v)
-            };
-            format!("{k}={shown}")
-        })
+        .map(|(k, v)| format!("{k}={}", shown_value(k, v)))
         .collect();
     lines.sort();
     lines.join("\n")
+}
+
+/// The most one value may take in `settings.redacted`, in characters.
+///
+/// The longest ordinary setting is a notification template; a value past this
+/// is a pasted document, and is cut with a note saying how much was left out.
+pub const SETTING_VALUE_CAP: usize = 1_024;
+
+/// The most `settings.redacted` and `audio-sources.redacted` may each hold, in
+/// bytes. A station has well under a hundred settings, so this is a guard
+/// against a table somebody filled with something else, not a limit anyone
+/// meets; past it the member ends with a line saying how many rows were left
+/// out.
+pub const STATE_MEMBER_CAP: usize = 64 * 1024;
+
+/// Keep `lines` to [`STATE_MEMBER_CAP`] bytes, saying what was left out.
+fn capped(lines: Vec<String>) -> String {
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if out.len() + line.len() + 1 > STATE_MEMBER_CAP {
+            out.push_str(&format!(
+                "(… {} more rows not shown: this member is capped at {STATE_MEMBER_CAP} bytes)\n",
+                lines.len() - i
+            ));
+            return out;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The settings saved from the web interface (the `settings` table), one
+/// `key=value` per line and sorted, masked exactly as [`redacted_config`] masks
+/// the file: a key that names a secret is [`REDACTED`], a coordinate is
+/// coarsened, and every other value is masked by its shape.
+///
+/// A station configured in the browser has no configuration file at all, so
+/// without this member the bundle carried none of its settings. A value is cut
+/// at [`SETTING_VALUE_CAP`] characters and a newline inside one is written
+/// `\n`, so each setting stays one line.
+#[must_use]
+pub fn redacted_settings(rows: &[(String, String)]) -> String {
+    let mut lines: Vec<String> = rows
+        .iter()
+        .map(|(k, v)| {
+            let shown = shown_value(k, v).replace('\n', "\\n");
+            let over = shown.chars().count().saturating_sub(SETTING_VALUE_CAP);
+            if over == 0 {
+                format!("{k}={shown}")
+            } else {
+                let kept: String = shown.chars().take(SETTING_VALUE_CAP).collect();
+                format!("{k}={kept}(… {over} more characters not shown)")
+            }
+        })
+        .collect();
+    lines.sort();
+    capped(lines)
+}
+
+/// The station's microphones and streams (the `audio_sources` table), one line
+/// each. A stream's address is masked by [`redact_value`] — the camera's
+/// password never leaves — and every other field is what an audio fault is
+/// diagnosed from: the kind, the rate, the gain, the transport, the quiet
+/// window, the filters, and whether the row is disabled.
+#[must_use]
+pub fn redacted_audio_sources(rows: &[birdnet_db::audio_sources::AudioSource]) -> String {
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|s| {
+            let quiet = s
+                .schedule_quiet
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), |(a, b)| format!("{a}-{b}"));
+            let p = s.pipeline;
+            format!(
+                "id={} kind={} device={} label={:?} rate={} channels={} bit_depth={} gain_db={} \
+                 transport={} media_mode={} quiet={quiet} high_pass={} dc_removal={} agc={} \
+                 rtsp_keepalive={} eq_chain={:?} disabled_at={}",
+                s.id,
+                s.kind.as_str(),
+                redact_value(&s.device_id),
+                s.label.as_deref().unwrap_or(""),
+                s.sample_rate,
+                s.channels.as_str(),
+                s.bit_depth,
+                s.gain_db,
+                s.rtsp_transport.as_str(),
+                s.media_mode.as_str(),
+                p.high_pass,
+                p.dc_removal,
+                p.agc,
+                p.rtsp_keepalive,
+                s.eq_chain,
+                s.disabled_at.as_deref().unwrap_or("no"),
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return "(no audio sources are stored)\n".to_owned();
+    }
+    capped(lines)
+}
+
+/// The two database-backed members, `(settings.redacted, audio-sources.redacted)`.
+///
+/// Read through a read-only connection, so building a bundle cannot write to
+/// the station's database. A database that cannot be opened or read is said so
+/// in the member, with the path: "no settings are stored" and "the bundle could
+/// not read them" are different answers.
+fn station_state_members(config: Option<&Config>) -> (String, String) {
+    let path = crate::helpers::db_path_from_config(config);
+    let unreadable = |what: &str, e: &dyn std::fmt::Display| {
+        format!("(could not read the {what} from {}: {e})\n", path.display())
+    };
+    let conn = match birdnet_db::sqlite::open_readonly(&path) {
+        Ok(conn) => conn,
+        Err(e) => return (unreadable("settings", &e), unreadable("audio sources", &e)),
+    };
+    let settings = match birdnet_db::settings::list(&conn, None) {
+        Ok(rows) => {
+            if rows.is_empty() {
+                "(no settings have been saved from the web interface)\n".to_owned()
+            } else {
+                let pairs: Vec<(String, String)> =
+                    rows.into_iter().map(|s| (s.key, s.value)).collect();
+                redacted_settings(&pairs)
+            }
+        }
+        Err(e) => unreadable("settings", &e),
+    };
+    let sources = match birdnet_db::audio_sources::AudioSourceStore::list(&conn) {
+        Ok(rows) => redacted_audio_sources(&rows),
+        Err(e) => unreadable("audio sources", &e),
+    };
+    (settings, sources)
 }
 
 /// The two configuration keys that hold where the station is.
@@ -351,10 +491,20 @@ pub fn build_with_recent_log(
         &dir,
         "config.redacted",
         &config.map_or_else(
-            || "(no configuration file loaded)\n".to_owned(),
+            || {
+                "(no configuration file loaded; the settings saved from the web interface are \
+                 in settings.redacted)\n"
+                    .to_owned()
+            },
             redacted_config,
         ),
     ));
+
+    // What the browser saved. A station configured there has no file, so this
+    // and the audio sources are the whole of its configuration.
+    let (settings, audio_sources) = station_state_members(config);
+    push(stage(&dir, "settings.redacted", &settings));
+    push(stage(&dir, "audio-sources.redacted", &audio_sources));
 
     // The station's own ERROR/WARN log. This is the member that matters on a
     // default Raspberry Pi OS, where `/var/log/journal` does not exist and the
@@ -440,7 +590,8 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
             );
             println!();
             println!("It contains the diagnostic report, the station's version, a redacted");
-            println!("copy of the configuration, the hardware inventory (CPU, memory, USB and");
+            println!("copy of the configuration file and of the settings and audio sources");
+            println!("saved from the web interface, the hardware inventory (CPU, memory, USB and");
             println!(
                 "sound devices; no serial numbers), the station's own error log, and the last"
             );
@@ -778,5 +929,165 @@ FLICKR_FILTER_EMAIL=me@example.com",
             grep.trim().is_empty(),
             "a secret reached the bundle:\n{grep}"
         );
+    }
+
+    // ── the settings saved in the browser ───────────────────────────────
+
+    /// A known secret and a known benign setting, as the `settings` table
+    /// would hold them on a station that was configured in the browser.
+    const KNOWN_SECRET: &str = "swordfish-5521";
+
+    fn browser_settings() -> Vec<(String, String)> {
+        [
+            ("email_smtp_pass", KNOWN_SECRET),
+            ("birdweather_token", "bwtoken-5521"),
+            ("mqtt_password", KNOWN_SECRET),
+            ("rtsp_url", "rtsp://cam:swordfish-5521@camera.lan/stream"),
+            (
+                "notify_urls",
+                "tgram://123456:swordfish-5521/987\nntfy://my-private-topic",
+            ),
+            ("heartbeat_url", "https://hc-ping.example/swordfish-5521"),
+            ("station_name", "Garden Station"),
+            ("confidence_threshold", "0.70"),
+            ("latitude", "52.523431"),
+            ("notify_title_template", "line one\nline two"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect()
+    }
+
+    /// Seen failing with `shown_value` returning the value untouched: every
+    /// secret then appeared, and with `redacted_settings` returning an empty
+    /// string the benign settings went missing.
+    #[test]
+    fn the_browsers_settings_are_in_the_bundle_with_every_secret_masked() {
+        let out = redacted_settings(&browser_settings());
+        for needle in [KNOWN_SECRET, "bwtoken-5521", "my-private-topic", "123456"] {
+            assert!(!out.contains(needle), "{needle} survived:\n{out}");
+        }
+        // Counterpart: what a maintainer needs is still there.
+        for kept in [
+            "station_name=Garden Station",
+            "confidence_threshold=0.70",
+            "rtsp_url=rtsp://cam:***REDACTED***@camera.lan/stream",
+            "email_smtp_pass=***REDACTED***",
+            "latitude=52.5\n",
+            "notify_title_template=line one\\nline two",
+            "ntfy://***REDACTED***",
+        ] {
+            assert!(out.contains(kept), "{kept} was lost:\n{out}");
+        }
+        assert_eq!(
+            out.lines().count(),
+            browser_settings().len(),
+            "one line per setting:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_long_value_and_a_long_table_are_cut_and_say_so() {
+        let long = "x".repeat(SETTING_VALUE_CAP + 40);
+        let out = redacted_settings(&[("notes".to_owned(), long)]);
+        assert!(out.contains("(… 40 more characters not shown)"), "{out}");
+
+        let many: Vec<(String, String)> = (0..5_000)
+            .map(|i| (format!("setting_{i:05}"), "v".repeat(40)))
+            .collect();
+        let out = redacted_settings(&many);
+        assert!(out.len() <= STATE_MEMBER_CAP + 200, "{} bytes", out.len());
+        assert!(
+            out.contains("more rows not shown"),
+            "{}",
+            &out[out.len() - 200..]
+        );
+        // Counterpart: a table under the cap is whole.
+        let few = redacted_settings(&many[..10]);
+        assert!(!few.contains("not shown"), "{few}");
+    }
+
+    /// A station database as the wizard leaves it: settings, and one stream.
+    fn browser_configured_station(dir: &Path) -> Config {
+        let db = dir.join("birds.db");
+        let conn = rusqlite::Connection::open(&db).expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        for (k, v) in browser_settings() {
+            birdnet_db::settings::set(
+                &conn,
+                &k,
+                &v,
+                birdnet_db::settings::SettingsCategory::System,
+            )
+            .expect("setting");
+        }
+        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
+        conn.insert(&NewAudioSource::defaults(
+            "cam1",
+            SourceKind::Rtsp,
+            format!("rtsp://viewer:{KNOWN_SECRET}@camera.lan/stream"),
+        ))
+        .expect("source");
+        Config::parse(&format!("DB_PATH={}", db.display())).expect("config")
+    }
+
+    /// Seen failing with the two `stage` calls for the database members
+    /// removed: the archive then held only the one-line `config.redacted`,
+    /// and none of the station's settings.
+    #[test]
+    fn a_browser_configured_stations_bundle_carries_its_settings_and_no_secret() {
+        use clap::Parser as _;
+        if !crate::doctor::tool_exists("tar") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = browser_configured_station(dir.path());
+        let dest = dir.path().join("bundle.tar.gz");
+        let bundle =
+            build(&Cli::parse_from(["birdnet-behavior"]), Some(&cfg), &dest).expect("the bundle");
+        assert!(bundle.warnings.is_empty(), "{:?}", bundle.warnings);
+
+        let out = dir.path().join("x");
+        std::fs::create_dir_all(&out).unwrap();
+        let _ = capture(
+            "tar",
+            &["xzf", dest.to_str().unwrap(), "-C", out.to_str().unwrap()],
+        );
+        let member = |name: &str| {
+            std::fs::read_to_string(out.join("birdnet-support").join(name))
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+        };
+        let settings = member("settings.redacted");
+        assert!(
+            settings.contains("station_name=Garden Station"),
+            "{settings}"
+        );
+        let sources = member("audio-sources.redacted");
+        assert!(
+            sources.contains(
+                "id=cam1 kind=rtsp device=rtsp://viewer:***REDACTED***@camera.lan/stream"
+            ),
+            "{sources}"
+        );
+        // Every member, not just these two: the secret is in the database
+        // several times over and must be in the archive nowhere.
+        let grep = capture("grep", &["-r", KNOWN_SECRET, out.to_str().unwrap()]);
+        assert!(
+            grep.trim().is_empty(),
+            "a secret reached the bundle:\n{grep}"
+        );
+    }
+
+    /// A database that cannot be read is said so, with where it looked; it is
+    /// not "no settings", and it does not stop the rest of the bundle.
+    #[test]
+    fn an_unreadable_database_is_reported_in_the_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(&format!("DB_PATH={}/absent.db", dir.path().display())).unwrap();
+        let (settings, sources) = station_state_members(Some(&cfg));
+        for text in [&settings, &sources] {
+            assert!(text.contains("could not read"), "{text}");
+            assert!(text.contains("absent.db"), "{text}");
+        }
     }
 }
