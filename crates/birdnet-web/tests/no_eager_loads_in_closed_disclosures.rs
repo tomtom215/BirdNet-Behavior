@@ -177,6 +177,57 @@ fn a_deferred_panel_does_not_advertise_a_load_that_is_not_happening() {
     );
 }
 
+/// A script-filled slot in a collapsed disclosure ships empty, not "Loading…".
+///
+/// # The defect this was written for
+///
+/// `terrain.html` kept `<span class="bnb-meta">Loading…</span>` in the slot of its
+/// "See the numbers" disclosure, which `terrain.js` fills when the disclosure is
+/// opened. Nothing is loading while it is closed, so the words were a permanent
+/// claim in the markup, and the browser sweep reported all four theme x viewport
+/// states of `/patterns` as stuck. The script now writes "Loading…" at the moment
+/// it asks, so the words are true whenever they are on screen.
+///
+/// Scoped to the templates: a `<details>` built in Rust is covered by the gate
+/// above, and the `htmx-indicator` convention is exempt because the stylesheet
+/// hides it until a request is in flight.
+#[test]
+fn a_collapsed_disclosure_does_not_ship_a_loading_placeholder() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+    let mut files = Vec::new();
+    collect(&root, &mut files);
+    let mut offenders: Vec<String> = Vec::new();
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (start, end) in closed_details_spans(&text) {
+            let body = &text[start..end];
+            let mut from = 0;
+            while let Some(rel) = body[from..].find("Loading") {
+                let at = from + rel;
+                from = at + 1;
+                // The opening tag of the element holding the words.
+                let tag_start = body[..at].rfind('<').unwrap_or(0);
+                let tag = &body[tag_start..at];
+                if tag.contains("htmx-indicator") || tag.starts_with("<text") {
+                    continue;
+                }
+                let line = text[..start + at].matches('\n').count() + 1;
+                offenders.push(format!("{}:{line}", path.display()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these placeholders sit inside a collapsed <details>, where nothing is \
+         loading and nobody can read them. Ship the slot empty and let the \
+         script that fills it write \"Loading…\" when it asks, or mark it \
+         `htmx-indicator`:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// The counterpart: an `open` disclosure *should* still load eagerly, so the
 /// scanner must not be a blanket ban on `load` near a `<details>`.
 #[test]

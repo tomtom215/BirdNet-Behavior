@@ -400,7 +400,23 @@ class Terrain {
     const slot = this.card.querySelector(".tr-table-slot");
     if (!slot || !window.htmx) return;
     const base = this.card.dataset.trTable;
-    window.htmx.ajax("GET", `${base}?days=${this.days}`, slot);
+    // The slot is empty in the markup: "Loading…" written there is text in a closed
+    // disclosure, which nobody sees and a gate then (rightly) cannot tell from a
+    // stuck one. It is written here, when the reader has asked for the numbers.
+    const note = (text) => {
+      slot.textContent = "";
+      const span = document.createElement("span");
+      span.className = "bnb-meta tr-loading";
+      span.textContent = text;
+      slot.appendChild(span);
+    };
+    note("Loading…");
+    // htmx does not swap a 4xx/5xx body, so a failed request would leave the
+    // placeholder up for good; say so when the request is over and nothing came.
+    const failed = () => {
+      if (slot.querySelector(".tr-loading")) note("The numbers are not available just now.");
+    };
+    window.htmx.ajax("GET", `${base}?days=${this.days}`, slot).then(failed, failed);
   }
 
   // ── data ──
@@ -855,11 +871,11 @@ class Terrain {
       lab.appendChild(s);
       this.axisLabels.push({ el: s, x, z });
     };
-    for (const [h, t] of [[0, "12a"], [6, "6a"], [12, "12p"], [18, "6p"], [24, "12a"]]) add(t, -12 + h, 10.9, "tr-lbl-hour");
+    for (const [h, t] of [[0, "12a"], [6, "6a"], [12, "12p"], [18, "6p"], [24, "12a"]]) add(t, -12 + h, 11.8, "tr-lbl-hour");
     const stepD = days <= 30 ? 7 : days <= 90 ? 30 : 90;
     for (let back = 0; back < days; back += stepD) {
       const r = days - 1 - back;
-      add(back === 0 ? "today" : `${back} d ago`, -13, (r + 0.5 - days / 2) * (20 / days), "tr-lbl-day");
+      add(back === 0 ? "today" : `${back} d ago`, -14.2, (r + 0.5 - days / 2) * (20 / days), "tr-lbl-day");
     }
   }
 
@@ -1092,14 +1108,87 @@ class Terrain {
     g.renderer.setPixelRatio(dpr);
     g.renderer.setSize(w, h, false);
     g.camera.aspect = w / h;
-    // A tall, narrow stage needs the camera further back to keep the footprint in view.
-    this.orbitHome.r = g.camera.aspect < 1.2 ? 34 / Math.max(0.55, g.camera.aspect) ** 0.7 : 31;
-    if (!this.homeApplied) {
-      this.orbit.r = this.orbitHome.r;
+    g.camera.updateProjectionMatrix();
+    // Where the view was put, and whether the reader has moved it since: a stage that is resized
+    // (a phone turned on its side) is re-fitted only if nobody has turned or zoomed it.
+    const keys = ["theta", "phi", "r", "tx", "ty", "tz"];
+    const unmoved = !this.homeApplied || keys.every((k) => Math.abs(this.orbit[k] - this.orbitHome[k]) < 1e-9);
+    this.fitHome();
+    if (unmoved) {
+      for (const k of keys) this.orbit[k] = this.orbitHome[k];
       this.homeApplied = true;
     }
-    g.camera.updateProjectionMatrix();
     this.requestRender();
+  }
+
+  /**
+   * The distance and the aim at which the whole slab, the labels round it and the tallest peak
+   * stand inside this canvas, at the home angles. A fixed distance fitted one shape of stage: on
+   * a wide desktop one the near edge ran off the bottom and the right, and on a phone the mesh
+   * was cropped on the left and the bottom. This projects the corners of the box the scene
+   * fills through the real camera, takes the nearest distance at which they all land inside the
+   * canvas, and moves the aim sideways and up or down until the box has as much room on one
+   * side as on the other. The aim moves in the picture's plane, so the turning that follows is
+   * about a point that is still on the slab.
+   */
+  fitHome() {
+    const g = this.gl;
+    const T = this.T;
+    const cam = g.camera;
+    const home = this.orbitHome;
+    // A narrow stage is better served by a view nearer the front, where the 24 hours run across
+    // the picture rather than away along a diagonal.
+    home.theta = cam.aspect < 1.2 ? 0.3 : 0.5;
+    const peak = (this.field && this.field.height) || 7;
+    // The slab is 24 by 20; the day labels are centred on a point 2.2 beyond its left edge and run
+    // about 2 further, and the hour labels stand 1.8 beyond its front.
+    const corners = [];
+    for (const x of [-16.5, 12.8]) for (const z of [-11, 12.4]) for (const y of [0, peak]) corners.push(new T.Vector3(x, y, z));
+    const v = new T.Vector3();
+    const extent = (r, tx, ty, tz) => {
+      const sp = Math.sin(home.phi);
+      cam.position.set(tx + r * sp * Math.sin(home.theta), ty + r * Math.cos(home.phi), tz + r * sp * Math.cos(home.theta));
+      cam.lookAt(tx, ty, tz);
+      cam.updateMatrixWorld();
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const c of corners) {
+        v.copy(c).project(cam);
+        minX = Math.min(minX, v.x);
+        maxX = Math.max(maxX, v.x);
+        minY = Math.min(minY, v.y);
+        maxY = Math.max(maxY, v.y);
+      }
+      return { minX, maxX, minY, maxY };
+    };
+    const LIMIT = 0.96;
+    const tanV = Math.tan((cam.fov * Math.PI) / 360);
+    const tanH = tanV * cam.aspect;
+    let [tx, ty, tz] = [0, 1.6, 0];
+    let r = 31;
+    for (let pass = 0; pass < 5; pass++) {
+      let lo = 6;
+      let hi = 240;
+      for (let i = 0; i < 30; i++) {
+        const mid = (lo + hi) / 2;
+        const e = extent(mid, tx, ty, tz);
+        if (Math.max(-e.minX, e.maxX, -e.minY, e.maxY) <= LIMIT) hi = mid;
+        else lo = mid;
+      }
+      r = hi;
+      const e = extent(r, tx, ty, tz);
+      // The camera's right is (cos t, 0, -sin t) on the floor; its up has a share sin(phi) of the world's.
+      const side = ((e.minX + e.maxX) / 2) * r * tanH;
+      tx += side * Math.cos(home.theta);
+      tz -= side * Math.sin(home.theta);
+      ty += (((e.minY + e.maxY) / 2) * r * tanV) / Math.sin(home.phi);
+    }
+    home.r = r;
+    home.tx = tx;
+    home.ty = ty;
+    home.tz = tz;
   }
 
   requestRender() {
@@ -1181,9 +1270,20 @@ class Terrain {
       if (px[i + 3] > 0) lit++;
       hash = (Math.imul(hash, 31) + px[i] + px[i + 1] * 3 + px[i + 2] * 5 + px[i + 3] * 7) >>> 0;
     }
+    // Lit pixels in the outermost two rows and columns of the canvas: a mesh the camera has cut off.
+    let edgeLit = 0;
+    const litAt = (x, y) => px[(y * w + x) * 4 + 3] > 0;
+    for (let y = 0; y < h; y++) {
+      if (y < 2 || y >= h - 2) {
+        for (let x = 0; x < w; x++) if (litAt(x, y)) edgeLit++;
+      } else {
+        for (const x of [0, 1, w - 2, w - 1]) if (litAt(x, y)) edgeLit++;
+      }
+    }
     return {
       width: w,
       height: h,
+      edgeLit,
       cssWidth: this.glCanvas.clientWidth,
       litShare: lit / (px.length / 20),
       hash,

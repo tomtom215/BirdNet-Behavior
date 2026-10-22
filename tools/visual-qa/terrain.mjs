@@ -38,6 +38,7 @@
 //   MUTATE=nofallback hasWebGL() answers true everywhere
 //   MUTATE=noreading  the pointer reading is never written
 //   MUTATE=leak       dispose() frees nothing
+//   MUTATE=nofit      the camera goes back to one fixed distance for every shape of canvas
 import { chromium } from 'playwright';
 import * as T from '../../crates/birdnet-web/static/terrain.js';
 
@@ -146,6 +147,7 @@ async function open({ reduced = 'no-preference', motionSetting = null, theme = '
       if (MUTATE === 'noorbit') body = body.replace('o().theta -= dx * 0.008;', '');
       if (MUTATE === 'nofallback') body = body.replace('function hasWebGL() {', 'function hasWebGL() { return true;');
       if (MUTATE === 'noreading') body = body.replace('if (this.readout) this.readout.textContent = readingText(this.data, cell.day, cell.hour);', '');
+      if (MUTATE === 'nofit') body = body.replace('this.fitHome();', 'g.camera.aspect < 1.2 ? (this.orbitHome.r = 34 / Math.max(0.55, g.camera.aspect) ** 0.7) : (this.orbitHome.r = 31);');
       if (MUTATE === 'leak') body = body.replaceAll('g.mesh.geometry.dispose();', '').replace('g.renderer.forceContextLoss();', '');
       await route.fulfill({ response: res, body });
     });
@@ -174,6 +176,16 @@ async function openTerrain(page) {
 }
 
 const probe = (page) => page.evaluate(() => document.querySelector('.tr-card').__terrain.probe());
+// Which axis labels are not wholly inside the stage that holds them.
+const labelsOutside = (page) =>
+  page.evaluate(() => {
+    const st = document.querySelector('.tr-stage').getBoundingClientRect();
+    return [...document.querySelectorAll('.tr-lbl')]
+      .filter((l) => !l.hidden && l.getClientRects().length)
+      .map((l) => ({ t: l.textContent, r: l.getBoundingClientRect() }))
+      .filter(({ r }) => r.left < st.left - 1 || r.right > st.right + 1 || r.top < st.top - 1 || r.bottom > st.bottom + 1)
+      .map(({ t }) => t);
+  });
 
 // 1. lazy, draws, orbit, reading, csp ----------------------------------------------------------
 console.log('\nthe terrain in a browser with WebGL');
@@ -201,6 +213,10 @@ console.log('\nthe terrain in a browser with WebGL');
   const first = await probe(page);
   check('the canvas holds lit pixels read back from the GPU', first && first.litShare > 0.08, JSON.stringify(first));
   check('the entrance has finished: the ground is full height', first && Math.abs(first.scaleY - 1) < 1e-6, `scaleY ${first && first.scaleY}`);
+  // The camera is fitted to the canvas: nothing of the slab is cut off, and no label is outside it.
+  const outside = await labelsOutside(page);
+  check('the whole slab is inside the canvas at 1280 px (no lit pixel on its edge)', first && first.edgeLit === 0, `${first && first.edgeLit} lit pixel(s) on the edge of a ${first && first.width}x${first && first.height} canvas`);
+  check('every axis label is inside the stage at 1280 px', outside.length === 0, outside.join(', '));
 
   // Orbit: a drag.
   const box = await page.locator('.tr-gl-canvas').boundingBox();
@@ -395,6 +411,9 @@ console.log('\na phone');
   const p = await probe(page);
   const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check('the 3D view draws at 390 px and the page does not scroll sideways', p && p.litShare > 0.05 && over <= 0, JSON.stringify({ p: p && p.litShare, over }));
+  const phoneOutside = await labelsOutside(page);
+  check('the whole slab is inside the canvas at 390 px (no lit pixel on its edge)', p && p.edgeLit === 0, `${p && p.edgeLit} lit pixel(s) on the edge of a ${p && p.width}x${p && p.height} canvas`);
+  check('every axis label is inside the stage at 390 px', phoneOutside.length === 0, phoneOutside.join(', '));
   check('no error on a phone', errors.length === 0, errors.join(' | '));
   await context.close();
 }
