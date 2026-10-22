@@ -726,7 +726,10 @@ mod tests {
         let state = init_site_name(test_state(), &cli, Some(&cfg));
         assert_eq!(state.site_name(), "Garden Station");
         // Counterpart: a Site Name that is set wins over it, and so does the flag.
-        let cfg = config_with(&[("SITENAME", "Front Yard"), ("STATION_NAME", "Garden Station")]);
+        let cfg = config_with(&[
+            ("SITENAME", "Front Yard"),
+            ("STATION_NAME", "Garden Station"),
+        ]);
         let state = init_site_name(test_state(), &cli, Some(&cfg));
         assert_eq!(state.site_name(), "Front Yard");
         let mut cli = default_cli();
