@@ -7,7 +7,7 @@
 //! read `hour_start` and `hour_end` as `Option<u8>`, and serde answers an empty
 //! string for an integer with an error, so **Create Rule with the two hour
 //! fields left as the page invites** was refused by the extractor with a 422
-//! ("Failed to deserialize form body: hour_start: cannot parse integer from
+//! ("Failed to deserialize form body: `hour_start`: cannot parse integer from
 //! empty string"). htmx never swaps a 4xx body, so the person saw nothing at
 //! all: no rule, no message, no sign the click registered.
 //!

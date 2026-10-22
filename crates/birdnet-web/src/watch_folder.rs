@@ -56,14 +56,12 @@ fn readable_recording(name: &str) -> Option<bool> {
 pub fn scan(dir: &Path) -> Option<FolderScan> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut unnamed = 0;
-    let mut seen = 0;
     let mut capped = false;
-    for entry in entries.flatten() {
+    for (seen, entry) in entries.flatten().enumerate() {
         if seen >= SCAN_CAP {
             capped = true;
             break;
         }
-        seen += 1;
         let Ok(kind) = entry.file_type() else {
             continue;
         };

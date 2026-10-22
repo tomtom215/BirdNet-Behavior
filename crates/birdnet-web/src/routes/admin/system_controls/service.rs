@@ -111,7 +111,7 @@ pub fn request_restart(support: RestartSupport) -> RestartOutcome {
 /// back, which is not always systemd. It used to say "systemd Restart=always
 /// brings us back" on a station that nobody supervises, where the process runs
 /// itself again, and the log is where someone looks to see what happened.
-fn restart_log_message(support: RestartSupport) -> &'static str {
+const fn restart_log_message(support: RestartSupport) -> &'static str {
     if support.under_systemd {
         "restart requested; SIGTERM self, systemd Restart=always brings us back"
     } else {

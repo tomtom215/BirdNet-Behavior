@@ -161,6 +161,7 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
 /// the database's health, and a doctor that failed because the DB was corrupt
 /// would block the startup that repairs it, which is the trap this release
 /// spent its time removing.
+#[cfg(test)]
 fn effective_alsa_devices(config: Option<&Config>) -> Option<Vec<String>> {
     database_sources(config).map(|rows| alsa_devices_of(&rows))
 }
