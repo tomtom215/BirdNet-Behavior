@@ -1,19 +1,18 @@
-//! A private station's pages are not kept by a browser or its service worker,
+//! A private station's pages are not kept by a browser, a proxy or a service worker,
 //! so signing out ends access to them.
 //!
-//! `static/sw.js` answers the dashboard surfaces stale-while-revalidate: the
-//! cached copy is returned at once and the network refresh happens behind it.
-//! On a station in private mode that cached copy is the private dashboard —
-//! the detection history, the species list, the recordings — and it was
-//! handed back after sign-out, from cache, before the server had a chance to
-//! say `303 /login`. The worker already refuses to cache a response marked
-//! `Cache-Control: no-store`; what was missing is the server marking them.
+//! `static/sw.js` is written to answer the dashboard surfaces stale-while-revalidate,
+//! but it is dormant today: registered with a scope that covers no page, it controls
+//! none (its header says so, and `tools/visual-qa/sw-state.mjs` drives it in three
+//! engines). Were it given a wider scope, the cached copy on a private station would
+//! be the private dashboard, handed back after sign-out before the server could say
+//! `303 /login`. The worker already refuses to cache a response marked
+//! `Cache-Control: no-store`; the server marking them also covers the browser's own
+//! cache, back-forward navigation and any proxy.
 //!
 //! The mark goes on exactly the responses the private gate lets through to a
-//! signed-in browser, and nowhere else: an open station's pages stay
-//! cacheable, because that is what lets the PWA keep a wall display up through
-//! a network outage. The other half — the worker side — is
-//! `the_service_worker_does_not_keep_a_private_page.rs`.
+//! signed-in browser, and nowhere else: an open station's pages stay cacheable. The
+//! worker side is `the_service_worker_does_not_keep_a_private_page.rs`.
 
 use std::collections::BTreeSet;
 

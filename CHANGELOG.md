@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Admin forms no longer print a stored credential.** Settings and Audio showed saved
+  passwords, tokens and camera addresses in clear in the page source. A secret now shows as
+  `***REDACTED***` (or empty), an unchanged mask saves back to the stored value, and a mask
+  with nothing behind it is refused without echoing it. A test drives 21 admin and station
+  routes and fails if a secret appears in any body. The support bundle carries settings
+  saved in the browser and the audio sources, masked.
+- **A viewer cannot read the live log**, and the cross-site check refuses `Sec-Fetch-Site:
+  cross-site` writes.
 - **The cross-site-request check now covers HTTP/2.** Browsers speak HTTP/2 to the
   station's TLS listener, which sends no `Host` header, and the check treated "no `Host`"
   as "nothing to compare" and let the request through. It now takes the authority from the
@@ -221,14 +229,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a trusted proxy says so (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or
   when `BNB_PUBLIC_URL` is `https://` and the request's `Host` is that address. A
   reverse proxy should send `X-Forwarded-Proto`; the nginx examples now do.
-- **A signed-out browser is no longer handed the private dashboard from cache.** The
-  service worker answered dashboard pages from cache first, and on a private station
-  that copy was the private page, returned before the server could say `303 /login`; a
-  sign-in form reached through a redirect was also cached under the page's own address.
-  The private-mode gate now marks what it serves and its refusals `Cache-Control:
-  no-store` (a handler's own value wins; an open station is unchanged), and the worker
-  refuses a redirected response. The worker also honours `SKIP_WAITING` only from its
-  own origin.
+- **A private station's pages are marked `no-store`, and the service worker cannot keep one.**
+  The private-mode gate now marks what it serves and its refusals `Cache-Control: no-store`
+  (a handler's own value wins; an open station is unchanged), and the worker refuses a
+  redirected response and honours `SKIP_WAITING` only from its own origin. Correction to
+  the first draft of this entry: it said the worker "answered dashboard pages from cache".
+  It never did. It was registered at an address the server does not serve, so it did not
+  run; see *Fixed* for what it is now. The `no-store` marking still stands as a guard
+  against a browser or proxy cache.
 - **A feed address can no longer choose where its links lead.** `?base=` on `/feeds/*`
   set the host of every item link, so a link on the station's own domain could point at
   a phishing page. It is honoured only for the host the request was addressed to or the
@@ -565,6 +573,26 @@ is described under *Changed* or *Fixed*.
 
 ### Fixed
 
+- **A blank number in a form no longer fails silently.** An optional number left blank
+  (audio-source sample rate, migration confirm, quarantine pager, alert-rule hours)
+  answered a 422 that htmx never shows, so the click appeared to do nothing. Every form
+  handler now takes `HtmxForm`: blank means none, and a value that is present and not a
+  number is an error toast naming the field and never repeating the value. A client that
+  is not htmx still gets a 4xx, now as JSON. The migration clock offset used to read `abc`
+  as "none". Testing an alert rule deleted in another tab, and a BirdNET-Pi upload or
+  settings-file preview that stops arriving or passes the size limit, now say so on the
+  page. A new gate, `an_htmx_form_cannot_fail_silently`, fails on a raw `Form<T>` and
+  drives every form handler with the browser's own body. Still silent to htmx: a 403 from
+  the cross-site check or the viewer role, and a 429 from the rate limiter.
+- **The service worker is dormant, and says so.** It was registered at an address the
+  server does not serve and with a scope that would have let it keep pages that differ per
+  visitor, so it never ran. It is now registered at `<base>/static/sw.js` with scope
+  `/static/`, no longer precaches `/`, and its header says what it does and does not do. A
+  gate (`sw-state.mjs`) checks this in Chromium, Firefox and WebKit.
+- **The live log answers at once.** The stream sends a comment the moment it opens, so
+  Firefox shows "Connected" immediately instead of after the first log line.
+- **Settings Location: moving the coordinates clears a stale time zone**, so a station
+  moved to another place is not left on the old zone.
 - **A long identifier no longer widens the page on a phone.** The hint under Notification
   Cooldown quotes `APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES`, one 385 px
   word in a 292 px box, which grew `/station/alerts` and `/admin/settings` to 434 px on a

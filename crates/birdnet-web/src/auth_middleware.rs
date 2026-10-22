@@ -203,18 +203,19 @@ async fn private_gate_middleware(request: Request<Body>, next: Next, state: &App
 /// Mark a private station's response as not to be kept, unless the handler
 /// already said what it wants.
 ///
-/// The service worker (`static/sw.js`) answers dashboard pages
+/// The service worker (`static/sw.js`) is written to answer dashboard pages
 /// stale-while-revalidate, which is right for an open station and wrong for a
-/// private one: the cached copy is the private dashboard, and it is returned
-/// after sign-out before the server has had a chance to say `303 /login`. The
-/// worker already declines to store anything marked `no-store`; the browser's
-/// own cache and back-forward navigation honour it too. A handler that set its
-/// own `Cache-Control` (a clip, a spectrogram, an image) keeps it: those carry
-/// a policy of their own, and they are not what the worker revalidates.
+/// private one: the cached copy would be the private dashboard, returned after
+/// sign-out before the server could say `303 /login`. It is dormant today (it is
+/// registered with a scope that covers no page; see the header of `sw.js`), so
+/// this marking guards what could keep a page instead: the browser's own cache,
+/// back-forward navigation and any proxy, all of which honour it, and the worker
+/// should it ever be given a wider scope (it already declines to store anything
+/// marked `no-store`). A handler that set its own `Cache-Control` (a clip, a
+/// spectrogram, an image) keeps it: those carry a policy of their own.
 ///
-/// Applied only where the gate is active. An open station's pages are public,
-/// and the worker's offline copy of them is what keeps a wall display up
-/// through an outage.
+/// Applied only where the gate is active. An open station's pages are public and
+/// stay cacheable.
 fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()
