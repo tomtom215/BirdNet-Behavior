@@ -1037,6 +1037,7 @@ main {
   border: var(--bw) solid transparent; transition: background var(--dur-glow), border-color var(--dur-glow);
 }
 .feed-row .ago { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-row .who { min-width: 0; }
 .feed-row .who .name { font-weight: var(--fw-medium); font-size: var(--fs-base); }
 .feed-row .who .sci  { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed-row:hover { background: color-mix(in oklab, var(--fg) 3.5%, transparent); }
@@ -1108,6 +1109,10 @@ tbody tr:hover { background: color-mix(in oklab, var(--moss) 5%, var(--surface))
 .btn-primary { background: var(--moss); color: var(--on-moss); border-color: transparent; box-shadow: var(--shadow-sm), var(--shadow-key); }
 .btn-primary:hover { background: var(--moss-ink); border-color: transparent; }
 .btn.active { background: var(--fg); color: var(--bg); border-color: transparent; box-shadow: var(--shadow-sm), var(--shadow-key); }
+/* The small in-row action (Remove, Reset). Station pages carry page-local `.btn { padding: .5rem 1.5rem }`
+   blocks that arrive after this sheet and beat the page-local `.del-btn` on source order, so
+   Remove was 101px wide and ended past its card at 320px; two classes win on specificity. */
+.btn.del-btn { padding: var(--space-4) var(--space-10); font-size: var(--fs-sm); white-space: nowrap; }
 
 /* Segmented control (period / range pickers) */
 .seg { display: inline-flex; gap: var(--space-4); flex-wrap: wrap; }
@@ -1130,6 +1135,13 @@ select:not([multiple]):not([size]) {
   background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
   background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
+/* A field never ends past the box that holds it. A select is as wide as its longest option
+   ("Copy them (BirdNET-Pi keeps its own)" was 277px in a 272px card at 320px), and an input
+   with a `size` or a long placeholder is as wide as that; `max-width` lets either give way,
+   and `min-width: 0` lets a select inside a flex or grid cell shrink with its cell. Rules that
+   set their own `max-width` for a select (a menu capped at 168px) are more specific and win. */
+input, select, textarea { max-width: 100%; }
+select { min-width: 0; }
 /* Focus. `outline: none` used to live here, at (0,1,1) — higher than the
    `:focus-visible` rule further down at (0,1,0) — so the 2px indicator that
    rule declares had never once applied to an input, select or textarea. What
@@ -1262,7 +1274,10 @@ footer a:hover { color: var(--moss-ink); }
 }
 @media (max-width: 720px) {
   main { padding: var(--pad-3) var(--pad-3) 56px; }
-  .feed-row { grid-template-columns: 52px 30px 1fr auto; }
+  /* minmax(0, 1fr), not 1fr: a 1fr track will not shrink below its content, and the
+     scientific name (nowrap) held it at 143px, so at 320px the play button was drawn
+     past the card and the whole page scrolled sideways. */
+  .feed-row { grid-template-columns: 52px 30px minmax(0, 1fr) auto; }
   .feed-row .waveform, .feed-row .bnb-conf { display: none; }
   .topnav { padding: var(--space-8) var(--space-14); }
   .topnav-right .bnb-meta.mono { display: none; }
@@ -2326,7 +2341,9 @@ footer a:hover { color: var(--moss-ink); }
   .account-sessions li,
   .account-users li,
   .account-audit li {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr): a bare 1fr track will not shrink below its content, and the password
+       field in a user's row held it at 242px, ending 12px past the row at 320px. */
+    grid-template-columns: minmax(0, 1fr);
   }
   .account-sessions li > :nth-child(3),
   .account-sessions li > :nth-child(4),
@@ -5130,9 +5147,13 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .dp-noclip { text-align: center; }
 
 /* Live-signal card: source picker + listen-live link */
-.x-sig-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-10); margin-top: var(--space-12); padding-top: var(--space-12); border-top: var(--bw) solid var(--hairline); }
-.x-sig-src { display: inline-flex; align-items: center; gap: var(--space-8); min-width: 0; }
-.x-sig-src select { font-family: var(--font-ui); font-size: var(--fs-md); color: var(--fg); background: var(--surface); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm); padding: 5px var(--space-8) 5px 9px; max-width: 168px; }
+/* The row wraps: at 320px the source menu and the Listen-live link together are wider than the
+   card, and the link was drawn over the menu (and "source" broke into letters). The menu may
+   shrink (min-width: 0) before the link drops to a second line under it. */
+.x-sig-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-8) var(--space-10); margin-top: var(--space-12); padding-top: var(--space-12); border-top: var(--bw) solid var(--hairline); }
+.x-sig-src { display: inline-flex; align-items: center; gap: var(--space-8); min-width: 0; max-width: 100%; }
+.x-sig-src > .bnb-meta { flex: none; white-space: nowrap; }
+.x-sig-src select { font-family: var(--font-ui); font-size: var(--fs-md); color: var(--fg); background: var(--surface); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm); padding: 5px var(--space-8) 5px 9px; max-width: 168px; min-width: 0; }
 .x-sig-src select:focus-visible { outline: 2px solid var(--moss); outline-offset: 1px; }
 .x-listen { flex: none; font-size: var(--fs-sm); }
 .x-tempkey { color: var(--dawn-ink); font-weight: var(--fw-medium); }
@@ -5296,6 +5317,16 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .rc-shift select { font-family: var(--font-ui); font-size: var(--fs-md); color: var(--fg); background: var(--surface); border: var(--bw) solid var(--border-2); border-radius: var(--r-sm); padding: 5px 9px; }
 .rc-shift-hint { margin: var(--space-6) 0 0; max-width: 62ch; }
 .rc-listen-btn { margin-left: auto; font-size: var(--fs-sm); }
+/* A label in the live foot never breaks ("source" was drawn one letter per line at 320px) and a
+   menu may shrink; on a phone the source picker takes the whole first line so the long option
+   names have room, and pitch and Listen follow beneath it. */
+.rc-src-label { flex: none; white-space: nowrap; }
+.rc-src, .rc-shift { min-width: 0; max-width: 100%; }
+.rc-src select, .rc-shift select { min-width: 0; max-width: 100%; }
+@media (max-width: 520px) {
+  .rc-src { flex: 1 1 100%; }
+  .rc-src select { flex: 1 1 auto; }
+}
 .rc-audio-hidden { display: none; }
 .rc-trickle { margin-top: var(--space-18); }
 
@@ -6356,3 +6387,13 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
    The day and hour labels are HTML laid over the canvas, so a ridge drawn under
    "60 d ago" took its contrast away. A small plate of the stage's own colour. */
 .tr-lbl { background: color-mix(in oklab, var(--surface-sunken) 78%, transparent); padding: 0 var(--space-4); border-radius: var(--r-2xs); }
+
+/* ── 320px phones: a legacy card's padding is not worth a quarter of the screen ──────────
+   `.card` carries 24px of padding on every side and the page 24px of margin, so a card's
+   content was 224px of a 320px screen: the thresholds table (a name, a percentage, a Remove
+   button) did not fit and a long scientific name broke mid-word. Page-local `.card` blocks
+   arrive after this sheet, so the selector is `main .card` to win on specificity. Only below
+   341px: at 360px and wider the 24px stands and nothing there moves. */
+@media (max-width: 340px) {
+  main .card { padding: var(--space-16); }
+}
