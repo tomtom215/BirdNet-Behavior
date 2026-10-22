@@ -135,7 +135,7 @@ fn render_session_rows(sessions: &[Session], current_session_id: &str) -> String
         let is_current = s.id == current_session_id;
         let current_marker = if is_current { "true" } else { "false" };
         let current_pill = if is_current {
-            r#"<span class="session-pill current" title="The browser you're using right now">This device</span>"#
+            r#" <span class="bnb-pill moss session-pill current" title="The browser you're using right now">This device</span>"#
         } else {
             ""
         };
@@ -971,6 +971,43 @@ mod tests {
         assert!(html.contains(r#"data-current="true""#));
         assert!(html.contains(r#"data-current="false""#));
         assert!(html.contains("This device"));
+    }
+
+    /// The pill is a separate word from the browser's name, to a reader and to
+    /// anyone who copies the line: the row read "...Safari/537.36This device"
+    /// because the markup put nothing between them and the pill had no style.
+    #[test]
+    fn the_current_device_pill_is_not_glued_to_the_browser_name() {
+        let s = Session {
+            id: "sess-current".to_string(),
+            user_id: 1,
+            issued_at: "2026-05-28 10:00:00".to_string(),
+            last_seen: "2026-05-28 10:05:00".to_string(),
+            expires_at: "2099-01-01 00:00:00".to_string(),
+            user_agent: Some("Mozilla/5.0 Safari/537.36".to_string()),
+            ip_hash: None,
+        };
+        let html = render_session_rows(&[s], "sess-current");
+        // What a reader (or a copy of the selection) gets: the text of the label
+        // line, tags removed, and nothing else changed.
+        let label_start = html.find(r#"<div class="session-label">"#).expect("label");
+        let label = &html[label_start..html[label_start..].find("</div>").unwrap() + label_start];
+        let mut text = String::new();
+        let mut in_tag = false;
+        for c in label.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => text.push(c),
+                _ => {}
+            }
+        }
+        assert!(
+            text.contains("Safari/537.36 This device"),
+            "the pill must be a separate word: {text:?}"
+        );
+        // And it is drawn as a pill, not left as unstyled text.
+        assert!(label.contains("bnb-pill"), "{label}");
     }
 
     #[test]
