@@ -114,10 +114,13 @@ impl DynamicThresholdState {
     /// judged without the forgotten level. The table is then rewritten from the
     /// tracker, which also removes a row this thread wrote from a snapshot taken
     /// before the web side deleted it.
-    fn apply_resets(&mut self, state: &birdnet_web::state::AppState) {
+    ///
+    /// Returns how many learned levels the resets removed, so the figure the
+    /// log line states can be checked rather than only printed.
+    fn apply_resets(&mut self, state: &birdnet_web::state::AppState) -> usize {
         let requests = self.handle.drain();
         if requests.is_empty() {
-            return;
+            return 0;
         }
         let mut forgotten = 0;
         for request in &requests {
@@ -131,6 +134,7 @@ impl DynamicThresholdState {
         if self.enabled {
             self.persist(crate::daemon::disposition::epoch_ms(), state);
         }
+        forgotten
     }
 
     /// The tracker to judge against, or `None` when the feature is off.
@@ -555,7 +559,9 @@ fn wait_for_event(
     loop {
         match event_rx.recv_timeout(RESET_POLL) {
             Ok(event) => return Some(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => dynamic.apply_resets(state),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                dynamic.apply_resets(state);
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         }
     }
@@ -1758,6 +1764,57 @@ mod tests {
             off.tracker().is_none(),
             "a disabled tracker must not be offered — the feature is off"
         );
+    }
+
+    /// An operator's reset forgets what it names, says how many levels went, and
+    /// leaves the table matching the tracker.
+    ///
+    /// The count is printed by the log line the reset produces and returned so a
+    /// test can see it: `forgotten += n` mutated to `*=` leaves it at zero and to
+    /// `-=` underflows, and neither changes anything else the processor does, so
+    /// only an assertion on the figure can tell them from the code. Three
+    /// requests of different weight make the sum matter: a named species that
+    /// was learned (1), a named one that was not (0), and `All` over what is left.
+    #[test]
+    fn a_reset_forgets_what_it_names_and_counts_it() {
+        use birdnet_core::detection::dynamic_threshold::Reset;
+        let (_tmp, state) = dyn_state(true);
+        let mut on = DynamicThresholdState::new(tracker_with(true), &state);
+        // The real clock: `apply_resets` rewrites the table from the live set at
+        // the real time, and a level confirmed at 1 s has lapsed by then.
+        let now = crate::daemon::disposition::epoch_ms();
+        for name in ["Turdus merula", "Parus major", "Erithacus rubecula"] {
+            on.confirm(name, 0.95, now, &state);
+        }
+        let stored = |state: &birdnet_web::state::AppState| {
+            state
+                .with_db(birdnet_db::dynamic_thresholds::load_all)
+                .expect("load")
+                .len()
+        };
+        assert_eq!(stored(&state), 3, "the fixture learned three species");
+
+        assert_eq!(on.apply_resets(&state), 0, "nothing was asked for");
+
+        on.handle
+            .request(Reset::Species("Turdus merula".to_owned()));
+        on.handle.request(Reset::Species("Never heard".to_owned()));
+        assert_eq!(
+            on.apply_resets(&state),
+            1,
+            "one learned species named, one that was never learned"
+        );
+        assert_eq!(stored(&state), 2, "the table follows the tracker");
+
+        on.handle.request(Reset::All);
+        on.handle.request(Reset::Species("Parus major".to_owned()));
+        assert_eq!(
+            on.apply_resets(&state),
+            2,
+            "`All` removes the two that are left; the species named after it is already gone"
+        );
+        assert_eq!(stored(&state), 0);
+        assert_eq!(on.apply_resets(&state), 0, "the requests were consumed");
     }
 
     /// `confirm` learns only when the feature is on, and only from a detection
