@@ -6231,3 +6231,60 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
     font-weight: var(--fw-medium);
   }
 }
+
+/* ── fixD1: a long unbreakable word wraps, it does not widen the page ───────
+   A hint under "Notification Cooldown" quotes BirdNET-Pi's setting name,
+   `APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES`: one 385px word
+   in a 292px box. It overflowed the box, grew the document to 434px on a 390px
+   phone and dragged the fixed tab bar out with it (the last tab was cut off).
+   The class of defect is any identifier, path or filename in prose, a code
+   chip or a table cell, so the rule is on the class, not the string. `anywhere`
+   (not `break-word`) also lowers the min-content width, so a grid or flex
+   child holding one can shrink instead of holding its parent open. */
+.hint,
+main :is(p, li, dd, td, summary, figcaption, code, kbd, samp, .mono, .bnb-meta) { overflow-wrap: anywhere; }
+
+/* ── fixD1: form controls that look the same in every engine ────────────────
+   Placeholder: nothing set it, so each engine drew its own default, measured at
+   2.35:1 (WebKit, light), 3.8:1 (Firefox, light) and 4.08:1 (Chromium, dark)
+   against the 4.5:1 WCAG 1.4.3 asks of text. --fg-3 is the quiet-text token the
+   other gates already hold at 4.5:1 on every surface; `opacity: 1` because Firefox
+   draws a placeholder at 54% of its colour unless told otherwise. tokens.mjs
+   grades the result on the real fields. */
+::placeholder { color: var(--fg-3); opacity: 1; }
+
+/* Number fields: the stepper arrows showed at all times in Firefox and WebKit and
+   on hover in Chromium, and took the right edge of a narrow "Hour start" field.
+   Hidden the same way everywhere; the arrow keys and the mouse wheel still step. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+
+/* Range sliders (the Listen controls): `accent-color` is all Firefox and WebKit
+   took from the page, and each drew its own grey track and thumb. One drawing
+   for all three: a quiet track and a moss thumb with a ring of the surface it sits
+   on, so it reads on the card and on the page, in both themes. */
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  background: transparent; cursor: pointer;
+  min-height: var(--space-24); margin: 0;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--space-4); border-radius: var(--r-pill); background: var(--fg-4); border: 0;
+}
+input[type="range"]::-moz-range-track {
+  height: var(--space-4); border-radius: var(--r-pill); background: var(--fg-4); border: 0;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: var(--space-20); height: var(--space-20); border-radius: var(--r-pill);
+  background: var(--moss); border: var(--space-2) solid var(--surface); box-shadow: var(--shadow-sm);
+  margin-top: calc((var(--space-4) - var(--space-20)) / 2);
+}
+input[type="range"]::-moz-range-thumb {
+  width: var(--space-16); height: var(--space-16); border-radius: var(--r-pill);
+  background: var(--moss); border: var(--space-2) solid var(--surface); box-shadow: var(--shadow-sm);
+}
+input[type="range"]:hover::-webkit-slider-thumb { background: var(--moss-ink); }
+input[type="range"]:hover::-moz-range-thumb { background: var(--moss-ink); }
+input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }

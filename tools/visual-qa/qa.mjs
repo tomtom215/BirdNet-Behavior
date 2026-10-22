@@ -174,14 +174,22 @@ const EXPECT_404 = new Set(['notfound']);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function diagnose(page) {
+export async function diagnose(page) {
   return page.evaluate(() => {
     const de = document.documentElement;
     const overflowX = de.scrollWidth > de.clientWidth + 2;
     const stuck = [];
     const re = /loading[….]/i;
+    // "Is a reader looking at it": `checkVisibility` knows that the contents of a closed
+    // <details> are not rendered; `offsetParent` does not (Chromium 141 leaves it set), and
+    // /patterns' "See the numbers" disclosure was reported as four stuck "Loading…" for text
+    // nobody could see. The fallback is the old test plus an explicit closed-details check.
+    const seen_ = (el) =>
+      typeof el.checkVisibility === 'function'
+        ? el.checkVisibility({ checkVisibilityCSS: true, contentVisibilityAuto: true })
+        : el.offsetParent !== null && !(el.closest('details:not([open])') && !el.closest('summary'));
     document.querySelectorAll('*').forEach((el) => {
-      if (el.children.length === 0 && el.textContent && re.test(el.textContent.trim()) && el.offsetParent !== null) {
+      if (el.children.length === 0 && el.textContent && re.test(el.textContent.trim()) && seen_(el)) {
         stuck.push(el.textContent.trim().slice(0, 40));
       }
     });

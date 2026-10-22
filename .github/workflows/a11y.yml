@@ -104,6 +104,13 @@ jobs:
         # 1440 and 390 px. Labels authored at 8 px rendered at 2.7-5 px on a
         # phone while axe, the sweep and every screenshot called the pages clean.
         run: node legibility.mjs
+      - name: Sweep self-test (a placeholder in a closed disclosure is not a stuck loader)
+        working-directory: tools/visual-qa
+        # qa.mjs's stuck-"Loading..." check read `offsetParent`, which Chromium
+        # leaves set for the contents of a closed <details>, so /patterns was
+        # reported stuck in all four states for text nobody could see. This holds
+        # both directions: the closed one is not reported, the visible one is.
+        run: node qa-selftest.mjs
       - name: Layout gate self-test (clipped text is not overlap; painted overlap is)
         working-directory: tools/visual-qa
         # The gate measured a species name cut off by `overflow: hidden` and an

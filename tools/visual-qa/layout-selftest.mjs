@@ -17,6 +17,12 @@
 //             a CSSOM style (allowed by the CSP, unlike a style attribute). Two
 //             painted lines over each other. Must be reported, or the clipped
 //             case passing only means the gate stopped looking.
+//   widen     the document wider than the screen (counterparts, each the others'):
+//             a 600px unbreakable line in `main` must be reported and named; the
+//             same line inside an `overflow-x: auto` box that fits must not be (a
+//             table that scrolls is the page behaving); and a long identifier in a
+//             `.hint`, the original defect, must not widen the page at all, which
+//             is the stylesheet's job and fails on the CSS before the fix.
 //
 // Env: BASE (default http://127.0.0.1:8502), CHROMIUM_PATH.
 import { chromium } from 'playwright';
@@ -90,6 +96,47 @@ check(
   unclipped.length > 0,
   `the same line left unclipped is reported (${unclipped.slice(0, 2).join(' | ') || 'none'})`,
 );
+
+const widen = async () => (await page.evaluate(inPage)).widen;
+// Built with the DOM and CSSOM, not markup: the CSP refuses a style attribute.
+const plant = (spec) =>
+  page.evaluate((sp) => {
+    const host = document.querySelector('main');
+    const make = (n) => {
+      const el = document.createElement(n.tag);
+      if (n.id) el.id = n.id;
+      if (n.cls) el.className = n.cls;
+      if (n.text) el.textContent = n.text;
+      Object.assign(el.style, n.style || {});
+      for (const k of n.kids || []) el.appendChild(make(k));
+      return el;
+    };
+    host.appendChild(make(sp));
+  }, spec);
+const WORD = 'APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES_AND_SOME_MORE_OF_IT_BEYOND_ANY_PHONE';
+
+await fresh();
+check((await widen()).length === 0, 'precondition: the fresh Today page is not wider than the screen');
+await plant({ tag: 'p', id: 'zz-wide', text: `${WORD} ${WORD}`, style: { whiteSpace: 'nowrap', margin: '0' } });
+const wide = await widen();
+check(
+  wide.length === 1 && wide[0].includes('p#zz-wide'),
+  `a line that cannot wrap and widens the page is reported and named (${wide.join(' | ') || 'none'})`,
+);
+
+await fresh();
+await plant({
+  tag: 'div',
+  style: { overflowX: 'auto', width: '300px' },
+  kids: [{ tag: 'p', text: `${WORD} ${WORD}`, style: { whiteSpace: 'nowrap', margin: '0' } }],
+});
+const scrolled = await widen();
+check(scrolled.length === 0, `the same line inside a box that scrolls sideways is not reported (${scrolled.join(' | ') || 'none'})`);
+
+await fresh();
+await plant({ tag: 'div', cls: 'card', kids: [{ tag: 'p', cls: 'hint', id: 'zz-hint', text: WORD }] });
+const hinted = await widen();
+check(hinted.length === 0, `a long identifier in a hint wraps instead of widening the page (${hinted.join(' | ') || 'none'})`);
 
 await browser.close();
 if (failed) process.exit(1);

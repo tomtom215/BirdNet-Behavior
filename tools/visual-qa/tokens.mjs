@@ -64,6 +64,9 @@ async function resolver(page) {
   });
 }
 
+// A CSS colour string to [r,g,b] on a given page (resolver() must have run there).
+const rgbOn = (page, css) => page.evaluate((c) => window.__resolve(c), css);
+
 // Composite a possibly translucent computed colour over `under` ([r,g,b]).
 const over = (css, under, page) => page.evaluate(([css, under]) => {
   const c = document.createElement('canvas');
@@ -281,6 +284,59 @@ for (const theme of ['light', 'dark']) {
     check(`${theme} sign-in ${id} field is findable against the card (1.4.11)`, best, 3, `edge ${m.width}px`);
   }
   await ctx3.close();
+
+  // A placeholder is text (WCAG 1.4.3, 4.5:1). Nothing in the stylesheet set one, so each
+  // engine drew its own default: 2.35:1 in WebKit light, 3.8:1 in Firefox light and 4.08:1
+  // in Chromium dark, on a field that holds the instruction ("Scientific name (e.g. ...")
+  // until it is typed over. Graded on the real fields of real pages, as the browser paints
+  // them: `::placeholder`'s own computed colour and opacity, composited over the field's fill.
+  const ctx4 = await browser.newContext({ viewport: { width: 1000, height: 700 }, colorScheme: theme });
+  await ctx4.addInitScript((t) => { try { localStorage.setItem('theme', t); } catch (e) {} }, theme);
+  const p4 = await ctx4.newPage();
+  const seenPlaceholders = new Set();
+  let graded = 0;
+  for (const route of ['/station/alerts', '/station/capture', '/station/data', '/admin/images', '/dashboard']) {
+    await p4.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded' });
+    await p4.waitForLoadState('networkidle').catch(() => {});
+    await resolver(p4);
+    const fields = await p4.evaluate(() => [...document.querySelectorAll('input[placeholder], textarea[placeholder]')]
+      .filter((el) => el.getBoundingClientRect().width > 0 && el.placeholder.trim() && el.type !== 'hidden')
+      .map((el) => {
+        const ph = getComputedStyle(el, '::placeholder');
+        return {
+          what: `${el.tagName.toLowerCase()}[${el.type}]${el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : ''}`,
+          colour: ph.color,
+          opacity: parseFloat(ph.opacity),
+          fill: getComputedStyle(el).backgroundColor,
+          surface: getComputedStyle(document.documentElement).getPropertyValue('--surface'),
+        };
+      }));
+    for (const f of fields) {
+      const key = `${f.what}|${f.colour}|${f.opacity}|${f.fill}`;
+      if (seenPlaceholders.has(key)) continue;
+      seenPlaceholders.add(key);
+      const under = await rgbOn(p4, f.surface);
+      const fill = await over(f.fill, under, p4);
+      // The placeholder's colour at its own opacity, over the fill.
+      const text = await p4.evaluate(([css, bgRgb, opacity]) => {
+        const c = document.createElement('canvas');
+        c.width = c.height = 1;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = `rgb(${bgRgb.join(',')})`;
+        ctx.fillRect(0, 0, 1, 1);
+        ctx.globalAlpha = opacity;
+        ctx.fillStyle = css;
+        ctx.fillRect(0, 0, 1, 1);
+        const d = ctx.getImageData(0, 0, 1, 1).data;
+        return [d[0], d[1], d[2]];
+      }, [f.colour, fill, f.opacity]);
+      check(`${theme} placeholder in ${f.what} on ${route} (1.4.3)`, contrast(text, fill), 4.5, `opacity ${f.opacity}`);
+      graded++;
+    }
+  }
+  // A gate that found no field graded nothing.
+  if (graded < 5) { failures.push(`${theme}: only ${graded} placeholder style(s) found on the fixture's pages`); rows.push(`FAIL  ${theme} placeholders found: ${graded}`); }
+  await ctx4.close();
 }
 
 await browser.close();
