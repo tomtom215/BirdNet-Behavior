@@ -573,6 +573,17 @@ is described under *Changed* or *Fixed*.
 
 ### Fixed
 
+- **Every page fits a 320 px phone, and the setup wizard fits a 360 px one.** The wizard's
+  stepper was a fixed 369 px, so on a 360 px phone (the commonest Android width) the whole
+  wizard scrolled sideways by 23 px, and by 8 px on a 375 px iPhone SE; the connectors now
+  take what is left. At 320 px, Today's source menu no longer sits under its Listen-live
+  link, the live feed's play buttons no longer push the page sideways, the Live view's
+  source menu is no longer cut off, and the Capture Remove buttons, the Data selects and the
+  Access password field stay inside their cards. Below 341 px a card takes 16 px of padding
+  instead of 24 px. The layout gate (`tools/visual-qa/layout.mjs`) now grades 1440, 390, 360
+  and 320 px by default (it graded 1440 and 390), and reports a control cut off by an
+  `overflow: hidden` ancestor, which it passed before. Checked in Chromium, Firefox and
+  WebKit; not on a real phone.
 - **A blank number in a form no longer fails silently.** An optional number left blank
   (audio-source sample rate, migration confirm, quarantine pager, alert-rule hours)
   answered a 422 that htmx never shows, so the click appeared to do nothing. Every form
