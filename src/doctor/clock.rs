@@ -282,12 +282,16 @@ fn timezone_mismatch_check(
     Check::warn(
         "Timezone",
         format!(
-            "this machine's clock is set to {system}, but the station's location is in {detected}"
+            "this machine's clock is set to {system}, but the time zone saved for the station \
+             is {detected}"
         ),
         format!(
-            "detection times come from the system clock, so they will be recorded in {system}. \
-             Fix with:  sudo timedatectl set-timezone {detected}   \
-             (then restart: sudo systemctl restart birdnet-behavior)"
+            "Detection times follow the machine's own time zone ({system}); the zone saved for \
+             the station ({detected}) is a note, and nothing in the browser changes the \
+             machine's clock. If {system} is where the station is, no action is needed (correct \
+             the saved zone by looking up the location again in Settings). If the machine is on \
+             the wrong zone, on the machine itself: sudo timedatectl set-timezone {detected}, \
+             then sudo systemctl restart birdnet-behavior"
         ),
     )
 }
@@ -665,6 +669,16 @@ mod tests {
         assert!(
             fix.contains("timedatectl set-timezone Europe/Berlin"),
             "the operator needs the command, not a description: {fix}"
+        );
+        // The command is for whoever can run it and does not lead: the first
+        // thing said is what the saved zone is and what follows the machine.
+        let command_at = fix.find("sudo").expect("the command is still there");
+        let words_before = &fix[..command_at];
+        assert!(
+            words_before.contains("machine's own time zone")
+                && words_before.contains("a note")
+                && words_before.contains("on the machine itself"),
+            "plain words must come before the command: {fix}"
         );
     }
 
