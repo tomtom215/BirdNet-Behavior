@@ -1998,6 +1998,61 @@ mod tests {
         }
     }
 
+    fn bound(form_key: &str) -> &'static FieldBound {
+        FIELD_BOUNDS
+            .iter()
+            .find(|b| b.form_key == form_key)
+            .unwrap_or_else(|| panic!("no bound for {form_key}"))
+    }
+
+    /// The numbers the settings page prints, as literals. The test above derives
+    /// every edge from the table it checks, so a mutated constant moves the edge
+    /// with it and nothing notices; these three are written out by hand.
+    ///
+    /// `fmt_bound` is private and every bound in the table is a whole number, so
+    /// the fractional branch is only reachable by calling it, and a bound of
+    /// `-12000` loses its sign if the table's minus is deleted.
+    #[test]
+    fn the_range_in_a_refusal_is_the_range_of_the_field() {
+        assert_eq!(fmt_bound(12_000.0), "12000");
+        assert_eq!(fmt_bound(-40.0), "-40");
+        assert_eq!(fmt_bound(0.0), "0");
+        assert_eq!(fmt_bound(2.5), "2.5");
+        assert_eq!(fmt_bound(-0.25), "-0.25");
+
+        let said = bound("freq_shift_hz").refusal("99999");
+        assert!(
+            said.contains("a whole number from -12000 to 12000."),
+            "{said}"
+        );
+        let said = bound("pre_sunrise_offset").refusal("500");
+        assert!(said.contains("a whole number from 0 to 120."), "{said}");
+        let said = bound("extraction_length").refusal("500");
+        assert!(said.contains("a number from 1 to 60."), "{said}");
+        let said = bound("clip_target_lufs").refusal("5");
+        assert!(said.contains("a number from -40 to -6."), "{said}");
+    }
+
+    /// A leading minus is accepted on a whole-number field only where the range
+    /// goes negative. Both halves: the shift takes `-6000`, and a field that
+    /// starts at zero refuses `-0`, which parses as zero and would otherwise
+    /// slip through as in range.
+    #[test]
+    fn a_minus_sign_is_taken_only_where_the_range_goes_negative() {
+        let shift = bound("freq_shift_hz");
+        assert!(shift.accepts("-6000"));
+        assert!(shift.accepts("-12000"));
+        assert!(!shift.accepts("-12001"));
+        assert!(!shift.accepts("--5"));
+
+        for key in ["pre_sunrise_offset", "clip_retention_days"] {
+            let from_zero = bound(key);
+            assert!(from_zero.accepts("0"), "{key}");
+            assert!(!from_zero.accepts("-0"), "{key} took -0");
+            assert!(!from_zero.accepts("-5"), "{key} took -5");
+        }
+    }
+
     /// The motivating slip: the percentage typed into a fraction-sized field.
     /// Out-of-range numbers in the file are warnings (an error would roll the
     /// whole station back to its last-good file), and the finding names the key.
