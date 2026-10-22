@@ -123,6 +123,30 @@ pub fn path_problem(path: &str) -> Option<String> {
     None
 }
 
+/// Why the file at a saved path will not be shown on the Today page, or `None`
+/// when it will (or when no path is set).
+///
+/// [`path_problem`] decides whether a *path* may be stored, and the file may
+/// legitimately appear later (a camera script writes it once a minute), so a
+/// path that is not a picture yet is stored all the same. This is the other
+/// half: the same checks the route makes when it serves the file ([`stat`], then
+/// [`open_picture`]'s sniff of the first bytes), run when the setting is saved,
+/// so the person is told at once — not by a missing picture — that `/etc/passwd`
+/// is not one. Blocking: it opens the file.
+#[must_use]
+pub fn picture_problem(path: &str) -> Option<&'static str> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    match stat(path) {
+        Stat::Unusable(why) => Some(why),
+        Stat::Ready { .. } => open_picture(path)
+            .is_none()
+            .then_some("not a PNG, JPEG, GIF or WebP picture the station can read"),
+    }
+}
+
 /// See [`path_problem`].
 #[must_use]
 pub fn title_problem(title: &str) -> Option<String> {

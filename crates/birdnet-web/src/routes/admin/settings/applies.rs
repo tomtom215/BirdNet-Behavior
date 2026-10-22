@@ -118,22 +118,22 @@ pub const APPLIES: &[Entry] = &[
     Entry {
         key: "alsa_device",
         applies: Applies::Restart,
-        evidence: "src/capture/sources.rs seeds the audio-source table once, at start",
+        evidence: "src/capture/sources.rs seeds the audio-source table only while it is empty, at start; once an active audio_sources row exists src/capture.rs reads the table alone, so the settings page offers this field only while there is none",
     },
     Entry {
         key: "alsa_devices",
         applies: Applies::Restart,
-        evidence: "src/capture/sources.rs seeds the audio-source table once, at start",
+        evidence: "src/capture/sources.rs seeds the audio-source table only while it is empty, at start; once an active audio_sources row exists src/capture.rs reads the table alone, so the settings page offers this field only while there is none",
     },
     Entry {
         key: "rtsp_url",
         applies: Applies::Restart,
-        evidence: "src/capture/sources.rs seeds the audio-source table once, at start",
+        evidence: "src/capture/sources.rs seeds the audio-source table only while it is empty, at start; once an active audio_sources row exists src/capture.rs reads the table alone, so the settings page offers this field only while there is none",
     },
     Entry {
         key: "rtsp_urls",
         applies: Applies::Restart,
-        evidence: "src/capture/sources.rs seeds the audio-source table once, at start",
+        evidence: "src/capture/sources.rs seeds the audio-source table only while it is empty, at start; once an active audio_sources row exists src/capture.rs reads the table alone, so the settings page offers this field only while there is none",
     },
     Entry {
         key: "audio_format",

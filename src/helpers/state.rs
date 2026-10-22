@@ -290,15 +290,32 @@ fn classifier_label_path(
 }
 
 /// Initialize custom site name.
+///
+/// The name shown on the dashboard, the audio-player and share pages is, in
+/// order: `--site-name`, `SITENAME` (the *Site Name* setting), then
+/// `STATION_NAME` (the *Station Name* setting, the one the setup wizard asks
+/// for). The last step is why a name typed in the wizard shows up: the two
+/// settings are different keys with different readers (`STATION_NAME` also
+/// names the Home Assistant device and the eBird export's location), and
+/// before this a station with only the wizard's name set showed
+/// "BirdNet-Behavior" everywhere the site name is printed. An empty value is
+/// the same as none.
 pub fn init_site_name(
     state: birdnet_web::state::AppState,
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) -> birdnet_web::state::AppState {
+    let named = |key: &str| {
+        config?
+            .get(key)
+            .filter(|n| !n.trim().is_empty())
+            .map(String::from)
+    };
     let name = cli
         .site_name
         .clone()
-        .or_else(|| config?.get("SITENAME").map(String::from));
+        .or_else(|| named("SITENAME"))
+        .or_else(|| named("STATION_NAME"));
 
     match name {
         Some(n) if !n.is_empty() => {
@@ -693,6 +710,29 @@ mod tests {
         let cfg = config_with(&[("SITENAME", "")]);
         let state = init_site_name(test_state(), &cli, Some(&cfg));
         assert_eq!(state.site_name(), "BirdNet-Behavior");
+    }
+
+    /// The setup wizard asks for the *Station Name*, and the dashboard prints
+    /// the site name. Seen failing with the `STATION_NAME` step removed: the
+    /// dashboard then said "BirdNet-Behavior" for a station named in the wizard.
+    #[test]
+    fn site_name_falls_back_to_the_station_name_the_wizard_asked_for() {
+        let cli = default_cli();
+        let cfg = config_with(&[("STATION_NAME", "Garden Station")]);
+        let state = init_site_name(test_state(), &cli, Some(&cfg));
+        assert_eq!(state.site_name(), "Garden Station");
+        // An empty Site Name does not hide it.
+        let cfg = config_with(&[("SITENAME", " "), ("STATION_NAME", "Garden Station")]);
+        let state = init_site_name(test_state(), &cli, Some(&cfg));
+        assert_eq!(state.site_name(), "Garden Station");
+        // Counterpart: a Site Name that is set wins over it, and so does the flag.
+        let cfg = config_with(&[("SITENAME", "Front Yard"), ("STATION_NAME", "Garden Station")]);
+        let state = init_site_name(test_state(), &cli, Some(&cfg));
+        assert_eq!(state.site_name(), "Front Yard");
+        let mut cli = default_cli();
+        cli.site_name = Some("CliStation".to_owned());
+        let state = init_site_name(test_state(), &cli, Some(&cfg));
+        assert_eq!(state.site_name(), "CliStation");
     }
 
     #[test]

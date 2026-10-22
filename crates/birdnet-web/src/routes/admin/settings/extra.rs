@@ -534,7 +534,11 @@ pub(super) fn render_group(out: &mut String, group: Group, settings: &HashMap<St
             key = e.key,
             label = e.label,
             control = control(e, value(settings, e.key)),
-            help = e.help,
+            help = if matches!(e.kind, Kind::Secret) {
+                format!("{} {}", e.help, super::masking::SECRET_HINT)
+            } else {
+                e.help.to_owned()
+            },
         );
     }
     out.push_str("\n    </div>\n  </section>");

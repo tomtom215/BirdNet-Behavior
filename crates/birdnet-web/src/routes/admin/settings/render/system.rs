@@ -204,7 +204,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
       <div>
         <label for="site_name">Site Name</label>
         <input id="site_name" name="site_name" value="{site}" placeholder="My Bird Station">
-        <p class="hint">Shown in page titles and headers (BirdNET-Pi: SITE_NAME)</p>
+        <p class="hint">Shown on the dashboard, in the title of a shared detection and of
+        the audio player. Leave blank to use the Station Name. (BirdNET-Pi: SITE_NAME)</p>
       </div>
       <div>
         <label for="info_site">Species Info Links</label>

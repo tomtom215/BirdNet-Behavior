@@ -131,6 +131,13 @@ pub const GROUPS: &[&str] = &["Health", "Capture", "Alerts", "Data", "Settings",
 /// answers `403`), so a viewer's copy of the nav leaves them out.
 pub const VIEWER_HIDDEN: &[&str] = &["doctor"];
 
+/// Pages a viewer is refused that are linked from the body of other pages (a
+/// quick link, a rail button), not from the nav row. [`without_viewer_hidden`]
+/// removes those anchors from a viewer's copy too, for the same reason it
+/// removes the nav entries: a link that only ever answers `403` reads as a
+/// broken station.
+pub const VIEWER_DENIED_LINKS: &[&str] = &["/admin/system/logs/page"];
+
 /// Response extension the admin gate sets on a viewer's response: the page's
 /// admin nav is rewritten by [`without_viewer_hidden`] on its way out.
 ///
@@ -171,12 +178,18 @@ pub fn nav_links(active: &str) -> String {
 /// in either of the two forms [`nav_links`] writes them (active or not).
 ///
 /// Only the admin nav row is touched (`<nav class="admin-nav" ..>`): the same link
-/// written in a sentence elsewhere on the page is the page's own business.
+/// written in a sentence elsewhere on the page is the page's own business — with
+/// the exception of the anchors listed in [`VIEWER_DENIED_LINKS`], which are
+/// quick links and buttons, not sentences, and are removed wherever they sit.
 #[must_use]
 pub fn without_viewer_hidden(html: &str) -> String {
     const OPEN: &str = r#"<nav class="admin-nav""#;
+    let mut html = html.to_owned();
+    for href in VIEWER_DENIED_LINKS {
+        html = without_anchor_to(&html, href);
+    }
     let Some(start) = html.find(OPEN) else {
-        return html.to_owned();
+        return html;
     };
     let end = html[start..]
         .find("</nav>")
@@ -188,6 +201,32 @@ pub fn without_viewer_hidden(html: &str) -> String {
         }
     }
     format!("{}{row}{}", &html[..start], &html[end..])
+}
+
+/// `html` with every `<a … href="HREF" …>…</a>` removed, whole.
+fn without_anchor_to(html: &str, href: &str) -> String {
+    let needle = format!(r#"href="{href}""#);
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find(&needle) {
+        // The anchor's own opening tag: the last `<a` before the attribute,
+        // with no `>` between (otherwise the attribute is on something else).
+        let before = &rest[..at];
+        let open = before.rfind("<a").filter(|&o| !before[o..].contains('>'));
+        let close = rest[at..].find("</a>");
+        match (open, close) {
+            (Some(o), Some(c)) => {
+                out.push_str(&rest[..o]);
+                rest = &rest[at + c + "</a>".len()..];
+            }
+            _ => {
+                out.push_str(&rest[..at + needle.len()]);
+                rest = &rest[at + needle.len()..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A breadcrumb trail for an admin page (`Home › Admin › <Page>`).
@@ -267,6 +306,31 @@ mod tests {
             }
         }
         // No nav on the page: nothing to do, nothing lost.
+        assert_eq!(without_viewer_hidden("<p>hi</p>"), "<p>hi</p>");
+    }
+
+    /// A refused page's anchor is removed wherever it sits and only it: other
+    /// links, the same address written as text, and an `<a>` that merely
+    /// precedes it are left alone.
+    #[test]
+    fn a_denied_link_is_removed_whole_and_nothing_else() {
+        let page = concat!(
+            r#"<a href="/admin/overview">Overview</a>"#,
+            r#"<a href="/admin/system/logs/page" class="quick-link"><div>Logs</div></a>"#,
+            r#"<p>Open /admin/system/logs/page in a terminal.</p>"#,
+            r#"<a class="bnb-btn" href="/admin/system/logs/page">Open the log viewer</a>"#,
+            r#"<a href="/admin/system">System</a>"#,
+        );
+        let seen = without_viewer_hidden(page);
+        assert_eq!(
+            seen,
+            concat!(
+                r#"<a href="/admin/overview">Overview</a>"#,
+                r#"<p>Open /admin/system/logs/page in a terminal.</p>"#,
+                r#"<a href="/admin/system">System</a>"#,
+            )
+        );
+        // A page without the link comes back as it was.
         assert_eq!(without_viewer_hidden("<p>hi</p>"), "<p>hi</p>");
     }
 

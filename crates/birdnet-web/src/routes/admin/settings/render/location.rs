@@ -41,7 +41,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div>
       <label for="station_name">Station Name</label>
       <input id="station_name" name="station_name" value="{station}" placeholder="e.g. My Garden, London">
-      <p class="hint">Used in BirdWeather uploads and export metadata</p>
+      <p class="hint">The name of this place. It is the name on the dashboard unless
+      a Site Name is set under System &amp; Display, the Home Assistant device name
+      when MQTT discovery is on, and the location name in an eBird export.</p>
     </div>
     <div class="grid-2">
       <div>

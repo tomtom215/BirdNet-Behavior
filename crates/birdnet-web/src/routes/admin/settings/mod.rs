@@ -8,12 +8,14 @@
 //! | `extra`   | Settings drawn and saved from a table |
 //! | `form`    | Form deserialization types            |
 //! | `handler` | Route handler functions               |
+//! | `masking` | Credentials shown masked, kept unchanged |
 //! | `render`  | HTML page and form rendering          |
 
 pub mod applies;
 pub mod extra;
 pub mod form;
 pub mod handler;
+pub(crate) mod masking;
 pub mod render;
 
 use axum::{Router, routing::get};

@@ -389,9 +389,16 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
 /// the `birdnet.conf` lines the BirdNET-Pi import offers for download (the
 /// station's keys, verbatim), and the diagnostics (`/admin/doctor`,
 /// `/admin/doctor.json`: the MQTT broker's host, the certificate and CA paths,
-/// the model and data directories) and the process id the restart button
+/// the model and data directories), the process id the restart button
 /// compares (`/admin/system/boot-id`: nothing a read-only account can use, since
-/// it cannot press that button).
+/// it cannot press that button), and the live log (`/admin/system/logs`, the
+/// stream, and `/admin/system/logs/page`, its viewer). The log is the one
+/// surface that is not a rendering of settings: it carries whatever a
+/// subsystem wrote while it ran — file and directory paths, host names and
+/// addresses, the names of accounts that signed in, a camera's host — and none
+/// of it is passed through the redaction the forms use, so "read-only" cannot
+/// be made safe by masking it. A viewer is shown the pages that are renderings
+/// of state, with their credentials masked, and not the stream.
 /// The source's status pill (`/probe`) stays readable — the capture tab polls
 /// it for everyone. The settings forms stay readable too, with every
 /// credential masked (`settings::handler::load_settings_for`), and so does the
@@ -407,6 +414,8 @@ fn viewer_may_read(path: &str) -> bool {
             | "/admin/doctor"
             | "/admin/doctor.json"
             | "/admin/system/boot-id"
+            | "/admin/system/logs"
+            | "/admin/system/logs/page"
     ) || path.starts_with("/admin/system/backups/")
     {
         return false;

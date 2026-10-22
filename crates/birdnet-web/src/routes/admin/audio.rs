@@ -149,6 +149,40 @@ pub(crate) fn public_name(s: &AudioSource) -> String {
     }
 }
 
+/// What any page shows of a source's device: a local device as it is, a
+/// stream's address with its password (and any token in its path or query)
+/// masked.
+///
+/// The administrator's list and edit form used to print the address whole,
+/// which put a camera's password on screen and into every screenshot of the
+/// page. A save that sends the masked address back keeps the stored one
+/// ([`restore_device`]).
+fn shown_device(s: &AudioSource) -> String {
+    if s.kind == SourceKind::Rtsp {
+        birdnet_core::config::redact::redact_value(&s.device_id)
+    } else {
+        s.device_id.clone()
+    }
+}
+
+/// The address a stream form was submitted with, with the mask the page showed
+/// replaced by the stored address.
+///
+/// `Err` carries a sentence for the person when the submission still holds a
+/// mask that stands for nothing (the host was changed and the hidden password
+/// kept), which is never stored.
+fn restore_device(row: &AudioSource, submitted: &str) -> Result<String, &'static str> {
+    const REFUSAL: &str = "The address still holds the hidden-password placeholder, which only \
+        stands for the address already saved. Type the whole address again, password included.";
+    if !submitted.contains(birdnet_core::config::redact::REDACTED) {
+        return Ok(submitted.to_owned());
+    }
+    if row.kind == SourceKind::Rtsp && submitted == shown_device(row) {
+        return Ok(row.device_id.clone());
+    }
+    Err(REFUSAL)
+}
+
 /// Human-readable badge text for a source kind.
 ///
 /// `pub(crate)` so the onboarding wizard's microphone step names the operator's
@@ -189,9 +223,11 @@ async fn page() -> axum::response::Redirect {
 /// pill through the same metrics-driven path the per-row `/probe` poll uses, so
 /// the initial status matches the 8 s self-poll.
 ///
-/// `show_credentials` is `false` for a viewer: an RTSP address carries its
-/// camera's password, so a read-only account sees it with the password masked
-/// (`redact_value`), exactly as the settings API shows it.
+/// An RTSP address carries its camera's password, so every row prints it with
+/// the password masked (`redact_value`), exactly as the settings API shows it,
+/// for the administrator as for a viewer ([`shown_device`]). `show_credentials`
+/// is `false` for a viewer and masks the address of a row before it is drawn;
+/// for an administrator the row masks it itself.
 pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
     // A failed read is not an empty station. This was `Vec::new()`, which drew
     // "0 mics, 0 streams" and two add forms over a station that had both, and
@@ -462,6 +498,14 @@ async fn create(
             let device_id = form.device_id.trim().to_string();
             if device_id.is_empty() {
                 return validation_response("Device id is required.");
+            }
+            // The placeholder the list prints in place of a password is never an
+            // address to store; a new source has no saved one for it to stand for.
+            if device_id.contains(birdnet_core::config::redact::REDACTED) {
+                return validation_response(
+                    "That address holds the placeholder the list shows in place of a password. \
+                     Type the real address, password included.",
+                );
             }
             let kind: SourceKind = match form.kind.parse() {
                 Ok(k) => k,
@@ -789,11 +833,18 @@ async fn update(
                 None,
             );
             let mut patch = AudioSourcePatch::default();
-            let device_id = form.device_id.trim().to_string();
+            let mut device_id = form.device_id.trim().to_string();
             if !device_id.is_empty() {
                 // A changed stream URL is held to the same rule as a new one.
                 match state.with_read_db(|conn| conn.get(&id)) {
                     Ok(Some(row)) => {
+                        // The form was shown the address masked: put the stored
+                        // one back before it is checked, so a bad address
+                        // already stored is still found.
+                        device_id = match restore_device(&row, &device_id) {
+                            Ok(d) => d,
+                            Err(msg) => return validation_response(msg),
+                        };
                         if let Err(msg) = check_stream_url(row.kind, &device_id) {
                             return validation_response(&msg);
                         }
@@ -1157,7 +1208,7 @@ fn render_row(s: &AudioSource, status: Status, listen_default: &str) -> String {
         .replace("{{label_class}}", label_class)
         .replace("{{label_text}}", &escape_html(&label_text))
         .replace("{{label}}", &escape_html(label_raw))
-        .replace("{{device_id}}", &escape_html(&s.device_id))
+        .replace("{{device_id}}", &escape_html(&shown_device(s)))
         .replace("{{detail_line}}", &escape_html(&detail_for(s)))
         .replace("{{status_class}}", status.css())
         .replace("{{status_label}}", status.label())
@@ -1321,7 +1372,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         kind_class = kind_css(row.kind),
         kind_label = kind_label(row.kind),
         label = escape_html(&label),
-        device_id = escape_html(&row.device_id),
+        device_id = escape_html(&shown_device(row)),
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
         eq_chain = escape_html(&row.eq_chain),

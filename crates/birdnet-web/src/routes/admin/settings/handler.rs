@@ -434,6 +434,7 @@ pub(crate) fn submission_problems(form: &SettingsForm) -> Vec<String> {
     problems.extend(language_problem(form));
     problems.extend(stream_url_problems(form));
     problems.extend(super::extra::problems(&form.extra));
+    problems.extend(super::masking::leftover_problems(form));
     problems
 }
 
@@ -532,6 +533,7 @@ pub async fn save_settings(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SettingsForm>,
 ) -> Result<Html<String>, StatusCode> {
+    let mut form = form;
     state.run_blocking(move |state| {
     // Compare submitted values against the current DB state so we only
     // persist the rows the operator actually changed. Without this the
@@ -556,6 +558,9 @@ pub async fn save_settings(
             ));
         }
     };
+    // A credential the form was shown masked comes back as the mask; put what is
+    // stored back in its place before anything checks or diffs the submission.
+    super::masking::resolve(&mut form, &existing);
     let items = build_settings_items(&form, &existing, Unset::AsShownByTheForm);
 
     // Reject before writing, and reject the whole submission: a partial save
@@ -646,26 +651,60 @@ pub async fn save_settings(
                     },
                 )
             };
+            // A picture path is stored whatever it names (the file may appear
+            // later), but a person who typed `/etc/passwd` is told now, not by
+            // a Today page with no picture. Checked on the submission, not the
+            // diff: a path already saved that is still not a picture is the
+            // reason someone is on this page.
+            let picture_note = form
+                .dashboard_image
+                .as_deref()
+                .and_then(|path| {
+                    crate::routes::dashboard_image::picture_problem(path)
+                        .map(|why| format!("{}: {why}", path.trim()))
+                })
+                .map(|note| {
+                    format!(
+                        "The picture for the Today page will not show: {note}. The setting is saved, and the page looks again every ten seconds, so it will appear once the file is a picture."
+                    )
+                });
+            let picture_html = picture_note.as_deref().map_or_else(String::new, |note| {
+                format!(
+                    r#"<p class="save-picture-note">{}</p>"#,
+                    crate::routes::pages::escape_html(note)
+                )
+            });
+            let alert = if picture_note.is_some() {
+                "alert-warn"
+            } else {
+                "alert-success"
+            };
             let body = Html(format!(
-                r#"<div class="alert alert-success" role="alert"
+                r#"<div class="alert {alert}" role="alert"
                     hx-swap-oob="true" id="settings-feedback">
                 <svg class="alert-icon" width="16" height="16" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
                 </svg>
                 Settings saved ({saved} values updated).
-                {when}
+                {when}{picture_html}
             </div>"#
             ));
             // O-18: toast the success outcome via OOB. The follow-up action is
             // offered only when something saved actually waits for a restart.
-            let toast = Toast::success(if waiting.is_empty() {
+            let saved_message = if waiting.is_empty() {
                 format!("Settings saved ({saved} values updated).")
             } else {
                 format!(
                     "Settings saved ({saved} values updated). {} need a restart to apply.",
                     waiting.len()
                 )
-            });
+            };
+            // Green says everything worked; with a picture that will not show it
+            // did not, so the toast is the warning one and carries the reason.
+            let toast = match &picture_note {
+                Some(note) => Toast::warn(format!("{saved_message} {note}")),
+                None => Toast::success(saved_message),
+            };
             Ok(toast::with(
                 body,
                 if waiting.is_empty() {
@@ -948,10 +987,13 @@ pub(crate) fn mask_credentials(raw: &HashMap<String, String>) -> HashMap<String,
 
 /// The settings as `user` may see them in a form.
 ///
-/// An admin sees every stored value — they are the one who types them in. A
-/// viewer is read-only on `/admin`, and "read-only" had meant "can read the
-/// SMTP password, the BirdWeather token and every notification URL in
-/// plaintext": the settings API has always masked them, the forms did not.
+/// An administrator sees every stored value except the credentials, which are
+/// masked ([`super::masking`]): they typed them in once, and a page that prints
+/// them back is a page that can be shoulder-surfed, screenshotted into a bug
+/// report or cached by a proxy. A viewer is read-only on `/admin`, and
+/// "read-only" had meant "can read the SMTP password, the BirdWeather token and
+/// every notification URL in plaintext": the settings API has always masked
+/// them, the forms did not.
 ///
 /// `None` — no identity on the request, which the admin gate never lets
 /// happen — is treated as a viewer: the safe default for a form that would
@@ -965,8 +1007,12 @@ pub(crate) fn load_settings_for(
     user: Option<&crate::auth_middleware::RequestUser>,
 ) -> Result<HashMap<String, String>, String> {
     let raw = load_all_settings(state)?;
+    // Nobody sees a credential in clear: the administrator's forms show a saved
+    // secret as a mask and an address with its password masked, and a save that
+    // sends the mask back keeps what is stored (`masking`). A viewer's forms are
+    // masked more broadly, by the rule the settings API applies.
     let mut shown = if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
-        raw
+        super::masking::mask_for_admin(&raw)
     } else {
         mask_credentials(&raw)
     };
@@ -977,7 +1023,50 @@ pub(crate) fn load_settings_for(
     if !pending.is_empty() {
         shown.insert(super::render::PENDING_KEY.to_owned(), pending.join(","));
     }
+    // Also not a setting: whether the audio-source list exists, because once it
+    // does the capture addresses below it are ignored (see `audio_sources_note`).
+    if let Some(summary) = audio_sources_summary(state) {
+        shown.insert(super::render::AUDIO_SOURCES_KEY.to_owned(), summary);
+    }
     Ok(shown)
+}
+
+/// The station's active audio sources as the Audio Capture card lists them,
+/// or `None` when it has none (or they could not be read).
+///
+/// Capture reads the `audio_sources` table alone as soon as one active row is in
+/// it (`src/capture.rs`); the microphone and network-camera settings only seed
+/// the table while it is empty. So the card offers those fields only while there
+/// is no active row, and otherwise lists the rows and says where they are
+/// edited. An unreadable table is `None`: the fields are then offered as they
+/// always were, and the page says nothing false about sources it cannot see.
+///
+/// One line per source, `kind<TAB>name<TAB>device`, the device masked; see
+/// [`super::render::audio_sources_note`].
+fn audio_sources_summary(state: &AppState) -> Option<String> {
+    let rows = state
+        .with_read_db(birdnet_db::audio_sources::AudioSourceStore::list)
+        .map_err(|e| tracing::warn!(error = %e, "could not list the audio sources for the settings page"))
+        .ok()?;
+    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lines: Vec<String> = rows
+        .iter()
+        .filter(|s| s.disabled_at.is_none())
+        .map(|s| {
+            let device = if s.kind == birdnet_db::audio_sources::SourceKind::Rtsp {
+                birdnet_core::config::redact::redact_value(&s.device_id)
+            } else {
+                s.device_id.clone()
+            };
+            format!(
+                "{}\t{}\t{}",
+                s.kind.as_str(),
+                one_line(s.label.as_deref().unwrap_or("")),
+                one_line(&device)
+            )
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// The settings saved since the station started (see [`crate::pending_restart`]).

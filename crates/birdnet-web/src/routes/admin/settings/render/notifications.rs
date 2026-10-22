@@ -70,6 +70,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let hb = get_setting(s, "heartbeat_url");
     let deadman = get_setting(s, "deadman_hours");
     let weekly_opts = render_weekly_options(&weekly);
+    let secret_hint = super::super::masking::SECRET_HINT;
+    let address_hint = super::super::masking::ADDRESS_HINT;
     write!(out, r#"
   <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
     <h2 class="section-title" id="set-notifications-h">Notifications</h2>
@@ -85,7 +87,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         (<code>gotify://</code>), Pushover (<code>pover://</code>), or a plain
         web address to post to (<code>json://</code>). Look for "webhook" in
         that service’s settings and paste what it gives you. Nothing extra
-        needs installing on the station.
+        needs installing on the station. {address_hint}
       </p>
     </div>
     <h3 class="mt-md">Other services (advanced)</h3>
@@ -96,7 +98,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <div>
         <label for="apprise_url">Address of your Apprise server</label>
         <input id="apprise_url" name="apprise_url" value="{apprise}" placeholder="http://localhost:8000">
-        <p class="hint">Leave blank if you do not run one. (BirdNET-Pi has no Apprise server setting: it runs Apprise itself)</p>
+        <p class="hint">Leave blank if you do not run one. (BirdNET-Pi has no Apprise server setting: it runs Apprise itself) {address_hint}</p>
       </div>
       <div>
         <label for="apprise_config">Path to an Apprise configuration file</label>
@@ -172,7 +174,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint"><b>This shares your sightings publicly.</b> With a token
         set, every detection — with this station’s location — is uploaded to the
         BirdWeather community map, where anyone can see it. Leave blank to keep
-        everything on this device. (BirdNET-Pi: BIRDWEATHER_ID)</p>
+        everything on this device. (BirdNET-Pi: BIRDWEATHER_ID) {secret_hint}</p>
       </div>
       <div>
         <label for="weekly_report_schedule">Weekly Report Day</label>
@@ -187,7 +189,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <label for="heartbeat_url">Heartbeat URL</label>
         <input id="heartbeat_url" name="heartbeat_url" type="url" value="{hb}"
                placeholder="https://hc-ping.com/…">
-        <p class="hint">Pinged periodically so an outside monitor (Healthchecks.io, Uptime Kuma, …) can alert you when the station stops reporting. Leave blank to disable (BirdNET-Pi: HEARTBEAT_URL)</p>
+        <p class="hint">Pinged periodically so an outside monitor (Healthchecks.io, Uptime Kuma, …) can alert you when the station stops reporting. Leave blank to disable (BirdNET-Pi: HEARTBEAT_URL). {address_hint}</p>
       </div>
       <div>
         <label for="deadman_hours">Dead-man alert after (hours of no detections)</label>

@@ -126,12 +126,25 @@ async fn a_viewer_sees_the_forms_with_every_credential_masked() {
             );
         }
     }
-    // Counterpart: the admin, who types these in, still sees them.
+    // Counterpart: the admin, who types these in, still gets the forms and the
+    // list. Nobody is shown a credential in clear any more (the administrator's
+    // pages are held to that by `a_credential_is_never_printed_in_clear`), so
+    // what the admin sees in place of them is the saved-value placeholder and
+    // the camera's address with only its password hidden.
     let admin = sign_in(&app, "admin", &admin_password()).await;
-    let (_, html) = get(&app, "/admin/settings", &admin).await;
-    assert!(html.contains(SMTP_PASS) && html.contains(BW_TOKEN));
+    let (status, html) = get(&app, "/admin/settings", &admin).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !html.contains(SMTP_PASS) && !html.contains(BW_TOKEN),
+        "the administrator's settings form printed a credential"
+    );
+    assert!(html.contains(r#"name="email_smtp_pass" type="password" value="***REDACTED***""#));
     let (_, html) = get(&app, "/station/capture", &admin).await;
-    assert!(html.contains(CAM_PASS));
+    assert!(
+        !html.contains(CAM_PASS),
+        "the capture tab printed the camera password"
+    );
+    assert!(html.contains("rtsp://viewer:***REDACTED***@camera.local/stream"));
 }
 
 #[tokio::test]
@@ -202,6 +215,50 @@ async fn a_viewer_cannot_read_the_diagnostics_or_the_process_id() {
     let (status, body) = get(&app, "/admin/system/boot-id", &admin).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains('-'), "a boot id: {body:?}");
+}
+
+/// The live log carries whatever a subsystem wrote while it ran: paths, host
+/// names, addresses, the names of accounts that signed in. None of it goes
+/// through the redaction the forms use, so a viewer is refused the stream and
+/// its page, and is not offered a link to either.
+#[tokio::test]
+async fn a_viewer_cannot_read_the_live_log_and_is_not_offered_it() {
+    let app = station();
+    let viewer = sign_in(&app, "viewer", &viewer_password()).await;
+    let admin = sign_in(&app, "admin", &admin_password()).await;
+    for uri in ["/admin/system/logs", "/admin/system/logs/page"] {
+        let (status, _) = get(&app, uri, &viewer).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "a viewer may GET {uri}");
+    }
+    // Counterpart: the administrator reaches both (the stream answers at once
+    // with its headers; the body is not read, it never ends).
+    for uri in ["/admin/system/logs", "/admin/system/logs/page"] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(header::COOKIE, &admin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "the admin was refused {uri}");
+    }
+    // The pages that link to the viewer page offer the link to the admin
+    // and not to a viewer, who would be sent to a refusal.
+    let link = r#"href="/admin/system/logs/page""#;
+    for uri in ["/admin/overview", "/admin/system", "/station/data"] {
+        let (status, html) = get(&app, uri, &viewer).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(
+            !html.contains(link),
+            "{uri} offered a viewer a link to the log, which refuses them"
+        );
+        let (_, html) = get(&app, uri, &admin).await;
+        assert!(html.contains(link), "{uri}: the admin lost the log link");
+    }
 }
 
 /// The classifier panel is on the Capture tab, which a viewer may open. A

@@ -27,6 +27,11 @@ use std::fmt::Write as _;
 use birdnet_core::i18n::NameLocalizer;
 
 pub(crate) use badges::PENDING_KEY;
+
+/// The pseudo-setting the page loader adds when the station has an active
+/// audio-source row: the rows, one per line (`kind<TAB>name<TAB>device`). Never
+/// stored. See `handler::audio_sources_summary`.
+pub(crate) const AUDIO_SOURCES_KEY: &str = "__audio_sources";
 pub(crate) use system::language_options;
 
 /// Every settings section on the full page, in the order it is rendered:
@@ -295,6 +300,9 @@ pub(crate) static SETTINGS_FORM_CSS: crate::seal::Sealed = crate::seal::Sealed::
       .btn-primary:hover { background: var(--moss-ink); }
       .alert-success { background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
                          border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .alert-warn { background: var(--dawn-soft); border: 1px solid var(--dawn-soft); color: var(--dawn-ink);
+                       border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .save-picture-note { margin: 0.4rem 0 0; }
       .alert-error { background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
                        border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
       .alert-icon { vertical-align: -2px; margin-right: 0.4rem; }
@@ -325,6 +333,13 @@ pub(crate) static SETTINGS_FORM_CSS: crate::seal::Sealed = crate::seal::Sealed::
       .save-row { display: flex; align-items: center; gap: 1rem; }
       .save-note { color: var(--fg-3); font-size: 0.875rem; }
       .save-note.dim { color: var(--fg-4); font-size: 0.8rem; }
+      /* The audio-source list shown in place of the capture addresses. */
+      .set-sources { border: 1px solid var(--border); border-radius: 0.5rem; background: var(--bg);
+                     padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .set-sources p { margin: 0 0 0.5rem; font-size: 0.875rem; color: var(--fg-2); }
+      .set-sources p.hint { margin-top: 0.5rem; margin-bottom: 0; }
+      .set-sources__list { margin: 0 0 0.25rem; padding-left: 1.2rem; font-size: 0.875rem; }
+      .set-sources__list li { margin-bottom: 0.25rem; overflow-wrap: anywhere; }
     </style>",
 );
 
