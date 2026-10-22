@@ -55,6 +55,7 @@ handled	crates/birdnet-web/src/routes/admin/rules.rs	rules_list_partial	match-er
 handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	save_settings	match-err	match load_all_settings(state) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	settings_page	match-err	match load_settings_for(state, user.as_deref()) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	settings_partial	match-err	match load_settings_for(state, user.as_deref()) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	audio_sources_summary	ok	state .with_read_db(birdnet_db::audio_sources::AudioSourceStore::list) .map_err(|e| tracing::warn!(error = %e,
 handled	crates/birdnet-web/src/routes/admin/species/handler.rs	configured_species_lists	unwrap_or_else	read_list(conn, key).unwrap_or_else(|e| { tracing::warn!(error = %e, key, "species list could not be read; app
 handled	crates/birdnet-web/src/routes/admin/species/handler.rs	filter_test_page	match-err	match state.with_read_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000)) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/species/handler.rs	filter_test_page	match-err	match try_species_lists(state) { Err .. }
