@@ -11,8 +11,8 @@ The working branch is `claude/amazing-babbage-nxiuuc`, pushed to `origin`. `main
 merge of #264 (`gh api repos/tomtom215/BirdNet-Behavior/commits/main`); the branch is
 `git rev-list --count origin/main..HEAD` commits ahead of it and `git diff --shortstat
 origin/main HEAD` is the size of the difference (both move; the commands are the source).
-**No pull request has been opened**, so no `pull_request`-triggered workflow has run on it
-(section 6, step 1).
+A **draft pull request, [#265](https://github.com/tomtom215/BirdNet-Behavior/pull/265), was opened on
+2026-10-22**; the verification in section 4 predates it, and no CI result is recorded in this file.
 
 ## 1. Repository settings only the maintainer can change
 
@@ -214,7 +214,8 @@ them (`184b3db`, `2e63d18`, `ba1f5a1`, `59762e1`, `7282666`); the commit message
 and I re-ran only the resampler one myself. The documentation pass's counts (56 migrations, 155 config keys, 106 paths and 108
 operations in `openapi.json`) date from 2026-10-21 and were not repeated.
 
-**Not verified:** a CI run of any workflow on this branch (no pull request); OpenSSF Scorecard
+**Not verified:** a CI run of any workflow on this branch (the draft pull request #265 was opened after this
+section was written); OpenSSF Scorecard
 (it cannot run here); an upgrade or fresh install on a real systemd host
 (`installer/test/upgrade-e2e.sh`); a real Raspberry Pi, soundcard, GPU or screen reader; iOS
 or macOS Safari (only Playwright's Linux WebKit); birdnet-go (its source was read, never run).
@@ -237,9 +238,9 @@ maintainer can settle are listed in `dismiss.sh`'s closing text.
 Severity is a judgement. Everything here was found or confirmed in the last session unless
 it says otherwise.
 
-1. **The pull-request-triggered gates have not seen this branch.** Open a draft pull
-   request early (CLAUDE.md: work has sat broken on a pushed branch for hours). A full CI
-   run is about 45 minutes and each push cancels the run in progress.
+1. **CI on this branch has not been read.** Draft pull request #265 was opened on 2026-10-22,
+   so the `pull_request` workflows run for the first time; read them. A full CI run is about
+   45 minutes and each push cancels the run in progress.
 2. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
    another machine stops notifications until the file is copied in again.
 3. **The interface text is English only (A-5).** Medium, large. Species names come in 35
@@ -308,8 +309,7 @@ it says otherwise.
 
 ## 6. Where to start
 
-1. Open a **draft** pull request from `claude/amazing-babbage-nxiuuc` and read the first
-   CI run. Expect to fix what only CI shows: the previous branch's first run on #264 found
+1. Read the first CI run on draft pull request #265 (`claude/amazing-babbage-nxiuuc`). Expect to fix what only CI shows: the previous branch's first run on #264 found
    a mutation survivor, 17 CodeQL alerts and more mutation survivors that no local run had.
    The default layout gate is now about four times longer (336 page states, roughly 12 minutes
    locally); `a11y.yml` has not run it.
