@@ -2,18 +2,17 @@
 
 What only the maintainer can do, what the last working session did and did not
 verify, and where the next one should start. This file was **rewritten**, not
-appended to, on 2026-10-21 for the tree as that session left it. Facts about
-GitHub were read that day with read-only `gh api` calls, each named in section 1;
-read them again before relying on them. Anything not attributed to a command is
-marked as reported, read or unknown.
+appended to, on 2026-10-21 and its sections 3 to 6 were brought up to date on 2026-10-22 for
+the tree at the commit named in section 4. Facts about GitHub were read on 2026-10-21 with
+read-only `gh api` calls, each named in section 1; read them again before relying on them.
+Anything not attributed to a command is marked as reported, read or unknown.
 
-The working branch is `claude/amazing-babbage-nxiuuc`. `main` is `ea2d439`, the
-merge of #264 (`gh api repos/tomtom215/BirdNet-Behavior/commits/main`), and the
-branch is `git rev-list --count origin/main..HEAD` commits ahead of it (83 at
-`042973f`; the number moves, the command is the source), and `git diff --shortstat
-origin/main HEAD` reported 414 files changed at that commit (before this file's own). **Nothing
-from it has been pushed or opened as a pull request by this file's author**, so no
-`pull_request`-triggered workflow has seen it (section 6, step 2).
+The working branch is `claude/amazing-babbage-nxiuuc`, pushed to `origin`. `main` is `ea2d439`, the
+merge of #264 (`gh api repos/tomtom215/BirdNet-Behavior/commits/main`); the branch is
+`git rev-list --count origin/main..HEAD` commits ahead of it and `git diff --shortstat
+origin/main HEAD` is the size of the difference (both move; the commands are the source).
+**No pull request has been opened**, so no `pull_request`-triggered workflow has run on it
+(section 6, step 1).
 
 ## 1. Repository settings only the maintainer can change
 
@@ -182,97 +181,93 @@ the commits to read first (hashes valid on this branch).
 - *Release engineering and public-repository hygiene* (`cbc2c21`, `b213bde`, `bcc28ee`,
   `65094fc`, `14b34f1`, `fa3015f`, `e783ef6`, `71129a0`, `e88ee2c`, `ac18953`, `e88cd67`).
 - *Lint, format and typos clean-up* by the last agent (`b89e8e0` and following; read `git log`).
+- *The final hardening pass (2026-10-22).* Credentials are masked in admin forms and the
+  support bundle (`masking.rs`); the cross-site check holds over HTTP/2 and refuses
+  `Sec-Fetch-Site: cross-site`; every form handler takes `HtmxForm` so a blank or garbled field
+  is a toast and not a 422 htmx hides (`184b3db`); the service worker is dormant, honestly
+  (`sw.js`, gate `sw-state.mjs`); BirdWeather's privacy settings fail closed; every page fits
+  a 320 px phone and the setup wizard a 360 px one (`2e63d18`, `ba1f5a1`); the code-scanning
+  alerts were reproduced locally and fixed in code or listed for dismissal
+  (`tools/code-scanning/dismiss.sh`).
 
 ## 4. What was verified, and by what command
 
-Only what the documentation pass itself ran on 2026-10-21 is recorded here; each line is a
-command and what it printed.
+Run on 2026-10-22 on commit `59762e1` (later commits changed only `CHANGELOG.md` and this
+file), in a container with the real BirdNET V2.4 and V3.0 models and the range model loaded
+through the `BIRDNET_TEST_*` variables, with `~/.duckdb` moved aside. Exit codes come from the
+runner's own results files, not from a pipe.
 
 | Command | Printed |
 |---|---|
-| the counting script of the pass (migrations, config keys, `--help` lines, `openapi.json`) | 56 migrations, 155 config keys, 118 `--help` option lines (after `3e1fa96` regenerated the reference), **106 paths and 108 operations** |
-| `grep -rhE '^\s*#\[(tokio::)?test\]\s*$' --include='*.rs' src crates tests \| wc -l` | **5791** test functions (a count of attributes, not of tests run) |
-| `cargo test -p birdnet-core --all-features --lib resample` | 9 passed |
-| `… -p birdnet-core --lib disk` | 59 passed |
-| `… -p birdnet-db --lib species_tracking` | 21 passed |
-| `… -p birdnet-integrations --lib notification` | 28 passed |
-| `… -p birdnet-integrations --test mqtt_client_certificate` | 7 passed |
-| `… -p birdnet-migrate --test a_birdnet_pi_conf_is_planned_key_by_key` | 21 passed |
-| `… -p birdnet-migrate --test clips_follow_their_detections_across` | 17 passed |
-| `… -p birdnet-web --test every_route_the_api_serves_is_in_the_openapi_document` | 6 passed |
-| `… -p birdnet-web --test the_learned_thresholds_can_be_read_and_reset` | 15 passed |
-| `… -p birdnet-web --test the_weather_api_serves_what_the_poll_stored` | 8 passed |
-| `… -p birdnet-web --test spectrogram_look_options` / `listening_aids_are_served` / `a_species_interval_that_was_not_saved_says_so` | 6 / 4 / 7 passed |
-| `… -p birdnet-web --test the_clock_and_temperature_are_printed_in_one_place` | **1 passed, 2 FAILED** (section 5, item 1) |
-| `node tools/visual-qa/token-doc.mjs --check` | "generated regions are current" (241 light tokens, 90 dark overrides) |
-| `python3 scripts/gen-third-party-licenses.py --check` | ok: 389 packages, 12 MPL-2.0, up to date |
-| the typos binary the lint pass downloaded, `--config ./.typos.toml` over the seven documents edited | no findings |
-| the path check and the tally script in `FEATURE_GAP_ANALYSIS.md` (10.6, 9.9) | 132 paths resolved, 39 names unresolved (upstream files, generated names), 0 lines past the end of a file; 87 findings, 53 shipped, 28 open |
-| `python3 -I` on the script at the end of this file, over the tracked `.rs` files | 459 `#[allow]` attributes, 440 without a reason, 796 entries, 599 cast-lint entries (the script at the end of this file) |
+| `cargo test --all-features --no-fail-fast`, run in 65 batches (each crate's `--lib`, the binary, the root `tests/` six at a time, each crate's `tests/` six at a time, `--doc` per crate) | 293 `test result:` lines, every batch exit 0: **4597 passed, 0 failed, 9 ignored** (the ones I read are subprocess workers started by their parent tests) |
+| `cargo fmt --check --all` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings`, then with `--no-default-features`, then `--all-features` | exit 0, 0, 0 |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --all-features` | exit 0 |
+| `typos --config ./.typos.toml`; `scripts/gen-third-party-licenses.py --check`; `scripts/check-crate-licences.py --self-test`; `scripts/gen-cli-help.sh` then `git diff --exit-code` on the reference; `scripts/check-ci-config.py` (needs `cargo-mutants` 27.1.0) | exit 0 each |
+| 30 browser-gate steps in `tools/visual-qa` against a fixture built from `59762e1` (Chromium 141): `layout-selftest`, `qa-selftest`, `layout`, `tokens`, `chart-ramps`, `surface-layers`, `token-doc --check`, `motion`, `focus`, `figures --fail`, `dom-sinks`, `interactions`, `charts`, `relational`, `terrain`, `listen-fx`, `display-format`, `legibility`, `cls`, `axe`, `onboarding-wizard`, `live-logs-connect`, `sw-state`, `sonar`, `base-path` and `sw-state` under `/bn`, `charts-edge` on the `empty`, `one` and `stress` profiles, `STRICT=1 qa` | exit 0 each. `layout` graded 336 page states (1440, 390, 360 and 320 px, both themes); `qa` reported 0 pages with issues; `interactions` 79 passed; `tokens` 91 checks; `axe` no blocking violations; `charts-edge` graded 48 / 42 / 2 charts |
+| `live-logs-connect`, `sw-state`, `sonar` with `PLAYWRIGHT_BROWSERS_PATH` set | pass in Chromium 141, Firefox 157 and WebKit 27.2 (Playwright's Linux builds) |
+| a one-off script (not committed) loading all 42 routes in Firefox and WebKit at 320, 360 and 390 px | 252 route/width states, 0 with sideways overflow |
+| the resampler gate `tests/resampler_matches_resampy_parity.rs` against the file before `280f7fc` | fails ("44100 Hz: output length left: 96001 right: 96000"), passes after |
 
-The final full test suite, `cargo clippy --workspace --all-targets`, `cargo fmt --check`,
-rustdoc, the browser gates and a CI run **on this branch** are not recorded here: they were
-the lead's to run after this file was written, and their results belong in the pull request
-or in this section, from whoever ran them.
+Other gates were seen failing before their fix, as reported in the commit messages that add
+them (`184b3db`, `2e63d18`, `ba1f5a1`, `59762e1`, `7282666`); the commit message is the record,
+and I re-ran only the resampler one myself. The documentation pass's counts (56 migrations, 155 config keys, 106 paths and 108
+operations in `openapi.json`) date from 2026-10-21 and were not repeated.
+
+**Not verified:** a CI run of any workflow on this branch (no pull request); OpenSSF Scorecard
+(it cannot run here); an upgrade or fresh install on a real systemd host
+(`installer/test/upgrade-e2e.sh`); a real Raspberry Pi, soundcard, GPU or screen reader; iOS
+or macOS Safari (only Playwright's Linux WebKit); birdnet-go (its source was read, never run).
+The final CodeQL pass over `rust`, `actions`, `javascript` and `python` was **running when this
+section was written** and is not recorded here.
 
 ## 5. Open items, with severity
 
 Severity is a judgement. Everything here was found or confirmed in the last session unless
 it says otherwise.
 
-1. **A gate is red at `3eb0055`: `the_clock_and_temperature_are_printed_in_one_place`
-   (2 of 3 tests fail).** Severity **high for CI**. It lists seven hand-written times or
-   temperatures that later work added: `routes/weather.rs:185` and `:257`,
-   `routes/pages/viz/bars.rs:301-302`, `viz/bursts.rs:83`, `viz/funnel.rs:58`,
-   `routes/admin/settings/render/system.rs:175`, plus an exemption in `viz/bars.rs` that
-   now excuses nothing. Convert them or name them in the exemption list with a reason.
-2. **The pull-request-triggered gates have not seen this branch.** Open a draft pull
+1. **The pull-request-triggered gates have not seen this branch.** Open a draft pull
    request early (CLAUDE.md: work has sat broken on a pushed branch for hours). A full CI
    run is about 45 minutes and each push cancels the run in progress.
-3. **BirdNET-Pi's protected clips are not carried across as locks (A-23, TD-7).** Severity
-   medium. `protected_names` (`crates/birdnet-migrate/src/clips.rs:714`) is written and
-   tested and **nothing calls it**; the migration guide tells a migrator to lock the clips
-   again by hand. Wire it into the clip import, then delete that sentence.
-4. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
+2. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
    another machine stops notifications until the file is copied in again.
-5. **The interface text is English only (A-5).** Medium, large. Species names come in 35
+3. **The interface text is English only (A-5).** Medium, large. Species names come in 35
    languages; birdnet-go has 15 interface locales.
-6. **The classifier runs on 2 threads and no setting changes that (A-7).** Medium, small.
-7. **The V3.0 privacy default (section 2) and voice-activity detection (G-13).**
-8. **92 of 108 settings need a restart (P-7).** Low. They say so; hot reload is not built.
-9. **Smaller gaps:** weather on a detection (A-6), per-species actions (A-22), the public
+4. **The classifier runs on 2 threads and no setting changes that (A-7).** Medium, small.
+5. **The V3.0 privacy default (section 2) and voice-activity detection (G-13).**
+6. **92 of 108 settings need a restart (P-7).** Low. They say so; hot reload is not built.
+7. **Smaller gaps:** weather on a detection (A-6), per-species actions (A-22), the public
    address is an environment variable only (A-25; `IMAGE_PROVIDER` and the Flickr keys *are*
    browser settings now), no certificate upload or generate page (P-22), the data-volume check
    judges one of upstream's four paths (P-4), no OIDC (G-20), the rest of the gap analysis'
    9.7 table.
-10. **Known debt, each with evidence:** [`TECH_DEBT.md`](TECH_DEBT.md) TD-1 (a failed read
+8. **Known debt, each with evidence:** [`TECH_DEBT.md`](TECH_DEBT.md) TD-1 (a failed read
     inside the station-health evaluator ends an alert), TD-2 (12 of 24 help topics have no
     call site), TD-3 (the boot journal records a detection count it could not read as 0),
     TD-4 (the Capture tab's duplicate guard; the wizard logs and says nothing), TD-5 (RTSP
     credentials on ffmpeg's command line; a way around it is proven with `concat` and
-    `tools/rtsp-probe`, not built), TD-6 (ten page partials routed and never linked), TD-7
-    (item 3). Counts in that file were rechecked on 2026-10-21 where a command could.
-11. **Public pages that scan the whole history are still slow one at a time**, and an
+    `tools/rtsp-probe`, not built), TD-6 (ten page partials routed and never linked); TD-7 (protected clips) is closed. Counts in that file were rechecked on 2026-10-21 where a command could.
+9. **Public pages that scan the whole history are still slow one at a time**, and an
     unescaped reflection can still inject non-script markup (the CSP nonce goes only onto
     sealed tags and any other `<script` is rewritten to text; an `hx-post` attribute is a
     different matter): accounts in `docs/book/field/hardening.md` and
     `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`. The heavy-read gate and the species-and-date index
     helped concurrency and the feeds' worst case; a single `rare.rss` is not faster.
-12. **`--doctor` reports a config value outside its range as a warning, not a refusal**
+10. **`--doctor` reports a config value outside its range as a warning, not a refusal**
     (`START_CRITICAL` holds four names), so a bad number leaves a station running on a value
     the daemon cannot use. Whether some should stop the start is a decision.
-13. **Workflows that have not run as a whole:** `release.yml` (read against a real toolchain
+11. **Workflows that have not run as a whole:** `release.yml` (read against a real toolchain
     and fixed; not executed), the new `docs.yml` tag and browser gates, the `fuzz.yml` pull-request
     path. The release SemVer check accepts build metadata (`+…`), which a Docker tag cannot
     carry (read from the regular expression, not run).
-14. **Floating pins:** every `uses:` line is commit-pinned (133 of 133, counted); the
+12. **Floating pins:** every `uses:` line is commit-pinned (133 of 133, counted); the
     `ubuntu:24.04` container `install-smoke.yml` starts with `docker run` is a tag, and
     `taiki-e/install-action` and `EmbarkStudios/cargo-deny-action` choose their own tool builds.
-15. **Dependencies.** `ort` 2.0.0-rc.15, `tokio` 1.54.0, `rustls` 0.23.46, `zip` 9.0.5
+13. **Dependencies.** `ort` 2.0.0-rc.15, `tokio` 1.54.0, `rustls` 0.23.46, `zip` 9.0.5
     (build-time only), htmx 2.0.11 (npm also publishes a 4.0.0, not evaluated). Four packages
     have newer releases their parents hold back (`comfy-table`, `generic-array`, `matchit`,
     `psm`: from the previous `cargo update --dry-run`, not re-run).
-16. **Suggestions for `CLAUDE.md`, not added** (agents proposed them; I did not edit that file
+14. **Suggestions for `CLAUDE.md`, not added** (agents proposed them; I did not edit that file
     on their say-so): a full-page escaping test must probe with a payload `seal::redeem` does
     not rewrite (`<i>`, `<img onerror>`) and assert on the rendered region; a BLOB in a TEXT
     column (`X'ff'`) makes `row.get::<String>` refuse it, which separates two reads of the
@@ -283,20 +278,38 @@ it says otherwise.
     files; and a real clock never equals a `Duration`, so put a time comparison in a
     function of its two durations.
 
+- **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
+  middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
+  cross-site check (403; behind a reverse proxy whose `Origin` differs from `Host`, every
+  write would do nothing visible), the viewer-role refusal (403) and the rate limiter (429).
+  One outermost layer turning a 4xx/5xx on a non-GET `HX-Request` into 200, `HX-Reswap: none`
+  and a status toast (excluding `HX-Redirect`, `HX-Location`, `HX-Refresh`) would close it;
+  not built because it changes the status every htmx caller sees. Check the proxy case first.
+- **WebKit reports a `style-src-attr` violation for every plain `<select>`** under this
+  station's CSP. Reproduced in Playwright's Linux WebKit 27.2 with a bare page and none of our
+  code; Firefox and Chromium do not. Its effect on a select's look in Safari is **unknown**
+  (not run on macOS or iOS).
+- **Smaller items found at the end and left:** the species hourly chart and the weekly chart
+  still scale down on a phone rather than being redrawn; a hint under the Data tab's source
+  time zone select overlaps slightly at 320 px and no gate flags it (read from a screenshot by
+  the agent that found it, not by me); `cargo install` caveats and the crates.io publish order
+  are section 2 decisions.
+
 ## 6. Where to start
 
-1. Turn the red gate in section 5, item 1 green (and check the generated CLI reference is
-   current: `scripts/gen-cli-help.sh`, then `git diff --exit-code docs/book/_generated/cli-help.txt`;
-   it was regenerated in `3e1fa96`).
-2. Open a **draft** pull request from `claude/amazing-babbage-nxiuuc` and read the first
+1. Open a **draft** pull request from `claude/amazing-babbage-nxiuuc` and read the first
    CI run. Expect to fix what only CI shows: the previous branch's first run on #264 found
    a mutation survivor, 17 CodeQL alerts and more mutation survivors that no local run had.
+   The default layout gate is now about four times longer (336 page states, roughly 12 minutes
+   locally); `a11y.yml` has not run it.
+2. Run `APPLY=1 tools/code-scanning/dismiss.sh` with a maintainer token for the dismissals it
+   lists, and read what it prints for the Scorecard items only a maintainer can settle.
 3. Make the settings in section 1 (private vulnerability reporting, the five labels,
    topics, `protect-main`) and tag the next release with `git tag -a`.
 4. Decide, in this order: the V3.0 privacy default; whether to wire the model mirror; the
    three missing controls (A-16 to A-18); the cast-lint policy; crates.io.
-5. Close A-23 and A-24 (section 5, items 3 and 4); they are the two places a migrated
-   station behaves differently from the guide's promise.
+5. Close A-24 (section 5, item 2): a migrated station's notifications stop on restore until
+   `apprise.txt` is copied in again.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 
