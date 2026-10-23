@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-23
+
 ### Security
 
 - **`tokio` 1.54.1 (RUSTSEC-2026-0384).** 1.54.0 has a race between `tokio::time::Interval`
@@ -11071,7 +11073,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...v0.16.1

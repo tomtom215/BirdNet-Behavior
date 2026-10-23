@@ -8,7 +8,7 @@ is where every change is announced.
 
 ## 1. Where the project is
 
-BirdNet-Behavior is at `0.17.x`. Between `0.1.0` (2026-04-12) and `0.17.1`
+BirdNet-Behavior is at `0.18.x`. Between `0.1.0` (2026-04-12) and `0.17.1`
 (2026-10-04) there were 22 releases, ten of them from `0.11.0` (2026-08-09) on
 (`0.10.0` has a changelog section but was never tagged). The count is the
 application releases in
