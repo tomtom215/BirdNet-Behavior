@@ -640,7 +640,6 @@ mod remember_tests {
     // `==` is the contract: the window is either exactly off or exactly the
     // number the operator gave. The same reasoning `resolve_f32_with_default`
     // records for its own comparison.
-    #[allow(clippy::float_cmp)]
     #[test]
     fn the_window_is_off_unless_it_is_asked_for() {
         let f = NoiseFilter::new(0.5, vec!["Dog".to_owned()]);
@@ -651,7 +650,6 @@ mod remember_tests {
     }
 
     /// A typo must not silence a species for the rest of the recording.
-    #[allow(clippy::float_cmp)]
     #[test]
     fn a_nonsense_window_is_off_rather_than_unbounded() {
         for bad in [0.0, -5.0, f32::NAN, f32::INFINITY] {

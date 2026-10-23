@@ -35,6 +35,14 @@ pub(super) fn source_options_for(sources: &[AudioSource], selected: Option<&str>
     render_options(&enabled, selected)
 }
 
+/// The `<option>` set for a source list that could not be read.
+///
+/// Not [`render_options`]' "no source yet": that says the station has no
+/// microphone, which a failed read cannot know.
+pub(super) fn unreadable_options() -> String {
+    r#"<option value="" disabled selected>— couldn't read the sources —</option>"#.to_owned()
+}
+
 /// Render the `<option>` set for the source selector. With at least one
 /// configured `audio_sources` row, the first option is the default-source
 /// path (empty value → first enabled row) and the rows follow, labelled by

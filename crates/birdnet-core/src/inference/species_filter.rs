@@ -492,7 +492,6 @@ impl SpeciesFilter {
     /// # Errors
     ///
     /// Returns `InferenceError` if metadata model inference fails.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     pub fn filter_species(
         &mut self,
         location: Option<(f64, f64)>,

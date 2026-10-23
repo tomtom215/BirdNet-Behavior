@@ -96,7 +96,8 @@ fn boot_and_expect_serving(config_path: &std::path::Path) {
                 let ob = http_status_line(port, "/onboarding");
                 assert!(
                     ob.as_deref().is_some_and(|l| l.contains("200")),
-                    "GET /onboarding did not return 200 (got {ob:?})"
+                    "GET /onboarding did not return 200 (got {:?})",
+                    ob.as_deref().map(|l| l.escape_debug().to_string())
                 );
                 return; // booted and serving — success
             }

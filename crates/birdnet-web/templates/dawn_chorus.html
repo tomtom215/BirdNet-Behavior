@@ -18,7 +18,7 @@
     <p class="bnb-lede dc-lede">
       <b>Who sings, and when.</b> Each ring is one species; its ribbon swells outward
       at the hours it's most active, normalized to its own peak so a quiet wren reads
-      as clearly as a loud cardinal. Midnight is at the top; the dashed hand is now.
+      as clearly as a loud cardinal. Midnight is at the top; the line is now.
       <span id="sun-line" hidden>Sunrise <span id="sun-rise" class="mono"></span>,
       sunset <span id="sun-set" class="mono"></span>.</span>
     </p>
@@ -42,29 +42,26 @@
   </div>
 </div>
 
-<!-- Per-species activity, tucked behind a "see the numbers" disclosure -->
+<!-- Each bird's day, flat: the same numbers as the rings, one row per species -->
 <div class="bnb-card pad dc-list-card">
   <div class="section-header">
     <div>
-      <div class="bnb-eyebrow">Selected species</div>
-      <h2 class="sh-h">Activity ribbons</h2>
+      <div class="bnb-eyebrow">Hour by hour</div>
+      <h2 class="sh-h">Each bird's day</h2>
     </div>
     <a class="action" href="/species">All species →</a>
   </div>
-
-  <details class="pt-disc">
-    <summary>See the numbers — per-species activity</summary>
-    <div id="dawn-list"
-         hx-get="/pages/dawn-list"
-         hx-trigger="toggle from:closest details once, intersect once"
-         hx-swap="innerHTML">
-      {{skel_ribbons}}
-    </div>
-    <div class="bnb-meta dc-foot">
-      Species whose peak hour falls outside the dawn band (05:00–08:00) are marked
-      <em>off-chorus</em> on their row.
-    </div>
-  </details>
+  <p class="bnb-meta dc-strip-note">
+    The same species, laid flat: the day runs left to right and a taller column is an
+    hour that bird is heard more. The shaded band is the dawn window, 05:00 to 08:59.
+  </p>
+  <div id="dawn-list"
+       hx-get="/pages/dawn-list"
+       hx-trigger="load"
+       hx-swap="innerHTML"
+       class="dc-list-slot">
+    {{skel_ribbons}}
+  </div>
 </div>
 
 <script>

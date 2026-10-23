@@ -102,7 +102,7 @@ async fn notif_history_partial(
                      <td><span class=\"conf {status_cls}\">{status}</span></td>\
                      <td class=\"nc-msg\">{msg}</td>\
                      </tr>",
-                    time = escape_html(&e.sent_at),
+                    time = crate::display::datetime(&e.sent_at),
                     channel = escape_html(&e.channel),
                     species = escape_html(shown),
                     status = escape_html(&e.status),

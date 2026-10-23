@@ -88,6 +88,9 @@ pub(super) struct Facts<'a> {
     pub(super) source_names: &'a HashMap<String, String>,
     pub(super) filter_admits_nothing: bool,
     pub(super) failing_classifiers: &'a [String],
+    /// What a scan of the folder the daemon watches found; `None` when the
+    /// folder is not known or cannot be read.
+    pub(super) recordings_folder: Option<&'a crate::watch_folder::FolderScan>,
 }
 
 /// What to call a source: the name its owner gave it, else the stream id.
@@ -194,6 +197,16 @@ pub(super) fn issues(f: &Facts<'_>) -> Vec<Issue> {
             "uploads are waiting for the network".to_owned(),
         );
     }
+    // A recording whose name the daemon cannot read is refused with a line in
+    // the log and left where it is, so the person who dropped it in sees
+    // nothing happen. Said here, with the count and the fix.
+    if let Some(scan) = f.recordings_folder.filter(|s| s.unnamed > 0) {
+        push(
+            Severity::Attention,
+            "Files not analysed",
+            unnamed_recordings_sentence(scan),
+        );
+    }
     // Named, not counted. "An audio source is down" told the owner of two
     // cameras that one of them had a problem and left them to work out which.
     let faulted: Vec<&SourceStatus> = f.capture.iter().filter(|c| c.state.is_fault()).collect();
@@ -251,6 +264,31 @@ pub(super) fn issues(f: &Facts<'_>) -> Vec<Issue> {
         );
     }
     out
+}
+
+/// The sentence for recordings the daemon refuses by name.
+fn unnamed_recordings_sentence(scan: &crate::watch_folder::FolderScan) -> String {
+    use crate::watch_folder::{EXAMPLE_NAME, EXPECTED_NAME};
+    let (count, were, its, them) = match (scan.unnamed, scan.capped) {
+        (1, false) => ("1 audio file".to_owned(), "was", "its name does not", "it"),
+        (n, false) => (
+            format!("{n} audio files"),
+            "were",
+            "their names do not",
+            "them",
+        ),
+        (n, true) => (
+            format!("at least {n} audio files"),
+            "were",
+            "their names do not",
+            "them",
+        ),
+    };
+    format!(
+        "{count} in {dir} {were} not analysed because {its} look like {EXPECTED_NAME} \
+         (for example {EXAMPLE_NAME}); rename {them} to that form, the date and then the time",
+        dir = scan.dir.display(),
+    )
 }
 
 /// Upper-case the first character.
@@ -391,6 +429,18 @@ pub(super) fn disks(db_path: &std::path::Path) -> (Option<DiskUsage>, Option<Dis
     (disk, scratch)
 }
 
+/// The disk readings the Health surfaces grade: the ones a test pinned with
+/// [`AppState::pin_disk_usage`] (and no scratch reading beside them), otherwise
+/// whatever `read` asks the filesystem.
+pub(super) fn pinned_or(
+    state: &AppState,
+    read: impl FnOnce() -> (Option<DiskUsage>, Option<DiskUsage>),
+) -> (Option<DiskUsage>, Option<DiskUsage>) {
+    state
+        .pinned_disk_usage()
+        .map_or_else(read, |pinned| (Some(pinned), None))
+}
+
 /// The directory holding the database: the station's data directory.
 pub(super) fn data_dir_of(db_path: &std::path::Path) -> std::path::PathBuf {
     db_path
@@ -490,7 +540,7 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
                 .map_err(|e| e.to_string())?;
         Ok::<_, String>((enabled.len(), names, queued, recorded_integrity(conn)))
     });
-    let (disk, scratch) = disks_cached(state.db_path());
+    let (disk, scratch) = pinned_or(state, || disks_cached(state.db_path()));
     let capture = state
         .capture_status()
         .map(|handle| birdnet_core::audio::capture::read_capture_status(&handle).sources)
@@ -504,6 +554,10 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
         .collect();
     let admits_nothing = state.metrics().occurrence_filter().admits_nothing();
     let capture_down = matches!(live_capture_state(state), CaptureState::Down);
+    // A bounded read of one folder's names; cheap enough for every poll.
+    let recordings_folder = state
+        .watch_dir()
+        .and_then(|dir| crate::watch_folder::scan(&dir));
 
     let (sources_configured, names, queued, integrity, records_unreadable) = match read {
         Ok((n, names, q, i)) => (n, names, q, i, false),
@@ -527,6 +581,7 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
         source_names: &names,
         filter_admits_nothing: admits_nothing,
         failing_classifiers: &failing,
+        recordings_folder: recordings_folder.as_ref(),
     };
     (issues(&facts), integrity)
 }
@@ -567,6 +622,7 @@ mod tests {
             source_names: names,
             filter_admits_nothing: false,
             failing_classifiers: none,
+            recordings_folder: None,
         }
     }
 
@@ -581,6 +637,57 @@ mod tests {
         let (n, none) = (HashMap::new(), Vec::new());
         assert!(issues(&ok(&n, &none)).is_empty());
         assert_eq!(label_of(&ok(&n, &none)), ("Healthy", "ok"));
+    }
+
+    /// Recordings the daemon refuses by name are said, with the folder, the count
+    /// and the form that works, in the badge and on the page; a folder with none
+    /// says nothing.
+    #[test]
+    fn files_the_daemon_cannot_read_are_named_with_the_folder_and_the_fix() {
+        let (n, none) = (HashMap::new(), Vec::new());
+        let scan = |unnamed, capped| crate::watch_folder::FolderScan {
+            dir: std::path::PathBuf::from("/tmp/birdnet-stream"),
+            unnamed,
+            capped,
+        };
+        let mut f = ok(&n, &none);
+        let clean = scan(0, false);
+        f.recordings_folder = Some(&clean);
+        assert!(issues(&f).is_empty(), "a folder with none is silent");
+
+        let three = scan(3, false);
+        f.recordings_folder = Some(&three);
+        let list = issues(&f);
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].label, "Files not analysed");
+        let s = &list[0].sentence;
+        assert!(
+            s.starts_with("3 audio files in /tmp/birdnet-stream were not analysed")
+                && s.contains("YYYY-MM-DD-birdnet-HH:MM:SS.wav")
+                && s.contains("rename them"),
+            "{s}"
+        );
+
+        let one = scan(1, false);
+        f.recordings_folder = Some(&one);
+        assert!(
+            issues(&f)[0]
+                .sentence
+                .starts_with("1 audio file in /tmp/birdnet-stream was not analysed"),
+            "{}",
+            issues(&f)[0].sentence
+        );
+
+        let many = scan(2000, true);
+        f.recordings_folder = Some(&many);
+        assert!(
+            issues(&f)[0]
+                .sentence
+                .starts_with("at least 2000 audio files"),
+            "a capped scan is a floor and says so: {}",
+            issues(&f)[0].sentence
+        );
+        assert_eq!(label_of(&f), ("Files not analysed", "warn"));
     }
 
     /// No gauge published yet is not an outage: a station that has just

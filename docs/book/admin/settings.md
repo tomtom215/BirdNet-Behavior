@@ -1,6 +1,20 @@
 # Settings & Detection
 
-The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) persists everything you change into the SQLite settings table, and the station reads it on the next restart.
+The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) persists everything you change into the SQLite settings table.
+
+## When a change takes effect
+
+Every field on the page carries a small badge: **Applies immediately** (the part of the station that uses it reads the stored value again on its own, typically within about half a minute) or **Applies after restart** (the value is read once, when the station starts). The badge is drawn from one table in the code, and a test fails if a field on the page lacks one, so the page cannot disagree with itself.
+
+When you have saved something that is still waiting for a restart, a banner at the top of the page lists which settings and offers the **Restart** button. Under a service manager (systemd, Docker's restart policy) the button stops the process and the manager starts it again. A station started by hand restarts itself in place with the same arguments; if neither is possible the button says so instead of stopping the station and leaving it stopped.
+
+### The bird-identifying model
+
+At the top of **Settings → Capture** (and as step 2 of the setup wizard), the **Bird-identifying model** panel says whether the classifier the station needs is installed. If it is missing, **Install** downloads it (checked against a pinned SHA-256, with a progress bar and a free-space check first) and the panel then offers the restart that loads it. This is the same installer as `--install-model`; the program, not the browser, does the download.
+
+### Numbers the page refuses
+
+A number typed into a field is checked against the range the station actually accepts before it is saved, and the message names the range. The same bounds apply to `PUT /api/v2/settings` and, as warnings, to `--doctor` for the config file: frequency shift, sunrise/sunset recording offsets, notification cooldown, dead-man hours, clip retention days, files kept per species, disk purge threshold, extraction length, rare-species window, stream retention and size, SMTP port, email cooldown and clip loudness target. (They are warnings, not errors, in `--doctor` because an error makes the station fall back to its last-good configuration file.)
 
 ### How a setting is resolved
 
@@ -19,7 +33,7 @@ flag is governed entirely by this page.
 
 ### Settings not on this page
 
-Two things are deliberately configured elsewhere:
+Two things are deliberately configured elsewhere in the browser:
 
 - **The admin password.** It is stored as an Argon2id hash in the accounts
   database, seeded from the `CADDY_PWD` environment variable — never as a
@@ -27,6 +41,8 @@ Two things are deliberately configured elsewhere:
 - **Per-source audio properties** (channels, sample rate, gain, RTSP transport).
   Each microphone or stream carries its own, on
   [Audio & Microphones](./audio.md).
+
+A handful of settings are file-only on purpose, each for a stated reason — secrets that must not live in the database a backup copies, listen address and TLS (a typo locks you out of the page you would fix it on), and similar. [Where to change it](../reference/where-to-change-it.md) lists every setting, the browser page that owns it, and for the exceptions why.
 
 ## Detection
 
@@ -93,11 +109,13 @@ All three actions are written to the [audit log](system.md).
 ## Species photographs
 
 Each species page shows a photograph, cached on disk so the station works
-offline after the first fetch. Two sources are available.
+offline after the first fetch. Three sources are available.
 
 **Wikipedia** (the default) needs no key and covers most species. For a long
 tail it has no photograph at all, and for many others it has a museum skin, an
 egg, or a range map rather than a living bird.
+
+**AviCommons** (`IMAGE_PROVIDER=avicommons`) needs no key. [AviCommons](https://avicommons.org) is a library of cropped, oriented Creative Commons bird photographs made to be embedded. It is tried first and Wikipedia fills in behind it. The station downloads AviCommons' one JSON index (1.6 MB, which its README asks to be fetched once and not on each page load) and keeps it in the image cache folder for 30 days, then each photograph once. **Only the CC0, CC BY and CC BY-SA images are used**, the same rule as Flickr below: of the index's 10,185 images (checked 2026-10-21) 2,620 qualify, the rest are NonCommercial. Against the 6,522 species of the BirdNET V2.4 labels that is 1,628 species (25 %) with an AviCommons photograph, and the rest keep Wikipedia's. Each photograph is shown with its photographer, its licence and a link to AviCommons. The project's repository declares no licence of its own; the terms are per image, in the index.
 
 **Flickr** searches Flickr first and falls back to Wikipedia when Flickr has
 nothing, so turning it on can only add coverage — it never leaves a species
@@ -147,6 +165,23 @@ skipped rather than shown uncredited.
   domain stays because it is the diagnostic half.
 - Neither source is used at all in offline mode, or when the image cache is
   disabled with an empty `IMAGE_CACHE_DIR`.
+
+## Spectrograms
+
+Two settings under **System & Display** change how every spectrogram is drawn, and a change shows on the next image, with no restart (the answer is revalidated rather than cached for an hour, so a browser that already has the old picture asks again):
+
+- **Spectrogram colours** — *Viridis* (blue to yellow, what earlier versions drew and the default), *Magma* and *Inferno* (black to pale or bright yellow), *Grey* (quiet is black) and *Grey, inverted* (quiet is white, the look of a printed figure). Louder is always lighter, so the order survives a grey print; a unit test holds CIELAB lightness monotonic for every map. Magma and Inferno are matplotlib's tables (CC0).
+- **Spectrogram dynamic range** — 60, 80 (the default), 100 or 120 dB. Cells more than this far below the loudest in the clip are drawn as the floor. A smaller range gives more contrast and lets faint calls sink into the background. birdnet-go offers 80, 100 and 120 (`dynamicrange`); 60 is added here.
+
+There is no gain setting, because the image is stretched between its own quietest and loudest cell, so a gain would change nothing. The live spectrogram on Recordings is drawn by the browser and keeps its own colours.
+
+## Your picture on the Today page
+
+BirdNET-Pi's `CUSTOM_IMAGE` and `CUSTOM_IMAGE_TITLE`. Set **Today page picture (file)** to the full path of a PNG, JPEG, GIF or WebP file and **Picture title** to its heading, and the Today page shows it between the day strip and the log. A webcam works the same way: something on the station keeps the file current (for example a cron job running `ffmpeg -i rtsp://camera/stream -frames:v 1 -y /home/pi/camera/latest.jpg` every minute) and the page checks it every ten seconds while the tab is visible, fetching it again only when the file's size or time changed. BirdNET-Pi re-reads it every second and inlines it; this does one conditional request in ten seconds, which is easier on a Raspberry Pi.
+
+The file is held to what a picture is: a regular file, at most 8 MiB, a PNG, JPEG, GIF or WebP **by its first bytes** whatever its name says (so a path typed with a slip, or `/etc/passwd`, shows nothing; SVG is refused because it can carry script). If the file cannot be read the block says so and keeps trying. It is a block like the others: hide or move it under **Today Page Layout**. Only a file path is supported, as upstream; a camera that only offers a URL needs the snapshot saved to a file first.
+
+This is not `custom_image_dir`, which replaces one species' photograph.
 
 ## Other categories
 

@@ -1,7 +1,7 @@
 <!--
   Migration (phenology) · NEW page at /migration
-  Ridgeline of weekly per-species abundance over the calendar year, with
-  arrival markers, peak diversity, and "still expected" forecast cards.
+  Ridgeline of weekly per-species abundance over the calendar year, species heard
+  per week under it, peak diversity, and "still expected" / "missing" cards.
 
   Drop-in: register at /migration (see DIFF.md). Renames the existing
   /admin/migration → /admin/import to free the URL.
@@ -16,14 +16,16 @@
       Arrivals and <em>departures</em>.
     </h1>
     <p class="bnb-lede mig-lede">
-      <b>Each ridge is one species' abundance across the year</b>, normalized to its own
-      peak so small-population migrants stay visible. The green band is spring migration,
-      amber is fall. Residents hold a steady ribbon; migrants spike and vanish.
+      <b>Each ridge is one species' year</b>, week by week, scaled to its own busiest week
+      so a small-population migrant stays visible. Colour says when it peaks: green in the
+      spring migration window, amber in the fall one. A steady bird holds a low ribbon; a
+      migrant spikes and vanishes. Under the ridges: how many different species were heard
+      each week.
     </p>
   </div>
   <div class="pill-row mig-pills">
     <span class="bnb-pill">Calendar year {{year}}</span>
-    <span class="bnb-pill">Migratory only</span>
+    <span class="bnb-pill">Seasonal birds only</span>
     <span class="bnb-pill">vs. last year</span>
   </div>
 </div>
@@ -38,23 +40,12 @@
   {{skel_migration_stats}}
 </div>
 
-<!-- Ridgeline + diversity strip — Rust renders the SVG inline -->
+<!-- Ridgeline and the species-per-week lane under it — Rust renders the SVG inline -->
 <div class="bnb-card pad">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Ridgeline · per-species weekly index</div>
       <h2 class="sh-h">Twelve months of migrants</h2>
-    </div>
-    <div class="mig-legend">
-      <span class="bnb-meta mig-legend-item">
-        <span class="mig-swatch spring"></span>
-        spring window
-      </span>
-      <span class="bnb-meta mig-legend-item">
-        <span class="mig-swatch fall"></span>
-        fall window
-      </span>
-      <span class="bnb-meta mono">w 1 — 52</span>
     </div>
   </div>
 
@@ -64,20 +55,6 @@
        hx-swap="innerHTML"
        class="mig-ridge">
     {{skel_ridgeline}}
-  </div>
-
-  <div class="mig-divider">
-    <div class="mig-divider-head">
-      <div class="bnb-eyebrow">Weekly diversity · all species combined</div>
-      <span id="migration-diversity-caption" class="bnb-meta mono">—</span>
-    </div>
-    <div id="migration-diversity"
-         hx-get="/pages/migration-diversity"
-         hx-trigger="load"
-         hx-swap="innerHTML"
-         class="mig-diversity">
-      {{skel_diversity}}
-    </div>
   </div>
 </div>
 

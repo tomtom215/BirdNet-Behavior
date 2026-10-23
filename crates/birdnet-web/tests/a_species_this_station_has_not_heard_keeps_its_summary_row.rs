@@ -85,9 +85,39 @@ async fn a_heard_species_gets_its_numbers() {
     assert!(html.contains("2026-05-01"), "{html}");
 }
 
-/// The trend is the last 14 calendar days. A species heard only in May has
+/// The label the chart's tooltip gives a day: `Wed 21 Oct`, weekday first and
+/// the day of the month without a leading zero.
+///
+/// Asked of SQLite rather than computed here, so the expectation comes from the
+/// same calendar the page's own query used, `n` days before today.
+fn tooltip_day(conn: &rusqlite::Connection, days_ago: u32) -> String {
+    const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (weekday, day, month): (i64, i64, i64) = conn
+        .query_row(
+            "SELECT CAST(strftime('%w', d) AS INTEGER), CAST(strftime('%d', d) AS INTEGER), \
+                    CAST(strftime('%m', d) AS INTEGER) \
+             FROM (SELECT DATE('now', 'localtime', '-' || ?1 || ' days') AS d)",
+            [days_ago],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("calendar day");
+    format!(
+        "{} {day} {}",
+        WEEKDAYS[usize::try_from(weekday).expect("weekday")],
+        MONTHS[usize::try_from(month - 1).expect("month")]
+    )
+}
+
+/// The trend is the last 14 calendar days. A species heard only in October has
 /// none of them, and says so in a sentence rather than fourteen empty bars;
 /// one heard today gets its chart, today's bar last.
+///
+/// The chart is the chart kit's: one `ck-hit` rectangle per day carries that
+/// day's tooltip, so the days a reader can reach are read from those, in order,
+/// and the bar actually drawn is the one at the last index.
 #[tokio::test]
 async fn the_trend_is_the_last_fourteen_calendar_days() {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
@@ -98,9 +128,8 @@ async fn the_trend_is_the_last_fourteen_calendar_days() {
            (DATE('now','localtime'), '06:00:00', 'Pica pica', 'Eurasian Magpie', 0.9, 'm.wav');",
     )
     .expect("seed");
-    let today: String = conn
-        .query_row("SELECT DATE('now','localtime')", [], |r| r.get(0))
-        .expect("today");
+    // Fourteen calendar days, oldest first, ending today.
+    let expected: Vec<String> = (0..14).rev().map(|n| tooltip_day(&conn, n)).collect();
     let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
     let get = |name: &'static str| {
         let state = state.clone();
@@ -124,10 +153,56 @@ async fn the_trend_is_the_last_fourteen_calendar_days() {
         blackbird.contains("Not heard in the last 14 days."),
         "{blackbird}"
     );
-    let magpie = get("Eurasian%20Magpie").await;
-    assert_eq!(magpie.matches("<rect ").count(), 14, "{magpie}");
-    assert!(
-        magpie.contains(&format!(">{}</text></svg>", &today[5..])),
-        "{magpie}"
-    );
+    assert!(!blackbird.contains("ck-hit"), "{blackbird}");
+
+    let page = get("Eurasian%20Magpie").await;
+    // The chart is drawn twice, a wide drawing for a card and a narrow one for a phone
+    // (`.viz-chart--narrow`); CSS shows one. Each must tell the same fourteen days.
+    let (wide, narrow) = page
+        .split_once("<div class=\"viz-chart ck viz-chart--narrow\">")
+        .unwrap_or_else(|| panic!("no narrow drawing: {page}"));
+    for magpie in <[&str; 2]>::from((wide, narrow)) {
+        // One reachable day per calendar day: 14 of them, in order, each at its own
+        // index, each saying the date it is.
+        let tips: Vec<(usize, &str)> = magpie
+            .split("<rect class=\"ck-hit\"")
+            .skip(1)
+            .map(|rect| {
+                let index = rect
+                    .split("data-ck-i=\"")
+                    .nth(1)
+                    .and_then(|r| r.split('"').next())
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .expect("each day carries its index");
+                let tip = rect
+                    .split("data-tip=\"")
+                    .nth(1)
+                    .and_then(|r| r.split('"').next())
+                    .expect("each day carries its tooltip");
+                (index, tip)
+            })
+            .collect();
+        assert_eq!(tips.len(), 14, "{magpie}");
+        for (position, (index, tip)) in tips.iter().enumerate() {
+            assert_eq!(*index, position, "days are out of order: {tips:?}");
+            assert!(
+                tip.starts_with(&format!("{}&#10;", expected[position])),
+                "day {position} should be {:?}, the tooltip says {tip:?}",
+                expected[position]
+            );
+            // The magpie was heard once, today, and on no other day.
+            let heard = u8::from(position == 13);
+            assert!(
+                tip.contains(&format!("Detections&#9;{heard}&#10;")),
+                "day {position} should show {heard} detection(s): {tip:?}"
+            );
+        }
+        // Today's bar is the one drawn, and the last: the only bar is at index 13.
+        assert_eq!(magpie.matches("class=\"ck-grow\"").count(), 1, "{magpie}");
+        assert!(
+            magpie.contains("data-ck-i=\"13\" data-style=\"--i:13\"/>"),
+            "{magpie}"
+        );
+        assert!(magpie.contains("data-ck-start=\"13\""), "{magpie}");
+    }
 }

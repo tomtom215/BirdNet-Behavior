@@ -356,7 +356,21 @@ fn no_command_spawn_hides_below_a_cfg_test() {
     // must be either classified or a known test-only helper.
     // `sh` and the nonexistent path are what `birdnet_core::process`'s own
     // tests spawn to prove a deadline kills and a missing program is reported.
-    const TEST_ONLY: &[&str] = &["sleep", "sh", "/nonexistent/birdnet-no-such-tool"];
+    // `/nonexistent/birdnet-kill`, `false` and `true` are the three outcomes
+    // (cannot start, exits non-zero, exits zero) the restart-signal tests in
+    // `system_controls/service.rs` hand to the signal sender; `mkfifo` makes the
+    // FIFO the dashboard-image test opens to prove a non-regular file is refused.
+    // None is spawned above the `#[cfg(test)]` marker (the production-half scan
+    // would then require it classified), so none needs a place in the image.
+    const TEST_ONLY: &[&str] = &[
+        "sleep",
+        "sh",
+        "/nonexistent/birdnet-no-such-tool",
+        "/nonexistent/birdnet-kill",
+        "false",
+        "true",
+        "mkfifo",
+    ];
     let mut stray: Vec<String> = Vec::new();
     for file in source_files() {
         let Ok(src) = std::fs::read_to_string(&file) else {

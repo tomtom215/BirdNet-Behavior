@@ -115,8 +115,16 @@ pub fn migration_body(dest_db_path: &str) -> String {
     and your original installation is left completely untouched.
   </p>
 
+  <p class="lede">
+    Moving from BirdNET-Pi takes up to three steps, in this order: your <strong class="fg">settings</strong>,
+    your <strong class="fg">detection history</strong>, and the <strong class="fg">recordings</strong>
+    that go with it. Each can be done on its own.
+  </p>
+
+  {conf_form}
+
   <div class="card">
-    <div class="card-head">How it works</div>
+    <div class="card-head">Your detection history: how it works</div>
     <ol class="steps">
       <li>If BirdNET-Pi is still running on this device, turning it off first
           keeps the copy consistent.
@@ -270,8 +278,12 @@ pub fn migration_body(dest_db_path: &str) -> String {
          hx-trigger="load, importsChanged from:body" hx-swap="innerHTML"></div>
   </div>
 
+  {clip_form}
+
 {MIGRATION_TABS_SCRIPT}</div>"##,
         utc_options = utc_offset_options(),
+        conf_form = super::conf_view::form(),
+        clip_form = super::clip_import::form(""),
     )
 }
 
@@ -635,14 +647,41 @@ pub fn import_started() -> String {
         .to_string()
 }
 
+/// The "started" partial for the recordings step: its own element id, because
+/// the page already has `migrate-status` and `migrate-progress` for the history
+/// import and an id may appear once.
+pub fn clips_started() -> String {
+    r#"<div id="clips-status">
+  <p class="info-text">The recordings are being brought across; the bar follows them.</p>
+  <div id="clips-progress"
+       hx-get="/admin/migrate/progress?for=clips"
+       hx-trigger="every 2s"
+       hx-swap="outerHTML">
+    <div class="progress-track">
+      <div class="progress-fill run"></div>
+    </div>
+  </div>
+</div>"#
+        .to_string()
+}
+
 /// Render the progress bar partial.
 pub fn progress_bar(p: &MigrationProgress) -> String {
+    progress_bar_for(p, "migrate-progress", "/admin/migrate/progress")
+}
+
+/// The progress bar for the recordings step.
+pub fn clips_progress_bar(p: &MigrationProgress) -> String {
+    progress_bar_for(p, "clips-progress", "/admin/migrate/progress?for=clips")
+}
+
+fn progress_bar_for(p: &MigrationProgress, id: &str, poll: &str) -> String {
     let pct = p.percent();
     let msg = escape_html(&p.message);
     let trigger = if p.is_terminal() {
         String::new()
     } else {
-        r#" hx-get="/admin/migrate/progress" hx-trigger="every 2s" hx-swap="outerHTML""#.to_string()
+        format!(r#" hx-get="{poll}" hx-trigger="every 2s" hx-swap="outerHTML""#)
     };
     // Stage tone is an enumerable set, so it is a class; only the continuous
     // bar fill width stays an inline style (computed per request). That single
@@ -655,13 +694,13 @@ pub fn progress_bar(p: &MigrationProgress) -> String {
         _ => "run",
     };
     format!(
-        r#"<div id="migrate-progress"{trigger}>
+        r#"<div id="{id}"{trigger}>
   <p class="bar-msg {tone}">{msg}</p>
   <div class="progress-track">
     <div class="progress-fill {tone}" data-style="width:{pct}%"></div>
   </div>
   <p class="bar-note">
-    {imported} / {total} rows
+    {imported} of {total}
   </p>
 </div>"#,
         imported = p.rows_imported,

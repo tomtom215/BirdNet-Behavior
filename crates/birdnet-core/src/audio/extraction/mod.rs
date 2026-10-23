@@ -201,9 +201,7 @@ mod tests {
         #[allow(
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
+            clippy::cast_sign_loss
         )]
         let num_samples = (duration_secs * sample_rate as f32) as usize;
         let samples: Vec<f32> = (0..num_samples)

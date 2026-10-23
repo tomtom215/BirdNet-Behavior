@@ -174,14 +174,22 @@ const EXPECT_404 = new Set(['notfound']);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function diagnose(page) {
+export async function diagnose(page) {
   return page.evaluate(() => {
     const de = document.documentElement;
     const overflowX = de.scrollWidth > de.clientWidth + 2;
     const stuck = [];
     const re = /loading[….]/i;
+    // "Is a reader looking at it": `checkVisibility` knows that the contents of a closed
+    // <details> are not rendered; `offsetParent` does not (Chromium 141 leaves it set), and
+    // /patterns' "See the numbers" disclosure was reported as four stuck "Loading…" for text
+    // nobody could see. The fallback is the old test plus an explicit closed-details check.
+    const seen_ = (el) =>
+      typeof el.checkVisibility === 'function'
+        ? el.checkVisibility({ checkVisibilityCSS: true, contentVisibilityAuto: true })
+        : el.offsetParent !== null && !(el.closest('details:not([open])') && !el.closest('summary'));
     document.querySelectorAll('*').forEach((el) => {
-      if (el.children.length === 0 && el.textContent && re.test(el.textContent.trim()) && el.offsetParent !== null) {
+      if (el.children.length === 0 && el.textContent && re.test(el.textContent.trim()) && seen_(el)) {
         stuck.push(el.textContent.trim().slice(0, 40));
       }
     });
@@ -351,6 +359,16 @@ async function main() {
     }
   }
   await browser.close();
+  // CodeQL (js/http-to-file-access) flags the write below: the report holds
+  // strings read from pages over HTTP (console messages cut to 200 characters,
+  // failed-request and broken-image URLs). That is the report's whole purpose, so
+  // it is not reduced to a derived summary: the sweep's reader needs the message
+  // and the URL to find the defect. The pages come from the fixture server this
+  // script's caller started on localhost, the file is JSON (every string
+  // escaped) in the directory the caller named with OUT, and no code reads it
+  // back: the summary below is computed from the in-memory `report`, and CI only
+  // uploads the file as an artifact for a person. It is never executed, served
+  // or included in a build. Dismissed as "used in tests".
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
 
   // A page where EVERY species photo failed is not "these birds have no

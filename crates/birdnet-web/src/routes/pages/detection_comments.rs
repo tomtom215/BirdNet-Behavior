@@ -14,7 +14,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::{Router, routing::get, routing::post};
@@ -92,7 +93,7 @@ async fn thread_partial(
 async fn add_comment(
     State(state): State<AppState>,
     user: RequestUser,
-    Form(form): Form<AddForm>,
+    HtmxForm(form): HtmxForm<AddForm>,
 ) -> impl IntoResponse {
     // The write, its audit row and the re-read run as one piece on the
     // blocking pool: none of them may hold a runtime worker, and a client that
@@ -149,7 +150,7 @@ async fn add_comment(
 async fn delete_comment(
     State(state): State<AppState>,
     user: RequestUser,
-    Form(form): Form<DeleteForm>,
+    HtmxForm(form): HtmxForm<DeleteForm>,
 ) -> impl IntoResponse {
     // As in `add_comment`: delete, audit and re-read together, off the runtime.
     let rendered = state

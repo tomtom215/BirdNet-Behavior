@@ -22,10 +22,11 @@
 
 use std::fmt::Write as _;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Html;
-use axum::{Form, Router, routing::get};
+use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use birdnet_db::alert_rules::{
@@ -244,7 +245,7 @@ fn plan_import(
 async fn import_rules(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<ImportForm>,
+    HtmxForm(form): HtmxForm<ImportForm>,
 ) -> Result<Html<String>, StatusCode> {
     let (ready, metric_ready, outcome) = match plan_import(&form.rules_json) {
         Ok(v) => v,
@@ -372,8 +373,12 @@ struct RuleForm {
     species_pattern: Option<String>,
     confidence_min: Option<String>,
     confidence_max: Option<String>,
-    hour_start: Option<u8>,
-    hour_end: Option<u8>,
+    /// Read as text: a browser sends a blank number field as `hour_start=`,
+    /// which serde refuses for an integer (a 422 that htmx never shows). See
+    /// [`hour_window_from_form`].
+    hour_start: Option<String>,
+    /// As `hour_start`.
+    hour_end: Option<String>,
     days_of_week: Option<String>,
     action_type: String,
     action_webhook_url: Option<String>,
@@ -494,14 +499,81 @@ fn webhook_auth_from_form(
     }
 }
 
-/// Locale-tolerant decimal parser for an `Option<String>` form field.
-/// Returns the parsed `f64` or the documented `default` when the field
-/// is absent, empty, or unparseable.
-fn parse_optional_decimal(raw: Option<&str>, default: f64) -> f64 {
-    raw.map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| birdnet_core::config::locale::parse_decimal(s).ok())
-        .unwrap_or(default)
+/// One end of the hour window, from what the form said.
+///
+/// Absent or blank is `None` ("any hour": the label says so). A whole number
+/// from 0 to 23 is `Some`. Anything else is refused with the field named,
+/// because the alternative is a rule that quietly covers different hours from
+/// the ones typed.
+fn hour_from_form(label: &str, raw: Option<&str>) -> Result<Option<u8>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if raw.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(hour) = raw.parse::<u8>()
+        && hour <= 23
+    {
+        return Ok(Some(hour));
+    }
+    Err(format!(
+        "{label} must be a whole hour from 0 to 23, or left blank for any. You entered \u{201c}{raw}\u{201d}."
+    ))
+}
+
+/// The hour window, from both fields. The matcher applies a window only when
+/// it has both ends, so one end alone would be a rule that fires at every
+/// hour while the page shows a window; that is refused.
+fn hour_window_from_form(
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<(Option<u8>, Option<u8>), String> {
+    let start = hour_from_form("Hour Start", start)?;
+    let end = hour_from_form("Hour End", end)?;
+    if start.is_some() != end.is_some() {
+        return Err(
+            "Hour Start and Hour End go together: fill in both for a window, or leave both blank \
+             for any hour."
+                .to_owned(),
+        );
+    }
+    Ok((start, end))
+}
+
+/// A confidence bound, from what the form said.
+///
+/// Absent or blank is `default`; a number (`.` or `,` as the decimal mark) from
+/// 0 to 1 is itself; anything else is refused with the field named. It used to
+/// fall back to `default` for text and clamp a number out of range, so `70`
+/// typed for 0.70 became a rule that matched only a perfect score.
+fn confidence_from_form(label: &str, raw: Option<&str>, default: f64) -> Result<f64, String> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(default);
+    };
+    match birdnet_core::config::locale::parse_decimal(raw) {
+        Ok(v) if (0.0..=1.0).contains(&v) => Ok(v),
+        _ => Err(format!(
+            "{label} must be a number from 0.0 to 1.0 (for example 0.70). You entered \u{201c}{raw}\u{201d}."
+        )),
+    }
+}
+
+/// A day list: `1`..`7` (Monday to Sunday) separated by commas.
+fn days_from_form(raw: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = raw.filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let raw = raw.trim().to_owned();
+    if raw
+        .split(',')
+        .all(|d| matches!(d.trim(), "1" | "2" | "3" | "4" | "5" | "6" | "7"))
+    {
+        Ok(Some(raw))
+    } else {
+        Err(format!(
+            "Days of Week must be numbers from 1 (Monday) to 7 (Sunday) separated by commas, \
+             for example 1,2,3,4,5. You entered \u{201c}{raw}\u{201d}."
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -594,12 +666,35 @@ async fn test_rule(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
-    let rule = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::alert_rules::get_rule(conn, id).ok().flatten())
+    let read = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| birdnet_db::alert_rules::get_rule(conn, id))
     })
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rule = match read {
+        Ok(Some(rule)) => rule,
+        // The rule was deleted in another tab or by another person, and this page is
+        // stale. A 404 here would swap nothing (htmx discards a 4xx body), so the
+        // button would do nothing at all; say what happened in the result slot.
+        Ok(None) => {
+            return Ok(Html(
+                "<div class=\"rule-error\">That rule no longer exists, so there is nothing to \
+                 test. Reload the page to see the current list.</div>"
+                    .to_owned(),
+            ));
+        }
+        // htmx swaps no 4xx/5xx body, and 404 would say the rule is gone: a
+        // read that failed is answered in the result slot, where the test's
+        // outcome is read.
+        Err(e) => {
+            tracing::warn!(error = %e, rule = id, "rule test: the rule could not be read");
+            return Ok(Html(
+                "<div class=\"rule-error\">The rule could not be read, so it was not tested. \
+                 This is a fault in the station, not in the rule.</div>"
+                    .to_owned(),
+            ));
+        }
+    };
 
     let message = match plan_test(&rule.action) {
         TestPlan::NothingToSend(msg) => {
@@ -674,7 +769,7 @@ async fn rules_list_partial(State(state): State<AppState>) -> axum::response::Re
 async fn create_rule(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<RuleForm>,
+    HtmxForm(form): HtmxForm<RuleForm>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse as _;
     // Normalise empty strings to None
@@ -683,10 +778,36 @@ async fn create_rule(
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string());
 
-    let days_of_week = form
-        .days_of_week
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().to_string());
+    let refused = |why: String| {
+        crate::routes::pages::toast::not_applied(&Toast::error(format!(
+            "{why} The rule was not created."
+        )))
+    };
+    let days_of_week = match days_from_form(form.days_of_week) {
+        Ok(d) => d,
+        Err(why) => return refused(why),
+    };
+    let (hour_start, hour_end) =
+        match hour_window_from_form(form.hour_start.as_deref(), form.hour_end.as_deref()) {
+            Ok(w) => w,
+            Err(why) => return refused(why),
+        };
+    let confidence_min =
+        match confidence_from_form("Min Confidence", form.confidence_min.as_deref(), 0.0) {
+            Ok(v) => v,
+            Err(why) => return refused(why),
+        };
+    let confidence_max =
+        match confidence_from_form("Max Confidence", form.confidence_max.as_deref(), 1.0) {
+            Ok(v) => v,
+            Err(why) => return refused(why),
+        };
+    if confidence_min > confidence_max {
+        return refused(format!(
+            "Min Confidence ({confidence_min}) is above Max Confidence ({confidence_max}), so \
+             no detection could match."
+        ));
+    }
 
     // Only a webhook rule has a cooldown to give: the daemon ignores it on a
     // `log` or `suppress` rule (a suppress rule that stopped suppressing after
@@ -732,10 +853,10 @@ async fn create_rule(
         name: rule_name.clone(),
         enabled: true,
         species_pattern,
-        confidence_min: parse_optional_decimal(form.confidence_min.as_deref(), 0.0).clamp(0.0, 1.0),
-        confidence_max: parse_optional_decimal(form.confidence_max.as_deref(), 1.0).clamp(0.0, 1.0),
-        hour_start: form.hour_start,
-        hour_end: form.hour_end,
+        confidence_min,
+        confidence_max,
+        hour_start,
+        hour_end,
         days_of_week,
         cooldown_secs,
         action,
@@ -904,7 +1025,7 @@ async fn metric_rules_list_partial(State(state): State<AppState>) -> axum::respo
 async fn create_metric_rule(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<MetricRuleForm>,
+    HtmxForm(form): HtmxForm<MetricRuleForm>,
 ) -> Html<String> {
     use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
 

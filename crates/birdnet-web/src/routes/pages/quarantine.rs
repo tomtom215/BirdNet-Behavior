@@ -17,7 +17,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -37,10 +38,6 @@ pub fn router() -> Router<AppState> {
         .route("/quarantine", get(quarantine_page))
         .route("/pages/quarantine-list", get(quarantine_list_partial))
         .route("/pages/quarantine-stats", get(quarantine_stats_partial))
-        .route(
-            "/pages/quarantine-pending-count",
-            get(quarantine_pending_count_partial),
-        )
 }
 
 /// The state-changing half, mounted behind the admin auth middleware.
@@ -82,6 +79,7 @@ pub struct ActionForm {
     /// Current filter (forwarded for list re-render).
     pub filter: Option<String>,
     /// Current offset (forwarded for list re-render).
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     pub offset: Option<u32>,
 }
 
@@ -214,43 +212,6 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
     }
 }
 
-/// Tiny partial used by the nav badge to show pending count.
-///
-/// Three answers, because there are three facts: nothing waiting (no badge),
-/// `n` waiting (the count), and *could not count* — which is a `?`, not a
-/// missing badge, since a missing badge is how "nothing waits" looks.
-async fn quarantine_pending_count_partial(State(state): State<AppState>) -> impl IntoResponse {
-    let counted = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::quarantine_pending_count)
-    })
-    .await;
-
-    let html = match counted {
-        Ok(Ok(count)) if count > 0 => format!(
-            r#"<span class="qz-pending-badge">
-               {count}
-            </span>"#
-        ),
-        Ok(Ok(_)) => String::new(),
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "quarantine badge: the pending count could not be read");
-            unknown_pending_badge()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "quarantine badge: task failed");
-            unknown_pending_badge()
-        }
-    };
-
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-/// The badge for a count that could not be read.
-fn unknown_pending_badge() -> String {
-    r#"<span class="qz-pending-badge" role="img" aria-label="The number of sightings waiting for review could not be read" title="The number of sightings waiting for review could not be read">?</span>"#
-        .to_string()
-}
-
 // ---------------------------------------------------------------------------
 // List partial
 // ---------------------------------------------------------------------------
@@ -359,7 +320,7 @@ fn render_quarantine_row(
     let com_name = escape_html(names.name(&row.sci_name, &row.com_name));
     let sci_name = escape_html(&row.sci_name);
     let date = escape_html(&row.date);
-    let time = escape_html(&row.time);
+    let time = crate::display::clock(&row.time);
     let reason_label =
         escape_html(birdnet_db::sqlite::QuarantineReason::from_db_str(&row.reason).label());
     let sf_info = row
@@ -510,7 +471,7 @@ fn row_audio_player(file_name: Option<&str>) -> String {
 async fn quarantine_approve(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ActionForm>,
+    HtmxForm(form): HtmxForm<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
     // Normalised, never echoed: this is written into an `hx-get` attribute,
@@ -568,7 +529,7 @@ async fn quarantine_approve(
 async fn quarantine_reject(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ActionForm>,
+    HtmxForm(form): HtmxForm<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
     // Normalised, never echoed: this is written into an `hx-get` attribute,
@@ -612,7 +573,7 @@ async fn quarantine_reject(
 async fn quarantine_delete(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ActionForm>,
+    HtmxForm(form): HtmxForm<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
     // Normalised, never echoed: this is written into an `hx-get` attribute,

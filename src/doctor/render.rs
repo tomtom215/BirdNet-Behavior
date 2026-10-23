@@ -441,7 +441,7 @@ mod tests {
             ),
             Check::skip(
                 "ONNX model file",
-                "no --model / MODEL configured (will use the bundled default at startup)",
+                "no --model / MODEL configured: the web UI will run, but nothing will be analysed until a classifier is installed",
             ),
             Check::pass("Disk space", "120 GiB free on the volume containing /"),
         ]

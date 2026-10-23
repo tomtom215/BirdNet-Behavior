@@ -21,6 +21,7 @@
 
 use std::fmt::Write as _;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::Html;
 use axum::{Router, routing::get};
@@ -119,7 +120,7 @@ struct ExcludeForm {
 async fn exclude_phantom(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    axum::Form(form): axum::Form<ExcludeForm>,
+    HtmxForm(form): HtmxForm<ExcludeForm>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse as _;
 
@@ -383,8 +384,9 @@ fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocal
         |m| render_model_vs_review(m, names),
     );
     let tuning_link = help_link(Topic::Tuning);
-    // Skeletons for the partials that load via hx-trigger="load" (resolves
-    // TODO(O-16-followup) for #quality-summary / #quality-trend).
+    // Skeletons for the partials that load via hx-trigger="load"
+    // (#quality-summary and #quality-trend), so the page does not jump when
+    // they arrive (O-16).
     let summary_skeleton = skeletons::stat_row(6);
     let trend_skeleton = skeletons::hourly_bars(30);
 

@@ -156,7 +156,6 @@ fn read_packet(sock: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
 /// Serve one connection, decoding what arrives and answering per `behaviour`.
 ///
 /// Returns the address to connect to plus a receiver of `(Connect, packets)`.
-#[allow(clippy::type_complexity)]
 fn broker(behaviour: Behaviour) -> (String, mpsc::Receiver<(Connect, Vec<Packet>)>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr").to_string();
@@ -202,7 +201,6 @@ fn broker(behaviour: Behaviour) -> (String, mpsc::Receiver<(Connect, Vec<Packet>
                     }));
                     if qos > 0 && behaviour.ack_publishes {
                         let id = packet_id.unwrap_or(0);
-                        #[allow(clippy::cast_possible_truncation)]
                         let ack = [0x40, 0x02, (id >> 8) as u8, (id & 0xFF) as u8];
                         if sock.write_all(&ack).is_err() {
                             break;

@@ -236,13 +236,31 @@ async fn htmx_top_species_partial_returns_list() {
     assert!(html.contains("bnb-avatar"));
 }
 
+/// A data disk with room to spare, which is what the badge tests assume.
+///
+/// The badge grades the *host's* filesystem, so a test of its other inputs
+/// that left this to `df` passed or failed according to how full the machine
+/// running it was (it failed at 90 %, on this very build host). The state
+/// pins the reading instead, and the counterpart below pins a full one.
+const fn disk_with(used_percent: u64) -> birdnet_core::audio::capture::DiskUsage {
+    const TOTAL: u64 = 100 * 1024 * 1024 * 1024;
+    let used = TOTAL / 100 * used_percent;
+    birdnet_core::audio::capture::DiskUsage {
+        total_bytes: TOTAL,
+        used_bytes: used,
+        available_bytes: TOTAL - used,
+    }
+}
+
 /// The badge is the answer a non-technical operator gets to "is my station
 /// working?", on every page, refreshed every 30 s. It used to mean only
 /// "SQLite is not corrupt", so it read green with a dead microphone. These pin
 /// both halves of the new contract.
 #[tokio::test]
 async fn htmx_health_badge_flags_a_station_with_no_microphone() {
-    let response = app()
+    let state = test_state();
+    state.pin_disk_usage(disk_with(10));
+    let response = build_router(state)
         .oneshot(
             Request::builder()
                 .uri("/pages/health-badge")
@@ -262,6 +280,58 @@ async fn htmx_health_badge_flags_a_station_with_no_microphone() {
     assert!(html.contains("No microphone"), "{html}");
     assert!(html.contains(r#"data-health="warn""#), "{html}");
     assert!(!html.contains("Healthy"));
+    assert!(
+        !html.contains("Storage is running low"),
+        "the disk is pinned at 10 %, so it must not be among the reasons: {html}"
+    );
+}
+
+/// The counterpart of the two tests around it: they pin a roomy disk and expect
+/// the badge not to mention storage, so this pins a full one and expects it to.
+/// Without it, a badge that had stopped reading the disk at all would leave
+/// both of those green.
+#[tokio::test]
+async fn htmx_health_badge_names_a_nearly_full_disk() {
+    // 90 % is "running low" and 95 % "critically low" (`DiskUsage::LOW_PERCENT`
+    // and `CRITICAL_PERCENT`); one value either side of each, and the wording
+    // must follow the reading and nothing else on this machine.
+    for (percent, says) in [
+        (92, "Storage is running low"),
+        (97, "Storage is critically low"),
+    ] {
+        let state = test_state();
+        let new_source = birdnet_db::audio_sources::NewAudioSource::defaults(
+            "src_ok",
+            birdnet_db::audio_sources::SourceKind::UsbAlsa,
+            "plughw:CARD=PRO,DEV=0",
+        );
+        state.with_db(|c| {
+            birdnet_db::audio_sources::AudioSourceStore::insert(c, &new_source).unwrap();
+        });
+        state.metrics().set_source_up("src_ok", true);
+        state.pin_disk_usage(disk_with(percent));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/pages/health-badge")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains(r#"data-health="warn""#),
+            "{percent} %: {html}"
+        );
+        assert!(html.contains(says), "{percent} %: {html}");
+        assert!(!html.contains("Healthy"), "{percent} %: {html}");
+    }
 }
 
 #[tokio::test]
@@ -278,6 +348,7 @@ async fn htmx_health_badge_returns_healthy_for_a_capturing_station() {
     // The supervisor publishes this gauge; the badge reads the same one the
     // Capture tab's status pill does.
     state.metrics().set_source_up("src_ok", true);
+    state.pin_disk_usage(disk_with(10));
 
     let response = build_router(state)
         .oneshot(
@@ -294,21 +365,15 @@ async fn htmx_health_badge_returns_healthy_for_a_capturing_station() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    // The badge grades three inputs — database, capture, disk — and this test
-    // controls only the first two. The third is the *host's* filesystem, and
-    // the badge correctly reports "Disk full" above 90 %, so asserting
-    // "Healthy" unconditionally made this fail on any full build machine. It
-    // did, here, after a scale probe filled the volume.
-    //
-    // So assert the two signals this test actually sets, and tolerate exactly
-    // one thing: a disk warning, named. Anything else — a database error, a
-    // capture problem, an ungraded badge — still fails, which is what the test
-    // is for. Widening it to "any warn" would have hidden the mic-down case
-    // this file's sibling test exists to catch.
-    let disk_warning = html.contains(r#"data-health="warn""#) && html.contains("Disk full");
+    // The badge grades three inputs — database, capture, disk — and the disk is
+    // pinned above, so all three are stated by this test and nothing is left to
+    // the host's filesystem. (It used to tolerate a "Disk full" warning because
+    // the real disk was read; that tolerance made the test a coin toss on a
+    // full build machine, and it also let a badge that was wrongly warning
+    // about storage pass.) Any warning at all fails here.
     assert!(
-        (html.contains("Healthy") && html.contains(r#"data-health="ok""#)) || disk_warning,
-        "expected a healthy badge, or a disk warning on a full build host; got {html}"
+        html.contains("Healthy") && html.contains(r#"data-health="ok""#),
+        "expected a healthy badge; got {html}"
     );
     assert!(
         // "Not recording" is what the badge says since 0.16.0; "Mic down" is
@@ -522,7 +587,15 @@ async fn htmx_activity_streamgraph_partial() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    // `days` is clamped to 365, so this is the largest answer there is, and the
+    // limit is what makes "bounded" an assertion: `to_bytes` fails past it.
+    // The band outlines are one monotone cubic per day per edge (about 28 bytes
+    // each), so the size is the drawing, not waste: this fixture's 365 days come
+    // to 157,225 bytes (9,829 gzipped); a busy station's nine bands, measured
+    // separately, to about 270 KB (65 KB gzipped), and the page's own 90-day
+    // maximum to about 73 KB. The earlier 64 KiB limit was a guess from before
+    // the outlines were curves; 512 KiB is about twice the largest measured.
+    let body = axum::body::to_bytes(response.into_body(), 512 * 1024)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
@@ -645,7 +718,6 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/activity-streamgraph",
         "/pages/migration-ridgeline",
         "/pages/migration-stats",
-        "/pages/migration-diversity",
         "/pages/dawn-polar",
         "/pages/dawn-list",
         "/pages/analytics-dawn-sequence",

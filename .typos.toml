@@ -38,6 +38,19 @@ extend-exclude = [
     # arrays.sha256: scientific names (afer, americanus, mexicanus, varius) and
     # hashes. Editing one to please a spell-checker would change what it proves.
     "tools/parity/golden/**",
+    # The extended parity manifest: titles, creators and notes copied from the
+    # upstream recording pages (a German "vor"/"unter" in a title, a creator
+    # called Udo, a place called Hel), written by build_extended_manifest.py.
+    # They are other people's words about their recordings.
+    "tools/parity/fixtures_extended.json",
+    # The read-site sweep's record of the lines it judged: each row quotes a
+    # source line cut at a fixed column, so words end mid-way (`threshol`,
+    # `versio`). The cut is the data.
+    "tests/data/read_default_sweep.tsv",
+    # BirdNET-Pi's default birdnet.conf, byte for byte: the migration tests
+    # read it as the input a real station has, misspellings included
+    # (Miscellanous, precentile) and a list of audio formats (`caf`).
+    "crates/birdnet-migrate/tests/data/birdnet_pi_default.conf",
     # Vendored / minified JS (htmx, etc.) — too dense for spell-check and
     # not our code to fix.
     "**/static/htmx.min.js",
@@ -192,12 +205,14 @@ ot = "ot"             # ONNX op type
 nd = "nd"             # ndarray crate
 nin = "nin"           # NIN (neural network in network)
 arange = "arange"     # numpy-style function name
+certifi = "certifi"     # the PyPI package of CA certificates, pinned in tools/*/requirements*.txt
 ot_ = "ot_"
 crate_ = "crate_"
 mosquitto = "mosquitto" # MQTT broker, correct spelling (not "mosquito")
 yoy = "yoy"           # year-over-year, domain abbreviation
 inh = "inh"           # short for "inhibit" — used as local var name
 unparseable = "unparseable" # alternative spelling of "unparsable", widely used
+mexicanus = "mexicanus" # Latin epithet (Haemorhous mexicanus, the House Finch), not "mexicans"
 cardinalis = "cardinalis" # Latin species epithet — Cardinalis cardinalis (Northern Cardinal)
 ater = "ater"         # Latin species epithet — Periparus ater (Coal Tit)
 anser = "anser"       # Latin genus and epithet — Anser anser (Greylag Goose); eBird's

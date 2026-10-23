@@ -15,18 +15,20 @@ Two principles govern them:
   a hue stays the same "colour" as its lightness changes, and light/dark themes
   can be derived by moving lightness rather than re-picking hex values. The
   format is `oklch(L C H)` — lightness %, chroma, hue degrees — with an optional
-  `/ alpha`. The one family written as hex is the categorical chart palette,
-  because a colour-blind-safety check can only be run on the exact values that
+  `/ alpha`. Every colour in the stylesheet, the categorical chart palette included,
+  is written that way, so a colour-blind-safety check runs on the exact values that
   ship (see [Chart colours](#chart-colours)).
-- **The token set is closed.** New UI is built by composing existing tokens into
-  new *classes*, **not** by adding tokens. Adding a token is a deliberate,
-  reviewed design decision (see [Adding or changing a token](#adding-or-changing-a-token)).
+- **The token set grows by decision, not by accident.** New UI is built by composing
+  existing tokens into new *classes*. Adding a token is a deliberate, reviewed design
+  decision (see [Adding or changing a token](#adding-or-changing-a-token)), and the
+  gates below refuse a raw colour, shadow, radius, duration, curve, layer or on-ladder
+  gap where a token exists.
 
 ## At a glance
 
 The stylesheet's light block declares
-<!--count-light-->135<!--/count--> tokens, and the dark block overrides
-<!--count-dark-->51<!--/count--> of them. Those two numbers are checked against
+<!--count-light-->241<!--/count--> tokens, and the dark block overrides
+<!--count-dark-->90<!--/count--> of them. Those two numbers are checked against
 `app.css` by the test below, so they cannot go stale; every other number on this
 page that describes the present is read from the stylesheet the same way.
 
@@ -39,6 +41,20 @@ page that describes the present is read from the stylesheet the same way.
 | Every colour token has a value in both themes, or is named as theme-invariant | `tests/design_tokens_are_the_only_literals.rs` |
 | The contrast ratios the tokens claim, measured in a browser in both themes | `tools/visual-qa/tokens.mjs` |
 | A token refactor changes no element's computed style | `tools/visual-qa/style-snapshot.mjs` |
+| No raw shadow, radius, duration, curve, layer or on-ladder gap outside a token definition | `tests/design_tokens_are_the_only_literals.rs` (rule 5) |
+| The sequential, diverging and data-ink tokens, graded in both themes | `tools/visual-qa/chart-ramps.mjs` |
+| The page washes, the translucent nav, surface order and the focus ring, graded | `tools/visual-qa/surface-layers.mjs` |
+| The generated tables, every hand-written row's values and both counts equal `app.css` | `tools/visual-qa/token-doc.mjs --check` |
+
+### Every token, drawn
+
+Both pictures are rendered from the stylesheet the station serves, so they are the
+tokens and not a drawing of them. `tools/visual-qa/token-swatches.mjs` regenerates
+them; a token added to `app.css` appears without the script changing.
+
+![Every design token in the light theme](../images/design-tokens__light.png)
+
+![Every design token in the dark theme](../images/design-tokens__dark.png)
 
 ## Themes
 
@@ -162,15 +178,19 @@ Two inks are fixed because the fill they sit on does not change between themes:
 
 ## Elevation — shadows
 
-Three elevations. Each layers a soft drop shadow with a hairline `0 0 0 0.5px`
-ring so a card reads as lifted on both themes; the dark theme deepens the
-shadow and switches the ring to a faint light edge.
+Three elevations (and the rest of the family under [More scales](#more-scales)).
+Each layers a tight contact shadow, a long soft one and a hairline `0 0 0 0.5px`
+ring so a card reads as lifted on both themes. The shadows are mixed from
+`--shadow-tint` (a warm brown on paper, a cool near-black on night), never from
+pure black, so a lifted card throws a shadow the colour of the page it sits on. The
+dark theme deepens them and switches the ring to a faint light edge, and the large
+one carries a one-pixel light along its top edge.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `--shadow-sm` | `0 1px 2px oklch(0% 0 0 / .04), 0 0 0 0.5px oklch(0% 0 0 / .04)` | `0 1px 2px oklch(0% 0 0 / .50), 0 0 0 0.5px oklch(100% 0 0 / .04)` | Subtle lift (cards, chips, inputs). |
-| `--shadow-md` | `0 4px 14px oklch(0% 0 0 / .06), 0 0 0 0.5px oklch(0% 0 0 / .04)` | `0 8px 24px oklch(0% 0 0 / .55), 0 0 0 0.5px oklch(100% 0 0 / .06)` | Popovers, hovered cards. |
-| `--shadow-lg` | `0 18px 40px oklch(0% 0 0 / .08), 0 0 0 0.5px oklch(0% 0 0 / .05)` | `0 24px 60px oklch(0% 0 0 / .65), 0 0 0 0.5px oklch(100% 0 0 / .07)` | Modals, the floating now-playing bar. |
+| `--shadow-sm` | `0 1px 2px color-mix(in oklab, var(--shadow-tint) 7%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `0 1px 2px color-mix(in oklab, var(--shadow-tint) 55%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .06)` | Subtle lift (cards, chips, inputs). |
+| `--shadow-md` | `0 2px 4px color-mix(in oklab, var(--shadow-tint) 5%, transparent), 0 8px 20px -4px color-mix(in oklab, var(--shadow-tint) 11%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `0 2px 6px color-mix(in oklab, var(--shadow-tint) 35%, transparent), 0 10px 28px -4px color-mix(in oklab, var(--shadow-tint) 70%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .08)` | Popovers, hovered cards. |
+| `--shadow-lg` | `0 4px 8px color-mix(in oklab, var(--shadow-tint) 5%, transparent), 0 20px 44px -8px color-mix(in oklab, var(--shadow-tint) 19%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent)` | `0 4px 10px color-mix(in oklab, var(--shadow-tint) 35%, transparent), 0 24px 56px -8px color-mix(in oklab, var(--shadow-tint) 80%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09), inset 0 1px 0 oklch(100% 0 0 / .05)` | Modals, the floating now-playing bar. |
 
 ## Focus & scrim
 
@@ -270,8 +290,8 @@ numeral, a 404 code) stay literal and are listed under
 | `--fs-h3` | `24px` | A sub-section title, or a numeral between a title and a statistic. |
 | `--fs-stat` | `32px` | A statistic's numeral, in the serif. |
 | `--fs-stat-lg` | `44px` | The large numeral of a four-up stat tile. |
-| `--fs-h1` | `clamp(34px, 9vw, 46px)` | A page title. Fluid, so a phone gets a title that fits rather than one that wraps four times. |
-| `--fs-hero` | `clamp(40px, 11vw, 60px)` | An editorial headline: Today, the species name, the weekly and yearly recaps. |
+| `--fs-h1` | `clamp(34px, 3.2vw + 22px, 56px)` | A page title. Fluid, so a phone gets a title that fits rather than one that wraps four times. |
+| `--fs-hero` | `clamp(38px, 4.2vw + 22px, 72px)` | An editorial headline: Today, the species name, the weekly and yearly recaps. |
 
 ## Typography — weights and tracking
 
@@ -379,6 +399,297 @@ drawn at full strength with no `fill-opacity`, so what is painted is what was gr
 one place that keeps its own ramp is the History calendar, which prints a day number on
 each cell and so uses a lighter, capped tint of `--moss` that keeps that number at 4.5:1.
 
+## Chart ramps and data ink
+
+The categorical set above says *which*. These say *how much*, *which side*, and
+what a chart draws that is not data. A chart renderer reads these and nothing else
+(no `--moss`, no literal), so one change here retunes every chart.
+
+### Which ramp for which question
+
+| The data says | Use | Why |
+|---|---|---|
+| Identity: which species, which source | `--chart-1` … `--chart-8`, then `--chart-other` | Fixed order, never cycled. |
+| Magnitude: how many, how loud | `--seq-1` … `--seq-7` | One hue family, lightness moves one way. |
+| Magnitude on a cell that prints its own number | `--seq-moss-1` … `--seq-moss-7` | Pale enough that the number keeps 4.5:1. |
+| Polarity: above or below a baseline | `--div-neg-3` … `--div-pos-3` | Two hues and a neutral middle. |
+| State: good, watch, bad | `--moss`, `--dawn`, `--rare`, always with a word or an icon | Reserved meaning; never a series. |
+
+Interpolate between two steps in OKLab (`color-mix(in oklab, var(--seq-5) 40%, var(--seq-4))`),
+never in sRGB or OKLCH, which bend through grey or swing the hue. A ramp is
+graded by arithmetic, not by eye: `tools/visual-qa/chart-ramps.mjs` reads the
+shipped values and fails on a step that is not monotone in lightness, a step
+that is not 7 to 13 dE from its neighbour, a lowest step within 8 dE of an empty
+cell, a highest step under 3:1 on its card, the two diverging poles within 15 dE
+of each other under either colour-blind simulation, or a data-ink colour under its
+stated contrast.
+
+### How a renderer reads them
+
+An SVG mark takes its colour from a class (the stylesheet, not a presentation
+attribute, so the theme can change it) or from a custom property set on the element
+through `data-style`. Never a literal, never `--moss`.
+
+```css
+.my-grid   { stroke: var(--chart-grid); stroke-width: 1; }
+.my-axis   { stroke: var(--chart-axis); stroke-width: 1; }
+.my-label  { fill: var(--chart-label); font-size: var(--fs-2xs); }
+.my-line   { stroke: var(--chart-1); stroke-width: var(--chart-stroke); fill: none; }
+.my-bar    { fill: var(--chart-2); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
+.my-dim    { opacity: var(--chart-dim); }          /* the marks that are not hovered */
+/* A cell a quarter of the way from step 4 to step 5, as OKLab: */
+.my-cell   { fill: color-mix(in oklab, var(--seq-5) 25%, var(--seq-4)); }
+/* One value either side of a baseline: */
+.my-up     { fill: var(--div-pos-2); }
+.my-down   { fill: var(--div-neg-2); }
+```
+
+A tooltip is `background: var(--chart-tip-bg); color: var(--chart-tip-fg);
+border: var(--bw-strong) solid var(--chart-tip-border)`, with `--shadow-md` under it.
+Text on a chart is never drawn in a series colour: the mark carries the identity, the
+label stays in `--chart-label` or `--chart-annot`.
+
+### Sequential (the sun ramp)
+
+Light runs pale to brick, dark runs ember to gold: in both, the more a cell holds,
+the more it stands out from the card.
+
+<!--tokens:begin seq-sun-->
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--seq-1` | `oklch(92% 0.07 95)` | `oklch(32% 0.05 60)` | The least a cell can hold and still be drawn (held 8 dE from an empty cell). |
+| `--seq-2` | `oklch(85% 0.11 85)` | `oklch(40% 0.085 55)` | Sequential sun ramp, step 2. |
+| `--seq-3` | `oklch(77% 0.145 72)` | `oklch(49% 0.115 55)` | Step 3. |
+| `--seq-4` | `oklch(69% 0.16 58)` | `oklch(58% 0.13 62)` | The middle of the ramp. |
+| `--seq-5` | `oklch(60% 0.165 46)` | `oklch(67% 0.14 72)` | Step 5. |
+| `--seq-6` | `oklch(50% 0.15 36)` | `oklch(77% 0.145 85)` | Step 6. |
+| `--seq-7` | `oklch(40% 0.12 30)` | `oklch(88% 0.13 98)` | The most. 9.8:1 on a light card, 13:1 on a dark one. |
+<!--tokens:end-->
+
+### Sequential (the moss ramp)
+
+<!--tokens:begin seq-moss-->
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--seq-moss-1` | `oklch(91% 0.055 150)` | `oklch(31% 0.04 150)` | Moss ramp, the least. |
+| `--seq-moss-2` | `oklch(83.5% 0.085 152)` | `oklch(39% 0.065 152)` | Step 2. |
+| `--seq-moss-3` | `oklch(75.5% 0.105 152)` | `oklch(48% 0.09 152)` | Step 3. |
+| `--seq-moss-4` | `oklch(67% 0.118 151)` | `oklch(57% 0.11 151)` | Step 4. |
+| `--seq-moss-5` | `oklch(58% 0.118 150)` | `oklch(66% 0.125 150)` | Step 5. |
+| `--seq-moss-6` | `oklch(49% 0.102 150)` | `oklch(76% 0.14 150)` | Step 6. |
+| `--seq-moss-7` | `oklch(40% 0.085 150)` | `oklch(87% 0.13 150)` | The most. |
+<!--tokens:end-->
+
+### Diverging
+
+<!--tokens:begin diverging-->
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--div-neg-3` | `oklch(42% 0.105 250)` | `oklch(80% 0.11 240)` | Far below the baseline (strong blue). |
+| `--div-neg-2` | `oklch(62% 0.11 248)` | `oklch(60% 0.12 248)` | Below. |
+| `--div-neg-1` | `oklch(83% 0.055 245)` | `oklch(40% 0.07 250)` | Slightly below. |
+| `--div-mid` | `oklch(95% 0.004 80)` | `oklch(26% 0.008 250)` | The baseline: a neutral grey, never a hue. |
+| `--div-pos-1` | `oklch(85% 0.08 62)` | `oklch(40% 0.08 52)` | Slightly above. |
+| `--div-pos-2` | `oklch(70% 0.15 50)` | `oklch(62% 0.15 48)` | Above. |
+| `--div-pos-3` | `oklch(50% 0.15 36)` | `oklch(82% 0.115 62)` | Far above the baseline (strong brick). |
+<!--tokens:end-->
+
+### Data ink and mark anatomy
+
+<!--tokens:begin chart-ink-->
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--chart-grid` | `oklch(93% 0.005 80)` | `oklch(26% 0.012 250)` | A gridline: 1.2:1 against the card on purpose, a guide and not information. |
+| `--chart-grid-strong` | `oklch(87% 0.006 80)` | `oklch(32% 0.014 250)` | The gridline that marks a boundary (midnight, the zero line of a diverging chart). |
+| `--chart-axis` | `oklch(64% 0.010 70)` | `oklch(58% 0.014 250)` | An axis line and its ticks: 3:1 against the card. |
+| `--chart-tip-bg` | `oklch(24% 0.010 70)` | `oklch(30% 0.014 250)` | A chart tooltip: a dark card on the light theme, a lifted one on dark. |
+| `--chart-tip-fg` | `oklch(98% 0.004 80)` | `oklch(97% 0.004 240)` | Tooltip text, 13:1 or better on the tooltip. |
+| `--chart-tip-border` | `oklch(34% 0.010 70)` | `oklch(42% 0.016 250)` | Tooltip edge, so it never merges with the card behind it. |
+<!--tokens:end-->
+
+The rest of the ink is the same in both themes, or reads a token that already flips:
+
+<!--tokens:begin chart-ink-shared-->
+| Token | Value | Use |
+|---|---|---|
+| `--chart-label` | `var(--fg-3)` | An axis label or a mark label: text, 4.5:1. |
+| `--chart-annot` | `var(--fg-2)` | An annotation drawn on the plot ("peak", "now"): text, stronger than a label. |
+| `--chart-track` | `var(--bg-2)` | The empty part of a bar: the track a fill sits on. |
+| `--chart-gap` | `var(--surface)` | The colour of the gap between touching fills: the card, so a stack reads as separate marks. |
+| `--chart-crosshair` | `var(--fg-3)` | The hover crosshair line. |
+| `--chart-stroke` | `2px` | A line mark's width. |
+| `--chart-gap-w` | `2px` | The width of the gap between touching fills. |
+| `--chart-bar-r` | `4px` | The round on the data end of a bar, anchored square at the baseline. |
+| `--chart-dim` | `.35` | The opacity of the marks that are not hovered. |
+<!--tokens:end-->
+
+## More scales
+
+The scales the first sections do not cover: layered surfaces and tinted shadows,
+the rest of the radius, spacing, type and motion ladders, layers, the focus ring
+and density. Each table is generated from `app.css` by
+`tools/visual-qa/token-doc.mjs`, so a value here is the value the stylesheet has.
+
+### Surfaces
+
+<!--tokens:begin surfaces-themed-->
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--surface-raised` | `var(--surface)` | `oklch(20% 0.011 250)` | A card. Equal to --surface in light; one step lighter than the page in dark, where nearer is lighter. |
+| `--surface-overlay` | `var(--surface)` | `oklch(24% 0.012 250)` | A popover, a menu, a dialog: lifted again in dark. |
+| `--wash-a` | `oklch(90% 0.07 150 / .40)` | `oklch(34% 0.09 160 / .32)` | The green wash behind the top left of the page. |
+| `--wash-b` | `oklch(93% 0.07 75 / .45)` | `oklch(30% 0.07 60 / .20)` | The warm wash behind the top right. |
+<!--tokens:end-->
+
+<!--tokens:begin surfaces-shared-->
+| Token | Value | Use |
+|---|---|---|
+| `--surface-sunken` | `var(--bg-2)` | A well cut into a card: an inset field, a track, a code block. |
+| `--surface-glass` | `color-mix(in oklab, var(--surface-overlay) 76%, transparent)` | The translucent surface of a sticky bar, drawn with --glass-blur. |
+| `--glass-blur` | `saturate(1.5) blur(14px)` | The `backdrop-filter` of a glass surface. |
+<!--tokens:end-->
+
+### Shadows
+
+A shadow is mixed from `--shadow-tint`, so a lifted card throws a warm shadow on
+paper and a cool one on night, never a grey smudge.
+
+<!--tokens:begin shadows-themed-->
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--shadow-tint` | `oklch(32% 0.045 65)` | `oklch(4% 0.03 255)` | What every shadow is mixed from: warm brown on paper, cool near-black on night. Never pure black. |
+| `--shadow-xs` | `0 1px 1px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `0 1px 1px color-mix(in oklab, var(--shadow-tint) 60%, transparent)` | A hairline of depth: a chip, a segmented control. |
+| `--shadow-hover` | `0 2px 4px color-mix(in oklab, var(--shadow-tint) 7%, transparent), 0 12px 28px -6px color-mix(in oklab, var(--shadow-tint) 15%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent)` | `0 2px 4px color-mix(in oklab, var(--shadow-tint) 40%, transparent), 0 14px 32px -6px color-mix(in oklab, var(--shadow-tint) 75%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09)` | A card the pointer is on: between --shadow-md and --shadow-lg. |
+| `--shadow-xl` | `0 6px 12px color-mix(in oklab, var(--shadow-tint) 6%, transparent), 0 32px 64px -12px color-mix(in oklab, var(--shadow-tint) 24%, transparent), 0 0 0 0.5px color-mix(in oklab, var(--shadow-tint) 9%, transparent)` | `0 8px 16px color-mix(in oklab, var(--shadow-tint) 40%, transparent), 0 40px 80px -12px color-mix(in oklab, var(--shadow-tint) 80%, transparent), 0 0 0 0.5px oklch(100% 0 0 / .09), inset 0 1px 0 oklch(100% 0 0 / .06)` | A command palette, a drawer, the biggest thing on the screen. |
+| `--shadow-press` | `inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 16%, transparent)` | `inset 0 1px 3px color-mix(in oklab, var(--shadow-tint) 70%, transparent)` | A control being pressed: it sinks into the page. |
+| `--shadow-inset` | `inset 0 1px 0 oklch(100% 0 0 / .7)` | `inset 0 1px 0 oklch(100% 0 0 / .06)` | The one-pixel light along the top edge of a raised surface. |
+| `--text-glow` | `none` | `0 0 28px var(--glow)` | The halo behind display type on a dark page; none on paper. |
+| `--shadow-field` | `inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 8%, transparent)` | `inset 0 1px 2px color-mix(in oklab, var(--shadow-tint) 55%, transparent)` | The inner shadow of a text field or a segmented track: it is cut into the page, not set on it. |
+<!--tokens:end-->
+
+<!--tokens:begin shadows-shared-->
+| Token | Value | Use |
+|---|---|---|
+| `--ring-danger` | `0 0 0 4px color-mix(in oklab, var(--rare) 8%, transparent)` | The faint red ring around a destructive dialog. |
+| `--accent-bar` | `3px` | The width of the accent bar down the left edge of a banner or a toast (an inset shadow in the banner's own colour). |
+| `--accent-bar-sm` | `2px` | The same on a list row. |
+| `--halo-w` | `3px` | The width of the halo round a status dot in a toast. |
+| `--shadow-key` | `inset 0 1px 0 color-mix(in oklab, currentColor 20%, transparent)` | A one-pixel highlight along the top of a filled button, in that button's own text colour. |
+| `--shadow-up` | `0 -10px 28px -20px color-mix(in oklab, var(--shadow-tint) 40%, transparent)` | The faint shadow cast upward by a bar fixed to the bottom of the screen. |
+| `--shadow-glow` | `0 0 0 1px color-mix(in oklab, var(--moss) 30%, transparent), 0 6px 24px -6px color-mix(in oklab, var(--moss) 38%, transparent)` | A moss ring and a soft green halo: a live or selected thing that should be noticed. |
+<!--tokens:end-->
+
+### Radius
+
+<!--tokens:begin radius-extra-->
+| Token | Value | Use |
+|---|---|---|
+| `--r-3xs` | `2px` | The smallest round: a meter, a tick. |
+| `--r-base` | `8px` | A hover highlight on a list row. |
+| `--r-2xl` | `28px` | A sheet. |
+| `--r-control` | `var(--r-sm)` | A button or a segmented control. Today the same as --r-sm. |
+| `--r-field` | `var(--r-sm)` | A text field or a select. |
+| `--r-card` | `var(--r-lg)` | A card. |
+| `--r-popover` | `var(--r-md)` | A menu or a tooltip. |
+| `--r-dialog` | `var(--r-xl)` | A dialog or a drawer. |
+<!--tokens:end-->
+
+### Edges
+
+<!--tokens:begin edge-->
+| Token | Value | Use |
+|---|---|---|
+| `--edge` | `var(--bw) solid var(--border)` | A card's edge: the hairline in --border. |
+| `--edge-2` | `var(--bw) solid var(--border-2)` | A control's edge: the hairline in --border-2. |
+| `--edge-hair` | `var(--bw) solid var(--hairline)` | A divider: the hairline in --hairline. |
+<!--tokens:end-->
+
+### Spacing
+
+<!--tokens:begin space-extra-->
+| Token | Value | Use |
+|---|---|---|
+| `--space-28` | `28px` | Between a page's sections on a desk. |
+| `--space-40` | `40px` | Above a page's first heading. |
+| `--space-48` | `48px` | The padding of an empty state. |
+| `--space-64` | `64px` | The room under a page. |
+<!--tokens:end-->
+
+### Type
+
+<!--tokens:begin type-extra-->
+| Token | Value | Use |
+|---|---|---|
+| `--fs-display` | `clamp(48px, 5vw + 24px, 84px)` | The oversize numeral or opening line of a page with one thing to say. Fluid, 48 to 84 px. |
+| `--fs-section` | `clamp(22px, 1vw + 16px, 28px)` | A section title in the serif. Fluid, 22 to 28 px. |
+| `--lh-none` | `1` | A single line of display type. |
+| `--lh-tight` | `1.1` | Serif display lines that wrap. |
+| `--lh-snug` | `1.3` | Card titles and short labels. |
+| `--lh-base` | `1.5` | Body text. |
+| `--lh-loose` | `1.7` | Long-form prose (the manual, the changelog). |
+| `--measure` | `66ch` | The longest a line of prose should run. |
+<!--tokens:end-->
+
+### Motion
+
+<!--tokens:begin motion-extra-->
+| Token | Value | Use |
+|---|---|---|
+| `--dur-instant` | `.08s` | A press: the control has to feel it at once. |
+| `--dur-slower` | `.5s` | A panel or a sheet travelling a long way. |
+| `--dur-loop` | `1.4s` | One sweep of a skeleton's shimmer. |
+| `--dur-pulse` | `1.6s` | One beat of a live dot. |
+| `--dur-blink` | `1.2s` | One blink of a starting indicator. |
+| `--dur-glow` | `.6s` | A highlight fading out: a fresh row settling into the list. |
+| `--ease-in` | `cubic-bezier(.4, 0, 1, 1)` | Something leaving. |
+| `--ease-emphasized` | `cubic-bezier(.2, 0, 0, 1)` | Something arriving with intent: a dialog, a toast. |
+| `--ease-spring` | `cubic-bezier(.34, 1.56, .64, 1)` | A control that settles: it overshoots by a few per cent and comes back. |
+| `--stagger` | `.04s` | The delay between one row of a list and the next as they reveal. |
+| `--lift` | `-1px` | How far a hovered card rises. Zero under reduced motion. |
+| `--press-scale` | `.98` | How far a pressed button shrinks. One under reduced motion. |
+<!--tokens:end-->
+
+### Layers
+
+<!--tokens:begin z-extra-->
+| Token | Value | Use |
+|---|---|---|
+| `--z-base` | `0` | The page. |
+| `--z-dropdown` | `45` | A menu under the top bar. |
+| `--z-drawer` | `65` | The help drawer. |
+| `--z-modal` | `80` | A dialog that is not in the top layer. |
+| `--z-tooltip` | `90` | A tooltip, above everything but the skip link. |
+<!--tokens:end-->
+
+### Focus
+
+<!--tokens:begin focus-extra-->
+| Token | Value | Use |
+|---|---|---|
+| `--focus-color` | `var(--moss)` | The keyboard focus ring. |
+| `--focus-width` | `2px` | Its thickness (WCAG 2.4.13 asks for 2 px). |
+| `--focus-offset` | `2px` | The gap between the control and its ring. |
+<!--tokens:end-->
+
+### Icons
+
+<!--tokens:begin icons-->
+| Token | Value | Use |
+|---|---|---|
+| `--icon-moon` | `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z'/%3E%3C/svg%3E")` | The moon on the theme button, drawn as a mask so it takes the button's ink. |
+| `--icon-sun` | `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/%3E%3C/svg%3E")` | The sun, shown on a dark page. |
+<!--tokens:end-->
+
+### Density
+
+<!--tokens:begin density-->
+| Token | Value | Use |
+|---|---|---|
+| `--control-h` | `max(28px, calc(32px * var(--density)))` | The height of a button or a field. Follows density, floored at 28 px. |
+| `--control-h-sm` | `max(24px, calc(26px * var(--density)))` | The height of a small control: a chip, a segment. |
+| `--row-h` | `calc(48px * var(--density))` | The height of a list row. |
+<!--tokens:end-->
+
 ## Legacy aliases
 
 A handful of tokens from before the v3 redesign are kept as **aliases** of the
@@ -419,22 +730,26 @@ change should move. The clusters that remain, and why:
 |---|---|
 | Species identity hues (`--sp`, set per bird) | Data, computed per species at render time. |
 | The migration ridgeline's bands (one hue per species, computed from the name) | Identity as data: the same bird is the same colour on every page. Everything else a chart draws reads `--chart-*` or `--heat-*`. |
-| Loops: skeleton shimmer 1.4 s, pulse 1.6 s, blink 1.2 s, the 0.6 s fresh-row fade | Ambient animation with its own tempo, not interaction feedback. |
 | `black` in a `mask-image` | An alpha mask has no colour of its own; only its alpha is read. |
-| Heading sizes above 16 px other than the steps above (gauge and tile numerals, an icon glyph, a 404 code) | Per-surface display type, sized to its one container. |
-| Padding and the 2 px, 5 px, 7 px and 8 px bar radii | Optical adjustments to one component. A `gap` or a vertical margin that matches a `--space-N` rung uses it. |
+| The sizes of one-off display glyphs and numerals (gauge and tile numerals, a 404 code, the palette's search glyph) | Per-surface display type sized to its one container. Each is named, with a reason, in `FONT_SIZE_EXEMPT` in `tests/design_tokens_are_the_only_literals.rs`; a new one is a decision. |
+| Optical gaps off the `--space-N` ladder (3, 5, 7, 9, 11, 13 px and the odd paddings) | Adjustments to one component's own balance. The rule is the other way round: a pixel count that has a rung is that rung, and the test fails on one that is not. |
+| The geometry of a keyframe (`@keyframes`) | Animation frames are not a design choice a theme moves. The durations and curves that drive them are tokens. |
+| A colour map's stops (`routes/spectrogram/colormap.rs`) | Data, not styling: a spectrogram is an image drawn pixel by pixel, and a theme must not change it. Named in `DATA_FILES` in the same test. |
 | Colours inside the admin pages' own `<style>` blocks, and in the SVG a chart renderer writes | Counted, not forbidden: `tests/design_tokens_are_the_only_literals.rs` holds each file to the number it has now, so none can grow. |
 
 ## Adding or changing a token
 
-The token set is deliberately closed (see the v3 spine
-[protect list](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/design/handover/v3_spine/IMPLEMENTATION_PLAN.md) —
-"OKLCH token set: zero new tokens"). The structural tokens on this page — type,
-weights, tracking, the hairline, the fixed gaps, motion, layers, focus, scrim and
-the pill radius — were each added in a reviewed pass because each replaced a
-cluster of ad-hoc literals rather than introducing a new idea; a refactor of that
-kind is proven pure with `tools/visual-qa/style-snapshot.mjs` (snapshot every
-element's computed style before, and after, and diff).
+The token set was closed by the v3 spine
+([protect list](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/design/handover/v3_spine/IMPLEMENTATION_PLAN.md):
+"OKLCH token set: zero new tokens"), and was then opened once, on purpose, by a pass
+that measured what the stylesheet actually wrote (the numbers are in
+[Known problems](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/DESIGN_BRIEF.md))
+and added the ramps, the layered surfaces, the tinted shadows, the rest of the motion,
+layer and radius ladders and the focus and density tokens. Each replaced a cluster of
+ad-hoc literals or described a thing the stylesheet could not yet say, rather than
+introducing a new idea. A refactor of the first kind is proven pure with
+`tools/visual-qa/style-snapshot.mjs` (snapshot every element's computed style before,
+and after, from the same running fixture, and diff).
 
 - **Build new UI from existing tokens.** Compose them into new CSS *classes*;
   that is the additive path and needs no token change.

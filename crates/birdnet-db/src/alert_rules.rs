@@ -606,7 +606,6 @@ pub struct AlertRule {
 /// Lightweight struct for inserting a new rule.
 // `PartialEq` so an import round trip can be asserted whole rather than field
 // by field; not `Eq`, because the confidence bounds are `f64`.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewAlertRule {
     /// Human-readable rule name.
@@ -1410,7 +1409,7 @@ mod tests {
         // and the rules list is dumped wholesale in more than one diagnostic.
         // A derived `Debug` on `WebhookAuth` would put a live API key in every
         // one of them, and into any support bundle taken afterwards.
-        let secrets = [
+        let canaries = [
             WebhookAuth::Bearer("SUPERSECRETTOKEN".into()),
             WebhookAuth::Basic {
                 user: "ada".into(),
@@ -1421,7 +1420,7 @@ mod tests {
                 value: "SUPERSECRETKEY".into(),
             },
         ];
-        for auth in secrets {
+        for auth in canaries {
             let rule = authed_rule("dbg", Some(auth.clone()));
             let rendered = format!("{:?} {:#?}", rule.action, rule.action);
             for needle in ["SUPERSECRETTOKEN", "SUPERSECRETPASSWORD", "SUPERSECRETKEY"] {

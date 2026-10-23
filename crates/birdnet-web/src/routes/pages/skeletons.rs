@@ -61,11 +61,13 @@ pub fn stat_row(n: usize) -> String {
     out
 }
 
-/// 24h day strip — a histogram-shaped placeholder plus a dot row underneath.
+/// 24h day strip — a histogram-shaped placeholder plus a dot row underneath, as tall as
+/// the chart that replaces it (`.bnb-skel-strip` holds its aspect ratio), so the page below
+/// does not jump when it arrives.
 #[must_use]
 pub const fn day_strip() -> &'static str {
-    r#"<div role="status" aria-busy="true" aria-label="Loading day strip">
-  <div class="bnb-skel-bars" data-style="--n:24;height:62px;">
+    r#"<div class="bnb-skel-strip" role="status" aria-busy="true" aria-label="Loading day strip">
+  <div class="bnb-skel-bars" data-style="--n:24;height:72%;">
     <span data-style="height:30%"></span><span data-style="height:42%"></span><span data-style="height:58%"></span><span data-style="height:70%"></span><span data-style="height:62%"></span><span data-style="height:48%"></span><span data-style="height:38%"></span><span data-style="height:32%"></span><span data-style="height:28%"></span><span data-style="height:26%"></span><span data-style="height:24%"></span><span data-style="height:22%"></span><span data-style="height:24%"></span><span data-style="height:28%"></span><span data-style="height:36%"></span><span data-style="height:42%"></span><span data-style="height:52%"></span><span data-style="height:60%"></span><span data-style="height:54%"></span><span data-style="height:44%"></span><span data-style="height:34%"></span><span data-style="height:26%"></span><span data-style="height:20%"></span><span data-style="height:18%"></span>
   </div>
   <div data-style="display:grid;grid-template-columns:repeat(4,1fr);margin-top:8px;">
@@ -103,25 +105,6 @@ pub const fn ridgeline() -> &'static str {
 </div>"#
 }
 
-/// Diversity bars under the ridgeline — 52 thin bars.
-#[must_use]
-pub fn diversity_bars() -> String {
-    let mut out = String::from(
-        r#"<div class="bnb-skel-bars" data-style="--n:52;height:60px;" role="status" aria-busy="true" aria-label="Loading weekly diversity">"#,
-    );
-    // Pre-baked heights so it looks like a real distribution.
-    let h = [
-        18, 22, 24, 28, 30, 36, 44, 56, 68, 78, 82, 86, 88, 82, 70, 62, 54, 48, 42, 38, 36, 32, 30,
-        28, 28, 26, 24, 26, 28, 30, 32, 36, 40, 44, 50, 58, 64, 70, 74, 76, 72, 68, 60, 54, 46, 40,
-        34, 28, 24, 22, 20, 18,
-    ];
-    for &p in &h {
-        let _ = write!(out, r#"<span data-style="height:{p}%"></span>"#);
-    }
-    out.push_str("</div>");
-    out
-}
-
 /// Per-species ribbons list (dawn chorus right rail). N rows.
 #[must_use]
 pub fn species_ribbons(n: usize) -> String {
@@ -144,7 +127,7 @@ pub fn species_ribbons(n: usize) -> String {
 
 /// 24-bar hourly chart (species circadian, hour×day mini-grid spine).
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
+#[allow(clippy::cast_precision_loss)]
 pub fn hourly_bars(n: usize) -> String {
     let n = n.clamp(8, 96);
     let mut out = format!(

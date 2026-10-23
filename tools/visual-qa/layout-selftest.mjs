@@ -17,6 +17,15 @@
 //             a CSSOM style (allowed by the CSP, unlike a style attribute). Two
 //             painted lines over each other. Must be reported, or the clipped
 //             case passing only means the gate stopped looking.
+//   widen     the document wider than the screen (counterparts, each the others'):
+//             a 600px unbreakable line in `main` must be reported and named; the
+//             same line inside an `overflow-x: auto` box that fits must not be (a
+//             table that scrolls is the page behaving); and a long identifier in a
+//             `.hint`, the original defect, must not widen the page at all, which
+//             is the stylesheet's job and fails on the CSS before the fix.
+//
+//   escape    (second form) a control wider than the `overflow: hidden` box around it is
+//             reported; the same control in a box that scrolls, or one that fits, is not.
 //
 // Env: BASE (default http://127.0.0.1:8502), CHROMIUM_PATH.
 import { chromium } from 'playwright';
@@ -42,8 +51,27 @@ async function fresh() {
 const overlaps = async () => (await page.evaluate(inPage)).overlap;
 
 await fresh();
-const geometry = await page.evaluate((name) => {
-  const a = document.querySelector('#detections-table .feed-row .who .sci');
+// Which Today row to put the long line in. A row whose common name wraps to two lines on a
+// phone has its scientific name a line lower, so a long one passes under the play button's
+// glyph with only a sliver of vertical overlap, which the gate rightly does not call a
+// collision. The case needs a row where the two lines share a band; the fixture's first row
+// depends on the time of day it was seeded, so this finds one rather than assuming row 0.
+const ROW = await page.evaluate((name) => {
+  const rows = [...document.querySelectorAll('#detections-table .feed-row')];
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i].querySelector('.who .sci');
+    const play = rows[i].querySelector('button.x-fplay');
+    if (!a || !play || !a.firstChild || !play.firstChild) continue;
+    const band = (node) => { const g = document.createRange(); g.selectNodeContents(node); const r = g.getBoundingClientRect(); return [r.top, r.bottom]; };
+    const [t0, t1] = band(a.firstChild);
+    const [p0, p1] = band(play.firstChild);
+    if (Math.min(t1, p1) - Math.max(t0, p0) >= 6) return i;
+  }
+  return -1;
+}, NAME);
+check(ROW >= 0, `the fixture has a Today row whose scientific name shares a line with its play button (row ${ROW})`);
+const geometry = await page.evaluate(([name, row]) => {
+  const a = document.querySelectorAll('#detections-table .feed-row')[row]?.querySelector('.who .sci');
   const play = a && a.closest('.feed-row').querySelector('button.x-fplay');
   if (!a || !play) return null;
   a.textContent = name;
@@ -51,7 +79,7 @@ const geometry = await page.evaluate((name) => {
   rg.selectNodeContents(a.firstChild);
   const t = rg.getBoundingClientRect();
   return { textRight: t.right, boxRight: a.getBoundingClientRect().right, playLeft: play.getBoundingClientRect().left };
-}, NAME);
+}, [NAME, ROW]);
 check(geometry !== null, 'the fixture has a Today feed row to put a long line in');
 if (geometry) {
   // The precondition: without it the case proves nothing about clipping.
@@ -79,17 +107,84 @@ check(
 // The long line again, this time not clipped: it is painted under the play
 // button, and the gate that stays silent about the clipped one must speak here.
 await fresh();
-await page.evaluate((name) => {
-  const sci = document.querySelector('#detections-table .feed-row .who .sci');
+await page.evaluate(([name, row]) => {
+  const sci = document.querySelectorAll('#detections-table .feed-row')[row].querySelector('.who .sci');
   sci.textContent = name;
   sci.style.overflow = 'visible';
   sci.style.textOverflow = 'clip';
-}, NAME);
+}, [NAME, ROW]);
 const unclipped = await overlaps();
 check(
   unclipped.length > 0,
   `the same line left unclipped is reported (${unclipped.slice(0, 2).join(' | ') || 'none'})`,
 );
+
+const widen = async () => (await page.evaluate(inPage)).widen;
+// Built with the DOM and CSSOM, not markup: the CSP refuses a style attribute.
+const plant = (spec) =>
+  page.evaluate((sp) => {
+    const host = document.querySelector('main');
+    const make = (n) => {
+      const el = document.createElement(n.tag);
+      if (n.id) el.id = n.id;
+      if (n.cls) el.className = n.cls;
+      if (n.text) el.textContent = n.text;
+      Object.assign(el.style, n.style || {});
+      for (const k of n.kids || []) el.appendChild(make(k));
+      return el;
+    };
+    host.appendChild(make(sp));
+  }, spec);
+const WORD = 'APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES_AND_SOME_MORE_OF_IT_BEYOND_ANY_PHONE';
+
+await fresh();
+check((await widen()).length === 0, 'precondition: the fresh Today page is not wider than the screen');
+await plant({ tag: 'p', id: 'zz-wide', text: `${WORD} ${WORD}`, style: { whiteSpace: 'nowrap', margin: '0' } });
+const wide = await widen();
+check(
+  wide.length === 1 && wide[0].includes('p#zz-wide'),
+  `a line that cannot wrap and widens the page is reported and named (${wide.join(' | ') || 'none'})`,
+);
+
+await fresh();
+await plant({
+  tag: 'div',
+  style: { overflowX: 'auto', width: '300px' },
+  kids: [{ tag: 'p', text: `${WORD} ${WORD}`, style: { whiteSpace: 'nowrap', margin: '0' } }],
+});
+const scrolled = await widen();
+check(scrolled.length === 0, `the same line inside a box that scrolls sideways is not reported (${scrolled.join(' | ') || 'none'})`);
+
+await fresh();
+await plant({ tag: 'div', cls: 'card', kids: [{ tag: 'p', cls: 'hint', id: 'zz-hint', text: WORD }] });
+const hinted = await widen();
+check(hinted.length === 0, `a long identifier in a hint wraps instead of widening the page (${hinted.join(' | ') || 'none'})`);
+
+// escape, second form: a control wider than the `overflow: hidden` box around it is cut off.
+// Counterparts: the same control in a box that scrolls is reachable, and a control that fits a
+// clipping box is fine. The Live view's source menu was the first kind, with the gate green.
+const escaped = async () => (await page.evaluate(inPage)).escape;
+const boxed = (overflowX, buttonWidth) => ({
+  tag: 'div',
+  style: { overflowX, width: '200px', margin: '0' },
+  kids: [{ tag: 'button', id: 'zz-cut', text: 'Wide button', style: { width: buttonWidth, display: 'block' } }],
+});
+await fresh();
+check((await escaped()).length === 0, 'precondition: the fresh Today page has no control past its box');
+await plant(boxed('hidden', '300px'));
+const cut = await escaped();
+check(
+  cut.length === 1 && cut[0].includes('button#zz-cut') && cut[0].includes('cut off'),
+  `a control wider than its overflow: hidden box is reported and named (${cut.join(' | ') || 'none'})`,
+);
+await fresh();
+await plant(boxed('auto', '300px'));
+const reachable = await escaped();
+check(reachable.length === 0, `the same control in a box that scrolls sideways is not reported (${reachable.join(' | ') || 'none'})`);
+await fresh();
+await plant(boxed('hidden', '150px'));
+const fits = await escaped();
+check(fits.length === 0, `a control that fits its clipping box is not reported (${fits.join(' | ') || 'none'})`);
 
 await browser.close();
 if (failed) process.exit(1);

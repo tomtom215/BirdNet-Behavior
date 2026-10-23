@@ -190,13 +190,7 @@ mod tests {
 
         // Noise-like: deterministic pseudo-random (LCG, wrapping arithmetic)
         let mut state: u64 = 0xDEAD_C0DE_CAFE_BABE_u64;
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
+        #[allow(clippy::cast_precision_loss)]
         let noisy: Vec<f32> = (0..MIN_SAMPLES * 3)
             .map(|_| {
                 state = state

@@ -1,8 +1,13 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security disclosure
-    url: https://github.com/tomtom215/BirdNet-Behavior/security/advisories/new
-    about: Found a vulnerability? Open a private security advisory instead of a public issue.
-  - name: Discussion / question
-    url: https://github.com/tomtom215/BirdNet-Behavior/discussions
-    about: For setup questions and general discussion, please use Discussions.
+    # Not security/advisories/new: GitHub's private vulnerability reporting is off
+    # for this repository, so that address is the maintainers' advisory-drafting
+    # form and answers a reporter with a 404. SECURITY.md says what works instead;
+    # once the setting is on, point this back at the advisory form.
+    url: https://github.com/tomtom215/BirdNet-Behavior/blob/main/SECURITY.md
+    about: Found a vulnerability? Do not open a public issue with the details. SECURITY.md says how to reach the maintainer privately.
+  - name: Getting help
+    # Not /discussions: GitHub Discussions are not enabled for this repository.
+    url: https://github.com/tomtom215/BirdNet-Behavior/blob/main/SUPPORT.md
+    about: Setup questions? Run the built-in diagnostic and read the troubleshooting guide first; SUPPORT.md says where each kind of question goes.

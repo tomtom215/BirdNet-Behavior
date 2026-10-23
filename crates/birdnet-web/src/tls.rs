@@ -964,7 +964,12 @@ pub fn spawn_renewer(resolver: Arc<Resolver>, settings: TlsSettings) {
             .await;
             match outcome {
                 Ok(Ok(true)) => {
-                    let expiry = self_signed_expiry(&settings.state_dir);
+                    let state_dir = settings.state_dir.clone();
+                    let expiry =
+                        tokio::task::spawn_blocking(move || self_signed_expiry(&state_dir))
+                            .await
+                            .ok()
+                            .flatten();
                     tracing::info!(
                         expires_on =
                             expiry.map_or_else(|| "unknown".to_owned(), |e| e.leaf_expires_on()),
@@ -1043,15 +1048,30 @@ impl ResolvesServerCert for Resolver {
 /// and skipped — a renewal caught mid-write retries a minute later rather than
 /// tearing down the keypair that currently works.
 pub fn spawn_reloader(resolver: Arc<Resolver>, cert: PathBuf, key: PathBuf) {
+    // The `stat`s and the reads are blocking calls; each goes to the blocking pool
+    // rather than being made on a runtime worker every minute.
+    async fn on_the_pool<T: Send + 'static>(
+        cert: &Path,
+        key: &Path,
+        work: impl FnOnce(&Path, &Path) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (cert, key) = (cert.to_path_buf(), key.to_path_buf());
+        tokio::task::spawn_blocking(move || work(&cert, &key))
+            .await
+            .ok()
+    }
     tokio::spawn(async move {
-        let mut last = fingerprint(&cert, &key);
+        let mut last = on_the_pool(&cert, &key, fingerprint).await;
         loop {
             tokio::time::sleep(RELOAD_POLL).await;
-            let now = fingerprint(&cert, &key);
+            let now = on_the_pool(&cert, &key, fingerprint).await;
             if now == last {
                 continue;
             }
-            match load_pair(&cert, &key) {
+            let Some(loaded) = on_the_pool(&cert, &key, load_pair).await else {
+                continue;
+            };
+            match loaded {
                 Ok(next) => {
                     resolver.replace(next);
                     last = now;

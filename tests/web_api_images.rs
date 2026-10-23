@@ -272,6 +272,50 @@ async fn species_image_file_respects_blacklist() {
     );
 }
 
+/// A blacklist the station cannot read fails closed.
+///
+/// An entry is the operator withdrawing a picture. Serving it because the
+/// database did not answer undid that decision at the moment nobody was looking
+/// (`unwrap_or(false)` on the read made a failure indistinguishable from "not
+/// blacklisted"). The refusal is a 503 that a browser may not keep, so the
+/// picture comes back as soon as the database does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn species_image_file_fails_closed_when_the_blacklist_cannot_be_read() {
+    let addr = spawn_image_server().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let state = state_with_stub_cache(format!("http://{addr}"), tmp.path());
+    let app = build_router(state.clone());
+    let uri = "/api/v2/species/image/Turdus%20merula/file";
+    let ask = || {
+        app.clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    };
+
+    // The counterpart, and the precondition: with a readable (empty) blacklist the
+    // picture is served, and the cache now knows the URL it came from.
+    let warm = ask().await.unwrap();
+    assert_eq!(warm.status(), StatusCode::OK, "precondition");
+
+    state.with_db(|conn| {
+        conn.execute_batch("DROP TABLE image_blacklist")
+            .expect("break the blacklist");
+    });
+    let blocked = ask().await.unwrap();
+    assert_eq!(
+        blocked.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a blacklist that could not be read served the picture"
+    );
+    assert_eq!(
+        blocked
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store"),
+        "a refusal caused by a fault must not be kept by the browser"
+    );
+}
+
 /// Both answers from the file endpoint must tell the browser how long it may
 /// reuse them.
 ///

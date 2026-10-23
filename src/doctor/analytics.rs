@@ -98,7 +98,7 @@ fn verdict(compiled: bool, req: Request, dir: Option<&Path>) -> Check {
             ),
             _ => Check::pass(
                 NAME,
-                "enabled — the behavioral extension is embedded in release binaries and loads with no network",
+                "enabled — release binaries carry the behavioral extension and load it with no network; a build from source or `cargo install` fetches it into ~/.duckdb on first use (needs the network once and a writable home directory)",
             ),
         },
     }

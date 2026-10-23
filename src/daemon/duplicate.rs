@@ -44,17 +44,27 @@ pub(super) enum DuplicateVerdict {
     },
 }
 
-/// Remembers when each species was last admitted.
+/// Remembers when each species was last admitted **on each source**.
 ///
-/// Bounded by the model's label count (~11 500 short strings, low single-digit
-/// megabytes at absolute worst, and in practice the few dozen species a site
-/// actually hears), so entries are never evicted — an eviction policy would be
-/// a second thing to get wrong for no memory that matters.
+/// Keyed by (source, species), not species alone: two RTSP cameras at the two
+/// ends of a garden hear different birds, and a call at the second camera 20
+/// seconds after the first used to be dropped (no row, no clip, no
+/// notification) as a "repeat" of a bird that was somewhere else. For a station
+/// with one source the source is the same on every detection, so the key is the
+/// species and nothing changes. The cost is the other direction: two
+/// microphones that hear the *same* bird each record it once.
+///
+/// Bounded by the model's label count times the number of sources (~11 500
+/// short strings each at absolute worst, and in practice the few dozen species a
+/// site actually hears), so entries are never evicted — an eviction policy would
+/// be a second thing to get wrong for no memory that matters.
 #[derive(Debug)]
 pub(super) struct DuplicateGate {
     /// Zero disables the gate.
     interval_secs: i64,
-    /// Scientific name → timestamp of the last admitted detection, in seconds.
+    /// (source, scientific name) → timestamp of the last admitted detection,
+    /// in seconds. The two parts are joined by a unit separator, which neither
+    /// a stream id nor a species name contains.
     last_admitted: HashMap<String, i64>,
 }
 
@@ -94,20 +104,133 @@ impl DuplicateGate {
     /// directory in whatever order the filesystem returns, so on a restart with
     /// a backlog an *earlier* recording routinely arrives after a later one. A
     /// signed `at - last < interval` test would admit every one of those.
+    #[cfg(test)]
     pub(super) fn admit(&mut self, sci_name: &str, at_secs: i64) -> DuplicateVerdict {
-        if !self.is_enabled() {
+        self.admit_with(sci_name, at_secs, None)
+    }
+
+    /// As [`Self::admit_from`], for the one source a single-source station has.
+    #[cfg(test)]
+    pub(super) fn admit_with(
+        &mut self,
+        sci_name: &str,
+        at_secs: i64,
+        species_interval_secs: Option<i64>,
+    ) -> DuplicateVerdict {
+        self.admit_from("local", sci_name, at_secs, species_interval_secs)
+    }
+
+    /// As `admit`, for a species that may have an interval of
+    /// its own, heard on `source` (a stream id, or `local`).
+    ///
+    /// `species_interval_secs` is the operator's per-species minimum
+    /// (`species_intervals`, migration 56). A positive value **replaces** the
+    /// station's interval for that species — it is not added to it, and it
+    /// applies even when the station's own interval is off, which is how
+    /// tphakala/birdnet-go's `species.config.<name>.interval` behaves ("0 =
+    /// use the global default"). `None`, zero or a negative number falls back
+    /// to the station's interval, so a bad stored value can never switch the
+    /// gate on for a species by accident.
+    pub(super) fn admit_from(
+        &mut self,
+        source: &str,
+        sci_name: &str,
+        at_secs: i64,
+        species_interval_secs: Option<i64>,
+    ) -> DuplicateVerdict {
+        let interval_secs = match species_interval_secs {
+            Some(own) if own > 0 => own,
+            _ => self.interval_secs,
+        };
+        if interval_secs <= 0 {
             return DuplicateVerdict::Admit;
         }
-        if let Some(&last) = self.last_admitted.get(sci_name) {
+        let key = format!("{source}\u{1f}{sci_name}");
+        if let Some(&last) = self.last_admitted.get(&key) {
             let gap = at_secs.saturating_sub(last).abs();
-            if gap < self.interval_secs {
+            if gap < interval_secs {
                 return DuplicateVerdict::Suppress {
                     since_last_secs: gap,
                 };
             }
         }
-        self.last_admitted.insert(sci_name.to_owned(), at_secs);
+        // Never moved backwards: a restart backlog is walked in directory order,
+        // so a recording from before the last admitted one arrives after it, and
+        // storing its earlier time would make the next in-order detection of the
+        // same song look far enough from the "last" one to be admitted again.
+        let slot = self.last_admitted.entry(key).or_insert(at_secs);
+        *slot = (*slot).max(at_secs);
         DuplicateVerdict::Admit
+    }
+}
+
+/// The operator's per-species minimum intervals, re-read from the database on
+/// a short TTL.
+///
+/// `/admin/species` writes them at runtime, so — exactly as for the per-species
+/// confidence thresholds — a snapshot taken at start would make the page
+/// confirm a save that changed nothing until the next restart. The first read
+/// is at construction, not after the first TTL, so a station that restarts with
+/// an interval already set honours it from its first detection.
+pub(super) struct SpeciesIntervals {
+    map: HashMap<String, i64>,
+    refreshed: std::time::Instant,
+}
+
+impl SpeciesIntervals {
+    /// How stale the map may get before the next detection re-reads it.
+    const TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Read the table once.
+    pub(super) fn load(state: &birdnet_web::state::AppState) -> Self {
+        let mut this = Self {
+            map: HashMap::new(),
+            refreshed: std::time::Instant::now(),
+        };
+        this.reread(state);
+        this
+    }
+
+    /// A failed read keeps the previous map: dropping every interval on a
+    /// transient `SQLITE_BUSY` would silently record the repeats the operator
+    /// asked not to see.
+    fn reread(&mut self, state: &birdnet_web::state::AppState) {
+        match state.with_db(birdnet_db::sqlite::get_species_interval_map) {
+            Ok(fresh) => self.map = fresh,
+            Err(e) => tracing::warn!(
+                error = %e,
+                "could not read per-species intervals; keeping the previous set"
+            ),
+        }
+        self.refreshed = std::time::Instant::now();
+    }
+
+    /// The species' own interval, refreshed if stale.
+    pub(super) fn get(
+        &mut self,
+        state: &birdnet_web::state::AppState,
+        sci_name: &str,
+    ) -> Option<i64> {
+        if self.refreshed.elapsed() >= Self::TTL {
+            self.reread(state);
+        }
+        self.map.get(sci_name).copied()
+    }
+
+    /// Make the next read look a TTL old.
+    #[cfg(test)]
+    pub(super) fn age_for_test(&mut self) {
+        self.refreshed = std::time::Instant::now()
+            .checked_sub(Self::TTL)
+            .expect("the monotonic clock is older than the TTL");
+    }
+
+    /// How many species have an interval of their own, or `None` when none
+    /// does: the figure the processor announces at start, and nothing to
+    /// announce when there is none. A function of its own so the "none" case is
+    /// a value a test can read, not a branch of a log call.
+    pub(super) fn in_force(&self) -> Option<usize> {
+        (!self.map.is_empty()).then_some(self.map.len())
     }
 }
 
@@ -228,6 +351,60 @@ mod tests {
         assert!(admitted(&mut g, "Turdus merula", "05:00:01"));
     }
 
+    // ── a species' own interval (migration 56) ──────────────────────────
+
+    /// Whether the gate admitted `sci` at `hms` under a species interval.
+    fn admitted_under(g: &mut DuplicateGate, sci: &str, hms: &str, own: Option<i64>) -> bool {
+        g.admit_with(sci, t(hms), own) == DuplicateVerdict::Admit
+    }
+
+    #[test]
+    fn a_species_interval_applies_when_the_station_has_none() {
+        // The station's interval is off (the default). One noisy species is
+        // limited to once a minute; every other species is untouched. This is
+        // birdnet-go's `species.config.<name>.interval`.
+        let mut g = DuplicateGate::new(0);
+        assert!(admitted_under(&mut g, "Strix aluco", "02:00:00", Some(60)));
+        assert!(!admitted_under(&mut g, "Strix aluco", "02:00:59", Some(60)));
+        assert!(admitted_under(&mut g, "Strix aluco", "02:01:00", Some(60)));
+        // A species with no interval of its own is not gated at all.
+        assert!(admitted_under(&mut g, "Turdus merula", "02:00:00", None));
+        assert!(admitted_under(&mut g, "Turdus merula", "02:00:01", None));
+    }
+
+    #[test]
+    fn a_species_interval_replaces_the_stations_and_does_not_add_to_it() {
+        // Longer than the station's: the owl is held for 60 s although the
+        // station would admit it again after 10.
+        let mut g = DuplicateGate::new(10);
+        assert!(admitted_under(&mut g, "Strix aluco", "02:00:00", Some(60)));
+        assert!(!admitted_under(&mut g, "Strix aluco", "02:00:30", Some(60)));
+        // Shorter than the station's: the blackbird is admitted again after 5 s
+        // although the station's interval is 10.
+        assert!(admitted_under(&mut g, "Turdus merula", "05:00:00", Some(5)));
+        assert!(admitted_under(&mut g, "Turdus merula", "05:00:05", Some(5)));
+    }
+
+    #[test]
+    fn a_zero_or_negative_species_interval_means_the_stations() {
+        // "0 = use the default" upstream; a negative number is a typo and must
+        // not turn the gate on or off for the species.
+        for own in [Some(0), Some(-5), None] {
+            let mut g = DuplicateGate::new(10);
+            assert!(admitted_under(&mut g, "Pica pica", "09:00:00", own));
+            assert!(
+                !admitted_under(&mut g, "Pica pica", "09:00:05", own),
+                "{own:?} did not fall back to the station's 10 s"
+            );
+            let mut off = DuplicateGate::new(0);
+            assert!(admitted_under(&mut off, "Pica pica", "09:00:00", own));
+            assert!(
+                admitted_under(&mut off, "Pica pica", "09:00:01", own),
+                "{own:?} switched the gate on under a station with none"
+            );
+        }
+    }
+
     // ── out-of-order arrival ────────────────────────────────────────────
 
     #[test]
@@ -303,6 +480,55 @@ mod tests {
         assert_eq!(
             g.admit("Turdus merula", t("05:00:07")),
             DuplicateVerdict::Suppress { since_last_secs: 7 }
+        );
+    }
+
+    /// M6: two cameras are two places. A call at the second 20 s after the
+    /// first used to be dropped as a repeat.
+    #[test]
+    fn a_species_on_another_source_is_not_a_repeat() {
+        let mut g = DuplicateGate::new(3600);
+        let at = |g: &mut DuplicateGate, source: &str, hms: &str| {
+            g.admit_from(source, "Turdus merula", t(hms), None) == DuplicateVerdict::Admit
+        };
+        assert!(at(&mut g, "cam1", "05:00:00"));
+        assert!(at(&mut g, "cam2", "05:00:20"), "cam2 was shadowed by cam1");
+        // Each source still gates itself.
+        assert!(!at(&mut g, "cam1", "05:00:30"));
+        assert!(!at(&mut g, "cam2", "05:00:40"));
+    }
+
+    /// The counterpart that proves keying by source did not change a station
+    /// with one: the same sequence on a single source is gated exactly as it
+    /// is by `admit` (which has no source at all).
+    #[test]
+    fn a_single_source_station_is_gated_exactly_as_before() {
+        let times = ["05:00:00", "05:00:20", "05:30:00", "06:00:01", "06:00:30"];
+        let mut keyed = DuplicateGate::new(3600);
+        let mut unkeyed = DuplicateGate::new(3600);
+        for hms in times {
+            assert_eq!(
+                keyed.admit_from("cam1", "Turdus merula", t(hms), None),
+                unkeyed.admit("Turdus merula", t(hms)),
+                "{hms}"
+            );
+        }
+    }
+
+    /// L1: a recording from before the last admitted one (a restart backlog is
+    /// walked in directory order) must not pull the remembered time back, or
+    /// the same song is admitted again.
+    #[test]
+    fn an_earlier_recording_arriving_late_does_not_rewind_the_gate() {
+        let mut g = DuplicateGate::new(60);
+        assert!(admitted(&mut g, "Turdus merula", "05:10:00"));
+        // 05:00:00 is 10 minutes before: far enough to be admitted on its own...
+        assert!(admitted(&mut g, "Turdus merula", "05:00:00"));
+        // ...but 05:10:20 is 20 s after the song admitted at 05:10:00, and must
+        // still be a repeat of it. With the time rewound to 05:00:00 it was not.
+        assert!(
+            !admitted(&mut g, "Turdus merula", "05:10:20"),
+            "the late arrival moved the remembered time backwards"
         );
     }
 }

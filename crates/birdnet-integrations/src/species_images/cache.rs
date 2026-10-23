@@ -156,7 +156,6 @@ impl DiskCache {
     /// re-fetches (and is then refused if the resolved URL is still blacklisted).
     ///
     /// Returns `true` if a file was deleted. A missing file is not an error.
-    #[allow(clippy::significant_drop_tightening)]
     pub fn remove(&self, cache_key: &str) -> bool {
         self.index
             .lock()

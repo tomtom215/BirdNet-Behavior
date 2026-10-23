@@ -24,6 +24,22 @@
     return b + p;
   }
   window.bnbUrl = url;
+  // `raw` as an absolute URL on this origin, or null. A value a script reads
+  // back from the DOM (`data-play-src`, `data-href`, `data-help-drawer`) is a
+  // URL to follow, not one to trust: a `javascript:` URL and another origin
+  // are refused here, and what comes back is the parsed `href`, not the string
+  // that was read. Every legitimate value is an application path, which
+  // resolves against the page and so keeps a reverse-proxy prefix the server
+  // put on it.
+  window.bnbSameOrigin = function (raw) {
+    if (typeof raw !== "string" || raw === "") return null;
+    try {
+      var u = new URL(raw, window.location.href);
+      return u.origin === window.location.origin ? u.href : null;
+    } catch (e) {
+      return null;
+    }
+  };
   document.addEventListener("htmx:configRequest", function (e) {
     if (e.detail && typeof e.detail.path === "string") e.detail.path = url(e.detail.path);
   });

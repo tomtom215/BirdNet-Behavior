@@ -2,15 +2,17 @@
 #
 # STATUS: template — pending a hardware-verified `aarch64-apple-darwin` release.
 # The release pipeline (.github/workflows/release.yml) already builds and
-# uploads `birdnet-behavior-<version>-aarch64-apple-darwin.tar.gz` plus a
-# `.sha256` sidecar. Once a release is cut AND verified on real M-series
-# hardware, fill in `version` and `sha256` (copy the value from the sidecar)
-# and publish this file in a tap repo, e.g.:
+# uploads `birdnet-behavior-<version>-aarch64-apple-darwin.tar.gz`, and lists its
+# SHA-256 in the release's `SHA256SUMS` (the per-archive `.sha256` sidecars are
+# build artefacts only; they are deleted before the release is assembled). Once
+# a release is cut AND verified on real M-series hardware, fill in `version` and
+# `sha256` (the line for that archive in `SHA256SUMS`) and publish this file in
+# a tap repo, e.g.:
 #
 #     tomtom215/homebrew-birdnet-behavior  ->  Formula/birdnet-behavior.rb
 #     brew install tomtom215/birdnet-behavior/birdnet-behavior
 #
-# until then, build from source (see docs/MACOS.md).
+# until then, build from source (see docs/book/field/macos.md).
 class BirdnetBehavior < Formula
   desc "Real-time acoustic bird classification with DuckDB behavioral analytics"
   homepage "https://github.com/tomtom215/BirdNet-Behavior"
@@ -21,7 +23,7 @@ class BirdnetBehavior < Formula
   on_macos do
     on_arm do
       url "https://github.com/tomtom215/BirdNet-Behavior/releases/download/v#{version}/birdnet-behavior-#{version}-aarch64-apple-darwin.tar.gz"
-      # Replace with the value from the release's .tar.gz.sha256 sidecar:
+      # Replace with the archive's line in the release's SHA256SUMS:
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
@@ -36,7 +38,10 @@ class BirdnetBehavior < Formula
     (etc/"birdnet-behavior").mkpath
     (var/"birdnet-behavior").mkpath
     (var/"log").mkpath
-    doc.install "README.md", "CHANGELOG.md", "LICENSE", "LICENSE-UPSTREAM"
+    # The licence terms travel with the binary, as they do in every release
+    # archive: NOTICE and THIRD_PARTY_LICENSES.txt carry the third-party terms
+    # the statically linked code requires to be reproduced.
+    doc.install "README.md", "CHANGELOG.md", "LICENSE", "LICENSE-UPSTREAM", "NOTICE", "THIRD_PARTY_LICENSES.txt"
   end
 
   def caveats
@@ -55,9 +60,10 @@ class BirdnetBehavior < Formula
       then set MODEL_PATH, LABELS_PATH and METADATA_MODEL_PATH in birdnet.conf to
       the files it prints.
 
-      Configure your station before first run:
-        cp #{etc}/birdnet-behavior/birdnet.conf.example #{etc}/birdnet-behavior/birdnet.conf
-        # edit LATITUDE/LONGITUDE, then start the LaunchAgent.
+      Configure your station before first run: create
+        #{etc}/birdnet-behavior/birdnet.conf
+      with at least LATITUDE= and LONGITUDE= (the manual's Configuration page lists
+      every key; no example file is installed), then start the LaunchAgent.
     EOS
   end
 

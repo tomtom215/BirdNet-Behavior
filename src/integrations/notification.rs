@@ -23,6 +23,9 @@ pub fn create_notification_filter(
         "APPRISE_TRIGGER",
     );
     let trigger = TriggerMode::parse(&trigger_str);
+    if let Some(notice) = trigger_off_notice(&trigger_str, &trigger) {
+        tracing::warn!("{notice}");
+    }
 
     // These two flags have no clap default, so `Some` already means the
     // operator supplied one; the config carries the admin-UI value otherwise.
@@ -46,6 +49,28 @@ pub fn create_notification_filter(
         trigger,
         species_filter,
     }
+}
+
+/// The warning for a trigger that turns every notification off.
+///
+/// `off`, `none` and `never` used to be read as "each" (an unknown word falls
+/// back to that); they now mean what they say. A station whose file still says
+/// `off` was being notified about every detection and is not any more, and a
+/// default BirdNET-Pi `birdnet.conf` imports as `off` as it did there. Said once
+/// at start-up, in the journal, because nothing else on screen says that the
+/// phone is quiet by choice.
+fn trigger_off_notice(
+    raw: &str,
+    trigger: &birdnet_integrations::notification::TriggerMode,
+) -> Option<String> {
+    (*trigger == birdnet_integrations::notification::TriggerMode::Off).then(|| {
+        format!(
+            "APPRISE_TRIGGER={:?} turns detection notifications OFF: no detection is sent. \
+             Earlier versions read off, none and never as \"each\" and notified about every \
+             detection. For every detection set it to each; for rare species new-species",
+            raw.trim()
+        )
+    })
 }
 
 /// Create a notification template from CLI flags and/or config.
@@ -431,5 +456,28 @@ mod tests {
         assert_eq!(body, "only-body");
         // The hand-rolled default title is "Bird Detection: $comname".
         assert!(title.contains("Eurasian Magpie"));
+    }
+
+    /// M3: `off`, `none` and `never` silence notifications and the journal says
+    /// so; the counterparts (a real rule, an unknown word that falls back to
+    /// "each") say nothing.
+    #[test]
+    fn a_trigger_that_silences_notifications_is_announced() {
+        use super::trigger_off_notice;
+        use birdnet_integrations::notification::TriggerMode;
+        for word in ["off", "none", "never", " OFF "] {
+            let notice = trigger_off_notice(word, &TriggerMode::parse(word))
+                .unwrap_or_else(|| panic!("{word:?} was not announced"));
+            assert!(
+                notice.contains("OFF") && notice.contains("each"),
+                "{notice}"
+            );
+        }
+        for word in ["each", "new-species", "each,new-species", "sometimes", ""] {
+            assert!(
+                trigger_off_notice(word, &TriggerMode::parse(word)).is_none(),
+                "{word:?} was announced as off"
+            );
+        }
     }
 }

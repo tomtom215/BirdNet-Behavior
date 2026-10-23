@@ -30,6 +30,13 @@ pub struct NotificationProbes {
     pub mqtt: Option<Probe>,
     /// Sends a test email, when email is configured.
     pub email: Option<Probe>,
+    /// Asks eBird a real question with the configured key (`P-15`), when a key
+    /// is set. Not a notification channel, so "Test all channels" does not run
+    /// it; it has its own button.
+    pub ebird: Option<Probe>,
+    /// Fetches the configured weather provider's data (`P-15`), when the
+    /// weather poll is switched on. Same: its own button.
+    pub weather: Option<Probe>,
 }
 
 impl std::fmt::Debug for NotificationProbes {
@@ -37,6 +44,8 @@ impl std::fmt::Debug for NotificationProbes {
         f.debug_struct("NotificationProbes")
             .field("mqtt", &self.mqtt.is_some())
             .field("email", &self.email.is_some())
+            .field("ebird", &self.ebird.is_some())
+            .field("weather", &self.weather.is_some())
             .finish()
     }
 }

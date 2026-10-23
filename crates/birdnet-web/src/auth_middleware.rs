@@ -203,18 +203,19 @@ async fn private_gate_middleware(request: Request<Body>, next: Next, state: &App
 /// Mark a private station's response as not to be kept, unless the handler
 /// already said what it wants.
 ///
-/// The service worker (`static/sw.js`) answers dashboard pages
+/// The service worker (`static/sw.js`) is written to answer dashboard pages
 /// stale-while-revalidate, which is right for an open station and wrong for a
-/// private one: the cached copy is the private dashboard, and it is returned
-/// after sign-out before the server has had a chance to say `303 /login`. The
-/// worker already declines to store anything marked `no-store`; the browser's
-/// own cache and back-forward navigation honour it too. A handler that set its
-/// own `Cache-Control` (a clip, a spectrogram, an image) keeps it: those carry
-/// a policy of their own, and they are not what the worker revalidates.
+/// private one: the cached copy would be the private dashboard, returned after
+/// sign-out before the server could say `303 /login`. It is dormant today (it is
+/// registered with a scope that covers no page; see the header of `sw.js`), so
+/// this marking guards what could keep a page instead: the browser's own cache,
+/// back-forward navigation and any proxy, all of which honour it, and the worker
+/// should it ever be given a wider scope (it already declines to store anything
+/// marked `no-store`). A handler that set its own `Cache-Control` (a clip, a
+/// spectrogram, an image) keeps it: those carry a policy of their own.
 ///
-/// Applied only where the gate is active. An open station's pages are public,
-/// and the worker's offline copy of them is what keeps a wall display up
-/// through an outage.
+/// Applied only where the gate is active. An open station's pages are public and
+/// stay cacheable.
 fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()
@@ -366,24 +367,56 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
         return *resp;
     }
 
+    // A viewer's page is built by the same shell as the administrator's; say who
+    // is reading so the nav leaves out what would answer them `403`.
+    let viewer = !user.is_admin();
     let mut req = request;
     req.extensions_mut().insert(user);
-    next.run(req).await
+    let mut response = next.run(req).await;
+    if viewer {
+        response
+            .extensions_mut()
+            .insert(crate::routes::admin::nav::ViewerView);
+    }
+    response
 }
 
 /// Whether a viewer may `GET` this admin path.
 ///
 /// `false` for the reads that export what a viewer must not hold: the database
 /// and its backups (every password hash and every stored credential), the
-/// support bundle, the rules export (webhook URLs carry their tokens), and an
-/// audio source's own row and edit form (an RTSP URL carries its password).
+/// support bundle, the rules export (webhook URLs carry their tokens), an
+/// audio source's own row and edit form (an RTSP URL carries its password),
+/// the `birdnet.conf` lines the BirdNET-Pi import offers for download (the
+/// station's keys, verbatim), and the diagnostics (`/admin/doctor`,
+/// `/admin/doctor.json`: the MQTT broker's host, the certificate and CA paths,
+/// the model and data directories), the process id the restart button
+/// compares (`/admin/system/boot-id`: nothing a read-only account can use, since
+/// it cannot press that button), and the live log (`/admin/system/logs`, the
+/// stream, and `/admin/system/logs/page`, its viewer). The log is the one
+/// surface that is not a rendering of settings: it carries whatever a
+/// subsystem wrote while it ran — file and directory paths, host names and
+/// addresses, the names of accounts that signed in, a camera's host — and none
+/// of it is passed through the redaction the forms use, so "read-only" cannot
+/// be made safe by masking it. A viewer is shown the pages that are renderings
+/// of state, with their credentials masked, and not the stream.
 /// The source's status pill (`/probe`) stays readable — the capture tab polls
 /// it for everyone. The settings forms stay readable too, with every
-/// credential masked (`settings::handler::load_settings_for`).
+/// credential masked (`settings::handler::load_settings_for`), and so does the
+/// classifier panel, which hides its file paths from a viewer
+/// (`classifier::panel`).
 fn viewer_may_read(path: &str) -> bool {
     if matches!(
         path,
-        "/admin/system/backup/full" | "/admin/support-bundle" | "/admin/rules/export"
+        "/admin/system/backup/full"
+            | "/admin/support-bundle"
+            | "/admin/rules/export"
+            | "/admin/migrate/conf/lines"
+            | "/admin/doctor"
+            | "/admin/doctor.json"
+            | "/admin/system/boot-id"
+            | "/admin/system/logs"
+            | "/admin/system/logs/page"
     ) || path.starts_with("/admin/system/backups/")
     {
         return false;
@@ -537,6 +570,23 @@ fn urlencode_path(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nav hides exactly what the gate refuses: every entry a viewer's nav
+    /// leaves out answers a viewer `403`, so no link in it is a dead one.
+    #[test]
+    fn every_entry_hidden_from_a_viewer_is_refused_to_a_viewer() {
+        for key in crate::routes::admin::nav::VIEWER_HIDDEN {
+            let nav = crate::routes::admin::nav::ADMIN_NAV
+                .iter()
+                .find(|n| n.key == *key)
+                .expect("a nav key");
+            assert!(
+                !viewer_may_read(nav.path),
+                "{} is hidden from a viewer's nav but the gate lets a viewer GET it",
+                nav.path
+            );
+        }
+    }
 
     #[test]
     fn excluded_paths_match_basic_auth() {

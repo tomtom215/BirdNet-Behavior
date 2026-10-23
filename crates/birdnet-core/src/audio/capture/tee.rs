@@ -1249,7 +1249,7 @@ mod conditioning_tests {
     fn tone(hz: f32, n: usize, amp: f32) -> Vec<i16> {
         (0..n)
             .map(|i| {
-                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                #[allow(clippy::cast_precision_loss)]
                 let t = i as f32 / SR as f32;
                 #[allow(clippy::cast_possible_truncation)]
                 let v = (amp * f32::from(i16::MAX) * (2.0 * std::f32::consts::PI * hz * t).sin())

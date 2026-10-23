@@ -14,7 +14,6 @@ pub(super) struct StftResult {
     pub(super) n_frames: usize,
 }
 
-#[allow(clippy::cast_precision_loss)]
 pub(super) fn compute_stft(
     samples: &[f32],
     n_fft: usize,
@@ -214,7 +213,6 @@ pub(super) fn mel_to_hz(mel: f32) -> f32 {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 

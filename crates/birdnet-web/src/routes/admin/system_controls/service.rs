@@ -32,13 +32,24 @@ pub fn supervised_by_systemd() -> bool {
     std::env::var_os("INVOCATION_ID").is_some() || std::env::var_os("JOURNAL_STREAM").is_some()
 }
 
-/// What a restart request would do, given whether systemd is supervising us.
+/// What would bring this process back after a restart request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartSupport {
+    /// systemd supervises the process: exit, and `Restart=always` starts a new one.
+    pub under_systemd: bool,
+    /// The binary replaces itself with a fresh copy of its own program once it
+    /// has shut down ([`crate::restart`]). Only ever the case when nothing else
+    /// supervises it.
+    pub self_exec: bool,
+}
+
+/// What a restart request would do, given what would bring the process back.
 ///
 /// Pure, and separate from [`request_restart`] so the discrimination can be
 /// asserted without a test process signalling itself.
 #[must_use]
-pub const fn restart_outcome(under_systemd: bool) -> RestartOutcome {
-    if under_systemd {
+pub const fn restart_outcome(support: RestartSupport) -> RestartOutcome {
+    if support.under_systemd || support.self_exec {
         RestartOutcome::Signalled
     } else {
         RestartOutcome::NotUnderSystemd
@@ -57,17 +68,26 @@ pub const fn restart_outcome(under_systemd: bool) -> RestartOutcome {
 /// nothing to bring us back, so we say so rather than kill the process and leave
 /// the operator staring at a dead server behind a misleading "restart sent".
 ///
-/// `under_systemd` is a parameter rather than an environment read so that the
+/// `support` is a parameter rather than an environment read so that the
 /// only thing separating a test from a self-inflicted SIGTERM is an explicit
 /// argument. See [`supervised_by_systemd`].
+///
+/// A station nobody supervises, whose binary can run itself again, is told to
+/// do that ([`crate::restart::request_reexec`]) before the SIGTERM, so that
+/// once the graceful shutdown has finished the same program starts in its
+/// place. Under systemd that is never set: the unit's own restart is the one it
+/// was written for.
 ///
 /// Does **not** audit: the caller does, because the two callers have different
 /// identities (a logged-in person, or a bearer token that is nobody) and the
 /// audit-log vocabulary gate reads the action literal at the call site.
-pub fn request_restart(under_systemd: bool) -> RestartOutcome {
-    let outcome = restart_outcome(under_systemd);
+pub fn request_restart(support: RestartSupport) -> RestartOutcome {
+    let outcome = restart_outcome(support);
     if outcome == RestartOutcome::NotUnderSystemd {
         return outcome;
+    }
+    if !support.under_systemd {
+        crate::restart::request_reexec();
     }
 
     // Respond first, then signal: send SIGTERM from a detached thread after a
@@ -76,15 +96,59 @@ pub fn request_restart(under_systemd: bool) -> RestartOutcome {
     // fresh instance. `kill` of our own PID needs no privilege (same uid), so it
     // works even with every capability dropped.
     let pid = std::process::id().to_string();
-    tracing::info!(%pid, "restart requested; SIGTERM self, systemd Restart=always brings us back");
+    tracing::info!(%pid, "{}", restart_log_message(support));
+    let reexec_requested = !support.under_systemd;
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let _ = birdnet_core::process::run_with_timeout(
-            std::process::Command::new("kill").args(["-TERM", &pid]),
-            std::time::Duration::from_secs(5),
-        );
+        let mut kill = std::process::Command::new("kill");
+        kill.args(["-TERM", &pid]);
+        send_term(&mut kill, reexec_requested);
     });
     outcome
+}
+
+/// The line logged when a restart is requested: what will bring the process
+/// back, which is not always systemd. It used to say "systemd Restart=always
+/// brings us back" on a station that nobody supervises, where the process runs
+/// itself again, and the log is where someone looks to see what happened.
+const fn restart_log_message(support: RestartSupport) -> &'static str {
+    if support.under_systemd {
+        "restart requested; SIGTERM self, systemd Restart=always brings us back"
+    } else {
+        "restart requested; SIGTERM self, then this process runs itself again once it has shut down"
+    }
+}
+
+/// Run the `kill` that signals this process, and say whether it went out.
+///
+/// The re-exec request is made before the signal because the shutdown the
+/// signal starts reads it. If the signal then does not go (`kill` missing from
+/// the image, refused, timed out), nothing is shutting down, and a request left
+/// standing would make the next *unrelated* graceful shutdown start the program
+/// again instead of exiting — so the request is taken back (`reexec_requested`
+/// says there is one to take back; under systemd there is not).
+fn send_term(kill: &mut std::process::Command, reexec_requested: bool) -> bool {
+    let sent = match birdnet_core::process::run_with_timeout(
+        kill,
+        std::time::Duration::from_secs(5),
+    ) {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            tracing::error!(
+                status = %output.status,
+                "restart: kill -TERM on this process failed, so no restart is under way"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "restart: could not run kill, so no restart is under way");
+            false
+        }
+    };
+    if !sent && reexec_requested {
+        crate::restart::cancel_reexec();
+    }
+    sent
 }
 
 /// The HTML fragment the dashboard's restart button swaps in.
@@ -125,7 +189,7 @@ pub(super) async fn service_restart(
             // "who kept pressing this?" is a question either outcome raises.
             crate::audit::audit(state, Some(&request_user), "system.restart", None, None);
 
-            restart_fragment(request_restart(state.supervised_by_systemd()))
+            restart_fragment(request_restart(state.restart_support()))
         })
         .await
 }
@@ -247,7 +311,69 @@ fn check_systemd_service_active(service: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestartOutcome, restart_fragment, restart_outcome};
+    use super::{
+        RestartOutcome, RestartSupport, restart_fragment, restart_log_message, restart_outcome,
+        send_term,
+    };
+
+    /// The line in the log says what will actually bring the process back.
+    #[test]
+    fn the_restart_log_line_is_true_for_both_ways_back() {
+        let systemd = restart_log_message(RestartSupport {
+            under_systemd: true,
+            self_exec: false,
+        });
+        assert!(systemd.contains("systemd Restart=always"), "{systemd}");
+        let itself = restart_log_message(RestartSupport {
+            under_systemd: false,
+            self_exec: true,
+        });
+        assert!(
+            itself.contains("runs itself again") && !itself.contains("systemd"),
+            "an unsupervised station is not brought back by systemd: {itself}"
+        );
+    }
+
+    /// The re-exec request is made before the SIGTERM, so a SIGTERM that does
+    /// not go out must take it back; one that does must not. One test, because
+    /// the flag is process-wide and a second test toggling it would race this.
+    ///
+    /// The "signal" is a harmless command: `true` succeeds, a program that does
+    /// not exist cannot be spawned, and `false` runs and fails.
+    #[test]
+    fn a_signal_that_did_not_go_out_does_not_leave_a_restart_requested() {
+        use std::process::Command;
+        crate::restart::request_reexec();
+        let mut missing = Command::new("/nonexistent/birdnet-kill");
+        assert!(!send_term(&mut missing, true));
+        assert!(
+            !crate::restart::reexec_requested(),
+            "kill could not be run, yet the next shutdown would re-exec"
+        );
+
+        crate::restart::request_reexec();
+        let mut fails = Command::new("false");
+        assert!(!send_term(&mut fails, true));
+        assert!(!crate::restart::reexec_requested(), "kill exited non-zero");
+
+        // Counterparts: a signal that went out leaves the request standing (the
+        // shutdown it starts needs it), and under systemd, where no request was
+        // made, a failure does not touch the flag.
+        crate::restart::request_reexec();
+        let mut ok = Command::new("true");
+        assert!(send_term(&mut ok, true));
+        assert!(
+            crate::restart::reexec_requested(),
+            "a sent signal cancelled it"
+        );
+        let mut missing = Command::new("/nonexistent/birdnet-kill");
+        assert!(!send_term(&mut missing, false));
+        assert!(
+            crate::restart::reexec_requested(),
+            "a failure with no request of ours cancelled someone else's"
+        );
+        crate::restart::cancel_reexec();
+    }
 
     /// The decision, both ways, without anything signalling itself.
     ///
@@ -258,8 +384,31 @@ mod tests {
     /// `INVOCATION_ID`. Splitting the decision out is what makes this a test.
     #[test]
     fn a_restart_is_refused_when_nothing_would_bring_us_back() {
-        assert_eq!(restart_outcome(true), RestartOutcome::Signalled);
-        assert_eq!(restart_outcome(false), RestartOutcome::NotUnderSystemd);
+        let none = RestartSupport {
+            under_systemd: false,
+            self_exec: false,
+        };
+        assert_eq!(restart_outcome(none), RestartOutcome::NotUnderSystemd);
+        assert_eq!(
+            restart_outcome(RestartSupport {
+                under_systemd: true,
+                ..none
+            }),
+            RestartOutcome::Signalled
+        );
+    }
+
+    /// A station nobody supervises can restart itself when the binary can run
+    /// its own program again; without that it still refuses.
+    #[test]
+    fn a_self_restarting_station_is_not_refused() {
+        assert_eq!(
+            restart_outcome(RestartSupport {
+                under_systemd: false,
+                self_exec: true,
+            }),
+            RestartOutcome::Signalled
+        );
     }
 
     /// The dashboard tells the operator which of the two happened.

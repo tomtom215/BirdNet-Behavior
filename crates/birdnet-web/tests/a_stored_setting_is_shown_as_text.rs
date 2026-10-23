@@ -23,6 +23,7 @@ async fn a_stored_value_cannot_break_out_of_its_field() {
     conn.execute_batch(
         r#"INSERT INTO settings (key, value) VALUES
              ('site_name', 'Garden"><script>owned()</script>'),
+             ('station_name', 'n&lt;ame'),
              ('email_smtp_pass', 'p&lt;ss');"#,
     )
     .expect("seed settings");
@@ -57,10 +58,20 @@ async fn a_stored_value_cannot_break_out_of_its_field() {
         html.contains(r#"value="Garden&quot;&gt;&lt;script&gt;owned()&lt;/script&gt;""#),
         "the site name is not carried as escaped text"
     );
+    // The entity case, on a field whose value is still echoed: a decoded entity
+    // would be written back by the next save as a different value.
     assert!(
-        html.contains(r#"value="p&amp;lt;ss""#),
-        "the password would change on the next save: its entity was decoded"
+        html.contains(r#"value="n&amp;lt;ame""#),
+        "the name would change on the next save: its entity was decoded"
     );
+    // A password is no longer echoed at all (see
+    // `a_credential_is_never_printed_in_clear`): the box holds the placeholder,
+    // and a save of it keeps the stored `p&lt;ss` byte for byte.
+    assert!(
+        !html.contains("p&amp;lt;ss") && !html.contains("p&lt;ss"),
+        "the saved password was printed"
+    );
+    assert!(html.contains(r#"name="email_smtp_pass" type="password" value="***REDACTED***""#));
 }
 
 /// `/admin/settings` for a station holding `seed` in its settings table.

@@ -130,7 +130,11 @@ fn the_real_binary_serves_its_doctor_and_its_support_bundle() {
 
     // The doctor: the same document `--doctor-json` prints, with real checks.
     let (status, head, body) = http_get(port, "/admin/doctor.json").expect("doctor.json");
-    assert!(status.contains("200"), "GET /admin/doctor.json: {status}");
+    assert!(
+        status.contains("200"),
+        "GET /admin/doctor.json: {}",
+        status.escape_debug()
+    );
     let json: serde_json::Value =
         serde_json::from_slice(&dechunk(&head, &body)).expect("doctor.json parses");
     let checks = json["checks"].as_array().expect("checks array");
@@ -147,12 +151,14 @@ fn the_real_binary_serves_its_doctor_and_its_support_bundle() {
     let (status, head, body) = http_get(port, "/admin/support-bundle").expect("bundle");
     assert!(
         status.contains("200"),
-        "GET /admin/support-bundle: {status}"
+        "GET /admin/support-bundle: {}",
+        status.escape_debug()
     );
     assert!(
         head.to_ascii_lowercase()
             .contains("content-type: application/gzip"),
-        "{head}"
+        "{}",
+        head.escape_debug()
     );
     let archive = dechunk(&head, &body);
     assert_eq!(

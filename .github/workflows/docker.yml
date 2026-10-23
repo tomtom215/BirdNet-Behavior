@@ -66,10 +66,12 @@ concurrency:
   group: docker-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Read-only at the workflow level. The two jobs that write say so themselves:
+# `build` pushes by digest to GHCR (`packages: write`), `merge` also tags the
+# manifest and signs it (`packages: write` and `id-token: write`, the keyless
+# cosign signing via Fulcio/Rekor OIDC). A job added later starts with neither.
 permissions:
   contents: read
-  packages: write
-  id-token: write   # keyless cosign signing via Fulcio/Rekor OIDC (merge job)
 
 env:
   REGISTRY: ghcr.io
@@ -86,6 +88,9 @@ jobs:
     name: Build ${{ matrix.platform.arch }}
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write   # push the per-platform image by digest
 
     # Only push on "real" events; PRs and dry-run dispatches build without
     # pushing.  This gate is referenced by multiple steps below.
@@ -329,6 +334,10 @@ jobs:
     needs: build
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)
     timeout-minutes: 15  # observed 21s
+    permissions:
+      contents: read
+      packages: write   # tag and push the manifest list
+      id-token: write   # keyless cosign signing via Fulcio/Rekor OIDC
 
     steps:
       - name: Download digests

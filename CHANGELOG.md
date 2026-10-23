@@ -7,1726 +7,1355 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **BirdNET V2.4 is installable, and measured against BirdNET-Pi.**
-  `--install-model birdnet-v24` fetches birdnet-go's published FP32 ONNX of the
-  network BirdNET-Pi and birdnet-go run, with its labels;
-  `--install-model birdnet-v24-range-v2` fetches the matching species-occurrence
-  filter. Both URLs are pinned to a repository revision and a sha256 (installed
-  through the real binary: digests verified, labels byte-identical to the file the
-  harness used), and the post-install text says what each is for. Before, no V2.4
-  ONNX had ever been run through this pipeline: the CI model is V3.0, a 32 kHz
-  probability model. `tools/parity` runs BirdNET-Pi's own unmodified code on its
-  FP16 TFLite model over 14 clips (byte-identical across two full runs) and writes
-  goldens; `tests/v24_matches_birdnet_pi.rs`, `tests/v24_range_filter_matches_birdnet_pi.rs`
-  and `tests/parity_dump.rs` diff this project against them, and CI now fetches the
-  models, checks their sha256 and runs both. Measured: native-48 kHz audio decodes
-  bit-identically (6 clips, stereo and 32-bit included); chunk counts and starts
-  equal on 13 of 13; the magpie recording stores 0.9123 / 0.9318 / 0.8864 against
-  BirdNET-Pi's own asserted 0.912 / 0.9316 / 0.8857; the same species in the same
-  chunks at `CONFIDENCE=0.7` on 12 of 13 clips; all 12 range-filter questions
-  return BirdNET-Pi's exact species list. What differs, and why, is in
-  `docs/book/guides/parity.md`. `tools/model-convert` converts BirdNET-Pi's two
-  range-filter models to ONNX (max difference 3.7e-6 from TFLite over 1,344 calls;
-  v1, BirdNET-Pi's default, is not hosted anywhere, so it is not in the catalogue).
-  `GET /api/v2/models/catalog` gains `use`.
-- **The species whitelist, with BirdNET-Pi's meaning.** BirdNET-Pi's
-  `whitelist_species_list.txt` lets a species through the occurrence filter when
-  the range model holds it back, and does nothing else: its `run_analysis` checks
-  the include list, then the exclude list, then occurrence-or-whitelist. The core
-  filter had a `whitelist` field that nothing set, and that added the whitelist
-  back *after* both lists (so it overrode them, unlike BirdNET-Pi). It is now
-  settable under Station → Capture → Species ("Always allowed", add/remove like the
-  other two lists, audited as `species.whitelist.add` / `.remove`) and in the
-  Settings form, stored as `species_whitelist`, re-read by the daemon with the other
-  lists within about half a minute, and applied with BirdNET-Pi's order. Red
-  against the old add-back: `a_whitelisted_species_that_is_also_excluded_stays_excluded`
-  and `a_whitelisted_species_outside_a_non_empty_include_list_stays_out` fail, while
-  the threshold-exemption test stays green; three more mutations (the handler not
-  storing it, the daemon's list not reading it, the page without the control) each
-  fail `a_whitelist_posted_on_the_settings_page_is_what_the_daemon_reads`. It only
-  matters on a station with a location and an occurrence model (it exempts nothing
-  otherwise), and BirdNET-Pi's own text calls it a last resort.
-  `SpeciesFilter::set_lists` now takes a `SpeciesLists` (`include`, `exclude`,
-  `whitelist`).
-- **`--doctor` warns about a BirdNET-Pi `PRIVACY_THRESHOLD`.** The key is shared and
-  the scale is not (BirdNET-Pi: a percentage of the species list; here: the model's
-  confidence for a human sound). A BirdNET-Pi `1` is in range here and masks nothing
-  short of certainty. Any value above 0.5 now warns.
-
-- **Bird names in 35 languages besides English.** Choose one under
-  *Settings → System & Display → Common-name language*, or set `DATABASE_LANG`
-  (`--lang`, `BIRDNET_LANG`); it applies when the station next starts. The names
-  are BirdNET-Pi's `model/l18n` tables at a pinned commit, reduced to the
-  entries that are genuine translations and compiled into the binary: 7,008
-  species across 35 languages, in `crates/birdnet-core/data/l18n/` with each
-  source file's sha256 and `scripts/build-species-names.py` to rebuild it.
-  Only what is *drawn* changes. A detection is still stored under the
-  classifier's English name, so switching language loses and splits nothing, a
-  species list that excludes "Dog" keeps excluding the dog, and links, forms,
-  the JSON API, exports, MQTT and webhooks carry the stored name. The pages a
-  person reads draw the translated name — Today, species, recordings, history,
-  reports, the review queue, quarantine, the dashboard and kiosk, the share
-  page, the RSS and calendar feeds, notifications, the weekly report and the
-  live feed — and the species search, the command palette and the Today,
-  Recordings and Search boxes understand a name typed in that language (a name
-  added to an exclusion or allow list is saved as the scientific name). A
-  language does not name every species: the Settings picker, `--doctor` and
-  `GET /api/v2/languages` say how many of the installed classifier's species
-  each one names, and a species without a name keeps the classifier's. Before,
-  the setting was a dead control: it built a label manager only when
-  `--labels-dir` pointed at files the project did not ship, and nothing asked
-  that manager to translate a name. Held by
-  `every_name_a_reader_sees_is_in_the_stations_language`: 31 pages and feeds
-  fetched from a German station must show German names and none of the English
-  ones, links, forms and the API must still carry the stored name, and every
-  place that escapes a stored name must be classified; and by
-  `the_language_setting_is_a_language_we_have`, and `species_names_table.rs`
-  (the table, `SOURCES.tsv` and the coverage table in its README agree). Not
-  fetched, because they need data the gate does not seed: the share page, the
-  migration, behavioural and correlation pages; they are covered by the source
-  scan or by reading, as is the live feed's script. Limits: the sort order is
-  the stored name's; an alert rule's webhook body carries the stored name (its
-  pattern matches either); non-Latin scripts need a system font, which a bare
-  Raspberry Pi kiosk may not have; the names are upstream's and unreviewed; and
-  whether names derived from Wikipedia may be combined with CC BY-NC-SA 4.0 is
-  open (`docs/HANDOFF.md`). See `docs/book/admin/species-names.md`.
-
-- **Live audio as HLS, so a phone keeps playing through a network
-  handover.** `POST /api/v2/streams/hls/{source_id}/start` answers with a
-  token and a playlist of two-second AAC segments, with `stop`,
-  `heartbeat` and `status` beside it — birdnet-go's routes and fields. One
-  `ffmpeg` per source and pitch shift serves every listener, within the
-  four live-stream slots `/stream` uses, and a stream ends with its last
-  listener or a minute after its last fetch. The Live view uses it where
-  the browser plays HLS natively (Safari, iOS, Android Chrome) and keeps
-  MP3 elsewhere. A private station's `live_audio` carve-out opens it.
-
-- **A classifier that fails every window is reported.** After ten failed
-  analysis windows in a row — an error, or scores that are not numbers — a
-  classifier is *failing* until it answers one: a station-health alert
-  names it (`classifier:<id>`), `/api/v2/health` lists every classifier's
-  state and makes a failing one a `?strict=1` fault, and Prometheus gets
-  `birdnet_model_failing`, `birdnet_model_consecutive_failed_windows`,
-  `birdnet_model_windows_total` and
-  `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
-  and error classes. Before, it was one journal line per segment.
-
-- **CPU profiles for administrators, in builds with the `profiling`
-  feature.** `GET /admin/debug/pprof/profile?seconds=30` samples every
-  thread and answers a `pprof` profile (`go tool pprof`, Speedscope) or, with
-  `format=folded`, folded stacks. Not in release builds; nothing samples
-  until one is asked for; one at a time.
-
-- **`GET /api/v2/system/database/overview`** (bearer token). The database's
-  engine settings, each table's rows and size, the last recorded integrity
-  check and VACUUM, mean write latency and the last 24 hours' arrivals —
-  birdnet-go's fields, with `null` where it would report a figure this
-  station does not measure.
-
-- **`GET /api/v2/analytics/species/daily`.** Any day's species, most
-  detected first, with hourly counts, first and last heard, and how new
-  each is — first heard here, this year or this season within the last
-  seven days, and how long since it was last heard — birdnet-go's
-  parameters and fields. The novelty is read from the station's history as
-  of the day asked, so a past day says what was new then.
-
-- **`GET /api/v2/analytics/time/distribution/species` and
-  `GET /api/v2/analytics/time/succession`.** Each species' detections by
-  hour of the day over a range — as fractions of its total, to compare when
-  species sing, or as counts, to stack by volume — for the most detected
-  species or a repeated `species` selection of up to ten. birdnet-go's
-  parameters, defaults and fields.
-
-- **`GET /api/v2/analytics/time/heatmap`.** Detections by day and time of
-  day over a range, in 15-, 30- or 60-minute slots as the range widens, as
-  birdnet-go's sparse columnar payload or, with `format=csv`, a CSV file.
-  The existing hour × weekday heatmap is unchanged.
-
-- **`GET /api/v2/analytics/time/dawn-onset`.** For each day of a range,
-  when the dawn chorus began against that day's civil dawn: the third
-  detection of the day, so a stray or two before dawn does not move it, on
-  days with at least five. birdnet-go's rule and fields; civil dawn comes
-  from the station's location, in the local time — daylight saving
-  included — of each day rather than today.
-
-- **`GET /api/v2/analytics/time/year-over-year`.** Detections this year
-  to date against the same span of last year, cumulatively, one point a day
-  aligned by calendar date — birdnet-go's parameter, fields and handling of
-  29 February in either year.
-
-- **`GET /api/v2/analytics/confidence/distribution`.** Each species'
-  confidence distribution over a date range — the fraction of its
-  detections in each of 5 to 50 equal bins — for the most detected species
-  or for one named species, with birdnet-go's parameters, defaults and
-  fields. The quality page's station-wide six-bucket histogram is unchanged.
-
-- **`GET /api/v2/analytics/sources`.** The audio sources with detections
-  over an optional date range, busiest first, with the name each was given
-  on the Capture screen — birdnet-go's path, parameters and fields. Until
-  now the per-source counts covered today only, on the Station Health tab.
-
-- **`GET /api/v2/analytics/species/detections/new`.** Species first heard
-  here within a date range (by default the last 30 days), newest first,
-  with their detections in the range, paged — birdnet-go's path,
-  defaults and fields.
-
-- **`GET /api/v2/analytics/species/summary`.** Each species' count, mean
-  and highest confidence, and first and last detection over an optional
-  date range — birdnet-go's path, parameters and fields. First and last
-  carry the UTC offset in force when they were heard, and are ordered by
-  instant, so the hour the clocks go back is placed correctly.
-
-- **`GET /api/v2/insights/phantom-species`.** Species detected at least
-  three times in the last 30 days with a mean confidence under 0.6, the
-  least confident first — birdnet-go's rule and fields. The quality page's
-  phantom report, which looks at the shape of all history, is unchanged.
-
-- **`GET /api/v2/dashboard/kpis`.** Species ever heard, detections today,
-  the busiest day since this date last year, and the run of consecutive
-  days with a detection ending today — birdnet-go's fields and empty
-  values, with the streak uncapped where upstream stops at 90 days.
-
-- **`GET /api/v2/insights/expected-today` and `…/expected-today/regional`.**
-  The first lists species heard within three days of today's date in any
-  of the last ten years, most regular first; the second, what eBird
-  observers have reported nearby that the station does not usually hear
-  now. birdnet-go's fields — except that the regional list answers an error,
-  not every eBird species, when the station's own history cannot be read.
-
-- **`GET /api/v2/insights/dawn-chorus` and `GET /api/v2/insights/migration`.**
-  The first answers who opens the dawn chorus: each species' typical and
-  earliest first song of the morning (04:00–10:00), over species heard on at
-  least `min_days` of the last `period_days` days. The second lists species
-  first heard in the last 14 days, and species heard at least five times
-  that have gone quiet for 14. Both match birdnet-go's endpoints of the same
-  names — parameters, defaults, limits and field names — and read SQLite, so
-  they answer with the analytics engine off.
-
-- **`birdnet_audio_analysed_seconds_total{source}`**, the data rate: seconds of
-  audio analysed per source. Its rate is about 1 for a source that delivers
-  continuously, and falls below that when audio goes missing inside segments
-  — which a count of files cannot show.
-
-- **Streams other than RTSP.** A network source can now be an HTTP or
-  Icecast stream, an HLS playlist (`.m3u8`), an RTMP server, MPEG-TS over
-  UDP, or SRT — the URL decides which. Each gets the ffmpeg options its
-  protocol accepts: the RTSP options every stream used to get stop ffmpeg
-  opening an HLS playlist at all, and make an RTMP reader listen instead of
-  connect. Checked end to end against MediaMTX 1.21.2 and ffmpeg 6.1,
-  recording and listening live, and through a stalled server. A URL with
-  another scheme is refused on the form; `rtp://` is not supported (a bare
-  RTP stream does not describe its payload). A UDP stream is listed in the
-  Live view as spectrogram only: capture is its one reader.
-
-- **Audio-only cameras.** An RTSP source can ask the camera for its audio
-  track alone (Settings → Capture, a source's edit form: *Tracks requested*).
-  By default the station sets up every track and discards the video, which
-  holds one of the camera's few video sessions for as long as it listens —
-  and another whenever someone listens live. Checked against MediaMTX: one
-  track instead of two, for capture and for the live stream. A camera with
-  no audio track then fails visibly, as a down source.
-
-- **`GET /api/v2/system/network` and `GET /api/v2/system/processes`**, behind
-  the API token like the rest of `/system`. The first lists every network
-  interface with its addresses, hardware address and byte counters — the
-  address to type when `birdnet.local` does not resolve. The second lists the
-  station's own process and everything it started (capture `ffmpeg`,
-  `arecord`, conversions) with CPU and memory, which is the first question
-  when a Pi sits at 100 %.
-
-- **Arrange the Today page.** Settings → Today Page Layout shows, hides and
-  reorders the page's parts — headline, nudge, day strip, log, and the three
-  side cards — with Move up, Move down and Show/Hide buttons rather than
-  dragging, so a keyboard or a touch screen can do it. The page is rebuilt in
-  that order, so reading and tab order follow what is shown. A new station
-  shows everything until its first detection.
-
-- **What is heard just before a species.** The Analytics page's follow-on
-  card now shows the species heard immediately *before* the most recent
-  bird's first detection in a session as well as after it
-  (`sequence_next_node` run backward), and
-  `GET /api/v2/analytics/previous-species?before=…` returns the same.
-- **The behavioural functions are checked, not just loaded.**
-  `--verify-extension` and `/api/v2/analytics/status` (`self_test`) run every
-  function the station uses on fixed events and compare each answer with
-  v0.10.0's, so an extension that loads but answers differently is reported
-  rather than turned into plausible wrong numbers.
-
-- **The published manual is versioned.** The site root is now the latest
-  release's manual, so existing links keep working and describe what you can
-  install; each release from v0.17.1 on stays at `/vX.Y.Z/`, rebuilt from its
-  own tag, and `main` is at `/dev/`. A version menu sits in the toolbar, with
-  a banner on any page that is not the latest release.
-  `scripts/build-versioned-docs.sh` builds it; a release tag push deploys it.
-
-- **MQTT says when a species was last heard.** Each detection payload carries
-  `species_first_detected_at` and `species_last_detected_at`: the species'
-  earliest and latest detections before this one. Both are `null` for a
-  first-ever detection, and both are left out when the history could not be
-  read, so a "new species" automation cannot fire on a database error.
-- **`/api/v2/detections?source=`** filters by audio source, and combines with
-  `date` and `species`.
-
-- **Pirate Weather** as a fourth weather provider: `WEATHER_PROVIDER=pirate-weather`
-  with `WEATHER_API_KEY`. Hourly rows from its Dark Sky-compatible API.
-  Written against its published field definitions; not checked against a
-  live response, because that needs a key.
-
-- **`STABILITY.md` (proposed), a documentation map, and a list of the checks
-  `main` should require.** `STABILITY.md` says what a release may and may not
-  change across the station's data, configuration, HTTP API, metrics and
-  messages, artefacts and platforms, and how a break is announced; every figure
-  in it was re-measured from the tree. `docs/README.md` says which of the
-  documents are current and which are records. `.github/workflows/README.md`
-  lists each workflow and the sixteen checks that run on every pull request, and
-  check 8 of `scripts/check-ci-config.py` fails when a name on that list stops
-  being a job, or when its workflow gains a path filter (seen failing against a
-  renamed job, a workflow with no row, a path filter on `ci.yml`, and an empty
-  list). `docs/HANDOFF.md` records the repository settings only the maintainer
-  can change, as read on 2026-10-14.
-
-- **Release archives and the container image carry the licence notices the
-  binary's third-party code requires.** The binary statically links 389
-  third-party Rust packages (twelve of them, `symphonia`, under MPL-2.0),
-  DuckDB with the libraries it bundles, and ONNX Runtime, and serves four
-  font families (SIL OFL 1.1) and htmx from memory; none of their notices
-  travelled with it, and the fonts' licence was not in the repository at all.
-  `NOTICE` now says in prose what is included and under which terms, and
-  `THIRD_PARTY_LICENSES.txt` (generated by
-  `scripts/gen-third-party-licenses.py` from `Cargo.lock` and `third_party/`)
-  reproduces 227 distinct licence texts, ONNX Runtime 1.31.0's own third-party
-  notices, DuckDB's bundled-library licences and ICU's. Both are in every
-  archive and in the image at `/usr/share/doc/birdnet-behavior/`. A package
-  that declares MIT but publishes no licence file (14 do) is written out under
-  the standard MIT text with its manifest's holders; any other licence without
-  a file fails the generator. The `third-party licence notices` job and the
-  release `validate` job fail when the committed file is stale or when a
-  vendored text is for a different ONNX Runtime, DuckDB or htmx than the build
-  links (all seen failing). `NOTICE` also records two facts checked this
-  session: the BirdNET+ V3.0 preview 3 model's Zenodo record says CC BY-SA 4.0,
-  and `tests/testdata/Pica_pica_30s.wav` is byte-identical to the recording in
-  BirdNET-Pi's `tests/testdata/`.
-
-- **Chart labels stay readable on a phone.** The charts are fixed-canvas SVGs
-  scaled to their card, so a label authored at 8 px rendered as small as
-  2.7 px on a 390 px screen — on the dashboard, Patterns, Migration,
-  History, the life list and the species page — while axe and the visual
-  sweep called every one clean. `static/chart-text.js` raises any label that
-  would render under 9.5 px (by at most 4×), abbreviates one that then
-  collides with its neighbour and hides one that still does;
-  `data-no-text-fit` opts a chart out. A new gate,
-  `tools/visual-qa/legibility.mjs`, measures each label's on-screen size
-  (computed font size × the SVG's screen scale) at 1440 and 390 px: with the
-  fitter withheld (`NO_FITTER=1`) 17 of 78 route-and-viewport combinations
-  fail; with it, none do (631 labels graded, the smallest at least 8.5 px).
-- **A cooldown on webhook alert rules.** A rule on `Strix*` posted once per 3-second
-  chunk for as long as an owl called (`DUPLICATE_INTERVAL_SECS` is off by default).
-  Each rule now carries a per-species cooldown in seconds (migration 55,
-  `alert_rules.cooldown_secs`; at most 7 days). `0`, which every existing rule
-  receives, behaves exactly as before. The gate runs on the detection's own timestamp
-  (a backlog replayed out of order is not mistaken for a repeat), applies to webhook
-  actions only (a suppress rule that stopped suppressing after its first match would
-  let later notifications through), and returns its window when the request never
-  left, so an endpoint that was restarting does not cost the rule its window. The
-  rule export is version 3 and omits a zero cooldown: a version-2 file still imports,
-  and an older station refuses a version-3 file instead of dropping the limit. The
-  rule form sets it (see the next entries).
-- **Station Health says when the data lives on the container's own layer.** A data
-  directory that is not a mount keeps the database and recordings on the
-  container's writable layer, where recreating the container (an image upgrade is
-  enough) deletes them, and no existing probe had anything to say about a
-  directory that is writable, has space and was never a mount. The banner and the
-  header badge name it when the process is in a container and the mount holding
-  the data directory is the image-layer root (overlay, aufs, fuse-overlayfs); a
-  volume, a bind mount, a tmpfs or a Pi with an overlay root is not flagged. The
-  shipped image declares `VOLUME /data`, so a bare `docker run` gets an anonymous
-  volume, which counts as a mount and is not flagged (`docker rm -v` or `--rm`
-  still deletes it). Tested against `mountinfo` fixtures modelled on Docker's
-  output, not in a real container.
-- **An alert rule made in the form has a cooldown.** The daemon has enforced
-  `cooldown_secs` since migration 55, but the form never set it, so every rule
-  created in the UI posted once per 3 s chunk of a calling bird. Webhook rules get a
-  "Cooldown (minutes, 0 = every match)" field, 5 by default; a blank, fractional,
-  negative or over-7-day value is refused rather than clamped, and the rules list
-  says "cooldown 5 min" or "no cooldown". Log and suppress rules ignore it and store 0.
-- **Settings → Detection has a Privacy Rank field.** The human-sound rule's N (a
-  human class in the model's top N classes drops the window and its neighbours; 10
-  by default, 0 = off, up to 12000) could only be set in `birdnet.conf`,
-  `BIRDNET_PRIVACY_RANK` or `--privacy-rank`. The page and `PUT /api/v2/settings`
-  take it now and refuse what would otherwise be cut to 0 (the rule off, reported as
-  saved): a fraction such as the Privacy Threshold's `0.02`, `10%`, `1,000`, a sign,
-  or more than 12000. A flag or variable other than 10 still beats the page; one left
-  at 10 yields to it.
-- **`--doctor` warns when the data directory is on the container's own layer.** A
-  new "Data volume" check (a warning, never an error, so it cannot park the unit)
-  says the database, recordings and settings are deleted with the container and
-  names the fix (`-v birdnet-data:/data`). It passes in a container with a mount at
-  the data directory and skips on a host. A bare `docker run` of the shipped image
-  gets an anonymous volume and passes.
-- **Every route the API serves is in `openapi.json`, and a test keeps it so.** Ten
-  served paths were missing (the API root, `analytics/abundance`,
-  `analytics/phenology`, `detections/export/raven`, the per-clip Raven and Audacity
-  tables, `soundlevel`, `species/tracking`, both WebSockets); they are documented
-  now. A gate reads the router and fails by name on a route with no entry or an
-  entry no route serves, and a structural check covers refs, path parameters,
-  operation ids and response descriptions. Redocly itself was not run.
-- **"Why isn't a bird heard here?"** `GET /api/v2/species/occurrence` and the page
-  `/species/occurrence` show what the range filter says about a species for the
-  station's place and a week: the model's probability, the threshold in force and
-  whether the station admits it, with the reason (the range model, or your lists). A
-  species page for a held-back bird links to it. The answer is a 503 with a `reason`
-  when the station has no location, no range model or a model that failed, never
-  an empty list; the station's position is shown rounded to 0.1 degrees. The first
-  ask loads a second copy of the range model (14.7 or 29.5 MB on disk; its memory
-  was not measured), and an answer is kept for 60 s.
-
-### Changed
-
-- **A new install runs BirdNET V2.4, not the V3.0 preview.** `install.sh` and a new
-  Docker volume install V2.4 and its v2 range filter; `--classifier birdnet-v3` or
-  `BIRDNET_CLASSIFIER=birdnet-v3` chooses the V3.0 preview. A running station never
-  changes model: an existing `birdnet.conf` decides, and a Docker volume holding the
-  V3.0 file keeps it unless `BIRDNET_CLASSIFIER` is set. The files come from
-  `birdnet-behavior --install-model`, SHA-256 checked. Checked with the installer and
-  entrypoint suites on stub binaries (the Docker one seen failing against the old
-  entrypoint); not run: a container, a real `systemd`, or an upgrade from v0.17.1.
-
-- **`CONFIDENCE` defaults to 0.70, and the human-sound rule is on.** 0.70 is
-  BirdNET-Pi's own (it was 0.75). `PRIVACY_RANK` (`--privacy-rank`, default 10, `0` is
-  off) is BirdNET-Pi's rule: a window and the windows either side are dropped when a
-  human class is among the model's 10 best-scoring classes. It is on after an upgrade
-  for a station that sets neither key, works beside `PRIVACY_THRESHOLD` (off by
-  default; either suppresses) and is not on the Settings page yet. Checked against
-  BirdNET-Pi's masks with the real V2.4: 13 of 14 clips agree window for window; the
-  14th is a synthetic clip's digital-silence tail.
-
-- **V2.4 species carry BirdNET-Pi's English names.** The label file birdnet-go
-  publishes names 460 of V2.4's 6,522 classes differently ("Common Magpie" for
-  BirdNET-Pi's "Eurasian Magpie"), so an imported BirdNET-Pi history would hold one
-  species under two names. `--install-model birdnet-v24` now writes BirdNET-Pi's
-  names, built into the binary and checked against a digest; a station that already
-  installed the old file keeps it until the command is run again by hand. Through the
-  daemon, BirdNET-Pi's magpie recording stores Pica pica as "Eurasian Magpie" at
-  0.9123 / 0.9318 / 0.8864 (BirdNET-Pi's own: 0.912 / 0.9316 / 0.8857).
-
-- **`--install-model` does not fetch a file you already have.** It hashes a file
-  already under the right name and skips the download when the SHA-256 matches the
-  pinned one, and says so; a truncated or substituted file is fetched again. Before,
-  every run downloaded again (541 MB for V3.0, 84 MB for V2.4). Checked by a test
-  with an unreachable URL, seen failing with the check replaced by `false` and with
-  the digest comparison replaced by "the file can be read".
-
-- **The manual's `/dev/` is built from `main`, and each release links its own
-  manual.** On a tag push `/dev/` was built from the release tag; it now comes from
-  `DOCS_DEV_REF` (default `origin/main`). A stable release's notes link its `/vX.Y.Z/`
-  manual. Every crate tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE`,
-  checked by `scripts/check-crate-licences.py`. The documented source install is
-  `cargo install birdnet-behavior --locked` (`ort` is required as the pre-release
-  `^2.0.0-rc.14`). Nothing is published; crates.io admits five new crates at once,
-  then one per ten minutes (`RELEASING.md`). Not run: a release.
-
-- **htmx 2.0.4 → 2.0.11**, and the third-party licence notices regenerated.
-  Both tarballs were checked against the registry's integrity hash; the vendored
-  2.0.4 file was byte-identical to its package's `dist/htmx.min.js`, and so is the new
-  one. The 2.0.5–2.0.11 changelog was read for what this interface depends on: the
-  default that never swaps a 4xx or 5xx body (`{code:"[45]..",swap:false,error:true}`,
-  which several handlers answer around) is unchanged in the new file. On the new file:
-  the interaction gate passes 74 of 74, the base-path gate passes, axe reports 0
-  findings on both viewports and themes, and the strict visual sweep reports 0 pages
-  with issues, on a second run: the first run, on a cold fixture, reported all six
-  species photos on the life-list page as failed, and a rerun with the image cache
-  warm did not (the cause was not investigated; CI's `a11y` job loads every page in
-  axe before the sweep). `THIRD_PARTY_LICENSES.txt` had not been regenerated since the
-  rubato 5 and argon2 0.6 bump (it still listed `audio-core`, which rubato 5 no longer
-  uses, and lacked `audio-codec-algorithms` and `phc`); `gen-third-party-licenses.py
-  --check` passes now.
-- **Typography, motion, stacking and focus are design tokens now, and a layout gate
-  checks what axe cannot.** `app.css` declared 368 font sizes as literal pixels in 34
-  different values; it now declares 36 in 12 (a font-size ladder `--fs-2xs`…`--fs-lg`,
-  `--fs-title`, `--fs-stat`, `--fs-stat-lg`, two fluid sizes `--fs-h1` and `--fs-hero`),
-  with 450 uses of the `--fs-*` tokens. New tokens: `--dur-fast/base/slow` and the two
-  easing curves, `--z-raised/sticky/tabbar/toast/skip`, `--r-pill`, `--scrim`,
-  `--ring` and `--ring-soft`; badge text uses `--on-fill` (white on bright amber in
-  dark mode before). `docs/book/reference/design-tokens.md` documents the set, and
-  `tests/design_tokens_doc_matches_the_stylesheet.rs` fails when the page and the
-  stylesheet disagree (changing `--fs-md` from 13 px to 14 px in the page fails it with
-  the line and both values; restored, it passes).
-  `tools/visual-qa/layout.mjs` reports text drawn over text or over a form control,
-  columns squeezed to nothing, controls that escape their card and text under 9 px, at
-  both viewports and both themes. Run against the stylesheet and templates this
-  release replaces, it reports 56 findings over 152 page states (52 overlaps, 2
-  escapes among them); against this tree it reports none, and it is a CI step
-  (`a11y.yml`). The same pass, working from screenshots of every route in both themes
-  at 1440 and 390 px as well as the gate, changed (the gate covers overlaps, escapes and
-  squeezes; the rest were judged by eye): form hints no longer struck through
-  by the input above them, the Data quality histograms and tiles styled again after
-  being folded into the Station tab, the species page's stat band and hero aligned,
-  the empty Access, audit and sessions states no longer squeezed into a 92 px column,
-  legacy admin forms using the stylesheet's own control style (their inputs had no
-  `type` attribute), the migration ridgeline's "today" pill off its caption, the chord
-  diagram's species names never upside down (`chord_labels_are_never_upside_down`
-  fails against the old rule at 124.6°) and the life-list axis labels no longer cut to
-  "25-…", a phone layout that no longer runs rows past the screen edge, 40 px touch
-  targets and 16 px fields on coarse pointers, and `print.css` printing absolute link
-  addresses only. Checked on this tree: axe over 38 routes × 2 themes × 2 widths with
-  the WCAG 2.2 and best-practice rules blocking, 0 findings; the interaction gate, 74
-  passed; the legibility gate (482 chart labels, none under 8.5 px); the base-path
-  gate; the strict visual sweep, 0 pages with issues; and all of `birdnet-web`'s
-  tests. Not checked: Firefox and Safari, a screen reader, the compact and comfy
-  density settings, print beyond three pages, real Pi hardware. Known and left:
-  `/admin/*` nav wraps to two rows at 1180 px, Quarantine uses four button styles in
-  one row, the patterns activity grid scrolls sideways on a phone, the dark-theme
-  chart fills are a deliberate bright boost.
-
-- **`rubato` 4 → 5 and `argon2` 0.5 → 0.6 (with `password-hash` 0.6 and
-  `audioadapter-buffers` 5).** Dependabot had held both pairs until their releases
-  existed; each now arrives as one grouped pull request. A password hash and an
-  encrypted backup written by the 0.5 line, captured before the upgrade, are frozen
-  as tests and pass on 0.6; with the backup KDF's Argon2 version changed, only the
-  frozen vector went red. The web crate's session ids, CSP nonces and share keys now
-  draw from one `random::fill` over `getrandom`, replacing a re-export that no
-  longer exists. Resampled output differs only in the first ~20 ms of a file.
-
-- **`GET /api/v2/languages` says what a station can show.** Each language
-  carries `native_name`, `active` and `coverage` (`named` of `of` species in the
-  installed classifier; null for English or without a label file), and the body
-  carries the `active` code. Before, it listed all 36 languages as available
-  whether or not anything could be shown in them. `openapi.json` describes it.
-
-- **The species list fits a phone.** Below 520px its Detections and
-  Avg-confidence columns started past the card's edge, behind a sideways scroll
-  that nothing said was there; it is a wrapping table again, without the
-  sparkline or the confidence bar (the percentage stays) and, below 400px,
-  without the rank. A name breaks inside a word only when it must: a German
-  compound alone made it 314px in a 304px card. Held by `data-fits-phone` in
-  `tools/visual-qa/qa.mjs`, whose check read only the table and so passed this
-  one at 350px in a 340px card; it now reads the nearest ancestor that clips as
-  well, and reported `sp-table in bnb-card pad:350>340` before the last rule
-  went in.
-
-- A network source is labelled **Network stream** rather than "Network
-  camera", and the Capture tab's section is **Cameras and streams**.
-
-- **ONNX Runtime 1.31** (`ort` 2.0.0-rc.14, was rc.13 with ONNX Runtime
-  1.28). Every session is now created under one process-wide environment,
-  built on first use and kept for the life of the process — `ort` allows one
-  per process and refuses a second even after the first is dropped. Scores
-  are unchanged: the top 25 species of every 3-second chunk of the test
-  recording match the previous runtime to nine decimal places, byte for byte
-  (x86_64, the BirdNET+ V3.0 model; not measured on a Raspberry Pi).
-  `scripts/setup-onnxruntime.sh` now seeds the runtime for the `ort-sys`
-  version in `Cargo.lock`; it took the first one unpacked, which after an
-  upgrade was the old one.
-
-- **The classifier no longer spin-waits between chunks.** ONNX Runtime's
-  worker threads busy-waited after every inference. Off, measured on a 4-vCPU
-  x86_64 host with the BirdNET v2.4 INT8 model: 52–54 ms of CPU per
-  inference instead of 93–98 ms, for 3–4 ms more wall time. Not yet measured
-  on a Raspberry Pi.
-- **The analytics engine leaves the classifier its cores.** DuckDB used every
-  core whatever the process's CPU affinity; it now uses the CPUs available
-  less the classifier's two inference threads, at least one — 2 on a Pi 4.
-  `BIRDNET_DUCKDB_THREADS` overrides. Measured on a 4-core x86 host with two
-  busy loops standing in for inference: two threads halved the slowest
-  dashboard query against one without slowing the competing load more than
-  one thread did; four were ~22 % faster again but cut the competing load to
-  62–75 % and were slower on three of four write shapes.
-  `enable_optimistic_write` (DuckDB's default, on) was measured too and is
-  kept: off, a full resync spilled 86–103 MB and wrote 3.4x the bytes.
-- **DuckDB 1.5.5 → 1.5.6** (`duckdb` / `libduckdb-sys` 1.10505.0 →
-  1.10506.0), to pick up **`duckdb-behavioral` v0.10.0** and the embedded ICU
-  for 1.5.6. CI, release, upgrade and Docker fetch from the `v1.5.6` registry
-  paths. Measured before landing: the community CDN's `v1.5.6` `behavioral`
-  artifacts report `v0.10.0` for linux_amd64 and linux_arm64, and `file`
-  confirms each is built for its named architecture.
-- **The embedded-extension check understands stable-C-API extensions.**
-  v0.10.0 is built on DuckDB's stable C API: its footer carries ABI
-  `C_STRUCT` and a *C API* version (`v1.2.0`) where v0.9.1 carried the DuckDB
-  version. The build script and the runtime check compared that field to the
-  engine's version for equality, so a plain bump would have reported a
-  correct, loadable embed as a mismatch on every start, failed
-  `--verify-extension`, and failed `embedded_extension_targets_the_linked_engine`.
-  The check now applies DuckDB's own per-ABI rule
-  (`src/main/extension.cpp`): exact version for `CPP` / `C_STRUCT_UNSTABLE`,
-  same major and no newer than the engine's C API for `C_STRUCT`.
-  `/api/v2/analytics/status` reports the embed's `abi`.
-
-- **The admin pages and the live-log viewer use the site's own layout.** They
-  were standalone documents with a different header, no tab bar, no
-  breadcrumbs and no theme toggle on a phone. They now render inside the
-  shared layout, with the admin sections as a one-line strip that scrolls
-  sideways on a narrow screen. Changelog, Notification Center, Search,
-  Quarantine and Detection Reviews also have a home tab, so the navigation
-  says where you are.
-
-- **Quarantine says why in plain words.** "Unlikely here this time of year"
-  and "Below the bar set for this species", with "N% likely here this week"
-  where the range model supplied a figure, in place of the internal gate
-  names. The Live page's empty source reads "— no source yet —".
-
-- **Thirteen rules authored at 8–9.5 px were raised to 10 px** (badges,
-  pills, the year-in-review month labels, tape and day labels, three chart
-  captions). Three disclosure and help glyphs, and the tab-bar labels and
-  footer line below 360 px wide, which are tightened to fit a 320 px screen,
-  stay under 10 px. Chart text is sized separately, above.
-
-- **The crates package for crates.io, and a job keeps them that way.** Nothing
-  has been published and the decision is the maintainer's (the licence is CC BY-NC-SA
-  4.0). `cargo package --workspace` failed on the first crate that depends on
-  another: the eight internal path dependencies had no `version`. They have one
-  now. Running it on all nine also found two real defects, both fixed: the web
-  crate `include_str!`ed `CHANGELOG.md` from outside its own directory, so it
-  could not compile from its published package (it reads a symlink inside the
-  crate now), and the root crate's `build.rs` renders the manual into the source
-  tree, which `cargo publish` verification rejects ("Source directory was modified
-  by build.rs") and a read-only registry cache would too; it now does nothing in a
-  package. The root package is 826 KiB (it was 11.8 MiB, over crates.io's 10 MiB
-  limit, because it carried the tests, the manual and every audit), each library
-  crate has its own README saying it is internal, and the two crates whose
-  default features compile the bundled DuckDB build their docs without it on
-  docs.rs. `cargo package --workspace --no-default-features` (which also builds
-  each crate from its tarball) passes for all nine; the `crates are publishable`
-  job and the release `validate` job run the fast form on every pull request and
-  tag. `cargo-deny` now denies wildcard dependencies (seen failing when an
-  internal version is removed). RELEASING.md says how to publish and what to
-  decide first. Not done: the bundled-DuckDB build of the packaged crates, docs.rs
-  and `cargo publish` itself.
-
-- **The two fuzz targets run in CI, and the first run found something.**
-  `fuzz/` held harnesses for the audio decoder and the label parser that nothing
-  ever ran. `fuzz.yml` runs both weekly (10 minutes a target) and on pull
-  requests that touch them (60 seconds), with a dated nightly, a locked
-  `cargo-fuzz`, the shipped lockfile's dependency versions, `-timeout` and
-  `-rss_limit_mb`, and keeps the failing input. A 60-second local run with
-  cargo-fuzz's defaults crashed `decode_audio` on a 37-byte WAV: an arithmetic
-  overflow in `symphonia-format-riff` 0.6.1 (32 769 channels × 2 bytes in `u16`,
-  computed only to log a block-align mismatch). It panics with overflow checks and
-  wraps harmlessly without them; the release build has none, so the workflow
-  fuzzes with `-O`. With it, 150 seconds of `decode_audio` and 20 of `parse_labels`
-  found nothing, and neither did 45 seconds of `parse_labels` with the defaults. The input is kept in `fuzz/known/`, and check 10 of
-  `scripts/check-ci-config.py` fails when a harness target is not in the
-  workflow's matrix (seen failing against an unrun target and a dropped one).
-
-- **CodeQL, OSV-Scanner and OpenSSF Scorecard workflows.** `codeql.yml` runs
-  CodeQL's `security-extended` queries over Rust, the workflows, the JavaScript
-  the interface serves and the Python gate scripts; `osv.yml` scans `Cargo.lock`
-  and the browser-QA lockfile against OSV and fails on a finding; `scorecard.yml`
-  publishes the repository's Scorecard. All three are adapted from the
-  maintainer's a2a-rust workflows, with action refs verified against the
-  upstream tags. Today OSV reports no record for any of the 554 registry
-  packages in `Cargo.lock` (queried through its API) and `npm audit` finds
-  nothing in the QA lockfile. None has run on GitHub.
-
-- **Eleven GitHub Actions moved to their current releases**, among them
-  `actions/checkout` 6.0.3 → 7.0.1, `actions/upload-artifact` 7.0.2,
-  `actions/download-artifact` 8.0.2, `docker/build-push-action` 7.4.0,
-  `docker/setup-buildx-action` 4.4.1, `taiki-e/install-action` 2.87.27,
-  `Swatinem/rust-cache` 2.9.2, `actions/attest-build-provenance` 4.2.2,
-  `codecov/codecov-action` 7.1.1 and `crate-ci/typos` 1.51.1. They are the refs
-  of Dependabot's own pull requests #255 and #200, whose head commits ran the
-  full CI on GitHub (58 and 46 checks passed, 2 skipped, none failed), and each
-  tag was checked to resolve to its commit upstream. `actions/cache` 6.1.0
-  (#199) is not included: its one failing check is a month old and unexplained.
-
-- **Every tool CI installs, and both Docker base images, are pinned.**
-  `cargo install cargo-audit`, `cargo-mutants`, `cargo-llvm-cov`, `pip install
-  pyyaml` and the Dockerfile's `cargo-chef` (`^0.1`) took whichever release was
-  newest on the day, so one commit could pass on Monday and fail on Tuesday for a
-  reason that was nowhere in the diff; they now name `27.1.0`, `0.9.1`, `0.22.2`,
-  `6.0.3` and `0.1.78` (the newest stable of each on the crates.io index and
-  PyPI today), and the browser-QA job runs `npm ci` against the committed lock,
-  which was checked to install cleanly. The Dockerfile's two `FROM` lines name
-  `rust:1.95-slim-trixie` and `debian:trixie-slim` by manifest digest instead of
-  interpolating `RUST_VERSION` and `DEBIAN_CODENAME` build-args (the digests'
-  bodies were hashed against the registry and list linux/amd64 and linux/arm64);
-  Dependabot is told to move digests but not the builder's Rust tag, which is the
-  MSRV. Check 9 of `scripts/check-ci-config.py` fails on an unpinned install, a
-  range (`^0.1`), a base image without a digest, and a builder whose Rust is not
-  `rust-version` (seen failing against each). **Breaking for anyone who built
-  the image with `--build-arg RUST_VERSION=…` or `DEBIAN_CODENAME=…`:** those
-  arguments no longer exist; change the `FROM` line.
-
-- **A release refuses a lightweight tag, a tag off the default branch, and an
-  undated changelog heading; and `install.sh`, `uninstall.sh` and `SHA256SUMS`
-  are attested like the archives.** Twenty of the repository's 23 tag refs are
-  bare commits although `RELEASING.md` prescribes `git tag -a`, and the two
-  scripts operators pipe into `sudo bash` sat beside verifiable archives with
-  nothing to verify them against (their attestation lookups answer 404 for
-  v0.17.1). The release's `validate` job now fails on a lightweight tag or on a
-  commit not in the default branch (the two API calls were checked against real
-  tags: v0.17.1 answers `tag`, v0.15.0 `commit`, both `ahead` of `main`), and on
-  a `## [X.Y.Z]` heading without `- YYYY-MM-DD` (all 24 existing headings have
-  one). `verify-release` runs `gh attestation verify` on every published asset;
-  the invocation was run against v0.17.1's published files: the SBOM verifies,
-  `install.sh` and `SHA256SUMS` do not, as expected for a release made before
-  this change. Not run on GitHub: the workflow itself.
-
-- **Release and Docker builds fail when an extension cannot be fetched.** A
-  failed download used to log a warning and ship a binary or image that needs
-  the network at first run — the 0.13.1 fault, in which every dashboard stayed
-  empty for days. The release workflow now fails the job (after three retries),
-  and the Dockerfile fails an `analytics` build, with
-  `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` to build without them. A lean
-  `BUILD_FEATURES=""` image embeds nothing, so it is unaffected.
-
-- **Every GitHub Actions workflow pins `dtolnay/rust-toolchain` by commit**
-  and names the toolchain in a `toolchain:` input, as every other action
-  already was; 110 of 110 `uses:` lines are now commit-pinned, and the
-  `CI config` job fails on one that is not or on a toolchain action with no
-  `toolchain:` input (seen failing against both). The pin is upstream
-  `6c977a6` (2026-08-04), in `release.yml` since August; upstream has since
-  merged input-handling hardening (2026-10-08, `e2a55d2`) that matters only
-  where an input is not a literal, and these are. Release and upgrade builds, and the Docker image's final
-  build, pass `--locked`; the release workflow first runs
-  `cargo update --workspace --locked`, which exits 101 on a lock that
-  disagrees with a manifest (checked against a lock with one workspace
-  version edited) and so fails in seconds rather than partway through the
-  build matrix.
-- **One rule for confidence, with a key.** Five rules drew the same detection in
-  different colours (82 % was amber on the Today feed and green on the Review
-  page; everything between the cut-off and 75 % was the grey of a disabled
-  control; there was no legend). One function now grades every surface: 90 % and
-  up is *very sure*, below the station's cut-off plus ten points is *borderline*,
-  and between is *sure*, so the edges follow the cut-off the station chose (at 70 %:
-  70-79 amber, 80-89 neutral, 90+ green). A key is printed above each list of bars.
-  The tiers are tokens (`--conf-*`), graded by `tokens.mjs` (3:1 for a fill against
-  its track, 4.5:1 for pill text). On a phone the Today feed's names wrap instead
-  of ending in an ellipsis and the confidence is shown (it was hidden).
-- **The header badge and the Health page read one list.** The badge graded three
-  things and the page a dozen, so a station with two cameras stalled read a green
-  *Healthy* in the header over a page saying *Needs attention*. Both now build one
-  issue list; one issue names itself ("Source stopped"), two or more read "Needs
-  attention", and a damaged or unreadable database is red. The badge reads the
-  integrity verdict the daily pass recorded and caches its two `df` readings for
-  25 s; it never runs the full check.
-- **Charts you can read.** The categorical palette (8 colours per theme, graded
-  by arithmetic for distance, contrast and gamut; the old one had two colours
-  outside sRGB), a heat ramp that gets darker with more in both themes, a
-  streamgraph with a scale bar, the busiest day marked, a pointer readout and a
-  table, a key under the dawn-chorus rings, Trends charts above their tables, and a
-  drawn empty state for migration in place of a 360 px blank card.
-- **One token set, held by tests.** About 770 literal font weights, hairlines,
-  gaps and colours in `app.css` became tokens, with no computed style changed
-  (116 of 117 page states identical over 40,648 elements; the 117th loads a
-  fragment lazily and matched on re-runs). `prefers-contrast: more`
-  now does what the High contrast setting does, `forced-colors` keeps bars and
-  card edges, and the browser's `theme-color` bar equals `--bg` in each theme and
-  follows the toggle. `app.css` grew from 272,772 to 298,659 bytes (gzip 61,084 to
-  67,545).
-
-### Fixed
-
-- **The frequency shift is a shift in hertz.** `--freq-shift-hz` was a ratio, documented
-  as a shift: with ffmpeg 6.1.1 an 8 kHz tone at -3000 came out at 7 500 Hz (not
-  5 000) and a 3.0 s clip at 3.2 s. Saved clips and the live stream now use
-  `afreqshift` (ffmpeg 4.3 or newer): 8 kHz at -3000 is 5 000 Hz and the length is
-  unchanged, measured on audio. The sox fallback is gone, as sox cannot shift by an
-  amount of hertz; if the shift fails the clip is saved unshifted and a warning says
-  so. A shifted WAV also lost its species, confidence and date tags; it keeps them.
-  Seen failing with the old filter pair, and with the bitexact flags removed.
-
-- **The layout gate no longer reports text that is cut off and not drawn.** On the first
-  CI run of the gate (this branch added it) the A11y job failed: on a phone, the Today
-  feed's "Ruby-throated Hummingbird" overlapped the play button beside it. The name is
-  `overflow: hidden` with an ellipsis, so nothing is painted past its box; the gate
-  measured the text run, which `Range.getClientRects` reports in full. It never showed
-  locally because the fixture's feed is seeded from the date and the name was not in view
-  until that day. The gate now clips each text rect to every ancestor that clips its
-  overflow. `layout-selftest.mjs` (a new step of the A11y job) holds both directions
-  against the fixture: it failed first (the clipped name was reported, 9x6 px, as in CI)
-  and passes, and a painted overlap of the same row's two lines is still reported. The
-  full gate then graded all 152 page states clean on the day's data.
-- **Six stale `# observed` job durations.** `scripts/check-ci-config.py` compares them
-  with the default branch's recent runs and failed the *Mutation testing* workflow's
-  "CI config" job on `ci.yml` (`fmt`), `supply-chain.yml` (`cargo-machete`) and four jobs
-  that had none (`osv.yml`, `scorecard.yml`, `third-party-notices`, `publishable`). Written
-  by the script's own updater from the values that job printed, not by hand: it needs a
-  token this machine does not have, so the durations are the CI log's, not re-read.
-- **Three small workflow defects, from a read of the workflows; none was observed
-  failing, because a workflow cannot run here.** `coverage.yml`'s Codecov step tested
-  `env.CODECOV_TOKEN` in its own `if` while setting that variable in its own `env:`,
-  and a step's `if` is evaluated before the step's `env` exists (GitHub's documented
-  context availability), so the upload could never run; the variable is now job-level.
-  The sticky pull-request comments in `coverage.yml` and `mutation.yml` ran on a
-  fork's pull request, whose token is read-only, which fails the comment step and the
-  job; they now skip forks (the summary stays in the Step Summary). The release notes'
-  download table listed the two Linux archives and not the macOS one the release
-  attaches. The YAML parses and `scripts/check-ci-config.py` passes.
-- **Names on the co-occurrence chart no longer run into each other, and the life-list
-  total is no longer written across its own curve.** The Who-sings-together chord
-  diagram wrote each name at the middle of its arc, so two species heard with few
-  others (short neighbouring arcs) had their names drawn across one another:
-  Red-winged Blackbird over Black-capped Chickadee, Downy Woodpecker over
-  White-breasted Nuthatch, on the manual's own picture. Names are now pushed apart
-  along the ring only as far as it takes, and stay on their arcs when there is room.
-  The life-list chart ends at its highest point by construction, so its "15 species"
-  label was always clamped to the top edge, *below* that point, with the curve's last
-  stretch through it; the plot now leaves headroom and the label sits above. (A first
-  attempt gave the label a halo, a test that checked for the halo, and a picture in
-  which the line still showed between the letters: the test asserted the remedy, not
-  the geometry, and was replaced.) A phone could also be pushed 84 px sideways by the
-  Data tab, which printed the database's full path unwrapped, found because the
-  screenshot fixture now lives in a deep directory, as a macOS home folder is. Each is
-  a test that failed first (`chord_labels_do_not_run_into_each_other`: three pairs
-  overlapped; `the_total_sits_above_the_curve_it_labels`: baseline 20 against an end
-  point at 12; the strict sweep: 474 px on a 390 px screen, both themes). The layout
-  gate could not have seen the first two: it skipped every `<svg>`, and passed with the
-  overlap on screen. It now grades chart labels as the turned rectangles they are (a
-  quarter of the shorter label's height of overlap fails); on the fixture before the
-  fix it reported exactly the two chord pairs, and across all 152 page states nothing
-  else. It does not see a line crossing a label, which is what the life-list defect
-  was; that one was found by looking at the picture.
-- **The manual's images and its directions follow the interface.** Every image in
-  `docs/book/images/` (24 desktop, 24 phone, the share page and the wizard's
-  Accuracy step) was regenerated from a fixture built from this tree and the renders
-  looked at; they had been taken on v0.8.0, and `detection-detail.png` was the
-  "Detection not found" page, for a time the fixture never seeded. The fixture now
-  publishes the capture gauge the pills read, so the header badge no longer says
-  "Not recording" over a healthy feed, and `book-onboarding.mjs` is the producer
-  `onboarding-accuracy.png` never had. Rendering them showed the text still saying
-  **Station → Capture** where the navigation says Settings, and sending readers to
-  places that were never there: *Settings → Accounts* (the tab is Access),
-  *Settings → Location has a detect button* (that button is the setup wizard's),
-  *Admin → Settings → MQTT* (MQTT has no settings page: it is `MQTT_HOST` and its
-  neighbours in the configuration file), *Normalise Clip Loudness* (the control is
-  "Even out clip volume"). The manual, the wizard, the dashboard's checklist, the
-  doctor, the station-health alert and the installer's config comment are corrected,
-  and the screen-reader heading on every Settings tab reads "Settings — Capture"
-  like the navigation (it said "Station —"). `the_text_names_the_screens_the_ui_has`
-  builds each heading from the nav's own labels and checks every Settings breadcrumb
-  in the manual, the README, the Rust sources and the installer against the tabs the
-  page renders; it failed on 6 of 6 headings and 42 breadcrumbs before the fix.
-  What it does not check: the step after the tab (several are loaded on demand), and
-  prose that names a screen without an arrow. Not changed, found while checking:
-  the Today Page Layout editor is only on the full `/admin/settings` page, which the
-  Settings tabs link to in one conditional hint, so it is hard to find from the
-  navigation; the manual now says where it is.
-
-- **Only writes take the writer connection now, and the analytics store has readers.**
-  `with_db` is the one SQLite connection the capture daemon's inserts share, and 223
-  `with_db(` lines in 56 files of `birdnet-web/src` took it, so any page that read
-  waited behind a detection being stored and the detection behind the page. A
-  classification of every one of them (read from source, each callee opened; a
-  second, independent scan of the closures and what they call found no write in the
-  ones moved, and its one false positive was a trait declaration) found 117
-  production sites that only read. They use `with_read_db` (the pool of read-only
-  connections) now, including the three on every authenticated request:
-  `admin_password_configured`, the seed-admin lookup and the session lookup. The
-  session's `last_seen` is rewritten only once it is a minute old (it is displayed on
-  the Accounts page and read nowhere else), instead of on every request, under the
-  lock. What remains on the writer is listed with its reason in
-  `crates/birdnet-web/tests/writer_lock_sites.txt` (55 call sites: logins, account,
-  rule, source and settings changes, detection edits, the audit log, the daemon's
-  insert path) and fails `the_writer_lock_is_for_writing` when a new one appears or a
-  listed one goes; the same test fails on a write verb inside any closure given to a
-  read method, which covers the case no response shows (an error swallowed by `.ok()`).
-  `every_route_answers_through_a_read_only_connection` requests the pages and
-  partials of the visual-QA route list and every parameterless documented read on a
-  file-backed station (over 120 requests), and fails on a server error, an error state, or `readonly` in
-  the log. Seen failing: a read put back on `with_db`, a swallowed write planted in a
-  reader (the ledger test); a write planted on a converted read (the crawl: four
-  pages rendered "readonly database"); and with the old session code a signed-in
-  request waited for a held writer lock for the whole 3 s the test allows and rewrote
-  `last_seen` on every request. `/stream` and the other tests that held the writer to
-  show a waiting request does not stall the runtime now hold every pooled reader.
-  **The DuckDB analytics store had one connection behind one `Mutex`**, so a
-  six-second retention query held the status badge and every chart behind it. It has
-  two further connections to the same database for reads
-  (`with_analytics_read`, `with_timeseries_read`; 35 call sites moved), and the
-  original is left to what writes (nine call sites, in
-  `tests/analytics_writer_sites.txt`). Checked rather than assumed: a clone sees what
-  the writer commits and not what it has not, reads while a write transaction is open,
-  and sees the behavioral extension's functions. `analytics_reads_answer_while_the_writer_connection_is_held`
-  fails on the single connection and passes on the readers. **Not measured:** the
-  throughput of concurrent heavy analytics queries (DuckDB already uses every thread
-  of one query, so two at once finish later each; what changed is that a cheap request
-  no longer waits for them), and Raspberry Pi behaviour.
-- **The rare-bird feeds and the "has this species been heard before" probes seek by
-  species and date instead of walking the species.** Every index that could answer
-  the question led with `Date` or with the species alone, so each probe read every
-  row of the species, once per candidate row. Migration 54 adds
-  `idx_detections_species_date (Com_Name, Date)` and the feed's query states its
-  window as a `Date` range as well as the day count (identical rows, held against the
-  previous query over data built to sit on the rule's edges; a window one day short
-  fails it). The index alone made the old query slower (17 s against 3.25 s: the
-  planner then walked each species from its first day), which is why they travel
-  together. Measured on a 300 000-row station, SQLite 3.45.1: 3.25 s to 0.94 s for
-  `rare_species_days = 30`, and **300 s to 0.96 s for `rare_species_days = 0`**
-  (`MIN(Date)` per row). Through the real binary (debug build): `rare.rss` 4.6–4.9 s
-  to 1.5 s, `rare.ics` 4.9 s to 1.4 s. Cost: 0.30 s to build, +8.2 MB on a 147 MB
-  database (+5.6 %), no measurable change to 2 000 inserts (77 ms with it, 82 ms
-  without). A Raspberry Pi builds it slower, once, at the first start after
-  upgrading.
-- **Sixteen visitors to the public heavy pages could keep the station from answering
-  anything else.** The RSS feeds, the four detection exports, the insights routes and
-  the migration cards read the whole detection history through `with_db`, the one
-  connection every writer also uses, so each held the lock the capture daemon, the
-  settings form and every cheap page wait on. They now read through the pool of
-  read-only connections (`with_read_db`), and a second limit, the heavy-read gate
-  (half the pool, at least one), keeps them from taking every reader: a heavy request
-  past the gate waits for a slot (exports, insights, analytics fragments) or is
-  refused at once with `503` and `Retry-After: 15` (the three feeds, which
-  aggregators poll and will retry). The first attempt, the pool alone, was measured
-  and was not enough: the heavy reads took all four readers and `/api/v2/health`
-  waited 22 s behind them. Measured on a 300 000-row station (SQLite, a debug build,
-  four cores), sixteen heavy requests in flight, then three cheap ones:
-  `detections?limit=1` 38.9 s before and 0.01 s after, `/species` 10.5 s before and
-  0.07–0.10 s after, `/api/v2/health` 0.00 s. A single `rare.rss` is **not** faster
-  (5.2 s before, 4.6–4.9 s after: the query is unchanged and `(Com_Name, Date)` has
-  no index), and under that load the heavy requests themselves take 7–31 s because
-  they queue for the two slots; what changed is that nothing else waits with them.
-  Two new gates, each seen failing: `a_public_read_does_not_hold_the_writer_lock`
-  holds the writer lock and requests ten routes (red with the conversions reverted),
-  and `heavy_reads_leave_readers_for_the_cheap_requests` runs twelve scans and then a
-  cheap read (red with the gate widened to 100 slots: the cheap read waited 1.7 s).
-  `database_work_stays_off_the_async_runtime` knows `run_blocking_heavy`. The other
-  database calls in the web crate were swept in the entry above.
-- **The retention analysis took 74 seconds on a 300 000-detection station and held
-  the analytics connection the whole time.** The query joined every pair of a
-  species' active days and let the `retention()` aggregate discard the pairs no
-  interval looks at, so its cost grew with the square of those days. It now joins
-  only the days within the longest interval, which cannot change an answer: no
-  condition looks further. Measured on 300 000 rows over 700 days and 150 species,
-  a debug build of the test harness on this machine: 74.4 s before, 6.65 s after,
-  150 species rows identical. (A second formulation, an equality join on each
-  offset, measured 217 s and was dropped.) The new test holds the old query as the
-  definition and compares raw rows over six interval sets, including an unsorted
-  one and one longer than the data; each of three mutations of the reach (the
-  shortest interval, the last in the list, an off-by-one bound) fails it. Six
-  seconds is still a long time for a request on the public router; the analytics
-  store is one connection behind a mutex, so heavy analytics requests queue, and
-  that is unchanged.
-- **A password changed on the Accounts page no longer reverts at the next restart
-  while `CADDY_PWD` is set.** Every start compared the stored hash with `CADDY_PWD`
-  and, when they differed, put `CADDY_PWD` back, so the password an owner had just
-  chosen (possibly because the old one leaked) was undone by the restart, with only
-  an `info` line to show for it. The station now keeps a hash of the `CADDY_PWD` it
-  last applied in `admin-password.applied` beside the database: an unchanged
-  `CADDY_PWD` leaves the Accounts-page password alone and logs a warning saying so,
-  and a `CADDY_PWD` edited to a new value still replaces it. A station upgrading
-  from a release without the record applies `CADDY_PWD` once at its first start (the
-  old rule, so an owner locked out by an edited config still recovers) and keeps the
-  record from then; when the record cannot be written the old rule stands. The
-  Accounts page, Settings → System, the FAQ and the hardening page say this.
-- **The sound-level meter's top bands did not measure the band they named.** The
-  band filter was designed with its bandwidth pre-warped for the bilinear
-  transform but its edges were not, so near Nyquist one edge landed too low and the
-  other too high: a unit sine at the 20 kHz band's two edges at 48 kHz read −4.38
-  and −8.91 dB where −6.02 is right (+1.6 / −2.9 dB), and the same shape shows at
-  every sample rate (16 kHz at 44.1 kHz ±1 dB, 12.5 kHz at 32 kHz +1.3 / −1.7 dB).
-  The edges are now taken through `tan(πf/fs)` and the band is centred on their
-  warped geometric mean; both edges measure −3.01 dB to 0.003 dB in the top bands
-  of 48, 44.1, 32 and 22.05 kHz. The price: a tone at the nominal centre of the
-  20 kHz band at 48 kHz reads 0.34 dB low (the peak sits 4 % above the label), and
-  under 0.02 dB low across the bottom fifth of the spectrum. A band whose
-  **upper** edge reaches Nyquist is now refused (`BiquadError::AboveNyquist`) where
-  only the centre was checked, so a 22.05 kHz station keeps 26 bands, not the 27 the
-  code comment said (48 kHz: 30, 44.1 kHz: 29, 32 kHz: 28; counted by
-  `tests/soundlevel_accuracy.rs`). White noise reads about 0.5 dB high across the
-  bands by the shape of the passband; that is stated in the filter's docs, not
-  changed. `SoundLevelMeter::push` returns only the newest of several completed
-  intervals, as it always did; that is now documented, and `push_with` reports every
-  interval. Stored hourly buckets from before this release keep their old
-  readings, so a top band's history steps once at the upgrade. Six of the twelve
-  checks in `tests/soundlevel_accuracy.rs` (among them
-  `a_tone_at_each_band_edge_reads_three_db_below_the_centre_level`,
-  `the_highest_bands_are_right_at_48_and_44_1_khz` and
-  `a_band_above_nyquist_cannot_be_built`) fail against the previous `filter.rs`.
-- **`SENSITIVITY` meant the opposite of BirdNET-Pi's on a V2.4 model.** It was
-  applied as the sigmoid slope itself (default 1.25); BirdNET-Pi and BirdNET-Analyzer
-  use `clamp(2 − S, 0.5, 1.5)` (default 0.75). A raw score of 3.12 stored 0.980 here
-  and 0.912 there, and a station carrying its settings across stored more
-  detections than the one it left. It now maps as BirdNET-Pi does
-  (`inference::model::logit_slope`); the settings hint, the tuning guide and the
-  settings page say which way it runs. This changes V2.4 results only: the bundled
-  V3.0 ignores the setting, and V2.4 was bring-your-own before this release. Red
-  against the old formula: `v24_confidence_reproduces_birdnet_pis_expected_values`
-  (0.9802 vs 0.912) and, with the real model, `tests/v24_matches_birdnet_pi.rs`.
-  birdnet-go's setting is the slope itself; enter `2 − value` to carry one across.
-- **A clip cut from a 16-bit recording was not the recording's samples.** The decoder
-  reads 16-bit audio as `value / 32768` and the clip writer scaled back by 32767, so
-  32,703 of the 65,536 possible values came back one step smaller in magnitude (every
-  sample past about a quarter of full scale), and `-32768` could not be written at
-  all. Inaudible, but a clip is meant to be the recorded audio, and the rounding fix
-  above had left the scale factor alone. The writer scales by 32768, rounds and
-  saturates, so `a_sixteen_bit_recording_exports_bit_for_bit` passes for every 16-bit
-  value through the real decoder and writer (it reported 32,703 changed against the
-  old writer). birdnet-go made the same change on 2026-10-15 (`a122b6b`; samples
-  differ by at most 1 LSB).
-- **Every resampled recording ran late and short.** The resampler left rubato's
-  start-up delay in, so a recording converted between rates (every default-install
-  file, 48 → 32 kHz for V3.0; any 44.1 kHz microphone) was `128 × ratio` samples
-  late, +138 at 44.1 → 48 kHz, +85 at 48 → 32, and lost that much from its end.
-  Measured against BirdNET-Pi's resampled samples as a lag of +138 and +278
-  samples; now `process_all`, lag under one sample. Red: an impulse came back at
-  21,907 where 21,768.7 was expected.
-- **A trailing remainder under 1.5 s is dropped, as BirdNET-Pi drops it.** It was
-  kept down to a quarter window (0.75 s), so a 16 s file gave a sixth chunk of one
-  second of audio and two of silence that BirdNET-Pi never analyses. Differential-
-  tested against a transcription of `splitSignal` over six overlaps and 155 lengths.
-- **Docker deleted an operator's own model.** `docker/entrypoint.sh` checked any
-  `BIRDNET_MODEL` against the V3.0 digest, removed a mismatch and downloaded V3.0
-  bytes under that name: a V2.4 or Perch model was destroyed and replaced by a
-  different network with labels that did not match it. Only files at the default
-  paths are managed now.
-- **Documentation that was not true.** The FAQ and the installer said the default
-  model is "the same neural network BirdNET-Pi uses" (it is its successor, and
-  different); three pages described a rain-and-wind "quality pre-filter" that does
-  not exist; the tuning guide gave a default of 0.7 (it is 0.75); `SF_THRESH=0` was
-  labelled "disabled" while a species the occurrence model has no entry for is never
-  let through; the stored `week` was called the ISO week (it is the 48-week value);
-  and the overlap docs said 3-second windows (V3.0's is 4.5 s). (Two of these have
-  since changed: a new install runs V2.4, and `CONFIDENCE` defaults to 0.70; see the
-  first two entries under Changed.)
-- **Model catalogue URLs follow no branch.** `perch-v2` pointed at HuggingFace
-  `resolve/main/`, so an upstream edit would have failed every install's checksum at
-  once. Pinned to the revision whose LFS metadata lists the same sha256 and size;
-  a gate (`no_catalogue_url_follows_a_branch`) keeps it so.
-
-- **The Settings page printed `source\'s`.** The Audio Channels note was written
-  with a Rust escape inside a raw string, so the page showed a backslash. The
-  Bare spectrograms checkbox row had no style at all and drew over its own hint,
-  and the Audio Channels note sat on its label. A test fetches the page and
-  scans every raw string in the web crate and the binary for the escape. Beside
-  them, the species page's Detections tile read `2583` under a `2,583
-  detections` pill; it groups digits now.
-
-- **The browser-QA lockfile was ignored while two workflows named it.**
-  `tools/visual-qa/package-lock.json` was excluded by two `.gitignore` files
-  ("never committed"), yet `osv.yml` scanned it and the `a11y` job ran `npm ci`
-  against it. Both worked on the machine that wrote them, where an ignored file
-  is still on disk, and neither could work on GitHub: the first pull request
-  that ran them stopped at `stat .../package-lock.json: no such file or
-  directory`. The lockfile (five packages, all from `registry.npmjs.org`, with
-  integrity hashes; `npm ci` accepts it and `npm audit` finds 0 vulnerabilities)
-  is tracked now, and `scripts/check-ci-config.py` fails when a workflow names a
-  lockfile git does not track: it reported the two workflows before the file
-  was tracked and passed after.
-
-- **A new station's first screens had two defects the sweeps could not see.**
-  The Today "Getting ready" checklist's links (the setup wizard, Accounts, the
-  doctor) were told apart from their sentence by colour alone, which WCAG 1.4.1
-  and axe's `link-in-text-block` call serious, in the light theme; they are
-  underlined like every other link in prose. And the Species list and gallery
-  told a station that had heard nothing "No species match this filter yet.",
-  with no filter chosen; they now show the "No species heard yet" state the
-  dashboard already had, and a search or filter that misses still says so.
-  Both come from sweeping a station with no detections, which the fixture the
-  sweeps run against never is: `QA_EMPTY=1` makes `qa.mjs` and `axe.mjs` do it.
-  axe reported two serious violations on that station before the underline and
-  none across 152 route, theme and width legs after. CI does not run it.
-
-- **A detection's Details table labelled half its rows differently.** Date and
-  Time were small and grey; Location, Sensitivity, Overlap and Cutoff, which
-  come from another function, were full-size and black. All six share one label
-  style now.
-
-- **Diagnostics overflowed a phone once the station had models configured.** A
-  finding that quotes a model path has no place to break, and the card, a flex
-  item with auto margins, is as wide as its longest unbreakable run: 442px on a
-  390px screen, and the page with it. Short findings (the CI fixture's) never
-  showed it; `qa.mjs` against a station running the real models did
-  (`overflowX(466>390)` on both themes). The card may now shrink and a finding
-  breaks inside a word when it must.
-
-- **Empty and failure states skipped a heading level.** The shared fragments in
-  `empty_states.rs` and `error_states.rs` each drew an `<h3>`. Dropped under a
-  page's `<h1>` with no `<h2>` — the Rare bird quarantine list on a station with
-  nothing to review — that skips a level, which axe reports as `heading-order`.
-  The CI sweep never saw it, because its fixture's quarantine list is not empty;
-  a station with real detections did, on all four theme and width legs. The
-  title is a paragraph now, spaced as the heading was, and a test fails on any
-  heading tag in these fragments.
-
-- **`--labels-dir` was documented with the wrong file names.** `--help` said
-  `labels_de.txt`; the loader reads `de_labels.txt` (or the same name under
-  `labels_l18n/`). `--lang`'s help is corrected with it, and
-  `docs/book/_generated/cli-help.txt` regenerated.
-
-- **`typos` read the DuckDB Foundation's name as a misspelling.** `NOTICE` gives
-  the legal name, *Stichting DuckDB Foundation* (its first word is Dutch for
-  foundation), and the checker offered "Stitching". That whole name is ignored,
-  and the bundled name tables are excluded.
-
-- **Notification templates sent blanks and zeros for the station's own
-  values.** `$latitude` and `$longitude` printed `0.000000` on every push, and
-  `$reason`, `$cutoff`, `$sens`, `$overlap`, `$listenurl`, `$friendlyurl` and
-  `$image` were replaced with nothing — the daemon built the context with a
-  literal `0.0` and empty fields, and every unit test of the template used a
-  hand-built one. A migrated BirdNET-Pi body that ends in `($reason)` rendered
-  `()`. Each now carries what the station knows: its coordinates (nothing at
-  all for a station that has none, never `0.000000`), the confidence bar the
-  detection cleared, the sensitivity and overlap the run used, and BirdNET-Pi's
-  own `$reason` wording (`detection`, `first time today`, `only seen N times in
-  last 7d`). The three links point at the station — `BNB_PUBLIC_URL`, then
-  `BNB_BASE_URL`, then `http://<hostname>.local:<port>`, left empty when none can
-  be worked out rather than aimed at `localhost`. `$friendlyurl` is now
-  BirdNET-Pi's Markdown `[Listen here](…)` link to the detection, where it was
-  the bare address of the station. The template variables are listed in the
-  manual for the first time, and the `.env.example` comment that said
-  `BNB_PUBLIC_URL` "reuses" `BNB_BASE_URL` (it does not; the cookie reads only
-  the former) is corrected.
-
-- **A systemd `MemoryMax=` was invisible to the memory ceiling.** The ceiling
-  was read from `/sys/fs/cgroup/memory.max`, which does not exist on cgroup v2
-  outside a container: a service's limit lives on the service's own cgroup.
-  The shipped unit sets `MemoryMax=1G`, so on a bare-metal station the ceiling
-  came out as the machine's RAM, and a second classifier (`MODEL_2_PATH`) could
-  be admitted that the unit then killed. The limit is now found from
-  `/proc/self/cgroup` and the tightest limit on the path to the root wins, for
-  cgroup v1 and v2; the container case, where the process's cgroup is `/`, reads
-  the same file it did. Read from the specification and tested against a
-  directory tree laid out as the kernel lays it out; not yet confirmed on a Pi
-  running the unit under cgroup v2.
-
-- **The MSRV job and the Docker builder were not running the MSRV.**
-  `rust-toolchain.toml` names `stable`, and rustup ranks a toolchain file above
-  `rustup default`, which is all `dtolnay/rust-toolchain@1.95` sets — so
-  "MSRV (Rust 1.95)" compiled with the current stable (1.99.0 here), and so did
-  `docker build` through the `COPY . .` that carried the file into a
-  `rust:1.95` image. The job now exports `RUSTUP_TOOLCHAIN` from `Cargo.toml`'s
-  `rust-version` and asserts `rustc --version` in a following step, checks
-  `--all-targets --locked` (it checked the library and binary only), and
-  `.dockerignore` leaves the file out. The promise itself holds:
-  `cargo check --workspace --all-features --all-targets --locked` passes on
-  Rust 1.95.0 with no warnings. `scripts/check-ci-config.py` gains the check
-  that keeps it so (incident 6).
-
-- **One failing classifier silenced the rest.** On a station running more
-  than one classifier, an error from any of them failed the whole file, so
-  a broken second model stopped the primary from recording anything. A
-  window now fails only when none of its classifiers answers.
-
-- **Listening live to a camera ignored its transport.** The live stream
-  always asked for TCP, so a camera that only speaks UDP could be recorded
-  but not listened to. It now uses the source's transport (and media mode).
-  The add form also described `auto` as "TCP w/ UDP fallback"; it is TCP,
-  and nothing falls back. Transport can now be changed on the edit form.
-
-- **Two pages read a failed query as good news.** The suspect-species report
-  said "Nothing looks suspicious", and the dawn-sequence card "Not enough dawn
-  activity yet", when the detections could not be read at all. Both now say
-  the data could not be read.
-
-- **The Live view gave a visitor the camera's password.** A source with no
-  label was listed in the Live view's picker — and on the first-run Today
-  checklist — by its address, `user:pass@` included, and both pages are open
-  to anyone on a password-protected station. An unlabelled stream is now
-  named by its host. (Give each camera a label; it reads better anyway.)
-
-- **A secret in a stream URL's query reached the log.** The log redactors
-  removed `user:pass@` and passed the query through, where an SRT
-  `passphrase=`, a signed URL's `token=` and MediaMTX's
-  `streamid=read:path:user:pass` keep theirs. Parameters named like a secret,
-  and a stream id's user and password, are masked now.
-
-- **`--doctor` failed every stream URL that was not `rtsp://`**, and a
-  failed doctor stops the service starting. It now probes each protocol's
-  port, and skips UDP and SRT, which have no connection to test.
-
-- **The audio docs described an "Add-RTSP wizard"** — a locked `rtsp://`
-  prefix, a reachability pill, a preview row — that does not exist. They now
-  describe the add form.
-
-- **Station tabs restyled the whole page.** Five of the pages folded into
-  the Station tabs (settings, alert rules, notifications, species settings,
-  import) brought stylesheets written for a page of their own, with rules
-  for bare `input`, `label`, `table`, `h1` and `code`. Inside a tab those
-  rules reached the site header, the tab bar and every other section — the
-  header's search box was visibly displaced. Each is now scoped to its own
-  section.
-
-- **Two stray markup errors on Settings → Data.** The Raven export row
-  showed its per-clip path as `recordings//raven.txt`, because `<clip>` was
-  written raw and parsed as an element; and the "species that may not be
-  birds" report closed one more `<div>` than it opened, ending the page's
-  content column early (also in the report's own refreshes).
-
-- **`GET /api/v2/system/jobs` answered an empty list when it could not read
-  the job state** — which reads as "nothing is due" on exactly the station
-  that has a problem. It now answers `500`.
-
-- **A species page told the truth only about birds with recent detections.**
-  Its "Detections, last 14 days" chart drew the 14 most recent days *with* a
-  detection, so a bird heard once a week filled it with three months and no
-  gaps; it now draws the last 14 calendar days, today last, and says "Not
-  heard in the last 14 days" when there are none. Its "7-day moving average
-  overlaid" note described a line that was never drawn, and is gone. A bird
-  this station has not heard got "Species not found." — false for a real
-  species — in a bare paragraph that collapsed the stats row to a hairline
-  across the page; it now gets the four tiles, honestly empty, and its
-  hour-of-day chart no longer says "No detections today yet" about an
-  all-dates chart. When every clip of a species has been reclaimed by
-  retention, the Best detection panel says so instead of "No recording
-  captured for this species yet". The page's sections had no space between
-  them.
-
-- **The count over the tallest bar was never drawn.** Both bar charts (the
-  daily trend on the dashboard and species page, and the hour-of-day chart)
-  placed it 3 units above the top of the chart, outside what the SVG shows —
-  so the busiest day or hour was the one bar without a number.
-
-- **Station tabs had up to four `<h1>`s.** Capture, Alerts, Data and Access
-  embed the bodies of the admin pages they replaced, and each kept its own
-  page heading: Capture showed "Audio sources" twice (with an eyebrow reading
-  "primary support surface", a phrase from a design document) and a second
-  title "Species List Management". Embedded titles are now `<h2>`, or gone
-  where the tab already names the section; the standalone Test Notifications
-  page keeps its own title.
-
-- **Year in Review mixed three periods under one year.** Its masthead says
-  "Year in review · 2026", but the totals, species count, leaderboard, first
-  day and days of listening were all-time; the busiest day was the trailing
-  366 days ("the loudest the yard ever got"); and only "new to your list" was
-  the calendar year. A station with three years of records was shown all three
-  as "your year". Every figure is now 1 January to today, and a year with
-  nothing heard yet says so. Species tied on count in the leaderboard and the
-  weekly report are ordered by name rather than by however the scan returned
-  them.
-
-- **Share links reached the request log.** At `debug`, every request was
-  logged with its full URI, so `/r/{token}` — where the token is the access —
-  went to the journal and into support bundles. Requests are now logged by
-  the route they matched (`/r/{token}`, literally), and a request that
-  matched no route by its path; the query string is no longer logged.
-
-- **Credentials printed by `{:?}`.** 26 types that hold a password, token,
-  API key or a URL with one in it derived `Debug`, which prints every field
-  in full: the SMTP, MQTT and ntfy passwords, the Discord, Telegram, Slack,
-  Gotify and Pushover tokens, the BirdWeather, eBird, Weather Underground and
-  Pirate Weather keys, RTSP and webhook URLs, the S3 request signature, the
-  login, onboarding and account forms, and the command line. Each now writes
-  `Debug` by hand and prints `<redacted>`, or the URL without its credential.
-  So does the notification request body, which carried Pushover's token as a
-  form value. A source scan keeps a credential-holding type from deriving
-  `Debug` again.
-
-- **An RTSP camera's password reached the journal.** Starting an RTSP
-  source logged its URL at info, on every start. ffmpeg also names its input
-  in its errors (`Error opening input file rtsp://admin:…@cam/stream.`), which
-  was logged at debug. Both are now written with the password replaced; the
-  user name and host stay, because they are what makes a camera fault
-  diagnosable.
-- **A camera that refused the connection said why only at debug.** ffmpeg's
-  "Error opening input: Connection refused" matched none of the failure
-  markers, so it sat below the default log filter while the supervisor's
-  restart notices were visible. It is a warning now.
-  The support bundle's error log, and the doctor's message about a malformed
-  source URL, now redact every URL in a line rather than only the first.
-- **Six more places a credential could leave the station**, found by a sweep
-  of every log and error site:
-  - The support bundle's `journal.log` was the journal verbatim. It is now
-    scrubbed of every configured secret's value, of URL-valued settings'
-    paths and tokens, and of every URL's password — which also cleans lines an
-    older build wrote before these fixes.
-  - The Apprise address was logged at start-up as configured; an Apprise API
-    address can carry a password or, in `/notify/{key}`, the key. Now logged
-    redacted, as are a custom BirdWeather or weather endpoint.
-  - Apprise's own error text, stored in the notification log viewers can read,
-    is redacted and clipped: Apprise names the URL it failed on, and in an
-    Apprise URL the token is often the host.
-  - The BirdWeather "Test" button put the station token into its error
-    message on any network failure; reqwest's error text includes the URL.
-  - A "redacted" alert-rule export, the form offered for sharing, still
-    carried each webhook's full address — for Home Assistant, Slack or
-    Discord the address is the credential. It now keeps only the scheme and
-    host. Importing such a rule brings it in switched off, and the import
-    summary names it, rather than enabling a rule that can only fail.
-
-- **FLAC, MP3 and Ogg clips carried no tags.** The species, confidence and
-  date were written into a clip only when it stayed a WAV, so every
-  compressed clip — the formats a station short of disk is told to use —
-  left with nothing inside it. The WAV is now tagged before conversion and
-  ffmpeg carries the tags into the format's own (Vorbis comments, ID3). A
-  WAV is never tagged twice. The sox fallback does not carry them.
-
-- **`/api/v2/detections` ignored `date` whenever `species` was given**, so
-  `?species=X&date=Y` answered with every detection of X on every day. Every
-  filter now applies together, through the same filter the search page uses.
-  `species` now also matches a scientific name and ignores case, as its
-  documentation always said; it matched the exact common name only. An empty
-  `species=` means no filter, where it used to return nothing. `total_count`
-  is now always present and counts the filtered set.
-- **A BirdWeather token pasted with a trailing newline or space failed every
-  upload.** It is saved trimmed and trimmed again when the client is built,
-  and a token holding anything but letters and digits is refused on save with
-  a message saying why. The token is now encoded as the single path segment
-  it is, so a `/` or `?` in it cannot reach a different address.
-- **Alert-rule webhooks could be pointed at a cloud metadata address**
-  (O-11). Webhook requests, the Test button included, refuse link-local
-  addresses (`169.254.169.254` among them), the unspecified address and two
-  more metadata addresses, in every IPv4-in-IPv6 encoding, on the first
-  request, on every redirect, and for every address a host name resolves to.
-  Loopback, LAN and public addresses are unaffected. Webhook requests no
-  longer go through `HTTP(S)_PROXY`: through a proxy the guard cannot see the
-  address. The policy is birdnet-go's (`internal/httpclient/ssrf.go`).
-
-- **A model output of infinity was a 100 % detection, and a NaN from the
-  occurrence model let a species through.** Both classifier output mappings
-  turned `+inf` into exactly 1.0, a confident detection of whichever label sat
-  at that index; a non-finite score is now never a detection, a non-finite
-  human-class score masks the clip, and the first one is logged. The
-  occurrence filter skipped a species only when `score < threshold`, which a
-  NaN never is, so an all-NaN geomodel output admitted every species in
-  silence; it is now a reported run-time failure, handled like any other.
-
-- **A visitor behind some reverse-proxy setups could choose their own
-  address.** With a trusted proxy that sets only `X-Real-IP` (nginx with
-  `proxy_set_header X-Real-IP $remote_addr;` and no `X-Forwarded-For` line),
-  the visitor's own `X-Forwarded-For` reached the station and won, so each
-  request could claim a fresh address and walk past the rate limiter and the
-  sign-in throttle, and write a false identity into the audit log. It did not
-  bypass authentication. When the two headers name different visitors the
-  request is now attributed to the proxy, and the log says so once. The
-  documented nginx and Caddy configurations did not have the defect. The
-  cost, stated rather than hidden: a visitor who forges `X-Real-IP` is now
-  counted as the proxy, an identity shared with anyone browsing on the
-  station's own machine, so they can spend that identity's sign-in
-  throttle. Having a proxy overwrite or clear `X-Real-IP` closes that too.
-
-- **"Suggest an edit" was a 404 on every page of the published manual.**
-  mdBook 0.5 expands `{path}` relative to the book root, so the 0.4-era
-  template sent every link to `docs/book/docs/book/…`.
-  `scripts/check-book-links.py` now fails on an edit link that names no file
-  in the repository (46 findings — every content page — against the old
-  template, 0 after).
-- **Manual accessibility.** Links inside running text were told apart by
-  colour alone (WCAG 1.4.1) and are underlined; four tables had an empty
-  first header cell; tables and code samples that scroll sideways on a phone
-  could not be reached from the keyboard and are now focusable when they
-  overflow. axe found all three classes; the fixed pages report none.
-
-- **Birds heard together are no longer reported as heard in order.**
-  BirdNET stamps every species in one audio chunk with the same instant.
-  Measured against v0.10.0, the funnels and sequence patterns counted such a
-  pair as ordered in *both* directions, so the dawn running order and
-  `/analytics/funnel` / `patterns` / `sequence-count` credited orders nobody
-  observed. Funnels now use `'strict_increase'` and patterns require each step
-  strictly after the last (`(?t>0)`); detections 3 s apart still count. The
-  neighbour card likewise no longer reports a species heard in the same chunk
-  as the trigger as its "next" or "previous" one (which it did by alphabetical
-  order).
-- **Step times on a clock-change day.** Funnel and pattern step times were
-  converted to wall clock with one offset per day; with an hour range spanning
-  the change, one side came out an hour off (a step heard at 03:30 on
-  Europe/Berlin's spring-forward day read `02:30`). Each step now takes its own
-  detection's recorded wall clock.
-- **The follow-on card never showed a prediction.** It found the latest
-  detection with `ORDER BY rowid` on a view, which the bundled SQLite 3.53
-  rejects; the error was swallowed into "No detections yet." on every
-  station.
-- **Effort-corrected abundance divided by effort as of the last restart.**
-  Recording effort reached the analytics store only at startup, so each week
-  since then had too few listening hours, or none. The last two days are now
-  re-copied after every effort sample; the copy is one transaction (a failed
-  copy used to leave the table empty), and a row that cannot be read fails the
-  copy instead of being skipped.
-- **A request waiting on the database no longer stalls the others.** 170
-  places in the web server and the daemon's background tasks read or wrote a
-  database directly on an async worker thread — most of them through a helper
-  such as the audit-log write, which 43 admin actions call — so while the
-  detection writer held the database, every page, script and live socket
-  scheduled on that thread waited too. A Pi 4 has four. All of them now run on
-  the blocking pool (`AppState::run_blocking`); startup's ten one-off reads,
-  before the server listens, are named and left as they are. Measured with
-  one worker and the database lock held: a static script was not served
-  within 5 s before, and is served at once now. An admin change and its
-  audit-log row are now written together, so a client that disconnects
-  between them can no longer leave a change unrecorded.
-- **`AbsenceStreak` did not parse and `TumblingSpec` rejected the ISO dates
-  it documents** (both public time-series query builders with no caller).
-  Both now run, and every public query builder is executed by a test.
-- **One day without timestamps no longer takes the Analytics page's
-  Activity sessions and dawn-chorus cards down**, nor `/analytics/sessions`,
-  `/analytics/patterns` and `/analytics/sequence-count`. A detection whose `detected_at_utc` is NULL while
-  its date and time still parse in DuckDB has no `detection_instant`, and
-  forms a day group of its own. On such a group `behavioral` v0.10.0 returns
-  NULL from `sequence_match` / `sequence_count` (v0.9.1 returned `false` /
-  `0`; measured on both), and `sessionize` returns a NULL session id (both
-  versions). Each failed its whole query on decode; the dawn-chorus card
-  runs `sequence_count` first, so it failed too. The funnels reported that
-  day as "0 steps". Every builder that orders by the instant now leaves
-  such rows out.
-- **The Time series page's sessions card, and the time-series hourly,
-  accumulation and sessions endpoints, no longer fail outright on one
-  unplaceable row.** A row with a date but an unparseable time, or with no
-  parseable date, or with no instant, reached a decoder as NULL and failed the
-  query for every day. `species_peak_hours` (library only) had the same
-  defect.
-- **`/analytics/abundance` and `/analytics/phenology` no longer truncate
-  decimals.** The JSON converter tried an integer first, and duckdb-rs's
-  integer conversion accepts and truncates a DOUBLE: `detections_per_hour`
-  of 0.43 reached the JSON as `0`, a `DECIMAL` 2.5 as `3`, and a numeric
-  string as a number. FLOAT columns also now render at their own precision
-  (`0.4286`, not `0.428600013256073`).
-- **`/api/v2/analytics/status` reports an unreadable count as `null`, not
-  `0`.** A zero there is documented as "the sync has not run", which was the
-  wrong diagnosis for a store whose tables could not be read.
-
-- **The mutation and supply-chain workflows' scheduled runs are no longer
-  cancelled by a merge.** Both shared a concurrency group with every push to
-  the default branch and cancelled in progress, so the weekly sweep — hours
-  long — was killed whenever anything merged while it ran. Scheduled and
-  dispatched runs now have their own group and are not cancelled.
-
-- **The guide and the OpenAPI description counted the token-gated API
-  wrongly.** The code holds ten bearer writes and eight bearer reads. The guide
-  said fifteen (ten and five) and the OpenAPI description said "the four
-  `/detections/*` write endpoints". Both now say eighteen, and a test
-  (`the_prose_counts_what_the_route_tables_hold`) reads the route tables and
-  fails when either sentence disagrees (seen failing against each file as it was
-  before). The architecture documents and a benchmark comment also described the
-  resampler as polynomial; `audio/resample.rs` is a windowed-sinc resampler
-  (its own header says the polynomial one it replaced folded a 20 kHz tone
-  down), so they now say so.
-
-- **A species card says what is actually missing.** With the image cache
-  configured it no longer tells you to pass `--image-cache-dir`; with it off
-  it says so and names the flag for whoever set the station up.
-- **BirdWeather is never sent a position the station does not have.** A station with
-  a token and no (or an unparseable) `LATITUDE`/`LONGITUDE` built its client at
-  0°, 0° and posted every detection to a public map in the Gulf of Guinea. The client
-  now refuses a position that is missing, not finite, off the globe or exactly 0, 0
-  (a real equator or prime-meridian station has one coordinate non-zero and passes);
-  the station logs one warning at start-up saying which value is wrong and builds no
-  client. `--doctor` gains a "BirdWeather location" check for the same condition, and
-  uploads an earlier version had parked at 0, 0 are dropped with a warning instead
-  of replayed once the station gets a position.
-- **A failed read is no longer published as "nothing" on the API and the admin pages.**
-  `/api/v2/species/tracking` answered 200 with no species and `/api/v2/soundlevel`
-  "no observations yet" (both now 500); the data-quality panels drew "No detections in
-  database" and "Database quality looks good!"; Species storage drew "0 B across 0
-  clips"; the filter-test page, both rule lists, the notification history, the image
-  blacklist and the import history drew empty states. They show the could-not-load
-  state instead, each panel on its own.
-- **A refused bulk species action no longer reports "0 removed" and deletes the audio.**
-  The clips handler marked rows reclaimed, defaulted a failure to zero, and went on
-  to unlink every file of the species. It now stops at the first refusal, answers 200
-  with a toast (htmx discards a 5xx body) saying only what is certain, and writes no
-  audit row for a change that did not happen.
-- **An unreadable species list is no longer replaced by the one name just added.**
-  The include, exclude and whitelist handlers read the stored list with `.ok()`, so a
-  read error looked like "never written" and forty excluded species became one. Only
-  a list that was never written is empty now; the six handlers, Species storage and
-  the suspect-species report say so when a list cannot be read or written. The
-  daemon still treats an unreadable list as empty (logged at `warn`).
-- **`BIRDNET_CORS_ALLOWED_ORIGINS=*` no longer aborts the service at boot.**
-  tower-http panics on a wildcard and the workspace builds with `panic = "abort"`, so
-  the service restarted into the same panic. The entry is dropped with an `error`
-  log, valid entries are kept, and with none left the policy is same-origin only. A
-  wildcard is not turned into "any origin": that is what the setting's default
-  exists to prevent.
-- **Camera passwords stay out of the live-stream log.** `livestream.rs` logged
-  ffmpeg's stderr and the source's device at `warn`/`info` verbatim, and ffmpeg
-  names its RTSP input in its errors; both sites now redact as the capture path does.
-- **The audit log records the page-side mutations the API's already recorded.**
-  Deleting, locking, unlocking and relabelling from the Today list, the Clips page and
-  the Search bulk bar, review verdicts, quarantine approve/reject/delete, image
-  blacklist add/remove, notification prune, backup delete and the suspect-species
-  exclude each leave a row with the signed-in user as actor, only when the write took
-  effect. New action names: `detection.relabel`, `quarantine.*`, `image.blacklist.*`,
-  `notification.prune`, `data.backup.delete`.
-- **Tints were the wrong colour.** `color-mix(in oklch, ...)` over a neutral walks
-  the hue toward 0 or 250: a 16 % amber came out pink, a 16 % moss brown, and
-  the dark warning toast magenta. The 72 mixes are in OKLab now, and `tokens.mjs`
-  checks a tint keeps its hue.
-- **Focus squared off every rounded control.** `:focus-visible { border-radius:
-  2px }` reshaped 948 of 1,156 focus stops. A focused control keeps its shape
-  and a 2 px ring that is 3:1 against what is behind it (`focus.mjs`: 2,264
-  stops, 0 changed shape, 0 weak; 28 stops inside the browser's own audio bar are
-  not graded). Digits are tabular everywhere (`figures.mjs`: 879 figures, none
-  proportional; 280 of 879 were), and the sign-in fields have a 3:1 edge (4.89:1
-  light, 4.98:1 dark; the earlier fields measured 1.74:1 and 1.98:1).
-- **Pages jumped as they filled in.** Placeholders now have the shape of what
-  replaces them, and the weekly-report column no longer widens in steps. With
-  `cls.mjs`, 8 of 78 page loads are over 0.1 (15 on the baseline, by the UI branch's
-  run); the dashboard, a never-heard species page, the chord diagram and the footer
-  still shift. The onboarding wizard was
-  recomposed (what it saves is unchanged) and opens with the card that matches the
-  stored threshold, whether it is spelled `0.7`, `0.70` or `.7`.
-- **`analytics/phenology` and `analytics/abundance` answered 503 on every
-  station.** The handler asked the prepared statement for its column names before
-  running it; the `duckdb` crate panics on that, and the catch-all arm turned the
-  panic into "analytics database not configured". Both routes now answer, a failed
-  query task is a 500 and no longer a claim about configuration, and a test calls
-  both through a real DuckDB and holds each row to the keys `openapi.json` documents.
-- **More places no longer present a failed read as an empty or healthy one.**
-  Today's recording pill and review strip, the Recordings grid, the live feed's
-  "first ever" badge, Station Health's microphone panel, the merged-history note and
-  the account and session lists now say they could not read. A user or session
-  change that went through is reported as done even if the list cannot be redrawn,
-  a panicked Station tab says so instead of rendering blank, and a failed approval no
-  longer quotes the database's error.
-- **Inviting a viewer on Station → Access no longer shows the existing users twice.**
-- **Settings holds more values to what the daemon accepts.** Segment Duration (and
-  `PUT /api/v2/settings`) refuses a length outside 3 to 600 seconds, a fraction or a
-  unit, and its input allowed 5 to 60, which blocked saving the form on a station
-  whose valid value was 120. The API runs the same checks as the page (language,
-  BirdWeather token, recording window, clip format, info site). A fixed recording
-  window that does not end after it starts is refused, since the scheduler ignores
-  it and records all day; `--doctor` warns about one in `birdnet.conf`.
+## [0.18.0] - 2026-10-23
 
 ### Security
 
+- **`tokio` 1.54.1 (RUSTSEC-2026-0384).** 1.54.0 has a race between `tokio::time::Interval`
+  and the runtime's time driver that can free a timer's waker while the driver is firing it (a
+  use-after-free in safe Rust). The station uses `Interval` in twelve places, among them the
+  systemd watchdog ping, the heartbeat, the dead-man timer, the maintenance scheduler and the
+  MQTT presence pings. The advisory was issued 2026-10-22 and is fixed in 1.54.1; the
+  lockfile now pins it. `Sleep` and `Timeout` are not affected.
+- **`ctutils` 0.4.4 (RUSTSEC-2026-0385).** Before 0.4.4 the constant-time helpers in this
+  crate could compile to a branch on a secret-dependent value (mask generation on common
+  platforms, `u128` comparisons on 32-bit targets); a branch on a secret can leak it through
+  timing. The station reaches it through the Argon2 password-hashing dependencies
+  (`argon2` → `blake2` → `digest`); whether the station's own hashing and verification call the
+  affected functions was not traced. Pinned in the lockfile; the `birdnet-db` library tests
+  (497) and the account tests pass on it.
+- **Admin forms no longer print a stored credential.** Settings and Audio showed saved
+  passwords, tokens and camera addresses in clear in the page source. A secret now shows as
+  `***REDACTED***` (or empty), an unchanged mask saves back to the stored value, and a mask
+  with nothing behind it is refused without echoing it. A test drives 21 admin and station
+  routes and fails if a secret appears in any body. The support bundle carries settings
+  saved in the browser and the audio sources, masked.
+- **A viewer cannot read the live log**, and the cross-site check refuses `Sec-Fetch-Site:
+  cross-site` writes.
+- **The cross-site-request check now covers HTTP/2.** Browsers speak HTTP/2 to the
+  station's TLS listener, which sends no `Host` header, and the check treated "no `Host`"
+  as "nothing to compare" and let the request through. It now takes the authority from the
+  `Host` header or the request address, and refuses a request that carries an `Origin` or
+  `Referer` it cannot compare. Found by review; the new test drives a real HTTP/2 client
+  and failed on the old code (a cross-origin POST, a cross-site `Referer` and a forged
+  sign-in all got through).
+- **`EMBED_ORIGINS` applies only to the dashboard, the wall display and the recordings
+  page.** Sign-in, onboarding, restore, `/admin/*` and `/station/*` can never be framed,
+  and wildcards over shared suffixes (`*.co.uk`, `*.github.io`, `*.pages.dev`,
+  `*.ui.nabu.casa`) are refused (a hand-kept list, not the Public Suffix List). The old text
+  said the session cookie is withheld from framed pages; that holds only for cross-*site*
+  embedders: a Home Assistant on the same host and another port is same-site, so a
+  signed-in administrator who is same-site with a listed embedder sees the framed
+  dashboard's admin controls.
+- **A viewer account can no longer read** the BirdNET-Pi import's settings lines (they
+  carry credentials), Diagnostics, the process id, or file paths in the model panel. The
+  setup wizard no longer prints a camera's password, and the first admin password can be
+  set only once (two simultaneous first-run submissions no longer both succeed).
+- **BirdWeather's position blur fails closed and cannot be averaged away.** A mistyped
+  `BIRDWEATHER_THRESHOLD` used to discard a valid `BIRDWEATHER_LOCATION_ACCURACY`, and an
+  unusable radius (`5km`, `60000`) posted the exact position. Now a bad radius turns
+  uploads off, the two settings are read independently, `--doctor` reports both, and the
+  offset is one fixed point per station (a seed in `birdweather-blur-seed` beside the
+  database) so many posts cannot be averaged back. It is not hidden from anyone who learns
+  the offset, and changing the radius or losing the seed draws a new one.
+- **Imports and installs are harder to abuse.** The settings-import lines download uses a
+  random 128-bit token, works once and expires after ten minutes; credential-named keys,
+  unknown keys and address user-info are not shown in the preview; the heartbeat address
+  goes through the outbound-address guard; a model install stops at the pinned size, uses
+  a unique exclusive staging file and re-checks the length; Settings refuses a stream
+  address with no known scheme and a heartbeat address that is not http(s).
+- **The public MQTT status no longer carries file paths or the broker address**, a mangled
+  private key is never quoted in an error, and learned-threshold and weather-by-detection
+  reads no longer confirm a detection the owner rejected.
+
+- **"Look up my approximate location" no longer asks over plain HTTP.** It asked
+  `http://ip-api.com/json/`, whose free tier has no TLS, so anyone on the path could
+  rewrite the coordinates and timezone it filled in, and the station's public IP
+  address crossed the network in clear. It asks `https://ipwho.is/` (free, no key,
+  1,000 requests a day per address) and, only if that fails, `https://get.geojs.io/`;
+  the client refuses `http://` outright, redirects included. The answer is read
+  defensively: a coordinate that is missing, not finite, out of range or exactly
+  0.0, 0.0 is a failed lookup, and a timezone that is not shaped like an IANA name is
+  dropped. The wizard now says which services it asks and what they are told (the
+  station's public IP address, as before). A failed lookup still shows the same
+  message. Gates: the unit tests in `routes/admin/settings/handler.rs`.
 - **The support bundle no longer carries the station's exact coordinates.**
   `LATITUDE` and `LONGITUDE` are shown to one decimal (about 11 km) in the
   configuration and wherever the journal printed them (BirdWeather's start-up line,
   a settings change); a value that is not a number is masked. The bundle is written
-  to be pasted into a public issue, and four decimals are a house. A bundle made by
-  an earlier version has them exactly. `--doctor` was checked and prints neither.
-  Seen failing with the journal step replaced by a passthrough, and with the
-  configuration branch disabled.
-
-- **`duckdb` / `libduckdb-sys` 1.10506.0 → 1.10506.1, which takes the build-time `zip`
-  from 6.0.0 to 9.0.5.** Three RustSec advisories against `zip` 6.0.0
-  (RUSTSEC-2026-0367, -0368, -0369: `ZipArchive::extract` and
-  `ZipStreamReader::extract` creating symlinks and applying permissions outside the
-  destination, fixed in 9.0.0) failed `cargo deny`, `cargo audit` and OSV-Scanner on
-  this branch's first pull request; `main` carries the same lockfile entry, so its
-  next scheduled run would have failed too. `zip` is a build-dependency of
-  `libduckdb-sys` only, and the call that extracts an archive sits in the build
-  script's `not(feature = "bundled")` module, which this project's builds never
-  compile (`duckdb` is built with `bundled`); so nothing here was exploitable, and
-  the binary never contained the crate. The DuckDB engine is unchanged (the `10506`
-  component is 1.5.6, so the extension pins hold), and the lockfile diff is exactly
-  `zip`, the two bindings, `nix` and `typed-path` added and `arbitrary` /
-  `derive_arbitrary` dropped (all MIT or MIT/Apache). `birdnet-behavioral` and
-  `birdnet-timeseries` pass against the new binding.
-- **The install one-liner no longer runs the development branch as root.** README, the
-  manual, the architecture notes, the installer's usage text and its sudo error messages
-  told readers to pipe `raw.githubusercontent.com/…/main/install.sh` into `sudo bash`:
-  whatever `main` held that second, with no release, checksum or provenance between.
-  They now name `https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh`,
-  the file each release lists in `SHA256SUMS` and attests, with `--proto '=https'
-  --tlsv1.2` (the admin "Check for updates" text already names the release's own copy).
-  Read on 2026-10-16: v0.17.1, the latest release, has an `install.sh` asset, so the
-  address resolves today. `installer/test/install-one-liner-is-a-release-asset.sh`
-  fails on a branch-pinned form (21 hits before, none after) and on a scan that has
-  stopped seeing the files; the installer suite passes. Not done: the one-liner was
-  not run end to end, and the Docker `quickstart.sh` (and the compose files it
-  downloads) and `scripts/hardware-test.sh` still come from `main`: see `docs/HANDOFF.md`
-  for why the quickstart cannot move before a release carries it.
+  to be pasted into a public issue. A bundle made by an earlier version has them
+  exactly. `--doctor` prints neither.
 - **The CSP nonce now goes only onto the `<script>` and `<style>` tags this server
-  wrote, and any other `<script` in a response is turned into text.** The nonce
-  used to be stamped by a pass over the finished body that rewrote every
-  `<script ` and `<script>` it found, a visitor's included, so any one unescaped
-  reflection in any page was script execution that the strict CSP existed to stop
-  (the two fixed below were that class). Authored markup is now sealed with a
-  per-process 128-bit token where it is defined (`static X: Sealed` for the 21 page
-  templates and 20 inline blocks, `seal::seal` for a literal built in place), and the response
-  pass (`src/seal.rs`) redeems exactly those tags for the nonce and strips the token,
-  so it never leaves the process. Measured in Chromium against a page that reflects
-  its input unescaped, behind the real middleware: a full document no longer runs
-  the reflected script (CSP `script-src-elem` violation, no dialog). A second
-  probe found that sealing alone was **not enough**: in a fragment that htmx swaps
-  in, htmx re-creates the script and `'strict-dynamic'` admits it without a nonce, so
-  the reflected script ran (`window.__theirs`, an `alert`). So the pass also rewrites
-  every `<script` that is not sealed to `&lt;script`, in any letter case; the same
-  probe then shows no execution while the server's own fragment script still runs.
-  Gates, each seen failing: with a blind stamping pass put back after `redeem`,
-  `security::tests::a_script_reflected_into_a_page_does_not_come_out_as_a_script`
-  and the `<style>` counterpart fail; `tests/every_script_on_every_page_carries_the_nonce.rs`
-  rendered the 114 pages and partials of the visual-QA route list and, with the page
-  templates sealed but not yet the inline blocks, reported 21 tags without a nonce on
-  14 routes; it is green once those were sealed, with every page byte-identical to the previous build apart from clock and
-  system metrics (diffed, 107 of 114 identical, the other 7 differing only in
-  CPU, uptime, time-of-day and chart geometry);
-  `tests/authored_markup_is_sealed.rs` reads the source, so it also covers pages the
-  crawl does not reach, and was seen failing on a bare `<script>` added to
-  `share.rs`. **Not closed by this:** an unescaped reflection can still inject
-  markup, including an `hx-post` attribute that htmx would fire on load (the CSRF
-  origin check passes, the request being same-origin); escaping stays the primary
-  defence and `a_query_value_is_never_echoed_as_markup.rs` still sweeps it, for GET
-  parameters only, not POST bodies or stored values.
+  wrote, and any other `<script` in a response is turned into text.** The nonce used
+  to be stamped by a pass over the finished body onto every `<script ` it found, a
+  visitor's included, so any one unescaped reflection was script execution that the
+  strict CSP existed to stop. Authored markup is now sealed with a per-process
+  128-bit token where it is defined, and the response pass (`src/seal.rs`) redeems
+  exactly those tags for the nonce and strips the token, so it never leaves the
+  process. Sealing alone was not enough: in a fragment htmx swaps in,
+  `'strict-dynamic'` admits a re-created script without a nonce, so the pass also
+  rewrites every unsealed `<script` to `&lt;script`, in any letter case. Measured in
+  Chromium against a page that reflects its input unescaped: a full document and a
+  swapped fragment no longer run the reflected script, and the server's own fragment
+  script still runs. Gates: `security::tests::a_script_reflected_into_a_page_does_not_come_out_as_a_script`
+  (and its `<style>` counterpart), `tests/every_script_on_every_page_carries_the_nonce.rs`
+  (the 114 pages and partials of the visual-QA route list) and
+  `tests/authored_markup_is_sealed.rs` (a source scan). **Not closed by this:** an
+  unescaped reflection can still inject markup, including an `hx-post` attribute that
+  htmx would fire on load; escaping stays the primary defence, and
+  `a_query_value_is_never_echoed_as_markup.rs` sweeps GET parameters only, not POST
+  bodies or stored values.
+- **Two pages put a URL value into their HTML unescaped.** `/quarantine?filter=` wrote
+  the raw value into an `hx-get` attribute and `/pages/weekly-content?week=` accepted
+  any ten characters as a date. Both are on the public router; `?filter="><script>…`
+  ran in Chromium on the station's origin, because the old nonce stamper trusted every
+  `<script`. A filter is now one of four known words and a week must be `YYYY-MM-DD`.
+  `tests/a_query_value_is_never_echoed_as_markup.rs` requests every page and partial
+  route with each `String` query parameter set to a probe and fails on one that comes
+  back as a tag or ends an attribute; against the unfixed code it reports exactly
+  those two routes.
 - **The local HTTPS CA can no longer vouch for a public website.** `--tls-mode
   self-signed` makes a CA and a leaf it signs, and the operator imports the CA into
-  browsers and phones; the CA had no name constraint and its private key
-  (`local-ca.key`, mode 0600) is readable by the service user, so anything running
-  as that user could mint a certificate for any site that every importing device
-  would trust. The CA now carries a critical `nameConstraints` extension permitting
-  `localhost`, `.local`, the loopback, private and link-local ranges (so a new DHCP
-  lease or phone costs nothing) and the names given with `--tls-hostnames`.
-  Measured with rustls's own WebPKI verifier, not assumed: before, a leaf for
-  `bank.example.com` signed by the station's CA verified; after, it and leaves for
-  `accounts.google.com`, `8.8.8.8` and `203.0.113.7` are refused, while the
-  station's names and other LAN names (`10.9.8.7`, `other-pi.local`, `::1`) still
-  verify (the counterpart that stops a blanket refusal from passing). **One-time
-  cost:** the CA from before this release is replaced at the next start, so devices
-  that imported it import the new `local-ca.crt` once; so is a CA that cannot
-  vouch for a newly added public name. Both log a warning. The private-key
-  temporary file is also created with its final mode instead of being widened by
-  the umask and narrowed after (`create_private`, which also refuses a symlink
-  planted at the temporary name); that test pins the helper, not the race.
-- **An uploaded migration database no longer waits in `/tmp` or leaves SQLite's
-  `-shm`/`-wal` behind.** The staged upload (up to 4 GiB) now lives in
-  `migration-staging/` beside the station's database, and removing it removes the
-  bookkeeping files SQLite creates when it reads a WAL-mode file. Before, on a
-  distribution whose `/tmp` is a tmpfs that was RAM charged to the service's memory
-  ceiling, and a replaced upload left `.tmpXXXX.db-shm` and `.db-wal` files behind
-  (shown by the test against the old drop). `an_uploaded_database_waits_on_the_data_disk_and_leaves_nothing_behind`
-  fails both with the old location and with the data-disk location but no sibling
-  cleanup. The migration guide no longer says the source is "never modified": no row
-  of it is, but SQLite may create `-shm`/`-wal` beside a WAL-mode file that is read
-  in place.
-- **The installer's downloads are https-only, and the update check names the
-  release, not `main`.** `curl`/`wget` in the installer followed a redirect to plain
-  http without comment, over the connection that carries the `SHA256SUMS` the
-  archive is checked against. They now pass `--proto '=https' --proto-redir '=https'
-  --tlsv1.2` / `--https-only` (`installer/test/downloads-are-https-only.sh` fails
-  on all five helpers against the previous file, passes on this one). The
-  admin "Check for updates" text told operators to pipe `main/install.sh` through
-  `sudo bash`; it, the can't-replace-the-binary message and the release notes now
-  give the `install.sh` attached to the release (built from the tagged commit and
-  attested by the release workflow). (The first-install one-liners in the README and
-  the installation page were switched to `releases/latest/download/install.sh` later;
-  see *Security*, *The install one-liner no longer runs the development branch as
-  root*.) `ffmpeg` command
-  lines are unchanged: RTSP credentials appear in them (see below).
-- **RTSP credentials are visible in `ffmpeg`'s command line, and the audio guide now
-  says so instead of implying otherwise.** Not fixed, because it cannot be with the
-  tool: `ffmpeg` takes its input address only as an argument, RTSP takes its user and
-  password only from that address, and `-/i` (read an option from a file) is not an
-  option in 6.1.1 (`Unrecognized option '/i'`, run here). Logs and the support bundle
-  already redact it. The guide says who can see it (anyone who can list processes
-  on the host; nobody outside the container under Docker) and what to do on a shared
-  host: a read-only camera account, or `/proc` mounted with `hidepid=2`. The
-  unit's `ProtectProc=invisible` hides other users' processes *from the service*,
-  not the service from them, so it is not the mitigation.
-- **Two pages put a URL value into their HTML unescaped, and the nonce stamper
-  turned that into script execution.** `/quarantine?filter=` wrote the raw value
-  into an `hx-get="…"` attribute, and `/pages/weekly-content?week=` accepted any
-  ten characters as a date and wrote them into its navigation links. Both are on
-  the public router; `?filter="><script>…</script>` ran in a real Chromium on the
-  station's own origin. The Content-Security-Policy did not stop it, because
-  `inject_script_nonce` stamps the per-request nonce onto **every** `<script` in
-  the finished body, an attacker's included (the page-title fix before this was the
-  same class). Both values are now normalised before they are written: a filter
-  becomes one of four known words, a week must be a `YYYY-MM-DD` date. The class is
-  now swept mechanically: `tests/a_query_value_is_never_echoed_as_markup.rs`
-  requests every page and partial route the visual-QA sweep lists, the page layer
-  registers, or the pages load with `hx-get`, with every `String`-typed parameter
-  name found in `src/routes` set to a probe, and fails on a probe that comes back as
-  a tag or ends an attribute. Against the unfixed code it reports exactly those
-  two routes (four findings: the quarantine page three times, the weekly report
-  once); the counterpart test shows a valid week and a known filter still work. It does not cover POST bodies, JSON, or
-  a value stored and rendered by a later page, and the stamper itself still trusts
-  whatever `<script` is in the body, so the next unescaped reflection outside the
-  sweep's reach would be exploitable the same way.
-- **`--apply-config` can no longer be steered through a planted symlink.** It runs
-  as root in `/etc/birdnet`, which the installer makes group-writable by the
-  service user, and wrote `<target>.part` and `<target>.bak-<epoch>` with
-  `std::fs::write` and `std::fs::copy`: a link planted at either name was written
-  through, then `chmod`ed and `chown`ed, and the live config was left a link to it.
-  Both files are now created with `O_EXCL` (which refuses a symlink), mode `0600`,
-  and given the target's mode and owner on the open descriptor before any text is
-  written. Red against the old behaviour: both new tests overwrite the victim file.
-- **A webhook's custom auth header no longer follows a redirect to another
-  origin.** `reqwest` drops `Authorization` and `Cookie` there and nothing else, so
-  an `X-API-Key` (any name the rule chose) reached whatever host the first server
-  named: `X-Secret: TOPSECRET` arrived at a second port after a 302 in the audit's
-  reproduction and in the new test. A rule with a header credential now stops at a
-  cross-origin redirect and reports the 3xx; a same-origin redirect still carries
-  the header. The outbound-address guard also refuses Azure's WireServer
-  (`168.63.129.16`), Oracle Cloud's alternate metadata address (`192.0.0.192`) and
-  Google's IPv6 metadata server (`fd20:ce::254`), which it let through.
+  browsers and phones; the CA had no name constraint and its key (`local-ca.key`,
+  mode 0600) is readable by the service user, so anything running as that user could
+  mint a certificate for any site that every importing device would trust. The CA now
+  carries a critical `nameConstraints` extension permitting `localhost`, `.local`, the
+  loopback, private and link-local ranges and the names given with `--tls-hostnames`.
+  Measured with rustls's WebPKI verifier: a leaf for `bank.example.com` verified
+  before; after, it and leaves for `accounts.google.com`, `8.8.8.8` and `203.0.113.7`
+  are refused while `10.9.8.7`, `other-pi.local` and `::1` still verify. **One-time
+  cost:** the CA from before this release is replaced at the next start (so is a CA
+  that cannot vouch for a newly added public name); devices that imported it import
+  the new `local-ca.crt` once. Both log a warning. The key's temporary file is also
+  created with its final mode (`create_private`, which refuses a symlink at the
+  temporary name).
+- **A BirdNET-Pi database or CSV chosen for import, and a backup envelope read back
+  from storage, can no longer exhaust the station.** (1) A 16 KiB SQLite file whose
+  `detections` is an FTS5 external-content table over a view of its own choosing
+  passed schema detection and then produced rows and allocations of its own choosing
+  (three rows of `hex(zeroblob(1e8))` took the process from 120 MB to 2.4 GB). The
+  source is now opened with `SQLITE_LIMIT_LENGTH` at 1 MiB, refused when it defines
+  any virtual table, and refused when it is not a regular file. (2) CSV validation
+  buffered a line of any length (one 300 MB line took the process from 123 MB to
+  709 MB, and `/dev/zero`, which the form accepts as a path, ended it); it now uses
+  the importer's 1 MiB capped reader. (3) The importer logged the full text of every
+  unparseable CSV line, so naming any file as the source put its contents in the
+  journal and the support bundle; it logs the data-line number. (4) A backup
+  envelope's header carries its own argon2 cost, read before anything is
+  authenticated: a header naming 8 GiB of memory ended in an out-of-memory kill and
+  `t_cost = u32::MAX` was still running after ten seconds. Reading is now bounded to
+  256 MiB, 16 passes and 16 lanes (this build writes 19 MiB, 2 and 1); an envelope
+  written by argon2 0.5 still decrypts. Reaching (4) needs write access to wherever
+  the backup is stored.
+- **Alert-rule webhooks could be pointed at a cloud metadata address** (O-11).
+  Webhook requests, the Test button included, refuse link-local addresses
+  (`169.254.169.254` among them), the unspecified address and Azure's WireServer
+  (`168.63.129.16`), Oracle Cloud's `192.0.0.192` and Google's IPv6 metadata server
+  (`fd20:ce::254`), in every IPv4-in-IPv6 encoding, on the first request, on every
+  redirect and for every address a host name resolves to. Loopback, LAN and public
+  addresses are unaffected. Webhook requests no longer go through `HTTP(S)_PROXY`
+  (the guard cannot see the address behind a proxy). A rule's custom auth header
+  (`X-API-Key` or any name the rule chose) no longer follows a redirect to another
+  origin (`reqwest` drops only `Authorization` and `Cookie`): the request stops at the
+  cross-origin 3xx and reports it; a same-origin redirect still carries the header.
+  The policy is birdnet-go's (`internal/httpclient/ssrf.go`).
+- **A visitor behind some reverse-proxy setups could choose their own address.** With a
+  trusted proxy that sets only `X-Real-IP` (nginx with `proxy_set_header X-Real-IP
+  $remote_addr;` and no `X-Forwarded-For` line), the visitor's own `X-Forwarded-For`
+  won, so each request could claim a fresh address and walk past the rate limiter and
+  the sign-in throttle, and write a false identity into the audit log. It did not
+  bypass authentication. When the two headers name different visitors the request is
+  now attributed to the proxy, and the log says so once. The documented nginx and
+  Caddy configurations did not have the defect. Cost: a visitor who forges `X-Real-IP`
+  is counted as the proxy, an identity shared with anyone on the station's own
+  machine, so they can spend that identity's sign-in throttle; having the proxy
+  overwrite or clear `X-Real-IP` closes that too.
+- **Credentials stopped leaving the station through logs, errors and exports.**
+  26 types holding a password, token, API key or a URL with one derived `Debug`, which
+  prints every field (the SMTP, MQTT and ntfy passwords, the Discord, Telegram, Slack,
+  Gotify and Pushover tokens, the BirdWeather, eBird, Weather Underground and Pirate
+  Weather keys, RTSP and webhook URLs, the S3 signature, the login, onboarding and
+  account forms, the command line); each now prints `<redacted>`, and a source scan
+  keeps one from deriving it again. An RTSP camera's URL was logged at info on every
+  start, and ffmpeg's errors (`Error opening input file rtsp://admin:…@cam/stream.`)
+  at debug, in capture and in the live-stream log; both are written with the password
+  replaced (the user name and host stay). The log redactors removed `user:pass@` and
+  passed the query through, where an SRT `passphrase=`, a signed URL's `token=` and
+  MediaMTX's `streamid=read:path:user:pass` keep theirs; parameters named like a
+  secret and a stream id's user and password are masked now. A source with no label
+  was listed in the Live view's picker and on the first-run Today checklist by its
+  address, `user:pass@` included, to anyone on a password-protected station; it is
+  named by its host. The support bundle's `journal.log` was the journal verbatim and
+  is now scrubbed of every configured secret, URL-valued settings' paths and tokens
+  and every URL's password (which also cleans lines an older build wrote); its error
+  log and the doctor's malformed-URL message redact every URL in a line, not the
+  first. The Apprise address is logged redacted and so are custom BirdWeather and
+  weather endpoints; Apprise's own error text (it names the URL it failed on, and in
+  an Apprise URL the token is often the host) is redacted and clipped before it is
+  stored; the BirdWeather Test button no longer puts the token into its error
+  message. A "redacted" alert-rule export still carried each webhook's full address
+  (for Home Assistant, Slack or Discord that is the credential); it keeps scheme and
+  host, and importing such a rule brings it in switched off and says so. Share links
+  (`/r/{token}`, where the token is the access) were logged with their full URI at
+  `debug`, into the journal and support bundles; requests are logged by the route
+  they matched, and the query string is not logged.
+- **RTSP credentials are visible in `ffmpeg`'s command line (not fixed).** `ffmpeg`
+  takes its input address only as an argument and RTSP takes its user and password
+  only from that address. Logs and the support bundle redact it. The audio guide says
+  who can see it (anyone who can list processes on the host; nobody outside the
+  container under Docker) and what to do on a shared host: a read-only camera account,
+  or `/proc` mounted with `hidepid=2` (the unit's `ProtectProc=invisible` hides other
+  users' processes from the service, not the service from them). A way around it
+  exists and is recorded, not built: `docs/TECH_DEBT.md` TD-5.
+- **`--apply-config` can no longer be steered through a planted symlink.** It runs as
+  root in `/etc/birdnet`, which the installer makes group-writable by the service
+  user, and wrote `<target>.part` and `<target>.bak-<epoch>` through a link planted at
+  either name. Both are now created with `O_EXCL`, mode `0600`, and given the
+  target's mode and owner on the open descriptor before any text is written.
+- **The installer's downloads are https-only, and the update check names the release,
+  not `main`.** `curl`/`wget` followed a redirect to plain http over the connection
+  that carries the `SHA256SUMS` the archive is checked against; they now pass
+  `--proto '=https' --proto-redir '=https' --tlsv1.2` / `--https-only`
+  (`installer/test/downloads-are-https-only.sh`). The admin "Check for updates" text,
+  the can't-replace-the-binary message and the release notes give the `install.sh`
+  attached to the release instead of piping `main/install.sh` through `sudo bash`.
+- **The install one-liner no longer runs the development branch as root.** README, the
+  manual, the architecture notes and the installer's messages piped
+  `raw.githubusercontent.com/…/main/install.sh` into `sudo bash`: whatever `main` held
+  that second, with no release, checksum or provenance between. They now name
+  `https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh`
+  (listed in `SHA256SUMS` and attested), with `--proto '=https' --tlsv1.2`;
+  `installer/test/install-one-liner-is-a-release-asset.sh` fails on a branch-pinned
+  form. Not done: the one-liner was not run end to end, and the Docker `quickstart.sh`,
+  the compose files it downloads and `scripts/hardware-test.sh` still come from `main`
+  (`docs/HANDOFF.md` says why).
 - **The Docker quickstart no longer leaves `/admin` open to the network.**
-  `quickstart.sh` published the dashboard on every interface with no password, and
-  wrote `.env` (which can hold an RTSP URL with a camera's credentials) with the
-  default umask. It now generates a 22-character admin password as the bare-metal
-  installer does, writes it to a `0600` `.env`, and prints it once at the end. The
-  test runs the generator under `set -eo pipefail` in a process of its own on both
-  of its branches; an earlier draft of that test ran it in a `||` list, where bash
-  disables `set -e`, and passed a mutant that makes every call fail.
-
-- **A BirdNET-Pi database or CSV chosen for import, and a backup envelope read
-  back from storage, can no longer be made to exhaust the station.** Found by
-  reading the import and restore paths as someone who controls the file, and
-  reproduced against the running binary before fixing.
-  (1) A 16 KiB SQLite file whose `detections` is an FTS5 external-content table
-  over a view of its own choosing passed schema detection and then generated rows
-  and allocations of its own choosing: 100,000 rows validated in 5.8 s, and three
-  rows of `hex(zeroblob(1e8))` took the process from 120 MB to 2.4 GB. The source
-  is now opened with `SQLITE_LIMIT_LENGTH` at 1 MiB (the `rusqlite` `limits`
-  feature), refused when it defines any virtual table, and refused when it is not
-  a regular file.
-  (2) CSV validation and the header read used `BufRead::lines()`, which buffers a
-  line of any length: one 300 MB line took the process from 123 MB to 709 MB, and
-  `/dev/zero`, which the migration form accepts as a path, ended it. Both now use
-  the importer's 1 MiB capped reader, and a path that is not a regular file is
-  refused before it is read.
-  (3) The importer logged the full text of every unparseable CSV line, so naming
-  any file as the source put its contents in the journal and the support bundle.
-  It logs the data-line number now.
-  (4) The backup envelope's header carries its own argon2 cost, read before
-  anything is authenticated. A header naming 8 GiB of memory ended in an
-  out-of-memory error (an OOM kill without a `ulimit`), and one naming
-  `t_cost = u32::MAX` was still running after ten seconds; reaching either needs
-  write access to wherever the backup is stored. Reading is now bounded to
-  256 MiB, 16 passes and 16 lanes (this build writes 19 MiB, 2 and 1), and the
-  frozen-vector test of an envelope written by argon2 0.5 still decrypts.
-  Each fix was watched failing first by removing it: with the cost check gone, a
-  header one KiB over the memory ceiling derives for 8.6 s in a debug build and
-  fails afterwards as a bad passphrase.
-
-- **`rustls` 0.23.46, for four advisories published 2026-10-14.**
-  RUSTSEC-2026-0346 (client session values print TLS secrets through `Debug`),
-  -0347 (application data sent to the outer server after an ECH rejection),
-  -0348 (Brotli certificate decompression allocating up to 1 GiB before the
-  peer is authenticated) and -0349 (an unauthenticated ServerHello downgrading
-  later connections to classical key exchange) are all fixed from 0.23.46, and
-  `cargo deny` and `cargo audit` fail on 0.23.45. The refresh also moves
-  `rustls-native-certs`, `tokio`, `deranged`, `equivalent` and `zerocopy` by a
-  patch each. Reachability here is limited and was read, not tested: the
-  lockfile has no `brotli` crate, so -0348 has nothing to decompress with, and
-  nothing in the workspace enables ECH.
-
-- **The DuckDB extensions compiled into a build are pinned by sha256.** The
-  `behavioral` and `icu` extensions are native code that the daemon loads with
-  DuckDB's signature check bypassed (an ad-hoc-path `LOAD`). Four places
-  fetched them with an unchecked `curl`, and `build.rs` checked only that the
-  footer parsed and named the right engine, so whatever the registry served
-  that day was embedded. `crates/birdnet-behavioral/extension_pins.rs` now
-  lists the five builds the project ships (`behavioral` linux_amd64 and
-  linux_arm64; `icu` linux_amd64, linux_arm64 and osx_arm64) and `build.rs`
-  refuses an extension that is not one of them, or is one with other bytes.
-  The `linux_amd64` builds were also loaded by the DuckDB 1.5.6 the workspace
-  links with unsigned extensions disallowed (genuine files load; a copy with
-  one bit changed is refused); the other three platforms could not be, so
-  those pins are the registry's bytes as served on 2026-10-14. `RELEASING.md`
-  says how to update a pin.
-- **A station whose admin pages are open says so at start-up.** `docker compose up`
-  with a hand-made `.env` publishes the dashboard on every interface with no admin
-  password, and the first browser to finish the first-run wizard chooses it; the only
-  trace in the journal was a `debug` line. A station whose admin account has no
-  password now logs one `warn` naming what is open, to whom, and how to close it. A
-  station whose owner has chosen a password says nothing. The first-run flow itself
-  is unchanged.
+  `quickstart.sh` published the dashboard on every interface with no password and wrote
+  `.env` (which can hold an RTSP URL with a camera's credentials) with the default
+  umask. It now generates a 22-character admin password as the bare-metal installer
+  does, writes a `0600` `.env`, and prints the password once at the end. A station whose
+  admin account has no password (a hand-made `.env`) now logs one `warn` at start-up
+  naming what is open and how to close it.
 - **The session cookie's `Secure` flag follows the request, not `BNB_PUBLIC_URL`.**
-  It came from the scheme of that variable alone, so `--tls-mode` without it issued
-  a cookie without `Secure` on an encrypted connection (and cookies are not
-  port-scoped, so it also travelled to the plain-HTTP listener), while an `https://`
-  public URL made every sign-in `Secure`, including one from `http://192.168.1.5:8502`
-  where the browser drops the cookie and the sign-in loops. A request is HTTPS now
-  when it arrived on the station's own TLS listener, when a trusted proxy says so
-  (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or when `BNB_PUBLIC_URL`
-  is `https://` and the request's `Host` is that address. A reverse proxy should send
-  `X-Forwarded-Proto`; the nginx examples now do.
-- **A signed-out browser is no longer handed the private dashboard from cache.** The
-  service worker answers dashboard pages from cache first, and on a private station
-  that copy was the private page, returned before the server could say `303 /login`;
-  a sign-in form reached through a redirect was also cached under the page's own
-  address. The private-mode gate now marks what it serves, and its refusals,
-  `Cache-Control: no-store` (a handler's own value wins; an open station is
-  unchanged), and the worker refuses a redirected response.
-- **A feed address can no longer choose where its links lead.** `?base=` on
-  `/feeds/*` set the host of every item link, so a link on the station's own domain
-  could point at a phishing page. It is honoured only for the host the request was
-  addressed to or the host of `BNB_PUBLIC_URL`/`BNB_BASE_URL`; anything else falls back
-  to the default. A deployment whose proxy rewrites `Host` and whose readers pass
-  `?base=` must set `BNB_BASE_URL`. A lone carriage return in a species name no longer
-  starts a new iCalendar property.
+  `--tls-mode` without that variable issued a cookie without `Secure` on an encrypted
+  connection, while an `https://` public URL made every sign-in `Secure`, including one
+  from `http://192.168.1.5:8502`, where the browser drops the cookie and the sign-in
+  loops. A request is HTTPS now when it arrived on the station's own TLS listener, when
+  a trusted proxy says so (`X-Forwarded-Proto` or `Forwarded: proto=`, leftmost hop), or
+  when `BNB_PUBLIC_URL` is `https://` and the request's `Host` is that address. A
+  reverse proxy should send `X-Forwarded-Proto`; the nginx examples now do.
+- **A private station's pages are marked `no-store`, and the service worker cannot keep one.**
+  The private-mode gate now marks what it serves and its refusals `Cache-Control: no-store`
+  (a handler's own value wins; an open station is unchanged), and the worker refuses a
+  redirected response and honours `SKIP_WAITING` only from its own origin. Correction to
+  the first draft of this entry: it said the worker "answered dashboard pages from cache".
+  It never did. It was registered at an address the server does not serve, so it did not
+  run; see *Fixed* for what it is now. The `no-store` marking still stands as a guard
+  against a browser or proxy cache.
+- **A feed address can no longer choose where its links lead.** `?base=` on `/feeds/*`
+  set the host of every item link, so a link on the station's own domain could point at
+  a phishing page. It is honoured only for the host the request was addressed to or the
+  host of `BNB_PUBLIC_URL`/`BNB_BASE_URL`. A deployment whose proxy rewrites `Host` and
+  whose readers pass `?base=` must set `BNB_BASE_URL`. A lone carriage return in a
+  species name no longer starts a new iCalendar property.
+- **An uploaded migration database no longer waits in `/tmp` or leaves SQLite's
+  `-shm`/`-wal` behind.** The staged upload (up to 4 GiB) lives in `migration-staging/`
+  beside the station's database, and removing it removes the bookkeeping files SQLite
+  creates when it reads a WAL-mode file. Before, on a distribution whose `/tmp` is a
+  tmpfs that was RAM charged to the service's memory ceiling. The migration guide no
+  longer says the source is "never modified": no row of it is, but SQLite may create
+  `-shm`/`-wal` beside a WAL-mode file read in place.
+- **The DuckDB extensions compiled into a build are pinned by sha256.** `behavioral` and
+  `icu` are native code the daemon loads with DuckDB's signature check bypassed. Four
+  places fetched them with an unchecked `curl`, and `build.rs` checked only that the
+  footer parsed and named the right engine. `crates/birdnet-behavioral/extension_pins.rs`
+  now lists the five builds the project ships (`behavioral` linux_amd64 and linux_arm64;
+  `icu` linux_amd64, linux_arm64 and osx_arm64) and `build.rs` refuses any other
+  extension or other bytes. The `linux_amd64` builds were also loaded by DuckDB 1.5.6
+  with unsigned extensions disallowed (genuine files load; a copy with one bit changed
+  is refused); the other three pins are the registry's bytes as served on 2026-10-14.
+  `RELEASING.md` says how to update a pin.
+- **`rustls` 0.23.46, for four advisories published 2026-10-14**: RUSTSEC-2026-0346
+  (client session values print TLS secrets through `Debug`), -0347 (application data
+  sent to the outer server after an ECH rejection), -0348 (Brotli certificate
+  decompression allocating up to 1 GiB before the peer is authenticated) and -0349 (an
+  unauthenticated ServerHello downgrading later connections to classical key exchange).
+  Reachability here is limited and was read, not tested: the lockfile has no `brotli`
+  crate and nothing in the workspace enables ECH.
+- **`duckdb` / `libduckdb-sys` 1.10506.0 → 1.10506.1, which takes the build-time `zip`
+  from 6.0.0 to 9.0.5.** Three RustSec advisories against `zip` 6.0.0 (RUSTSEC-2026-0367,
+  -0368, -0369: `ZipArchive::extract` and `ZipStreamReader::extract` creating symlinks and
+  applying permissions outside the destination, fixed in 9.0.0) failed `cargo deny`,
+  `cargo audit` and OSV-Scanner. `zip` is a build-dependency of `libduckdb-sys` only, and
+  the call that extracts an archive sits in a `not(feature = "bundled")` module this
+  project's builds never compile, so nothing here was exploitable and the binary never
+  contained the crate. The engine is unchanged (the `10506` component is DuckDB 1.5.6, so
+  the extension pins hold).
+- **`BIRDNET_CORS_ALLOWED_ORIGINS=*` no longer aborts the service at boot.** tower-http
+  panics on a wildcard and the workspace builds with `panic = "abort"`, so the service
+  restarted into the same panic. The entry is dropped with an `error` log, valid entries
+  are kept, and with none left the policy is same-origin only. A wildcard is not turned
+  into "any origin".
+
+### Upgrade notes
+
+- **Two microphones at one site** now each record the same bird: the duplicate-prediction
+  interval is keyed by source as well as species. A one-source station is unchanged.
+
+What a station that upgrades from `0.17.1` notices without doing anything; each item
+is described under *Changed* or *Fixed*.
+
+- **Models and detection.** A *new* install runs BirdNET V2.4; an existing station
+  never changes model. `CONFIDENCE` defaults to 0.70 (was 0.75) for a station that does
+  not set it, so more detections are stored; the human-sound rule (`PRIVACY_RANK` 10)
+  is on for a station that sets neither `PRIVACY_RANK` nor `PRIVACY_THRESHOLD`, so the
+  windows around speech are not stored. On V2.4, `SENSITIVITY` now
+  means what it means in BirdNET-Pi (it was inverted). Recordings the model's rate does not
+  match (V2.4 on 44.1 or 22.05 kHz sources; V3.0 on any recording not already 32 kHz,
+  which includes every 48 kHz one) used to reach the model
+  up to one sample early and no longer do, which can move a borderline detection across
+  the threshold; V2.4 on a 48 kHz recorder is unchanged.
+- **Notifications.** `APPRISE_TRIGGER=off` now means off (it was read as "each").
+  Template values that used to arrive blank or as `0.000000` (`$latitude`, `$reason`,
+  `$listenurl` and others) are now filled in.
+- **Data.** Migrations 53 to 56 run at the first start (v0.17.1 has 52); 54 builds an index, once
+  (slower on a Pi). Stored hourly sound-level buckets keep their old readings, so a
+  top band's history steps once.
+- **HTTPS.** A local CA made by `--tls-mode self-signed` is replaced at the next start
+  (a name constraint was added); devices that imported it import `local-ca.crt` once.
+- **Sign-in.** With `CADDY_PWD` set, a password changed on the Accounts page now
+  survives a restart; edit `CADDY_PWD` to replace it.
+- **API.** `/api/v2/detections` applies `date` together with `species`; webhook
+  requests no longer use `HTTP(S)_PROXY`; the alert-rule export is version 3.
+- **Docker and tools.** `--build-arg RUST_VERSION` and `DEBIAN_CODENAME` no longer
+  exist; `--freq-shift-hz` needs ffmpeg 4.3 or newer.
+- **Known limitation.** On a V3.0 station the human-sound rule masked 3.9 % of the
+  measured windows against 37.0 % on V2.4 (`docs/book/guides/parity.md`); do not rely
+  on it for privacy there.
+
+### Changed
+
+- **A new install runs BirdNET V2.4, not the V3.0 preview.** `install.sh` and a new
+  Docker volume install V2.4 and its v2 range filter (`birdnet-behavior --install-model`,
+  SHA-256 checked); `--classifier birdnet-v3` or `BIRDNET_CLASSIFIER=birdnet-v3` chooses
+  the preview. A running station never changes model: an existing `birdnet.conf`
+  decides, and a Docker volume holding the V3.0 file keeps it unless
+  `BIRDNET_CLASSIFIER` is set. Checked with the installer and entrypoint suites on stub
+  binaries; not run: a container, a real `systemd`, or an upgrade from v0.17.1.
+- **`CONFIDENCE` defaults to 0.70, and the human-sound rule is on.** 0.70 is
+  BirdNET-Pi's own (it was 0.75). `PRIVACY_RANK` (`--privacy-rank`, default 10, `0` is
+  off) is BirdNET-Pi's rule: a window and the windows either side are dropped when a
+  human class is among the model's 10 best-scoring classes. It is on after an upgrade
+  for a station that sets neither `PRIVACY_RANK` nor `PRIVACY_THRESHOLD`, and works
+  beside `PRIVACY_THRESHOLD` (off by default; either suppresses). Against BirdNET-Pi's
+  masks with the real V2.4, 13 of 14 clips agree window for window (the 14th is a
+  synthetic clip's digital-silence tail). **On V3.0 the rule does not protect:** over the
+  same 91 clips it masks 3.9 % of windows against 37.0 % on V2.4, and 0 of 31 windows of
+  five speech recordings; nothing in this project measured a setting that does
+  (`docs/book/guides/parity.md`). `--doctor` warns about a BirdNET-Pi
+  `PRIVACY_THRESHOLD` above 0.5: the key is shared and the scale is not (BirdNET-Pi: a
+  percentage of the species list; here: the model's confidence for a human sound).
+- **V2.4 species carry BirdNET-Pi's English names.** The label file birdnet-go publishes
+  names 460 of V2.4's 6,522 classes differently ("Common Magpie" for BirdNET-Pi's
+  "Eurasian Magpie"), so an imported history would hold one species under two names.
+  `--install-model birdnet-v24` writes BirdNET-Pi's names, built into the binary and
+  checked against a digest; a station that installed the old file keeps it until the
+  command is run again by hand. `--install-model` also no longer fetches a file you
+  already have: a file under the right name whose SHA-256 matches the pinned one is
+  skipped (before, every run downloaded again: 541 MB for V3.0, 84 MB for V2.4); a
+  truncated or substituted file is fetched again.
+- **`APPRISE_TRIGGER=off` means off.** It used to be read as "each". A station that set
+  `off` and was notified about every detection should expect silence now. The settings
+  form refuses a trigger word it does not know. Hints that described another setting
+  are corrected (`PURGE_THRESHOLD` is a percent of disk, the notification cooldown,
+  the names lists, the templates, and the avahi line, which claimed the station was
+  "discoverable as birdnet.local" when all it had done was write a service file).
+- **The classifier no longer spin-waits between chunks, and the analytics engine
+  leaves it its cores.** ONNX Runtime's worker threads busy-waited after every
+  inference; off, on a 4-vCPU x86_64 host with the BirdNET v2.4 INT8 model, 52 to 54 ms
+  of CPU per inference instead of 93 to 98 ms, for 3 to 4 ms more wall time. DuckDB used
+  every core whatever the process's affinity; it now uses the CPUs available less the
+  classifier's two inference threads, at least one (2 on a Pi 4);
+  `BIRDNET_DUCKDB_THREADS` overrides. On a 4-core host with two busy loops standing in
+  for inference, two threads halved the slowest dashboard query against one without
+  slowing the competing load more than one thread did. Not measured on a Raspberry Pi.
+- **ONNX Runtime 1.31** (`ort` 2.0.0-rc.14, was rc.13 with 1.28; `Cargo.lock` now holds
+  rc.15). Every session is
+  created under one process-wide environment (`ort` allows one per process). Scores are
+  unchanged: the top 25 species of every 3-second chunk of the test recording match the
+  previous runtime to nine decimal places (x86_64, the BirdNET+ V3.0 model; not measured
+  on a Pi). `scripts/setup-onnxruntime.sh` seeds the runtime for the `ort-sys` version in
+  `Cargo.lock` (it took the first one unpacked, which after an upgrade was the old one).
+- **DuckDB 1.5.5 → 1.5.6** (`duckdb` / `libduckdb-sys` 1.10505.0 → 1.10506.0) to pick up
+  **`duckdb-behavioral` v0.10.0** and the embedded ICU for 1.5.6. v0.10.0 is built on
+  DuckDB's stable C API: its footer carries ABI `C_STRUCT` and a C API version
+  (`v1.2.0`) where v0.9.1 carried the DuckDB version, so the build script and the runtime
+  check, which compared that field to the engine's version, would have reported a correct
+  embed as a mismatch on every start. They now apply DuckDB's own per-ABI rule (exact
+  version for `CPP`, same major and no newer than the engine's C API for `C_STRUCT`);
+  `/api/v2/analytics/status` reports the embed's `abi`.
+- **`rubato` 4 → 5 and `argon2` 0.5 → 0.6** (with `password-hash` 0.6 and
+  `audioadapter-buffers` 5). A password hash and an encrypted backup written by the 0.5
+  line are frozen as tests and pass on 0.6. Session ids, CSP nonces and share keys draw
+  from one `random::fill` over `getrandom`. **htmx 2.0.4 → 2.0.11**, checked against the
+  registry's integrity hash; the 2.0.5 to 2.0.11 changelog was read for what this
+  interface depends on (the default that never swaps a 4xx or 5xx body is unchanged).
+  `THIRD_PARTY_LICENSES.txt` is regenerated (it still listed `audio-core`, which rubato 5
+  no longer uses).
+- **The design system is tokens, held by gates, and the shell has depth.** `app.css`
+  gained the scales it lacked (additive; no existing token was renamed or re-valued except
+  the elevation and fluid heading sizes): two seven-step sequential ramps, a
+  seven-step diverging ramp, data ink and mark tokens for charts, layered surfaces and
+  page washes, a warm/cool-tinted shadow family, the rest of the radius, spacing, type,
+  line-height, motion (a spring curve, `--stagger`, `--lift`/`--press-scale` zeroed
+  under reduced motion), layer, focus-ring and density tokens: **241 tokens in the light
+  block (was 135) and 90 dark overrides (was 51)**, every one documented in
+  `docs/book/reference/design-tokens.md`, whose tables and counts are generated from the
+  stylesheet (`tools/visual-qa/token-doc.mjs --check`). Raw font sizes (a ladder of 15
+  `--fs-*` tokens), spacing, radius, duration, weight, hairline and colour literals became
+  tokens, checked with the computed-style snapshot (`style-snapshot.mjs`). Badge text
+  uses `--on-fill` (it was white on bright amber in dark mode). The shell: elevation is
+  mixed from a tint instead of pure black; the top bar and phone tab bar are glass;
+  buttons, chips and segmented controls press; fields are cut in; toasts, dialogs and
+  the command palette arrive with a spring; native parts follow the page's theme (a dark
+  page no longer opens a white select menu); page titles scale to 56 px and the hero to
+  72 px (fluid); navigation cross-fades (View Transitions); all of it is off under
+  `prefers-reduced-motion` and the operator's Motion = Reduced. `prefers-contrast: more`
+  does what the High contrast setting does, `forced-colors` keeps bars and card edges,
+  and the browser's `theme-color` bar follows the theme. Tints mixed in OKLab keep their
+  hue (OKLCH walked a 16 % amber to pink). Gates: `tools/visual-qa/chart-ramps.mjs` and
+  `surface-layers.mjs` (no browser; ramps monotone in lightness, diverging poles apart
+  under protanopia and deuteranopia, page washes leaving text 4.5:1, focus ring 3:1),
+  rule 5 of `tests/design_tokens_are_the_only_literals.rs` (a raw shadow, radius,
+  duration, curve, layer or on-ladder gap fails), `tests/design_tokens_doc_matches_the_stylesheet.rs`,
+  and `tools/visual-qa/layout.mjs` (text drawn over text or a control, columns squeezed to
+  nothing, controls escaping their card, text under 9 px, at both viewports and themes; a
+  CI step in `a11y.yml`, with `layout-selftest.mjs` holding both directions: it reports a
+  painted overlap and not text an ancestor clips). Found by the same pass and fixed: form
+  hints struck through by the input above them, the Data quality histograms unstyled
+  after being folded into the Station tab, the empty Access, audit and sessions states
+  squeezed into a 92 px column, legacy admin forms without the stylesheet's control
+  style, the chord diagram's names upside down, 40 px touch targets and 16 px fields on
+  coarse pointers, and `print.css` printing absolute link addresses only. Not checked:
+  Firefox and Safari, a screen reader, the compact and comfy density settings, real Pi
+  hardware. Known and left: the `/admin/*` nav wraps to two rows at 1180 px, Quarantine uses four
+  button styles in one row, the patterns activity grid scrolls sideways on a phone, and the
+  dark-theme chart fills are a deliberate bright boost.
+- **One rule for confidence, with a key.** Five rules drew the same detection in
+  different colours (82 % was amber on the Today feed and green on the Review page).
+  One function now grades every surface: 90 % and up is *very sure*, below the
+  station's cut-off plus ten points is *borderline*, between is *sure*, so the edges
+  follow the cut-off the station chose (at 70 %: 70 to 79 amber, 80 to 89 neutral, 90+
+  green). The tiers are `--conf-*` tokens (`tokens.mjs` grades 3:1 for a fill against
+  its track and 4.5:1 for pill text), and a key is printed above each list of bars. On a
+  phone the Today feed's names wrap instead of ending in an ellipsis and the confidence
+  is shown.
+- **The header badge and the Health page read one list.** The badge graded three things
+  and the page a dozen, so a station with two cameras stalled read a green *Healthy* in
+  the header over a page saying *Needs attention*. Both build one issue list now; one
+  issue names itself ("Source stopped"), two or more read "Needs attention", and a
+  damaged or unreadable database is red. The badge reads the integrity verdict the daily
+  pass recorded and caches its two `df` readings for 25 s; it never runs the full check.
+- **The charts are redrawn on a shared kit, and their labels stay readable on a phone.**
+  `static/chart-kit.js` gives every chart a tooltip for a pointer, a finger and the
+  keyboard (one tab stop, arrow keys, an `aria-live` reading), puts one series in the
+  foreground with the rest at `--chart-dim`, and plays an entrance that reduced motion
+  switches off. On it: the activity streamgraph (every other species as one more band,
+  so the thickness is the day's real total), Today's hourly strip (night shaded, a now
+  marker, the three busiest species in each hour's tooltip), the hour-by-weekday grid
+  (average per day), detections by hour, the Trends charts (the 7-day average over thin
+  daily columns, the 30 days before as a ghost, the busiest and quietest day named), a
+  53-week calendar on the Year in review and on every species page, the weekly report, the
+  life-list curve and the confidence distribution. A day the station was not recording
+  (from the recording-effort ledger) is hatched and says so rather than drawing a silent
+  day; an hour or day still to come says "Not yet". Today's hour totals come from the
+  database, not from counting the first 1,000 rows of the day. *Who sings together* is a
+  chord diagram whose species stand in the order that crosses the fewest ribbons (a
+  staircase matrix on a phone); the dawn rings put each hour's count at the middle of the
+  hour (they were half an hour early) with a sky strip from the station's coordinates; the
+  migration ridgeline is coloured by the season a species peaks in; the Behavior tab draws
+  bursts of singing, a return-rate ledger by residency class, a before-and-after flow and
+  the morning running order. On *When active*, a soundscape terrain: the last 30, 90 or 365
+  days by hour, as a flat grid, or raised in 3D on request (three.js 0.186.1, tree-shaken
+  and vendored under `static/vendor/three/` with its hash and rebuild recipe, loaded only
+  when 3D is asked for, about 134 kB gzipped). The categorical palette is eight colours per theme graded by
+  arithmetic (the old one had two outside sRGB), the heat ramp darkens with more in both
+  themes, and a drawn empty state replaces a blank migration card. Charts are fixed-canvas
+  SVGs scaled to their card, so a label authored at 8 px rendered as small as 2.7 px on a
+  390 px screen while axe called it clean: `static/chart-text.js` raises any label that
+  would render under 9.5 px (by at most 4×), abbreviates one that then collides and hides
+  one that still does (`data-no-text-fit` opts out). Gates: `tools/visual-qa/legibility.mjs`
+  (with the fitter withheld, 17 of 78 route-and-viewport combinations failed; with it,
+  none), `charts.mjs` (hover, keyboard, dim, reduced motion, no replay, theme),
+  `charts-edge.mjs` (an empty station, one detection, sixty species with 70-character
+  names, 1.6 million detections in an hour, a 365-day range), `relational.mjs`;
+  `docs/design/charts.md` states the rules and how to add a chart. The screenshot fixture
+  is now a year with weather, seasons, flocks and days the station was off.
+- **The admin pages and the live-log viewer use the site's own layout.** They were
+  standalone documents with a different header, no tab bar, no breadcrumbs and no theme
+  toggle on a phone. They render inside the shared layout, with the admin sections as a
+  one-line strip that scrolls sideways on a narrow screen; Changelog, Notification
+  Center, Search, Quarantine and Detection Reviews also have a home tab. Quarantine says
+  why in plain words ("Unlikely here this time of year", "Below the bar set for this
+  species", with "N% likely here this week" where the range model supplied a figure). A
+  network source is labelled **Network stream** rather than "Network camera", and the
+  Capture tab's section is **Cameras and streams**. Thirteen rules authored at 8 to
+  9.5 px were raised to 10 px.
+- **`GET /api/v2/languages` says what a station can show.** Each language carries
+  `native_name`, `active` and `coverage` (`named` of `of` species in the installed
+  classifier; null for English or without a label file), and the body carries the
+  `active` code. Before, it listed all 36 languages as available.
+- **The species list fits a phone.** Below 520 px its Detections and Avg-confidence
+  columns started past the card's edge behind a sideways scroll that nothing said was
+  there; it is a wrapping table again, without the sparkline or the bar (the percentage
+  stays) and, below 400 px, without the rank. A name breaks inside a word only when it
+  must (a German compound alone made it 314 px in a 304 px card).
+- **The manual's `/dev/` is built from `main`, and each release links its own manual.**
+  On a tag push `/dev/` was built from the release tag; it now comes from `DOCS_DEV_REF`
+  (default `origin/main`). A stable release's notes link its `/vX.Y.Z/` manual. Every
+  crate tarball carries `LICENSE`, `LICENSE-UPSTREAM` and `NOTICE`
+  (`scripts/check-crate-licences.py`). The documented source install is
+  `cargo install birdnet-behavior --locked` (`ort` is required as the pre-release
+  `^2.0.0-rc.14`). Nothing is published; crates.io admits five new crates at once, then
+  one per ten minutes (`RELEASING.md`).
+- **The crates package for crates.io, and a job keeps them that way.** Nothing has been
+  published and the decision is the maintainer's (the licence is CC BY-NC-SA 4.0).
+  `cargo package --workspace` failed on the first crate that depends on another (the
+  eight internal path dependencies had no `version`; they have one now) and found two
+  real defects: the web crate `include_str!`ed `CHANGELOG.md` from outside its own
+  directory (it reads a symlink inside the crate now), and the root `build.rs` rendered
+  the manual into the source tree, which `cargo publish` verification rejects (it does
+  nothing in a package now). The root package is 826 KiB (it was 11.8 MiB, over
+  crates.io's 10 MiB limit), each library crate has a README saying it is internal, and
+  the two crates whose default features compile the bundled DuckDB build their docs
+  without it on docs.rs. `cargo package --workspace --no-default-features` (which builds
+  each crate from its tarball) passes for all nine; the `crates are publishable` job and
+  the release `validate` job run the fast form on every pull request and tag.
+  `cargo-deny` denies wildcard dependencies. A `cargo install` build has no in-app
+  `/help` manual and embeds neither DuckDB extension (they are fetched on first use into
+  `~/.duckdb`). Not done: the bundled-DuckDB build of the packaged crates, docs.rs and
+  `cargo publish` itself.
+- **Release archives and the container image carry the licence notices the binary's
+  third-party code requires.** The binary statically links 389 third-party Rust packages
+  (twelve, `symphonia`, under MPL-2.0), DuckDB with its bundled libraries and ONNX
+  Runtime, and serves four font families (SIL OFL 1.1), htmx and three.js from memory;
+  none of their notices travelled with it. `NOTICE` says in prose what is included under
+  which terms, and `THIRD_PARTY_LICENSES.txt` (generated by
+  `scripts/gen-third-party-licenses.py` from `Cargo.lock` and `third_party/`) reproduces
+  their licence texts, ONNX Runtime's own notices and DuckDB's bundled-library and ICU
+  notices. Both are in every archive and in the image at
+  `/usr/share/doc/birdnet-behavior/`. A package declaring MIT without publishing a
+  licence file is written out under the standard MIT text; any other licence
+  without a file fails the generator. The `third-party licence notices` job and the
+  release `validate` job fail when the committed file is stale or a vendored text is for
+  a different ONNX Runtime, DuckDB or htmx than the build links. `NOTICE` also records
+  that the BirdNET+ V3.0 preview 3 model's Zenodo record says CC BY-SA 4.0 and that
+  `tests/testdata/Pica_pica_30s.wav` is byte-identical to the recording in BirdNET-Pi's
+  `tests/testdata/`.
+- **Releases and CI are stricter, and pinned.** A release refuses a lightweight tag, a
+  tag off the default branch and an undated changelog heading (21 of the
+  repository's 24 tag refs are bare commits although `RELEASING.md` prescribes
+  `git tag -a`, read 2026-10-21); `install.sh`, `uninstall.sh` and `SHA256SUMS` are attested like the
+  archives and `verify-release` runs `gh attestation verify` on every asset. Release and
+  Docker builds fail (after three retries) when a DuckDB extension cannot be fetched,
+  instead of shipping a binary that needs the network at first run (the 0.13.1 fault);
+  `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` builds without them. Release and upgrade
+  builds pass `--locked`, and the release workflow first runs `cargo update --workspace
+  --locked`, which fails in seconds on a lock that disagrees with a manifest. Every
+  `uses:` line of every workflow (133 of 133 on 2026-10-21) is pinned by commit, including
+  `dtolnay/rust-toolchain` with an explicit `toolchain:` input; eleven actions moved to
+  their current releases (among them `actions/checkout` 7.0.1); every tool CI installs
+  names a version (`cargo-audit` 27.1.0, `cargo-mutants` 0.9.1, `cargo-llvm-cov` 0.22.2,
+  `pyyaml` 6.0.3, `cargo-chef` 0.1.78), the browser-QA job runs `npm ci` against the
+  committed lockfile, and the Dockerfile's two `FROM` lines name `rust:1.95-slim-trixie`
+  and `debian:trixie-slim` by manifest digest. **Breaking for anyone who built the image
+  with `--build-arg RUST_VERSION=…` or `DEBIAN_CODENAME=…`:** those arguments no longer
+  exist; change the `FROM` line. `scripts/check-ci-config.py` fails on an unpinned
+  install, a range, a base image without a digest, a builder whose Rust is not
+  `rust-version`, a workflow naming a lockfile git does not track, and a fuzz target
+  missing from the workflow's matrix.
+- **New workflows.** `fuzz.yml` runs the two `fuzz/` harnesses (audio decoder, label
+  parser) weekly (10 minutes a target) and on pull requests that touch them (60 seconds),
+  with `-O` because the release build has no overflow checks; the first local run
+  crashed `decode_audio` on a 37-byte WAV (an arithmetic overflow in
+  `symphonia-format-riff` 0.6.1, computed only to log a block-align mismatch), and the
+  input is kept in `fuzz/known/`. `codeql.yml` (`security-extended` over Rust, the
+  workflows, the served JavaScript and the Python gate scripts), `osv.yml` (fails on a
+  finding in `Cargo.lock` or the browser-QA lockfile) and `scorecard.yml` are adapted
+  from the maintainer's a2a-rust workflows. OSV reported no record for the 554 registry
+  packages in `Cargo.lock` when it was queried, and `npm audit` found nothing in the QA
+  lockfile.
+
+### Fixed
+
+- **Every page fits a 320 px phone, and the setup wizard fits a 360 px one.** The wizard's
+  stepper was a fixed 369 px, so on a 360 px phone (the commonest Android width) the whole
+  wizard scrolled sideways by 23 px, and by 8 px on a 375 px iPhone SE; the connectors now
+  take what is left. At 320 px, Today's source menu no longer sits under its Listen-live
+  link, the live feed's play buttons no longer push the page sideways, the Live view's
+  source menu is no longer cut off, and the Capture Remove buttons, the Data selects and the
+  Access password field stay inside their cards. Below 341 px a card takes 16 px of padding
+  instead of 24 px. The layout gate (`tools/visual-qa/layout.mjs`) now grades 1440, 390, 360
+  and 320 px by default (it graded 1440 and 390), and reports a control cut off by an
+  `overflow: hidden` ancestor, which it passed before. Checked in Chromium, Firefox and
+  WebKit; not on a real phone.
+- **A blank number in a form no longer fails silently.** An optional number left blank
+  (audio-source sample rate, migration confirm, quarantine pager, alert-rule hours)
+  answered a 422 that htmx never shows, so the click appeared to do nothing. Every form
+  handler now takes `HtmxForm`: blank means none, and a value that is present and not a
+  number is an error toast naming the field and never repeating the value. A client that
+  is not htmx still gets a 4xx, now as JSON. The migration clock offset used to read `abc`
+  as "none". Testing an alert rule deleted in another tab, and a BirdNET-Pi upload or
+  settings-file preview that stops arriving or passes the size limit, now say so on the
+  page. A new gate, `an_htmx_form_cannot_fail_silently`, fails on a raw `Form<T>` and
+  drives every form handler with the browser's own body. Still silent to htmx: a 403 from
+  the cross-site check or the viewer role, and a 429 from the rate limiter.
+- **The service worker is dormant, and says so.** It was registered at an address the
+  server does not serve and with a scope that would have let it keep pages that differ per
+  visitor, so it never ran. It is now registered at `<base>/static/sw.js` with scope
+  `/static/`, no longer precaches `/`, and its header says what it does and does not do. A
+  gate (`sw-state.mjs`) checks this in Chromium, Firefox and WebKit.
+- **The live log answers at once.** The stream sends a comment the moment it opens, so
+  Firefox shows "Connected" immediately instead of after the first log line.
+- **Settings Location: moving the coordinates clears a stale time zone**, so a station
+  moved to another place is not left on the old zone.
+- **A long identifier no longer widens the page on a phone.** The hint under Notification
+  Cooldown quotes `APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES`, one 385 px
+  word in a 292 px box, which grew `/station/alerts` and `/admin/settings` to 434 px on a
+  390 px phone and dragged the fixed tab bar (and its last tab) out of view. Hints, table
+  cells, code chips and file names now wrap anywhere. The layout gate gained the check it
+  lacked (a page wider than the screen, named by the element that reaches furthest) and
+  went red on the old stylesheet before the fix.
+- **Form controls look the same in every browser.** A placeholder had no style of its own and
+  measured 2.35:1 in WebKit (Safari's engine), 3.8:1 in Firefox and 4.08:1 in Chromium's dark theme; it is now
+  the quiet-text colour (at least 5.6:1) and the token gate grades it on the real fields. The
+  Listen sliders are one drawing in Chromium, Firefox and WebKit, and number fields (the
+  alert rules' hour start and end) lose the permanent stepper arrows in Firefox and WebKit
+  (the arrow keys still step).
+- **Phone layouts.** The species page's 14-day chart is drawn twice, a wide one for a card
+  and a narrow, taller one for a phone, so its labels no longer sit on the baseline, the
+  last label is not cut to "2. 0…" and the average is not written across the busiest bar;
+  the thresholds and minimum-interval tables fit a phone (their Remove buttons were cut off
+  at the card edge) and the name field takes a row of its own; the Companions table's second
+  heading is no longer clipped; "Even out clip volume" shows its chosen option; the Data
+  page's snapshot rows, Export buttons and "Save settings" no longer wrap mid-word; Year in
+  review's Milestones card stops stretching to the height of the leaderboard; the setup
+  wizard's sticky stepper is transparent until the page scrolls under it; the 3D terrain is
+  fitted to its canvas on any shape of screen (the near edge ran off the bottom of a desktop
+  one and the mesh was cropped on a phone), and its axis labels sit on a plate so a ridge
+  does not take their contrast.
+- **The published manual passes axe at every version.** The in-text link underline lived in
+  `custom.css`, which the versioned build reads from each tag, so the root and `v0.17.1`
+  manuals (a release made before the rule) failed `link-in-text-block` 16 times; it is in
+  `a11y.css`, which every tree gets.
+- **Visual-QA gates that were wrong in both directions.** The sweep reported a stuck
+  "Loading…" on `/patterns` in all four states for text inside a closed disclosure (the
+  placeholder now ships empty and the script writes it when asked; the sweep asks the browser
+  whether it is visible, with a self-test that the check still bites on a visible one), and
+  `interactions.mjs` failed at some hours of the day because the fixture seeded today only
+  up to the clock: today now always holds at least 24 detections, and `BNB_FIXTURE_NOW`
+  runs the fixture at another time of day.
+
+- **The manual and the product's own sentences name the screens the Settings section has.**
+  README, five manual pages, the `.env.example` comment and the settings page's own hint
+  still sent readers to "Station → Data", "Settings → Home Assistant & MQTT", "Settings →
+  Online services" and "Station → Access → Secure connection"; they now read
+  "Settings → Data", "Settings → Alerts → Home Assistant & MQTT", "Settings → General →
+  Online services" and "Settings → Access → Secure connection". The gate that checks them
+  no longer reads the word "Settings" inside a card called "Detection Settings" as the start
+  of a second path (it had reported 19 correct paths as wrong).
+- **Previewing the protected clips of a BirdNET-Pi import no longer takes the one writer
+  connection**, and the per-species minimum interval, the imported-settings apply, the clip
+  lock and the learned-threshold reset are listed in the writer ledger with their reasons.
+- **Importing BirdNET-Pi clips is safer.** A move (`--clips-mode move`) is refused when this
+  station's retention would delete the clips; copies keep their age; every copy is synced to
+  disk, and so is its directory, before the original is removed; only one import runs at a
+  time and a crashed import or classifier-install worker ends as Failed instead of blocking
+  every later one; applying an import writes the Apprise file only after the settings are
+  saved. BirdNET-Pi's protected clips arrive locked, so this station's cleanup keeps them.
+- **The duplicate-prediction interval is per source.** A call at a second camera is no longer
+  dropped as a repeat of the first; a one-source station is unchanged, and an earlier
+  recording arriving late (a restart backlog) no longer rewinds the gate.
+- **Start-up notices** say when `APPRISE_TRIGGER=off|none|never`, `RECORDING_LENGTH` or
+  `FULL_DISK=keep` in an existing config now takes effect, and warn that `FULL_DISK=keep`
+  is ignored when `--watch-dir` is the recordings directory. The held-recording message and
+  Station Health say recording resumes 2 points below the purge threshold, and a raised
+  threshold applies after a restart.
+- **Smaller:** a sign-in attempt made while users are unreadable no longer clears an address's
+  failure count; a failed restart signal no longer leaves a re-exec pending; the dashboard
+  picture is streamed and cannot hang on a swapped-in FIFO; spectrogram ETags include a
+  renderer revision; a learned-threshold reset matches the species whatever its case and is
+  applied while the station is idle; `MQTT_TLS`, `MQTT_RETAIN` and `MQTT_HA_DISCOVERY`
+  accept `1`, `yes` and `on`; a viewer's navigation omits Diagnostics.
+- **Supply chain (Scorecard):** `docker.yml` has a read-only workflow token with writes granted
+  per job; `mutation.yml` installs its one Python package from a hashed requirements file;
+  `upgrade-e2e.sh` no longer pipes `curl` into `python3`; `certifi` is 2026.10.19 in the tool
+  requirements (an advisory) and `osv.yml` now scans those files too.
+
+- **A viewer is no longer offered the Diagnostics link.** The viewer deny list refuses
+  `/admin/doctor`, so the admin nav's Diagnostics entry and the classifier panel's
+  "Diagnostics says why" link led a read-only account to a `403`. The admin gate now marks
+  a viewer's response and the nav row leaves the entry out (the rest of the nav is
+  untouched); the panel says an administrator can see why instead of linking. Gates:
+  `a_viewer_is_not_offered_the_diagnostics_link` and the nav, gate and panel unit tests.
+  The Station Health page and the Today checklist still name the page for everyone.
+
+**What the model hears and what is stored**
+
+- **A recording that is not 48 kHz no longer reaches the model a fraction of a sample
+  early.** The resampling library delays its output by `128 × ratio − 1` samples and the
+  code removed only the whole-sample part, so every recording whose rate is not 48 kHz
+  arrived early by `1 − frac(128 × ratio)` samples: 0.69 at 44.1 kHz, 0.38 at 22.05 kHz,
+  0.67 for 48 to 32 kHz (the V3.0 model's rate) and 1.0 for 32 to 48 kHz. The delay is
+  now made a whole number and removed, and the output length is computed in integers
+  (floating point gave 96,001 samples for 88,200 at 44.1 to 48 kHz). Against
+  BirdNET-Pi's own resampler the model's input differed by 28 % RMS on a quiet 44.1 kHz
+  clip and 19 % on a spoken-word one; it now differs by 0.16 % RMS in the median over
+  100 windows from 40 clips, at most 2.8 % (`docs/book/guides/parity.md`). In stored
+  detections: a borderline great tit in BirdNET-Pi's 44.1 kHz test clip (0.7113 there,
+  0.6564 here) fell under the 0.7 bar and was missing, so the first set stored 11 of
+  BirdNET-Pi's 12 rows and stores 12 now; the 91 rows both stored differ in confidence by
+  at most 0.0067. **V2.4 on a recorder that writes 48 kHz is untouched** (a same-rate input
+  is returned unchanged). Affected: V2.4 on any other rate (44.1 and 22.05 kHz, RTSP
+  streams, uploaded files) and V3.0 on anything that is not already 32 kHz, which includes
+  every 48 kHz recording. Detections already stored are not rewritten. Gates:
+  `a_tone_comes_back_with_no_fractional_sample_delay` (11 rate pairs) and
+  `tests/resampler_matches_resampy_parity.rs`, against resampy's own output.
+- **Every resampled recording also ran late and short** (an earlier, larger fault in
+  the same function): the start-up delay was left in, so any converted recording
+  (every default-install file, 48 → 32 kHz for V3.0; any 44.1 kHz microphone) was
+  `128 × ratio` samples late (+138 at 44.1 → 48 kHz, +85 at 48 → 32) and lost that much
+  from its end. Now `process_all`, lag under one sample.
+- **`SENSITIVITY` meant the opposite of BirdNET-Pi's on a V2.4 model.** It was applied as
+  the sigmoid slope itself (default 1.25); BirdNET-Pi and BirdNET-Analyzer use
+  `clamp(2 − S, 0.5, 1.5)` (default 0.75). A raw score of 3.12 stored 0.980 here and
+  0.912 there. It now maps as BirdNET-Pi does (`inference::model::logit_slope`). This
+  changes V2.4 results only: the bundled V3.0 ignores the setting. birdnet-go's setting
+  is the slope itself; enter `2 − value` to carry one across.
+- **A trailing remainder under 1.5 s is dropped, as BirdNET-Pi drops it.** It was kept
+  down to a quarter window (0.75 s), so a 16 s file gave a sixth chunk of one second of
+  audio and two of silence that BirdNET-Pi never analyses. Tested against a transcription
+  of `splitSignal` over six overlaps and 155 lengths.
+- **A clip cut from a 16-bit recording was not the recording's samples.** The decoder
+  reads 16-bit audio as `value / 32768` and the clip writer scaled back by 32767, so
+  32,703 of the 65,536 values came back one step smaller (and `-32768` could not be
+  written). The writer scales by 32768, rounds and saturates. birdnet-go made the same
+  change on 2026-10-15 (`a122b6b`).
+- **A model output of infinity was a 100 % detection, and a NaN from the occurrence
+  model let a species through.** Both classifier output mappings turned `+inf` into
+  exactly 1.0; a non-finite score is now never a detection, a non-finite human-class
+  score masks the clip, and the first is logged. The occurrence filter skipped a species
+  only when `score < threshold`, which a NaN never is, so an all-NaN geomodel output
+  admitted every species in silence; it is now a reported run-time failure.
+- **The frequency shift is a shift in hertz.** `--freq-shift-hz` was a ratio: with
+  ffmpeg 6.1.1 an 8 kHz tone at -3000 came out at 7,500 Hz (not 5,000) and a 3.0 s clip
+  at 3.2 s. Saved clips and the live stream use `afreqshift` (ffmpeg 4.3 or newer): 8 kHz
+  at -3000 is 5,000 Hz and the length is unchanged, measured on audio. The sox fallback
+  is gone (sox cannot shift by hertz); if the shift fails the clip is saved unshifted and
+  a warning says so. A shifted WAV also lost its species, confidence and date tags; it
+  keeps them.
+- **FLAC, MP3 and Ogg clips carried no tags.** Species, confidence and date were written
+  only when a clip stayed a WAV. The WAV is tagged before conversion and ffmpeg carries
+  the tags into the format's own (Vorbis comments, ID3); the sox fallback does not.
+- **One failing classifier silenced the rest.** On a station running more than one
+  classifier, an error from any of them failed the whole file, so a broken second model
+  stopped the primary from recording anything. A window fails only when none of its
+  classifiers answers.
+- **A bird that has lived here all year is not "new this season" on the first day of the
+  next one** (P-20). `classify` called the first detection after a season boundary new
+  even when the bird had been recorded the day before; a 7-day carry-over
+  (`SEASON_CARRYOVER_DAYS`, birdnet-go's figure) now applies. `charts.rs` has its own
+  definition of "new this season", which this does not change.
+- **The sound-level meter's top bands did not measure the band they named.** The band
+  filter's bandwidth was pre-warped for the bilinear transform but its edges were not,
+  so near Nyquist one edge landed too low and the other too high: a unit sine at the
+  20 kHz band's two edges at 48 kHz read −4.38 and −8.91 dB where −6.02 is right, and
+  the same shape shows at every sample rate. The edges are now taken through
+  `tan(πf/fs)`; both edges measure −3.01 dB to 0.003 dB in the top bands of 48, 44.1, 32
+  and 22.05 kHz. The price: a tone at the nominal centre of the 20 kHz band at 48 kHz
+  reads 0.34 dB low. A band whose upper edge reaches Nyquist is refused, so a 22.05 kHz
+  station keeps 26 bands, not 27 (48 kHz: 30, 44.1 kHz: 29, 32 kHz: 28; counted by
+  `tests/soundlevel_accuracy.rs`). White noise reads about 0.5 dB high across the bands
+  by the shape of the passband (stated in the filter's docs). `SoundLevelMeter::push`
+  returns only the newest of several completed intervals, as it always did, now
+  documented; `push_with` reports every one. Stored hourly buckets keep their old
+  readings, so a top band's history steps once at the upgrade.
+
+**A failed read is not a fact**
+
+- **A failed read is no longer printed as "nothing" or as good news.** A parse of the
+  tree (`tests/a_failed_read_is_not_defaulted_into_a_fact.rs`, one row per site in
+  `tests/data/read_default_sweep.tsv`) classifies every read whose error is defaulted in
+  its own closure; the real ones now say they could not look. API: `/api/v2/species/tracking`
+  and `/api/v2/soundlevel` answered 200 with nothing (both 500 now), `/api/v2/system/jobs`
+  answered an empty list, which reads as "nothing is due" on exactly the station that has a
+  problem (500 now), `/api/v2/analytics/status` reported an unreadable count as `0`
+  (`null` now), and `/stream` answers 503 where the table is unreadable (404 only for a
+  missing row). Pages: the suspect-species report ("Nothing looks suspicious") and the
+  dawn-sequence card ("Not enough dawn activity yet"); the species page's best recording,
+  per-species thresholds, the last backup, the live source picker, the Today pill, review
+  strip and outage banner, the Recordings grid, the live feed's "first ever" badge,
+  Station Health's microphone panel, share links, the Migration cards, the merged-history
+  note, the account and session lists; the data-quality panels ("Database quality looks
+  good!"), Species storage ("0 B across 0 clips"), the filter-test page, both rule
+  lists, the notification history, the image blacklist and the import history; the
+  Capture tab ("0 mics, 0 streams" with two add forms) and the Listen default; and
+  sign-in, which blamed the password for an unreadable users table. A blacklisted image is
+  no longer served when the blacklist cannot be read. A user or session change that went
+  through is reported as done even if the list cannot be redrawn, a panicked Station tab
+  says so instead of rendering blank, and a failed approval no longer quotes the
+  database's error.
+- **A refused bulk species action no longer reports "0 removed" and deletes the audio.**
+  The clips handler marked rows reclaimed, defaulted a failure to zero and went on to
+  unlink every file of the species. It stops at the first refusal, answers 200 with a toast
+  (htmx discards a 5xx body) saying only what is certain, and writes no audit row for a
+  change that did not happen. **An unreadable species list is no longer replaced by the
+  one name just added**: the include, exclude and whitelist handlers read the stored list
+  with `.ok()`, so forty excluded species became one. Only a list that was never written
+  is empty; the handlers say so when a list cannot be read or written. The daemon still
+  treats an unreadable list as empty (logged at `warn`).
+- **BirdWeather is never sent a position the station does not have.** A station with a
+  token and no (or an unparseable) `LATITUDE`/`LONGITUDE` built its client at 0°, 0° and
+  posted every detection to a public map in the Gulf of Guinea. The client refuses a
+  position that is missing, not finite, off the globe or exactly 0, 0; one start-up
+  warning says which value is wrong; `--doctor` has a "BirdWeather location" check; and
+  uploads an earlier version parked at 0, 0 are dropped with a warning. A BirdWeather
+  token pasted with a trailing newline or space failed every upload: it is trimmed on
+  save and when the client is built, a token with anything but letters and digits is
+  refused with a reason, and it is encoded as the single path segment it is.
+
+**Database, concurrency and speed**
+
+- **A request waiting on the database no longer stalls the others.** 170 places in the web
+  server and the daemon's background tasks read or wrote a database directly on an async
+  worker thread (most through a helper such as the audit-log write, which 43 admin
+  actions call), so while the detection writer held the database, every page, script and
+  live socket on that thread waited too (a Pi 4 has four). All of them run on the
+  blocking pool (`AppState::run_blocking`), startup's ten one-off reads excepted. The
+  gate also covers `std::fs` now: 42 calls in 28 async functions moved to `tokio::fs` or
+  the blocking pool (avatars, recordings, spectrograms, HLS, backups, TLS reload, the
+  maintenance loop). With one worker and the database lock held, a static script was not
+  served within 5 s before and is served at once now. An admin change and its audit-log
+  row are written together, so a client that disconnects between them cannot leave a
+  change unrecorded.
+- **Only writes take the writer connection now, and the analytics store has readers.**
+  `with_db` is the one SQLite connection the capture daemon's inserts share, and 223
+  `with_db(` lines in 56 files of `birdnet-web/src` took it, so a page that only read
+  waited behind a detection being stored. 117 production sites that only read (found by
+  classifying every one) use `with_read_db` (the pool of read-only connections),
+  including the three on every authenticated request; the session's `last_seen` is
+  rewritten only once it is a minute old. What remains on the writer is listed with its
+  reason in `crates/birdnet-web/tests/writer_lock_sites.txt` (55 sites), and
+  `the_writer_lock_is_for_writing` fails when a new one appears. The DuckDB analytics store
+  had one connection behind one `Mutex`, so a six-second retention query held the status
+  badge and every chart behind it; it has two more connections for reads
+  (`with_analytics_read`, `with_timeseries_read`; 35 call sites moved). Not measured: the
+  throughput of concurrent heavy analytics queries, and Raspberry Pi behaviour.
+- **Sixteen visitors to the public heavy pages could keep the station from answering
+  anything else.** The RSS feeds, the four detection exports, the insights routes and the
+  migration cards read the whole history through the writer's connection. They read through
+  the pool now, and a heavy-read gate (half the pool, at least one) keeps them from taking
+  every reader: past it a heavy request waits for a slot (exports, insights, analytics
+  fragments) or is refused with `503` and `Retry-After: 15` (the three feeds, which
+  aggregators poll). On a 300,000-row station (debug build, four cores) with sixteen heavy
+  requests in flight, `detections?limit=1` took 38.9 s before and 0.01 s after, `/species`
+  10.5 s and 0.07 to 0.10 s. A single `rare.rss` is not faster (5.2 s, then 4.6 to 4.9 s).
+- **The rare-bird feeds and the "has this species been heard before" probes seek by species
+  and date.** Every index that could answer led with `Date` or the species alone, so each
+  probe read every row of the species. Migration 54 adds `idx_detections_species_date
+  (Com_Name, Date)` and the feed's query states its window as a `Date` range too (the index
+  alone made the old query slower, 17 s against 3.25 s). On 300,000 rows: 3.25 s to 0.94 s
+  for `rare_species_days = 30`, and **300 s to 0.96 s for `rare_species_days = 0`**. Cost:
+  0.30 s to build, +8.2 MB on a 147 MB database; a Pi builds it slower, once, at the first
+  start after upgrading.
+- **The retention analysis took 74 seconds on a 300,000-detection station and held the
+  analytics connection the whole time.** The query joined every pair of a species' active
+  days; it now joins only the days within the longest interval, which cannot change an
+  answer. 74.4 s before, 6.65 s after, 150 species rows identical.
+- **`analytics/phenology` and `analytics/abundance` answered 503 on every station** (the
+  `duckdb` crate panics when asked a prepared statement's column names before it runs; the
+  catch-all arm turned the panic into "analytics database not configured"). Both answer, and
+  they no longer truncate decimals (`detections_per_hour` of 0.43 reached the JSON as `0`,
+  a `DECIMAL` 2.5 as `3`); FLOAT columns render at their own precision.
+
+**Analytics**
+
+- **Birds heard together are no longer reported as heard in order.** BirdNET stamps every
+  species in one audio chunk with the same instant, and the funnels and sequence patterns
+  counted such a pair as ordered both ways, so the dawn running order and
+  `/analytics/funnel` / `patterns` / `sequence-count` credited orders nobody observed.
+  Funnels use `'strict_increase'` and patterns require each step strictly after the last;
+  detections 3 s apart still count. The neighbour card no longer reports a species heard in
+  the same chunk as its "next" or "previous" one. Step times on a clock-change day take each
+  detection's own recorded wall clock (a step heard at 03:30 on Europe/Berlin's
+  spring-forward day read `02:30`). The follow-on card never showed a prediction (it found
+  the latest detection with `ORDER BY rowid` on a view, which SQLite 3.53 rejects, and the
+  error became "No detections yet.").
+- **One bad row no longer takes an analytics page down.** A detection whose `detected_at_utc`
+  is NULL while its date and time still parse has no instant and forms a day group of its
+  own; on it `behavioral` v0.10.0 returns NULL from `sequence_match` / `sequence_count`
+  and `sessionize` a NULL session id, and each failed its whole query on decode (the
+  funnels reported that day as "0 steps"). Every builder that orders by the instant now
+  leaves such rows out. A row with an unparseable time, or no parseable date, no longer fails
+  the Time series sessions card and the hourly, accumulation and sessions endpoints.
+  `AbsenceStreak` did not parse and `TumblingSpec` rejected the ISO dates it documents (both
+  public builders with no caller); both run, and every public query builder is executed by a
+  test.
+- **Effort-corrected abundance divided by effort as of the last restart.** Recording effort
+  reached the analytics store only at startup, so each week since then had too few listening
+  hours, or none. The last two days are re-copied after every effort sample; the copy is one
+  transaction (a failed copy used to leave the table empty).
+- **Migration "Earliest vs last year" no longer prints −356 d.** A station that began
+  recording late last year compared a resident's first date this January with its first date
+  last December and called the difference an arrival. The tile needs last year to have been
+  recorded from its start, ignores first dates in the first four weeks of a year, and says
+  "last year was only partly recorded" otherwise.
+- **Year in Review mixed three periods under one year.** Its masthead said "Year in review ·
+  2026" but the totals, species count, leaderboard and days of listening were all-time and
+  the busiest day the trailing 366 days. Every figure is 1 January to today. Species tied on
+  count in the leaderboard and the weekly report are ordered by name.
+- **A species page told the truth only about birds with recent detections.** Its "last 14
+  days" chart drew the 14 most recent days *with* a detection (a bird heard once a week
+  filled it with three months); it draws the last 14 calendar days and says "Not heard in the
+  last 14 days" when there are none. A bird this station has not heard got "Species not
+  found." in a bare paragraph that collapsed the stats row; it gets the four tiles, honestly
+  empty. When every clip of a species has been reclaimed by retention, the Best detection
+  panel says so instead of "No recording captured for this species yet".
+- **`/api/v2/detections` ignored `date` whenever `species` was given.** Every filter applies
+  together now, through the filter the search page uses; `species` also matches a
+  scientific name and ignores case (as documented); an empty `species=` means no filter;
+  `total_count` is always present and counts the filtered set.
+
+**Configuration and operation**
+
+- **A password changed on the Accounts page no longer reverts at the next restart while
+  `CADDY_PWD` is set.** Every start put `CADDY_PWD` back when it differed from the stored
+  hash. The station keeps a hash of the `CADDY_PWD` it last applied in
+  `admin-password.applied` beside the database: an unchanged `CADDY_PWD` leaves the
+  Accounts-page password alone and logs a warning; an edited one still replaces it. A
+  station upgrading from a release without the record applies `CADDY_PWD` once (so an owner
+  locked out by an edited config still recovers).
+- **Notification templates sent blanks and zeros for the station's own values.** `$latitude`
+  and `$longitude` printed `0.000000` on every push, and `$reason`, `$cutoff`, `$sens`,
+  `$overlap`, `$listenurl`, `$friendlyurl` and `$image` were replaced with nothing (a migrated
+  body ending in `($reason)` rendered `()`). Each carries what the station knows: its
+  coordinates (nothing for a station that has none), the confidence bar the detection
+  cleared, the sensitivity and overlap used, and BirdNET-Pi's `$reason` wording (`detection`,
+  `first time today`, `only seen N times in last 7d`). The links use `BNB_PUBLIC_URL`, then
+  `BNB_BASE_URL`, then `http://<hostname>.local:<port>`, empty when none can be worked out.
+  `$friendlyurl` is BirdNET-Pi's Markdown `[Listen here](…)` link. The variables are listed in
+  the manual for the first time, and the `.env.example` comment that said `BNB_PUBLIC_URL`
+  "reuses" `BNB_BASE_URL` (it does not) is corrected.
+- **A systemd `MemoryMax=` was invisible to the memory ceiling.** The ceiling was read from
+  `/sys/fs/cgroup/memory.max`, which does not exist on cgroup v2 outside a container, so
+  with the shipped unit's `MemoryMax=1G` the ceiling came out as the machine's RAM and a
+  second classifier could be admitted that the unit then killed. The limit is found from
+  `/proc/self/cgroup`, the tightest on the path to the root, for cgroup v1 and v2. Tested
+  against a directory tree laid out as the kernel does; not confirmed on a Pi under cgroup v2.
+- **Listening live to a camera ignored its transport.** The live stream always asked for
+  TCP, so a UDP-only camera could be recorded but not listened to. It uses the source's
+  transport and media mode (changeable on the edit form); the add form no longer calls
+  `auto` "TCP w/ UDP fallback" (it is TCP, with no fallback).
+- **`--doctor` failed every stream URL that was not `rtsp://`**, and a failed doctor stops
+  the service starting. It probes each protocol's port and skips UDP and SRT. A camera that
+  refused the connection said why only at `debug`; it is a warning.
+- **The audit log records the page-side mutations the API's already recorded.** Deleting,
+  locking, unlocking and relabelling from the Today list, the Clips page and the Search bulk
+  bar, review verdicts, quarantine approve/reject/delete, image blacklist changes,
+  notification prune, backup delete and the suspect-species exclude each leave a row with the
+  signed-in user as actor, only when the write took effect (new actions: `detection.relabel`,
+  `quarantine.*`, `image.blacklist.*`, `notification.prune`, `data.backup.delete`).
+- **Settings hold more values to what the daemon accepts.** Segment Duration (and
+  `PUT /api/v2/settings`) refuses a length outside 3 to 600 seconds, a fraction or a unit,
+  and its input allowed 5 to 60, which blocked saving on a station whose valid value was
+  120. The API runs the same checks as the page (language, BirdWeather token, recording
+  window, clip format, info site). A fixed recording window that does not end after it
+  starts is refused, since the scheduler ignores it and records all day; `--doctor` warns
+  about one in `birdnet.conf`.
+- **Docker deleted an operator's own model.** `docker/entrypoint.sh` checked any
+  `BIRDNET_MODEL` against the V3.0 digest, removed a mismatch and downloaded V3.0 under that
+  name, destroying a V2.4 or Perch model. Only files at the default paths are managed.
+  Model catalogue URLs follow no branch (`perch-v2` pointed at HuggingFace `resolve/main/`);
+  it is pinned to the revision whose LFS metadata lists the same sha256 and size, and
+  `no_catalogue_url_follows_a_branch` keeps it so.
+- **`Station → Access` shows an invited viewer once**; the unlinked `/pages/quarantine-pending-count` is gone; a
+  blank invite label is stored as no label; the range-filter list shows 25 species and
+  appends the next 25 in place (about 1,800 px on a phone, from about 4,900).
+
+**Pages and charts**
+
+- **Names on the co-occurrence chart no longer run into each other, and the life-list total
+  is no longer written across its own curve.** The chord diagram wrote each name at the
+  middle of its arc, so species heard with few others had their names drawn across one
+  another; names are pushed apart along the ring only as far as it takes. The life-list chart
+  ended at its highest point, so its label was clamped *below* that point with the curve's
+  last stretch through it; the plot leaves headroom and the label sits above. A phone could
+  be pushed 84 px sideways by the Data tab, which printed the database's full path
+  unwrapped. The layout gate skipped every `<svg>`, so it could not see the first two; it now
+  grades chart labels as the turned rectangles they are. It does not see a line crossing a
+  label (the life-list defect was found by looking at the picture).
+- **Smaller page defects.** The Settings page printed `source\'s` (a Rust escape inside a
+  raw string); the species page's Detections tile read `2583` under a `2,583` pill; a
+  detection's Details table labelled half its rows in another style; Diagnostics overflowed
+  a phone once models were configured (a finding quoting a model path cannot break); the
+  empty and failure fragments drew an `<h3>` under an `<h1>` (axe `heading-order`); Station
+  tabs had up to four `<h1>`s and restyled the whole page (five folded-in pages brought
+  stylesheets with rules for bare `input`, `label`, `table`, `h1` and `code`, which displaced
+  the header's search box); a stray `<clip>` showed the Raven export path as
+  `recordings//raven.txt` and a report closed one `<div>` too many; the count over the
+  tallest bar of both bar charts was drawn outside the SVG; the Today "Getting ready" links
+  were told apart by colour alone and the species list told a station that had heard nothing
+  "No species match this filter yet." (found by sweeping a station with no detections,
+  `QA_EMPTY=1`); a focused control kept its shape and a 2 px ring 3:1 against its
+  background (`:focus-visible` had squared off 948 of 1,156 focus stops); digits are
+  tabular everywhere (280 of 879 figures were proportional); the sign-in fields have a 3:1
+  edge; placeholders have the shape of what replaces them and the weekly-report column no
+  longer widens in steps; the onboarding wizard opens with the card that matches the stored
+  threshold, whether written `0.7`, `0.70` or `.7`.
+- **The manual's images and directions follow the interface.** Every image in
+  `docs/book/images/` (24 desktop, 24 phone, the share page and the wizard's Accuracy step)
+  was regenerated from a fixture built from this tree and looked at; they had been taken on
+  v0.8.0, and `detection-detail.png` was the "Detection not found" page. Rendering them
+  showed the text sending readers to places that were never there: *Station → Capture*
+  where the navigation says Settings, *Settings → Accounts* (the tab is Access),
+  *Settings → Location has a detect button* (that is the wizard's), *Admin → Settings →
+  MQTT* (MQTT has no settings page), *Normalise Clip Loudness* (the control is "Even out clip
+  volume"). The manual, wizard, dashboard checklist, doctor, station-health alert and the
+  installer's config comment are corrected, and the heading on every Settings tab reads
+  "Settings — Capture". `the_text_names_the_screens_the_ui_has` checks every Settings
+  breadcrumb in the manual, README, Rust sources and installer against the tabs the page
+  renders; it failed on 6 of 6 headings and 42 breadcrumbs before. It does not check the
+  step after the tab, or prose that names a screen without an arrow. The Today Page Layout
+  editor is only on the full `/admin/settings` page; the manual now says where.
+- **The published manual.** "Suggest an edit" was a 404 on every page (mdBook 0.5 expands
+  `{path}` from the book root; `scripts/check-book-links.py` now fails on an edit link that
+  names no file: 46 findings before, 0 after). Links in running text were told apart by
+  colour alone, four tables had an empty first header cell, and scrolling tables and code
+  samples could not be reached from the keyboard; axe found all three and the fixed pages
+  report none. The accessibility stylesheet reaches every released manual
+  (`docs/book-theme/a11y.css`, copied into each tree by `build-versioned-docs.sh`), and
+  the docs site gate loads the built site in Chromium: the version switcher on the 404
+  page, a phone's menu bar keeping its title, and axe at WCAG A/AA on six pages in two
+  themes at two widths. Three book defects the release rehearsal found: `parity.md` said
+  `CONFIDENCE` 0.70 was this project's "since v0.17.1" (it was 0.75 up to and including
+  v0.17.1), `migration.md` swallowed "<name> on <host>" as an HTML tag, and `settings.md`
+  jumped from h1 to h3.
+- **Documentation that was not true.** The FAQ and installer said the default model is "the
+  same neural network BirdNET-Pi uses" (it was its successor); three pages described a
+  rain-and-wind "quality pre-filter" that does not exist; the tuning guide gave a default of
+  0.7 (it was 0.75, and is 0.70 now); `SF_THRESH=0` was labelled "disabled" while a species the
+  occurrence model has no entry for is never let through; the stored `week` was called the
+  ISO week (it is the 48-week value); the overlap docs said 3-second windows (V3.0's is
+  4.5 s); the audio docs described an "Add-RTSP wizard" that does not exist; the guide and the
+  OpenAPI description counted the token-gated API wrongly (ten bearer writes and eight reads
+  are eighteen; `the_prose_counts_what_the_route_tables_hold` keeps them honest); the
+  architecture documents called the resampler polynomial (it is windowed-sinc); `--labels-dir`
+  was documented with `labels_de.txt` (the loader reads `de_labels.txt`); a species card
+  told you to pass `--image-cache-dir` with the cache configured. **`--doctor` said a missing
+  model "will use the bundled default at startup"**: no default is bundled, and with no
+  model the web UI runs and the detection daemon does not start. It is a warning naming both
+  ways to install one; the analytics line says an embedded extension is in release binaries
+  and that a build from source or `cargo install` fetches it on first use.
+- **OpenAPI.** Ten served paths were missing (the API root, `analytics/abundance`,
+  `analytics/phenology`, `detections/export/raven`, the per-clip Raven and Audacity tables,
+  `soundlevel`, `species/tracking`, both WebSockets), and `GET /api/v2/display` (the clock
+  and temperature defaults) had no entry. A gate reads the router and fails by name on a
+  route with no entry or an entry no route serves. Redocly itself was not run.
+
+**Continuous integration and release**
+
+- **The gates and workflows had defects of their own.** The layout gate reported text that
+  is cut off and not drawn (the Today feed's "Ruby-throated Hummingbird" on a phone), which
+  failed its first CI run; it clips each text rect to every ancestor that clips its overflow,
+  and `layout-selftest.mjs` holds both directions. Six `# observed` job durations were stale
+  (`scripts/check-ci-config.py` compares them with recent runs). `coverage.yml`'s Codecov
+  step tested `env.CODECOV_TOKEN` before its own `env:` existed, so the upload could never
+  run; the sticky pull-request comments in `coverage.yml` and `mutation.yml` ran on forks,
+  whose token is read-only, and now skip them; the release notes' download table omitted
+  the macOS archive. The MSRV job and the Docker builder were not running the MSRV (a
+  `rust-toolchain.toml` naming `stable` outranks `rustup default`, so "MSRV (Rust 1.95)" ran
+  the current stable); the job exports `RUSTUP_TOOLCHAIN` from `rust-version`, asserts
+  `rustc --version`, checks `--all-targets --locked`, and `.dockerignore` leaves the file out
+  (`cargo check --workspace --all-features --all-targets --locked` passes on 1.95.0 with no
+  warnings). The mutation and supply-chain workflows' scheduled runs were cancelled by every
+  merge (they shared a concurrency group); they have their own. The browser-QA lockfile was
+  ignored by two `.gitignore` files while `osv.yml` and the `a11y` job named it; it is
+  tracked. `typos` read the DuckDB Foundation's Dutch legal name as a misspelling.
+- **Release rehearsal fixes.** The Homebrew formula template named files and steps that do
+  not exist (a `.tar.gz.sha256` sidecar the release deletes, `docs/MACOS.md`, a
+  `birdnet.conf.example` nothing provides) and did not install `NOTICE` or
+  `THIRD_PARTY_LICENSES.txt`; it is still a template with a zero sha256. The issue chooser's
+  two contact links led nowhere (Discussions are off; private vulnerability reporting is
+  off), as did `SUPPORT.md` and `CODE_OF_CONDUCT.md`'s enforcement contact; the PR template's
+  gates omitted `--all-features`; `CONTRIBUTING.md` lacked a fresh machine's prerequisites;
+  `docs.yml` gained the tag gate `docker.yml` has (a stable tag off `main`, or one whose
+  `Cargo.toml` names another version, moved the site root to that manual while `release.yml`
+  rejected it); `RELEASING.md` and `CITATION.cff` (which named the V3.0 network) are
+  corrected.
+- **Smaller:** test passwords are built at run time (62 literals CodeQL would follow into a
+  `password` parameter) and `tests/no_literal_reaches_a_credential_parameter.rs` refuses a
+  new one; the six `TODO(O-nn-followup)` comments are resolved or recorded in
+  `docs/TECH_DEBT.md`, and a test refuses a new one; 24 `#[allow]` attributes that silenced
+  nothing are deleted and 19 more trimmed to the lints they still silence.
+
+### Added
+
+**Setting up and moving in**
+
+- **A new station can be set up from the browser alone.** The setup wizard has a Model
+  step (install the 54 MB classifier with a progress bar, SHA-256 and free space
+  checked), a microphone picker listing the sound cards with a two-second level test (or a
+  stream address, or a device name), plain-language accuracy and alert presets, and a last
+  page that restarts the station (systemd restarts it; a binary started by hand shuts down
+  cleanly and re-executes itself). Each Settings field says whether it applies immediately
+  or after a restart (one table, `settings/applies.rs`, each entry naming the consumer that
+  was read), and a banner lists changes still waiting. 34 more settings have a form (MQTT
+  trust files, alert limits, species filters, backups, storage, BirdWeather threshold and
+  blur, embed origins; `EXTRA_SETTINGS`), and `docs/book/reference/where-to-change-it.md`
+  lists every known config key, setting and flag with its page or the reason it is
+  file-only; a test fails for one with neither. Fifteen numeric settings are range-checked
+  at the form, the API and `--doctor` (`validate::FIELD_BOUNDS`; warnings in the file, since
+  an error would revert the whole station to its last-good file); `RECORDING_LENGTH` is read
+  as `SEGMENT_DURATION` when that is absent. Not run: the microphone list and level test on
+  real hardware, and a restart under systemd.
+- **Moving from BirdNET-Pi is a browser flow, and a settings file is read key by key.**
+  `Station → Data → Move from BirdNET-Pi` takes your `birdnet.conf` (and `apprise.txt`,
+  `body.txt` and the three species lists) and shows every line as a table (imported,
+  converted, needs a look, set in `birdnet.conf` only, not carried, left as it is, or
+  refused) before anything changes; Apply writes through the same validation as the
+  settings page, and one audit row names only the keys. The mapping lives in one table
+  (`birdnet_migrate::conf::RULES`) that the importer, `--doctor` ("BirdNET-Pi's X is our
+  Y", or plainly "no equivalent") and the generated table in
+  `docs/book/guides/migration.md` all read. Secrets (BirdWeather ID, Apprise URLs,
+  passwords, RTSP and Flickr credentials, the heartbeat URL) are shown only as "(hidden, N
+  characters)" and never logged; BirdNET-Pi's habit of notifying on every stored detection
+  is written down as an explicit `notify_confidence = 0` rather than silently becoming
+  this station's 0.80; the species lists are added to, never replacing, the station's own;
+  `apprise.txt` is copied into the data folder, **which the full backup does not include**.
+  CLI: `--import-birdnet-pi-conf PATH` (a dry run unless `--apply-import`).
+  `a_birdnet_pi_conf_is_planned_key_by_key` runs BirdNET-Pi's own 60-key default file
+  through it. Before this, 40 of those 60 keys were reported by `--doctor` as "not a
+  setting this station reads".
+- **Your BirdNET-Pi recordings come with the detections.** The same page imports the clip
+  tree (`By_Date` or `Extracted/By_Date`) in copy, hard-link, move or leave modes, with a
+  dry run, a disk-space check (a copy that would push the disk past the purge threshold
+  is refused), a path check that never follows a name out of the tree, a progress bar and
+  a resumable second run; imported detections play from `/api/v2/recordings/...`. CLI:
+  `--import-birdnet-pi-clips PATH --clips-mode MODE`. Imported rows keep BirdNET-Pi's ISO
+  `Week` and are marked by `import_batch_id`; this station stores its own 48-week-year
+  week, so grouping imported and new rows by week mixes two calendars. Written against a
+  synthetic tree in BirdNET-Pi's real layout, not a real installation.
+- **Notification triggers are independent.** `APPRISE_TRIGGER` / `notify_trigger` accepts a
+  list (`each,new-species,new-species-daily`) and `off`; BirdNET-Pi's three flags (every
+  detection, first of a species ever, first of a species each day) can be set in any
+  combination. **Not the same as BirdNET-Pi:** it sends one message per matching rule; this
+  station sends one message with every reason joined. Tested against a transcription of
+  BirdNET-Pi's `notifications.py` over all eight flag combinations. The settings page offers
+  the five common choices and keeps a list it cannot name as "Several rules".
+- **`FULL_DISK=keep` is honoured.** The setting `full_disk_action` (`purge` by default, as
+  before; `keep` for BirdNET-Pi's "keep everything, stop recording") makes the recordings
+  disk manager stop deleting and raise a recording hold; capture stops, resumes once usage
+  is 2 points under the threshold, and the hold is the `birdnet_recording_held` metric and
+  a Station health condition. Only the recordings directory takes `keep`; the stream
+  directory still purges. A migrated "keep" station never has a clip deleted.
+- **BirdNET V2.4 is installable, and measured against BirdNET-Pi.** `--install-model
+  birdnet-v24` fetches birdnet-go's published FP32 ONNX of the network BirdNET-Pi and
+  birdnet-go run, with its labels; `birdnet-v24-range-v2` fetches the matching occurrence
+  filter. Both URLs are pinned to a repository revision and a sha256. `tools/parity` runs
+  BirdNET-Pi's own unmodified code on its FP16 TFLite model and writes goldens;
+  `tests/v24_matches_birdnet_pi.rs`, `tests/v24_range_filter_matches_birdnet_pi.rs`,
+  `tests/parity_dump.rs` and `tests/resampler_matches_resampy_parity.rs` diff this project
+  against them, and CI fetches the models, checks their sha256 and runs them. What was
+  measured, what differs and why is in `docs/book/guides/parity.md` (120 recordings:
+  native-48 kHz audio decodes bit-identically; the same set of labels at or above 0.7 in 899
+  of 900 windows; the range-filter model returns BirdNET-Pi's exact species list for all 265
+  (place, week) questions). `tools/model-convert` converts BirdNET-Pi's two range-filter
+  models to ONNX (max difference 3.7e-6 from TFLite over 1,344 calls; v1, BirdNET-Pi's
+  default, is not hosted anywhere, so it is not in the catalogue). `GET
+  /api/v2/models/catalog` gains `use`.
+- **The species whitelist, with BirdNET-Pi's meaning.** BirdNET-Pi's
+  `whitelist_species_list.txt` lets a species through the occurrence filter when the range
+  model holds it back, and does nothing else (its `run_analysis` checks the include list,
+  then the exclude list, then occurrence-or-whitelist). The core filter had a `whitelist`
+  field nothing set, which added the whitelist back *after* both lists, overriding them. It
+  is settable under Station → Capture → Species ("Always allowed") and in the Settings form
+  (`species_whitelist`), re-read by the daemon within about half a minute, and applied in
+  BirdNET-Pi's order. It matters only on a station with a location and an occurrence model.
+  `SpeciesFilter::set_lists` takes a `SpeciesLists`.
+- **"Why isn't a bird heard here?"** `GET /api/v2/species/occurrence` and the page
+  `/species/occurrence` show what the range filter says about a species for the station's
+  place and a week: the model's probability, the threshold in force and whether the station
+  admits it, with the reason (the range model, or your lists). A species page for a
+  held-back bird links to it. The answer is a 503 with a `reason` when the station has no
+  location, range model or a model that failed, never an empty list; the position is shown
+  rounded to 0.1 degrees. The first ask loads a second copy of the range model (14.7 or
+  29.5 MB on disk; its memory was not measured); an answer is kept for 60 s.
+- **Bird names in 35 languages besides English.** Choose one under *Settings → System &
+  Display → Common-name language*, or set `DATABASE_LANG` (`--lang`, `BIRDNET_LANG`); it
+  applies when the station next starts. The names are BirdNET-Pi's `model/l18n` tables at a
+  pinned commit, reduced to the genuine translations and compiled into the binary: 7,008
+  species across 35 languages (`crates/birdnet-core/data/l18n/`, with each source file's
+  sha256 and `scripts/build-species-names.py`). Only what is *drawn* changes: a detection is
+  still stored under the classifier's English name, so switching language splits nothing,
+  species lists keep working, and links, forms, the JSON API, exports, MQTT and webhooks
+  carry the stored name. Pages, feeds, notifications, the weekly report and the live feed
+  draw the translated name, and the search boxes and command palette understand a name
+  typed in that language. A language does not name every species: the Settings picker,
+  `--doctor` and `GET /api/v2/languages` say how many of the installed classifier's species
+  each names, and a species without a name keeps the classifier's. Before, the setting was a
+  dead control. Held by `every_name_a_reader_sees_is_in_the_stations_language` (31 pages
+  and feeds fetched from a German station show German names and none of the English ones).
+  Limits: the sort order is the stored name's; an alert rule's webhook body carries the
+  stored name; non-Latin scripts need a system font a bare Pi kiosk may lack; the names are
+  upstream's and unreviewed; and whether names derived from Wikipedia may be combined with
+  CC BY-NC-SA 4.0 is open (`docs/HANDOFF.md`). `docs/book/admin/species-names.md`.
+
+**Listening, display and parity with birdnet-go**
+
+- **Listening and display options.** Every player can boost a quiet clip (to +24 dB), cut
+  low rumble and run a compressor in the browser, ending in a soft limiter
+  (`static/listen-fx.js`; the settings live in the browser, and the stored recording and
+  the download are never changed); `tools/visual-qa/listen-fx.mjs` renders real clips
+  through the page's own graph and fails if the output exceeds the limiter's ceiling (its
+  counterpart without the limiter must go over full scale). Spectrograms take a colour map
+  (viridis, still the default, magma, inferno, grey, inverted grey) and a dynamic range
+  (60, 80, 100 or 120 dB, default 80) that show on the next image: the answer is revalidated
+  instead of kept an hour. The Today page can show one picture with a title
+  (`dashboard_image`: BirdNET-Pi's `CUSTOM_IMAGE`, a webcam frame written to a file; images
+  only, by their first bytes, at most 8 MB). The clock (12 or 24 hour) and temperature (C or
+  F) have a station default and a per-browser choice through one formatter
+  (`GET /api/v2/display`), and a test fails on a hand-written time or temperature; chart axes
+  and tooltips keep 24-hour. `IMAGE_PROVIDER=avicommons` adds AviCommons photographs (no
+  key; CC0, CC BY and CC BY-SA only). Opus and AAC clip export is declined: the decoder
+  cannot read them. The help text of `custom_image_dir` no longer claims to be
+  `CUSTOM_IMAGE`.
+- **birdnet-go parity: P-2, P-9, P-10, P-11, P-12, P-14, P-15, P-21, P-22.** A per-species
+  minimum interval between detections, 1 s to a day (`species_intervals`, migration 56;
+  Station → Capture → Species; a species without a row uses `DUPLICATE_INTERVAL_SECS`);
+  MQTT client-certificate TLS (`MQTT_CLIENT_CERT`/`KEY`, a pair or neither, `--doctor`
+  checks the pair); `EMBED_ORIGINS`, an origin list (never `*`) that may frame the station
+  (`frame-ancestors 'self'` plus the list); learned dynamic thresholds listed, counted and
+  reset (`GET /api/v2/dynamic-thresholds`, `…/stats`, `…/{species}`; a bearer `POST
+  …/reset`; an admin card); BirdWeather upload threshold (`BIRDWEATHER_THRESHOLD`) and
+  position blur (`BIRDWEATHER_LOCATION_ACCURACY`, metres up to 50,000, uniform over a disc,
+  a new offset per post: it hides one post, not a station that posts for a year);
+  `hardware.json` (CPU, memory, USB and sound devices, no serials) in the support bundle;
+  test buttons for MQTT, eBird and weather that show the real failure; a weather JSON API
+  (`/api/v2/weather/latest`, `hourly/{date}[/{hour}]`, `detection`: open like the other
+  reads, null never 0, metric units; no `sun`, `moon` or `daily`, on purpose, since a public
+  sunrise time gives away the station's longitude); a Secure connection card with the local
+  CA download on the Access tab. Not matched: per-species actions, per-detection weather
+  (A-6), and the range explorer's what-if, CSV and rebuild.
+- **A cooldown on webhook alert rules.** A rule on `Strix*` posted once per 3-second chunk
+  for as long as an owl called. Each rule has a per-species cooldown in seconds (migration
+  55, `alert_rules.cooldown_secs`; at most 7 days; `0`, which every existing rule receives,
+  behaves as before). The gate runs on the detection's own timestamp, applies to webhook
+  actions only, and returns its window when the request never left. The rule export is
+  version 3 and omits a zero cooldown: a version-2 file still imports, and an older station
+  refuses a version-3 file instead of dropping the limit. The form has "Cooldown (minutes, 0
+  = every match)", 5 by default; a blank, fractional, negative or over-7-day value is
+  refused, and the list says "cooldown 5 min" or "no cooldown". (The daemon had enforced it
+  before the form could set it, so UI-made rules posted once per chunk.)
+- **Settings → Detection has a Privacy Rank field** (default 10, 0 = off, up to 12000),
+  which could only be set in `birdnet.conf`, `BIRDNET_PRIVACY_RANK` or `--privacy-rank`. The
+  page and `PUT /api/v2/settings` refuse what would be cut to 0 (the rule off, reported as
+  saved): a fraction such as the Privacy Threshold's `0.02`, `10%`, `1,000`, a sign, or more
+  than 12000. A flag or variable other than 10 still beats the page.
+- **Station Health says when the data lives on the container's own layer.** A data directory
+  that is not a mount keeps the database and recordings on the container's writable layer,
+  where recreating the container deletes them. The banner, the header badge and a new
+  `--doctor` "Data volume" check (a warning, never an error, so it cannot park the unit; it
+  names `-v birdnet-data:/data`) fire when the process is in a container and the data
+  directory's mount is the image-layer root; a volume, bind mount, tmpfs or a Pi with an
+  overlay root is not flagged. The shipped image declares `VOLUME /data`, so a bare `docker
+  run` gets an anonymous volume, which counts as a mount and is not flagged (`docker rm -v`
+  or `--rm` still deletes it). Tested against `mountinfo` fixtures modelled on Docker's
+  output, not in a container.
+- **A classifier that fails every window is reported.** After ten failed analysis windows
+  in a row (an error, or scores that are not numbers) a classifier is *failing* until it
+  answers one: a station-health alert names it (`classifier:<id>`), `/api/v2/health` lists
+  every classifier's state and makes a failing one a `?strict=1` fault, and Prometheus gets
+  `birdnet_model_failing`, `birdnet_model_consecutive_failed_windows`,
+  `birdnet_model_windows_total` and `birdnet_model_last_success_timestamp_seconds`
+  (birdnet-go's threshold and error classes). Before, it was one journal line per segment.
+
+**Streams, system and analytics**
+
+- **Live audio as HLS, so a phone keeps playing through a network handover.** `POST
+  /api/v2/streams/hls/{source_id}/start` answers with a token and a playlist of two-second
+  AAC segments, with `stop`, `heartbeat` and `status` beside it (birdnet-go's routes and
+  fields). One `ffmpeg` per source and pitch shift serves every listener, within the four
+  live-stream slots `/stream` uses; a stream ends with its last listener or a minute after
+  its last fetch. The Live view uses it where the browser plays HLS natively (Safari, iOS,
+  Android Chrome) and keeps MP3 elsewhere. A private station's `live_audio` carve-out opens
+  it.
+- **Streams other than RTSP, and audio-only cameras.** A network source can be an HTTP or
+  Icecast stream, an HLS playlist (`.m3u8`), an RTMP server, MPEG-TS over UDP, or SRT; the
+  URL decides, and each gets the ffmpeg options its protocol accepts (the RTSP options made
+  ffmpeg refuse an HLS playlist and made an RTMP reader listen instead of connect). Checked
+  against MediaMTX 1.21.2 and ffmpeg 6.1, recording and listening live, and through a
+  stalled server. Another scheme is refused on the form; `rtp://` is not supported; a UDP
+  stream is listed in the Live view as spectrogram only. An RTSP source can ask the camera
+  for its audio track alone (a source's edit form: *Tracks requested*): by default the
+  station sets up every track and discards the video, holding one of the camera's few video
+  sessions for as long as it listens. A camera with no audio track then fails visibly, as
+  a down source.
+- **System and operations.** `GET /api/v2/system/network` (every interface with addresses,
+  hardware address and byte counters: the address to type when `birdnet.local` does not
+  resolve), `GET /api/v2/system/processes` (the station's own process and what it started,
+  with CPU and memory), and `GET /api/v2/system/database/overview` (engine settings, each
+  table's rows and size, the last integrity check and VACUUM, write latency, the last 24
+  hours' arrivals; `null` where this station does not measure a figure), all behind the API
+  token. `birdnet_audio_analysed_seconds_total{source}`: seconds of audio analysed per
+  source; its rate is about 1 for a source that delivers continuously and falls below that
+  when audio goes missing inside segments, which a count of files cannot show. CPU profiles
+  for administrators in builds with the `profiling` feature (`GET
+  /admin/debug/pprof/profile?seconds=30`, a `pprof` profile or `format=folded`; not in
+  release builds; one at a time).
+- **birdnet-go's analytics and insights routes** (their parameters, defaults and fields;
+  SQLite-backed ones answer with the analytics engine off): `analytics/species/daily`,
+  `species/summary`, `species/detections/new`, `time/distribution/species`,
+  `time/succession`, `time/heatmap` (15-, 30- or 60-minute slots, or `format=csv`),
+  `time/dawn-onset` (the third detection of the day against civil dawn, on days with at
+  least five), `time/year-over-year`, `confidence/distribution`, `sources`;
+  `insights/phantom-species`, `insights/expected-today` and `…/regional` (an error, not
+  every eBird species, when the station's own history cannot be read), `insights/dawn-chorus`,
+  `insights/migration`; and `dashboard/kpis` (the streak uncapped where upstream stops at
+  90 days). Past-day novelty is read from the history as of that day, and first and last
+  detection carry the UTC offset in force, ordered by instant, so the hour the clocks go
+  back is placed correctly.
+- **What is heard just before a species**, as well as after it, on the Analytics page's
+  follow-on card (`sequence_next_node` run backward) and
+  `GET /api/v2/analytics/previous-species?before=…`. **The behavioural functions are
+  checked, not just loaded:** `--verify-extension` and `/api/v2/analytics/status`
+  (`self_test`) run every function the station uses on fixed events and compare each answer
+  with v0.10.0's.
+- **MQTT says when a species was last heard** (`species_first_detected_at` and
+  `species_last_detected_at`: the earliest and latest detections before this one; `null`
+  for a first-ever detection, left out when the history could not be read, so a "new
+  species" automation cannot fire on a database error). `/api/v2/detections?source=`
+  filters by audio source. **Pirate Weather** is a fourth weather provider
+  (`WEATHER_PROVIDER=pirate-weather` with `WEATHER_API_KEY`), written against its published
+  field definitions and not checked against a live response.
+- **Arrange the Today page.** Settings → Today Page Layout shows, hides and reorders the
+  page's parts with Move up, Move down and Show/Hide buttons (no dragging, so a keyboard or
+  touch screen can do it); the page is rebuilt in that order. A new station shows
+  everything until its first detection.
+
+**Project documents**
+
+- **The published manual is versioned.** The site root is the latest release's manual, each
+  release from v0.17.1 on stays at `/vX.Y.Z/` rebuilt from its own tag, and `main` is at
+  `/dev/`; a version menu sits in the toolbar, with a banner on any page that is not the
+  latest release (`scripts/build-versioned-docs.sh`).
+- **`STABILITY.md` (proposed), a documentation map, and the checks `main` should require.**
+  `STABILITY.md` says what a release may and may not change across the station's data,
+  configuration, HTTP API, metrics, artefacts and platforms, and how a break is announced;
+  `docs/README.md` says which documents are current and which are records;
+  `.github/workflows/README.md` lists each workflow and the seventeen checks that run on every
+  pull request (check 8 of `scripts/check-ci-config.py` fails when a name on that list stops
+  being a job or its workflow gains a path filter); `docs/HANDOFF.md` records the repository
+  settings only the maintainer can change.
 
 ## [0.17.1] - 2026-10-04
 
@@ -11444,7 +11073,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...v0.16.1

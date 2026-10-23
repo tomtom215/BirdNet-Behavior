@@ -284,12 +284,12 @@ pub const MIGRATIONS: &[Migration] = &[
         // O-15 adds the accounts surface that O-14's cookie sessions
         // build on. Day-zero shape: a single seeded `admin` row so
         // existing single-admin deployments see no behavioural change.
-        // `pwd_argon2` is the canonical column name — current installs
-        // store the password in the CADDY_PWD env var (not the DB), so
-        // the seed row writes an empty hash and the auth-middleware
-        // path still reads CADDY_PWD until the wire is flipped. See the
-        // TODO(O-15-followup) markers in `accounts.rs` and the auth
-        // module for the credential-store migration.
+        // `pwd_argon2` is the canonical column name. Installs of the time
+        // kept the password in the CADDY_PWD env var, not the DB, so the
+        // seed row wrote an empty hash. The credential store has since moved
+        // into this table (`helpers::auth::bootstrap_admin_password` writes
+        // the hash); `CADDY_PWD` survives only as a sign-in fallback in
+        // `auth_pages::authenticate`.
         //
         // Adapted from the O-15 accounts proposal's 009_accounts.sql for this
         // chain:
@@ -343,11 +343,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 15,
         description: "Create audio_sources table for first-class CRUD (O-13)",
         // O-13 replaces the audio.rs stub with a real entity model. The
-        // table carries one row per microphone or RTSP stream; the audio
-        // daemon continues to read `state.audio_source()` (a single
-        // string) until a follow-up PR teaches it to consume the table
-        // directly. See TODO(O-13-followup) in `routes::admin::audio`
-        // for the daemon-side change spelled out.
+        // table carries one row per microphone or RTSP stream. The capture
+        // daemon first read a single string (`state.audio_source()`); it now
+        // resolves its sources from this table
+        // (`capture::sources::resolve_sources_from_db`).
         //
         // The seed step pulls from `settings.audio_source` when present
         // so anyone with a configured single-string source lands on a
@@ -2330,6 +2329,26 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE alert_rules
                      ADD COLUMN cooldown_secs INTEGER NOT NULL DEFAULT 0
                      CHECK (cooldown_secs >= 0);",
+    },
+    Migration {
+        version: 56,
+        description: "Per-species minimum interval between detections",
+        // tphakala/birdnet-go's `realtime.species.config.<name>.interval`: the
+        // fewest seconds that must pass before the same species is recorded
+        // again, overriding the station-wide `DUPLICATE_INTERVAL_SECS` for that
+        // species (`0` there means "use the default"; here a row is only ever
+        // written for a species that has one, and a species without a row uses
+        // the station's interval). Seconds, because the daemon compares the
+        // value to detection timestamps that are already seconds.
+        //
+        // A table of its own rather than a column on `species_thresholds`: that
+        // table's `confidence_threshold` is `NOT NULL`, so an interval for a
+        // species with no custom threshold would need an invented one.
+        up_sql: "CREATE TABLE IF NOT EXISTS species_intervals (
+            sci_name TEXT PRIMARY KEY,
+            min_interval_secs INTEGER NOT NULL CHECK (min_interval_secs > 0),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
     },
 ];
 

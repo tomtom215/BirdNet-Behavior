@@ -57,11 +57,13 @@ pub(crate) async fn serve_recording(
     let file_path = rec_dir.join(&filename);
 
     // Security: resolve canonical path and confirm it is inside rec_dir.
-    let Ok(canonical) = file_path.canonicalize() else {
+    let Ok(canonical) = tokio::fs::canonicalize(&file_path).await else {
         return (StatusCode::NOT_FOUND, "recording not found").into_response();
     };
 
-    let rec_dir_canonical = rec_dir.canonicalize().unwrap_or_else(|_| rec_dir.clone());
+    let rec_dir_canonical = tokio::fs::canonicalize(&rec_dir)
+        .await
+        .unwrap_or_else(|_| rec_dir.clone());
     if !canonical.starts_with(&rec_dir_canonical) {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }

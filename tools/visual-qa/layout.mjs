@@ -8,7 +8,7 @@
 // of those shipped, in both themes, with every other gate green, and was found
 // by looking at a rendered page. This reads the same facts from the DOM.
 //
-// Five checks, per route x theme x viewport:
+// Six checks, per route x theme x viewport:
 //
 //   overlap   two text boxes (not nested, not in a closed <details>, not under
 //             the fixed tab bar) that intersect by more than 3px horizontally
@@ -20,9 +20,17 @@
 //             wider than 380px: a flex/grid child that shrank to nothing.
 //   escape    a button, link, field or select whose right edge is more than 2px
 //             beyond the card (or list item) that holds it, where that card does
-//             not itself scroll sideways.
+//             not itself scroll sideways; or one cut off by an `overflow: hidden`
+//             ancestor (the Live view's source menu, sliced at the card's edge).
 //   tiny      a visible text node set below 9px (the floor the legibility gate
 //             holds SVG labels to; HTML text had none).
+//   widen     the document is wider than the viewport (scrollingElement.scrollWidth
+//             > clientWidth), reported with the element that reaches furthest right
+//             and is not clipped by a scrolling ancestor. A hint holding one 385px
+//             identifier in a 292px box widened /station/alerts to 434px on a 390px
+//             phone and took the fixed tab bar with it; qa.mjs counts the overflow
+//             but names nothing, and none of the checks above looks at the page as a
+//             whole. The tab bar and fixed elements are victims, never the cause.
 //   svgtext   two SVG <text> labels whose turned boxes overlap by more than a
 //             quarter of the shorter one's height (and 2px). The first four checks walk HTML text and skip every
 //             <svg>, so a chart label written over its neighbour (the chord
@@ -35,8 +43,10 @@
 // Env:
 //   BASE      base url                       (default http://127.0.0.1:8502)
 //   THEMES    csv of light,dark              (default light,dark)
-//   VPS       csv of desktop,mobile          (default desktop,mobile)
+//   VPS       csv of desktop,mobile,narrow,tiny  (default all four: 1440, 390, 360 and 320 px wide)
 //   ONLY      substring filter on route name
+//   CSS_OVERRIDE  serve this file in place of /static/css/app.css (an older one, to
+//             see a new check fail against the stylesheet it was written for)
 //   MIN_ROUTES  fail if fewer routes were graded than this (default 30), so a run
 //             that could not reach the fixture cannot pass by grading nothing
 //
@@ -52,15 +62,22 @@ const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
 const VP_TABLE = {
   desktop: { viewport: { width: 1440, height: 900 }, hasTouch: false },
   mobile: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+  // A 360px phone is the commonest Android width and 375 the iPhone SE's; the setup wizard's
+  // stepper was a fixed 383px and scrolled the whole wizard sideways on both while 390 passed.
+  narrow: { viewport: { width: 360, height: 780 }, hasTouch: true, isMobile: true },
+  // 320px is the iPhone SE (1st generation) and the narrowest Android: the Today source menu was
+  // drawn under its Listen-live link, the live feed's play buttons ended 16px past the screen and
+  // three Station tabs had a field or button past its card, with 360 and 390 clean.
+  tiny: { viewport: { width: 320, height: 568 }, hasTouch: true, isMobile: true },
 };
-const VPS = (process.env.VPS || 'desktop,mobile').split(',').filter((v) => VP_TABLE[v]);
+const VPS = (process.env.VPS || 'desktop,mobile,narrow,tiny').split(',').filter((v) => VP_TABLE[v]);
 const ONLY = process.env.ONLY || '';
 const MIN_ROUTES = Number(process.env.MIN_ROUTES || 30);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Runs in the page. Returns { overlap, squeeze, escape, tiny, svgtext } arrays of strings.
+// Runs in the page. Returns { overlap, squeeze, escape, tiny, svgtext, widen } arrays of strings.
 function inPage() {
-  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [] };
+  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [], widen: [] };
   const sel = (el) =>
     el.tagName.toLowerCase() +
     (el.id ? '#' + el.id : '') +
@@ -195,6 +212,28 @@ function inPage() {
     }
   }
 
+  // escape, second form: a control cut off by an ancestor that clips. The loop above reads only
+  // the card or list item that holds the control and treats a clipping card as fine, so the Live
+  // view's source menu, wider than its `overflow: hidden` card at 320px, was drawn with its right
+  // edge sliced off and the gate green. Nothing that scrolls is reported (the user can reach the
+  // rest), and neither is a control the clip hides on purpose (`.sr-only`, under 2px).
+  for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea')) {
+    if (res.escape.length >= 10) break;
+    if (!shown(el) || el.closest(SKIP) || (el.closest('details:not([open])') && !el.closest('summary'))) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) continue;
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const o = getComputedStyle(p).overflowX;
+      if (o === 'auto' || o === 'scroll') break;
+      if (o !== 'hidden' && o !== 'clip') continue;
+      const h = p.getBoundingClientRect();
+      if (h.width > 0 && r.left < h.right && r.right > h.right + 2) {
+        res.escape.push(`${sel(el)} "${(el.textContent || el.value || '').trim().slice(0, 24)}" is cut off ${Math.round(r.right - h.right)}px by the overflow of ${sel(p)}`);
+        break;
+      }
+    }
+  }
+
   // svgtext: labels inside charts, as turned rectangles.
   const corners = (t) => {
     const m = t.getScreenCTM();
@@ -258,12 +297,58 @@ function inPage() {
     }
   }
 
+  // widen: the page itself is wider than the screen.
+  {
+    const de = document.scrollingElement || document.documentElement;
+    const vw = de.clientWidth;
+    if (de.scrollWidth > vw + 1) {
+      const reach = (el, r) => Math.max(r.right, el.scrollWidth > el.clientWidth && getComputedStyle(el).overflowX === 'visible' ? r.left + el.scrollWidth : 0);
+      let worst = null;
+      let depthOf = (el) => { let d = 0; for (let n = el; n; n = n.parentElement) d++; return d; };
+      for (const el of document.body.querySelectorAll('*')) {
+        if (el.closest('[class*="tabbar"], script, style, template, [hidden], details:not([open])')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || getComputedStyle(el).position === 'fixed') continue;
+        const x = reach(el, r);
+        if (x <= vw + 1) continue;
+        // Sideways scroll inside a box that itself fits is the box's own business.
+        let held = false;
+        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+          const cs = getComputedStyle(n);
+          if (cs.position === 'fixed') { held = true; break; }
+          if (cs.overflowX !== 'visible' && n.getBoundingClientRect().right <= vw + 1) { held = true; break; }
+        }
+        if (held) continue;
+        const d = depthOf(el);
+        if (!worst || x > worst.x + 0.5 || (Math.abs(x - worst.x) <= 0.5 && d > worst.d)) worst = { el, x, d };
+      }
+      const text = worst ? ` ("${(worst.el.textContent || '').trim().slice(0, 36)}")` : '';
+      res.widen.push(
+        worst
+          ? `document is ${de.scrollWidth}px wide in a ${vw}px viewport; ${sel(worst.el)} reaches ${Math.round(worst.x)}px${text}`
+          : `document is ${de.scrollWidth}px wide in a ${vw}px viewport; no unclipped element reaches past it`,
+      );
+    }
+  }
+
   for (const k of Object.keys(res)) res[k] = [...new Set(res[k])].slice(0, 10);
   return res;
 }
 
 async function main() {
   const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
+  // CSS_OVERRIDE=old.css grades an earlier stylesheet on the running fixture (as in
+  // tokens.mjs), to watch a check go red against the CSS it was written for.
+  if (process.env.CSS_OVERRIDE) {
+    const { readFileSync } = await import('node:fs');
+    const body = readFileSync(process.env.CSS_OVERRIDE, 'utf8');
+    const original = browser.newContext.bind(browser);
+    browser.newContext = async (opts) => {
+      const c = await original(opts);
+      await c.route(/\/static\/css\/app\.css(\?.*)?$/, (r) => r.fulfill({ status: 200, contentType: 'text/css', body }));
+      return c;
+    };
+  }
   const problems = [];
   let graded = 0;
   for (const theme of THEMES) {
@@ -313,7 +398,7 @@ async function main() {
     for (const p of problems) console.error('  ' + p);
     process.exitCode = 1;
   } else {
-    console.log('layout: no overlaps, squeezed columns, escaping controls, sub-9px text or colliding chart labels.');
+    console.log('layout: no overlaps, squeezed columns, escaping controls, sub-9px text, colliding chart labels or page wider than the screen.');
   }
 }
 

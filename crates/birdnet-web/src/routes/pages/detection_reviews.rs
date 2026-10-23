@@ -18,7 +18,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -261,6 +262,7 @@ fn render_pending_row(
     let sci = escape_html(&d.sci_name);
     let date = escape_html(&d.date);
     let time = escape_html(&d.time);
+    let time_clk = crate::display::clock(&d.time);
     let enc_com = simple_url_encode(&d.com_name);
     let conf = super::atoms::conf_pill(d.confidence * 100.0, floor);
     // Per-row form: hidden inputs carry the (possibly apostrophe-bearing)
@@ -277,7 +279,7 @@ fn render_pending_row(
   <div class=\"dr-row-main\">\
     <a href=\"/species/detail?name={enc_com}\" class=\"dr-row-name\">{shown}</a>\
     <div class=\"dr-row-sci\">{sci}</div>\
-    <div class=\"dr-row-meta\">{date} · {time}</div>\
+    <div class=\"dr-row-meta\">{date} · {time_clk}</div>\
   </div>\
   {conf}\
   <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"bnb-btn dr-confirm-btn\">&#10003; Confirm</button>\
@@ -379,6 +381,7 @@ fn render_verdict_row(
     let com = escape_html(names.name(&r.sci_name, &r.com_name));
     let date = escape_html(&r.date);
     let time = escape_html(&r.time);
+    let time_clk = crate::display::clock(&r.time);
     let sci = escape_html(&r.sci_name);
     let (badge, badge_cls) = if r.status == "confirmed" {
         ("&#10003; Confirmed", "moss")
@@ -394,7 +397,7 @@ fn render_verdict_row(
   <input type=\"hidden\" name=\"sci_name\" value=\"{sci}\">\
   <span class=\"bnb-pill {badge_cls}\">{badge}</span>\
   <div class=\"dr-vrow-main\">{com}\
-    <span class=\"dr-vrow-meta\"> · {date} {time}</span></div>\
+    <span class=\"dr-vrow-meta\"> · {date} {time_clk}</span></div>\
   <button type=\"submit\" class=\"bnb-btn ghost dr-undo-btn\">Undo</button>\
 </form>"
     );
@@ -403,7 +406,7 @@ fn render_verdict_row(
 async fn detection_review_set(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ReviewForm>,
+    HtmxForm(form): HtmxForm<ReviewForm>,
 ) -> axum::response::Response {
     if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         // `state.set_detection_review`, not `with_db(set_detection_review)`:
@@ -470,7 +473,7 @@ fn refused_review<T, E: std::fmt::Display>(
 async fn detection_review_clear(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ClearForm>,
+    HtmxForm(form): HtmxForm<ClearForm>,
 ) -> axum::response::Response {
     // Paired write — see `detection_review_set`. Clearing must reach both
     // stores or the exclusion outlives the verdict that justified it.
@@ -503,7 +506,7 @@ async fn detection_review_clear(
 async fn detection_review_inline(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ReviewForm>,
+    HtmxForm(form): HtmxForm<ReviewForm>,
 ) -> axum::response::Response {
     let current = if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         let (date, time, sci, com) = (

@@ -201,10 +201,10 @@ async fn download_backup(State(state): State<AppState>, Path(name): Path<String>
     let path = backup_dir(&state).join(&name);
 
     // Verify the canonical path is still inside the backup directory.
-    let Ok(backup_dir_canon) = backup_dir(&state).canonicalize() else {
+    let Ok(backup_dir_canon) = tokio::fs::canonicalize(backup_dir(&state)).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(file_canon) = path.canonicalize() else {
+    let Ok(file_canon) = tokio::fs::canonicalize(&path).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if !file_canon.starts_with(&backup_dir_canon) {

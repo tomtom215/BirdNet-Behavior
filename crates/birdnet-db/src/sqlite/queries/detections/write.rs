@@ -526,7 +526,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::items_after_statements)] // the type aliases tighten the asserter ergonomics
     fn insert_detection_with_null_optional_fields_stores_nulls() {
         // The DetectionRecord struct carries Option<f64>/Option<i64> so
         // missing values become SQLite NULLs — this contract is the

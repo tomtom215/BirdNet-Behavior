@@ -398,3 +398,85 @@ fn an_empty_species_name_is_ignored() {
     assert!(!d.observe("", 0.99, 0));
     assert_eq!(d.live_count(0), 0);
 }
+
+// ---------------------------------------------------------------------------
+// The operator's reset
+// ---------------------------------------------------------------------------
+
+/// A reset forgets that species and no other, and the next confirmation starts
+/// again at level 1 rather than resuming.
+#[test]
+fn a_reset_forgets_one_species_and_it_starts_again_at_level_one() {
+    let mut d = DynamicThresholds::new(on());
+    let mut t = 0;
+    for _ in 0..3 {
+        d.observe("Strix aluco", 0.9, t);
+        t += LEARN_COOLDOWN_MS;
+    }
+    d.observe("Turdus merula", 0.9, t);
+    assert!(d.adjustment("Strix aluco", t).is_some());
+
+    assert_eq!(d.apply_reset(&Reset::Species("Strix aluco".into())), 1);
+    assert!(
+        d.adjustment("Strix aluco", t).is_none(),
+        "the reset species is still adjusted"
+    );
+    assert!(
+        d.adjustment("Turdus merula", t).is_some(),
+        "a reset of one species forgot another"
+    );
+    assert_eq!(
+        d.apply_reset(&Reset::Species("Strix aluco".into())),
+        0,
+        "resetting a species with nothing learned reported a change"
+    );
+
+    d.observe("Strix aluco", 0.9, t + 1);
+    let level = d
+        .snapshot(t + 2)
+        .into_iter()
+        .find(|(n, _)| n == "Strix aluco");
+    assert_eq!(level.map(|(_, s)| s.level), Some(1));
+}
+
+/// The tracker matches a name the way the stored rows are deleted: without
+/// regard to case. A reset typed `strix aluco` used to leave the tracker's
+/// `Strix aluco` in force while the table said it was gone.
+#[test]
+fn a_reset_finds_the_species_whatever_the_case_it_was_typed_in() {
+    let mut d = DynamicThresholds::new(on());
+    d.observe("Strix aluco", 0.9, 0);
+    d.observe("Turdus merula", 0.9, 0);
+    assert_eq!(d.apply_reset(&Reset::Species("strix ALUCO".into())), 1);
+    assert!(d.adjustment("Strix aluco", 1).is_none(), "still adjusted");
+    assert!(
+        d.adjustment("Turdus merula", 1).is_some(),
+        "a different species was forgotten with it"
+    );
+    assert_eq!(d.tracked_count(), 1);
+}
+
+/// Reset-all empties the tracker and says how many went.
+#[test]
+fn a_reset_of_everything_counts_what_it_forgot() {
+    let mut d = DynamicThresholds::new(on());
+    d.observe("Strix aluco", 0.9, 0);
+    d.observe("Turdus merula", 0.9, 0);
+    assert_eq!(d.apply_reset(&Reset::All), 2);
+    assert_eq!(d.tracked_count(), 0);
+    assert_eq!(d.apply_reset(&Reset::All), 0);
+}
+
+/// The handle hands each request over exactly once, oldest first.
+#[test]
+fn the_handle_delivers_requests_once_in_order() {
+    let h = DynamicThresholdHandle::new(on());
+    assert!(h.drain().is_empty());
+    h.request(Reset::Species("Strix aluco".into()));
+    h.request(Reset::All);
+    assert_eq!(
+        h.drain(),
+        vec![Reset::Species("Strix aluco".into()), Reset::All]
+    );
+    assert!(h.drain().is_empty(), "a request was delivered twice");
+}

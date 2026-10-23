@@ -32,9 +32,10 @@
 
 use std::fmt::Write as _;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::{Html, IntoResponse as _, Response};
-use axum::{Form, Router, routing::get, routing::post};
+use axum::{Router, routing::get, routing::post};
 use serde::Deserialize;
 
 use crate::auth_middleware::RequestUser;
@@ -132,7 +133,7 @@ async fn rendered(state: AppState, note: Option<&str>) -> Html<String> {
 async fn exclude(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<SpeciesForm>,
+    HtmxForm(form): HtmxForm<SpeciesForm>,
 ) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
@@ -174,7 +175,7 @@ async fn exclude(
 async fn delete_detections(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<SpeciesForm>,
+    HtmxForm(form): HtmxForm<SpeciesForm>,
 ) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
@@ -238,7 +239,7 @@ async fn delete_detections(
 async fn delete_clips(
     State(state): State<AppState>,
     request_user: RequestUser,
-    Form(form): Form<SpeciesForm>,
+    HtmxForm(form): HtmxForm<SpeciesForm>,
 ) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
@@ -340,7 +341,7 @@ enum ClipsRefused {
 /// A separate action because it is `stat` per clip: for the species this page
 /// exists for that is thousands of syscalls, and doing it for every species on
 /// every page load would make the page unusable on the SD card it runs on.
-async fn measure(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -> Response {
+async fn measure(State(state): State<AppState>, HtmxForm(form): HtmxForm<SpeciesForm>) -> Response {
     let sci_name = form.sci_name.trim().to_owned();
     if sci_name.is_empty() {
         return rendered(state, None).await.into_response();

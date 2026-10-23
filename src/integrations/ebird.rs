@@ -29,6 +29,25 @@ use birdnet_core::config::Config;
 use birdnet_integrations::ebird;
 use birdnet_web::state::AppState;
 
+/// The eBird configuration this station runs with: `Ok(None)` without a key,
+/// `Err` when a key is set but the rest cannot be used. Shared by the poll and
+/// by the "test the eBird key" button, so the button tests what the poll uses.
+pub(super) fn resolve_settings(
+    config: Option<&Config>,
+) -> Result<Option<ebird::Settings>, ebird::EbirdError> {
+    // Each key is read as a literal `config.get("KEY")` rather than through a
+    // helper closure: `tests/every_config_key_is_known.rs` finds reads by their
+    // shape, and a closure hides the name from it.
+    ebird::resolve(
+        config.and_then(|c| c.get("EBIRD_API_KEY")),
+        config.and_then(|c| c.get("EBIRD_REGION")),
+        config.and_then(|c| c.get("EBIRD_DIST_KM")),
+        config.and_then(|c| c.get("EBIRD_BACK_DAYS")),
+        resolve_lat(config),
+        resolve_lon(config),
+    )
+}
+
 /// Spawn the eBird poll when an API key is configured and there is somewhere
 /// to ask about.
 ///
@@ -38,17 +57,7 @@ pub fn spawn_ebird_poll(
     config: Option<&Config>,
     state: AppState,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    // Each key is read as a literal `config.get("KEY")` rather than through a
-    // helper closure: `tests/every_config_key_is_known.rs` finds reads by their
-    // shape, and a closure hides the name from it.
-    let settings = match ebird::resolve(
-        config.and_then(|c| c.get("EBIRD_API_KEY")),
-        config.and_then(|c| c.get("EBIRD_REGION")),
-        config.and_then(|c| c.get("EBIRD_DIST_KM")),
-        config.and_then(|c| c.get("EBIRD_BACK_DAYS")),
-        resolve_lat(config),
-        resolve_lon(config),
-    ) {
+    let settings = match resolve_settings(config) {
         Ok(Some(settings)) => settings,
         Ok(None) => {
             tracing::debug!("eBird corroboration off (no EBIRD_API_KEY)");

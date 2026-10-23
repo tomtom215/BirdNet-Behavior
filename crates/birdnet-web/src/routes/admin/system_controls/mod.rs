@@ -52,6 +52,14 @@ pub fn router() -> Router<AppState> {
             "/admin/system/service/restart",
             routing::post(service::service_restart),
         )
+        // Where the "Restart to apply" button on a toast leads (adding a
+        // microphone, a stream, a setting). It was a 404: nothing answered at
+        // the path the toast links to, so the first thing a person pressed
+        // after changing a source led to "page not found".
+        .route(
+            "/admin/system/restart",
+            routing::get(|| async { axum::response::Redirect::to("/admin/system") }),
+        )
         .route(
             "/admin/system/service/status",
             routing::get(service::service_status),

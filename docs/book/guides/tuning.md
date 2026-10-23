@@ -180,10 +180,25 @@ phrasing.
 BIRDNET_DUPLICATE_INTERVAL_SECS=30   # 0 = off
 ```
 
-Each species is then admitted at most once per interval; the first chunk wins,
-because that is when the bird started singing. Off by default, since turning it
+Each species is then admitted at most once per interval **on each source** (the
+microphone, or each RTSP camera); the first chunk wins, because that is when the
+bird started singing. Two cameras that hear a bird 20 seconds apart each record it:
+they are two places. A station with one source behaves as if the interval were
+per species. Off by default, since turning it
 on changes how many rows your station records and puts a visible step in every
 chart on the day you do it.
+
+**One species louder than the rest.** A tawny owl calling all night will drown
+the log long before a blackbird does. *Settings → Capture → Which birds count → Per-Species
+Minimum Interval* gives a single species its own interval in seconds (1 to
+86400), which **replaces** the station-wide one for that species and applies
+even when the station-wide one is off — the same behaviour as birdnet-go's
+per-species `interval`. A repeat inside it is dropped like any other duplicate:
+no row, no clip, no notification, not counted. The window runs from the last
+*recorded* detection, a detection quarantined by a threshold does not start
+one, and the setting is picked up within about thirty seconds, no restart. It
+is separate from the notification cooldowns, which only ever limit messages and
+never rows.
 
 ### 9. Day birds at night
 

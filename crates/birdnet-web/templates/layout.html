@@ -178,9 +178,15 @@
          live/offline indicator and dispatch birdnet:detection events. -->
     <script src="/static/live-detections.js?v={{version}}" defer></script>
     <script src="/static/clip-player.js?v={{version}}" defer></script>
+    <!-- Boost, high-pass and compressor for every player (static/listen-fx.js). -->
+    <script src="/static/listen-fx.js?v={{version}}" defer></script>
+    <!-- Clock and temperature in the reader's choice (static/display-format.js). -->
+    <script src="/static/display-format.js?v={{version}}" defer></script>
     <!-- Chart labels are scaled with their SVG; this keeps them readable on a
          phone (static/chart-text.js). -->
     <script src="/static/chart-text.js?v={{version}}" defer></script>
+    <!-- Hover, focus, keyboard and entrance for every chart (static/chart-kit.js). -->
+    <script src="/static/chart-kit.js?v={{version}}" defer></script>
     <!-- A region that fails to load must say so. htmx leaves the target as it
          was on a 4xx/5xx and on a transport error, so a failed partial — or a
          station that died under an open dashboard — used to leave its
@@ -362,16 +368,21 @@
     {{cmdk_partial}}
     {{help_drawer}}
     {{tabbar}}
-    <!-- PWA service worker (O-24). Registration is best-effort; browsers
-         without SW support log nothing. The bnb-build meta lets the
-         worker invalidate its cache on a new release. -->
+    <!-- PWA service worker (O-24), registered in its own directory on purpose:
+         with no `scope` it is `<base>/static/` anyway, so no dashboard page is
+         controlled and the offline behaviour in sw.js has never run. sw.js says
+         what enabling it needs. Prefixed with <body data-base-path> because the
+         server cannot rewrite a URL inside a script. Best-effort. -->
     <script>
     (function () {
       if (!('serviceWorker' in navigator)) return;
       var build = document.querySelector('meta[name="bnb-build"]');
       var v = build ? '?v=' + encodeURIComponent(build.content) : '';
+      var base = (document.body && document.body.dataset.basePath) || '';
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('/static/sw.js' + v).catch(function () {});
+        navigator.serviceWorker
+          .register(base + '/static/sw.js' + v, { scope: base + '/static/' })
+          .catch(function () {});
       });
     })();
     </script>

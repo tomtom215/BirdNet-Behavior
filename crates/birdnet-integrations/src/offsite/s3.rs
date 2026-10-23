@@ -870,7 +870,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("blob");
         // Deliberately not a multiple of the block size.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(clippy::cast_possible_truncation)]
         let bytes: Vec<u8> = (0..(256_usize * 1024 + 12345))
             .map(|i| (i % 251) as u8)
             .collect();

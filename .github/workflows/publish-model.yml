@@ -70,7 +70,7 @@ jobs:
     name: Mirror model from Zenodo and publish
     if: ${{ inputs.classifier != 'birdnet-v24' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60  # observed 7m09s
+    timeout-minutes: 60  # observed 4m03s
     permissions:
       contents: write     # create the release + upload assets
       id-token: write     # OIDC token for SLSA attestation

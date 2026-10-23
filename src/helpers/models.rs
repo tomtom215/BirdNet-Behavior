@@ -356,19 +356,15 @@ fn model_sample_rate(
     }
 }
 
-/// Where `--install-model` puts what it installs.
+/// Where `--install-model` puts what it installs, and where the setup page's
+/// install lands.
 ///
-/// Env first, then the config file — the order `plan` reads its settings in
-/// and the order `.env.example` documents. Reading only the config file would
-/// have ignored `BIRDNET_MODEL_DIR`, which is the name the shipped compose
-/// file sets.
+/// See [`crate::helpers::station_defaults::model_dir`] for the order. It used to
+/// end in `/data/model` whatever the machine, which a person running the bare
+/// binary cannot write to.
 #[must_use]
 pub fn model_dir(config: Option<&Config>) -> PathBuf {
-    std::env::var("BIRDNET_MODEL_DIR")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| config.and_then(|c| c.get("MODEL_DIR").map(str::to_owned)))
-        .map_or_else(|| PathBuf::from("/data/model"), PathBuf::from)
+    crate::helpers::station_defaults::model_dir(config)
 }
 
 /// `--install-model <id>`: fetch and verify a classifier, or list what is

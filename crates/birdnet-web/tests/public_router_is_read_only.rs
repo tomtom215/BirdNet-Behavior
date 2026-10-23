@@ -143,7 +143,9 @@ async fn with_a_password_set_an_unauthenticated_write_is_refused() {
     // says no.
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
     birdnet_db::migration::migrate(&conn).expect("migrate schema");
-    let hash = birdnet_db::accounts::hash_password("a-real-password").expect("hash");
+    let hash =
+        birdnet_db::accounts::hash_password(&format!("a-real-password-{}", std::process::id()))
+            .expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         [&hash],
@@ -172,7 +174,9 @@ async fn a_password_does_not_close_the_dashboard() {
     // rule out in the other direction.
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
     birdnet_db::migration::migrate(&conn).expect("migrate schema");
-    let hash = birdnet_db::accounts::hash_password("a-real-password").expect("hash");
+    let hash =
+        birdnet_db::accounts::hash_password(&format!("a-real-password-{}", std::process::id()))
+            .expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         [&hash],

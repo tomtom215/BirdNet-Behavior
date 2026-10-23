@@ -211,7 +211,7 @@ fn render_weekly_content(
     let _ = write!(
         html,
         r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h2 class="sh-h">Detections per day</h2></div></div><div class="rp-viz">{chart}</div></div>"#,
-        chart = render_weekly_chart(week_start, daily),
+        chart = render_weekly_chart(week_start, daily, &super::today_date_string()),
     );
 
     // ── Two columns: top species + first-ever ─────────────────────────────
@@ -279,20 +279,16 @@ fn busiest_day(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount]) -> (S
     }
 }
 
-/// Render a 7-bar SVG chart for the week (one bar per day).
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless
-)]
-fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount]) -> String {
-    // Build date → count map for the 7 days
-    let mut counts = [0i64; 7];
-    let mut day_labels = [""; 7];
-    let day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/// The week as seven columns, Monday to Sunday, on an axis from zero: the busiest day
+/// labelled, the average as a hairline, a tooltip for every day. A day of the current week
+/// that has not happened yet is an empty slot that says "Not yet", not a zero.
+fn render_weekly_chart(
+    week_start: &str,
+    daily: &[birdnet_db::sqlite::DailyCount],
+    today: &str,
+) -> String {
     let dates = week_dates(week_start);
-    day_labels.copy_from_slice(&day_names);
-
+    let mut counts = [0_i64; 7];
     for dc in daily {
         if let Some(idx) = dates.iter().position(|d| d == &dc.date)
             && idx < 7
@@ -300,81 +296,24 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
             counts[idx] = dc.count;
         }
     }
-
-    let max_count = counts.iter().copied().max().unwrap_or(1).max(1);
-    let chart_w = 560;
-    let chart_h = 120;
-    let bar_w = 60;
-    let gap = 20;
-    let left_pad = 10;
-    // Headroom for the count label above the tallest bar. Without it the
-    // busiest day of the week — the one bar that reaches `chart_h`, so `y = 0`
-    // — had its label placed at `y - 4 = -4`, above the viewBox, where the
-    // browser clips it: the number you most want to read was the only one
-    // missing. Seen in a print render of the demo fixture.
-    let top_pad = 16;
-    let baseline = top_pad + chart_h;
-
-    let mut svg = format!(
-        r#"<svg viewBox="0 0 {w} {h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
-        w = chart_w,
-        h = baseline + 25,
-    );
-
-    for (i, &count) in counts.iter().enumerate() {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let x = left_pad + i as i32 * (bar_w + gap);
-        let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
-        // A zero-count day still draws a 2px stub so the day is visible as an
-        // empty slot. It used to be positioned from the unclamped `bar_h`, so
-        // `y = baseline` and the stub hung *below* the axis rather than resting
-        // on it. Clamp first, then place.
-        let drawn_h = bar_h.max(2);
-        let y = baseline - drawn_h;
-        let color = if count > 0 {
-            "var(--moss)"
-        } else {
-            "var(--surface-2)"
-        };
-
-        let _ = std::fmt::write(
-            &mut svg,
-            format_args!(
-                r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{drawn_h}" rx="3" fill="{color}"/>"#,
-            ),
-        );
-
-        if count > 0 {
-            let _ = std::fmt::write(
-                &mut svg,
-                format_args!(
-                    r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="11" font-family="sans-serif">{count}</text>"#,
-                    tx = x + bar_w / 2,
-                    ty = y - 4,
-                    count = count,
-                ),
-            );
-        }
-
-        let _ = std::fmt::write(
-            &mut svg,
-            format_args!(
-                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="11" font-family="sans-serif">{label}</text>"#,
-                tx = x + bar_w / 2,
-                ty = baseline + 17,
-                label = day_labels[i],
-            ),
-        );
-    }
-
-    svg.push_str("</svg>");
-    svg
+    let days: Vec<(String, i64)> = dates.iter().cloned().zip(counts).collect();
+    let future_from = dates.iter().position(|d| d.as_str() > today);
+    super::viz::bars::daily(&super::viz::bars::Daily {
+        id: "weekly-days",
+        name: "Detections per day this week",
+        desc: "Detections for each day of the week, Monday to Sunday; the busiest day is labelled and every day has a tooltip.",
+        unit: "detections",
+        days: &days,
+        slot: 0,
+        width: 560.0,
+        plot_h: 120.0,
+        listened: None,
+        mean_line: true,
+        future_from,
+        weekday_labels: true,
+        table: false,
+        class: "",
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -491,26 +430,7 @@ mod tests {
         assert_eq!(dates[6], "2026-03-15");
     }
 
-    /// Parse `name="value"` pairs out of every tag of one kind.
-    fn tags(svg: &str, tag: &str) -> Vec<std::collections::HashMap<String, f64>> {
-        svg.split(&format!("<{tag} "))
-            .skip(1)
-            .map(|frag| {
-                let body = frag.split('>').next().unwrap_or("");
-                body.split('"')
-                    .collect::<Vec<_>>()
-                    .chunks(2)
-                    .filter_map(|c| {
-                        let key = c.first()?.trim().trim_end_matches('=').trim();
-                        let val: f64 = c.get(1)?.parse().ok()?;
-                        Some((key.to_string(), val))
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn view_box(svg: &str) -> (f64, f64) {
+    fn view_box(svg: &str) -> (f64, f64, f64, f64) {
         let vb = svg
             .split_once("viewBox=\"")
             .unwrap()
@@ -522,7 +442,22 @@ mod tests {
             .split_whitespace()
             .filter_map(|x| x.parse().ok())
             .collect();
-        (n[2], n[3])
+        (n[0], n[1], n[2], n[3])
+    }
+
+    /// Every `x="…"` / `y="…"` / `height="…"` / `width="…"` number of every tag of one kind.
+    fn nums(svg: &str, tag: &str, attr: &str) -> Vec<f64> {
+        svg.split(&format!("<{tag} "))
+            .skip(1)
+            .filter_map(|frag| {
+                let body = frag.split('>').next().unwrap_or("");
+                let rest = body
+                    .split_once(&format!(" {attr}=\""))
+                    .or_else(|| body.split_once(&format!("\"{attr}=\"")))
+                    .map(|x| x.1)?;
+                rest.split('"').next()?.parse().ok()
+            })
+            .collect()
     }
 
     fn week(counts: [i64; 7]) -> Vec<birdnet_db::sqlite::DailyCount> {
@@ -536,46 +471,69 @@ mod tests {
 
     /// Nothing the weekly chart draws may fall outside its own viewBox.
     ///
-    /// Observed failing against the pre-fix renderer on two counts, both
-    /// visible in a print render of the demo fixture:
-    ///
-    /// * The tallest bar reaches `bar_h == chart_h`, so `y == 0` and its count
-    ///   label is placed at `y - 4 == -4` — four units above the top of the
-    ///   viewBox, where the browser clips it. The busiest day of the week is
-    ///   the one day whose number you cannot read.
-    /// * A zero-count day computes `y = chart_h - 0 = chart_h` and then draws
-    ///   `height = bar_h.max(2)`, so its 2px stub hangs *below* the baseline
-    ///   rather than sitting on it.
+    /// Observed failing against the pre-fix renderer on two counts, both visible in a
+    /// print render of the demo fixture: the tallest bar's count label was placed above
+    /// the top of the viewBox where the browser clips it (the busiest day was the one
+    /// day whose number you could not read), and a zero-count day's stub hung below the
+    /// baseline. Kept for the new renderer: the same arithmetic, new code.
     #[test]
     fn nothing_the_weekly_chart_draws_escapes_its_view_box() {
         for counts in [
-            [34, 36, 33, 35, 34, 34, 0], // the fixture: a tall bar and an empty day
+            [34, 36, 33, 35, 34, 34, 0], // a tall bar and an empty day
             [1, 0, 0, 0, 0, 0, 0],
             [0; 7],
             [999_999, 1, 0, 5, 0, 2, 3],
         ] {
-            let svg = render_weekly_chart("2026-03-09", &week(counts));
-            let (vw, vh) = view_box(&svg);
-            for (i, r) in tags(&svg, "rect").iter().enumerate() {
-                let (y, h) = (r["y"], r["height"]);
+            let svg = render_weekly_chart("2026-03-09", &week(counts), "2026-03-20");
+            let (vx, vy, vw, vh) = view_box(&svg);
+            for (i, y) in nums(&svg, "text", "y").iter().enumerate() {
                 assert!(
-                    y >= 0.0 && y + h <= vh,
-                    "{counts:?}: bar {i} spans y {y}..{} outside the {vh}-high viewBox",
-                    y + h
-                );
-                assert!(
-                    r["x"] + r["width"] <= vw,
-                    "{counts:?}: bar {i} overflows the width"
+                    *y >= vy && *y <= vy + vh,
+                    "{counts:?}: label {i} sits at y = {y} outside {vy}..{}",
+                    vy + vh
                 );
             }
-            for t in tags(&svg, "text") {
+            for (i, x) in nums(&svg, "text", "x").iter().enumerate() {
                 assert!(
-                    t["y"] >= 0.0 && t["y"] <= vh,
-                    "{counts:?}: a label sits at y = {} outside the {vh}-high viewBox",
-                    t["y"]
+                    *x >= vx && *x <= vx + vw,
+                    "{counts:?}: label {i} sits at x = {x} outside the width"
+                );
+            }
+            for (i, (x, w)) in nums(&svg, "rect", "x")
+                .iter()
+                .zip(nums(&svg, "rect", "width"))
+                .enumerate()
+            {
+                assert!(
+                    *x >= vx && x + w <= vx + vw + 1e-6,
+                    "{counts:?}: box {i} overflows the width"
                 );
             }
         }
+    }
+
+    /// A week still under way ends in days that have not happened: they say so, and
+    /// they are not in the average or the busiest day.
+    #[test]
+    fn days_that_have_not_happened_are_not_zeros() {
+        let svg = render_weekly_chart("2026-03-09", &week([10, 20, 30, 0, 0, 0, 0]), "2026-03-11");
+        assert!(svg.contains("Thu 12 Mar&#10;Not yet"), "{svg}");
+        assert!(svg.contains("Sun 15 Mar&#10;Not yet"), "{svg}");
+        assert!(
+            svg.contains("avg 20"),
+            "the average is over the three days that happened: {svg}"
+        );
+        assert!(svg.contains("Mon") && svg.contains("Sun"), "{svg}");
+        // Seven wide slots: each weekday is centred under its own bar, none hung from an edge.
+        assert!(
+            !svg.contains(r#"text-anchor="start""#) && !svg.contains(r#"text-anchor="end">Sun"#),
+            "{svg}"
+        );
+        // A finished week has no such days.
+        assert!(
+            !render_weekly_chart("2026-03-09", &week([10, 20, 30, 0, 0, 0, 0]), "2026-03-20")
+                .contains("Not yet")
+        );
     }
 
     #[test]

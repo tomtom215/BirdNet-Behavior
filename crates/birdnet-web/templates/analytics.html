@@ -12,9 +12,9 @@
 </div>
 
 <!-- One masonry of defined-in-place cards: every term explained where it lands -->
-<div class="pt-masonry">
+<div class="pt-masonry bh-grid">
     <!-- Sessions -->
-    <div class="bnb-card pad">
+    <div class="bnb-card pad bh-wide">
         <div class="bnb-eyebrow">Activity sessions</div>
         <h2 class="an-card-h3">Bursts of singing</h2>
         <p class="bnb-meta an-card-lede">
@@ -39,19 +39,6 @@
         </div>
     </div>
 
-    <!-- Previous / next species -->
-    <div class="bnb-card pad">
-        <div class="bnb-eyebrow">Before and after</div>
-        <h2 class="an-card-h3">Neighbouring species</h2>
-        <p class="bnb-meta an-card-lede">
-            Which species tends to be heard just <b>before</b> a bird first turns up in a
-            session, and which just <b>after</b>. Birds heard at the same moment are not counted.
-        </p>
-        <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
-            <p class="an-loading">Loading predictions...</p>
-        </div>
-    </div>
-
     <!-- Dawn sequence (v0.8.0: sequence_count + window_funnel_events) -->
     <div class="bnb-card pad">
         <div class="bnb-eyebrow">Dawn sequence</div>
@@ -65,8 +52,21 @@
         </div>
     </div>
 
+    <!-- Previous / next species -->
+    <div class="bnb-card pad bh-wide">
+        <div class="bnb-eyebrow">Before and after</div>
+        <h2 class="an-card-h3">Neighbouring species</h2>
+        <p class="bnb-meta an-card-lede">
+            Which species tends to be heard just <b>before</b> a bird first turns up in a
+            session, and which just <b>after</b>. Birds heard at the same moment are not counted.
+        </p>
+        <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading predictions...</p>
+        </div>
+    </div>
+
     <!-- Engine configuration -->
-    <div class="bnb-card pad">
+    <div class="bnb-card pad bh-wide">
         <div class="bnb-eyebrow">Configuration</div>
         <h2 class="an-card-h3">The analytics engine</h2>
         <p class="bnb-meta an-card-lede">

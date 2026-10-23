@@ -30,7 +30,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_ANALYTICS_DB` | `--analytics-db` | `ANALYTICS_DB_PATH` | `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns analytics off |
 | `BIRDNET_SKIP_MIGRATION_BACKUP` | — | — | unset. Any value but empty or `0` lets a history-rewriting migration run without the backup it otherwise takes first — for a station whose disk has no room for a copy of the database, accepting that the previous timestamps cannot be recovered |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | `RECORDING_SCHEDULE` | `all-day` |
-| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `SEGMENT_DURATION` (BirdNET-Pi's `RECORDING_LENGTH` is range-checked but does not set it) | `15` |
+| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `SEGMENT_DURATION` (BirdNET-Pi's `RECORDING_LENGTH` is read as this when `SEGMENT_DURATION` is absent or blank) | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
 | `BIRDNET_METADATA_MODEL` | `--metadata-model` | `METADATA_MODEL_PATH` | set by the installer / entrypoint |
 | `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
@@ -80,7 +80,8 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
 | `BIRDNET_CLIP_RETENTION_DAYS` | `--clip-retention-days` | `CLIP_RETENTION_DAYS` | `0` (keep forever) |
-| `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` |
+| `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` (BirdNET-Pi calls it `PURGE_THRESHOLD`) |
+| — | — | `FULL_DISK` | `purge`. What happens at that threshold: `purge` deletes the oldest clips of the most-recorded species (never below `PURGE_SPECIES_FLOOR`, never a locked one); `keep` stops recording, deletes nothing and records again by itself once usage is 2 points below the threshold, as BirdNET-Pi's `FULL_DISK=keep` does |
 | `BIRDNET_PURGE_SPECIES_FLOOR` | `--purge-species-floor` | `PURGE_SPECIES_FLOOR` | `5` (`0` = no floor) |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
@@ -131,8 +132,10 @@ consent: Apprise, BirdWeather, MQTT, SMTP e-mail, the heartbeat ping, and the
 weather poll (`api.open-meteo.com` by default; `api.met.no`, `api.weather.com`
 or `api.pirateweather.net` for the other `WEATHER_PROVIDER`s — itself opt-in via
 `BNB_WEATHER_ENABLED=1`).
-The location button on the settings page calls `ip-api.com`, and only when you
-press it.
+The location button calls `ipwho.is` (and `get.geojs.io` if that does not
+answer), over TLS and only when you press it. The request tells that service
+this station's public IP address, which is how it finds the area; no station
+data is sent. You review the coordinates before saving them.
 
 ### Offline mode
 

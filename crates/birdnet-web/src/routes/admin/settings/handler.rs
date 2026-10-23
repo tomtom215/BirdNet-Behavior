@@ -1,6 +1,6 @@
 //! Settings route handlers (GET / POST).
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -259,7 +259,44 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
         };
         problems.extend(whole_number_problem(label, value, min, max, advice));
     }
+    // The fifteen numbers the station parses and, outside their range, quietly
+    // replaces or clamps. Read from the submission, like the rest, and from the
+    // table `--doctor` checks the file against, so the two cannot disagree.
+    for bound in birdnet_core::config::validate::FIELD_BOUNDS {
+        if let Some(value) = bounded_value(form, bound.form_key)
+            && !bound.accepts(value)
+        {
+            problems.push(bound.refusal(value.trim()));
+        }
+    }
     problems
+}
+
+/// The submitted text of one of the fields in
+/// [`birdnet_core::config::validate::FIELD_BOUNDS`].
+///
+/// A match and not a lookup in a map, so that adding a bound without wiring the
+/// field here is a failing test (`every_bounded_field_is_wired`) and not a bound
+/// that is checked against nothing.
+fn bounded_value<'a>(form: &'a SettingsForm, key: &str) -> Option<&'a String> {
+    match key {
+        "freq_shift_hz" => form.freq_shift_hz.as_ref(),
+        "pre_sunrise_offset" => form.pre_sunrise_offset.as_ref(),
+        "post_sunset_offset" => form.post_sunset_offset.as_ref(),
+        "notify_cooldown" => form.notify_cooldown.as_ref(),
+        "deadman_hours" => form.deadman_hours.as_ref(),
+        "clip_retention_days" => form.clip_retention_days.as_ref(),
+        "max_files_per_species" => form.max_files_per_species.as_ref(),
+        "purge_threshold" => form.purge_threshold.as_ref(),
+        "extraction_length" => form.extraction_length.as_ref(),
+        "rare_species_days" => form.rare_species_days.as_ref(),
+        "stream_retention_secs" => form.stream_retention_secs.as_ref(),
+        "stream_max_mb" => form.stream_max_mb.as_ref(),
+        "email_smtp_port" => form.email_smtp_port.as_ref(),
+        "email_cooldown_secs" => form.email_cooldown_secs.as_ref(),
+        "clip_target_lufs" => form.clip_target_lufs.as_ref(),
+        _ => None,
+    }
 }
 
 /// Problems with the fields that take one word out of a short list, phrased for
@@ -313,6 +350,65 @@ fn choice_problems(form: &SettingsForm) -> Vec<String> {
             v::AUDIO_FORMATS.join(", ")
         ));
     }
+    if let Some(raw) = given(&form.full_disk_action)
+        && !v::is_full_disk_action(&raw)
+    {
+        problems.push(format!(
+            "When the disk is full must be one of {}. You entered “{raw}”.",
+            v::FULL_DISK_ACTIONS.join(", ")
+        ));
+    }
+    if let Some(raw) = given(&form.notify_trigger) {
+        let unknown = v::unknown_trigger_words(&raw);
+        if !unknown.is_empty() {
+            problems.push(format!(
+                "Notification trigger takes each, new-species, new-species-daily or off \
+                 (several may be listed, separated by commas). You entered “{raw}”."
+            ));
+        }
+    }
+    if let Some(raw) = given(&form.spectrogram_colormap)
+        && !crate::routes::spectrogram::is_colormap(&raw)
+    {
+        problems.push(format!(
+            "Spectrogram colour map must be one of viridis, magma, inferno, grey, \
+             grey_inverted. You entered “{raw}”."
+        ));
+    }
+    if let Some(raw) = given(&form.spectrogram_range_db)
+        && !crate::routes::spectrogram::is_range_db(&raw)
+    {
+        problems.push(format!(
+            "Spectrogram dynamic range must be one of 60, 80, 100, 120 (dB). You \
+             entered “{raw}”."
+        ));
+    }
+    if let Some(raw) = given(&form.time_format)
+        && !crate::display::is_time_format(&raw)
+    {
+        problems.push(format!("Clock must be 24h or 12h. You entered “{raw}”."));
+    }
+    if let Some(raw) = given(&form.temperature_unit)
+        && !crate::display::is_temperature_unit(&raw)
+    {
+        problems.push(format!(
+            "Temperature unit must be celsius or fahrenheit. You entered “{raw}”."
+        ));
+    }
+    if let Some(problem) = form
+        .dashboard_image
+        .as_deref()
+        .and_then(crate::routes::dashboard_image::path_problem)
+    {
+        problems.push(problem);
+    }
+    if let Some(problem) = form
+        .dashboard_image_title
+        .as_deref()
+        .and_then(crate::routes::dashboard_image::title_problem)
+    {
+        problems.push(problem);
+    }
     if let Some(raw) = given(&form.info_site)
         && !v::is_info_site(&raw)
     {
@@ -336,6 +432,9 @@ pub(crate) fn submission_problems(form: &SettingsForm) -> Vec<String> {
     problems.extend(choice_problems(form));
     problems.extend(birdweather_token_problem(form));
     problems.extend(language_problem(form));
+    problems.extend(stream_url_problems(form));
+    problems.extend(super::extra::problems(&form.extra));
+    problems.extend(super::masking::leftover_problems(form));
     problems
 }
 
@@ -383,6 +482,47 @@ fn language_problem(form: &SettingsForm) -> Option<String> {
     ))
 }
 
+/// A network audio address or a heartbeat address that cannot be requested,
+/// explained.
+///
+/// Both are typed by the owner (or imported from another station's
+/// `birdnet.conf`) and then requested for as long as the station runs. A
+/// stream address must start with a scheme the capture code knows; a heartbeat
+/// address is requested with plain HTTP(S). The messages name the field and
+/// never the value: both usually carry a key or a camera password.
+fn stream_url_problems(form: &SettingsForm) -> Vec<String> {
+    use birdnet_core::audio::capture::StreamProtocol;
+    let mut problems = Vec::new();
+    for (field, value) in [("rtsp_url", &form.rtsp_url), ("rtsp_urls", &form.rtsp_urls)] {
+        let bad = value.as_deref().is_some_and(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|piece| !piece.is_empty())
+                .any(|piece| StreamProtocol::of(piece).is_none())
+        });
+        if bad {
+            problems.push(format!(
+                "An address in {field} does not start with a scheme this station can read \
+                 ({}). Check each address, comma-separated, begins like rtsp://camera/stream.",
+                StreamProtocol::SCHEMES
+            ));
+        }
+    }
+    if let Some(url) = form.heartbeat_url.as_deref().map(str::trim)
+        && !url.is_empty()
+    {
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            problems.push(
+                "The heartbeat address must start with http:// or https:// — it is requested \
+                 with an ordinary web request."
+                    .to_owned(),
+            );
+        }
+    }
+    problems
+}
+
 /// Save submitted settings and return an HTMX feedback partial.
 ///
 /// # Errors
@@ -391,8 +531,9 @@ fn language_problem(form: &SettingsForm) -> Option<String> {
 pub async fn save_settings(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SettingsForm>,
+    HtmxForm(form): HtmxForm<SettingsForm>,
 ) -> Result<Html<String>, StatusCode> {
+    let mut form = form;
     state.run_blocking(move |state| {
     // Compare submitted values against the current DB state so we only
     // persist the rows the operator actually changed. Without this the
@@ -417,6 +558,9 @@ pub async fn save_settings(
             ));
         }
     };
+    // A credential the form was shown masked comes back as the mask; put what is
+    // stored back in its place before anything checks or diffs the submission.
+    super::masking::resolve(&mut form, &existing);
     let items = build_settings_items(&form, &existing, Unset::AsShownByTheForm);
 
     // Reject before writing, and reject the whole submission: a partial save
@@ -474,29 +618,105 @@ pub async fn save_settings(
                     Some(&keys),
                 );
             }
+            // Which of what was just saved is in force already and which waits
+            // for the station to start again. The page used to say "Settings are
+            // applied when the station next starts" of all of them, which was
+            // false of the species lists and the spectrogram options and,
+            // worse, left the person with a link to a page rather than a button.
+            let (waiting, in_force): (Vec<&str>, Vec<&str>) =
+                items.iter().map(|(k, _, _)| *k).partition(|k| {
+                    super::applies::applies_for(k).is_some_and(super::applies::Applies::needs_restart)
+                });
+            let readable = |keys: &[&str]| {
+                keys.iter()
+                    .map(|k| k.replace('_', " "))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let when = if waiting.is_empty() {
+                if saved == 0 {
+                    String::new()
+                } else {
+                    r#"<span class="save-note dim">These are in force already.</span>"#.to_owned()
+                }
+            } else {
+                format!(
+                    r#"<div class="applies-banner" role="status"><div class="applies-banner__text"><strong>{n} of these need a restart</strong> before the station uses them: {list}.{rest}</div><button type="button" class="bnb-btn primary" data-restart-now>Restart the station now</button><span class="bnb-meta" data-restart-status role="status"></span></div>"#,
+                    n = waiting.len(),
+                    list = crate::routes::pages::escape_html(&readable(&waiting)),
+                    rest = if in_force.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" The others ({}) are in force already.", in_force.len())
+                    },
+                )
+            };
+            // A picture path is stored whatever it names (the file may appear
+            // later), but a person who typed `/etc/passwd` is told now, not by
+            // a Today page with no picture. Checked on the submission, not the
+            // diff: a path already saved that is still not a picture is the
+            // reason someone is on this page.
+            let picture_note = form
+                .dashboard_image
+                .as_deref()
+                .and_then(|path| {
+                    crate::routes::dashboard_image::picture_problem(path)
+                        .map(|why| format!("{}: {why}", path.trim()))
+                })
+                .map(|note| {
+                    format!(
+                        "The picture for the Today page will not show: {note}. The setting is saved, and the page looks again every ten seconds, so it will appear once the file is a picture."
+                    )
+                });
+            let picture_html = picture_note.as_deref().map_or_else(String::new, |note| {
+                format!(
+                    r#"<p class="save-picture-note">{}</p>"#,
+                    crate::routes::pages::escape_html(note)
+                )
+            });
+            let zone_note = if items.iter().any(|(k, v, _)| *k == TIMEZONE_CLEARED_KEY && v.is_empty()) {
+                r#"<span class="save-note dim"> The time zone recorded at setup was for the old location, so it was cleared; Diagnostics will no longer compare it with this station's clock.</span>"#
+            } else {
+                ""
+            };
+            let alert = if picture_note.is_some() {
+                "alert-warn"
+            } else {
+                "alert-success"
+            };
             let body = Html(format!(
-                r#"<div class="alert alert-success" role="alert"
+                r#"<div class="alert {alert}" role="alert"
                     hx-swap-oob="true" id="settings-feedback">
                 <svg class="alert-icon" width="16" height="16" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
                 </svg>
                 Settings saved ({saved} values updated).
-                <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
+                {when}{zone_note}{picture_html}
             </div>"#
             ));
-            // O-18: toast the success outcome via OOB, with a follow-up action
-            // — settings only take effect on next restart, so surface the link.
+            // O-18: toast the success outcome via OOB. The follow-up action is
+            // offered only when something saved actually waits for a restart.
+            let saved_message = if waiting.is_empty() {
+                format!("Settings saved ({saved} values updated).")
+            } else {
+                format!(
+                    "Settings saved ({saved} values updated). {} need a restart to apply.",
+                    waiting.len()
+                )
+            };
+            // Green says everything worked; with a picture that will not show it
+            // did not, so the toast is the warning one and carries the reason.
+            let toast = match &picture_note {
+                Some(note) => Toast::warn(format!("{saved_message} {note}")),
+                None => Toast::success(saved_message),
+            };
             Ok(toast::with(
                 body,
-                // The action used to read "Open system", which says where to
-                // go and not why. Three places told the reader about the
-                // restart in three different ways — "Most settings require a
-                // restart", "Changes apply on next restart", and, in the most
-                // prominent of the three, nothing at all.
-                Toast::success(format!(
-                    "Settings saved ({saved} values updated). Restart to apply them."
-                ))
-                .with_action("/admin/system", "Restart →"),
+                if waiting.is_empty() {
+                    toast
+                } else {
+                    toast.with_action("/admin/system/restart", "Restart →")
+                },
             ))
         }
         Err(e) => {
@@ -531,93 +751,218 @@ pub async fn save_settings(
 // ---------------------------------------------------------------------------
 
 /// Response body for the detect-location endpoint.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LocationResult {
     /// Latitude in decimal degrees.
     pub lat: f64,
     /// Longitude in decimal degrees.
     pub lon: f64,
-    /// Nearest city name returned by ip-api.com; empty when unavailable.
+    /// Nearest city name reported by the provider; empty when unavailable.
     pub city: String,
-    /// Country name returned by ip-api.com; empty when unavailable.
+    /// Country name reported by the provider; empty when unavailable.
     pub country: String,
-    /// IANA timezone name (e.g. `"America/New_York"`) reported by ip-api.com.
+    /// IANA timezone name (e.g. `"America/New_York"`) reported by the provider.
     /// Empty when the service omits it. Surfaced so first-run onboarding can
     /// store it for display and the doctor's clock check (the OS clock remains
     /// the source of truth for wall-clock times — see `doctor::clock`).
     pub timezone: String,
 }
 
-/// Detect the station's approximate location using the public ip-api.com service.
+/// One IP-geolocation service: where to ask and how to read the answer.
+struct GeoProvider {
+    /// Host name, for the log; never sent anywhere.
+    name: &'static str,
+    /// An `https://` URL that answers with the caller's own address located.
+    url: &'static str,
+    /// Reads the response body.
+    parse: fn(&[u8]) -> Result<LocationResult, String>,
+}
+
+/// The services asked, in order, until one answers. Both are free, need no key
+/// and are reached over TLS; each is told the station's public IP address by
+/// the request itself, which is the whole of what it learns. The second is
+/// asked only when the first fails.
+///
+/// * `ipwho.is` — 1,000 requests a day per client address, commercial use
+///   allowed, <https://ipwhois.io/documentation>.
+/// * `get.geojs.io` — "No rate limits (yet)", <https://www.geojs.io/>.
+///
+/// `BirdNET-Pi` asked `ip-api.com`, whose free tier has no TLS: the
+/// coordinates this fills in could be rewritten on the way, and the station's
+/// address went across the network in clear.
+const GEO_PROVIDERS: [GeoProvider; 2] = [
+    GeoProvider {
+        name: "ipwho.is",
+        url: "https://ipwho.is/",
+        parse: parse_ipwhois,
+    },
+    GeoProvider {
+        name: "get.geojs.io",
+        url: "https://get.geojs.io/v1/ip/geo.json",
+        parse: parse_geojs,
+    },
+];
+
+/// Longest response read from a provider; a real answer is under 1 KiB.
+const GEO_MAX_BODY: usize = 64 * 1024;
+
+/// A coordinate from a JSON number or a numeric string (`geojs` sends strings).
+fn coordinate(v: Option<&serde_json::Value>, limit: f64) -> Option<f64> {
+    let n = match v? {
+        serde_json::Value::Number(n) => n.as_f64()?,
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok()?,
+        _ => return None,
+    };
+    (n.is_finite() && n.abs() <= limit).then_some(n)
+}
+
+/// A provider's free text made safe to store and show: control characters
+/// dropped, at most `max` characters.
+fn clean_text(v: Option<&serde_json::Value>, max: usize) -> String {
+    v.and_then(serde_json::Value::as_str)
+        .map(|s| s.chars().filter(|c| !c.is_control()).take(max).collect())
+        .map(|s: String| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// A timezone name only if it has the shape of an IANA one
+/// (`Area/Location`, ASCII letters, digits and `_+-/`); the settings table
+/// keeps it and the doctor reads it, so a provider's free text is not stored.
+fn clean_timezone(v: Option<&serde_json::Value>) -> String {
+    let t = clean_text(v, 64);
+    let shaped = !t.is_empty()
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '+' | '-'));
+    if shaped { t } else { String::new() }
+}
+
+/// The location in a decoded answer, or why it is not one. A coordinate that
+/// is missing, not finite or out of range is a failed lookup, and so is
+/// 0.0, 0.0: no provider's answer for a real station, and what an unknown
+/// address is reported as.
+fn located(
+    root: &serde_json::Value,
+    city: Option<&serde_json::Value>,
+    country: Option<&serde_json::Value>,
+    timezone: Option<&serde_json::Value>,
+) -> Result<LocationResult, String> {
+    let lat = coordinate(root.get("latitude"), 90.0);
+    let lon = coordinate(root.get("longitude"), 180.0);
+    match (lat, lon) {
+        (Some(lat), Some(lon)) if lat != 0.0 || lon != 0.0 => Ok(LocationResult {
+            lat,
+            lon,
+            city: clean_text(city, 100),
+            country: clean_text(country, 100),
+            timezone: clean_timezone(timezone),
+        }),
+        _ => Err("no usable coordinates in the response".into()),
+    }
+}
+
+/// `https://ipwho.is/`: `{"success": true, "latitude": 37.77, "longitude":
+/// -122.41, "city": ..., "country": ..., "timezone": {"id": "America/..."}}`,
+/// and `{"success": false, "message": ...}` for a refusal.
+fn parse_ipwhois(body: &[u8]) -> Result<LocationResult, String> {
+    let root: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("invalid location response: {e}"))?;
+    if root.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err("the provider reported a failure".into());
+    }
+    located(
+        &root,
+        root.get("city"),
+        root.get("country"),
+        root.get("timezone").and_then(|t| t.get("id")),
+    )
+}
+
+/// `https://get.geojs.io/v1/ip/geo.json`: `{"latitude": "37.751", "longitude":
+/// "-97.822", "country": ..., "timezone": "America/Chicago"}`. Coordinates are
+/// strings; there is no city for most addresses and no success flag.
+fn parse_geojs(body: &[u8]) -> Result<LocationResult, String> {
+    let root: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("invalid location response: {e}"))?;
+    located(
+        &root,
+        root.get("city"),
+        root.get("country"),
+        root.get("timezone"),
+    )
+}
+
+/// The client for a provider: TLS only (a redirect to `http://` is refused
+/// too), no more than five seconds.
+fn geo_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .https_only(true)
+        .build()
+}
+
+/// Ask one provider. The body is read at most [`GEO_MAX_BODY`] bytes deep and
+/// only for a 2xx status.
+async fn ask_provider(
+    client: &reqwest::Client,
+    url: &str,
+    parse: fn(&[u8]) -> Result<LocationResult, String>,
+) -> Result<LocationResult, String> {
+    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("the provider answered {}", resp.status()));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > GEO_MAX_BODY {
+            return Err("the response is larger than any location answer".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    parse(&body)
+}
+
+/// Detect the station's approximate location from its public IP address.
 ///
 /// Returns `{"lat": ..., "lon": ..., "city": ..., "country": ..., "timezone": ...}`
-/// on success, or `500` with an error message on failure.
+/// on success, or `502` with an error message on failure. The request tells a
+/// third-party service (see `GEO_PROVIDERS`) the station's public IP address
+/// and nothing else; the wizard says so next to the button and the manual
+/// repeats it.
 ///
 /// BirdNET-Pi equivalent: `birdnet_analysis.sh` calls `curl ipinfo.io` on startup
 /// to auto-populate `LATITUDE` / `LONGITUDE` when not configured.
 ///
 /// # Errors
 ///
-/// Returns `(StatusCode, String)` on HTTP client build failure, network errors,
-/// JSON decode failure, or when ip-api.com returns a non-success status.
+/// Returns `(StatusCode, String)` on HTTP client build failure, or when every
+/// provider failed (no route, a non-2xx status, an answer that is not JSON or
+/// has no usable coordinates).
 pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, String)> {
-    #[derive(serde::Deserialize)]
-    struct IpApiResponse {
-        lat: f64,
-        lon: f64,
-        #[serde(default)]
-        city: String,
-        #[serde(default)]
-        country: String,
-        #[serde(default)]
-        timezone: String,
-        status: String,
+    let client = geo_client().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut last = String::from("no provider configured");
+    for provider in &GEO_PROVIDERS {
+        match ask_provider(&client, provider.url, provider.parse).await {
+            Ok(found) => {
+                tracing::info!(
+                    lat = found.lat,
+                    lon = found.lon,
+                    city = %found.city,
+                    provider = provider.name,
+                    "auto-detected location"
+                );
+                return Ok(Json(found));
+            }
+            Err(e) => {
+                tracing::warn!(provider = provider.name, error = %e, "location lookup failed");
+                last = e;
+            }
+        }
     }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let resp = client
-        .get("http://ip-api.com/json/")
-        .send()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("location lookup failed: {e}"),
-            )
-        })?;
-
-    let data: IpApiResponse = resp.json().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("invalid location response: {e}"),
-        )
-    })?;
-
-    if data.status != "success" {
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            "ip-api.com returned non-success status".into(),
-        ));
-    }
-
-    tracing::info!(
-        lat = data.lat,
-        lon = data.lon,
-        city = %data.city,
-        "auto-detected location via ip-api.com"
-    );
-
-    Ok(Json(LocationResult {
-        lat: data.lat,
-        lon: data.lon,
-        city: data.city,
-        country: data.country,
-        timezone: data.timezone,
-    }))
+    Err((
+        StatusCode::BAD_GATEWAY,
+        format!("location lookup failed: {last}"),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -647,10 +992,13 @@ pub(crate) fn mask_credentials(raw: &HashMap<String, String>) -> HashMap<String,
 
 /// The settings as `user` may see them in a form.
 ///
-/// An admin sees every stored value — they are the one who types them in. A
-/// viewer is read-only on `/admin`, and "read-only" had meant "can read the
-/// SMTP password, the BirdWeather token and every notification URL in
-/// plaintext": the settings API has always masked them, the forms did not.
+/// An administrator sees every stored value except the credentials, which are
+/// masked ([`super::masking`]): they typed them in once, and a page that prints
+/// them back is a page that can be shoulder-surfed, screenshotted into a bug
+/// report or cached by a proxy. A viewer is read-only on `/admin`, and
+/// "read-only" had meant "can read the SMTP password, the BirdWeather token and
+/// every notification URL in plaintext": the settings API has always masked
+/// them, the forms did not.
 ///
 /// `None` — no identity on the request, which the admin gate never lets
 /// happen — is treated as a viewer: the safe default for a form that would
@@ -664,13 +1012,77 @@ pub(crate) fn load_settings_for(
     user: Option<&crate::auth_middleware::RequestUser>,
 ) -> Result<HashMap<String, String>, String> {
     let raw = load_all_settings(state)?;
-    Ok(
-        if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
-            raw
-        } else {
-            mask_credentials(&raw)
-        },
-    )
+    // Nobody sees a credential in clear: the administrator's forms show a saved
+    // secret as a mask and an address with its password masked, and a save that
+    // sends the mask back keeps what is stored (`masking`). A viewer's forms are
+    // masked more broadly, by the rule the settings API applies.
+    let mut shown = if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
+        super::masking::mask_for_admin(&raw)
+    } else {
+        mask_credentials(&raw)
+    };
+    // Not a setting: the keys saved since the station started, for the page's
+    // "waiting for a restart" banner. Added here, after the masking, and not in
+    // `load_all_settings`, so the API and the save's diff never see it.
+    let pending = pending_restart_keys(state);
+    if !pending.is_empty() {
+        shown.insert(super::render::PENDING_KEY.to_owned(), pending.join(","));
+    }
+    // Also not a setting: whether the audio-source list exists, because once it
+    // does the capture addresses below it are ignored (see `audio_sources_note`).
+    if let Some(summary) = audio_sources_summary(state) {
+        shown.insert(super::render::AUDIO_SOURCES_KEY.to_owned(), summary);
+    }
+    Ok(shown)
+}
+
+/// The station's active audio sources as the Audio Capture card lists them,
+/// or `None` when it has none (or they could not be read).
+///
+/// Capture reads the `audio_sources` table alone as soon as one active row is in
+/// it (`src/capture.rs`); the microphone and network-camera settings only seed
+/// the table while it is empty. So the card offers those fields only while there
+/// is no active row, and otherwise lists the rows and says where they are
+/// edited. An unreadable table is `None`: the fields are then offered as they
+/// always were, and the page says nothing false about sources it cannot see.
+///
+/// One line per source, `kind<TAB>name<TAB>device`, the device masked; see
+/// `render::audio::sources_note`.
+fn audio_sources_summary(state: &AppState) -> Option<String> {
+    let rows = state
+        .with_read_db(birdnet_db::audio_sources::AudioSourceStore::list)
+        .map_err(|e| tracing::warn!(error = %e, "could not list the audio sources for the settings page"))
+        .ok()?;
+    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lines: Vec<String> = rows
+        .iter()
+        .filter(|s| s.disabled_at.is_none())
+        .map(|s| {
+            let device = if s.kind == birdnet_db::audio_sources::SourceKind::Rtsp {
+                birdnet_core::config::redact::redact_value(&s.device_id)
+            } else {
+                s.device_id.clone()
+            };
+            format!(
+                "{}\t{}\t{}",
+                s.kind.as_str(),
+                one_line(s.label.as_deref().unwrap_or("")),
+                one_line(&device)
+            )
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// The settings saved since the station started (see [`crate::pending_restart`]).
+///
+/// A read that fails is not a reason to withhold the page: this only decides
+/// whether to show a banner, and the page says nothing false without it.
+fn pending_restart_keys(state: &AppState) -> Vec<String> {
+    crate::pending_restart::changed_settings(state).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not tell which saved settings await a restart");
+        Vec::new()
+    })
 }
 
 /// Every stored setting, by key.
@@ -976,6 +1388,16 @@ pub(crate) fn build_settings_items(
         SettingsCategory::System
     );
     push!(
+        form.dashboard_image,
+        "dashboard_image",
+        SettingsCategory::System
+    );
+    push!(
+        form.dashboard_image_title,
+        "dashboard_image_title",
+        SettingsCategory::System
+    );
+    push!(
         form.max_files_per_species,
         "max_files_per_species",
         SettingsCategory::System
@@ -996,8 +1418,29 @@ pub(crate) fn build_settings_items(
         SettingsCategory::System
     );
     push!(
+        form.spectrogram_colormap,
+        "spectrogram_colormap",
+        SettingsCategory::System
+    );
+    push!(
+        form.spectrogram_range_db,
+        "spectrogram_range_db",
+        SettingsCategory::System
+    );
+    push!(form.time_format, "time_format", SettingsCategory::System);
+    push!(
+        form.temperature_unit,
+        "temperature_unit",
+        SettingsCategory::System
+    );
+    push!(
         form.purge_threshold,
         "purge_threshold",
+        SettingsCategory::System
+    );
+    push!(
+        form.full_disk_action,
+        "full_disk_action",
         SettingsCategory::System
     );
     push!(
@@ -1067,13 +1510,254 @@ pub(crate) fn build_settings_items(
         SettingsCategory::Notifications
     );
 
+    // The table-driven settings: same rule, only what changed.
+    items.extend(super::extra::changed(&form.extra, existing));
+
+    // The time zone the setup wizard recorded was looked up for the coordinates
+    // it saved with it. Moving the station here leaves it behind, and
+    // Diagnostics compares it with the host clock and advises on it: 50.0/5.0
+    // beside `America/Los_Angeles` told someone to set their clock to California.
+    // This form has no time-zone field of its own (nothing here can say what the
+    // new place's zone is), so a zone recorded for the old place is cleared
+    // rather than kept. The wizard makes the same decision on its own form.
+    let moved = items
+        .iter()
+        .any(|(k, _, _)| matches!(*k, "latitude" | "longitude"));
+    if moved
+        && existing
+            .get("timezone")
+            .is_some_and(|z| !z.trim().is_empty())
+    {
+        items.push((
+            TIMEZONE_CLEARED_KEY,
+            String::new(),
+            SettingsCategory::Location,
+        ));
+    }
     items
 }
+
+/// The settings key of the time zone the wizard records; see
+/// [`build_settings_items`] for why a move clears it.
+const TIMEZONE_CLEARED_KEY: &str = "timezone";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    // -- IP geolocation ---------------------------------------------------
+
+    /// What `https://ipwho.is/` answered (captured 2026-10-21, trimmed to the
+    /// members this code could read, the address replaced by a documentation one).
+    const IPWHOIS_BODY: &str = r#"{"ip":"203.0.113.7","success":true,"type":"IPv4",
+        "continent":"North America","country":"United States","country_code":"US",
+        "region":"California","city":"San Francisco","latitude":37.774926,
+        "longitude":-122.4194208,"timezone":{"id":"America/Los_Angeles","abbr":"PDT",
+        "is_dst":true,"offset":-25200,"utc":"-07:00"}}"#;
+
+    /// What `https://get.geojs.io/v1/ip/geo.json` answered (same capture).
+    const GEOJS_BODY: &str = r#"{"accuracy":1000,"area_code":"0","asn":396982,
+        "continent_code":"NA","country":"United States","country_code":"US",
+        "ip":"203.0.113.7","latitude":"37.751","longitude":"-97.822",
+        "organization":"AS396982 Google LLC","timezone":"America\/Chicago"}"#;
+
+    #[test]
+    fn ipwhois_is_read_into_a_location() {
+        let got = parse_ipwhois(IPWHOIS_BODY.as_bytes()).expect("a real answer parses");
+        assert_eq!(
+            got,
+            LocationResult {
+                lat: 37.774_926,
+                lon: -122.419_420_8,
+                city: "San Francisco".into(),
+                country: "United States".into(),
+                timezone: "America/Los_Angeles".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn geojs_strings_are_read_into_a_location() {
+        let got = parse_geojs(GEOJS_BODY.as_bytes()).expect("a real answer parses");
+        assert_eq!(
+            got,
+            LocationResult {
+                lat: 37.751,
+                lon: -97.822,
+                city: String::new(),
+                country: "United States".into(),
+                timezone: "America/Chicago".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_refusal_or_a_missing_coordinate_is_a_failed_lookup() {
+        for body in [
+            r#"{"success":false,"message":"Invalid IP address"}"#,
+            r#"{"success":true,"longitude":10.0}"#,
+            r#"{"success":true,"latitude":10.0}"#,
+            // `success` is the provider's word; absent is not true.
+            r#"{"latitude":10.0,"longitude":10.0}"#,
+            r#"{"success":"true","latitude":10.0,"longitude":10.0}"#,
+            "<html>Just a moment...</html>",
+            "",
+        ] {
+            assert!(parse_ipwhois(body.as_bytes()).is_err(), "{body}");
+        }
+        for body in [
+            r#"{"country":"X"}"#,
+            r#"{"latitude":null,"longitude":null}"#,
+            "[]",
+        ] {
+            assert!(parse_geojs(body.as_bytes()).is_err(), "{body}");
+        }
+    }
+
+    /// Both sides of the range check: the edges are places, one step past is
+    /// not, and neither is a value that is not a number at all.
+    #[test]
+    fn coordinates_are_finite_and_in_range() {
+        let at = |lat: &str, lon: &str| {
+            parse_geojs(format!(r#"{{"latitude":{lat},"longitude":{lon}}}"#).as_bytes())
+        };
+        assert!(at("90", "180").is_ok());
+        assert!(at("-90", "-180").is_ok());
+        assert!(at(r#""90.0""#, r#""-180.0""#).is_ok());
+        for (lat, lon) in [
+            ("90.0001", "0.5"),
+            ("-90.0001", "0.5"),
+            ("0.5", "180.0001"),
+            ("0.5", "-180.0001"),
+            ("91", "181"),
+            (r#""NaN""#, "1"),
+            ("1", r#""inf""#),
+            (r#""-inf""#, "1"),
+            (r#""north""#, "1"),
+            ("true", "1"),
+            ("1e999", "1"),
+        ] {
+            assert!(at(lat, lon).is_err(), "{lat}, {lon}");
+        }
+    }
+
+    #[test]
+    fn a_provider_that_does_not_know_the_address_is_not_a_location() {
+        let at = |lat: &str, lon: &str| {
+            parse_geojs(format!(r#"{{"latitude":{lat},"longitude":{lon}}}"#).as_bytes())
+        };
+        assert!(at("0", "0").is_err());
+        assert!(at(r#""0.0""#, r#""0.0""#).is_err());
+        // One coordinate on the equator or the meridian is a real place.
+        assert!(at("0", "10").is_ok());
+        assert!(at("10", "0").is_ok());
+    }
+
+    #[test]
+    fn free_text_from_a_provider_is_cleaned_before_it_is_kept() {
+        let body = serde_json::json!({
+            "success": true, "latitude": 1.5, "longitude": 2.5,
+            "city": format!("  Mü\u{7}nchen\n{}", "x".repeat(300)),
+            "country": "Germany",
+            "timezone": {"id": "Europe/Berlin; rm -rf /"},
+        })
+        .to_string();
+        let got = parse_ipwhois(body.as_bytes()).expect("the coordinates are good");
+        assert!(got.city.starts_with("München"), "{:?}", got.city);
+        assert!(got.city.chars().count() <= 100);
+        assert!(!got.city.chars().any(char::is_control));
+        // A timezone with the wrong shape is dropped; the location is kept.
+        assert_eq!(got.timezone, "");
+        assert_eq!((got.lat, got.lon), (1.5, 2.5));
+        for ok in [
+            "America/Argentina/Buenos_Aires",
+            "Etc/GMT+5",
+            "UTC",
+            "Asia/Ho_Chi_Minh",
+        ] {
+            let body = format!(r#"{{"latitude":1,"longitude":2,"timezone":"{ok}"}}"#);
+            assert_eq!(parse_geojs(body.as_bytes()).unwrap().timezone, ok);
+        }
+    }
+
+    /// The reason this code was changed: no provider is asked in clear text.
+    #[test]
+    fn every_provider_is_reached_over_tls() {
+        assert!(!GEO_PROVIDERS.is_empty());
+        for p in &GEO_PROVIDERS {
+            assert!(p.url.starts_with("https://"), "{} is {}", p.name, p.url);
+        }
+    }
+
+    /// A one-answer web server on a loopback port: `raw` is sent, whatever is
+    /// asked. Returns its address.
+    async fn serve_once(raw: Vec<u8>) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0_u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(&raw).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        addr
+    }
+
+    fn http_response(status: &str, body: &[u8]) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn plain_client() -> reqwest::Client {
+        reqwest::Client::builder().no_proxy().build().unwrap()
+    }
+
+    /// Counterpart pair: the station's client will not speak `http://` (so
+    /// neither the first request nor a redirect can drop to clear text), while
+    /// the very same server and answer are read by a client that may.
+    #[tokio::test]
+    async fn the_station_client_refuses_http_and_a_plain_one_reads_the_answer() {
+        let addr = serve_once(http_response("200 OK", GEOJS_BODY.as_bytes())).await;
+        let url = format!("http://{addr}/");
+        let refused = ask_provider(&geo_client().unwrap(), &url, parse_geojs).await;
+        assert!(refused.is_err(), "{refused:?}");
+
+        let addr = serve_once(http_response("200 OK", GEOJS_BODY.as_bytes())).await;
+        let got = ask_provider(&plain_client(), &format!("http://{addr}/"), parse_geojs)
+            .await
+            .expect("the fixture server answers");
+        assert_eq!(got.timezone, "America/Chicago");
+    }
+
+    #[tokio::test]
+    async fn a_failing_or_oversized_answer_is_a_failed_lookup() {
+        let addr = serve_once(http_response(
+            "429 Too Many Requests",
+            GEOJS_BODY.as_bytes(),
+        ))
+        .await;
+        let e = ask_provider(&plain_client(), &format!("http://{addr}/"), parse_geojs)
+            .await
+            .unwrap_err();
+        assert!(e.contains("429"), "{e}");
+
+        let big = vec![b' '; GEO_MAX_BODY + 1];
+        let addr = serve_once(http_response("200 OK", &big)).await;
+        let e = ask_provider(&plain_client(), &format!("http://{addr}/"), parse_geojs)
+            .await
+            .unwrap_err();
+        assert!(e.contains("larger"), "{e}");
+    }
 
     /// The form's ranges and `birdnet-core`'s must not drift.
     ///
@@ -1444,6 +2128,12 @@ mod tests {
     fn empty_form() -> SettingsForm {
         SettingsForm {
             raw_spectrogram: None,
+            spectrogram_colormap: None,
+            spectrogram_range_db: None,
+            time_format: None,
+            temperature_unit: None,
+            dashboard_image: None,
+            dashboard_image_title: None,
             extraction_length: None,
             rare_species_days: None,
             alsa_device: None,
@@ -1487,6 +2177,7 @@ mod tests {
             custom_image_dir: None,
             max_files_per_species: None,
             purge_threshold: None,
+            full_disk_action: None,
             stream_retention_secs: None,
             stream_max_mb: None,
             site_name: None,
@@ -1504,6 +2195,7 @@ mod tests {
             email_starttls: None,
             email_min_confidence: None,
             email_cooldown_secs: None,
+            extra: HashMap::new(),
         }
     }
 
@@ -1671,13 +2363,15 @@ mod tests {
         // but never reaches `set_many` would be classified as wired while still
         // doing nothing. Submitting a form with every field populated must emit
         // exactly the declared set — no more, no fewer.
-        use super::super::form::SETTINGS_FORM_KEYS;
+        use super::super::form::all_form_keys;
         use std::collections::BTreeSet;
 
         // Build the form the way a browser does, so the fields exercised are the
-        // ones serde actually binds.
+        // ones serde actually binds — the table-driven ones through the flattened
+        // map, which is the part that could silently drop a key.
+        let declared_keys = all_form_keys();
         let submitted: std::collections::HashMap<&str, &str> =
-            SETTINGS_FORM_KEYS.iter().map(|k| (*k, "1")).collect();
+            declared_keys.iter().map(|k| (*k, "1")).collect();
         let form: SettingsForm =
             serde_json::from_value(serde_json::to_value(&submitted).expect("payload serialises"))
                 .expect("a payload of every declared key deserialises into the form");
@@ -1686,7 +2380,7 @@ mod tests {
             .into_iter()
             .map(|(k, _, _)| k)
             .collect();
-        let declared: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+        let declared: BTreeSet<&str> = declared_keys.iter().copied().collect();
 
         assert_eq!(
             emitted, declared,
@@ -1705,5 +2399,135 @@ mod tests {
         let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let name = items.iter().find(|(k, _, _)| *k == "station_name").unwrap();
         assert_eq!(name.1, "Backyard, Boston");
+    }
+
+    /// "Bare spectrograms" was a checkbox, and an unticked checkbox sends no
+    /// field at all, so once it was on there was no way to submit it off.
+    /// Observed failing against the checkbox: the page rendered no `<select>`
+    /// and the form could not say `false` over a stored `true`.
+    #[test]
+    fn bare_spectrograms_can_be_turned_off_again() {
+        let html = super::super::render::render_settings_form(
+            &HashMap::from([("raw_spectrogram".to_owned(), "true".to_owned())]),
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(html.contains(r#"<select id="raw_spectrogram" name="raw_spectrogram">"#));
+        assert!(
+            html.contains(r#"<option value="true" selected>"#),
+            "the stored choice shows"
+        );
+        let form = SettingsForm {
+            raw_spectrogram: Some("false".to_owned()),
+            ..empty_form()
+        };
+        let stored = HashMap::from([("raw_spectrogram".to_owned(), "true".to_owned())]);
+        let items = build_settings_items(&form, &stored, Unset::AsShownByTheForm);
+        assert!(
+            items
+                .iter()
+                .any(|(k, v, _)| *k == "raw_spectrogram" && v == "false"),
+            "turning it off is a change: {items:?}"
+        );
+    }
+
+    /// Every bounded field has a place in `bounded_value`, and a value one past
+    /// each end is refused while the ends themselves are not. The counterpart
+    /// matters: a table that refused everything would otherwise pass.
+    #[test]
+    fn every_bounded_field_is_wired() {
+        use birdnet_core::config::validate::FIELD_BOUNDS;
+        for b in FIELD_BOUNDS {
+            let probe = |text: &str| {
+                let mut form = empty_form();
+                match b.form_key {
+                    "freq_shift_hz" => form.freq_shift_hz = Some(text.to_owned()),
+                    "pre_sunrise_offset" => form.pre_sunrise_offset = Some(text.to_owned()),
+                    "post_sunset_offset" => form.post_sunset_offset = Some(text.to_owned()),
+                    "notify_cooldown" => form.notify_cooldown = Some(text.to_owned()),
+                    "deadman_hours" => form.deadman_hours = Some(text.to_owned()),
+                    "clip_retention_days" => form.clip_retention_days = Some(text.to_owned()),
+                    "max_files_per_species" => form.max_files_per_species = Some(text.to_owned()),
+                    "purge_threshold" => form.purge_threshold = Some(text.to_owned()),
+                    "extraction_length" => form.extraction_length = Some(text.to_owned()),
+                    "rare_species_days" => form.rare_species_days = Some(text.to_owned()),
+                    "stream_retention_secs" => form.stream_retention_secs = Some(text.to_owned()),
+                    "stream_max_mb" => form.stream_max_mb = Some(text.to_owned()),
+                    "email_smtp_port" => form.email_smtp_port = Some(text.to_owned()),
+                    "email_cooldown_secs" => form.email_cooldown_secs = Some(text.to_owned()),
+                    "clip_target_lufs" => form.clip_target_lufs = Some(text.to_owned()),
+                    other => panic!("{other} is in FIELD_BOUNDS and this test cannot set it"),
+                }
+                range_problems(&form)
+            };
+            let fmt = |v: f64| format!("{v}");
+            assert!(
+                probe(&fmt(b.min)).is_empty(),
+                "{}: the minimum is refused",
+                b.form_key
+            );
+            assert!(
+                probe(&fmt(b.max)).is_empty(),
+                "{}: the maximum is refused",
+                b.form_key
+            );
+            assert!(
+                probe("").is_empty(),
+                "{}: blank clears and is fine",
+                b.form_key
+            );
+            let above = if b.whole { b.max + 1.0 } else { b.max + 0.5 };
+            let below = if b.whole { b.min - 1.0 } else { b.min - 0.5 };
+            assert_eq!(
+                probe(&fmt(above)).len(),
+                1,
+                "{}: {above} is allowed",
+                b.form_key
+            );
+            assert_eq!(
+                probe(&fmt(below)).len(),
+                1,
+                "{}: {below} is allowed",
+                b.form_key
+            );
+            assert_eq!(probe("lots").len(), 1, "{}: text is allowed", b.form_key);
+            if b.whole {
+                assert_eq!(
+                    probe("1.5").len(),
+                    1,
+                    "{}: a fraction is allowed",
+                    b.form_key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_stream_or_heartbeat_address_that_cannot_be_requested_is_refused_without_echoing_it() {
+        let mut form = empty_form();
+        form.rtsp_urls = Some("rtsp://cam:hunter2@10.0.0.5/s, ftp://10.0.0.6/s".to_owned());
+        form.heartbeat_url = Some("file:///etc/passwd".to_owned());
+        let problems = submission_problems(&form);
+        let all = problems.join(" | ");
+        assert!(all.contains("rtsp_urls"), "{all}");
+        assert!(
+            all.contains("heartbeat address must start with http"),
+            "{all}"
+        );
+        assert!(!all.contains("hunter2") && !all.contains("passwd"), "{all}");
+    }
+
+    #[test]
+    fn ordinary_stream_and_heartbeat_addresses_are_accepted() {
+        let mut form = empty_form();
+        form.rtsp_urls = Some(
+            "rtsp://cam:pw@10.0.0.5:554/s, RTSPS://cam/s,https://icecast/stream.mp3, srt://h:1"
+                .to_owned(),
+        );
+        form.heartbeat_url = Some("https://hc-ping.com/abc-123".to_owned());
+        assert!(submission_problems(&form).is_empty());
+        // Blank clears the setting and is not a problem.
+        form.rtsp_urls = Some(String::new());
+        form.heartbeat_url = Some("  ".to_owned());
+        assert!(submission_problems(&form).is_empty());
     }
 }

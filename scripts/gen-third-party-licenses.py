@@ -17,7 +17,7 @@ This script produces that file from what is actually in the build:
     the version that ships, not of whatever the repository says today;
   * the things that are not Rust packages, from files kept in `third_party/`
     and `crates/birdnet-web/static/`: ONNX Runtime, the libraries DuckDB
-    bundles, ICU, htmx and the fonts.
+    bundles, ICU, htmx, three.js and the fonts.
 
 A package that ships no licence file in its published crate is written out
 under the standard MIT text with the holders its manifest names, and says so,
@@ -35,8 +35,9 @@ The versions are in Cargo.lock.
 `--check` also holds the vendored texts to the versions they claim: the ONNX
 Runtime directory must be the version `ort-sys` downloads, the DuckDB one the
 version `libduckdb-sys` bundles, and the htmx licence the version of
-`static/htmx.min.js`. A bump that leaves a stale notice fails here, not in a
-user's audit.
+`static/htmx.min.js`, and the three.js licence the version `tools/vendor-three/`
+pins (whose build is `static/vendor/three/three.module.min.js`). A bump that
+leaves a stale notice fails here, not in a user's audit.
 
 Run from anywhere; needs cargo and Python 3.9+. It reads the crate sources cargo
 has unpacked, so run `cargo fetch --locked` first on a machine that has not built
@@ -228,6 +229,17 @@ def engine_versions(meta: dict[tuple[str, str], dict]) -> dict[str, str]:
     versions["duckdb"] = f"{duck['version'].split('.')[0]}.{number // 100 % 100}.{number % 100}"
     js = read_text(os.path.join(ROOT, "crates/birdnet-web/static/htmx.min.js"))
     versions["htmx"] = re.search(r'version:"([^"]+)"', js).group(1)
+    # three.js: the version the build recipe pins, which must also be the one the committed
+    # bundle says it is (its first statement is `var X="186"`, the library's REVISION).
+    pin = json.loads(read_text(os.path.join(ROOT, "tools/vendor-three/package.json")))
+    versions["three"] = pin["dependencies"]["three"]
+    bundle = read_text(os.path.join(ROOT, "crates/birdnet-web/static/vendor/three/three.module.min.js"))
+    revision = re.match(r'var \w+="(\d+)";', bundle)
+    if not revision or revision.group(1) != versions["three"].split(".")[1]:
+        sys.exit(
+            f"static/vendor/three/three.module.min.js is revision {revision and revision.group(1)}, "
+            f"but tools/vendor-three pins three {versions['three']}: rebuild it with build.sh"
+        )
     return versions
 
 
@@ -288,6 +300,18 @@ def bundled_sections(versions: dict[str, str]) -> tuple[str, list[str]]:
             f"htmx {versions['htmx']} (served as /static/htmx.min.js)",
             vendored(f"{htmx_dir}/LICENSE"),
         )
+    three_dir = f"third_party/three-{versions['three']}"
+    if not os.path.isdir(os.path.join(ROOT, three_dir)):
+        problems.append(
+            f"tools/vendor-three pins three {versions['three']}, but {three_dir}/ does not exist: "
+            "vendor that release's LICENSE (third_party/README.md)"
+        )
+    else:
+        section(
+            f"three.js {versions['three']} (the part the soundscape terrain uses, served as "
+            "/static/vendor/three/three.module.min.js)",
+            vendored(f"{three_dir}/LICENSE"),
+        )
     section(
         "Fonts (served from the binary; no external font host)",
         vendored("crates/birdnet-web/static/fonts/LICENSES.txt"),
@@ -305,7 +329,8 @@ def render() -> tuple[str, list[str], dict]:
     mpl = sorted({n for n, v in third_party if "MPL-2.0" in (meta[(n, v)].get("license") or "")})
 
     crates_text, problems = package_sections(third_party, meta)
-    bundled_text, more = bundled_sections(engine_versions(meta))
+    versions = engine_versions(meta)
+    bundled_text, more = bundled_sections(versions)
     problems += more
 
     header = f"""\

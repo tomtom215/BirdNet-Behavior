@@ -44,6 +44,7 @@ async fn player_page(
     let species_safe = escape_html(species);
     let filename_safe = escape_html(&filename);
     let time_safe = escape_html(time);
+    let time_clk = crate::display::clock(time);
     let date_safe = escape_html(date);
 
     let content = format!(
@@ -52,7 +53,7 @@ async fn player_page(
     <h2>{species_safe}</h2>
     <div class="player-meta">
       <span class="confidence-badge">{confidence}%</span>
-      <span class="detection-time">{date_safe} {time_safe}</span>
+      <span class="detection-time">{date_safe} {time_clk}</span>
     </div>
   </div>
 
@@ -104,6 +105,11 @@ async fn player_page(
         Download
       </button>
     </div>
+
+    <details class="lfx-fold">
+      <summary>Listening aids</summary>
+      <div data-listen-fx></div>
+    </details>
   </div>
 </div>"#
     );
@@ -128,11 +134,21 @@ async fn player_page(
   {content}
 </div>
 {player_script}
+{listen_script}
+{display_script}
 </body>
 </html>"#,
         site_name = escape_html(site_name),
         player_style = crate::seal::seal(&format!("<style>{PLAYER_CSS}</style>")),
         player_script = crate::seal::seal(&format!("<script>{PLAYER_JS}</script>")),
+        // Sealed like the page's own script: the security layer escapes any
+        // `<script` it did not seal, including an external one.
+        listen_script = crate::seal::seal(&format!(
+            r#"<script src="/static/listen-fx.js?v={css_v}" defer></script>"#
+        )),
+        display_script = crate::seal::seal(&format!(
+            r#"<script src="/static/display-format.js?v={css_v}" defer></script>"#
+        )),
     );
     Html(html)
 }

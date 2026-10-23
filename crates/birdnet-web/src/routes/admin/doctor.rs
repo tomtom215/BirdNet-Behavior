@@ -167,13 +167,22 @@ async fn doctor_page(State(state): State<AppState>) -> Html<String> {
         None => None,
     };
 
-    let config = state.config_path().map_or_else(no_config_body, |path| {
-        let shown = path.display().to_string();
-        match Config::load_from(path) {
-            Ok(config) => findings_body(&shown, &validate::validate(&config)),
-            Err(e) => load_error_body(&shown, &e.to_string()),
+    // Reading and parsing the file is blocking I/O.
+    let config = match state.config_path().map(std::path::Path::to_path_buf) {
+        None => no_config_body(),
+        Some(path) => {
+            let shown = path.display().to_string();
+            match tokio::task::spawn_blocking(move || Config::load_from(&path)).await {
+                Ok(Ok(config)) => findings_body(&shown, &validate::validate(&config)),
+                // No file is a supported way to run, not an error: say so.
+                Ok(Err(birdnet_core::config::ConfigError::NotFound(_))) => {
+                    absent_config_body(&shown)
+                }
+                Ok(Err(e)) => load_error_body(&shown, &e.to_string()),
+                Err(e) => load_error_body(&shown, &e.to_string()),
+            }
         }
-    });
+    };
 
     // Both arms open the card. The no-report arm used to emit only
     // `{config}{CLI_NOTE}</section>`: `card_open()` — which carries the page's
@@ -338,6 +347,24 @@ fn no_config_body() -> String {
     r"<p>No configuration file path is known to the running server, so it cannot be validated here.</p>".to_owned()
 }
 
+/// The configuration section when there is no file at the path the station
+/// looks at.
+///
+/// This used to be the same "Could not read the configuration file" a file that
+/// exists and cannot be read gets, which sent the owner of a station set up
+/// entirely from the browser looking for a file they never needed. An absent
+/// file is information; a file that is there and unreadable stays an error
+/// (see [`load_error_body`]).
+fn absent_config_body(path: &str) -> String {
+    format!(
+        r#"<p><span class="bnb-pill moss"><span class="bnb-dot"></span> No configuration file, and none is needed</span></p>
+<p class="mono doc-path tight">{path}</p>
+<p>A station does not need this file. It can be set up entirely from this browser under Settings,
+and anything not set there uses the built-in default. Nothing here is wrong.</p>"#,
+        path = escape_html(path),
+    )
+}
+
 fn load_error_body(path: &str, err: &str) -> String {
     format!(
         r#"<p><span class="bnb-pill"><span class="bnb-dot"></span> Could not read the configuration file</span></p>
@@ -357,6 +384,38 @@ mod tests {
         let html = report_body("not json at all");
         assert!(html.contains("not json at all"));
         assert!(html.contains("as text"));
+    }
+
+    /// A file that is not there is information, and a file that is there and
+    /// cannot be read is still an error.
+    #[tokio::test]
+    async fn an_absent_configuration_file_is_not_presented_as_a_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = dir.path().join("birdnet.conf");
+        let state = crate::state::AppState::from_connection(
+            {
+                let conn = rusqlite::Connection::open_in_memory().unwrap();
+                birdnet_db::migration::migrate(&conn).unwrap();
+                conn
+            },
+            std::path::PathBuf::from(":memory:"),
+        )
+        .with_config_path(absent.clone());
+        let Html(page) = doctor_page(State(state.clone())).await;
+        assert!(
+            page.contains("No configuration file, and none is needed"),
+            "{page}"
+        );
+        assert!(!page.contains("Could not read"), "{page}");
+
+        // The counterpart: the file exists but is not valid.
+        std::fs::write(&absent, "=an empty key is not valid\n").unwrap();
+        let Html(page) = doctor_page(State(state)).await;
+        assert!(
+            page.contains("Could not read the configuration file"),
+            "an unreadable file that exists must still be an error: {page}"
+        );
+        assert!(!page.contains("none is needed"), "{page}");
     }
 
     #[test]

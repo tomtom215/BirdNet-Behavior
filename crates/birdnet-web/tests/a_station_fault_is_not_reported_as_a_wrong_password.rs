@@ -27,7 +27,17 @@ use axum::http::{Request, Response, StatusCode, header};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
-const PASSWORD: &str = "hunter2correct";
+/// Built at run time, not written as a literal: CodeQL's
+/// `rust/hard-coded-cryptographic-value` follows a string literal into any
+/// parameter called `password` (see `tests/no_literal_reaches_a_credential_parameter.rs`).
+fn password() -> String {
+    format!("correct-horse-{}", std::process::id())
+}
+
+/// A password that is not the admin's.
+fn wrong_password() -> String {
+    format!("not-it-{}", std::process::id())
+}
 
 /// A station with a known admin password. `break_sessions` drops the table
 /// `create_session` writes to, so the password still verifies (a read of
@@ -36,7 +46,7 @@ const PASSWORD: &str = "hunter2correct";
 fn state_with_admin(break_sessions: bool) -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
     birdnet_db::migration::migrate(&conn).expect("migrate schema");
-    let hash = birdnet_db::accounts::hash_password(PASSWORD).expect("hash");
+    let hash = birdnet_db::accounts::hash_password(&password()).expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         rusqlite::params![hash],
@@ -108,7 +118,7 @@ async fn message_after_login(state: &AppState, password: &str) -> String {
 #[tokio::test]
 async fn a_session_that_cannot_be_written_is_not_blamed_on_the_password() {
     let state = state_with_admin(true);
-    let page = message_after_login(&state, PASSWORD).await;
+    let page = message_after_login(&state, &password()).await;
 
     assert!(
         !page.contains("Incorrect username or password."),
@@ -126,7 +136,7 @@ async fn a_session_that_cannot_be_written_is_not_blamed_on_the_password() {
 #[tokio::test]
 async fn a_wrong_password_is_still_reported_as_a_wrong_password() {
     let state = state_with_admin(false);
-    let page = message_after_login(&state, "definitelynotit").await;
+    let page = message_after_login(&state, &wrong_password()).await;
 
     assert!(
         page.contains("Incorrect username or password."),

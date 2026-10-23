@@ -23,8 +23,26 @@
             }
         });
     }
+    // mdBook 0.5 draws the table-of-contents toggle as a <label for=…> that
+    // carries aria-label and aria-controls, which a label may not have (axe
+    // `aria-allowed-attr`, critical, and `aria-prohibited-attr` on every page),
+    // and which no key can reach: the checkbox it drives is display:none and the
+    // label takes no focus. Giving it the role it is used as, a place in the tab
+    // order and Enter/Space makes the markup valid and the control reachable
+    // (mdBook's own script already keeps its aria-expanded current).
+    function toc() {
+        var label = document.getElementById("mdbook-sidebar-toggle");
+        var box = document.getElementById("mdbook-sidebar-toggle-anchor");
+        if (!label || !box || label.getAttribute("role")) return;
+        label.setAttribute("role", "button");
+        label.setAttribute("tabindex", "0");
+        label.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); label.click(); }
+        });
+    }
     var t;
     window.addEventListener("resize", function () { clearTimeout(t); t = setTimeout(mark, 150); });
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mark);
-    else mark();
+    function init() { mark(); toc(); }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
 })();

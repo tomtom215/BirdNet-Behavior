@@ -229,55 +229,6 @@ async fn quarantine_list_filter_all_shows_entry() {
 }
 
 // ---------------------------------------------------------------------------
-// Pending count badge
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn quarantine_pending_count_zero() {
-    let router = app(migrated_state());
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/pages/quarantine-pending-count")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
-    // Zero pending → empty body (no badge rendered)
-    let html = String::from_utf8_lossy(&body);
-    assert!(html.is_empty() || html == "0" || !html.contains("span"));
-}
-
-#[tokio::test]
-async fn quarantine_pending_count_nonzero() {
-    let router = app(state_with_quarantine(QuarantineReason::Manual));
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/pages/quarantine-pending-count")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
-    let html = String::from_utf8_lossy(&body);
-    // Should render a badge with count "1"
-    assert!(html.contains('1'));
-    assert!(html.contains("span"));
-}
-
-// ---------------------------------------------------------------------------
 // Approve action
 // ---------------------------------------------------------------------------
 

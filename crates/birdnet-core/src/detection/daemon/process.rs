@@ -229,7 +229,7 @@ fn infer_chunk(
 /// # Errors
 ///
 /// Returns `DaemonError` if any stage fails.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(clippy::cast_possible_truncation)]
 pub fn process_and_infer(
     path: &Path,
     pipeline_config: &PipelineConfig,
@@ -310,11 +310,7 @@ pub fn process_and_infer(
 /// # Errors
 ///
 /// Returns `DaemonError` if any stage fails.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::too_many_arguments
-)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
 pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
@@ -547,7 +543,6 @@ mod tests {
         let mut x: u32 = 1;
         for _ in 0..48_000 * 3 {
             x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             w.write_sample(((x >> 16) as i16) / 8).unwrap();
         }
         w.finalize().unwrap();

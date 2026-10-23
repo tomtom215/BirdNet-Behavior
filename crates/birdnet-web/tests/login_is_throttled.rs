@@ -22,12 +22,22 @@ use axum::http::{Request, Response, StatusCode};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
-const PASSWORD: &str = "hunter2correct";
+/// The admin password. Built at run time rather than written down: CodeQL's
+/// `rust/hard-coded-cryptographic-value` follows a string literal into any
+/// parameter called `password`, test or not (`tests/no_literal_reaches_a_credential_parameter.rs`).
+fn password() -> String {
+    format!("correct-horse-{}", std::process::id())
+}
+
+/// A password that is not the admin's.
+fn wrong_password() -> String {
+    format!("not-it-{}", std::process::id())
+}
 
 fn state_with_admin() -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
     birdnet_db::migration::migrate(&conn).expect("migrate schema");
-    let hash = birdnet_db::accounts::hash_password(PASSWORD).expect("hash");
+    let hash = birdnet_db::accounts::hash_password(&password()).expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         rusqlite::params![hash],
@@ -69,7 +79,7 @@ fn audit_actions(state: &AppState) -> Vec<String> {
 async fn the_sixth_attempt_from_one_address_is_refused_before_the_password_is_checked() {
     let state = state_with_admin();
     for i in 1..=5 {
-        let res = post_login(&state, "203.0.113.7", "wrong").await;
+        let res = post_login(&state, "203.0.113.7", &wrong_password()).await;
         assert_eq!(
             res.status(),
             StatusCode::SEE_OTHER,
@@ -83,7 +93,7 @@ async fn the_sixth_attempt_from_one_address_is_refused_before_the_password_is_ch
             "attempt {i}"
         );
     }
-    let res = post_login(&state, "203.0.113.7", "wrong").await;
+    let res = post_login(&state, "203.0.113.7", &wrong_password()).await;
     assert_eq!(
         res.status(),
         StatusCode::TOO_MANY_REQUESTS,
@@ -107,7 +117,7 @@ async fn the_sixth_attempt_from_one_address_is_refused_before_the_password_is_ch
 
     // The right password from the throttled address gets the same answer:
     // no session is minted, because nothing was verified.
-    let res = post_login(&state, "203.0.113.7", PASSWORD).await;
+    let res = post_login(&state, "203.0.113.7", &password()).await;
     assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(
         res.headers().get("set-cookie").is_none(),
@@ -135,13 +145,15 @@ async fn the_sixth_attempt_from_one_address_is_refused_before_the_password_is_ch
 async fn a_sixth_attempt_from_another_address_is_not_affected() {
     let state = state_with_admin();
     for _ in 0..5 {
-        post_login(&state, "203.0.113.7", "wrong").await;
+        post_login(&state, "203.0.113.7", &wrong_password()).await;
     }
     assert_eq!(
-        post_login(&state, "203.0.113.7", "wrong").await.status(),
+        post_login(&state, "203.0.113.7", &wrong_password())
+            .await
+            .status(),
         StatusCode::TOO_MANY_REQUESTS
     );
-    let other = post_login(&state, "203.0.113.8", PASSWORD).await;
+    let other = post_login(&state, "203.0.113.8", &password()).await;
     assert_eq!(
         other.status(),
         StatusCode::SEE_OTHER,
@@ -156,21 +168,78 @@ async fn a_sixth_attempt_from_another_address_is_not_affected() {
 async fn a_successful_sign_in_clears_the_address_failures() {
     let state = state_with_admin();
     for _ in 0..4 {
-        post_login(&state, "203.0.113.7", "wrong").await;
+        post_login(&state, "203.0.113.7", &wrong_password()).await;
     }
-    let ok = post_login(&state, "203.0.113.7", PASSWORD).await;
+    let ok = post_login(&state, "203.0.113.7", &password()).await;
     assert_eq!(ok.status(), StatusCode::SEE_OTHER);
     assert!(ok.headers().get("set-cookie").is_some());
     for i in 1..=5 {
         assert_eq!(
-            post_login(&state, "203.0.113.7", "wrong").await.status(),
+            post_login(&state, "203.0.113.7", &wrong_password())
+                .await
+                .status(),
             StatusCode::SEE_OTHER,
             "mistake {i} after a clean sign-in is still just a failure"
         );
     }
     assert_eq!(
-        post_login(&state, "203.0.113.7", "wrong").await.status(),
+        post_login(&state, "203.0.113.7", &wrong_password())
+            .await
+            .status(),
         StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+/// A moment when the users cannot be read is not a sign-in and not a guess.
+/// The Unavailable arm used to call `succeeded`, which forgets every failure
+/// the address has made: four wrong guesses, one moment of an unreadable
+/// database, and the address had a fresh five. The unreadable attempt itself is
+/// still not counted (five of them must not lock anyone out of their own garden).
+#[tokio::test]
+async fn an_unreadable_user_table_neither_clears_nor_adds_to_the_failures() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = AppState::new(dir.path().join("birds.db")).expect("state");
+    let hash = birdnet_db::accounts::hash_password(&password()).expect("hash");
+    state
+        .with_db(|c| {
+            c.execute(
+                "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
+                rusqlite::params![hash],
+            )
+        })
+        .expect("set admin password");
+    for i in 1..=4 {
+        let res = post_login(&state, "203.0.113.7", &wrong_password()).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "guess {i}");
+    }
+
+    state
+        .with_db(|c| c.execute_batch("ALTER TABLE users RENAME TO users_away"))
+        .expect("take the table away");
+    // Several unreadable attempts: none is a guess, so none may count.
+    for i in 1..=3 {
+        let res = post_login(&state, "203.0.113.7", &wrong_password()).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "unreadable {i}");
+        assert!(
+            res.headers()["location"]
+                .to_str()
+                .unwrap()
+                .contains("error=lookup"),
+            "unreadable {i} is reported as the station's fault"
+        );
+    }
+    state
+        .with_db(|c| c.execute_batch("ALTER TABLE users_away RENAME TO users"))
+        .expect("put it back");
+
+    // Four guesses stand. The fifth is still allowed and is the last.
+    let fifth = post_login(&state, "203.0.113.7", &wrong_password()).await;
+    assert_eq!(fifth.status(), StatusCode::SEE_OTHER, "the fifth guess");
+    let sixth = post_login(&state, "203.0.113.7", &wrong_password()).await;
+    assert_eq!(
+        sixth.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "the four earlier guesses were forgotten when the table was unreadable"
     );
 }
 
@@ -217,7 +286,7 @@ async fn a_cloudflare_header_nobody_vouched_for_does_not_mint_an_address() {
                 ("x-forwarded-for", "203.0.113.7"),
                 ("cf-connecting-ip", &cf),
             ],
-            "wrong",
+            &wrong_password(),
         )
         .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER, "attempt {i}");
@@ -229,7 +298,7 @@ async fn a_cloudflare_header_nobody_vouched_for_does_not_mint_an_address() {
             ("x-forwarded-for", "203.0.113.7"),
             ("cf-connecting-ip", "9.9.9.6"),
         ],
-        "wrong",
+        &wrong_password(),
     )
     .await;
     assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -248,7 +317,7 @@ async fn a_lan_hop_naming_a_new_address_each_time_runs_out() {
             &state,
             "192.168.1.50",
             &[("x-forwarded-for", &xff)],
-            "wrong",
+            &wrong_password(),
         )
         .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER, "attempt {i}");
@@ -257,7 +326,7 @@ async fn a_lan_hop_naming_a_new_address_each_time_runs_out() {
         &state,
         "192.168.1.50",
         &[("x-forwarded-for", "198.51.100.250")],
-        PASSWORD,
+        &password(),
     )
     .await;
     assert_eq!(
@@ -266,7 +335,7 @@ async fn a_lan_hop_naming_a_new_address_each_time_runs_out() {
         "the hop is spent"
     );
     // Another host on the LAN is not the one that spent it.
-    let res = post_login_via(&state, "192.168.1.51", &[], PASSWORD).await;
+    let res = post_login_via(&state, "192.168.1.51", &[], &password()).await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert!(res.headers().get("set-cookie").is_some());
 }
@@ -280,14 +349,20 @@ async fn a_same_host_proxy_is_not_charged_for_its_visitors() {
     let state = state_with_admin();
     for i in 0..=VOUCHER_MAX_FAILURES {
         let xff = format!("198.51.100.{i}");
-        let res = post_login_via(&state, "127.0.0.1", &[("x-forwarded-for", &xff)], "wrong").await;
+        let res = post_login_via(
+            &state,
+            "127.0.0.1",
+            &[("x-forwarded-for", &xff)],
+            &wrong_password(),
+        )
+        .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER, "visitor {i}");
     }
     let res = post_login_via(
         &state,
         "127.0.0.1",
         &[("x-forwarded-for", "198.51.100.251")],
-        PASSWORD,
+        &password(),
     )
     .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -303,7 +378,11 @@ async fn a_burst_gets_five_guesses_not_twenty() {
     let mut set = tokio::task::JoinSet::new();
     for _ in 0..20 {
         let state = state.clone();
-        set.spawn(async move { post_login(&state, "203.0.113.9", "wrong").await.status() });
+        set.spawn(async move {
+            post_login(&state, "203.0.113.9", &wrong_password())
+                .await
+                .status()
+        });
     }
     let mut checked = 0;
     while let Some(status) = set.join_next().await {

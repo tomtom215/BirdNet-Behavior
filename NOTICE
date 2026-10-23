@@ -50,6 +50,9 @@ Served by the web interface from the binary
 -------------------------------------------
 
 * htmx 2.0.11, Zero-Clause BSD.
+* three.js 0.186.1, MIT: the part of it the soundscape terrain uses, tree-shaken into
+  crates/birdnet-web/static/vendor/three/three.module.min.js and loaded only when the 3D
+  view is opened.
 * Inter Tight, Instrument Serif, JetBrains Mono and Noto Sans, Latin and
   Latin-extended subsets, unmodified from the @fontsource 5.3.0 packages, under
   the SIL Open Font License 1.1. Each family's copyright line and the licence

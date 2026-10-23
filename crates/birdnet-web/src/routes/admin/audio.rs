@@ -20,7 +20,7 @@
 
 use std::fmt::Write as _;
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Response};
@@ -149,6 +149,40 @@ pub(crate) fn public_name(s: &AudioSource) -> String {
     }
 }
 
+/// What any page shows of a source's device: a local device as it is, a
+/// stream's address with its password (and any token in its path or query)
+/// masked.
+///
+/// The administrator's list and edit form used to print the address whole,
+/// which put a camera's password on screen and into every screenshot of the
+/// page. A save that sends the masked address back keeps the stored one
+/// ([`restore_device`]).
+fn shown_device(s: &AudioSource) -> String {
+    if s.kind == SourceKind::Rtsp {
+        birdnet_core::config::redact::redact_value(&s.device_id)
+    } else {
+        s.device_id.clone()
+    }
+}
+
+/// The address a stream form was submitted with, with the mask the page showed
+/// replaced by the stored address.
+///
+/// `Err` carries a sentence for the person when the submission still holds a
+/// mask that stands for nothing (the host was changed and the hidden password
+/// kept), which is never stored.
+fn restore_device(row: &AudioSource, submitted: &str) -> Result<String, &'static str> {
+    const REFUSAL: &str = "The address still holds the hidden-password placeholder, which only \
+        stands for the address already saved. Type the whole address again, password included.";
+    if !submitted.contains(birdnet_core::config::redact::REDACTED) {
+        return Ok(submitted.to_owned());
+    }
+    if row.kind == SourceKind::Rtsp && submitted == shown_device(row) {
+        return Ok(row.device_id.clone());
+    }
+    Err(REFUSAL)
+}
+
 /// Human-readable badge text for a source kind.
 ///
 /// `pub(crate)` so the onboarding wizard's microphone step names the operator's
@@ -189,36 +223,63 @@ async fn page() -> axum::response::Redirect {
 /// pill through the same metrics-driven path the per-row `/probe` poll uses, so
 /// the initial status matches the 8 s self-poll.
 ///
-/// `show_credentials` is `false` for a viewer: an RTSP address carries its
-/// camera's password, so a read-only account sees it with the password masked
-/// (`redact_value`), exactly as the settings API shows it.
+/// An RTSP address carries its camera's password, so every row prints it with
+/// the password masked (`redact_value`), exactly as the settings API shows it,
+/// for the administrator as for a viewer ([`shown_device`]). `show_credentials`
+/// is `false` for a viewer and masks the address of a row before it is drawn;
+/// for an administrator the row masks it itself.
 pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
-    let mut sources = state
-        .with_read_db(AudioSourceStore::list)
-        .unwrap_or_else(|err| {
+    // A failed read is not an empty station. This was `Vec::new()`, which drew
+    // "0 mics, 0 streams" and two add forms over a station that had both, and
+    // invited the person to add a second copy of a microphone it already had.
+    let mut sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(list) => list,
+        Err(err) => {
             tracing::error!(error = %err, "audio_sources list failed");
-            Vec::new()
-        });
+            return crate::routes::pages::error_states::could_not_load(
+                "your microphones and streams",
+            );
+        }
+    };
     if !show_credentials {
         for s in &mut sources {
             s.device_id = birdnet_core::config::redact::redact_value(&s.device_id);
         }
     }
     let listen_default = listen_default_id(state);
-    render_body(&sources, |row| daemon_status(row, state), &listen_default)
+    let note = if listen_default == LISTEN_DEFAULT_UNREADABLE {
+        crate::routes::pages::error_states::inline("which source Listen plays by default")
+    } else {
+        String::new()
+    };
+    let body = render_body(&sources, |row| daemon_status(row, state), &listen_default);
+    format!("{note}{body}")
 }
 
+/// Stands in for the listen-default id when the settings table could not be
+/// read. An empty id means "the station never picked one", which is a claim; a
+/// row given this draws neither the pill nor the button, because it cannot say
+/// which of the two is true. No source id can equal it (they are `src_…`).
+const LISTEN_DEFAULT_UNREADABLE: &str = "\u{0}unreadable";
+
 /// The `audio_sources` id `/stream` serves when the listener has not chosen
-/// one, or `""` when the station has never picked a default.
+/// one, `""` when the station has never picked a default, or
+/// [`LISTEN_DEFAULT_UNREADABLE`] when the setting could not be read.
 fn listen_default_id(state: &AppState) -> String {
-    state.with_read_db(|conn| {
+    let read = state.with_read_db(|conn| {
         birdnet_db::settings::get_or(
             conn,
             crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
             "",
         )
-        .unwrap_or_default()
-    })
+    });
+    match read {
+        Ok(id) => id,
+        Err(err) => {
+            tracing::error!(error = %err, "reading the live-stream default failed");
+            LISTEN_DEFAULT_UNREADABLE.to_owned()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -229,7 +290,7 @@ struct CreateForm {
     device_id: String,
     #[serde(default)]
     label: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     sample_rate: Option<u32>,
     #[serde(default)]
     rtsp_transport: Option<String>,
@@ -429,7 +490,7 @@ fn parse_eq_field(raw: Option<&str>, sample_rate: u32) -> Result<Option<String>,
 async fn create(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<CreateForm>,
+    HtmxForm(form): HtmxForm<CreateForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -437,6 +498,14 @@ async fn create(
             let device_id = form.device_id.trim().to_string();
             if device_id.is_empty() {
                 return validation_response("Device id is required.");
+            }
+            // The placeholder the list prints in place of a password is never an
+            // address to store; a new source has no saved one for it to stand for.
+            if device_id.contains(birdnet_core::config::redact::REDACTED) {
+                return validation_response(
+                    "That address holds the placeholder the list shows in place of a password. \
+                     Type the real address, password included.",
+                );
             }
             let kind: SourceKind = match form.kind.parse() {
                 Ok(k) => k,
@@ -705,7 +774,17 @@ async fn listen_default(
         None,
     );
 
-    let sources = state.with_read_db(AudioSourceStore::list).unwrap_or_default();
+    // The default is stored. If the lists cannot be read back, say that, rather
+    // than redraw them empty under a toast that reports success.
+    let sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "audio_sources list failed after storing the listen default");
+            return toast::applied_but_not_redrawn(&Toast::warn(
+                "Listen default saved, but the list could not be read back. Reload the page to see it.",
+            ));
+        }
+    };
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
@@ -742,7 +821,7 @@ async fn update(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Path(id): Path<String>,
-    Form(form): Form<CreateForm>,
+    HtmxForm(form): HtmxForm<CreateForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -754,11 +833,18 @@ async fn update(
                 None,
             );
             let mut patch = AudioSourcePatch::default();
-            let device_id = form.device_id.trim().to_string();
+            let mut device_id = form.device_id.trim().to_string();
             if !device_id.is_empty() {
                 // A changed stream URL is held to the same rule as a new one.
                 match state.with_read_db(|conn| conn.get(&id)) {
                     Ok(Some(row)) => {
+                        // The form was shown the address masked: put the stored
+                        // one back before it is checked, so a bad address
+                        // already stored is still found.
+                        device_id = match restore_device(&row, &device_id) {
+                            Ok(d) => d,
+                            Err(msg) => return validation_response(msg),
+                        };
                         if let Err(msg) = check_stream_url(row.kind, &device_id) {
                             return validation_response(&msg);
                         }
@@ -1014,9 +1100,16 @@ fn oob_count(span_id: &str, n: usize, singular: &str, plural: &str) -> String {
 /// add/remove responses so the header totals stay truthful the instant a source
 /// is added or removed.
 fn count_oobs(state: &AppState) -> String {
-    let sources = state
-        .with_read_db(AudioSourceStore::list)
-        .unwrap_or_default();
+    // On a failed read the chips are left out, not zeroed: an out-of-band swap
+    // that is absent leaves the old figure in place, and a "0 mics" printed
+    // beside a row that was just added is a fabrication.
+    let sources = match state.with_read_db(AudioSourceStore::list) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "audio_sources list failed; the counts are not refreshed");
+            return String::new();
+        }
+    };
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
@@ -1115,14 +1208,18 @@ fn render_row(s: &AudioSource, status: Status, listen_default: &str) -> String {
         .replace("{{label_class}}", label_class)
         .replace("{{label_text}}", &escape_html(&label_text))
         .replace("{{label}}", &escape_html(label_raw))
-        .replace("{{device_id}}", &escape_html(&s.device_id))
+        .replace("{{device_id}}", &escape_html(&shown_device(s)))
         .replace("{{detail_line}}", &escape_html(&detail_for(s)))
         .replace("{{status_class}}", status.css())
         .replace("{{status_label}}", status.label())
         .replace("{{meta_line}}", &escape_html(&meta_for(s)))
         .replace(
             "{{listen_default}}",
-            &listen_default_control(s, !listen_default.is_empty() && listen_default == s.id),
+            &if listen_default == LISTEN_DEFAULT_UNREADABLE {
+                String::new()
+            } else {
+                listen_default_control(s, !listen_default.is_empty() && listen_default == s.id)
+            },
         )
 }
 
@@ -1275,7 +1372,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         kind_class = kind_css(row.kind),
         kind_label = kind_label(row.kind),
         label = escape_html(&label),
-        device_id = escape_html(&row.device_id),
+        device_id = escape_html(&shown_device(row)),
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
         eq_chain = escape_html(&row.eq_chain),
@@ -1387,7 +1484,7 @@ fn meta_for(s: &AudioSource) -> String {
     )
 }
 
-fn synth_id(kind: SourceKind) -> String {
+pub(crate) fn synth_id(kind: SourceKind) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     // A process-local sequence guarantees uniqueness even for two sources added
@@ -1596,7 +1693,7 @@ mod tests {
         let mut form = eq_form("usb-alsa", "plughw:3,0");
         form.eq_chain = Some("highpass:120; notch:50:20".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -1620,7 +1717,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(id.clone()),
-            Form(bad),
+            HtmxForm(bad),
         )
         .await;
         assert_refused(&refused);
@@ -1635,9 +1732,14 @@ mod tests {
         let mut clear = eq_form("usb-alsa", "plughw:3,0");
         clear.eq_chain = Some(String::new());
         assert_eq!(
-            update(State(state.clone()), actor(&state), Path(id), Form(clear))
-                .await
-                .status(),
+            update(
+                State(state.clone()),
+                actor(&state),
+                Path(id),
+                HtmxForm(clear)
+            )
+            .await
+            .status(),
             StatusCode::OK
         );
         assert_eq!(stored_chain(&state, "plughw:3,0"), "");
@@ -1709,7 +1811,7 @@ mod tests {
                 create(
                     State(state.clone()),
                     actor(&state),
-                    Form(eq_form("rtsp", url))
+                    HtmxForm(eq_form("rtsp", url))
                 )
                 .await
                 .status(),
@@ -1723,7 +1825,7 @@ mod tests {
             let refused = create(
                 State(state.clone()),
                 actor(&state),
-                Form(eq_form("rtsp", url)),
+                HtmxForm(eq_form("rtsp", url)),
             )
             .await;
             assert_refused(&refused);
@@ -1740,7 +1842,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(row.id.clone()),
-            Form(eq_form("rtsp", "rtp://10.0.0.9:5006")),
+            HtmxForm(eq_form("rtsp", "rtp://10.0.0.9:5006")),
         )
         .await;
         assert_refused(&refused);
@@ -1771,7 +1873,7 @@ mod tests {
         let mut form = eq_form("rtsp", url);
         form.media_mode = Some("audio".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -1790,7 +1892,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(row.id.clone()),
-            Form(bad),
+            HtmxForm(bad),
         )
         .await;
         assert_refused(&refused);
@@ -1803,7 +1905,7 @@ mod tests {
                 State(state.clone()),
                 actor(&state),
                 Path(row.id),
-                Form(back)
+                HtmxForm(back)
             )
             .await
             .status(),
@@ -1828,7 +1930,7 @@ mod tests {
         let mut form = eq_form("usb-alsa", "plughw:4,0");
         form.sample_rate = Some(8_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
-        let refused = create(State(state.clone()), actor(&state), Form(form)).await;
+        let refused = create(State(state.clone()), actor(&state), HtmxForm(form)).await;
         assert_refused(&refused);
 
         // The counterpart: the same stage on a source that *can* carry it is
@@ -1837,7 +1939,7 @@ mod tests {
         ok.sample_rate = Some(48_000);
         ok.eq_chain = Some("peaking:6000:1:3".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(ok))
+            create(State(state.clone()), actor(&state), HtmxForm(ok))
                 .await
                 .status(),
             StatusCode::OK
@@ -1856,7 +1958,7 @@ mod tests {
         form.sample_rate = Some(48_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -1872,7 +1974,13 @@ mod tests {
         let mut down = eq_form("usb-alsa", "plughw:6,0");
         down.sample_rate = Some(8_000);
         down.eq_chain = Some("peaking:6000:1:3".to_string());
-        let refused = update(State(state.clone()), actor(&state), Path(id), Form(down)).await;
+        let refused = update(
+            State(state.clone()),
+            actor(&state),
+            Path(id),
+            HtmxForm(down),
+        )
+        .await;
         // The check must use the rate this PATCH sets, not the stored one.
         assert_refused(&refused);
         assert_eq!(stored_chain(&state, "plughw:6,0"), "peaking:6000:1:3");
@@ -1887,7 +1995,7 @@ mod tests {
             create(
                 State(state.clone()),
                 actor(&state),
-                Form(eq_form("usb-alsa", "plughw:7,0"))
+                HtmxForm(eq_form("usb-alsa", "plughw:7,0"))
             )
             .await
             .status(),
@@ -2000,7 +2108,7 @@ mod tests {
         form.quiet_start = Some("22:00".to_string());
         form.quiet_end = Some("06:00".to_string());
         assert_eq!(
-            create(State(state.clone()), actor(&state), Form(form))
+            create(State(state.clone()), actor(&state), HtmxForm(form))
                 .await
                 .status(),
             StatusCode::OK
@@ -2037,7 +2145,7 @@ mod tests {
             State(state.clone()),
             actor(&state),
             Path(id.clone()),
-            Form(half),
+            HtmxForm(half),
         )
         .await;
         assert_refused(&refused);
@@ -2052,9 +2160,14 @@ mod tests {
         clear.quiet_start = Some(String::new());
         clear.quiet_end = Some(String::new());
         assert_eq!(
-            update(State(state.clone()), actor(&state), Path(id), Form(clear))
-                .await
-                .status(),
+            update(
+                State(state.clone()),
+                actor(&state),
+                Path(id),
+                HtmxForm(clear)
+            )
+            .await
+            .status(),
             StatusCode::OK
         );
         assert_eq!(
@@ -2084,9 +2197,9 @@ mod tests {
             quiet_start: None,
             quiet_end: None,
         };
-        let first = create(State(state.clone()), actor(&state), Form(form())).await;
+        let first = create(State(state.clone()), actor(&state), HtmxForm(form())).await;
         assert_eq!(first.status(), StatusCode::OK, "first add succeeds");
-        let second = create(State(state.clone()), actor(&state), Form(form())).await;
+        let second = create(State(state.clone()), actor(&state), HtmxForm(form())).await;
         // The same device cannot be added twice.
         assert_refused(&second);
         let count = state.with_db(AudioSourceStore::list).unwrap().len();
@@ -2891,5 +3004,100 @@ mod solar_quiet_form_tests {
             html.contains("sunset+30") && html.contains("sunrise-15"),
             "the stored anchors must render back into the form: {html}"
         );
+    }
+}
+
+// ── a failed read is not an empty station ───────────────────────────────
+#[cfg(test)]
+mod failed_read_tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("birds.db");
+        let _conn = birdnet_db::sqlite::open_or_create(&db_path).expect("open db");
+        let state = AppState::new(db_path).expect("state");
+        (dir, state)
+    }
+
+    fn one_microphone(state: &AppState) {
+        let new = NewAudioSource::defaults("src_nest", SourceKind::UsbAlsa, "hw:1,0");
+        state
+            .with_db(|conn| AudioSourceStore::insert(conn, &new))
+            .expect("insert");
+    }
+
+    fn drop_table(state: &AppState, table: &str) {
+        state
+            .with_db(|conn| conn.execute_batch(&format!("DROP TABLE {table};")))
+            .expect("drop the table so the next read fails");
+    }
+
+    /// The list of sources unreadable: say so, and do not draw "0 mics" with
+    /// two add forms over a station that has a microphone.
+    #[test]
+    fn an_unreadable_source_list_is_not_an_empty_station() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        drop_table(&state, "audio_sources");
+        let html = sources_body(&state, true);
+        assert!(
+            html.contains("couldn't load your microphones and streams"),
+            "{html}"
+        );
+        assert!(!html.contains("0 mics"), "{html}");
+        assert!(!html.contains("Add a microphone"), "{html}");
+    }
+
+    /// The counterpart: a readable, genuinely empty list still draws as empty,
+    /// so the check above is about the failure and not about emptiness.
+    #[test]
+    fn a_readable_empty_list_is_still_drawn_as_empty() {
+        let (_d, state) = fixture();
+        let html = sources_body(&state, true);
+        assert!(html.contains("0 mics"), "{html}");
+        assert!(html.contains("Add a microphone"), "{html}");
+        assert!(!html.contains("couldn't load"), "{html}");
+    }
+
+    /// An unreadable listen-default is neither "none chosen" (which would offer
+    /// the button) nor "this one" (the pill): the rows get neither, and the page
+    /// says why.
+    #[test]
+    fn an_unreadable_listen_default_draws_no_pill_and_no_button() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        drop_table(&state, "settings");
+        let html = sources_body(&state, true);
+        assert!(html.contains("hw:1,0"), "the source list was readable");
+        assert!(
+            html.contains("couldn't load which source Listen plays by default"),
+            "{html}"
+        );
+        assert!(!html.contains("Make listen default"), "{html}");
+        assert!(!html.contains("Listen default</span>"), "{html}");
+    }
+
+    /// The counterpart: with the setting readable and unset, the button is there
+    /// and the note is not.
+    #[test]
+    fn a_readable_unset_listen_default_offers_the_button() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        let html = sources_body(&state, true);
+        assert!(html.contains("Make listen default"), "{html}");
+        assert!(!html.contains("couldn't load"), "{html}");
+    }
+
+    /// The count chips after an add or remove: left out when the list cannot be
+    /// read (the old figure stays), never "0 mics" beside the row just added.
+    #[test]
+    fn unreadable_counts_are_omitted_not_zeroed() {
+        let (_d, state) = fixture();
+        one_microphone(&state);
+        let ok = count_oobs(&state);
+        assert!(ok.contains("1 mic"), "{ok}");
+        drop_table(&state, "audio_sources");
+        assert_eq!(count_oobs(&state), "");
     }
 }

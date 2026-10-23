@@ -21,9 +21,9 @@
 //! This module is the facade: it owns the shared [`Status`] / [`Check`] /
 //! [`Format`] types, the [`run_with_format`] orchestration, and the two
 //! filesystem helpers ([`writable`], [`tool_exists`]) several checks share.
-//! The checks live in thirteen submodules — `analytics`, `audio`, `clock`,
-//! `config`, `database`, `disk`, `environment`, `model`, `offsite`, `paths`,
-//! `tls`, `watchdog`, plus `fix`, whose `repair` runs *before* the checks when
+//! The checks live in fifteen submodules — `analytics`, `audio`, `clock`,
+//! `config`, `database`, `disk`, `embedding`, `environment`, `model`, `mqtt`, `offsite`,
+//! `paths`, `tls`, `watchdog`, plus `fix`, whose `repair` runs *before* the checks when
 //! `--fix` is given — and all report rendering (`text` / `json` / exit-code)
 //! lives in `render`.
 //!
@@ -51,9 +51,11 @@ mod clock;
 mod config;
 mod database;
 mod disk;
+mod embedding;
 mod environment;
 mod fix;
 mod model;
+mod mqtt;
 mod offsite;
 mod paths;
 mod render;
@@ -209,7 +211,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 28] = [
+const CHECK_FAMILIES: [(&str, Family); 30] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -233,6 +235,12 @@ const CHECK_FAMILIES: [(&str, Family); 28] = [
         config::check_birdweather_location(cli, cfg)
             .into_iter()
             .collect()
+    }),
+    ("embedding::check_embedding", |cli, cfg| {
+        embedding::check_embedding(cli, cfg).into_iter().collect()
+    }),
+    ("mqtt::check_mqtt_tls", |cli, cfg| {
+        mqtt::check_mqtt_tls(cli, cfg).into_iter().collect()
     }),
     ("config::check_occurrence_filter", |cli, cfg| {
         vec![config::check_occurrence_filter(cli, cfg)]

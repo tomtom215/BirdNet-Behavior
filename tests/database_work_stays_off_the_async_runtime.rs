@@ -1,4 +1,4 @@
-//! Database work stays off the async runtime.
+//! Database and filesystem work stays off the async runtime.
 //!
 //! `AppState::with_db`, `with_read_db`, `with_analytics` and their relatives
 //! block — on a mutex the detection processor also takes, then on the query.
@@ -14,6 +14,20 @@
 //! those primitives without crossing a blocking boundary, follows calls through
 //! them to a fixed point, and fails on any `async fn` (or `async` block) that
 //! reaches one directly.
+//!
+//! # The filesystem
+//!
+//! `std::fs::read`, `canonicalize`, `read_dir` and their relatives are the same
+//! hazard: a syscall that parks a worker for as long as the disk takes, which on
+//! an SD card under write load is long enough to see. A first scan found 11 call
+//! sites in 6 async functions and 5 more through synchronous helpers, on the
+//! page path: `species_image_file` (up to four reads per avatar), `serve_recording`
+//! and `serve_spectrogram` (two `canonicalize` calls each) and `fetch_clips`, which
+//! read the whole recordings directory. `std::fs::*`, `fs::*` (when it is not
+//! `tokio::fs`), `File::open`/`create` and the `Path` methods that stat
+//! (`exists`, `is_file`, `is_dir`, `metadata`, `canonicalize`, `read_dir`, …) are
+//! primitives alongside the database ones. An awaited call is never one: that is
+//! `tokio::fs`, whose futures run the syscall on the blocking pool.
 //!
 //! # What it can and cannot see
 //!
@@ -40,6 +54,71 @@ const PRIMITIVES: &[&str] = &[
     "with_timeseries",
     "resync_analytics_full",
     "mirror_recent_recording_effort",
+];
+
+/// `std::fs` functions, as `fs::NAME` or `std::fs::NAME`. A path with a `tokio`
+/// segment is `tokio::fs`, which is async.
+const FS_FNS: &[&str] = &[
+    "read",
+    "read_to_string",
+    "read_dir",
+    "read_link",
+    "write",
+    "create_dir",
+    "create_dir_all",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "rename",
+    "copy",
+    "hard_link",
+    "metadata",
+    "symlink_metadata",
+    "canonicalize",
+    "set_permissions",
+    "exists",
+];
+
+/// `Path`/`File`/`DirEntry` methods that make a syscall. Resolved by name, so a
+/// method of another type with one of these names is a false positive; the
+/// awaited form (`tokio`'s) is never counted.
+const FS_METHODS: &[&str] = &[
+    "canonicalize",
+    "exists",
+    "try_exists",
+    "is_file",
+    "is_dir",
+    "is_symlink",
+    "metadata",
+    "symlink_metadata",
+    "read_dir",
+    "read_link",
+];
+
+/// Method and function names that are also std's (`AtomicBool::store`,
+/// `Vec::append`, `Read::read`, …). The scan resolves a call by name only, so a
+/// repository function that shares one of these names and does file I/O would
+/// otherwise make every `.store(..)` in the tree a blocking call: the first
+/// filesystem run reported 21 such calls on atomics. A name here is never
+/// promoted to "blocking" by the fixed point; a call that reaches the filesystem
+/// through one is still caught where the filesystem call itself is made.
+const STD_NAMES: &[&str] = &["store", "load", "append", "open", "read", "write", "flush"];
+
+/// `(file, fn)` pairs that reach `std::fs` and are nonetheless not blocking, each
+/// with the reason. Files under `/proc` and `/sys` are generated from kernel
+/// memory when read: no storage device is involved, so the call neither waits on
+/// a disk nor can be made to wait by one.
+const MEMORY_BACKED: &[(&str, &str, &str)] = &[
+    (
+        "crates/birdnet-web/src/system_info.rs",
+        "process_uptime_secs",
+        "reads /proc/self/stat",
+    ),
+    (
+        "crates/birdnet-web/src/routes/health.rs",
+        "process_metrics",
+        "reads /proc/self/status and /proc/cpuinfo",
+    ),
 ];
 
 /// Calls whose closure arguments run on another thread.
@@ -72,6 +151,37 @@ const EXEMPT: &[(&str, &str, &str)] = &[
     ("src/app.rs", "serve", "start_capture_manager"),
     ("src/app.rs", "serve", "start_detection_daemon"),
     ("src/app.rs", "serve", "admin_password_configured"),
+    // The same, for the filesystem and for the rest of the start. `serve` reads
+    // the configuration, opens, checks and recovers the database, writes the
+    // last-good copy and loads the certificate before the listener binds, and
+    // `main` runs the one-shot command-line actions (`--doctor`,
+    // `--apply-config`, …) the same way: once, in order, with nothing yet waiting
+    // on a worker. A call added to either that is not on this list still fails.
+    ("src/app.rs", "serve", "choose"),
+    ("src/app.rs", "serve", "ensure_db_dir"),
+    ("src/app.rs", "serve", "exists"),
+    ("src/app.rs", "serve", "check_and_recover"),
+    ("src/app.rs", "serve", "quarantine_corrupt_database"),
+    ("src/app.rs", "serve", "ensure_incremental_vacuum"),
+    ("src/app.rs", "serve", "install_persisted_secret"),
+    ("src/app.rs", "serve", "build_state_with_analytics"),
+    ("src/app.rs", "serve", "hooks"),
+    ("src/app.rs", "serve", "create_apprise_client"),
+    ("src/app.rs", "serve", "station_url"),
+    ("src/app.rs", "serve", "spawn_watch"),
+    ("src/app.rs", "serve", "record_last_good"),
+    ("src/app.rs", "serve", "with_db"),
+    ("src/app.rs", "serve", "maybe_install_avahi_service"),
+    ("src/app.rs", "serve", "server_config"),
+    ("src/main.rs", "main", "load_from"),
+    ("src/main.rs", "main", "reload_filter_spec"),
+    ("src/main.rs", "main", "run_apply_config"),
+    ("src/main.rs", "main", "run_migration_report"),
+    ("src/main.rs", "main", "run_rebuild_species_summary"),
+    ("src/main.rs", "main", "run_with_format"),
+    ("src/main.rs", "main", "run_decrypt"),
+    ("src/main.rs", "main", "run_import_conf"),
+    ("src/main.rs", "main", "run_import_clips"),
 ];
 
 struct FnDef {
@@ -189,6 +299,31 @@ fn path_key(func: &syn::Expr) -> Option<(String, String, bool)> {
     Some((last.clone(), format!("{kind}:{last}"), segs.len() == 1))
 }
 
+/// `std::fs::read(..)`, `fs::metadata(..)`, `File::open(..)`: the call is made
+/// without `tokio` anywhere in its path. Returns a label for the report.
+fn fs_call(func: &syn::Expr) -> Option<String> {
+    let syn::Expr::Path(p) = func else {
+        return None;
+    };
+    let segs: Vec<String> = p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    if segs.iter().any(|s| s == "tokio") || segs.len() < 2 {
+        return None;
+    }
+    let (q, last) = (&segs[segs.len() - 2], &segs[segs.len() - 1]);
+    if q == "fs" && FS_FNS.contains(&last.as_str()) {
+        return Some(format!("fs::{last}"));
+    }
+    if q == "File" && matches!(last.as_str(), "open" | "create" | "create_new") {
+        return Some(format!("File::{last}"));
+    }
+    None
+}
+
 fn has_sync_closure(args: &syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>) -> bool {
     args.iter()
         .any(|a| matches!(a, syn::Expr::Closure(c) if c.asyncness.is_none()))
@@ -204,7 +339,11 @@ impl<'ast> Visit<'ast> for Calls<'_> {
     fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
         let awaited = std::mem::take(&mut self.awaited);
         let key = path_key(&c.func);
-        if let (false, Some((name, key, single))) = (awaited, &key) {
+        let fs = if awaited { None } else { fs_call(&c.func) };
+        if let Some(label) = &fs {
+            self.record(label.clone(), c.span().start().line);
+        }
+        if let (false, None, Some((name, key, single))) = (awaited, &fs, &key) {
             let local = format!("{key}@{}", self.file);
             let key = if *single && self.local.contains(&local) {
                 &local
@@ -229,7 +368,9 @@ impl<'ast> Visit<'ast> for Calls<'_> {
         let awaited = std::mem::take(&mut self.awaited);
         let n = m.method.to_string();
         if !awaited
-            && (PRIMITIVES.contains(&n.as_str()) || self.blocking.contains(&format!("m:{n}")))
+            && (PRIMITIVES.contains(&n.as_str())
+                || FS_METHODS.contains(&n.as_str())
+                || self.blocking.contains(&format!("m:{n}")))
         {
             self.record(n.clone(), m.method.span().start().line);
         }
@@ -283,6 +424,12 @@ fn calls_in(
     c.out
 }
 
+/// A file that is test code by where it lives: `tests.rs` beside the module it
+/// tests, or anything under a `tests/` directory.
+fn is_test_file(path: &str) -> bool {
+    path.ends_with("/tests.rs") || path.contains("/tests/")
+}
+
 /// Every call from async code that can block, in `files` (path, source).
 fn scan(files: &[(String, String)]) -> (Vec<Hit>, usize) {
     let mut defs = Vec::new();
@@ -290,7 +437,9 @@ fn scan(files: &[(String, String)]) -> (Vec<Hit>, usize) {
         let parsed = syn::parse_file(src).unwrap_or_else(|e| panic!("{path} does not parse: {e}"));
         let mut c = Collect {
             file: path.clone(),
-            in_test: 0,
+            // `#[cfg(test)] mod tests;` puts the attribute on the declaration, in
+            // another file; the file itself carries nothing to say it is test code.
+            in_test: usize::from(is_test_file(path)),
             out: Vec::new(),
         };
         c.visit_file(&parsed);
@@ -313,6 +462,20 @@ fn scan(files: &[(String, String)]) -> (Vec<Hit>, usize) {
         let mut changed = false;
         for (key, ds) in &by_key {
             if blocking.contains(*key) {
+                continue;
+            }
+            // A std-shaped name is never promoted (see `STD_NAMES`).
+            let bare = key.split_once(':').map_or(*key, |(_, n)| n);
+            let bare = bare.split('@').next().unwrap_or(bare);
+            if STD_NAMES.contains(&bare) {
+                continue;
+            }
+            // Declared cheap (see `MEMORY_BACKED`).
+            if ds.iter().all(|d| {
+                MEMORY_BACKED
+                    .iter()
+                    .any(|(f, n, _)| *f == d.file && *n == d.name)
+            }) {
                 continue;
             }
             let every = ds
@@ -364,15 +527,36 @@ fn rs_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
     }
 }
 
-#[test]
-fn no_async_function_blocks_on_the_database() {
+/// Every source file the scan reads: this binary's, and every workspace crate's.
+///
+/// The crates are all in, not only `birdnet-web`, because the definitions are what
+/// the fixed point follows: a handler that calls `birdnet_core::…::recording_stats`
+/// reaches `std::fs` through a function that lives in another crate, and a scan
+/// that cannot see the definition cannot see that.
+fn source_files() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     rs_files(&root.join("src"), root, &mut files);
-    rs_files(&root.join("crates/birdnet-web/src"), root, &mut files);
+    let crates = root.join("crates");
+    let mut dirs: Vec<_> = std::fs::read_dir(&crates)
+        .expect("crates")
+        .map(|e| e.expect("entry").path())
+        .collect();
+    dirs.sort();
+    for d in dirs {
+        if d.join("src").is_dir() {
+            rs_files(&d.join("src"), root, &mut files);
+        }
+    }
+    files
+}
+
+#[test]
+fn no_async_function_blocks_on_the_database_or_the_filesystem() {
+    let files = source_files();
     let (hits, fns) = scan(&files);
     // The walk found the code: a scan of nothing is clean.
-    assert!(fns > 2000, "scanned only {fns} functions");
+    assert!(fns > 3000, "scanned only {fns} functions");
 
     let mut used = BTreeSet::new();
     let offending: Vec<String> = hits
@@ -393,8 +577,9 @@ fn no_async_function_blocks_on_the_database() {
         .collect();
     assert!(
         offending.is_empty(),
-        "{} call(s) block a runtime worker on the database; move each into \
-         `state.run_blocking(..)` or `tokio::task::spawn_blocking`:\n{}",
+        "{} call(s) block a runtime worker on the database or the filesystem; move \
+         each into `state.run_blocking(..)` or `tokio::task::spawn_blocking`, or use \
+         `tokio::fs`:\n{}",
         offending.len(),
         offending.join("\n")
     );
@@ -468,5 +653,77 @@ fn the_scan_passes_each_boundary() {
     assert_eq!(
         hits_in("fn audit(s: &S) { s.with_db(|c| c.x()); } async fn a(s: S) { audit(&s); }"),
         vec![pair("a", "audit")]
+    );
+}
+
+/// An out-of-line `tests.rs` is test code, and the same text in `mod.rs` is not.
+#[test]
+fn a_tests_file_is_test_code_and_a_module_file_is_not() {
+    let src = "async fn t(s: S) { std::fs::write(p, b); }".to_owned();
+    let (in_tests, _) = scan(&[("crates/x/src/m/tests.rs".to_owned(), src.clone())]);
+    assert!(in_tests.is_empty(), "{:?}", in_tests.len());
+    let (in_module, _) = scan(&[("crates/x/src/m/mod.rs".to_owned(), src)]);
+    assert_eq!(in_module.len(), 1);
+}
+
+/// The filesystem shapes: a `std::fs` call written in full, through `use
+/// std::fs`, `File::open`, the `Path` methods that stat, and a synchronous helper
+/// two calls away.
+#[test]
+fn the_scan_flags_each_filesystem_shape() {
+    let src = r"
+        fn helper(p: &Path) -> u64 { std::fs::metadata(p).map_or(0, |m| m.len()) }
+        async fn direct(p: PathBuf) { std::fs::read(&p); }
+        async fn short(p: PathBuf) { fs::read_to_string(&p); }
+        async fn file(p: PathBuf) { File::open(&p); }
+        async fn stat(p: PathBuf) { p.canonicalize(); p.exists(); p.is_dir(); }
+        async fn via_helper(p: PathBuf) { helper(&p); }
+        async fn dirs(p: PathBuf) { p.read_dir(); }
+        fn spawner(p: PathBuf) { tokio::spawn(async move { std::fs::remove_file(&p); }); }
+    ";
+    assert_eq!(
+        hits_in(src),
+        vec![
+            pair("direct", "fs::read"),
+            pair("short", "fs::read_to_string"),
+            pair("file", "File::open"),
+            pair("stat", "canonicalize"),
+            pair("stat", "exists"),
+            pair("stat", "is_dir"),
+            pair("via_helper", "helper"),
+            pair("dirs", "read_dir"),
+            pair("spawner", "fs::remove_file"),
+        ]
+    );
+}
+
+/// The counterpart: `tokio::fs` (async, so awaited), the blocking boundaries, and
+/// the names std shares with this repository's own functions all pass. `helper`
+/// is unambiguously blocking — the first test shows the same helper flagged — so
+/// each line passes because of its boundary, not because the helper went
+/// unrecognised.
+#[test]
+fn the_scan_passes_each_filesystem_boundary() {
+    let src = r"
+        fn helper(p: &Path) { std::fs::metadata(p); }
+        struct Slot;
+        impl Slot { fn store(&self) { std::fs::write(&self.0, b'x'); } }
+        async fn a(p: PathBuf) { tokio::fs::read(&p).await; }
+        async fn b(p: PathBuf) { tokio::fs::metadata(&p).await; }
+        async fn c(p: PathBuf) { tokio::task::spawn_blocking(move || std::fs::read(&p)).await; }
+        async fn d(s: S, p: PathBuf) { s.run_blocking(move |_| helper(&p)).await; }
+        async fn e(p: PathBuf) { tokio::fs::File::open(&p).await; }
+        async fn f(p: PathBuf) { tokio::fs::try_exists(&p).await; }
+        async fn g(flag: AtomicBool) { flag.store(true); }
+        async fn h(v: Vec<u8>, w: Vec<u8>) { v.append(&mut w); }
+        fn sync_only(p: PathBuf) { std::fs::read(&p); }
+    ";
+    assert_eq!(hits_in(src), Vec::<(String, String)>::new());
+    // The same helper, unbounded, is caught.
+    assert_eq!(
+        hits_in(
+            "fn helper(p: &Path) { std::fs::metadata(p); } async fn a(p: PathBuf) { helper(&p); }"
+        ),
+        vec![pair("a", "helper")]
     );
 }

@@ -90,6 +90,19 @@ Both files are re-checked once a minute and re-read when they change on disk,
 so a `certbot renew` in the small hours is serving within a minute, from the
 next handshake — **no restart, no cron hook.**
 
+### What the browser shows
+
+**Settings → Access → Secure connection** says which of the three modes the
+station is in. In `self-signed` mode it shows when the certificate runs to (read
+from the certificate's own record, not the configured length) and offers the
+station's **local CA certificate** for download, so you can add it to a phone or
+computer once instead of clicking through the browser warning every time. The
+CA's private key is never served. The page has no upload or generate button, on
+purpose: the page used to fix a plain-HTTP station is itself plain HTTP, so a form
+for a private key would send the key across the network in the clear; the
+certificate and key are files on the station, and `self-signed` already generates
+and renews its own.
+
 ### Checking it before you rely on it
 
 `--doctor` does exactly what startup does, early enough to be useful:
@@ -244,7 +257,7 @@ Each account on **Settings → Access** is an **admin** or a **viewer**.
 
 - An **admin** can do everything the sign-in protects.
 - A **viewer** can open every page behind the sign-in, the settings forms included, but can change nothing: every save, delete, lock, review or other change is refused (`403`). The settings forms show a viewer every stored password, token and key masked.
-- A viewer is also refused the few pages that would hand over credentials or the whole database: the full backup and the backup files, the support bundle, the alert-rules export (webhook URLs carry their tokens), and an audio source's own settings (an RTSP URL carries its password). The source's status pill stays visible.
+- A viewer is also refused the few pages that would hand over credentials or the whole database: the full backup and the backup files, the support bundle, the alert-rules export (webhook URLs carry their tokens), an audio source's own settings (an RTSP URL carries its password), the `birdnet.conf` lines the BirdNET-Pi import offers to download, and Diagnostics (`/admin/doctor`, which prints the MQTT broker and the certificate and model paths). The source's status pill stays visible, and the model panel on the Capture tab shows a viewer what is wrong without the file path.
 
 ## Cross-origin requests (CORS)
 
@@ -255,6 +268,57 @@ BIRDNET_CORS_ALLOWED_ORIGINS=https://dashboard.example.com
 ```
 
 List origins by name; `*` is not supported. The station logs an error, ignores that entry and keeps the others, because a wildcard would let any website read the API. State-changing requests are protected by a CSRF guard regardless of this setting.
+
+## Embedding the station in another page
+
+By default no other website can show the station inside a frame: every page
+carries `Content-Security-Policy: frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN`. With sites listed (below), only the dashboard
+(`/`), the wall display (`/kiosk`) and the live view (`/recordings`) change; the
+sign-in, `/admin`, `/station`, the setup wizard and every other page keep that
+policy whatever you list. That is the right default for a page with an
+admin sign-in behind it, because a site that can frame the station can lay
+invisible controls over it to trick a visitor into clicking (clickjacking). It
+also means a Home Assistant card or a Grafana panel cannot show the live view.
+
+To allow it, name the places that may, in `birdnet.conf` or under **Settings → General →
+Online services**:
+
+```text
+EMBED_ORIGINS=http://homeassistant.local:8123, https://abcd1234.ui.nabu.casa
+```
+
+- Each entry is a full origin, `http` or `https`, host and optional port, no
+  path. `https://*.example.com` covers every subdomain of a domain you own.
+  Name your own host under a shared service rather than the service: a wildcard
+  over `ui.nabu.casa`, `github.io`, `pages.dev`, `co.uk` and the like would let
+  everyone who registers a name there show the station, so those are refused
+  (from a short built-in list of such suffixes, not the full Public Suffix List:
+  a suffix that is not on it is not protected).
+- There is **no way to allow every site**. A bare `*`, a scheme alone and a
+  wildcard over a whole top-level domain (`https://*.com`) are refused.
+  tphakala/birdnet-go's `allowembedding` is a switch for all sites at once; here
+  you list the sites, because everyone who asks for this knows where they are
+  embedding from.
+- One entry the station cannot read refuses the **whole** list, and then no site
+  may embed; the journal and `--doctor` say which entry. Dropping just the bad
+  one would silently narrow what you typed.
+- With a list set, `X-Frame-Options` is left off (it cannot name a third party)
+  and `frame-ancestors` alone decides: `'self'` plus your origins. Nothing else
+  in the policy changes.
+- Applies after a restart.
+
+For a page on another *site*, what you get in the frame is the station as an
+anonymous visitor sees it: the sign-in cookie is `SameSite=Lax`, which a browser
+does not send from inside a frame on another site, so signing in does not carry
+into the frame. A *site* is the registrable domain, not the origin, so this does
+**not** hold for the usual set-up: Home Assistant at `http://192.168.1.10:8123`
+framing the station at `http://192.168.1.10:8502` (another port), or a sibling
+subdomain, is the same site. There the cookie is sent, and if you are signed in
+to the station in that browser the framed dashboard shows its administrator
+controls, which the embedding page could click for you if it were compromised.
+List only places you trust with your browser, and sign out of the station on a
+shared screen.
 
 ## A safer alternative: a private tunnel
 

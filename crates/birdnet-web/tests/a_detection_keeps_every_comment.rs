@@ -246,7 +246,9 @@ async fn an_empty_body_is_the_callers_mistake_and_says_why() {
 async fn the_pages_write_endpoints_exist_and_need_a_sign_in() {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
-    let hash = birdnet_db::accounts::hash_password("a-real-password").expect("hash");
+    let hash =
+        birdnet_db::accounts::hash_password(&format!("a-real-password-{}", std::process::id()))
+            .expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         [&hash],

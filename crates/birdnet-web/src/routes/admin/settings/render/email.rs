@@ -18,6 +18,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let tls_no = if tls == "false" { " selected" } else { "" };
     let econf = get_setting(s, "email_min_confidence");
     let ecool = get_setting(s, "email_cooldown_secs");
+    let secret_hint = super::super::masking::SECRET_HINT;
     write!(out, r#"
   <section class="card" id="set-email" aria-labelledby="set-email-h">
     <h2 class="section-title" id="set-email-h">Email Alerts</h2>
@@ -50,7 +51,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <div>
         <label for="email_smtp_pass">App password</label>
         <input id="email_smtp_pass" name="email_smtp_pass" type="password" value="{pass}" placeholder="app-specific password">
-        <p class="hint">Not your everyday password — see the note above.</p>
+        <p class="hint">Not your everyday password — see the note above. {secret_hint}</p>
       </div>
     </div>
     <div class="grid-2">

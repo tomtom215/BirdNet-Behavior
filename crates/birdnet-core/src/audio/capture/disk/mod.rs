@@ -548,7 +548,6 @@ mod one_denominator {
         //
         // Exact equality is right here: both sides are literal constants, not
         // the result of any arithmetic.
-        #[allow(clippy::float_cmp)]
         {
             assert_eq!(
                 DiskUsage::CRITICAL_PERCENT,

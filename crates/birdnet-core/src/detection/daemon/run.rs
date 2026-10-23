@@ -1058,7 +1058,6 @@ mod tests {
         let mut x: u32 = 1;
         for _ in 0..48_000 * secs {
             x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             w.write_sample(((x >> 16) as i16) / 8).unwrap();
         }
         w.finalize().unwrap();
