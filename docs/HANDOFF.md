@@ -192,14 +192,17 @@ the commits to read first (hashes valid on this branch).
 
 ## 4. What was verified, and by what command
 
-Run on 2026-10-22 on commit `59762e1` (later commits changed only `CHANGELOG.md` and this
-file), in a container with the real BirdNET V2.4 and V3.0 models and the range model loaded
-through the `BIRDNET_TEST_*` variables, with `~/.duckdb` moved aside. Exit codes come from the
-runner's own results files, not from a pipe.
+The test suite and the lint gates (the first five rows) were run again on 2026-10-23 on the tree
+of commit `14ae57d` (the dependency refresh and the 0.18.0 bump; later commits changed only
+`docs/HANDOFF.md`). The browser-gate rows were run on 2026-10-22 on `59762e1`; nothing a browser
+renders has changed since (the later commits touched Rust logic behind tests, workflows,
+dependencies and documents). All in a container with the real BirdNET V2.4 and V3.0 models and
+the range model loaded through the `BIRDNET_TEST_*` variables, with `~/.duckdb` moved aside.
+Exit codes come from the runner's own results files, not from a pipe.
 
 | Command | Printed |
 |---|---|
-| `cargo test --all-features --no-fail-fast`, run in 65 batches (each crate's `--lib`, the binary, the root `tests/` six at a time, each crate's `tests/` six at a time, `--doc` per crate) | 293 `test result:` lines, every batch exit 0: **4597 passed, 0 failed, 9 ignored** (the ones I read are subprocess workers started by their parent tests) |
+| `cargo test --all-features --no-fail-fast`, run in 65 batches (each crate's `--lib`, the binary, the root `tests/` six at a time, each crate's `tests/` six at a time, `--doc` per crate) | 293 `test result:` lines, every batch exit 0: **4599 passed, 0 failed, 9 ignored** (4597 on 2026-10-22) (the ones I read are subprocess workers started by their parent tests) |
 | `cargo fmt --check --all` | exit 0 |
 | `cargo clippy --workspace --all-targets -- -D warnings`, then with `--no-default-features`, then `--all-features` | exit 0, 0, 0 |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --all-features` | exit 0 |
