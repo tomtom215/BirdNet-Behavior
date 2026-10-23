@@ -309,18 +309,38 @@ it says otherwise.
 
 ## 6. Where to start
 
-1. Read the first CI run on draft pull request #265 (`claude/amazing-babbage-nxiuuc`). Expect to fix what only CI shows: the previous branch's first run on #264 found
+This branch carries the release preparation for **0.18.0** (2026-10-23): a plain `cargo update`
+(its own commit, `4e6bdd1`), then the version bump and the changelog roll (`14ae57d`: `Cargo.toml`,
+`CITATION.cff`, `openapi.json`, `docs/book/reference/api.md`, `STABILITY.md`, `Cargo.lock`). No
+tag exists, and none should be pushed before steps 1 and 2.
+
+1. Read the CI run on draft pull request #265 (`claude/amazing-babbage-nxiuuc`) and merge when
+   it is green. Expect to fix what only CI shows: the previous branch's first run on #264 found
    a mutation survivor, 17 CodeQL alerts and more mutation survivors that no local run had.
-   The default layout gate is now about four times longer (336 page states, roughly 12 minutes
-   locally); `a11y.yml` has not run it.
-2. Run `APPLY=1 tools/code-scanning/dismiss.sh` with a maintainer token for the dismissals it
-   lists, and read what it prints for the Scorecard items only a maintainer can settle.
-3. Make the settings in section 1 (private vulnerability reporting, the five labels,
-   topics, `protect-main`) and tag the next release with `git tag -a`.
-4. Decide, in this order: the V3.0 privacy default; whether to wire the model mirror; the
-   three missing controls (A-16 to A-18); the cast-lint policy; crates.io.
-5. Close A-24 (section 5, item 2): a migrated station's notifications stop on restore until
+2. Run the **dry run** (`release.yml`, `workflow_dispatch`, version blank) on `main` after the
+   merge, with every `Upgrade from vA.B.C` row green. Then
+   `git tag -a v0.18.0 -m "Release v0.18.0" && git push origin v0.18.0`. The release date
+   (`CHANGELOG.md` heading, `CITATION.cff` `date-released`) is 2026-10-23; change both if the
+   tag lands on another day, because `validate` checks the heading's form and the CITATION
+   version, not that the date is today's.
+3. **After the tag**: the README says "unreleased" 11 times (and the installation chapter once)
+   about things 0.18.0 ships, and names `v0.17.1` as what installs the V3.0 preview
+   (line 131). Make those true of 0.18.0 in a small follow-up pull request; also run
+   `scripts/gen-cli-help.sh` and confirm `docs/book/_generated/cli-help.txt` is unchanged.
+4. Run `APPLY=1 tools/code-scanning/dismiss.sh` with a maintainer token for the dismissals it
+   lists, and read what it prints for the Scorecard items only a maintainer can settle. The CodeQL
+   check on #265 stays red until this is done (12 alerts).
+5. Make the settings in section 1 (private vulnerability reporting, the five labels,
+   topics, `protect-main`), then publish to crates.io by hand in two batches
+   (`RELEASING.md`, "Publishing to crates.io").
+6. Decide, in this order: the V3.0 privacy default; whether to wire the model mirror; the
+   three missing controls (A-16 to A-18); the cast-lint policy.
+7. Close A-24 (section 5, item 2): a migrated station's notifications stop on restore until
    `apprise.txt` is copied in again.
+
+Not done, on request: moving the bundled DuckDB to 2.0.0 (`duckdb` 1.20000.0 on crates.io). The
+`icu` and `behavioral` v0.10.0 builds exist on both registries for `v2.0.0` (footers read
+`CPP v2.0.0 v2.0.0` and `C_STRUCT v0.10.0 v1.2.0`), but nothing was loaded into a 2.0.0 engine.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 
