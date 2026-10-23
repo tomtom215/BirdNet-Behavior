@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   systemd watchdog ping, the heartbeat, the dead-man timer, the maintenance scheduler and the
   MQTT presence pings. The advisory was issued 2026-10-22 and is fixed in 1.54.1; the
   lockfile now pins it. `Sleep` and `Timeout` are not affected.
+- **`ctutils` 0.4.4 (RUSTSEC-2026-0385).** Before 0.4.4 the constant-time helpers in this
+  crate could compile to a branch on a secret-dependent value (mask generation on common
+  platforms, `u128` comparisons on 32-bit targets); a branch on a secret can leak it through
+  timing. The station reaches it through the Argon2 password-hashing dependencies
+  (`argon2` → `blake2` → `digest`); whether the station's own hashing and verification call the
+  affected functions was not traced. Pinned in the lockfile; the `birdnet-db` library tests
+  (497) and the account tests pass on it.
 - **Admin forms no longer print a stored credential.** Settings and Audio showed saved
   passwords, tokens and camera addresses in clear in the page source. A secret now shows as
   `***REDACTED***` (or empty), an unchanged mask saves back to the stored value, and a mask
