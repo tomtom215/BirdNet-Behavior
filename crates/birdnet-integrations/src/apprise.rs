@@ -494,11 +494,7 @@ impl Client {
         date: &str,
         time: &str,
     ) -> Result<(), AppriseError> {
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
-        )]
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let conf_pct = (confidence * 100.0) as u32;
 
         let body = format!("{species} detected ({conf_pct}% confidence) at {time} on {date}");

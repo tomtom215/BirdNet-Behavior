@@ -195,7 +195,7 @@ async fn tick_presence(
                 // see, which is why it is a warning and not a debug line.
                 tracing::warn!(error = %e, "MQTT presence session lost; reconnecting");
                 state.metrics().set_mqtt_connected(false);
-                state.metrics().set_mqtt_error(&e.to_string());
+                state.metrics().set_mqtt_error(public_reason(&e));
                 *backoff = RECONNECT_MIN;
                 *next_attempt = Instant::now() + RECONNECT_MIN;
                 None
@@ -203,7 +203,9 @@ async fn tick_presence(
             Err(e) => {
                 tracing::warn!(error = %e, "MQTT keepalive task failed");
                 state.metrics().set_mqtt_connected(false);
-                state.metrics().set_mqtt_error(&e.to_string());
+                state
+                    .metrics()
+                    .set_mqtt_error("the MQTT task failed; see the station log");
                 None
             }
         };
@@ -228,7 +230,7 @@ async fn tick_presence(
             // Down, and since when (DD-22): a broker dead from boot never
             // reached the gauge before — it stayed at "not configured".
             state.metrics().set_mqtt_connected(false);
-            state.metrics().set_mqtt_error(&e.to_string());
+            state.metrics().set_mqtt_error(public_reason(&e));
             *next_attempt = Instant::now() + *backoff;
             *backoff = next_backoff(*backoff);
             None
@@ -239,6 +241,30 @@ async fn tick_presence(
             *backoff = next_backoff(*backoff);
             None
         }
+    }
+}
+
+/// The fixed phrase that stands for an MQTT failure on the public pages.
+///
+/// The error itself is in the station log (the callers log it); what is stored
+/// for Station Health, which `/api/v2/health/conditions` serves to anyone who
+/// can reach the station, is only this. A TLS failure names the certificate,
+/// key and CA files by path, a connection failure the broker's host and port,
+/// and neither belongs on a page an unauthenticated visitor can read.
+const fn public_reason(error: &birdnet_integrations::mqtt::MqttError) -> &'static str {
+    use birdnet_integrations::mqtt::MqttError;
+    match error {
+        MqttError::Connection(_) => "the broker could not be reached",
+        MqttError::ConnAck(_) => "the broker refused the connection; check the credentials",
+        MqttError::Io(_) => "the connection to the broker was lost",
+        MqttError::Tls(_) => {
+            "the TLS settings could not be used, or the broker's certificate was not accepted; see the station log"
+        }
+        MqttError::Protocol(_) => "the broker sent a reply the station did not expect",
+        MqttError::Encode(_) | MqttError::Serialise(_) => {
+            "a message could not be built; see the station log"
+        }
+        MqttError::NotConfigured => "MQTT is not configured",
     }
 }
 
@@ -557,5 +583,34 @@ mod tests {
             stats_publishes(&seen, &config),
             vec![(r#"{"count":0}"#.to_owned(), true)]
         );
+    }
+
+    /// #6: the public reason names no file and no broker address. Each variant
+    /// is given an error text that does, and none may come out.
+    #[test]
+    fn the_public_reason_carries_no_path_and_no_address() {
+        use birdnet_integrations::mqtt::MqttError;
+        let leaky = "/etc/birdnet/secret/client.key: no usable private key; broker 10.1.2.3:8883";
+        let errors = [
+            MqttError::Connection(leaky.to_owned()),
+            MqttError::Io(std::io::Error::other(leaky)),
+            MqttError::Encode(leaky.to_owned()),
+            MqttError::Protocol(leaky.to_owned()),
+            MqttError::Serialise(leaky.to_owned()),
+            MqttError::Tls(leaky.to_owned()),
+            MqttError::NotConfigured,
+        ];
+        for e in &errors {
+            let phrase = super::public_reason(e);
+            assert!(!phrase.is_empty());
+            for secret in ["/etc", "client.key", "10.1.2.3", "8883", "birdnet/"] {
+                assert!(!phrase.contains(secret), "{e:?} -> {phrase}");
+            }
+        }
+        // The counterpart: the phrases are not all one, so the operator still
+        // learns which kind of fault it is.
+        let distinct: std::collections::HashSet<_> =
+            errors.iter().map(super::public_reason).collect();
+        assert!(distinct.len() >= 5, "{distinct:?}");
     }
 }

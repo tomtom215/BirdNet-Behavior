@@ -144,13 +144,7 @@ mod tests {
     use super::*;
     use std::f32::consts::PI;
 
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_lossless
-    )]
+    #[allow(clippy::cast_precision_loss)]
     fn sine_wave(freq_hz: f32, amplitude: f32, n_samples: usize, sample_rate: u32) -> Vec<f32> {
         (0..n_samples)
             .map(|i| amplitude * (2.0 * PI * freq_hz * i as f32 / sample_rate as f32).sin())
@@ -158,7 +152,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn empty_input_returns_defaults() {
         let (snr, floor) = estimate_snr(&[]);
         assert_eq!(snr, 0.0);
@@ -220,7 +213,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn spectral_flatness_empty_returns_zero() {
         assert_eq!(spectral_flatness(&[]), 0.0);
     }
@@ -232,7 +224,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn rms_to_dbfs_near_zero() {
         assert_eq!(rms_to_dbfs(0.0), -96.0);
     }

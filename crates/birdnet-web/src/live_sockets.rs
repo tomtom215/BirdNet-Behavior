@@ -70,8 +70,13 @@ impl LiveSockets {
     ///
     /// The refusal response.
     #[allow(clippy::result_large_err)]
-    pub fn admit(&self, kind: Kind, headers: &HeaderMap) -> Result<OwnedSemaphorePermit, Response> {
-        if !crate::security::is_same_origin(headers) {
+    pub fn admit(
+        &self,
+        kind: Kind,
+        headers: &HeaderMap,
+        uri: &axum::http::Uri,
+    ) -> Result<OwnedSemaphorePermit, Response> {
+        if !crate::security::is_same_origin(headers, uri) {
             tracing::info!(
                 origin = headers
                     .get(axum::http::header::ORIGIN)

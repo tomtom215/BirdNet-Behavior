@@ -29,6 +29,7 @@ use axum::{Router, routing::get};
 
 use super::station::station_subtabs;
 use crate::auth_middleware::RequestUser;
+use crate::routes::admin::settings::extra::Group;
 use crate::routes::admin::settings::render::{SETTINGS_FORM_CSS, Section, render_section_form};
 use crate::routes::pages::render_page_for_request;
 use crate::state::AppState;
@@ -105,18 +106,28 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>What your station is listening to, and which birds it keeps.</b> Add microphones or camera streams, tune which species count, and set how sure the model must be.</p>
+<h2 class="st-h3" id="classifier">Bird-identifying model</h2>
+{classifier}
 <h2 class="st-h3" id="audio">Audio sources</h2>
 {sources}
+{folder_note}
 <h2 class="st-h3" id="species">Which birds count <span class="st-h3-note">· <a href="/admin/species/test">preview the filter</a> before it affects live detections</span></h2>
 {species}
 <h2 class="st-h3" id="detection">Capture settings <span class="st-h3-note">· the single home for the detection threshold</span></h2>
 {settings_css}
 {form}"#,
         tabs = station_subtabs("capture"),
+        classifier = crate::routes::admin::classifier::host_html(state, user.is_admin()),
         sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
+        folder_note = crate::watch_folder::capture_note(state.watch_dir().as_deref()),
         species = crate::routes::admin::species::handler::species_body(state),
         settings_css = SETTINGS_FORM_CSS,
-        form = section_form(&[Section::Audio, Section::Location, Section::Detection]),
+        form = section_form(&[
+            Section::Audio,
+            Section::Location,
+            Section::Detection,
+            Section::Extra(Group::Filters),
+        ]),
     )
 }
 
@@ -159,7 +170,12 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
         rules = crate::routes::admin::rules::rules_body(),
         channels = crate::routes::admin::notification_test::channels_test_body(state),
         settings_css = SETTINGS_FORM_CSS,
-        form = section_form(&[Section::Notifications, Section::Email]),
+        form = section_form(&[
+            Section::Notifications,
+            Section::Extra(Group::AlertLimits),
+            Section::Extra(Group::Mqtt),
+            Section::Email,
+        ]),
         recent = crate::routes::admin::notifications::recent_body(state),
     )
 }
@@ -168,25 +184,37 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
 // Data · "keep it safe / bring it in"
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn data_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+async fn data_page(
+    State(state): State<AppState>,
+    user: crate::auth_middleware::RequestUser,
+    headers: HeaderMap,
+) -> Html<String> {
     let content = built(
         "data",
         "the Data tab",
-        tokio::task::spawn_blocking(move || build_data(&state)).await,
+        tokio::task::spawn_blocking(move || build_data(&state, &user)).await,
     );
     page(&content, &headers)
 }
 
-fn build_data(state: &AppState) -> String {
+fn build_data(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
+    let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let schedule = settings.as_ref().map_or_else(
+        |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+        |s| render_section_form(s, &[Section::Extra(Group::Backups)], state.names()),
+    );
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Protect your records, bring in your history, and check the data's trustworthy.</b> Backups bundle the database and recordings; import folds a BirdNET-Pi <span class="mono">birds.db</span> in with its original dates intact.</p>
 <div id="backups">{backups}</div>
+{settings_css}
+{schedule}
 <h2 class="st-h3" id="import">Bring your history with you</h2>
 {import}
 <div id="quality">{quality}</div>
 <div class="card" id="phantoms-section">{phantoms}</div>"#,
         tabs = station_subtabs("data"),
+        settings_css = SETTINGS_FORM_CSS,
         backups = crate::routes::admin::backup_recovery::backups_body(state),
         import = crate::routes::admin::migration::migration_body(state),
         quality = crate::routes::admin::quality::quality_body(state),
@@ -238,7 +266,11 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
         tabs = station_subtabs("settings"),
         display = DISPLAY_PREFS_HTML.as_str(),
         settings_css = SETTINGS_FORM_CSS,
-        form = section_form(&[Section::System]),
+        form = section_form(&[
+            Section::System,
+            Section::Extra(Group::Storage),
+            Section::Extra(Group::Online),
+        ]),
     )
 }
 
@@ -249,23 +281,27 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
 async fn access_page(
     State(state): State<AppState>,
     request_user: RequestUser,
+    scheme: Option<axum::Extension<crate::request_scheme::RequestScheme>>,
     headers: HeaderMap,
 ) -> Html<String> {
+    let https = crate::routes::admin::https::request_is_https(scheme.as_ref());
     let content = built(
         "access",
         "the Access tab",
-        tokio::task::spawn_blocking(move || build_access(&state, &request_user)).await,
+        tokio::task::spawn_blocking(move || build_access(&state, &request_user, https)).await,
     );
     page(&content, &headers)
 }
 
-fn build_access(state: &AppState, request_user: &RequestUser) -> String {
+fn build_access(state: &AppState, request_user: &RequestUser, https: bool) -> String {
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Who can change your station's settings.</b> Viewing the dashboard is open; only the toolbox is gated.</p>
 <div id="accounts">{accounts}</div>
+{https_card}
 <div id="danger-zone">{danger}</div>"#,
         tabs = station_subtabs("access"),
+        https_card = crate::routes::admin::https::card(state, https),
         accounts = crate::routes::admin::accounts::accounts_body(state, request_user),
         danger = danger_zone(),
     )
@@ -350,7 +386,8 @@ mod tests {
 
     #[test]
     fn data_folds_backups_import_and_quality() {
-        let html = build_data(&test_state());
+        let state = test_state();
+        let html = build_data(&state, &admin(&state));
         assert!(html.contains("BirdNET-Pi"));
         assert!(html.contains(r#"href="/station/data""#));
     }

@@ -2,17 +2,18 @@
 
 **Status:** complete — the historical record of the `v0.10.x` cycle. Every
 finding S-01…S-11 below landed, and the release shipped as `0.11.0`
-(`CHANGELOG.md` `## [0.11.0] - 2026-08-09`). The tree has moved four minors on
-since: `Cargo.toml` `workspace.package.version` is `0.15.0`. The body is
+(`CHANGELOG.md` `## [0.11.0] - 2026-08-09`). The tree has moved on by several minors since (`Cargo.toml`
+`workspace.package.version` is the current one). The body is
 preserved as the record of that cycle — read its `file:line` evidence as of
 `e98c8a0`, not as of today, and expect symbols to have moved. The current
 picture lives in the later audits: `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` (the
-one `CHANGELOG.md` points readers at), `docs/POST_0140_AUDIT.md`,
-`docs/FIELD_READINESS_AUDIT.md`, `docs/ENCLOSURE_READINESS_AUDIT.md` and
-`docs/PRODUCTION_AUDIT.md`. This plan superseded the `v0.10.0` preparation plan
-(same path, git history at `e98c8a0`), whose findings F-01…F-12 all landed and
-are re-verified green below, and also `docs/RELEASE_PUNCHLIST.md` and
-`docs/RELEASE_READINESS.md`, which are older still.
+one `CHANGELOG.md` points readers at), and, in `docs/archive/`,
+`POST_0140_AUDIT.md`, `FIELD_READINESS_AUDIT.md`, `ENCLOSURE_READINESS_AUDIT.md`
+and `PRODUCTION_AUDIT.md` (that directory's `README.md` lists them). This plan
+superseded the `v0.10.0` preparation plan (same path, git history at `e98c8a0`),
+whose findings F-01…F-12 all landed and are re-verified green below, and also
+`docs/RELEASE_PUNCHLIST.md` and `docs/archive/RELEASE_READINESS.md`, which are
+older still.
 
 **Audited:** 2026-08-08, against `main` tip `e98c8a0` (merge of PR #195).
 

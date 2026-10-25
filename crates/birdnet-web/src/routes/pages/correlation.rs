@@ -45,9 +45,19 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize)]
 struct CorrelationQuery {
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     days: Option<u32>,
     species: Option<String>,
+    /// How many of the strongest links the chord diagram draws (`0` = all of them).
+    links: Option<usize>,
 }
+
+/// Links the chord diagram draws until the reader asks for more: a ring with every pair
+/// of ten species on it is the tangle this chart used to be.
+const DEFAULT_LINKS: usize = super::viz::LINK_CHOICES[0];
+
+/// The most species either picture holds.
+const MAX_SPECIES: usize = 10;
 
 // ---------------------------------------------------------------------------
 // Page content — embedded in the Patterns home ("Who sings together" tab)
@@ -67,7 +77,7 @@ static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
     <div class="bnb-eyebrow">Behavioral analytics</div>
     <h1 class="display co-h1">Who sings with whom</h1>
     {{help_link}}
-    <p class="bnb-lede co-mt"><b>Species joined by a ribbon are often heard in the same five-minute block.</b> Thicker, brighter ribbons mean more of the two birds' time is shared; the arc length around the edge shows how connected each species is overall. It's correlation, not cause — they may just share the same good morning.</p>
+    <p class="bnb-lede co-mt"><b>Species joined by a ribbon are often heard in the same five-minute block.</b> A wider, darker ribbon means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause — they may just share the same good morning.</p>
   </div>
   <!-- role/name/state: this row conveyed the selected range with a CSS
        class alone. `templates/today.html` already does the same control with
@@ -86,7 +96,7 @@ static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
   <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
-  <details class="pt-disc">
+  <details class="pt-disc co-disc-matrix">
     <summary>See the numbers — the co-occurrence matrix</summary>
     <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix" hx-include="#days-hidden" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
       <span class="htmx-indicator bnb-meta">Loading…</span>
@@ -177,11 +187,11 @@ fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
         .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
-    let (labels, matrix) = build_matrix(&pairs, 10);
-    Some(super::viz::cooccurrence_matrix(
-        &displayed(&labels, state.names()),
-        &matrix,
-    ))
+    Some(super::viz::cooccurrence_matrix(&build_graph(
+        &pairs,
+        MAX_SPECIES,
+        state.names(),
+    )))
 }
 
 async fn cooccurrence_matrix_partial(
@@ -200,15 +210,18 @@ async fn cooccurrence_matrix_partial(
 // GET /pages/acoustic-network — chord diagram of the co-occurrence graph
 // ---------------------------------------------------------------------------
 
-fn compute_acoustic_network(state: &AppState, days: u32) -> Option<String> {
+fn compute_acoustic_network(state: &AppState, days: u32, links: usize) -> Option<String> {
     let pairs = state
         .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
-    // Fewer arcs read more clearly as a chord than the 10-wide matrix.
-    let (labels, matrix) = build_matrix(&pairs, 9);
-    Some(super::viz::chord_diagram(
-        &displayed(&labels, state.names()),
-        &matrix,
+    if pairs.is_empty() {
+        return Some(super::empty_states::no_co_signal());
+    }
+    let graph = build_graph(&pairs, MAX_SPECIES, state.names());
+    Some(super::viz::co_figure(
+        &graph,
+        links,
+        "/pages/acoustic-network",
     ))
 }
 
@@ -217,29 +230,29 @@ async fn acoustic_network_partial(
     Query(query): Query<CorrelationQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(30).min(365);
-    let html = cached_fragment(&state, format!("corr-network:{days}"), CORR_ERR, move |s| {
-        compute_acoustic_network(s, days)
-    })
+    let links = query.links.unwrap_or(DEFAULT_LINKS).min(200);
+    let html = cached_fragment(
+        &state,
+        format!("corr-network:{days}:{links}"),
+        CORR_ERR,
+        move |s| compute_acoustic_network(s, days, links),
+    )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
-/// The species labels as the station's language names them. The matrix is built,
-/// ranked and indexed on the stored names; only what is drawn changes.
-fn displayed(labels: &[String], names: &birdnet_core::i18n::NameLocalizer) -> Vec<String> {
-    labels
-        .iter()
-        .map(|l| names.name_of_stored(l).to_owned())
-        .collect()
-}
-
-/// Reduce co-occurrence pairs to a square matrix over the `max_species` most
-/// connected species. Cell strength is the pair's overlap, scaled to the
-/// strongest pair shown so the grid reads as a relative heat-map.
-fn build_matrix(
+/// Reduce co-occurrence pairs to the graph over the `max_species` most connected species.
+///
+/// Species are ranked by the sum of the overlap they take part in, busiest first, and that
+/// rank is their colour slot in every picture. Strength is the pair's overlap scaled to the
+/// strongest pair among those species, so the pictures read as a relative picture; the
+/// overlap as measured and the blocks behind it travel along, because a reading must say
+/// "38 % of the blocks either was heard in", not "0.71 of the strongest".
+fn build_graph(
     pairs: &[birdnet_db::sqlite::SpeciesPair],
     max_species: usize,
-) -> (Vec<String>, Vec<Vec<f64>>) {
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> super::viz::CoGraph {
     use std::collections::HashMap;
 
     // Summed overlap each species participates in → connectedness ranking.
@@ -250,34 +263,39 @@ fn build_matrix(
     }
     let mut ranked: Vec<(&str, f64)> = weight.into_iter().collect();
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
-    let labels: Vec<String> = ranked
-        .iter()
-        .take(max_species)
-        .map(|(n, _)| (*n).to_string())
-        .collect();
+    let labels: Vec<&str> = ranked.iter().take(max_species).map(|(n, _)| *n).collect();
 
-    let idx: std::collections::HashMap<&str, usize> = labels
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.as_str(), i))
-        .collect();
+    let idx: HashMap<&str, usize> = labels.iter().enumerate().map(|(i, n)| (*n, i)).collect();
     let n = labels.len();
-    let mut matrix = vec![vec![0.0_f64; n]; n];
+    let mut strength = vec![vec![0.0_f64; n]; n];
+    let mut share = vec![vec![0.0_f64; n]; n];
+    let mut blocks = vec![vec![0_i64; n]; n];
     let mut max_overlap = f64::MIN_POSITIVE;
     for p in pairs {
         if let (Some(&i), Some(&j)) = (idx.get(p.species_a.as_str()), idx.get(p.species_b.as_str()))
+            && i != j
         {
-            matrix[i][j] = p.overlap;
-            matrix[j][i] = p.overlap;
+            share[i][j] = p.overlap;
+            share[j][i] = p.overlap;
+            blocks[i][j] = p.shared_blocks;
+            blocks[j][i] = p.shared_blocks;
             max_overlap = max_overlap.max(p.overlap);
         }
     }
-    for row in &mut matrix {
-        for cell in row.iter_mut() {
-            *cell /= max_overlap;
+    for (row, out) in share.iter().zip(strength.iter_mut()) {
+        for (v, cell) in row.iter().zip(out.iter_mut()) {
+            *cell = v / max_overlap;
         }
     }
-    (labels, matrix)
+    super::viz::CoGraph {
+        names: labels
+            .iter()
+            .map(|l| names.name_of_stored(l).to_owned())
+            .collect(),
+        strength,
+        share,
+        blocks,
+    }
 }
 
 fn render_pairs_table(
@@ -447,8 +465,8 @@ pub fn prewarm(state: &AppState) {
     if let Some(h) = compute_cooccurrence_matrix(state, 30) {
         cache.put("corr-matrix:30".to_string(), h);
     }
-    if let Some(h) = compute_acoustic_network(state, 30) {
-        cache.put("corr-network:30".to_string(), h);
+    if let Some(h) = compute_acoustic_network(state, 30, DEFAULT_LINKS) {
+        cache.put(format!("corr-network:30:{DEFAULT_LINKS}"), h);
     }
     if let Some(h) = compute_correlation_pairs(state, 30) {
         cache.put("corr-pairs:30".to_string(), h);
@@ -496,6 +514,80 @@ mod tests {
         let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    fn pair(a: &str, b: &str, shared: u32, overlap: f64) -> SpeciesPair {
+        SpeciesPair {
+            species_a: a.into(),
+            species_b: b.into(),
+            shared_blocks: i64::from(shared),
+            blocks_a: 40,
+            blocks_b: 40,
+            overlap,
+        }
+    }
+
+    /// The graph the pictures draw keeps what a reading needs: the overlap as measured (not
+    /// only as scaled to the strongest pair) and the blocks behind it, and the colour slot of
+    /// a species is its rank by connectedness.
+    #[test]
+    fn the_graph_keeps_the_measured_share_beside_the_scaled_one() {
+        let pairs = vec![
+            pair("Robin", "Wren", 30, 0.60),
+            pair("Robin", "Jay", 15, 0.30),
+            pair("Wren", "Jay", 6, 0.12),
+            pair("Jay", "Owl", 3, 0.05),
+        ];
+        let g = build_graph(&pairs, 3, &birdnet_core::i18n::NameLocalizer::english());
+        // Robin (0.90) and Wren (0.72) and Jay (0.47) are the three most connected; Owl is cut.
+        assert_eq!(g.names, vec!["Robin", "Wren", "Jay"]);
+        assert!(
+            (g.strength[0][1] - 1.0).abs() < 1e-12,
+            "the strongest pair is 1.0"
+        );
+        assert!((g.strength[0][2] - 0.5).abs() < 1e-12);
+        assert!(
+            (g.share[0][1] - 0.60).abs() < 1e-12,
+            "the share is as measured"
+        );
+        assert_eq!(g.blocks[1][2], 6);
+        for i in 0..3 {
+            assert!(
+                g.strength[i][i].abs() < 1e-12,
+                "no species is linked to itself"
+            );
+            for j in 0..3 {
+                assert!(
+                    (g.strength[i][j] - g.strength[j][i]).abs() < 1e-12,
+                    "symmetric"
+                );
+                assert_eq!(g.blocks[i][j], g.blocks[j][i]);
+            }
+        }
+    }
+
+    /// A pair outside the species kept does not stretch the scale: only the strongest link
+    /// *drawn* is 1.0.
+    #[test]
+    fn a_pair_that_is_not_drawn_does_not_set_the_scale() {
+        let pairs = vec![
+            pair("A", "B", 10, 0.40),
+            pair("A", "C", 8, 0.30),
+            pair("B", "C", 8, 0.20),
+            pair("X", "Y", 50, 0.45),
+        ];
+        // X and Y (0.45 each) are less connected in total than A (0.70), B (0.60), C (0.50)
+        // and are cut at three, though their pair is stronger than A-B.
+        let g = build_graph(&pairs, 3, &birdnet_core::i18n::NameLocalizer::english());
+        assert_eq!(g.names, vec!["A", "B", "C"]);
+        assert!((g.strength[0][1] - 1.0).abs() < 1e-12, "{:?}", g.strength);
+    }
+
+    /// The chord diagram's "links shown" is read from the request and bounded.
+    #[test]
+    fn the_default_is_the_first_choice_the_figure_offers() {
+        assert_eq!(DEFAULT_LINKS, 12);
+        assert_eq!(super::super::viz::LINK_CHOICES, [12, 24, 0]);
     }
 
     #[test]

@@ -169,7 +169,7 @@ fn render_detail_page(
     let com = escape_html(shown);
     let sci = escape_html(&det.sci_name);
     let date = escape_html(&det.date);
-    let time = escape_html(&det.time);
+    let time = crate::display::clock(&det.time);
 
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
@@ -269,6 +269,10 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     <source src="/api/v2/recordings/{safe}" type="audio/wav">
     Your browser does not support audio playback.
   </audio>
+  <details class="lfx-fold">
+    <summary>Listening aids</summary>
+    <div data-listen-fx></div>
+  </details>
 </div>"#
     )
 }
@@ -290,7 +294,7 @@ fn build_corroboration_section(hits: &[birdnet_db::sqlite::ConcurrentDetection])
             rows,
             r#"<tr><td><span class="bnb-pill">{src}</span></td><td class="mono">{time}</td><td class="mono">{conf:.0}%</td></tr>"#,
             src = escape_html(&h.source),
-            time = escape_html(h.time.get(0..8).unwrap_or(&h.time)),
+            time = crate::display::clock(h.time.get(0..8).unwrap_or(&h.time)),
             conf = h.confidence * 100.0,
         );
     }

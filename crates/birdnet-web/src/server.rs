@@ -187,6 +187,7 @@ fn build_router_with(state: AppState, rate_limit: RateLimitConfig, cors: CorsLay
     let public = crate::auth_middleware::apply_public(routes::public_routes(), state.clone());
 
     let request_metrics = state.metrics();
+    let headers_state = state.clone();
     let router = public.merge(admin).merge(api_write).with_state(state);
 
     // Layer order is outermost-last. The CSRF guard runs after rate limiting
@@ -204,7 +205,8 @@ fn build_router_with(state: AppState, rate_limit: RateLimitConfig, cors: CorsLay
         }))
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .layer(cors)
-        .layer(axum::middleware::from_fn(
+        .layer(axum::middleware::from_fn_with_state(
+            headers_state,
             crate::security::security_headers_middleware,
         ))
         // Outside everything else so it measures what the client actually

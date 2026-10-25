@@ -9,9 +9,12 @@ pub mod analytics;
 pub mod api_write;
 pub mod auth_pages;
 pub mod charts;
+pub mod dashboard_image;
 pub mod detections;
+pub mod dynamic_thresholds;
 pub mod export;
 pub mod feeds;
+pub mod form;
 pub mod health;
 pub mod hls;
 pub mod images;
@@ -28,6 +31,7 @@ pub mod spectrogram_ws;
 pub mod static_files;
 pub mod system;
 pub mod timeseries;
+pub mod weather;
 pub mod websocket;
 
 use axum::Router;
@@ -74,6 +78,8 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", detections::router())
         .nest("/api/v2", analysis_runs::router())
         .nest("/api/v2", species::router())
+        .nest("/api/v2", dynamic_thresholds::router())
+        .nest("/api/v2", weather::router())
         .nest("/api/v2", analytics::router())
         .nest("/api/v2", timeseries::router())
         .nest("/api/v2", system::router())
@@ -90,6 +96,8 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", hls::router())
         .nest("/api/v2", health::router())
         .merge(livestream::stream_router())
+        .merge(dashboard_image::router())
+        .merge(crate::display::router())
         .merge(pages::router())
         .merge(redirects::router())
         .merge(feeds::router())

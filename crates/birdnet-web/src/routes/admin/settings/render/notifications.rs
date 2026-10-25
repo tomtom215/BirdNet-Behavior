@@ -5,6 +5,51 @@ use std::fmt::Write as _;
 
 use super::get_setting;
 
+/// The choices for the notification trigger, the stored one selected.
+///
+/// Five rows cover every combination of BirdNET-Pi's three switches that
+/// behaves differently: "every detection" already announces everything the
+/// other two would, so it stands for any combination that includes it. A stored
+/// list that is none of the five (`each,new-species`, written by importing a
+/// BirdNET-Pi file) is shown as itself and kept until another is chosen,
+/// rather than shown as the nearest row and silently replaced on the next save.
+fn trigger_options(stored: &str) -> String {
+    use birdnet_integrations::notification::TriggerMode;
+    const CHOICES: [(&str, &str); 5] = [
+        ("each", "Every detection"),
+        ("new-species-daily", "The first of each species, each day"),
+        (
+            "new-species",
+            "A species seen five times or fewer in a week",
+        ),
+        (
+            "new-species,new-species-daily",
+            "Both of those, but not every detection",
+        ),
+        ("off", "Never (no notifications)"),
+    ];
+    let current = TriggerMode::parse(stored).to_string();
+    let mut out = String::new();
+    let mut found = false;
+    for (value, label) in CHOICES {
+        let selected = if value == current {
+            found = true;
+            " selected"
+        } else {
+            ""
+        };
+        let _ = write!(out, r#"<option value="{value}"{selected}>{label}</option>"#);
+    }
+    if !found {
+        let _ = write!(
+            out,
+            r#"<option value="{v}" selected>Several rules: {v}</option>"#,
+            v = crate::routes::pages::escape_html(&current)
+        );
+    }
+    out
+}
+
 #[allow(clippy::too_many_lines)]
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let apprise = get_setting(s, "apprise_url");
@@ -13,18 +58,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let bw = get_setting(s, "birdweather_token");
     let nconf = get_setting(s, "notify_confidence");
     let ncool = get_setting(s, "notify_cooldown");
-    let trigger = get_setting(s, "notify_trigger");
-    let t_each = if trigger == "each" { " selected" } else { "" };
-    let t_new = if trigger == "new-species" {
-        " selected"
-    } else {
-        ""
-    };
-    let t_daily = if trigger == "new-species-daily" {
-        " selected"
-    } else {
-        ""
-    };
+    let trigger_options = trigger_options(&get_setting(s, "notify_trigger"));
     let only = get_setting(s, "notify_species_only");
     let nexcl = get_setting(s, "notify_species_exclude");
     let title_tmpl = get_setting(s, "notify_title_template");
@@ -36,6 +70,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let hb = get_setting(s, "heartbeat_url");
     let deadman = get_setting(s, "deadman_hours");
     let weekly_opts = render_weekly_options(&weekly);
+    let secret_hint = super::super::masking::SECRET_HINT;
+    let address_hint = super::super::masking::ADDRESS_HINT;
     write!(out, r#"
   <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
     <h2 class="section-title" id="set-notifications-h">Notifications</h2>
@@ -51,7 +87,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         (<code>gotify://</code>), Pushover (<code>pover://</code>), or a plain
         web address to post to (<code>json://</code>). Look for "webhook" in
         that service’s settings and paste what it gives you. Nothing extra
-        needs installing on the station.
+        needs installing on the station. {address_hint}
       </p>
     </div>
     <h3 class="mt-md">Other services (advanced)</h3>
@@ -62,14 +98,14 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <div>
         <label for="apprise_url">Address of your Apprise server</label>
         <input id="apprise_url" name="apprise_url" value="{apprise}" placeholder="http://localhost:8000">
-        <p class="hint">Leave blank if you do not run one. (BirdNET-Pi: APPRISE_URL)</p>
+        <p class="hint">Leave blank if you do not run one. (BirdNET-Pi has no Apprise server setting: it runs Apprise itself) {address_hint}</p>
       </div>
       <div>
         <label for="apprise_config">Path to an Apprise configuration file</label>
         <input id="apprise_config" name="apprise_config" value="{apprise_cfg}" placeholder="/etc/birdnet/apprise.yml">
         <p class="hint">Leave blank if you do not have one. Whoever set the
         station up can point this at an Apprise config to reach the 80-odd
-        services it supports. (BirdNET-Pi: APPRISE_CONFIG_FILE)</p>
+        services it supports. (BirdNET-Pi: its apprise.txt, which importing your birdnet.conf brings across)</p>
       </div>
     </div>
     <div class="mt-sm">
@@ -80,12 +116,12 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div class="grid-2 mt-md">
       <div>
         <label for="notify_trigger">Notification Trigger</label>
-        <select id="notify_trigger" name="notify_trigger">
-          <option value="each"{t_each}>Each detection</option>
-          <option value="new-species"{t_new}>New species (this week)</option>
-          <option value="new-species-daily"{t_daily}>New species (each day)</option>
-        </select>
-        <p class="hint">When to send notifications (BirdNET-Pi: APPRISE_NOTIFY_EACH_DETECTION etc.)</p>
+        <select id="notify_trigger" name="notify_trigger">{trigger_options}</select>
+        <p class="hint">When to send a notification. BirdNET-Pi has three switches
+        (<code>APPRISE_NOTIFY_EACH_DETECTION</code>, <code>_NEW_SPECIES</code> for a species seen
+        five times or fewer in a week, <code>_NEW_SPECIES_EACH_DAY</code>); the choices here are
+        every combination of them that differs. Several at once send one message that says
+        every reason, where BirdNET-Pi sends one per reason.</p>
       </div>
     </div>
     <div class="grid-2">
@@ -94,21 +130,21 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="notify_confidence" name="notify_confidence" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
                value="{nconf}" placeholder="0.80">
-        <p class="hint">Only notify above this confidence. Either <code>.</code> or <code>,</code> works (BirdNET-Pi: APPRISE_MIN_CONFIDENCE)</p>
+        <p class="hint">Only notify above this confidence. Either <code>.</code> or <code>,</code> works. BirdNET-Pi has no such minimum: it notifies for every detection it stores, so a station moved from it is set to 0.</p>
       </div>
       <div>
         <label for="notify_cooldown">Notification Cooldown (seconds)</label>
         <input id="notify_cooldown" name="notify_cooldown" type="text"
                inputmode="numeric" pattern="[0-9]*"
                value="{ncool}" placeholder="0">
-        <p class="hint">Minimum time between notifications per species (BirdNET-Pi: MIN_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES)</p>
+        <p class="hint">Minimum time between notifications per species (BirdNET-Pi: APPRISE_MINIMUM_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES)</p>
       </div>
     </div>
     <div>
       <label for="notify_species_only">Notify only for these species (common names, separated by commas)</label>
       <textarea id="notify_species_only" name="notify_species_only" rows="2"
                 placeholder="e.g. European Robin, Great Spotted Woodpecker">{only}</textarea>
-      <p class="hint">Leave empty to notify for all species (BirdNET-Pi: APPRISE_ONLY_NOTIFY_SPECIES_NAMES)</p>
+      <p class="hint">Leave empty to notify for all species (BirdNET-Pi: APPRISE_ONLY_NOTIFY_SPECIES_NAMES_2)</p>
     </div>
     <div>
       <label for="notify_species_exclude">Never notify for these species (common names, separated by commas)</label>
@@ -116,19 +152,20 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
                 placeholder="e.g. House Sparrow, Feral Pigeon">{nexcl}</textarea>
       <p class="hint">These birds are still recorded and still appear in your
         records — you just are not told about them. To stop recording a species
-        altogether, use "Never record these" under Species Filters.</p>
+        altogether, use "Never record these" under Species Filters.
+        (BirdNET-Pi: APPRISE_ONLY_NOTIFY_SPECIES_NAMES, which is an exclusion list despite its name.)</p>
     </div>
     <div>
       <label for="notify_title_template">Notification Title Template</label>
       <input id="notify_title_template" name="notify_title_template" value="{title_tmpl}"
              placeholder="Bird Detection: $comname">
-      <p class="hint">Variables: $comname $sciname $confidence $confidencepct $date $time $week $latitude $longitude $reason $cutoff $sens $overlap $listenurl $friendlyurl $image. Leave blank for default. (BirdNET-Pi: APPRISE_TITLE_TEMPLATE)</p>
+      <p class="hint">Variables: $comname $sciname $confidence $confidencepct $date $time $week $latitude $longitude $reason $cutoff $sens $overlap $listenurl $friendlyurl $image. Leave blank for default. (BirdNET-Pi: APPRISE_NOTIFICATION_TITLE)</p>
     </div>
     <div>
       <label for="notify_body_template">Notification Body Template</label>
       <textarea id="notify_body_template" name="notify_body_template" rows="2"
                 placeholder="$comname ($sciname) detected ($confidencepct% confidence) at $time on $date">{body_tmpl}</textarea>
-      <p class="hint">Leave blank for default template. (BirdNET-Pi: APPRISE_BODY_TEMPLATE)</p>
+      <p class="hint">Leave blank for default template. (BirdNET-Pi: the file body.txt)</p>
     </div>
     <div class="grid-2">
       <div>
@@ -137,7 +174,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint"><b>This shares your sightings publicly.</b> With a token
         set, every detection — with this station’s location — is uploaded to the
         BirdWeather community map, where anyone can see it. Leave blank to keep
-        everything on this device. (BirdNET-Pi: BIRDWEATHER_ID)</p>
+        everything on this device. (BirdNET-Pi: BIRDWEATHER_ID) {secret_hint}</p>
       </div>
       <div>
         <label for="weekly_report_schedule">Weekly Report Day</label>
@@ -152,7 +189,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <label for="heartbeat_url">Heartbeat URL</label>
         <input id="heartbeat_url" name="heartbeat_url" type="url" value="{hb}"
                placeholder="https://hc-ping.com/…">
-        <p class="hint">Pinged periodically so an outside monitor (Healthchecks.io, Uptime Kuma, …) can alert you when the station stops reporting. Leave blank to disable (BirdNET-Pi: HEARTBEAT_URL)</p>
+        <p class="hint">Pinged periodically so an outside monitor (Healthchecks.io, Uptime Kuma, …) can alert you when the station stops reporting. Leave blank to disable (BirdNET-Pi: HEARTBEAT_URL). {address_hint}</p>
       </div>
       <div>
         <label for="deadman_hours">Dead-man alert after (hours of no detections)</label>
@@ -187,4 +224,52 @@ fn render_weekly_options(selected: &str) -> String {
         write!(opts, "<option value=\"{d}\"{sel}>{label}</option>").unwrap_or_default();
     }
     opts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trigger_options;
+
+    fn selected(html: &str) -> Vec<&str> {
+        html.split("<option ")
+            .skip(1)
+            .filter(|o| o.contains(" selected"))
+            .map(|o| o.split('"').nth(1).unwrap_or(""))
+            .collect()
+    }
+
+    /// Every stored form of a trigger selects exactly one row, and a stored list
+    /// that is not one of the five is kept as itself rather than shown as the
+    /// nearest row (and replaced by it on the next save).
+    #[test]
+    fn the_stored_trigger_is_the_one_selected() {
+        for (stored, row) in [
+            ("each", "each"),
+            ("", "each"),
+            ("new_species", "new-species"),
+            ("new-species-daily", "new-species-daily"),
+            (
+                "new-species,new-species-daily",
+                "new-species,new-species-daily",
+            ),
+            (
+                "new-species-daily , new-species",
+                "new-species,new-species-daily",
+            ),
+            ("off", "off"),
+        ] {
+            assert_eq!(
+                selected(&trigger_options(stored)),
+                [row],
+                "stored {stored:?}"
+            );
+            assert!(
+                !trigger_options(stored).contains("Several rules"),
+                "{stored:?}"
+            );
+        }
+        let html = trigger_options("each,new-species");
+        assert_eq!(selected(&html), ["each,new-species"]);
+        assert!(html.contains("Several rules: each,new-species"), "{html}");
+    }
 }

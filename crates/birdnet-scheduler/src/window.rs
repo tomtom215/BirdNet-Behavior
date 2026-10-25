@@ -143,9 +143,9 @@ impl RecordingWindow {
                 // `start >= end` order check.
                 let start_i = (i64::from(sunrise_min) - i64::from(pre_sunrise_min)).clamp(0, 1439);
                 let end_i = (i64::from(sunset_min) + i64::from(post_sunset_min)).clamp(0, 1439);
-                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                #[allow(clippy::cast_sign_loss)]
                 let start = start_i as u32;
-                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                #[allow(clippy::cast_sign_loss)]
                 let end = end_i as u32;
                 // Degrade gracefully on an inverted/empty window instead of
                 // erroring out. A large `pre_sunrise_min` paired with a

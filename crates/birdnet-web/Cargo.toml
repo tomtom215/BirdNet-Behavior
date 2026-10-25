@@ -81,6 +81,12 @@ base64.workspace = true
 # tokens (`random::fill`).
 getrandom.workspace = true
 
+# `O_NONBLOCK` for opening the owner's dashboard picture (`routes::dashboard_image`):
+# a path swapped for a FIFO between the size check and the open must not park a
+# blocking-pool thread forever. Constants only; the crate has no `unsafe`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # `tower::ServiceExt::oneshot` drives the admin router in the nav route-parity
 # test (admin_router_serves_every_nav_destination). Also a normal dependency
@@ -89,6 +95,11 @@ getrandom.workspace = true
 tower.workspace = true
 # Captures the request span in `a_share_link_never_reaches_the_request_log`.
 tracing-subscriber.workspace = true
+# A real HTTP/2 client for `the_csrf_guard_holds_over_http2`: hyper's own
+# client would add nothing the test needs, and `h2` lets it send a request
+# with `:authority` and no `Host` header, as a browser does. Already in the
+# lockfile (hyper's server needs it).
+h2 = "0.4"
 
 [lints]
 workspace = true

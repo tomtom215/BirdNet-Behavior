@@ -127,6 +127,36 @@ pub const ADMIN_NAV: &[AdminNav] = &[
 /// labelled cluster per group from [`ADMIN_NAV`]; this is the canonical order.
 pub const GROUPS: &[&str] = &["Health", "Capture", "Alerts", "Data", "Settings", "Access"];
 
+/// Nav keys a viewer is refused the page of (`auth_middleware::viewer_may_read`
+/// answers `403`), so a viewer's copy of the nav leaves them out.
+pub const VIEWER_HIDDEN: &[&str] = &["doctor"];
+
+/// Refused pages that other pages link to in their body, not in the nav row.
+///
+/// A quick link or a rail button. [`without_viewer_hidden`]
+/// removes those anchors from a viewer's copy too, for the same reason it
+/// removes the nav entries: a link that only ever answers `403` reads as a
+/// broken station.
+pub const VIEWER_DENIED_LINKS: &[&str] = &["/admin/system/logs/page"];
+
+/// Response extension the admin gate sets on a viewer's response: the page's
+/// admin nav is rewritten by [`without_viewer_hidden`] on its way out.
+///
+/// The shell is built without the request (see `admin_shell_with`), so the nav
+/// cannot know who is reading; the gate does, and says so here.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewerView;
+
+/// One nav `<a>`: the single place its markup is written.
+fn link_html(n: &AdminNav, active: &str) -> String {
+    let attr = if n.key == active {
+        " class=\"am-nav-active\""
+    } else {
+        ""
+    };
+    format!("<a href=\"{}\"{attr}>{}</a>", n.path, n.label)
+}
+
 /// Render the admin nav, grouped into labelled Station task clusters.
 ///
 /// The tab whose key equals `active` is marked; entries are emitted in
@@ -140,13 +170,60 @@ pub fn nav_links(active: &str) -> String {
             current_group = n.group;
             let _ = write!(out, r#"<span class="am-nav-group">{}</span>"#, n.group);
         }
-        let attr = if n.key == active {
-            " class=\"am-nav-active\""
-        } else {
-            ""
-        };
-        let _ = write!(out, "<a href=\"{}\"{attr}>{}</a>", n.path, n.label);
+        out.push_str(&link_html(n, active));
     }
+    out
+}
+
+/// A viewer's copy of an admin page: the nav entries in [`VIEWER_HIDDEN`] removed,
+/// in either of the two forms [`nav_links`] writes them (active or not).
+///
+/// Only the admin nav row is touched (`<nav class="admin-nav" ..>`): the same link
+/// written in a sentence elsewhere on the page is the page's own business — with
+/// the exception of the anchors listed in [`VIEWER_DENIED_LINKS`], which are
+/// quick links and buttons, not sentences, and are removed wherever they sit.
+#[must_use]
+pub fn without_viewer_hidden(html: &str) -> String {
+    const OPEN: &str = r#"<nav class="admin-nav""#;
+    let mut html = html.to_owned();
+    for href in VIEWER_DENIED_LINKS {
+        html = without_anchor_to(&html, href);
+    }
+    let Some(start) = html.find(OPEN) else {
+        return html;
+    };
+    let end = html[start..]
+        .find("</nav>")
+        .map_or(html.len(), |e| start + e);
+    let mut row = html[start..end].to_owned();
+    for n in ADMIN_NAV.iter().filter(|n| VIEWER_HIDDEN.contains(&n.key)) {
+        for active in ["", n.key] {
+            row = row.replace(&link_html(n, active), "");
+        }
+    }
+    format!("{}{row}{}", &html[..start], &html[end..])
+}
+
+/// `html` with every `<a … href="HREF" …>…</a>` removed, whole.
+fn without_anchor_to(html: &str, href: &str) -> String {
+    let needle = format!(r#"href="{href}""#);
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find(&needle) {
+        // The anchor's own opening tag: the last `<a` before the attribute,
+        // with no `>` between (otherwise the attribute is on something else).
+        let before = &rest[..at];
+        let open = before.rfind("<a").filter(|&o| !before[o..].contains('>'));
+        let close = rest[at..].find("</a>");
+        if let (Some(o), Some(c)) = (open, close) {
+            out.push_str(&rest[..o]);
+            rest = &rest[at + c + "</a>".len()..];
+        } else {
+            out.push_str(&rest[..at + needle.len()]);
+            rest = &rest[at + needle.len()..];
+        }
+    }
+    out.push_str(rest);
     out
 }
 
@@ -189,6 +266,79 @@ pub fn breadcrumb_subpage(parent_key: &str, subpage: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A viewer's nav omits the entries it is refused, in the active and the
+    /// plain form, touches nothing else in the row, and leaves the same link in
+    /// a sentence elsewhere on the page alone.
+    #[test]
+    fn a_viewers_nav_omits_only_the_hidden_entries() {
+        let page = |active: &str| {
+            format!(
+                r#"<nav class="admin-nav" aria-label="Admin sections">{}</nav><p>See <a href="/admin/doctor">Diagnostics</a>.</p>"#,
+                nav_links(active)
+            )
+        };
+        let link = r#"<a href="/admin/doctor">Diagnostics</a>"#;
+        let active_link = r#"<a href="/admin/doctor" class="am-nav-active">Diagnostics</a>"#;
+        for active in ["overview", "doctor"] {
+            let full = page(active);
+            assert!(
+                full.contains(link) || full.contains(active_link),
+                "{active}"
+            );
+            let seen = without_viewer_hidden(&full);
+            assert!(!seen.contains(active_link), "{active}: {seen}");
+            let row_end = seen.find("</nav>").expect("nav");
+            assert!(!seen[..row_end].contains("/admin/doctor"), "{active}");
+            assert!(
+                seen[row_end..].contains(link),
+                "{active}: the sentence's own link is not the nav's to remove"
+            );
+            // Every other entry is still there.
+            for n in ADMIN_NAV.iter().filter(|n| n.key != "doctor") {
+                assert!(
+                    seen.contains(&format!(r#"href="{}""#, n.path)),
+                    "{active}: lost {}",
+                    n.path
+                );
+            }
+        }
+        // No nav on the page: nothing to do, nothing lost.
+        assert_eq!(without_viewer_hidden("<p>hi</p>"), "<p>hi</p>");
+    }
+
+    /// A refused page's anchor is removed wherever it sits and only it: other
+    /// links, the same address written as text, and an `<a>` that merely
+    /// precedes it are left alone.
+    #[test]
+    fn a_denied_link_is_removed_whole_and_nothing_else() {
+        let page = concat!(
+            r#"<a href="/admin/overview">Overview</a>"#,
+            r#"<a href="/admin/system/logs/page" class="quick-link"><div>Logs</div></a>"#,
+            r#"<p>Open /admin/system/logs/page in a terminal.</p>"#,
+            r#"<a class="bnb-btn" href="/admin/system/logs/page">Open the log viewer</a>"#,
+            r#"<a href="/admin/system">System</a>"#,
+        );
+        let seen = without_viewer_hidden(page);
+        assert_eq!(
+            seen,
+            concat!(
+                r#"<a href="/admin/overview">Overview</a>"#,
+                r#"<p>Open /admin/system/logs/page in a terminal.</p>"#,
+                r#"<a href="/admin/system">System</a>"#,
+            )
+        );
+        // A page without the link comes back as it was.
+        assert_eq!(without_viewer_hidden("<p>hi</p>"), "<p>hi</p>");
+    }
+
+    /// Everything the nav hides from a viewer is a key of the nav.
+    #[test]
+    fn every_hidden_key_is_a_nav_key() {
+        for k in VIEWER_HIDDEN {
+            assert!(ADMIN_NAV.iter().any(|n| n.key == *k), "{k}");
+        }
+    }
     use crate::state::AppState;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

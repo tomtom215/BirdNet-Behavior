@@ -22,7 +22,7 @@ Three ranks are browsable — **class**, **order** and **genus** — and each is
 
 ## Species detail
 
-Click any species for its detail page (`/species/detail?name=…`): a full-bleed Wikipedia photo, the scientific name and description, its class · order · genus (each a link back to the list filtered to that rank), an hourly activity profile, a multi-week activity grid, companion species (the birds it's most often heard alongside), and a strip of recent recordings.
+Click any species for its detail page (`/species/detail?name=…`): a full-bleed Wikipedia photo, the scientific name and description, its class · order · genus (each a link back to the list filtered to that rank), an hourly activity profile (columns from zero, the busiest hour labelled, a tooltip for every hour), the last 14 days as columns against the average, **Through the year** (a calendar with a cell for every day of the past 365: how many times it was heard, with the days the station was not listening hatched so they are not read as days the bird was quiet), companion species (the birds it's most often heard alongside), and a strip of recent recordings.
 
 ![A species detail page](../images/species-detail.png)
 
@@ -40,7 +40,7 @@ The station's location is shown to one decimal place (about 11 km): enough to sa
 
 ## Life list
 
-The **Life List** (`/species?view=lifelist` — the old `/life-list` still redirects in) is your birding journal — every species, once. It leads with three tallies (species, total detections, active days) and a smooth **accumulation curve** showing the list growing over the year, then a per-month "new species" chart and the full ranked table with average-confidence pills.
+The **Life List** (`/species?view=lifelist` — the old `/life-list` still redirects in) is your birding journal — every species, once. It leads with three tallies (species, total detections, active days) and a smooth **accumulation curve** showing the list growing month by month (a dot in each month that added a bird; point at a month for the total so far and how many came that month), then a per-month "new species" chart and the full ranked table with average-confidence pills.
 
 ![The life list with its accumulation curve](../images/life-list.png)
 

@@ -3,8 +3,8 @@
 //! Generates a PNG spectrogram from a WAV recording file on demand and
 //! returns it as an `image/png` response.
 //!
-//! Rendered PNGs are cached in memory keyed by filename, modification time and
-//! the overlay label, so the common case — the same recordings re-requested as
+//! Rendered PNGs are cached in memory keyed by filename, modification time, the
+//! overlay label and the look (colour map and dynamic range, see `look`), so the common case — the same recordings re-requested as
 //! the list and detail pages are browsed — is served without re-decoding the
 //! WAV or recomputing the mel transform. The cache is bounded by total bytes
 //! and evicts oldest-first. Because the endpoint is public and the label is
@@ -18,13 +18,19 @@
 //! |--------|------|--------|
 //! | GET    | /api/v2/spectrogram/{filename} | Generate/serve spectrogram PNG |
 //!
-//! The spectrogram is rendered as a grayscale/viridis-like PNG using the
-//! mel spectrogram computed by `birdnet-core`.
+//! The spectrogram is rendered as a PNG from the mel spectrogram computed by
+//! `birdnet-core`, in the colour map and dynamic range the station chose
+//! (viridis at 80 dB until it does). The response is revalidated rather than
+//! kept (`ETag`, `Cache-Control: private, no-cache`), so a change of look
+//! reaches a browser that already holds the old image under the same address.
 
 mod colormap;
 mod font;
+mod look;
 mod png;
 mod render;
+
+pub(crate) use look::{DEFAULT_RANGE_DB, RANGES_DB, colormap_choices, is_colormap, is_range_db};
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -38,6 +44,7 @@ use axum::{Router, routing::get};
 use tokio::sync::Semaphore;
 
 use crate::state::AppState;
+use look::Look;
 use render::{SpectrogramLabel, generate_spectrogram_png_with_label};
 
 /// Mount the spectrogram generation and serving route.
@@ -84,19 +91,72 @@ const CACHE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
 static SPECTROGRAM_CACHE: LazyLock<Mutex<SpectrogramCache>> =
     LazyLock::new(|| Mutex::new(SpectrogramCache::with_budget(CACHE_BUDGET_BYTES)));
 
-/// Cache key: recording filename + modification time + overlay label.
+/// Cache key: recording filename + modification time + overlay label + look.
 ///
 /// `mtime` invalidates the entry when a recording is overwritten so a stale PNG
 /// is never served. The label (species / confidence / time) is part of the key
 /// because it alters the rendered pixels — two requests for the same file with
 /// different overlays are distinct images. `thumb` likewise: the small grid
-/// preview and the full-size image for one file are different renders.
+/// preview and the full-size image for one file are different renders. So is
+/// the `look`: a station that changes its colour map or dynamic range must get
+/// the next image in the new one, not the cached image in the old one.
+/// Which version of the renderer drew an image; part of every `ETag`.
+///
+/// The tag names the *inputs* of a render, and a build that draws the same
+/// inputs differently (another colour table, a new font, a changed
+/// normalisation) would otherwise be told "304, keep yours" by a browser that
+/// still holds an image from the build before the upgrade, and keep showing
+/// stale pixels until the file's mtime moved. Raise it whenever the pixels
+/// change; `render::tests::the_pixels_are_what_the_etags_revision_names` fails
+/// when the colour maps, the overlay or the orientation change, and says so.
+/// It does not see a change to the audio-to-dB stage in `birdnet-core`, which
+/// has to be remembered.
+const RENDER_REVISION: u32 = 1;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
     filename: String,
     mtime: Option<Duration>,
     label: Option<(String, u32, String)>,
     thumb: bool,
+    look: Look,
+}
+
+impl CacheKey {
+    /// A quoted entity tag naming exactly the inputs of this render.
+    ///
+    /// Two requests with equal tags would be handed the same bytes, which is
+    /// what lets a `If-None-Match` be answered `304` without rendering or even
+    /// consulting the cache. The label is user text, so it enters as a hash.
+    fn etag(&self) -> String {
+        let mut label_hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |bytes: &[u8]| {
+            for b in bytes.iter().chain(&[0xff]) {
+                label_hash ^= u64::from(*b);
+                label_hash = label_hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        if let Some((species, confidence, time)) = &self.label {
+            feed(species.as_bytes());
+            feed(&confidence.to_le_bytes());
+            feed(time.as_bytes());
+        }
+        feed(self.filename.as_bytes());
+        let mtime = self.mtime.map_or(0, |d| d.as_nanos());
+        format!(
+            "\"{mtime:x}-{}-{}-{label_hash:016x}-r{RENDER_REVISION}\"",
+            self.look.tag(),
+            u8::from(self.thumb)
+        )
+    }
+}
+
+/// Whether an `If-None-Match` header names `etag` (or is `*`).
+fn etag_matches(header_value: &str, etag: &str) -> bool {
+    header_value
+        .split(',')
+        .map(str::trim)
+        .any(|candidate| candidate == "*" || candidate.trim_start_matches("W/") == etag)
 }
 
 /// Byte-budgeted, insertion-order (FIFO) cache of rendered spectrogram PNGs.
@@ -197,13 +257,20 @@ pub(crate) async fn serve_shared(state: State<AppState>, filename: Path<String>)
         time: None,
         thumb: None,
     };
-    serve_spectrogram(state, filename, axum::extract::Query(query)).await
+    serve_spectrogram(
+        state,
+        filename,
+        axum::extract::Query(query),
+        axum::http::HeaderMap::new(),
+    )
+    .await
 }
 
 async fn serve_spectrogram(
     State(state): State<AppState>,
     Path(filename): Path<String>,
     axum::extract::Query(query): axum::extract::Query<SpectrogramQuery>,
+    request_headers: axum::http::HeaderMap,
 ) -> Response {
     if !is_safe_filename(&filename) {
         return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
@@ -213,9 +280,11 @@ async fn serve_spectrogram(
     let file_path = rec_dir.join(&filename);
 
     // Confirm the resolved path stays within the recording directory.
-    match file_path.canonicalize() {
+    match tokio::fs::canonicalize(&file_path).await {
         Ok(canonical) => {
-            let rec_canonical = rec_dir.canonicalize().unwrap_or_else(|_| rec_dir.clone());
+            let rec_canonical = tokio::fs::canonicalize(&rec_dir)
+                .await
+                .unwrap_or_else(|_| rec_dir.clone());
             if !canonical.starts_with(&rec_canonical) {
                 return (StatusCode::FORBIDDEN, "path traversal denied").into_response();
             }
@@ -234,15 +303,16 @@ async fn serve_spectrogram(
     // BirdNET-Pi's `RAW_SPECTROGRAM` with one honest difference: their setting
     // also removes *axes*, and we have never drawn any. The image is a bare mel
     // surface either way; the only thing to suppress is the text.
-    let raw = state
+    let (raw, look) = state
         .run_blocking(|state| {
             state.with_read_db(|conn| {
-                birdnet_db::settings::get_or(conn, "raw_spectrogram", "false")
+                let raw = birdnet_db::settings::get_or(conn, "raw_spectrogram", "false")
                     .unwrap_or_else(|_| "false".to_owned())
+                    == "true";
+                (raw, Look::load(conn))
             })
         })
-        .await
-        == "true";
+        .await;
 
     // Build the optional overlay label, plus a matching cache-key fragment.
     let label = if thumb || raw {
@@ -271,11 +341,24 @@ async fn serve_spectrogram(
         mtime,
         label: label_key,
         thumb,
+        look,
     };
+
+    // Revalidation: the tag names every input of the render, so a browser that
+    // holds this exact image is told so without a render or a cache lookup,
+    // and one that holds an image drawn under another look is not.
+    let etag = key.etag();
+    if request_headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| etag_matches(v, &etag))
+    {
+        return not_modified(&etag);
+    }
 
     // Fast path: serve a previously rendered PNG without a render permit or CPU.
     if let Some(bytes) = cache_get(&key) {
-        return png_response(bytes);
+        return png_response(bytes, &etag);
     }
 
     // Slow path: bound how many renders run at once (see `MAX_CONCURRENT_RENDERS`).
@@ -293,7 +376,7 @@ async fn serve_spectrogram(
     // Re-check under the permit: a concurrent request for the same key may have
     // populated the cache while we queued, so we don't render it twice.
     if let Some(bytes) = cache_get(&key) {
-        return png_response(bytes);
+        return png_response(bytes, &etag);
     }
 
     let result = tokio::task::spawn_blocking(move || {
@@ -301,6 +384,7 @@ async fn serve_spectrogram(
             &file_path,
             label.as_ref(),
             thumb.then_some(THUMB_WIDTH),
+            look,
         )
     })
     .await;
@@ -309,7 +393,7 @@ async fn serve_spectrogram(
         Ok(Ok(png_bytes)) => {
             let bytes = Bytes::from(png_bytes);
             cache_insert(key, bytes.clone());
-            png_response(bytes)
+            png_response(bytes, &etag)
         }
         Ok(Err(e)) => {
             // The detail (codec/decode/path specifics) is for the operator's
@@ -328,18 +412,38 @@ async fn serve_spectrogram(
     }
 }
 
-/// Build the standard `image/png` response for a rendered (or cached) PNG.
-fn png_response(bytes: Bytes) -> Response {
+/// The headers every answer for a spectrogram carries.
+///
+/// `private`, like the recording it is drawn from: on a private station a
+/// shared cache licensed by `public` could hand a signed-in reader's image to
+/// the next person who asked for the same URL. `no-cache` with an `ETag`
+/// rather than the `max-age=3600` it used to send: the address does not change
+/// when the owner changes the colour map or the dynamic range, so an hour of
+/// "no need to ask" was an hour of the old look. A revalidation that matches
+/// costs a `304` and no render.
+fn cache_headers(etag: &str) -> axum::http::HeaderMap {
     let mut headers = axum::http::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
-    // `private`, like the recording it is drawn from: on a private station a
-    // shared cache licensed by `public` could hand a signed-in reader's image
-    // to the next person who asked for the same URL.
     headers.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=3600"),
+        HeaderValue::from_static("private, no-cache"),
     );
+    // The tag is built from hex digits, a colour-map name and quotes.
+    if let Ok(v) = HeaderValue::from_str(etag) {
+        headers.insert(header::ETAG, v);
+    }
+    headers
+}
+
+/// Build the standard `image/png` response for a rendered (or cached) PNG.
+fn png_response(bytes: Bytes, etag: &str) -> Response {
+    let mut headers = cache_headers(etag);
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
     (StatusCode::OK, headers, Body::from(bytes)).into_response()
+}
+
+/// `304 Not Modified` for a browser that already holds this exact render.
+fn not_modified(etag: &str) -> Response {
+    (StatusCode::NOT_MODIFIED, cache_headers(etag)).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +483,7 @@ mod tests {
             mtime: None,
             label: None,
             thumb: false,
+            look: Look::default(),
         }
     }
 
@@ -444,6 +549,23 @@ mod tests {
             thumb: true,
             ..key("x.wav")
         };
+        // So is the look: same file, same label, another colour map.
+        let magma = CacheKey {
+            look: Look {
+                colormap: colormap::Colormap::Magma,
+                ..Look::default()
+            },
+            ..key("x.wav")
+        };
+        let narrow = CacheKey {
+            look: Look {
+                range_db: 60,
+                ..Look::default()
+            },
+            ..key("x.wav")
+        };
+        c.insert(magma.clone(), Bytes::from_static(b"magma"));
+        c.insert(narrow.clone(), Bytes::from_static(b"narrow"));
         c.insert(base.clone(), Bytes::from_static(b"base"));
         c.insert(labeled.clone(), Bytes::from_static(b"labeled"));
         c.insert(newer.clone(), Bytes::from_static(b"newer"));
@@ -452,6 +574,86 @@ mod tests {
         assert_eq!(c.get(&labeled).unwrap(), Bytes::from_static(b"labeled"));
         assert_eq!(c.get(&newer).unwrap(), Bytes::from_static(b"newer"));
         assert_eq!(c.get(&thumb).unwrap(), Bytes::from_static(b"thumb"));
-        assert_eq!(c.len(), 4);
+        assert_eq!(c.get(&magma).unwrap(), Bytes::from_static(b"magma"));
+        assert_eq!(c.get(&narrow).unwrap(), Bytes::from_static(b"narrow"));
+        assert_eq!(c.len(), 6);
+    }
+
+    /// The tag carries the renderer's revision, so an upgrade that changes the
+    /// pixels cannot be answered `304` from a copy drawn before it.
+    #[test]
+    fn the_etag_names_the_renderers_revision() {
+        let tag = key("x.wav").etag();
+        assert!(
+            tag.ends_with(&format!("-r{RENDER_REVISION}\"")),
+            "{tag} has no renderer revision"
+        );
+    }
+
+    #[test]
+    fn etags_differ_exactly_when_the_render_does() {
+        let base = key("x.wav");
+        let tags = [
+            base.etag(),
+            CacheKey {
+                mtime: Some(Duration::from_secs(5)),
+                ..key("x.wav")
+            }
+            .etag(),
+            CacheKey {
+                thumb: true,
+                ..key("x.wav")
+            }
+            .etag(),
+            CacheKey {
+                label: Some(("Robin".into(), 90, "06:00".into())),
+                ..key("x.wav")
+            }
+            .etag(),
+            CacheKey {
+                label: Some(("Robin".into(), 91, "06:00".into())),
+                ..key("x.wav")
+            }
+            .etag(),
+            CacheKey {
+                look: Look {
+                    range_db: 60,
+                    ..Look::default()
+                },
+                ..key("x.wav")
+            }
+            .etag(),
+            CacheKey {
+                look: Look {
+                    colormap: colormap::Colormap::Grey,
+                    ..Look::default()
+                },
+                ..key("x.wav")
+            }
+            .etag(),
+            key("y.wav").etag(),
+        ];
+        for (i, a) in tags.iter().enumerate() {
+            assert!(a.starts_with('"') && a.ends_with('"'), "{a}");
+            for b in &tags[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+        assert_eq!(
+            base.etag(),
+            key("x.wav").etag(),
+            "a tag is a function of the inputs"
+        );
+    }
+
+    #[test]
+    fn if_none_match_is_read_like_a_list() {
+        let tag = "\"abc\"";
+        assert!(etag_matches("\"abc\"", tag));
+        assert!(etag_matches("W/\"abc\"", tag));
+        assert!(etag_matches("\"zzz\", \"abc\"", tag));
+        assert!(etag_matches("*", tag));
+        assert!(!etag_matches("\"abx\"", tag));
+        assert!(!etag_matches("", tag));
     }
 }

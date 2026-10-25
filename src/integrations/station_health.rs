@@ -550,9 +550,31 @@ fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
     out.extend(data_volume_condition(&volume));
 }
 
-/// A purge that stopped achieving anything (PR-7).
+/// A purge that stopped achieving anything (PR-7), and a recording that stopped
+/// because the disk is full and the station is set to keep everything.
 fn check_purge(state: &AppState, out: &mut Vec<Condition>) {
     out.extend(purge_condition(state.metrics().purge_ineffective()));
+    out.extend(hold_condition(state.metrics().recording_held()));
+}
+
+/// A station that has stopped listening, said loudly (`FULL_DISK=keep`).
+///
+/// The setting promises that no clip is deleted for want of room, and the price
+/// of the promise is that nothing is recorded until there is some. A station
+/// that does that quietly is the failure the setting must not be: the owner
+/// finds out weeks later, from the missing summer.
+fn hold_condition(held: bool) -> Option<Condition> {
+    held.then(|| Condition {
+        key: "recording-held".to_owned(),
+        title: "Recording is stopped: the disk is full".to_owned(),
+        body: format!(
+            "The disk reached the purge threshold and the station is set to keep \
+             every clip, so it has stopped recording and deleted nothing. {}. To let the \
+             station delete its oldest clips instead, change \"When the disk is \
+             full\" in the Settings.",
+            birdnet_core::audio::capture::disk::manager::hold_advice_relative()
+        ),
+    })
 }
 
 /// The purge policy, separated from the flag so it can be tested.
@@ -2362,6 +2384,20 @@ mod tests {
             c[0].body
         );
         assert!(c[0].body.contains("never counts as down"), "{}", c[0].body);
+    }
+
+    #[test]
+    fn a_held_recording_is_a_condition_that_says_how_to_end_it() {
+        assert!(hold_condition(false).is_none());
+        let c = hold_condition(true).expect("a condition");
+        assert_eq!(c.key, "recording-held");
+        assert!(c.title.contains("stopped"), "{}", c.title);
+        assert!(c.body.contains("resumes by itself"), "{}", c.body);
+        assert!(c.body.contains("deleted nothing"), "{}", c.body);
+        // M2: "raise the threshold and it resumes" was only true after a
+        // restart, and "free space" only past the margin; both are said.
+        assert!(c.body.contains("2 points below"), "{}", c.body);
+        assert!(c.body.contains("restart"), "{}", c.body);
     }
 
     #[test]

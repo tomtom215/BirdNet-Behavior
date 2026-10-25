@@ -26,8 +26,11 @@
 //! | `types`      | `ImageError`, `SpeciesImage`                         |
 //! | `provider`   | `ImageProvider` trait                                |
 //! | `wikipedia`  | `WikipediaClient` implementing `ImageProvider`       |
+//! | `flickr`     | `FlickrClient`, needs a key                          |
+//! | `avicommons` | `AviCommonsClient`, no key; CC0/BY/BY-SA images only |
 //! | `cache`      | `DiskCache` — on-disk image storage and indexing     |
 
+pub mod avicommons;
 pub mod cache;
 pub mod chain;
 pub mod flickr;
@@ -35,6 +38,7 @@ pub mod provider;
 pub mod types;
 pub mod wikipedia;
 
+pub use avicommons::AviCommonsClient;
 pub use cache::DiskCache;
 pub use chain::FallbackProvider;
 pub use flickr::FlickrClient;
@@ -216,12 +220,13 @@ impl ImageCache {
 
     /// Build the provider a configuration asks for, and the cache around it.
     ///
-    /// `provider` is `"flickr"` or anything else, which means Wikipedia — the
-    /// default has to be the one that needs no key, so a station with a typo in
-    /// this setting still shows photographs.
+    /// `provider` is `"flickr"`, `"avicommons"` or anything else, which means
+    /// Wikipedia — the default has to be the one that needs no key, so a station
+    /// with a typo in this setting still shows photographs. AviCommons needs no
+    /// key either; it keeps its index in `cache_dir`.
     ///
-    /// Choosing Flickr gives a *chain*, not a replacement: Flickr first,
-    /// Wikipedia behind it. See [`chain`] for why "choose one" is the wrong
+    /// Choosing Flickr or AviCommons gives a *chain*, not a replacement: that
+    /// provider first, Wikipedia behind it. See [`chain`] for why "choose one" is the wrong
     /// shape, and note that the cache key is the species name alone, so a
     /// station that switches provider keeps every image it has already
     /// downloaded rather than re-fetching nine thousand thumbnails.
@@ -239,6 +244,13 @@ impl ImageCache {
         flickr_filter_email: Option<&str>,
         thumb_width: u32,
     ) -> Result<Self, ImageError> {
+        if provider.trim().eq_ignore_ascii_case("avicommons") {
+            let chained = FallbackProvider::new(
+                Box::new(AviCommonsClient::new(cache_dir, thumb_width)?),
+                Box::new(WikipediaClient::with_thumb_width(thumb_width)?),
+            );
+            return Self::new(cache_dir, Arc::new(chained), thumb_width);
+        }
         if !provider.trim().eq_ignore_ascii_case("flickr") {
             return Self::new(
                 cache_dir,
@@ -424,10 +436,21 @@ mod tests {
     /// typo in `IMAGE_PROVIDER` still shows photographs instead of nothing.
     #[test]
     fn an_unrecognised_provider_falls_back_to_wikipedia() {
-        for name in ["wikipedia", "", "  ", "flickerr", "WIKIPEDIA"] {
+        for name in ["wikipedia", "", "  ", "flickerr", "WIKIPEDIA", "avicommon"] {
             assert!(
                 ImageCache::from_settings(&tmpdir("prov"), name, None, None, 300).is_ok(),
                 "{name:?} should build a working cache"
+            );
+        }
+    }
+
+    /// AviCommons needs no key, so choosing it (in any case) always builds.
+    #[test]
+    fn avicommons_needs_no_key_and_builds() {
+        for name in ["avicommons", "AviCommons", " avicommons "] {
+            assert!(
+                ImageCache::from_settings(&tmpdir("avi"), name, None, None, 300).is_ok(),
+                "{name:?}"
             );
         }
     }

@@ -32,6 +32,8 @@ is a `--doctor` warning, not a refusal. The clip format (`wav`, `mp3`, `flac`, `
 and the species-info site (`ebird`, `allaboutbirds`, `none`) are held to the
 same lists `--doctor` uses for the config file.
 
+**Why there is no Opus or AAC clip format** (birdnet-go has both). Measured on 2026-10-21 with the project's own decoder on a 3 s clip encoded four ways: WAV and Ogg Vorbis decode; Opus fails with "unsupported audio codec" and AAC in an `.m4a` with "no suitable format reader found". The spectrogram decodes the stored clip with that decoder, and the recording-file parser accepts only `wav`, `flac` and `mp3` names, so an Opus or AAC clip would have no spectrogram until the decoder gained an `ffmpeg` fallback (symphonia has no Opus decoder at all). The encoders are there (ffmpeg 6.1.1 on Ubuntu lists `libopus` and `aac`; the Docker image installs that ffmpeg; Fedora's `ffmpeg-free` was not checked), but a lossy clip format that the rest of the station cannot read is worse than the three it has. Ogg Vorbis already gives a small lossy clip.
+
 The [scheduler](../reference/architecture.md) computes sunrise and sunset from your latitude/longitude, so schedules can be anchored to solar events (e.g. the dawn-chorus window) rather than fixed clock times. This is also what powers the day/night cues in the dashboard and the kiosk night mode.
 
 > Set your **location** accurately — sunrise/sunset, the species-frequency filter, and any solar-anchored schedule all depend on it.

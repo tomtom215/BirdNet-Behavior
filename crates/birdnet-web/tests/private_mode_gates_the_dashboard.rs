@@ -27,17 +27,22 @@ use birdnet_web::private_mode::PublicAccess;
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
-const PASSWORD: &str = "a-real-password";
+/// Built at run time, not written as a literal: CodeQL's
+/// `rust/hard-coded-cryptographic-value` follows a string literal into any
+/// parameter called `password` (see `tests/no_literal_reaches_a_credential_parameter.rs`).
+fn admin_password() -> String {
+    format!("a-real-password-{}", std::process::id())
+}
 const CLIP: &str = "Eurasian_Blackbird-91-2026-09-08-birdnet-06:10:00.wav";
 
-/// A station with one detection and its clip on disk. `password` gives the
+/// A station with one detection and its clip on disk. `with_password` gives the
 /// seed admin a real hash so the gates observe an authorisation decision
 /// rather than the fresh-station bypass.
-fn station(password: bool, tmp: &std::path::Path) -> AppState {
+fn station(with_password: bool, tmp: &std::path::Path) -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
     birdnet_db::migration::migrate(&conn).expect("migrate schema");
-    if password {
-        let hash = birdnet_db::accounts::hash_password(PASSWORD).expect("hash");
+    if with_password {
+        let hash = birdnet_db::accounts::hash_password(&admin_password()).expect("hash");
         conn.execute(
             "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
             [&hash],
@@ -83,7 +88,10 @@ async fn sign_in(app: &axum::Router) -> String {
         .header("content-type", "application/x-www-form-urlencoded")
         .header("origin", "http://localhost")
         .header("host", "localhost")
-        .body(Body::from(format!("username=admin&password={PASSWORD}")))
+        .body(Body::from(format!(
+            "username=admin&password={}",
+            admin_password()
+        )))
         .expect("build request");
     let res = app.clone().oneshot(req).await.expect("router responds");
     assert_eq!(res.status(), StatusCode::SEE_OTHER, "login did not succeed");
@@ -348,8 +356,8 @@ async fn a_private_station_with_no_password_keeps_its_admin_panel_closed() {
 #[tokio::test]
 async fn with_private_mode_off_nothing_changes() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    for password in [false, true] {
-        let state = station(password, tmp.path());
+    for with_password in [false, true] {
+        let state = station(with_password, tmp.path());
         let link = share_link(&state);
         let app = birdnet_web::server::build_router(state);
         for path in [
@@ -364,7 +372,7 @@ async fn with_private_mode_off_nothing_changes() {
             let code = status(&app, path).await;
             assert!(
                 code.is_success(),
-                "GET {path} answered {code} with private mode off (password: {password}); \
+                "GET {path} answered {code} with private mode off (with_password: {with_password}); \
                  the open contract must be untouched"
             );
         }

@@ -28,6 +28,9 @@ routes/admin/images.rs :: add_blacklist  1  POST /admin/images/blacklist
 routes/admin/images.rs :: remove_blacklist  1  DELETE /admin/images/blacklist/{id}
 routes/admin/migration.rs :: delete_batch_handler  1  POST /admin/migrate/batches/delete
 routes/admin/migration.rs :: provenance_handler  1  POST /admin/migrate/batches/provenance
+routes/admin/migration/clip_import.rs :: protection_line  1  the `apply` branch only: it sets `is_locked` on the imported rows. The preview (the only caller today passes false) reads through `with_read_db`
+routes/admin/migration/clip_import.rs :: run_handler  1  POST /admin/migrate/clips/run: sets `is_locked` on the clips BirdNET-Pi protected, once the recordings are in place
+routes/admin/migration/conf_handlers.rs :: apply_handler  1  POST /admin/migrate/conf/apply: writes the imported birdnet.conf values to the settings table
 routes/admin/notifications.rs :: prune_handler  1  DELETE /admin/notifications/prune
 routes/admin/rules.rs :: import_rules  1  POST /admin/rules/import
 routes/admin/rules.rs :: create_rule  1  POST /admin/rules
@@ -39,6 +42,8 @@ routes/admin/rules.rs :: toggle_metric_rule_handler  1  POST /admin/metric-rules
 routes/admin/species/handler.rs :: set_threshold  1  POST /admin/species/thresholds/set
 routes/admin/species/handler.rs :: delete_threshold  1  POST /admin/species/thresholds/delete
 routes/admin/species/handler.rs :: modify_list  1  POST /admin/species/{exclude,include,whitelist}/{add,remove}
+routes/admin/species/handler.rs :: set_interval  1  POST /admin/species/intervals/set
+routes/admin/species/handler.rs :: delete_interval  1  POST /admin/species/intervals/delete
 routes/admin/species/manage.rs :: delete_detections  1  POST /admin/species/manage/detections
 routes/admin/species/manage.rs :: delete_clips  1  POST /admin/species/manage/clips
 routes/admin/system_controls/data.rs :: clear_detections  1  POST /admin/system/clear-detections
@@ -51,6 +56,7 @@ routes/auth_pages.rs :: authenticate  1  POST /login
 routes/auth_pages.rs :: mint_session_cookie  1  writes a session row: first-password path of POST /admin/accounts/users/{id} and POST /onboarding/save
 routes/auth_pages.rs :: open_bypass_redirect  1  POST /login
 routes/auth_pages.rs :: logout_submit  1  POST /logout
+routes/dynamic_thresholds.rs :: reset  1  POST /api/v2/dynamic-thresholds/reset and POST /admin/species/learned/reset: deletes the learned threshold rows
 routes/pages/detection_comments.rs :: add_comment  1  POST /pages/detection-comments/add
 routes/pages/detection_comments.rs :: delete_comment  1  POST /pages/detection-comments/delete
 routes/pages/onboarding.rs :: onboarding_save  1  POST /onboarding/save

@@ -28,8 +28,8 @@ use axum::extract::State;
 use axum::response::{Html, Sse, sse::Event};
 use axum::routing::get;
 use tokio::sync::broadcast;
-use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt as _};
 
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
@@ -169,12 +169,26 @@ async fn log_stream(
         }
     });
 
-    Sse::new(ReceiverStream::new(out)).keep_alive(
+    // The stream opens with a comment of its own. Firefox fires an
+    // `EventSource`'s `onopen` on the first byte of the *body*, not on the
+    // response headers (Chromium and WebKit use the headers), and on a quiet
+    // log the first body byte used to be the 15-second keep-alive below. The
+    // viewer said "Connecting…" for up to a quarter of a minute, in Firefox
+    // only, over a stream that was already open and healthy. A comment line is
+    // ignored by every `EventSource` and by the viewer's `sse-swap="log"`.
+    Sse::new(
+        tokio_stream::once(Ok(Event::default().comment(CONNECTED_COMMENT)))
+            .chain(ReceiverStream::new(out)),
+    )
+    .keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(Duration::from_secs(15))
             .text("keep-alive"),
     )
 }
+
+/// The comment the log stream sends the moment it opens; see [`log_stream`].
+const CONNECTED_COMMENT: &str = "connected";
 
 fn log_line_to_event(line: &LogLine) -> Event {
     let level_class = match line.level.as_str() {

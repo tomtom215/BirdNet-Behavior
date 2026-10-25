@@ -535,7 +535,51 @@ fn location_from_settings(config: Option<&Config>) -> Option<(f64, f64)> {
     Some((lat, lon))
 }
 
+/// How the station's database shows it was set up from the browser, or `None`
+/// when it does not (a new database, an unreadable one, none yet).
+///
+/// Two signs, either of which is a deliberate act in the browser and neither of
+/// which the settings table's own seeding can fake: the setup wizard was
+/// finished (`onboarding_complete`), or the Capture tab holds a source.
+fn set_up_in_the_browser(config: Option<&Config>) -> Option<&'static str> {
+    set_up_in_the_browser_at(&crate::helpers::db_path_from_config(config))
+}
+
+/// [`set_up_in_the_browser`] for a database at `db_path`.
+fn set_up_in_the_browser_at(db_path: &std::path::Path) -> Option<&'static str> {
+    use birdnet_db::audio_sources::AudioSourceStore;
+
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+    if birdnet_db::settings::get(&conn, "onboarding_complete").is_ok_and(|v| v.trim() == "true") {
+        return Some("the setup wizard was finished");
+    }
+    if conn.list().is_ok_and(|rows| !rows.is_empty()) {
+        return Some("the Capture tab holds an audio source");
+    }
+    None
+}
+
 pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
+    // Consulted only when the file is absent: reading a database for a
+    // station whose file loaded would be work for an answer nobody asks for.
+    let browser = if config.is_none() && !cli.config.exists() {
+        set_up_in_the_browser(config)
+    } else {
+        None
+    };
+    config_file_verdict(cli, config, browser)
+}
+
+/// [`check_config_file`] given what the database says about how the station
+/// was set up.
+fn config_file_verdict(cli: &Cli, config: Option<&Config>, browser: Option<&str>) -> Check {
     if config.is_some() {
         return Check::pass(
             "Configuration file",
@@ -547,6 +591,19 @@ pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
             "Configuration file",
             format!("{} exists but could not be parsed", cli.config.display()),
             "check the file for syntax errors (key=value, one per line; '#' for comments)",
+        )
+    } else if let Some(how) = browser {
+        // An install with no file is a supported way to run: everything the
+        // file would say is a setting in the browser, and the built-in defaults
+        // fill in the rest. Reporting the absence as a problem sent the owner
+        // of a browser-configured station looking for a file they never needed.
+        Check::pass(
+            "Configuration file",
+            format!(
+                "no file at {}, and none is needed: this station is set up from the browser \
+                 ({how}), with the built-in defaults for the rest",
+                cli.config.display()
+            ),
         )
     } else {
         // The default config path (/etc/birdnet/birdnet.conf) needs sudo on
@@ -1317,6 +1374,79 @@ mod tests {
         assert_eq!(check.status, Status::Fail);
         assert!(check.message.contains("could not be parsed"));
         assert!(check.remediation.is_some());
+    }
+
+    /// A station with no `birdnet.conf` that was set up from the browser is not
+    /// misconfigured: the file is optional and the page said it could not be
+    /// read.
+    #[test]
+    fn a_missing_file_on_a_station_set_up_in_the_browser_is_information() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cli = cli();
+        cli.config = dir.path().join("nope.conf");
+        let check = config_file_verdict(&cli, None, Some("the setup wizard was finished"));
+        assert_eq!(check.status, Status::Pass, "{check:?}");
+        assert!(
+            check.message.contains("none is needed") && check.message.contains("browser"),
+            "{}",
+            check.message
+        );
+        assert!(check.remediation.is_none());
+    }
+
+    /// The counterparts: a missing file where nothing else set the station up
+    /// stays a warning, and a file that exists but cannot be used is a failure
+    /// whatever the database says.
+    #[test]
+    fn a_missing_file_with_nothing_else_configuring_the_station_still_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cli = cli();
+        cli.config = dir.path().join("nope.conf");
+        let check = config_file_verdict(&cli, None, None);
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+    }
+
+    #[test]
+    fn a_file_that_exists_but_cannot_be_used_is_not_excused_by_the_browser() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cli = cli();
+        cli.config = tmp.path().to_path_buf();
+        let check = config_file_verdict(&cli, None, Some("the setup wizard was finished"));
+        assert_eq!(check.status, Status::Fail, "{check:?}");
+    }
+
+    /// The database signs that count, read from real files.
+    #[test]
+    fn the_browser_signs_are_a_finished_wizard_or_a_source_and_nothing_else() {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing yet: no file at all.
+        assert_eq!(set_up_in_the_browser_at(&dir.path().join("none.db")), None);
+        // A migrated database that nobody has touched.
+        let fresh = dir.path().join("fresh.db");
+        let conn = rusqlite::Connection::open(&fresh).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        assert_eq!(set_up_in_the_browser_at(&fresh), None);
+        // A finished wizard.
+        birdnet_db::settings::set(
+            &conn,
+            "onboarding_complete",
+            "true",
+            birdnet_db::settings::SettingsCategory::System,
+        )
+        .unwrap();
+        assert!(set_up_in_the_browser_at(&fresh).is_some());
+        // A source on the Capture tab, with the wizard never finished.
+        let sourced = dir.path().join("sourced.db");
+        let conn = rusqlite::Connection::open(&sourced).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.insert(&NewAudioSource::defaults(
+            "src_1".to_string(),
+            SourceKind::UsbAlsa,
+            "plughw:1,0".to_string(),
+        ))
+        .unwrap();
+        assert!(set_up_in_the_browser_at(&sourced).is_some());
     }
 
     #[test]

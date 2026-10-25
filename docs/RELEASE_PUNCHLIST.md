@@ -2,14 +2,15 @@
 
 > **⚠️ SUPERSEDED — historical record only.** Written 2026-05-29 against the
 > `claude/gallant-feynman-bJs95` integration branch, which no longer exists, at a point
-> long before the current `0.15.0` tree (`Cargo.toml` `workspace.package.version`).
+> long before the current tree (`Cargo.toml` `workspace.package.version`).
 > Every O-01…O-26 item and every P1/P2 item below has shipped, and so have P3-1…P3-5;
 > what remains open is P3-4's migration-missing stub (deliberately out of scope) and the
 > three minor P3-5 follow-ups listed under that item. Two of its own statements are simply
 > wrong today and are corrected in place below: the branch model, and the "there is no CI
-> on this repo" note — the repo has **ten** workflows, of which eight gate pushes to
-> `main` (`a11y`, `ci`, `coverage`, `docker`, `docs`, `install-smoke`, `mutation`,
-> `supply-chain`; `release` is tag-driven and `publish-model` is dispatch-only).
+> on this repo" note — the repo has fifteen workflows today, and
+> `.github/workflows/README.md` says what each does and which checks a pull request
+> must pass (when this note was corrected it counted ten, of which eight gated pushes
+> to `main`; `release` is tag-driven and `publish-model` is dispatch-only).
 > [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-08) succeeded this file and
 > is itself now a completed record; the live picture is in the later audits, starting with
 > `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`. Kept for the reasoning behind these decisions; do

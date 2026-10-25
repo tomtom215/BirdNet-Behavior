@@ -83,7 +83,8 @@ they get their own gate.
      pyyaml` and the Dockerfile's `cargo install cargo-chef --version "^0.1"`
      each took the newest release on the day of the run, so the same commit
      could pass on Monday and fail on Tuesday for a reason that is nowhere in the
-     diff. Every one is pinned to an exact version now, and `npm install` in the
+     diff. Every one is pinned to an exact version now (pip: to a hash, from
+     `tools/ci/requirements-ci.txt`), and `npm install` in the
      browser-QA job is `npm ci`, which refuses a lockfile that disagrees with
      `package.json`.
 
@@ -853,13 +854,31 @@ def runs_on_every_pull_request(spec: dict) -> bool:
     return not (isinstance(trigger, dict) and ("paths" in trigger or "paths-ignore" in trigger))
 
 
+def requirements_are_hashed(path: str) -> bool:
+    """Whether the requirements file at `path` has at least one entry and every
+    entry is `name==version` followed by one or more `--hash=sha256:<64 hex>`.
+
+    Continuation lines are joined and comments dropped, as pip reads them. A
+    missing file is not hashed: the install it feeds would fail, and so would
+    the job.
+    """
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return False
+    entries = [e.strip() for e in re.sub(r"\\\n", " ", text).splitlines()]
+    entries = [e for e in (re.sub(r"(^|\s)#.*", "", e).strip() for e in entries) if e]
+    pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[^\s=;]+(\s+--hash=sha256:[0-9a-f]{64})+")
+    return bool(entries) and all(pattern.fullmatch(e) for e in entries)
+
+
 def tool_installs(workflows_glob: str, dockerfile_path: str) -> list[tuple[str, str, bool]]:
     """Every tool install in the workflows and the Dockerfile: (where, what, pinned).
 
     Three shapes are recognised: `taiki-e/install-action`'s `tool:` list, where
     each entry needs `@version`; `cargo install`, which needs `--version` (or
-    `crate@version`); and `pip install`, whose packages need `==`. Comment lines
-    are not installs.
+    `crate@version`); and `pip install`, which must be `--require-hashes -r FILE`
+    with a hash for every entry of FILE. Comment lines are not installs.
     """
     found: list[tuple[str, str, bool]] = []
 
@@ -874,9 +893,18 @@ def tool_installs(workflows_glob: str, dockerfile_path: str) -> list[tuple[str, 
                 found.append((where, line, pinned))
             m = re.search(r"\bpip3? install\b(.*)", line)
             if m:
-                packages = [a for a in m.group(1).split() if not a.startswith("-")]
-                for pkg in packages:
-                    found.append((where, f"pip install {pkg}", "==" in pkg))
+                args = m.group(1).split()
+                # A version is not the bytes: `pkg==1.2.3` still installs whatever
+                # file PyPI serves under that number. The only accepted form is
+                # `--require-hashes -r FILE`, FILE holding `name==version` and a
+                # sha256 for each (OpenSSF Scorecard's Pinned-Dependencies).
+                for i, arg in enumerate(args):
+                    if arg in ("-r", "--requirement") and i + 1 < len(args):
+                        what = f"pip install -r {args[i + 1]}"
+                        found.append((where, what, "--require-hashes" in args
+                                      and requirements_are_hashed(args[i + 1])))
+                    elif not arg.startswith("-") and (i == 0 or args[i - 1] not in ("-r", "--requirement")):
+                        found.append((where, f"pip install {arg}", False))
 
     for path in sorted(glob.glob(workflows_glob)):
         for node in _walk_dicts(yaml.safe_load(open(path))):
@@ -939,12 +967,14 @@ def check_tools_are_pinned(
 
 def named_lockfiles(workflows_glob: str) -> list[tuple[str, str]]:
     """`(where, path)` for every lockfile a workflow relies on: the `--lockfile=`
-    arguments of a scan, and the `package-lock.json` beside every `npm ci`."""
+    arguments of a scan (less a `parser:` prefix), and the `package-lock.json`
+    beside every `npm ci`."""
     found: list[tuple[str, str]] = []
     for workflow in sorted(glob.glob(workflows_glob)):
         text = open(workflow, encoding="utf-8").read()
         for path in re.findall(r"--lockfile=(\S+)", text):
-            found.append((workflow, path))
+            # `requirements.txt:tools/x/requirements.txt` names the parser, then the file.
+            found.append((workflow, re.sub(r"^[A-Za-z][\w.-]*:", "", path)))
         for node in _walk_dicts(yaml.safe_load(text)):
             run = node.get("run")
             if isinstance(run, str) and re.search(r"\bnpm ci\b", run):

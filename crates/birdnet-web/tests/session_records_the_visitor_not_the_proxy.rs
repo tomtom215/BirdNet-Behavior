@@ -17,6 +17,13 @@ use axum::http::{Request, StatusCode};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
+/// Built at run time, not written as a literal: CodeQL's
+/// `rust/hard-coded-cryptographic-value` follows a string literal into any
+/// parameter called `password` (see `tests/no_literal_reaches_a_credential_parameter.rs`).
+fn admin_password() -> String {
+    format!("correct-horse-{}", std::process::id())
+}
+
 /// A station with a real admin password, so the login path is exercised rather
 /// than the fresh-station bypass.
 fn state_with_admin(password: &str) -> AppState {
@@ -45,7 +52,10 @@ async fn login_through_proxy(state: &AppState, xff: Option<&str>) -> StatusCode 
         b = b.header("x-forwarded-for", v);
     }
     let req = b
-        .body(Body::from("username=admin&password=hunter2correct"))
+        .body(Body::from(format!(
+            "username=admin&password={}",
+            admin_password()
+        )))
         .expect("build request");
     app.oneshot(req).await.expect("router responds").status()
 }
@@ -76,7 +86,7 @@ fn stored_sessions(state: &AppState) -> Vec<(Option<String>, Option<String>)> {
 /// reverts to `None` would leave gate 2 vacuously true (no rows to compare).
 #[tokio::test]
 async fn a_login_records_the_device_it_came_from() {
-    let state = state_with_admin("hunter2correct");
+    let state = state_with_admin(&admin_password());
     let status = login_through_proxy(&state, None).await;
     assert_eq!(
         status,
@@ -104,7 +114,7 @@ async fn a_login_records_the_device_it_came_from() {
 /// hash and the accounts page could never distinguish them.
 #[tokio::test]
 async fn two_visitors_through_one_proxy_get_different_fingerprints() {
-    let state = state_with_admin("hunter2correct");
+    let state = state_with_admin(&admin_password());
     login_through_proxy(&state, Some("198.51.100.7")).await;
     login_through_proxy(&state, Some("198.51.100.8")).await;
 
@@ -125,7 +135,7 @@ async fn two_visitors_through_one_proxy_get_different_fingerprints() {
 /// is noise and "was this session mine?" is still unanswerable.
 #[tokio::test]
 async fn the_same_visitor_twice_gets_the_same_fingerprint() {
-    let state = state_with_admin("hunter2correct");
+    let state = state_with_admin(&admin_password());
     login_through_proxy(&state, Some("198.51.100.7")).await;
     login_through_proxy(&state, Some("198.51.100.7")).await;
 

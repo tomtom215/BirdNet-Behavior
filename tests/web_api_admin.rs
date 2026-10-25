@@ -113,7 +113,15 @@ async fn htmx_species_hourly_partial() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 4096)
+    // The chart is always 24 columns, so this is bounded by the drawing and not
+    // by the data: each hour carries a hit rectangle and a tooltip (about 130
+    // bytes), the bars and labels the rest. Measured: this fixture's two busy
+    // hours answer 6,003 bytes (1,196 gzipped), and a species heard in all 24
+    // hours, 40 times each, 10,870 bytes (2,030 gzipped); more detections only
+    // add digits. The old 4 KiB limit predates the chart kit's per-hour
+    // tooltips; 32 KiB is about three times the largest measured, and still an
+    // assertion, because `to_bytes` fails past it.
+    let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
@@ -227,11 +235,14 @@ fn gated_state_with_cookies() -> (AppState, String, String) {
             |conn| -> Result<(String, String), accounts::AccountsError> {
                 // Real hash on the seed admin → "admin password configured".
                 let admin = conn.find_user_by_name("admin")?;
-                conn.set_password(admin.id, &accounts::hash_password("admin-pw")?)?;
+                conn.set_password(
+                    admin.id,
+                    &accounts::hash_password(&format!("admin-pw-{}", std::process::id()))?,
+                )?;
                 // A viewer-role account.
                 let viewer = conn.create_user(
                     "viewer",
-                    &accounts::hash_password("viewer-pw")?,
+                    &accounts::hash_password(&format!("viewer-pw-{}", std::process::id()))?,
                     Role::Viewer,
                     None,
                 )?;

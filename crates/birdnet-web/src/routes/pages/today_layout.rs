@@ -48,6 +48,9 @@ pub enum Block {
     Nudge,
     /// The 24-hour strip.
     DayStrip,
+    /// The owner's own picture (a site photograph or a camera frame) with a
+    /// title; empty, and so invisible, until one is set.
+    Picture,
     /// The unified detection log.
     Log,
     /// Rail: today's top species.
@@ -60,10 +63,11 @@ pub enum Block {
 
 impl Block {
     /// Every block, in the default order. Main-column blocks first.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Hero,
         Self::Nudge,
         Self::DayStrip,
+        Self::Picture,
         Self::Log,
         Self::TopSpecies,
         Self::Best,
@@ -77,6 +81,7 @@ impl Block {
             Self::Hero => "hero",
             Self::Nudge => "nudge",
             Self::DayStrip => "daystrip",
+            Self::Picture => "picture",
             Self::Log => "log",
             Self::TopSpecies => "top-species",
             Self::Best => "best",
@@ -91,6 +96,7 @@ impl Block {
             Self::Hero => "Today's headline and live signal",
             Self::Nudge => "Suggestion line",
             Self::DayStrip => "Day strip (24 hours)",
+            Self::Picture => "Your picture (set on the Settings page)",
             Self::Log => "Detection log",
             Self::TopSpecies => "Top species",
             Self::Best => "Best recordings",
@@ -102,7 +108,7 @@ impl Block {
     #[must_use]
     pub const fn group(self) -> Group {
         match self {
-            Self::Hero | Self::Nudge | Self::DayStrip => Group::Top,
+            Self::Hero | Self::Nudge | Self::DayStrip | Self::Picture => Group::Top,
             Self::Log => Group::Log,
             Self::TopSpecies | Self::Best | Self::Station => Group::Rail,
         }
@@ -349,14 +355,14 @@ mod tests {
     fn the_default_shows_every_block_in_page_order() {
         assert_eq!(
             ids(&Layout::default()),
-            "hero,nudge,daystrip,log,top-species,best,station"
+            "hero,nudge,daystrip,picture,log,top-species,best,station"
         );
         assert_eq!(Layout::parse(""), Layout::default());
     }
 
     #[test]
     fn a_stored_layout_round_trips() {
-        let v = "daystrip,hero,-nudge,log,best,-station,top-species";
+        let v = "daystrip,hero,-nudge,picture,log,best,-station,top-species";
         assert_eq!(ids(&Layout::parse(v)), v);
     }
 
@@ -366,7 +372,7 @@ mod tests {
     fn a_partial_or_foreign_value_is_completed_not_trusted() {
         assert_eq!(
             ids(&Layout::parse("log, -hero, video-embed, log")),
-            "log,-hero,nudge,daystrip,top-species,best,station"
+            "log,-hero,nudge,daystrip,picture,top-species,best,station"
         );
     }
 
@@ -381,12 +387,15 @@ mod tests {
         l.nudge(Block::DayStrip, true);
         l.nudge(Block::Station, true);
         l.set_shown(Block::Nudge, false);
-        assert_eq!(ids(&l), "hero,daystrip,-nudge,log,top-species,station,best");
+        assert_eq!(
+            ids(&l),
+            "hero,daystrip,-nudge,picture,log,top-species,station,best"
+        );
     }
 
     const TEMPLATE: &str = "<head>\
         <!--top--><!--block:hero-->H<!--/block:hero--><!--block:nudge-->N<!--/block:nudge-->\
-        <!--block:daystrip-->D<!--/block:daystrip--><!--/top-->\
+        <!--block:daystrip-->D<!--/block:daystrip--><!--block:picture-->P<!--/block:picture--><!--/top-->\
         <div class=\"work2{{work2_solo}}\"><!--block:log-->L<!--/block:log-->\
         <aside><!--rail--><!--block:top-species-->T<!--/block:top-species-->\
         <!--block:best-->B<!--/block:best--><!--block:station-->S<!--/block:station-->\
@@ -398,7 +407,7 @@ mod tests {
         let out = l.apply(TEMPLATE).expect("markers present");
         assert_eq!(
             out,
-            "<head>DH<div class=\"work2\">L<aside>ST</aside></div><end>"
+            "<head>DHP<div class=\"work2\">L<aside>ST</aside></div><end>"
         );
     }
 
@@ -409,7 +418,7 @@ mod tests {
         let out = Layout::default().apply(TEMPLATE).expect("markers present");
         assert_eq!(
             out,
-            "<head>HND<div class=\"work2\">L<aside>TBS</aside></div><end>"
+            "<head>HNDP<div class=\"work2\">L<aside>TBS</aside></div><end>"
         );
     }
 

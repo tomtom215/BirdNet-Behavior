@@ -34,8 +34,12 @@ async fn station_health_line_partial(
         // first-run station with a dead microphone is precisely wrong.
         let capture = super::today::live_capture_state(&state);
         let recording = state.with_read_db(|conn| {
-            crate::routes::pages::today::capture_outage(conn).map(|(_, last)| last)
+            crate::routes::pages::today::capture_outage(conn)
+                .map(|outage| outage.map(|(_, last)| last))
         });
+        if let Err(e) = &recording {
+            tracing::warn!(error = %e, "station health line: the detection history could not be read");
+        }
         let recording_pill = match (capture, recording) {
             (super::today::CaptureState::NoSource, _) => {
                 r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> no microphone</span>"#
@@ -49,13 +53,18 @@ async fn station_health_line_partial(
                 r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the sources</span>"#
                     .to_string()
             }
-            (_, Some(last)) => {
+            (_, Ok(Some(last))) => {
                 format!(
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> stopped · {last}</span>"#
                 )
             }
-            (_, None) => {
+            // As on the hero pill: a live gauge does not wait on the history.
+            (super::today::CaptureState::Up, Err(_)) | (_, Ok(None)) => {
                 r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#
+                    .to_string()
+            }
+            (_, Err(_)) => {
+                r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the history</span>"#
                     .to_string()
             }
         };
@@ -81,7 +90,10 @@ async fn station_health_line_partial(
         if let Some(temp) = crate::system_info::cpu_temperature() {
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
-                format_args!(r#"<span class="sep">·</span><span>{temp:.0}°C</span>"#),
+                format_args!(
+                    r#"<span class="sep">·</span><span>{}</span>"#,
+                    crate::display::temperature(f64::from(temp), 0, true)
+                ),
             );
         }
         out.push_str("</div>");

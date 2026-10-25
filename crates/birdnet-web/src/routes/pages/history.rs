@@ -435,7 +435,7 @@ fn render_chart_content(
     let _ = write!(
         html,
         r#"<div class="rp-viz">{chart}</div>"#,
-        chart = render_hourly_chart(hours),
+        chart = render_hourly_chart("history-hourly", hours),
     );
     html.push_str(r#"<div class="rp-h3">Top species that day</div>"#);
     if species.is_empty() {
@@ -485,7 +485,7 @@ fn render_day_page(
     let _ = write!(
         html,
         r#"<div class="rp-viz">{chart}</div></div>"#,
-        chart = render_hourly_chart(hours),
+        chart = render_hourly_chart("history-day-hourly", hours),
     );
 
     // Every species heard that day (the panel only shows the top six).
@@ -543,7 +543,7 @@ fn render_day_log_row(
         conf = conf_bar(d.confidence, floor),
         com = escape_html(shown),
         sci = escape_html(&d.sci_name),
-        time = escape_html(&d.time),
+        time = crate::display::clock(&d.time),
         date_enc = simple_url_encode(&d.date),
         time_enc = simple_url_encode(&d.time),
     );

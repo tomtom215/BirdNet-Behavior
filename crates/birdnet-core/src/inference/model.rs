@@ -326,11 +326,6 @@ impl BirdNetModel {
     /// # Errors
     ///
     /// Returns `InferenceError` if the input shape is wrong or inference fails.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
     pub fn predict_chunk(
         &mut self,
         audio: &[f32],
@@ -567,7 +562,6 @@ impl BirdNetModel {
     }
 
     /// Get the model's expected input shape.
-    #[allow(clippy::missing_const_for_fn)] // Vec deref is not const
     pub fn input_shape(&self) -> &[usize] {
         &self.input_shape
     }

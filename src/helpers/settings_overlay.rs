@@ -344,6 +344,18 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::System,
     ),
     (
+        "dashboard_image",
+        // Read from the settings table by the Today page's picture block each
+        // time it renders and polls.
+        Wiring::OwnedBy("the Today picture block"),
+        SettingsCategory::System,
+    ),
+    (
+        "dashboard_image_title",
+        Wiring::OwnedBy("the Today picture block"),
+        SettingsCategory::System,
+    ),
+    (
         "max_files_per_species",
         Wiring::Bridged("MAX_FILES_SPECIES"),
         SettingsCategory::System,
@@ -351,6 +363,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
     (
         "purge_threshold",
         Wiring::Bridged("DISK_PURGE_THRESHOLD"),
+        SettingsCategory::System,
+    ),
+    (
+        "full_disk_action",
+        Wiring::Bridged("FULL_DISK"),
         SettingsCategory::System,
     ),
     (
@@ -364,6 +381,30 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         // render time, so a change takes effect on the next image rather than
         // the next restart.
         Wiring::OwnedBy("the spectrogram renderer"),
+        SettingsCategory::System,
+    ),
+    (
+        "spectrogram_colormap",
+        // Read from the settings table by the spectrogram route on each render,
+        // and part of its cache key, so a change shows on the next image.
+        Wiring::OwnedBy("the spectrogram renderer"),
+        SettingsCategory::System,
+    ),
+    (
+        "spectrogram_range_db",
+        Wiring::OwnedBy("the spectrogram renderer"),
+        SettingsCategory::System,
+    ),
+    (
+        "time_format",
+        // Served to the browser at /api/v2/display, which prints every clock
+        // time in it unless the reader chose otherwise.
+        Wiring::OwnedBy("the display formatter"),
+        SettingsCategory::System,
+    ),
+    (
+        "temperature_unit",
+        Wiring::OwnedBy("the display formatter"),
         SettingsCategory::System,
     ),
     (
@@ -442,12 +483,32 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
     ),
 ];
 
+/// The hand-written table above and the table-driven settings
+/// (`birdnet_web::routes::admin::settings::extra`), as one list.
+///
+/// The extras are all [`Wiring::Bridged`]: each is a row in the settings table
+/// copied onto the configuration key its consumer reads. Keeping their
+/// definitions in the web crate beside the controls that edit them, and
+/// joining them here, is what stops a setting from having a control and no
+/// bridge, or a bridge and no control.
+fn all_specs() -> Vec<(&'static str, Wiring, SettingsCategory)> {
+    SETTING_SPECS
+        .iter()
+        .copied()
+        .chain(
+            birdnet_web::routes::admin::settings::extra::EXTRA_SETTINGS
+                .iter()
+                .map(|e| (e.key, Wiring::Bridged(e.config_key), e.category)),
+        )
+        .collect()
+}
+
 /// Resolve the runtime config key a given admin-UI setting maps to, if any.
 ///
 /// `None` for a key that is wired some other way (or not a settings key at all)
 /// — only [`Wiring::Bridged`] entries flow through the config.
 fn config_key_for(setting_key: &str) -> Option<&'static str> {
-    SETTING_SPECS
+    all_specs()
         .iter()
         .find(|(ui, _, _)| *ui == setting_key)
         .and_then(|(_, wiring, _)| match wiring {
@@ -525,7 +586,7 @@ fn settings_to_seed(
     from_secret_file: &[&str],
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut out = Vec::new();
-    for &(ui_key, wiring, category) in SETTING_SPECS {
+    for (ui_key, wiring, category) in all_specs() {
         if existing.contains(ui_key) {
             continue;
         }
@@ -656,7 +717,7 @@ pub fn seed_db_settings_from_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS;
+    use birdnet_web::routes::admin::settings::form::all_form_keys;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// Bridge keys that are deliberately *not* settings-form fields.
@@ -694,8 +755,8 @@ mod tests {
         // fails, instead of silently shipping another editable control that
         // does nothing — the defect this whole mapping exists to prevent, and
         // which had accumulated twenty instances before it was enforced.
-        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
-        let unclassified: Vec<&str> = SETTINGS_FORM_KEYS
+        let classified: BTreeSet<&str> = all_specs().iter().map(|(ui, _, _)| *ui).collect();
+        let unclassified: Vec<&str> = all_form_keys()
             .iter()
             .copied()
             .filter(|key| !classified.contains(key))
@@ -720,7 +781,7 @@ mod tests {
     fn onboarding_wizard_keys_are_all_classified() {
         use birdnet_web::routes::pages::onboarding::ONBOARDING_SETTING_KEYS;
 
-        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let classified: BTreeSet<&str> = all_specs().iter().map(|(ui, _, _)| *ui).collect();
         let unclassified: Vec<&str> = ONBOARDING_SETTING_KEYS
             .iter()
             .copied()
@@ -748,7 +809,7 @@ mod tests {
     fn audio_admin_keys_are_all_classified() {
         use birdnet_web::routes::admin::audio::AUDIO_ADMIN_SETTING_KEYS;
 
-        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let classified: BTreeSet<&str> = all_specs().iter().map(|(ui, _, _)| *ui).collect();
         let unclassified: Vec<&str> = AUDIO_ADMIN_SETTING_KEYS
             .iter()
             .copied()
@@ -1020,7 +1081,7 @@ mod tests {
              shape and would pass vacuously"
         );
 
-        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let classified: BTreeSet<&str> = all_specs().iter().map(|(ui, _, _)| *ui).collect();
         let unwired: Vec<&String> = written
             .iter()
             .filter(|k| !classified.contains(k.as_str()))
@@ -1062,7 +1123,7 @@ mod tests {
             "the scan found only {read:?} — it has stopped recognising the read shapes"
         );
 
-        let unread: Vec<&str> = SETTING_SPECS
+        let unread: Vec<&str> = all_specs()
             .iter()
             .filter(|(_, wiring, _)| matches!(wiring, Wiring::OwnedBy(_)))
             .map(|(ui, _, _)| *ui)
@@ -1128,9 +1189,9 @@ mod tests {
     fn every_bridge_spec_is_a_real_form_key() {
         // The reverse direction: a spec for a key the form no longer has is
         // dead weight that reads as coverage. Renaming a field trips this.
-        let form: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+        let form: BTreeSet<&str> = all_form_keys().iter().copied().collect();
         let allowed: BTreeSet<&str> = NON_FORM_BRIDGE_KEYS.iter().copied().collect();
-        let orphans: Vec<&str> = SETTING_SPECS
+        let orphans: Vec<&str> = all_specs()
             .iter()
             .map(|(ui, _, _)| *ui)
             .filter(|key| !form.contains(key) && !allowed.contains(key))
@@ -1146,12 +1207,12 @@ mod tests {
     fn no_duplicate_bridge_specs() {
         // A duplicated UI key makes `config_key_for` depend on list order,
         // which would silently pick one of two mappings.
-        let unique: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
-        assert_eq!(unique.len(), SETTING_SPECS.len(), "duplicate UI key");
+        let unique: BTreeSet<&str> = all_specs().iter().map(|(ui, _, _)| *ui).collect();
+        assert_eq!(unique.len(), all_specs().len(), "duplicate UI key");
 
         // Two UI keys writing the same config key would have them clobber each
         // other through the overlay.
-        let config_keys: Vec<&str> = SETTING_SPECS
+        let config_keys: Vec<&str> = all_specs()
             .iter()
             .filter_map(|(_, w, _)| match w {
                 Wiring::Bridged(k) => Some(*k),
@@ -1179,11 +1240,11 @@ mod tests {
     fn removed_credential_keys_are_not_classified() {
         // The admin credential is an Argon2id hash in the accounts table. If
         // these ever come back as settings keys, they come back as plaintext.
-        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let classified: BTreeSet<&str> = all_specs().iter().map(|(ui, _, _)| *ui).collect();
         assert!(!classified.contains("auth_password"));
         assert!(!classified.contains("auth_username"));
-        assert!(!SETTINGS_FORM_KEYS.contains(&"auth_password"));
-        assert!(!SETTINGS_FORM_KEYS.contains(&"auth_username"));
+        assert!(!all_form_keys().contains(&"auth_password"));
+        assert!(!all_form_keys().contains(&"auth_username"));
     }
 
     #[test]
@@ -1622,7 +1683,7 @@ mod tests {
             "precondition: the scan sees the resolver: {explicit:?}"
         );
 
-        let page_keys: BTreeSet<&str> = SETTING_SPECS.iter().map(|(k, _, _)| *k).collect();
+        let page_keys: BTreeSet<&str> = all_specs().iter().map(|(k, _, _)| *k).collect();
         let env_to_id: BTreeMap<String, String> = crate::cli::Cli::command()
             .get_arguments()
             .filter_map(|a| {
@@ -1673,5 +1734,63 @@ mod tests {
             })
             .collect();
         assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// P-7 made checkable: every saved setting says when it applies, and the
+    /// answer cannot contradict how the setting is wired.
+    ///
+    /// A key the bridge copies onto the configuration is read when its
+    /// consumer is built at start — so it can only ever be *after restart*; a
+    /// table row claiming such a key applies immediately would be the page
+    /// telling someone their change was in force when it was not.
+    #[test]
+    fn every_setting_says_when_it_applies() {
+        use birdnet_web::routes::admin::settings::applies::{Applies, every};
+        let table = every();
+        let specs = all_specs();
+        let missing: Vec<&str> = specs
+            .iter()
+            .map(|(ui, _, _)| *ui)
+            .filter(|ui| !table.iter().any(|e| e.key == *ui))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "settings with no row in settings/applies.rs (read its consumer and say when a saved \
+             value reaches it): {missing:?}"
+        );
+        let stale: Vec<&str> = table
+            .iter()
+            .map(|e| e.key)
+            .filter(|k| !specs.iter().any(|(ui, _, _)| ui == k))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "applies.rs rows for settings that no longer exist: {stale:?}"
+        );
+        for (ui, wiring, _) in &specs {
+            let applies = table.iter().find(|e| e.key == *ui).map(|e| e.applies);
+            if matches!(wiring, Wiring::Bridged(_)) {
+                assert_eq!(
+                    applies,
+                    Some(Applies::Restart),
+                    "{ui} is copied onto the configuration at start, so it applies after a restart"
+                );
+            }
+        }
+    }
+
+    /// Each table-driven setting names a configuration key the station reads.
+    #[test]
+    fn every_extra_setting_is_bridged_onto_a_key_the_station_knows() {
+        use birdnet_core::config::known_keys::KNOWN_CONFIG_KEYS;
+        for e in birdnet_web::routes::admin::settings::extra::EXTRA_SETTINGS {
+            assert!(
+                KNOWN_CONFIG_KEYS.contains(&e.config_key),
+                "{}: {} is not in KNOWN_CONFIG_KEYS, so a station would call it a typo",
+                e.key,
+                e.config_key
+            );
+            assert_eq!(config_key_for(e.key), Some(e.config_key), "{}", e.key);
+        }
     }
 }

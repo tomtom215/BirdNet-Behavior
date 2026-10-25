@@ -119,6 +119,33 @@
     --heat-lo:     oklch(90% 0.07 90);
     --heat-mid:    oklch(74% 0.15 65);
     --heat-hi:     oklch(46% 0.15 32);
+    --seq-1: oklch(92% 0.07 95);
+    --seq-2: oklch(85% 0.11 85);
+    --seq-3: oklch(77% 0.145 72);
+    --seq-4: oklch(69% 0.16 58);
+    --seq-5: oklch(60% 0.165 46);
+    --seq-6: oklch(50% 0.15 36);
+    --seq-7: oklch(40% 0.12 30);
+    --seq-moss-1: oklch(91% 0.055 150);
+    --seq-moss-2: oklch(83.5% 0.085 152);
+    --seq-moss-3: oklch(75.5% 0.105 152);
+    --seq-moss-4: oklch(67% 0.118 151);
+    --seq-moss-5: oklch(58% 0.118 150);
+    --seq-moss-6: oklch(49% 0.102 150);
+    --seq-moss-7: oklch(40% 0.085 150);
+    --div-neg-3: oklch(42% 0.105 250);
+    --div-neg-2: oklch(62% 0.11 248);
+    --div-neg-1: oklch(83% 0.055 245);
+    --div-mid: oklch(95% 0.004 80);
+    --div-pos-1: oklch(85% 0.08 62);
+    --div-pos-2: oklch(70% 0.15 50);
+    --div-pos-3: oklch(50% 0.15 36);
+    --chart-grid: oklch(93% 0.005 80);
+    --chart-grid-strong: oklch(87% 0.006 80);
+    --chart-axis: oklch(64% 0.010 70);
+    --chart-tip-bg: oklch(24% 0.010 70);
+    --chart-tip-fg: oklch(98% 0.004 80);
+    --chart-tip-border: oklch(34% 0.010 70);
     --card-top:    #ffffff;
     --card-bottom: #ffffff;
     --sheen:       transparent;
@@ -126,6 +153,18 @@
     --shadow-sm:   none;
     --shadow-md:   none;
     --shadow-lg:   none;
+    --shadow-xs:   none;
+    --shadow-hover: none;
+    --shadow-xl:   none;
+    --shadow-press: none;
+    --shadow-inset: none;
+    --shadow-field: none;
+    --text-glow:   none;
+    --shadow-tint: oklch(32% 0.045 65);
+    --surface-raised: #ffffff;
+    --surface-overlay: #ffffff;
+    --wash-a:      transparent;
+    --wash-b:      transparent;
     /* These seven also flip between light and dark in app.css, and this block
        did not override them — so a dark-theme operator printing the weekly
        report got their dark values on paper this sheet had already forced

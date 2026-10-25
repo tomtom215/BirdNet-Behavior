@@ -1,6 +1,6 @@
 //! Species list management handlers.
 
-use axum::Form;
+use crate::routes::form::HtmxForm;
 use axum::extract::State;
 use axum::response::{Html, IntoResponse as _, Response};
 use serde::Deserialize;
@@ -8,7 +8,8 @@ use serde::Deserialize;
 use birdnet_db::settings::{SettingsCategory, SettingsError, ensure_settings_table, get, set};
 
 use super::render::{
-    SuggestedThreshold, render_filter_test_page, render_species_partial, render_thresholds_partial,
+    SuggestedThreshold, render_filter_test_page, render_intervals_partial, render_species_partial,
+    render_thresholds_partial,
 };
 use crate::state::AppState;
 
@@ -110,7 +111,7 @@ pub struct SpeciesNameForm {
 pub async fn add_exclude(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -136,7 +137,7 @@ pub async fn add_exclude(
 pub async fn remove_exclude(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -162,7 +163,7 @@ pub async fn remove_exclude(
 pub async fn add_include(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -188,7 +189,7 @@ pub async fn add_include(
 pub async fn remove_include(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -217,7 +218,7 @@ pub async fn remove_include(
 pub async fn add_whitelist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -240,7 +241,7 @@ pub async fn add_whitelist(
 pub async fn remove_whitelist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<SpeciesNameForm>,
+    HtmxForm(form): HtmxForm<SpeciesNameForm>,
 ) -> Response {
     state
         .run_blocking(move |state| {
@@ -291,20 +292,31 @@ fn list_changed(
 /// One helper because the three threshold handlers all end by re-rendering the
 /// same partial, and a suggestion computed in only two of them would appear
 /// and vanish as the operator worked.
+///
+/// `Err` when the thresholds themselves could not be read: an empty list is
+/// drawn as "No per-species thresholds configured", which invites adding a row
+/// that a failed read made look absent. The suggestions are a hint derived from
+/// reviews and claim nothing when they are missing, so a failure there is
+/// logged and shown as none.
 fn load_thresholds_and_suggestions(
     state: &AppState,
-) -> (
-    Vec<birdnet_db::sqlite::SpeciesThreshold>,
-    Vec<SuggestedThreshold>,
-) {
+) -> Result<
+    (
+        Vec<birdnet_db::sqlite::SpeciesThreshold>,
+        Vec<SuggestedThreshold>,
+    ),
+    birdnet_db::sqlite::DbError,
+> {
     state.with_read_db(|conn| {
-        let thresholds = birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default();
+        let thresholds = birdnet_db::sqlite::get_species_thresholds(conn)?;
         let configured: std::collections::HashMap<&str, f64> = thresholds
             .iter()
             .map(|t| (t.sci_name.as_str(), t.confidence_threshold))
             .collect();
-        let suggestions = birdnet_db::sqlite::reviewed_detections_by_species(conn)
-            .unwrap_or_default()
+        let reviewed = birdnet_db::sqlite::reviewed_detections_by_species(conn)
+            .inspect_err(|e| tracing::warn!(error = %e, "threshold suggestions not readable"))
+            .unwrap_or_default();
+        let suggestions = reviewed
             .into_iter()
             .filter_map(|(sci_name, com_name, reviews)| {
                 birdnet_db::thresholds::suggest_threshold(&reviews).map(|suggestion| {
@@ -318,18 +330,27 @@ fn load_thresholds_and_suggestions(
                 })
             })
             .collect();
-        (thresholds, suggestions)
+        Ok((thresholds, suggestions))
     })
 }
 
+/// The thresholds partial, or the inline failure note when they cannot be read.
+fn thresholds_response(state: &AppState) -> Response {
+    match load_thresholds_and_suggestions(state) {
+        Ok((thresholds, suggestions)) => {
+            Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "per-species thresholds not readable");
+            crate::routes::pages::error_states::failed_partial("the per-species thresholds")
+                .into_response()
+        }
+    }
+}
+
 /// Return the HTMX partial fragment listing all current per-species confidence thresholds.
-pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
-    state
-        .run_blocking(move |state| {
-            let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
-            Html(render_thresholds_partial(&thresholds, &suggestions))
-        })
-        .await
+pub async fn thresholds_partial(State(state): State<AppState>) -> Response {
+    state.run_blocking(thresholds_response).await
 }
 
 /// Per-species threshold submission.
@@ -359,11 +380,10 @@ pub struct ThresholdForm {
 pub async fn set_threshold(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ThresholdForm>,
+    HtmxForm(form): HtmxForm<ThresholdForm>,
 ) -> axum::response::Response {
     state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
-    use axum::response::IntoResponse as _;
     let sci_name = form.sci_name.trim().to_string();
     if sci_name.is_empty() {
         return not_applied(&Toast::error("Choose a species for the threshold."));
@@ -400,8 +420,7 @@ pub async fn set_threshold(
         Some(&sci_name),
         Some(&format!("threshold={threshold}")),
     );
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
-    Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+    thresholds_response(state)
 })
 .await
 }
@@ -420,11 +439,10 @@ pub struct ThresholdDeleteForm {
 pub async fn delete_threshold(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<ThresholdDeleteForm>,
+    HtmxForm(form): HtmxForm<ThresholdDeleteForm>,
 ) -> axum::response::Response {
     state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
-    use axum::response::IntoResponse as _;
     if let Err(e) =
         state.with_db(|conn| birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name))
     {
@@ -441,10 +459,150 @@ pub async fn delete_threshold(
         Some(&form.sci_name),
         None,
     );
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
-    Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+    thresholds_response(state)
 })
 .await
+}
+
+// ---------------------------------------------------------------------------
+// Minimum-interval handlers
+// ---------------------------------------------------------------------------
+
+/// The longest per-species interval the form accepts: one day.
+///
+/// Anything longer
+/// is a unit slip (milliseconds, or minutes typed into a seconds field), and a
+/// species held for more than a day is not "recorded again" in any useful sense.
+pub const MAX_SPECIES_INTERVAL_SECS: i64 = 86_400;
+
+/// Re-read the table for a re-render. A failed read is an error, not an empty
+/// list: an empty table renders as "No species has an interval of its own",
+/// which would be a claim about the station that a database fault must not make.
+fn load_intervals(
+    state: &AppState,
+) -> Result<Vec<birdnet_db::sqlite::SpeciesInterval>, birdnet_db::sqlite::DbError> {
+    state.with_read_db(birdnet_db::sqlite::get_species_intervals)
+}
+
+fn intervals_response(state: &AppState) -> Response {
+    match load_intervals(state) {
+        Ok(rows) => Html(render_intervals_partial(&rows)).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "per-species intervals not readable");
+            crate::routes::pages::error_states::failed_partial("the per-species intervals")
+                .into_response()
+        }
+    }
+}
+
+/// Return the HTMX partial listing every per-species minimum interval.
+pub async fn intervals_partial(State(state): State<AppState>) -> Response {
+    state.run_blocking(intervals_response).await
+}
+
+/// Per-species interval submission.
+#[derive(Debug, Deserialize)]
+pub struct IntervalForm {
+    /// Scientific name of the species the interval is for.
+    pub sci_name: String,
+    /// Seconds, as typed. A string so a slip is answered with a toast rather
+    /// than the bare `422` serde would give a non-number (htmx discards it).
+    pub seconds: String,
+}
+
+/// Parse the interval field: whole seconds, 1 to [`MAX_SPECIES_INTERVAL_SECS`].
+fn parse_interval(raw: &str) -> Result<i64, String> {
+    let raw = raw.trim();
+    match raw.parse::<i64>() {
+        Ok(n) if (1..=MAX_SPECIES_INTERVAL_SECS).contains(&n) => Ok(n),
+        Ok(0) => Err(
+            "An interval of 0 means no interval; remove the species' row instead. Nothing was saved."
+                .to_owned(),
+        ),
+        Ok(n) if n > MAX_SPECIES_INTERVAL_SECS => Err(format!(
+            "An interval is at most {MAX_SPECIES_INTERVAL_SECS} seconds (one day); {n} looks like a unit slip. Nothing was saved."
+        )),
+        _ => Err(
+            "An interval is a whole number of seconds, such as 60. Nothing was saved.".to_owned(),
+        ),
+    }
+}
+
+/// Set a per-species minimum interval and return the updated partial.
+///
+/// Answers a refusal with a toast and the page unchanged, never a `4xx`: see
+/// [`set_threshold`].
+pub async fn set_interval(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    HtmxForm(form): HtmxForm<IntervalForm>,
+) -> Response {
+    state
+        .run_blocking(move |state| {
+            use crate::routes::pages::toast::{Toast, not_applied};
+            let sci_name = form.sci_name.trim().to_owned();
+            if sci_name.is_empty() {
+                return not_applied(&Toast::error("Choose a species for the interval."));
+            }
+            let secs = match parse_interval(&form.seconds) {
+                Ok(n) => n,
+                Err(msg) => return not_applied(&Toast::error(msg)),
+            };
+            if let Err(e) = state
+                .with_db(|conn| birdnet_db::sqlite::set_species_interval(conn, &sci_name, secs))
+            {
+                tracing::warn!(error = %e, species = %sci_name, "species interval not saved");
+                return not_applied(&Toast::error(format!(
+                    "The interval for {sci_name} was not saved: the database refused the write."
+                )));
+            }
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.interval.set",
+                Some(&sci_name),
+                Some(&format!("min_interval_secs={secs}")),
+            );
+            intervals_response(state)
+        })
+        .await
+}
+
+/// Form carrying the species whose interval should be removed.
+#[derive(Debug, Deserialize)]
+pub struct IntervalDeleteForm {
+    /// Scientific name of the species whose interval is to be removed.
+    pub sci_name: String,
+}
+
+/// Remove a per-species minimum interval and return the updated partial.
+pub async fn delete_interval(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    HtmxForm(form): HtmxForm<IntervalDeleteForm>,
+) -> Response {
+    state
+        .run_blocking(move |state| {
+            use crate::routes::pages::toast::{Toast, not_applied};
+            if let Err(e) = state.with_db(|conn| {
+                birdnet_db::sqlite::delete_species_interval(conn, &form.sci_name)
+            }) {
+                tracing::warn!(error = %e, species = %form.sci_name, "species interval not removed");
+                return not_applied(&Toast::error(format!(
+                    "The interval for {} was not removed: the database refused the write.",
+                    form.sci_name
+                )));
+            }
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.interval.delete",
+                Some(&form.sci_name),
+                None,
+            );
+            intervals_response(state)
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------

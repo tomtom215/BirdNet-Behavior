@@ -7,18 +7,12 @@ use birdnet_core::i18n::{ENGLISH, LANGUAGES, NameLocalizer, find_language};
 
 use super::get_setting;
 
-/// The common-name language control: one option per language the station has
-/// names for, each with the share of the installed classifier's species it
-/// covers, so a Korean station finds out *before* choosing it that most birds
-/// will keep their English names.
+/// The `<option>`s of the common-name language control, the stored one chosen.
 ///
-/// A stored value that is not a language (a typo from the old free-text box)
-/// selects English, which is what the station shows for it, and the hint says
-/// so. Saving then replaces it with a real choice rather than refusing the
-/// whole form over a value the page no longer lets anyone type.
-fn language_picker(stored: &str, names: &NameLocalizer) -> String {
-    let stored = stored.trim();
-    let chosen = find_language(stored).map_or(ENGLISH, |l| l.code);
+/// Shared by the settings page and the setup wizard, so the two offer the same
+/// languages with the same coverage figures.
+pub fn language_options(stored: &str, names: &NameLocalizer) -> String {
+    let chosen = find_language(stored.trim()).map_or(ENGLISH, |l| l.code);
     let mut options = String::new();
     for language in LANGUAGES {
         let label = if language.code == ENGLISH {
@@ -48,6 +42,21 @@ fn language_picker(stored: &str, names: &NameLocalizer) -> String {
             crate::routes::pages::escape_html(&label)
         );
     }
+    options
+}
+
+/// The common-name language control: one option per language the station has
+/// names for, each with the share of the installed classifier's species it
+/// covers, so a Korean station finds out *before* choosing it that most birds
+/// will keep their English names.
+///
+/// A stored value that is not a language (a typo from the old free-text box)
+/// selects English, which is what the station shows for it, and the hint says
+/// so. Saving then replaces it with a real choice rather than refusing the
+/// whole form over a value the page no longer lets anyone type.
+fn language_picker(stored: &str, names: &NameLocalizer) -> String {
+    let stored = stored.trim();
+    let options = language_options(stored, names);
     let unrecognised = if stored.is_empty() || find_language(stored).is_some() {
         String::new()
     } else {
@@ -69,16 +78,106 @@ fn language_picker(stored: &str, names: &NameLocalizer) -> String {
     )
 }
 
+/// `<option>`s for a small fixed choice, the stored one selected (the default
+/// when the stored value is none of them).
+fn choice_options(stored: &str, choices: &[(&str, &str)], default: &str) -> String {
+    let chosen = choices
+        .iter()
+        .find(|(value, _)| *value == stored.trim())
+        .map_or(default, |(value, _)| *value);
+    choices
+        .iter()
+        .fold(String::new(), |mut out, (value, label)| {
+            let selected = if *value == chosen { " selected" } else { "" };
+            let _ = write!(out, r#"<option value="{value}"{selected}>{label}</option>"#);
+            out
+        })
+}
+
+/// The `<option>`s of the spectrogram colour-map picker, the stored one chosen.
+///
+/// A stored value that is no colour map selects the default, which is what the
+/// renderer draws for it.
+fn spectrogram_colormap_options(stored: &str) -> String {
+    let choices = crate::routes::spectrogram::colormap_choices();
+    let chosen = choices
+        .iter()
+        .find(|(value, _)| *value == stored.trim())
+        .map_or("viridis", |(value, _)| *value);
+    choices
+        .iter()
+        .fold(String::new(), |mut out, (value, label)| {
+            let selected = if *value == chosen { " selected" } else { "" };
+            let _ = write!(out, r#"<option value="{value}"{selected}>{label}</option>"#);
+            out
+        })
+}
+
+/// The `<option>`s of the spectrogram dynamic-range picker (dB).
+fn spectrogram_range_options(stored: &str) -> String {
+    use crate::routes::spectrogram::{DEFAULT_RANGE_DB, RANGES_DB};
+    let chosen = stored
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|n| RANGES_DB.contains(n))
+        .unwrap_or(DEFAULT_RANGE_DB);
+    RANGES_DB.iter().fold(String::new(), |mut out, db| {
+        let selected = if *db == chosen { " selected" } else { "" };
+        let note = if *db == DEFAULT_RANGE_DB {
+            " (default)"
+        } else {
+            ""
+        };
+        let _ = write!(
+            out,
+            r#"<option value="{db}"{selected}>{db} dB{note}</option>"#
+        );
+        out
+    })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one settings section: a long run of fields that reads best in the order the page shows them"
+)]
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &NameLocalizer) {
     // Default 0 = keep audio forever, which is what every station does
     // today; age-based retention is strictly opt-in.
     let days = get_setting(s, "clip_retention_days");
     let imgcache = get_setting(s, "image_cache_dir");
     let customimg = get_setting(s, "custom_image_dir");
+    let dash_image = get_setting(s, "dashboard_image");
+    let dash_title = get_setting(s, "dashboard_image_title");
     let maxfiles = get_setting(s, "max_files_per_species");
     let purge = get_setting(s, "purge_threshold");
+    let keep_everything = get_setting(s, "full_disk_action") == "keep";
+    let full_purge = if keep_everything { "" } else { " selected" };
+    let full_keep = if keep_everything { " selected" } else { "" };
     let raw_spec = get_setting(s, "raw_spectrogram");
-    let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
+    // A select, not a checkbox: an unticked checkbox submits nothing, and a form
+    // that sends nothing for a field changes nothing, so a station that had
+    // turned the caption off could never turn it back on from this page.
+    let (raw_spec_on, raw_spec_off) = if raw_spec == "true" {
+        (" selected", "")
+    } else {
+        ("", " selected")
+    };
+    let time_options = choice_options(
+        &get_setting(s, "time_format"),
+        &[("24h", "24-hour (16:31)"), ("12h", "12-hour (4:31 PM)")],
+        "24h",
+    );
+    let temp_options = choice_options(
+        &get_setting(s, "temperature_unit"),
+        &[
+            ("celsius", "Celsius (°C)"),
+            ("fahrenheit", "Fahrenheit (°F)"),
+        ],
+        "celsius",
+    );
+    let colormap_options = spectrogram_colormap_options(&get_setting(s, "spectrogram_colormap"));
+    let range_options = spectrogram_range_options(&get_setting(s, "spectrogram_range_db"));
     let rare_days = get_setting(s, "rare_species_days");
     let extract_len = get_setting(s, "extraction_length");
     // Defaults mirror `helpers::system::DEFAULT_STREAM_*` so the form shows what
@@ -105,7 +204,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
       <div>
         <label for="site_name">Site Name</label>
         <input id="site_name" name="site_name" value="{site}" placeholder="My Bird Station">
-        <p class="hint">Shown in page titles and headers (BirdNET-Pi: SITENAME)</p>
+        <p class="hint">Shown on the dashboard, in the title of a shared detection and of
+        the audio player. Leave blank to use the Station Name. (BirdNET-Pi: SITE_NAME)</p>
       </div>
       <div>
         <label for="info_site">Species Info Links</label>
@@ -134,14 +234,28 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
         <label for="max_files_per_species">Max Files Per Species (0 = unlimited)</label>
         <input id="max_files_per_species" name="max_files_per_species" type="number"
                value="{maxfiles}" min="0" step="10">
-        <p class="hint">Oldest files beyond this limit are auto-deleted (BirdNET-Pi: MAX_FILES_SPECIES)</p>
+        <p class="hint">Once a species has more clips than this, the oldest are deleted; locked clips never are
+          (BirdNET-Pi: MAX_FILES_SPECIES, which keeps the most confident clips instead).</p>
       </div>
     </div>
-    <div>
-      <label for="purge_threshold">Disk Purge Threshold (%)</label>
-      <input id="purge_threshold" name="purge_threshold" type="number"
-             value="{purge}" min="50" max="99" class="bnb-w-num">
-      <p class="hint">Start purging old recordings when disk usage exceeds this % (BirdNET-Pi: DISK_PURGE_THRESHOLD). Locked clips are never purged.</p>
+    <div class="grid-2">
+      <div>
+        <label for="purge_threshold">Disk Purge Threshold (%)</label>
+        <input id="purge_threshold" name="purge_threshold" type="number"
+               value="{purge}" min="50" max="99" class="bnb-w-num">
+        <p class="hint">The disk percentage at which the next setting takes effect (BirdNET-Pi: PURGE_THRESHOLD).</p>
+      </div>
+      <div>
+        <label for="full_disk_action">When the disk is full</label>
+        <select id="full_disk_action" name="full_disk_action">
+          <option value="purge"{full_purge}>Delete the oldest clips (default)</option>
+          <option value="keep"{full_keep}>Stop recording and keep everything</option>
+        </select>
+        <p class="hint">Deleting starts with the species recorded most, never takes a species below five clips,
+          and never takes a locked clip. Stopping deletes nothing and records nothing more until there is room again;
+          while it is stopped the station sends an alert (when notifications are set up) and
+          reports it at <code>/api/v2/health/conditions</code> (BirdNET-Pi: FULL_DISK).</p>
+      </div>
     </div>
     <div class="grid-2">
       <div>
@@ -164,11 +278,47 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
     <div class="grid-2">
       <div>
         <label for="raw_spectrogram">Bare spectrograms</label>
-        <label class="bnb-check"><input id="raw_spectrogram" name="raw_spectrogram"
-               type="checkbox" value="true"{raw_spec_checked}> No text overlay</label>
+        <select id="raw_spectrogram" name="raw_spectrogram">
+          <option value="false"{raw_spec_off}>Show the species and confidence caption</option>
+          <option value="true"{raw_spec_on}>Leave the caption off</option>
+        </select>
         <p class="hint">Leaves out the species and confidence caption, for embedding in
           a stream overlay or a print (BirdNET-Pi: RAW_SPECTROGRAM). This renderer draws
           no axes in either case.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="time_format">Clock</label>
+        <select id="time_format" name="time_format">{time_options}</select>
+        <p class="hint">How times are shown across the dashboard. Each browser can choose
+          its own on the Display card (Settings &rarr; General); this is what a browser
+          that has not chosen shows. Feeds, exports and the API keep 24-hour ISO times.</p>
+      </div>
+      <div>
+        <label for="temperature_unit">Temperature unit</label>
+        <select id="temperature_unit" name="temperature_unit">{temp_options}</select>
+        <p class="hint">For the weather line, the day strip and the station's own
+          temperature. Stored and exported in Celsius whatever is shown. Each browser can
+          choose its own on the Display card.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="spectrogram_colormap">Spectrogram colours</label>
+        <select id="spectrogram_colormap" name="spectrogram_colormap">{colormap_options}</select>
+        <p class="hint">Louder is always lighter, so the order survives a grey print.
+          Viridis is what earlier versions drew. The inverted grey puts a white floor
+          under black calls, the look of a printed figure. Applies to the next
+          image shown.</p>
+      </div>
+      <div>
+        <label for="spectrogram_range_db">Spectrogram dynamic range</label>
+        <select id="spectrogram_range_db" name="spectrogram_range_db">{range_options}</select>
+        <p class="hint">Cells more than this far below the loudest are drawn as the
+          floor. A smaller range gives more contrast and drops faint calls into the
+          background; a larger one keeps them. 80 dB is what earlier versions used
+          (birdnet-go offers 80, 100 and 120).</p>
       </div>
     </div>
     <div class="grid-2">
@@ -196,7 +346,29 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>, names: &Name
         <label for="custom_image_dir">Custom Species Image Directory</label>
         <input id="custom_image_dir" name="custom_image_dir" value="{customimg}"
                placeholder="/home/pi/BirdNet-Behavior/custom_images">
-        <p class="hint">Override Wikipedia images with custom photos (BirdNET-Pi: CUSTOM_IMAGE). Files: sci_name.jpg</p>
+        <p class="hint">Replace one species' picture with your own photograph. Files are named
+          after the species: <code>sci_name.jpg</code> (lower case, underscores). This is not
+          BirdNET-Pi's <code>CUSTOM_IMAGE</code>: for a picture of the site, use the next two fields.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="dashboard_image">Today page picture (file)</label>
+        <input id="dashboard_image" name="dashboard_image" value="{dash_image}"
+               placeholder="/home/pi/camera/latest.jpg" autocomplete="off" spellcheck="false">
+        <p class="hint">Full path of a PNG, JPEG, GIF or WebP file, shown on the Today page
+          (BirdNET-Pi: CUSTOM_IMAGE). Something else keeps it current, for example a
+          camera snapshot saved every minute; the page checks it every ten seconds and
+          shows a new frame as soon as the file changes. Up to 8 MB; anything that is
+          not a picture is refused. Leave blank for no picture.</p>
+      </div>
+      <div>
+        <label for="dashboard_image_title">Picture title</label>
+        <input id="dashboard_image_title" name="dashboard_image_title" value="{dash_title}"
+               placeholder="The feeder" maxlength="120">
+        <p class="hint">The heading over the picture (BirdNET-Pi: CUSTOM_IMAGE_TITLE).
+          Also its description for screen readers. The block can be moved or hidden under
+          Today page layout.</p>
       </div>
     </div>
   </section>

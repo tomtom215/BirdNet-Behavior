@@ -99,7 +99,12 @@ fn compute_ts_daily(state: &AppState) -> Option<String> {
         species: None,
     };
     match state.with_timeseries_read(|ts| ts.moving_average(&params)) {
-        Some(Ok(rows)) => Some(render_trend_table(&rows)),
+        Some(Ok(rows)) => {
+            // Which of the days shown the station was recording on, from the ledger.
+            let dates: Vec<String> = rows.iter().map(|r| r.date.clone()).collect();
+            let listened = listened_for(state, &dates);
+            Some(render_trend_table(&rows, listened.as_deref()))
+        }
         _ => None,
     }
 }
@@ -130,12 +135,24 @@ async fn ts_daily_partial(State(_): State<AppState>) -> impl axum::response::Int
 
 #[cfg(feature = "analytics")]
 fn compute_ts_diversity(state: &AppState) -> Option<String> {
+    // Sixty days: the last thirty are the chart, the thirty before are its ghost line.
     let params = birdnet_timeseries::types::params::DiversityParams {
-        lookback_days: 30,
+        lookback_days: 60,
         include_shannon: true,
     };
     match state.with_timeseries_read(|ts| ts.daily_richness(&params)) {
-        Some(Ok(rows)) => Some(render_diversity_table(&rows)),
+        Some(Ok(rows)) => {
+            let today = state
+                .with_read_db(|conn| {
+                    conn.query_row("SELECT date('now','localtime')", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                })
+                .ok();
+            Some(render_diversity_table(&rows, today.as_deref(), &|dates| {
+                listened_for(state, dates)
+            }))
+        }
         _ => None,
     }
 }
@@ -271,6 +288,42 @@ async fn ts_peak_partial(State(_): State<AppState>) -> impl axum::response::Into
 // HTML renderers (only used with analytics feature)
 // ---------------------------------------------------------------------------
 
+/// For each of `dates`, whether the station was recording, from the recording-effort
+/// ledger; `None` when the ledger has nothing for them (no claim is made). Reads the
+/// database, so it is for the synchronous compute functions the cache runs on the blocking pool.
+#[cfg(feature = "analytics")]
+fn listened_for(state: &AppState, dates: &[String]) -> Option<Vec<bool>> {
+    let (first, last) = (dates.iter().min()?, dates.iter().max()?);
+    let effort = state
+        .with_read_db(|conn| super::listening::effort_by_date(conn, first, last))
+        .ok()?;
+    super::listening::listened_on(&effort, dates, last)
+}
+
+/// Fill the days with no row with zero, so a day that heard nothing is a point on the
+/// line and not a gap that the line steps over. `(date, value)` in, one per calendar
+/// day from the first to `last` out.
+#[cfg(feature = "analytics")]
+fn zero_fill(rows: &[(String, f64)], last: &str) -> Vec<(String, f64)> {
+    use super::viz::kit::{epoch_day, shift_date};
+    let Some(first) = rows.first().and_then(|r| epoch_day(&r.0)) else {
+        return rows.to_vec();
+    };
+    let Some(end) = epoch_day(last) else {
+        return rows.to_vec();
+    };
+    let by_date: std::collections::HashMap<&str, f64> =
+        rows.iter().map(|(d, v)| (d.as_str(), *v)).collect();
+    (first..=end)
+        .filter_map(|day| {
+            let (y, m, d) = shift_date("1970-01-01", day)?;
+            let iso = format!("{y:04}-{m:02}-{d:02}");
+            let v = by_date.get(iso.as_str()).copied().unwrap_or(0.0);
+            Some((iso, v))
+        })
+        .collect()
+}
+
 #[cfg(feature = "analytics")]
 fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatmapRow]) -> String {
     if rows.is_empty() {
@@ -292,12 +345,12 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
         let _ = write!(
             html,
             r#"<tr>
-<td class="tsd-key">{h:02}:00</td>
+<td class="tsd-key">{hour}</td>
 <td>{avg:.2}</td>
 <td>{total}</td>
 <td><div data-style="width:{pct:.0}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
 </tr>"#,
-            h = row.hour_of_day,
+            hour = crate::display::clock_hour(row.hour_of_day),
             avg = row.avg_detections_per_day,
             total = row.total_detections,
             pct = bar_pct,
@@ -315,22 +368,34 @@ const TABLE_OPEN: &str = r#"<details class="viz-table"><summary>Show as a table<
 #[cfg(feature = "analytics")]
 // Daily counts and richness are tens to thousands: an `f64` holds them exactly.
 #[allow(clippy::cast_precision_loss)]
-fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> String {
+fn render_trend_table(
+    rows: &[birdnet_timeseries::types::results::TrendRow],
+    listened: Option<&[bool]>,
+) -> String {
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No trend data yet.</p>"#.to_string();
     }
-    let shown: Vec<_> = rows.iter().rev().take(14).rev().collect();
+    // The last thirty complete days are the chart; the thirty before them are its ghost.
+    let shown: Vec<_> = rows.iter().rev().take(30).rev().collect();
+    let before: Vec<_> = rows.iter().rev().skip(30).take(30).rev().collect();
+    let point = |r: &&birdnet_timeseries::types::results::TrendRow| super::viz::TrendPoint {
+        date: r.date.clone(),
+        value: r.daily_detections as f64,
+        smooth: r.moving_avg_detections,
+    };
+    let pts: Vec<_> = shown.iter().map(point).collect();
+    let prior: Vec<_> = before.iter().map(point).collect();
+    let listened_shown = listened.map(|l| l[l.len().saturating_sub(pts.len())..].to_vec());
     let mut html = super::viz::trend_chart(
-        &shown
-            .iter()
-            .map(|r| super::viz::TrendPoint {
-                date: r.date.clone(),
-                value: r.daily_detections as f64,
-                smooth: r.moving_avg_detections,
-            })
-            .collect::<Vec<_>>(),
-        "detections",
-        true,
+        &pts,
+        &super::viz::TrendOpts {
+            id: "ts-daily-trend",
+            unit: "detections",
+            smooth_name: "7-day average",
+            bars: true,
+            prior: &prior,
+            listened: listened_shown.as_deref(),
+        },
     );
     html.push_str(TABLE_OPEN);
     html.push_str(
@@ -366,22 +431,44 @@ fn shannon_cell(h: Option<f64>) -> String {
 #[cfg(feature = "analytics")]
 // Daily counts and richness are tens to thousands: an `f64` holds them exactly.
 #[allow(clippy::cast_precision_loss)]
-fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityRow]) -> String {
+fn render_diversity_table(
+    rows: &[birdnet_timeseries::types::results::DiversityRow],
+    today: Option<&str>,
+    listened_for: &dyn Fn(&[String]) -> Option<Vec<bool>>,
+) -> String {
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No diversity data yet.</p>"#.to_string();
     }
-    let shown: Vec<_> = rows.iter().rev().take(14).rev().collect();
+    // One point a calendar day to today: a day with no detections is zero species, a point
+    // on the line, not a day the line steps over.
+    let last = today.unwrap_or_else(|| rows.last().map_or("", |r| r.date.as_str()));
+    let dated: Vec<(String, f64)> = rows
+        .iter()
+        .map(|r| (r.date.clone(), r.species_richness as f64))
+        .collect();
+    let filled = zero_fill(&dated, last);
+    let day_keys: Vec<String> = filled.iter().map(|d| d.0.clone()).collect();
+    let listened = listened_for(&day_keys);
+    let split = filled.len().saturating_sub(30);
+    let point = |d: &(String, f64)| super::viz::TrendPoint {
+        date: d.0.clone(),
+        value: d.1,
+        smooth: None,
+    };
+    let pts: Vec<_> = filled[split..].iter().map(point).collect();
+    let prior: Vec<_> = filled[..split].iter().map(point).collect();
+    let listened_shown = listened.map(|l| l[split..].to_vec());
+    let shown: Vec<_> = rows.iter().rev().take(30).rev().collect();
     let mut html = super::viz::trend_chart(
-        &shown
-            .iter()
-            .map(|r| super::viz::TrendPoint {
-                date: r.date.clone(),
-                value: r.species_richness as f64,
-                smooth: None,
-            })
-            .collect::<Vec<_>>(),
-        "species",
-        false,
+        &pts,
+        &super::viz::TrendOpts {
+            id: "ts-richness-trend",
+            unit: "species",
+            smooth_name: "",
+            bars: false,
+            prior: &prior,
+            listened: listened_shown.as_deref(),
+        },
     );
     html.push_str(TABLE_OPEN);
     html.push_str(

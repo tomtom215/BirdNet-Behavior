@@ -324,7 +324,7 @@ async fn an_upload_arrives_intact_and_signed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("birds.db.backup.1733400000.bnb");
     // Larger than one read of the streaming body, so a truncated stream shows.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(clippy::cast_possible_truncation)]
     let bytes: Vec<u8> = (0..300_000_usize).map(|i| (i % 251) as u8).collect();
     std::fs::write(&path, &bytes).expect("write");
     let (digest, len) = file_sha256(&path).expect("hash");

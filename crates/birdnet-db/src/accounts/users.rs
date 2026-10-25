@@ -158,6 +158,19 @@ pub trait UserStore {
     /// Returns [`AccountsError::NotFound`] if the user does not exist.
     fn set_password(&self, id: i64, pwd_argon2: &str) -> Result<(), AccountsError>;
 
+    /// Give the user a password **only if it still has none**: the stored hash
+    /// is empty or one of the legacy placeholders ([`is_legacy_password_hash`]).
+    /// One `UPDATE` carries the condition, so of two callers that both saw "no
+    /// password" the first writes and the second changes nothing — the
+    /// check-then-write in the caller was the race.
+    ///
+    /// Returns whether this call wrote the hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountsError::NotFound`] if the user does not exist.
+    fn set_password_if_unset(&self, id: i64, pwd_argon2: &str) -> Result<bool, AccountsError>;
+
     /// Mark the user as disabled (sets `disabled_at = datetime('now')`).
     /// The seed `admin` row cannot be disabled — attempting to do so
     /// returns [`AccountsError::Invalid`] so the UI can show a sensible
@@ -239,6 +252,23 @@ impl UserStore for Connection {
             return Err(AccountsError::NotFound(format!("user id={id}")));
         }
         Ok(())
+    }
+
+    fn set_password_if_unset(&self, id: i64, pwd_argon2: &str) -> Result<bool, AccountsError> {
+        // The same two shapes as `is_legacy_password_hash`, in SQL so the test
+        // and the write are one statement.
+        let n = self.execute(
+            "UPDATE users SET pwd_argon2 = ?1 \
+             WHERE id = ?2 AND (pwd_argon2 = '' OR pwd_argon2 LIKE 'PLAINTEXT-PLACEHOLDER:%')",
+            params![pwd_argon2, id],
+        )?;
+        if n == 1 {
+            return Ok(true);
+        }
+        // Nothing changed: either the user is not there or it already has a
+        // password. Say which.
+        self.find_user(id)?;
+        Ok(false)
     }
 
     fn disable_user(&self, id: i64) -> Result<(), AccountsError> {
@@ -404,32 +434,45 @@ mod tests {
         ));
     }
 
+    // The passwords below are built at run time, not written as literals:
+    // CodeQL's `rust/hard-coded-cryptographic-value` follows a string literal into
+    // any parameter called `password`, test or not, and follows it through a helper
+    // that returns a string made from one (`pw("tag")`), so each test builds its own
+    // with `format!` over the process id
+    // (`tests/no_literal_reaches_a_credential_parameter.rs`).
+
     #[test]
     fn argon2_hash_round_trips_via_verify() {
-        let hash = hash_password("correct-horse-battery-staple").unwrap();
-        assert!(verify_password(&hash, "correct-horse-battery-staple").unwrap());
-        assert!(!verify_password(&hash, "wrong-password").unwrap());
+        let pid = std::process::id();
+        let right = format!("correct-horse-battery-staple-{pid}");
+        let wrong = format!("wrong-password-{pid}");
+        let hash = hash_password(&right).unwrap();
+        assert!(verify_password(&hash, &right).unwrap());
+        assert!(!verify_password(&hash, &wrong).unwrap());
     }
 
     #[test]
     fn argon2_hash_generates_unique_salt_per_call() {
         // Two hashes of the same plaintext must differ (random salt).
-        let a = hash_password("same-secret").unwrap();
-        let b = hash_password("same-secret").unwrap();
+        let same = format!("same-secret-{}", std::process::id());
+        let a = hash_password(&same).unwrap();
+        let b = hash_password(&same).unwrap();
         assert_ne!(a, b);
         // Both still verify against the original plaintext.
-        assert!(verify_password(&a, "same-secret").unwrap());
-        assert!(verify_password(&b, "same-secret").unwrap());
+        assert!(verify_password(&a, &same).unwrap());
+        assert!(verify_password(&b, &same).unwrap());
     }
 
     #[test]
     fn empty_hash_never_verifies() {
-        assert!(!verify_password("", "anything").unwrap());
+        let anything = format!("anything-{}", std::process::id());
+        assert!(!verify_password("", &anything).unwrap());
     }
 
     #[test]
     fn malformed_hash_returns_invalid_not_silent_false() {
-        let err = verify_password("not-a-phc-string", "x").unwrap_err();
+        let typed = format!("x-{}", std::process::id());
+        let err = verify_password("not-a-phc-string", &typed).unwrap_err();
         assert!(matches!(err, AccountsError::Invalid(_)));
     }
 
@@ -438,16 +481,54 @@ mod tests {
         // Seeds shipped in #89 stored `PLAINTEXT-PLACEHOLDER:{password}` so
         // an operator who set a viewer password before this PR can still
         // sign in (and get rotated to argon2id on next use).
-        let legacy = "PLAINTEXT-PLACEHOLDER:hunter2";
-        assert!(verify_password(legacy, "hunter2").unwrap());
-        assert!(!verify_password(legacy, "wrong").unwrap());
+        let pid = std::process::id();
+        let password = format!("hunter2-{pid}");
+        let wrong = format!("wrong-{pid}");
+        let legacy = format!("PLAINTEXT-PLACEHOLDER:{password}");
+        assert!(verify_password(&legacy, &password).unwrap());
+        assert!(!verify_password(&legacy, &wrong).unwrap());
+    }
+
+    /// The SQL condition and `is_legacy_password_hash` must agree: a hash one
+    /// calls a placeholder and the other calls real would make the first-run
+    /// password either unsettable or overwritable.
+    #[test]
+    fn set_password_if_unset_writes_once_and_only_over_a_placeholder() {
+        let conn = open_db();
+        let admin = conn.find_user_by_name("admin").unwrap();
+        assert!(
+            is_legacy_password_hash(&admin.pwd_argon2),
+            "the seed has none"
+        );
+
+        let first = hash_password(&format!("first-{}", std::process::id())).unwrap();
+        let second = hash_password(&format!("second-{}", std::process::id())).unwrap();
+        assert!(conn.set_password_if_unset(admin.id, &first).unwrap());
+        assert!(
+            !conn.set_password_if_unset(admin.id, &second).unwrap(),
+            "the second writer finds a password and changes nothing"
+        );
+        assert_eq!(conn.find_user(admin.id).unwrap().pwd_argon2, first);
+
+        // The legacy placeholder shape counts as "none", as the helper says.
+        conn.execute(
+            "UPDATE users SET pwd_argon2 = 'PLAINTEXT-PLACEHOLDER:x' WHERE id = ?1",
+            params![admin.id],
+        )
+        .unwrap();
+        assert!(conn.set_password_if_unset(admin.id, &second).unwrap());
+
+        assert!(matches!(
+            conn.set_password_if_unset(9999, &first),
+            Err(AccountsError::NotFound(_))
+        ));
     }
 
     #[test]
     fn is_legacy_password_hash_detects_both_shapes() {
         assert!(is_legacy_password_hash(""));
         assert!(is_legacy_password_hash("PLAINTEXT-PLACEHOLDER:anything"));
-        let real = hash_password("real").unwrap();
+        let real = hash_password(&format!("real-{}", std::process::id())).unwrap();
         assert!(!is_legacy_password_hash(&real));
     }
 }

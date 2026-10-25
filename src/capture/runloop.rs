@@ -71,7 +71,10 @@ pub(super) fn run_supervisor(
         supervisor.apply_restart_requests(&restarts);
         supervisor.tick(
             now,
-            recording_allowed(schedule_config, secs, offset),
+            may_record(
+                recording_allowed(schedule_config, secs, offset),
+                metrics.recording_held(),
+            ),
             quiet_minute_of_day(secs, offset),
             solar_minutes(schedule_config, secs, offset),
             metrics,
@@ -89,6 +92,17 @@ fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// Whether sources may record this tick: the schedule allows it **and** the
+/// disk manager has not put recording on hold because the disk is full and the
+/// station keeps everything (`FULL_DISK=keep`).
+///
+/// The hold outranks the schedule's fail-open on an unsynced clock: a clock
+/// that cannot be trusted is a reason to record rather than guess a night, and
+/// never a reason to fill a disk the owner said not to clean.
+const fn may_record(schedule_allows: bool, held: bool) -> bool {
+    schedule_allows && !held
 }
 
 /// Whether recording is allowed for `secs`, failing **open** while the clock
@@ -215,6 +229,17 @@ mod tests {
         let mut c = cli();
         c.recording_schedule = spec.to_string();
         schedule::parse_schedule_config(&c, None)
+    }
+
+    #[test]
+    fn a_full_disk_on_hold_stops_recording_whatever_the_schedule_says() {
+        assert!(may_record(true, false), "nothing in the way: record");
+        assert!(!may_record(true, true), "a held disk is not recorded to");
+        assert!(!may_record(false, false), "the schedule still closes");
+        // The unsynced-clock fail-open must not reach past the hold.
+        let config = fixed_window_config("fixed:06:00-07:00");
+        assert!(recording_allowed(&config, 0, 0));
+        assert!(!may_record(recording_allowed(&config, 0, 0), true));
     }
 
     #[test]

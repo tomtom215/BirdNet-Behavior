@@ -18,7 +18,8 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Router, routing::get};
@@ -167,7 +168,10 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
                 .apply(TODAY_PAGE_HTML.as_str())
                 .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
         });
+    // The owner's picture: empty until one is set on the Settings page.
+    let picture = crate::routes::dashboard_image::block_for(&state).await;
     let body = arranged
+        .replace("{{picture_block}}", &picture)
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())
         .replace("{{hero_phrase}}", hero_phrase)
@@ -296,7 +300,7 @@ fn firstrun_checklist(
     // whether it hears anything (DD-14). Until a password exists every
     // `/admin/*` page is open to anyone on the network, and nothing on the
     // first screen said so.
-    let password_row = if password_set {
+    let admin_row = if password_set {
         r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Admin password</div><div class="d">settings are yours to change</div></div><span class="v">set</span></div>"#.to_string()
     } else {
         r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">No admin password</div><div class="d">anyone on the network can change settings — set one in the <a href="/onboarding">setup wizard</a> or <a href="/station/access">Settings → Access</a></div></div><span class="v">open</span></div>"#.to_string()
@@ -398,7 +402,7 @@ fn firstrun_checklist(
         r#"<div class="bnb-card pad">
       <div class="bnb-eyebrow td-check-eb">Getting ready</div>
       <div class="x-check">
-        {password_row}
+        {admin_row}
         <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
         {model_row}
         <div class="x-check-row">{disk_mark_html}<div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
@@ -435,23 +439,32 @@ fn first_run_needs_onboarding(state: &AppState) -> bool {
 
 /// Capture-outage check: the station has detected before, the silence exceeds
 /// the threshold, and (with a location) we're inside daylight, when silence
-/// is anomalous. Returns the silence duration and the last detection's time.
-pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String)> {
-    let silent = birdnet_db::sqlite::seconds_since_last_detection(conn)
-        .ok()
-        .flatten()?;
+/// is anomalous. `Ok(Some((silence, last)))` is the duration of the silence and
+/// the last detection's time; `Ok(None)` is "no outage".
+///
+/// `Err` when the detection history could not be read. That is a third answer,
+/// not `Ok(None)`: the pills drew "recording" in green for a station whose
+/// freshness they had not been able to look at, and the outage banner, which is
+/// "absent entirely when nothing waits", was absent for the same reason.
+pub(super) fn capture_outage(
+    conn: &rusqlite::Connection,
+) -> Result<Option<(u64, String)>, birdnet_db::sqlite::DbError> {
+    use rusqlite::OptionalExtension as _;
+    let Some(silent) = birdnet_db::sqlite::seconds_since_last_detection(conn)? else {
+        return Ok(None);
+    };
     let threshold = match super::solar_times_local(conn) {
         Some((sunrise, sunset)) => {
             let now = super::now_hour_local();
             if now < sunrise || now > sunset {
-                return None; // overnight silence is normal
+                return Ok(None); // overnight silence is normal
             }
             OUTAGE_DAYTIME_SECS
         }
         None => OUTAGE_NO_LOCATION_SECS,
     };
     if silent < threshold {
-        return None;
+        return Ok(None);
     }
     let last = conn
         .query_row(
@@ -459,8 +472,8 @@ pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String
             [],
             |row| row.get::<_, String>(0),
         )
-        .ok()?;
-    Some((silent, last.get(0..5).unwrap_or(&last).to_string()))
+        .optional()?;
+    Ok(last.map(|last| (silent, last.get(0..5).unwrap_or(&last).to_string())))
 }
 
 /// Filesystem usage of the data directory as a used percentage.
@@ -623,7 +636,11 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
             // Recording state. The gauge is authoritative when it has an
             // opinion; otherwise fall back to the detection-freshness signal
             // that drives the outage banner, so the two cannot disagree.
-            match (capture, capture_outage(conn)) {
+            let outage = capture_outage(conn);
+            if let Err(e) = &outage {
+                tracing::warn!(error = %e, "recording pill: the detection history could not be read");
+            }
+            match (capture, outage) {
                 (CaptureState::NoSource, _) => out.push_str(
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · no microphone configured</span>"#,
                 ),
@@ -634,14 +651,22 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                 (CaptureState::Unreadable, _) => out.push_str(
                     r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the audio sources</span>"#,
                 ),
-                (_, Some((_, last))) => {
+                (_, Ok(Some((_, last)))) => {
                     let _ = write!(
                         out,
                         r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> recording stopped · last heard {last}</span>"#
                     );
                 }
-                (_, None) => out.push_str(
+                // The gauge says it is up, which does not depend on the detection
+                // history; the freshness read only ever contradicts a gauge. The
+                // same pill when the history reads fine and shows no outage.
+                (CaptureState::Up, Err(_)) | (_, Ok(None)) => out.push_str(
                     r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
+                ),
+                // Nothing says it is up and the one thing that could say it is
+                // down could not be read: a pill that could not look says so.
+                (_, Err(_)) => out.push_str(
+                    r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the detection history</span>"#,
                 ),
             }
 
@@ -661,7 +686,10 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
             ) {
                 let _ = write!(
                     out,
-                    r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now_t:.0}°</span><span class="mono x-wx-hl">H {max:.0}° · L {min:.0}°</span></span>"#
+                    r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now}</span><span class="mono x-wx-hl">H {hi} · L {lo}</span></span>"#,
+                    now = crate::display::temperature(f64::from(now_t), 0, false),
+                    hi = crate::display::temperature(f64::from(max), 0, false),
+                    lo = crate::display::temperature(f64::from(min), 0, false),
                 );
             }
 
@@ -670,8 +698,8 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                 let _ = write!(
                     out,
                     r#"<span class="bnb-pill">☀ sunrise {}</span><span class="bnb-pill">☾ sunset {}</span>"#,
-                    fmt_hour(sunrise),
-                    fmt_hour(sunset)
+                    crate::display::clock_from_hours(sunrise),
+                    crate::display::clock_from_hours(sunset)
                 );
             }
 
@@ -730,8 +758,16 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
                 );
             }
             let mut strip = String::new();
-            if let Some((silent, last)) = capture_outage(conn) {
+            let outage = capture_outage(conn);
+            if let Err(e) = &outage {
+                tracing::warn!(error = %e, "outage banner: the detection history could not be read");
+                strip.push_str(&super::error_states::inline(
+                    "whether the microphone has gone quiet",
+                ));
+            }
+            if let Ok(Some((silent, last))) = outage {
                 let dur = fmt_duration(silent);
+                let last = crate::display::clock(&last);
                 let _ = write!(
                     strip,
                     r#"<div class="x-nudge" data-screen-label="Outage banner" data-announce="No detections recently: the microphone may be unplugged or the recorder stopped."><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
@@ -753,14 +789,6 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
     });
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-/// `6.35` hours → `"6:21"`.
-fn fmt_hour(h: f64) -> String {
-    let total_min = (h * 60.0).round();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let (hh, mm) = ((total_min / 60.0) as u32 % 24, (total_min % 60.0) as u32);
-    format!("{hh}:{mm:02}")
 }
 
 /// `8040` seconds → `"2h 14m"` (or `"45m"` under an hour).
@@ -1029,16 +1057,15 @@ async fn today_partial(
 )]
 async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
     let today = today_date_string();
+    let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let rows = birdnet_db::sqlite::todays_detections(
-                conn,
-                &today,
-                None,
-                TodayFilter::All,
-                1000,
-                0,
-            )?;
+            // The hour totals come from the database, not from counting the rows of a
+            // page of the day's detections: that page stops at 1000, and a busy station
+            // passes it before lunch, so the chart quietly stopped adding up.
+            let rows = birdnet_db::sqlite::hourly_activity(conn, &today)?;
+            // The species heard most each hour, for the tooltip.
+            let by_hour = birdnet_db::sqlite::today_species_hour_heatmap(conn, &today, 1000)?;
             // O-23 weather samples for the in-strip temperature line. Reads
             // the cached Open-Meteo rows — empty when the poll job hasn't
             // populated them, in which case the strip simply has no line.
@@ -1049,18 +1076,18 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
                 conn.range(&from, &to).unwrap_or_default()
             };
             let solar = super::solar_times_local(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, samples, solar))
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, by_hour, samples, solar))
         })
     })
     .await;
 
     // See `error_states::failed_partial` for why this is a 200.
-    let Ok(Ok((rows, samples, solar))) = result else {
+    let Ok(Ok((rows, by_hour, samples, solar))) = result else {
         tracing::warn!("today daystrip: query or task failed");
         return super::error_states::failed_partial("today's timeline");
     };
 
-    if rows.is_empty() {
+    if rows.iter().all(|r| r.count <= 0) {
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
@@ -1072,11 +1099,23 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     }
 
     let mut hourly = [0i64; 24];
-    for d in &rows {
-        let hi = parse_hour_fraction(&d.time) as usize;
-        if hi < 24 {
-            hourly[hi] += 1;
+    for r in &rows {
+        if let Ok(hi) = r.hour.parse::<usize>()
+            && hi < 24
+        {
+            hourly[hi] += r.count;
         }
+    }
+    // Per hour, the three species with the most detections, in the station's language.
+    let mut top: [Vec<(String, i64)>; 24] = std::array::from_fn(|_| Vec::new());
+    for (name, hour, count) in &by_hour {
+        if let Some(slot) = top.get_mut(usize::from(*hour)) {
+            slot.push((names.name_of_stored(name).to_owned(), *count));
+        }
+    }
+    for slot in &mut top {
+        slot.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        slot.truncate(3);
     }
 
     let temps: Vec<(f64, f64)> = samples
@@ -1100,30 +1139,24 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let dawn: i64 = hourly[4..9].iter().sum();
 
     let stats_oob = format!(
-        r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_hour:02}:00</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
+        r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_clock}</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
         total_fmt = super::group_thousands(total),
+        peak_clock = crate::display::clock_hour(peak_hour),
     );
     // The caption's temperature clause, kept in step with whether the line is
     // actually drawn (`day_strip` draws it only for a non-empty `temps`).
     let tempkey_oob = if temps.is_empty() {
         r#"<span id="td-tempkey" hx-swap-oob="true"></span>"#.to_string()
     } else {
-        r#"<span id="td-tempkey" hx-swap-oob="true"> · the <span class="x-tempkey">amber line</span> is temperature</span>"#.to_string()
+        r#"<span id="td-tempkey" hx-swap-oob="true"> · temperature runs along the bottom</span>"#
+            .to_string()
     };
-    let strip = super::viz::day_strip(&hourly, &temps, solar, super::now_hour_local());
+    let strip = super::viz::day_strip(&hourly, &top, &temps, solar, super::now_hour_local());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
         format!("{stats_oob}{tempkey_oob}{strip}"),
     )
-}
-
-/// Parse "HH:MM:SS" into a fractional hour in [0, 24). Best-effort.
-fn parse_hour_fraction(t: &str) -> f64 {
-    let mut it = t.split(':');
-    let h: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let m: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    h + m / 60.0
 }
 
 /// Render a single detection row into the HTML buffer.
@@ -1177,7 +1210,10 @@ fn render_detection_card(
     let conf = conf_bar(d.confidence, floor);
     let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
+    // `time` is plain text for the confirmation dialogs below, which cannot
+    // carry markup; the visible link prints through the display formatter.
     let time = escape_html(&d.time);
+    let time_clk = crate::display::clock(&d.time);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
     let row_vals = super::recordings::row_vals(&crate::state::RowRef::from(d));
@@ -1192,7 +1228,7 @@ fn render_detection_card(
          {conf}\
          </div>\
          <div class=\"bnb-meta mono tdl-card-sci\">{sci_name} · \
-         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time_clk}</a></div>\
          {audio}\
          </div>\
          <div class=\"tdl-card-actions\">\
@@ -1242,7 +1278,7 @@ fn after_write(
 async fn delete_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
@@ -1278,7 +1314,7 @@ async fn delete_detection(
 async fn relabel_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<RelabelForm>,
+    HtmxForm(form): HtmxForm<RelabelForm>,
 ) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
     let row = crate::state::RowRef {
@@ -1319,7 +1355,7 @@ async fn relabel_detection(
 async fn lock_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let result = tokio::task::spawn_blocking(move || {
         let result = state.set_detection_lock(&row, true);
@@ -1350,7 +1386,7 @@ async fn lock_detection(
 async fn unlock_detection(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let result = tokio::task::spawn_blocking(move || {
         let result = state.set_detection_lock(&row, false);
@@ -1428,15 +1464,6 @@ mod tests {
         state.metrics().set_source_up("mic0", true);
         state.detection_status_flag().store(false, Ordering::SeqCst);
         assert_eq!(live_capture_state(&state), CaptureState::Up);
-    }
-
-    #[test]
-    fn hour_formatting() {
-        assert_eq!(fmt_hour(6.35), "6:21");
-        assert_eq!(fmt_hour(0.0), "0:00");
-        assert_eq!(fmt_hour(19.5), "19:30");
-        // Wraps past midnight rather than printing "24:xx".
-        assert_eq!(fmt_hour(24.01), "0:01");
     }
 
     #[test]

@@ -1,0 +1,39 @@
+{
+  "_about": "Shared by src/display.rs (Rust) and tools/visual-qa/display-format.mjs (the browser): the one table both implementations of the clock and temperature formatting must agree with. A case is [input, ..., expected]; null means the input is left as it is.",
+  "clock": [
+    ["16:31:37", "24h", "16:31:37"],
+    ["16:31:37", "12h", "4:31:37 PM"],
+    ["06:00", "24h", "06:00"],
+    ["06:00", "12h", "6:00 AM"],
+    ["00:05", "12h", "12:05 AM"],
+    ["00:00:00", "12h", "12:00:00 AM"],
+    ["12:00:00", "12h", "12:00:00 PM"],
+    ["12:59", "12h", "12:59 PM"],
+    ["13:00", "12h", "1:00 PM"],
+    ["23:59:59", "12h", "11:59:59 PM"],
+    ["9:05", "12h", null],
+    ["24:00", "12h", null],
+    ["12:60", "12h", null],
+    ["12:30:61", "12h", null],
+    ["16:31:37.5", "12h", null],
+    ["noon", "12h", null],
+    ["", "12h", null],
+    ["16:31:37", "bogus", "16:31:37"]
+  ],
+  "temp": [
+    [21.4, 0, "celsius", true, "21°C"],
+    [21.4, 0, "fahrenheit", true, "71°F"],
+    [21.4, 0, "celsius", false, "21°"],
+    [21.4, 0, "fahrenheit", false, "71°"],
+    [20.5, 0, "celsius", true, "21°C"],
+    [-20.5, 0, "celsius", true, "-21°C"],
+    [-3.2, 0, "fahrenheit", true, "26°F"],
+    [-0.3, 0, "celsius", true, "0°C"],
+    [-17.8, 0, "fahrenheit", true, "0°F"],
+    [0, 1, "fahrenheit", true, "32.0°F"],
+    [36.65, 1, "celsius", true, "36.7°C"],
+    [100, 0, "fahrenheit", true, "212°F"],
+    [55.2, 0, "celsius", true, "55°C"],
+    [55.2, 0, "kelvin", true, "55°C"]
+  ]
+}

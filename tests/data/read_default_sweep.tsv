@@ -1,0 +1,264 @@
+# Every defaulting adaptor applied to a read, as found by
+# tests/a_failed_read_is_not_defaulted_into_a_fact.rs, and what a person who read it
+# decided. Columns (tab-separated): class, file, enclosing fn, kind, source text.
+#
+# A row is a decision about one site, made by reading it. It is not a place to
+# put a defect: those are fixed, or recorded as `tracked:TD-n` with the evidence
+# in docs/TECH_DEBT.md. The gate fails on a hit with no row and on a row that
+# matches nothing, so a fix that removes a site must remove its row, and an edit
+# that changes a site's text must re-read it.
+#
+# Classes are defined in the test (CLASSES). In short:
+#   handled          the error is kept: logged and shown, or the caller refuses
+#   decoration       the default states nothing about the station
+#   not-a-read       the fallible step is a conversion, a clock, a file or a task
+#   fail-closed      the default is the safe side
+#   setting-default  a setting falling back to its documented default
+#   omitted          the series or section is left out, not printed as zero
+#   task-panic       a task that panicked, not a query that failed
+#   legit-zero       the zero is true
+#   write-outcome    the outcome is carried on another path
+#   cache            an optimisation whose failure is inert
+#   tracked:TD-n     known, evidenced, not fixed; see docs/TECH_DEBT.md
+handled	crates/birdnet-web/src/analytics_cache.rs	cached_fragment	ok	tokio::task::spawn_blocking(move || { let _slot = permit; compute(&state_for_blocking) }) .await .ok()
+fail-closed	crates/birdnet-web/src/auth_middleware.rs	admin_password_configured	map_or	state .with_read_db(|conn| conn.find_user_by_name("admin")) .map_or(true, |u| !accounts::is_legacy_password_ha
+fail-closed	crates/birdnet-web/src/auth_middleware.rs	cookie_auth_middleware	map_or_else	synthesise_seed_admin(state).map_or_else( || (false, None, session_user(cookie, state)), |synth| (false, Some(
+decoration	crates/birdnet-web/src/auth_middleware.rs	session_user	unwrap_or	conn .session_touch_due(&validated.session_id, TOUCH_AFTER_IDLE_SECS) .unwrap_or(false)
+fail-closed	crates/birdnet-web/src/auth_middleware.rs	synthesise_seed_admin	ok	state .with_read_db(|conn| conn.find_user_by_name("admin")) .ok()
+handled	crates/birdnet-web/src/routes/admin/accounts.rs	create_user	match-err	match state.with_read_db(UserStore::list_users) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/accounts.rs	remove_user	match-err	match state.with_read_db(UserStore::list_users) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/accounts.rs	revoke_others_handler	match-err	match state.with_read_db(|conn| -> Result<String, AccountsError> { let sessions = conn.list_sessions(user_id)?
+handled	crates/birdnet-web/src/routes/admin/accounts.rs	revoke_session_handler	match-err	match state.with_read_db(|conn| -> Result<String, AccountsError> { let sessions = conn.list_sessions(request_u
+handled	crates/birdnet-web/src/routes/admin/accounts.rs	set_password	match-err	match state.with_db(|conn| conn.revoke_others(id, &request_user.session_id)) { Err .. }
+tracked:TD-4	crates/birdnet-web/src/routes/admin/audio.rs	create	unwrap_or_default	state .with_read_db(AudioSourceStore::list) .unwrap_or_default()
+handled	crates/birdnet-web/src/routes/admin/audio.rs	eq_preview	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	listen_default	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	probe	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	restart	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	row	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	update	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
+task-panic	crates/birdnet-web/src/routes/admin/backup.rs	list_backups	unwrap_or_default	tokio::task::spawn_blocking(move || -> Vec<BackupEntry> { let Ok(rd) = std::fs::read_dir(&dir) else { return V
+handled	crates/birdnet-web/src/routes/admin/backup_recovery.rs	gather	match-err	match state.with_read_db(|conn| { birdnet_db::sqlite::last_run_unix(conn, birdnet_db::sqlite::JOB_BACKUP_VACUU
+handled	crates/birdnet-web/src/routes/admin/doctor.rs	doctor_json	match-err	match tokio::task::spawn_blocking(move || diagnostics.doctor_json()).await { Err .. }
+handled	crates/birdnet-web/src/routes/admin/doctor.rs	doctor_page	match-err	match tokio::task::spawn_blocking(move || Config::load_from(&path)).await { Err .. }
+handled	crates/birdnet-web/src/routes/admin/doctor.rs	doctor_page	ok	tokio::task::spawn_blocking(move || diagnostics.doctor_json()) .await .ok()
+handled	crates/birdnet-web/src/routes/admin/images.rs	images_page	match-err	match state.with_read_db(birdnet_db::sqlite::list_image_blacklist) { Err .. }
+decoration	crates/birdnet-web/src/routes/admin/migration.rs	render_batches	is_ok_and	birdnet_db::settings::get_or(conn, EXCLUDE_IMPORTS_SETTING, "false") .is_ok_and(|v| v == "true")
+decoration	crates/birdnet-web/src/routes/admin/migration.rs	station_coords	ok	conn.query_row( "SELECT value FROM settings WHERE key = ?1", rusqlite::params![key], |r| r.get::<_, String>(0)
+handled	crates/birdnet-web/src/routes/admin/notification_test.rs	birdweather_state	match-err	match state.with_read_db(|conn| get_setting(conn, "birdweather_token")) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/quality.rs	exclude_phantom	unwrap_or_else	tokio::task::spawn_blocking(move || load_phantoms(&state)) .await .unwrap_or_else(|e| Err(e.to_string()))
+handled	crates/birdnet-web/src/routes/admin/quality.rs	phantoms_partial	unwrap_or_else	tokio::task::spawn_blocking(move || load_phantoms(&state)) .await .unwrap_or_else(|e| Err(e.to_string()))
+write-outcome	crates/birdnet-web/src/routes/admin/rules.rs	import_rules	is_ok	birdnet_db::metric_rules::insert(conn, rule).is_ok()
+write-outcome	crates/birdnet-web/src/routes/admin/rules.rs	import_rules	is_ok	insert_rule(conn, &i.rule).is_ok()
+handled	crates/birdnet-web/src/routes/admin/rules.rs	metric_rules_list_partial	match-err	match state .run_blocking(|state| state.with_read_db(birdnet_db::metric_rules::list)) .await { Err .. }
+handled	crates/birdnet-web/src/routes/admin/rules.rs	rules_list_partial	match-err	match state .run_blocking(|state| state.with_read_db(list_rules)) .await { Err .. }
+handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	save_settings	match-err	match load_all_settings(state) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	settings_page	match-err	match load_settings_for(state, user.as_deref()) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	settings_partial	match-err	match load_settings_for(state, user.as_deref()) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/settings/handler.rs	audio_sources_summary	ok	state .with_read_db(birdnet_db::audio_sources::AudioSourceStore::list) .map_err(|e| tracing::warn!(error = %e,
+handled	crates/birdnet-web/src/routes/admin/species/handler.rs	configured_species_lists	unwrap_or_else	read_list(conn, key).unwrap_or_else(|e| { tracing::warn!(error = %e, key, "species list could not be read; app
+handled	crates/birdnet-web/src/routes/admin/species/handler.rs	filter_test_page	match-err	match state.with_read_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/species/handler.rs	filter_test_page	match-err	match try_species_lists(state) { Err .. }
+decoration	crates/birdnet-web/src/routes/admin/species/handler.rs	load_thresholds_and_suggestions	unwrap_or_default	birdnet_db::sqlite::reviewed_detections_by_species(conn) .inspect_err(|e| tracing::warn!(error = %e, "threshol
+handled	crates/birdnet-web/src/routes/admin/species/handler.rs	read_list	match-err	match get(conn, key) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/species/manage.rs	delete_clips	match-err	match s .with_db(|conn| birdnet_db::sqlite::prune_species_clips(conn, &name, now)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/species/manage.rs	delete_clips	match-err	match s .with_read_db(|conn| birdnet_db::sqlite::species_clip_files(conn, &name)) { Err .. }
+task-panic	crates/birdnet-web/src/routes/admin/system.rs	render_status_partial	ok	tokio::task::spawn_blocking(system_info::sample).await.ok()
+task-panic	crates/birdnet-web/src/routes/admin/system.rs	render_status_partial	unwrap_or_else	tokio::task::spawn_blocking(move || {
+handled	crates/birdnet-web/src/routes/admin/system_controls/backup.rs	restore_backup	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || restore_spool(&db_path)).await
+task-panic	crates/birdnet-web/src/routes/admin/system_controls/service.rs	service_status	unwrap_or	tokio::task::spawn_blocking(move || { ( get_process_uptime_secs(pid), get_process_memory_mb(pid), check_system
+legit-zero	crates/birdnet-web/src/routes/analysis_runs.rs	get_run	unwrap_or	birdnet_db::sqlite::detection_counts_by_run(conn)? .get(&id) .copied() .unwrap_or(0)
+task-panic	crates/birdnet-web/src/routes/analytics.rs	analytics_status	unwrap_or_else	tokio::task::spawn_blocking(move || { state.with_analytics_read(|db| {
+handled	crates/birdnet-web/src/routes/api_write.rs	delete	match-err	match state.delete_detection(&key.row()) { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	delete_comment	match-err	match state.with_db(|conn| birdnet_db::detection_comments::delete(conn, key.id)) { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	read_settings	match-err	match crate::routes::admin::settings::handler::load_all_settings(state) { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	system_network	match-err	match tokio::task::spawn_blocking(crate::system_info::network_interfaces).await { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	system_processes	match-err	match tokio::task::spawn_blocking(crate::system_info::station_processes).await { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	write_settings	let-ok	let Ok(..) = crate::routes::admin::settings::handler::load_all_settings(state)
+handled	crates/birdnet-web/src/routes/auth_pages.rs	authenticate	match-err	match state.with_read_db(|conn| conn.find_user_by_name("admin")) { Err .. }
+handled	crates/birdnet-web/src/routes/auth_pages.rs	authenticate	match-err	match state.with_read_db(|conn| conn.find_user_by_name(username)) { Err .. }
+handled	crates/birdnet-web/src/routes/auth_pages.rs	login_submit	match-err	match state.login_throttle().begin(ip, voucher) { Err .. }
+decoration	crates/birdnet-web/src/routes/auth_pages.rs	logout_submit	ok	state .with_read_db(|conn| { <_ as SessionStore>::find_active_session(conn, &validated.session_id) }) .ok()
+handled	crates/birdnet-web/src/routes/auth_pages.rs	mint_session_cookie	ok	state .with_db(|conn| { conn.create_session( &session_id, user_id, &expires_at, device.user_agent.as_deref(), 
+fail-closed	crates/birdnet-web/src/routes/auth_pages.rs	open_bypass_redirect	let-ok	let Ok(..) = state.with_read_db(|conn| conn.find_user_by_name("admin"))
+not-a-read	crates/birdnet-web/src/routes/charts.rs	civil_dawn_minute	ok	conn.query_row( "SELECT date(?1, 'unixepoch', 'localtime'), CAST(strftime('%H', ?1, 'unixepoch', 'localtime') 
+task-panic	crates/birdnet-web/src/routes/dashboard_image.rs	block_for	unwrap_or	tokio::task::spawn_blocking(move || stat(&path)) .await .unwrap_or(Stat::Unusable("the check did not finish"))
+decoration	crates/birdnet-web/src/routes/dashboard_image.rs	load	match-err	match birdnet_db::settings::get(conn, key) { Err .. }
+setting-default	crates/birdnet-web/src/routes/export/ebird.rs	export_ebird	unwrap_or_default	birdnet_db::settings::get_or(conn, "site_name", "").unwrap_or_default()
+setting-default	crates/birdnet-web/src/routes/export/ebird.rs	export_ebird	unwrap_or_default	birdnet_db::settings::get_or(conn, "station_name", "").unwrap_or_default()
+setting-default	crates/birdnet-web/src/routes/export/ebird.rs	setting_f64	ok	birdnet_db::settings::get_or(conn, key, "") .ok()
+setting-default	crates/birdnet-web/src/routes/export/ebird.rs	setting_f64	ok	birdnet_db::settings::get_or(conn, key, "") .ok()? .trim() .parse() .ok()
+setting-default	crates/birdnet-web/src/routes/feeds.rs	rare_gap_days	unwrap_or	state .with_read_db(|conn| { birdnet_db::settings::get_or(conn, "rare_species_days", "30") .unwrap_or_else(|_|
+setting-default	crates/birdnet-web/src/routes/feeds.rs	rare_gap_days	unwrap_or_else	birdnet_db::settings::get_or(conn, "rare_species_days", "30") .unwrap_or_else(|_| "30".to_owned())
+omitted	crates/birdnet-web/src/routes/health.rs	prometheus_metrics	ok	birdnet_db::sqlite::last_run_result(conn, job) .ok()
+omitted	crates/birdnet-web/src/routes/health.rs	prometheus_metrics	unwrap_or	i64::try_from( birdnet_db::sqlite::rejected_detection_count(conn) .map_err(|e| e.to_string())?, ) .unwrap_or(i
+omitted	crates/birdnet-web/src/routes/health.rs	prometheus_metrics	unwrap_or_default	birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
+omitted	crates/birdnet-web/src/routes/health.rs	prometheus_metrics	unwrap_or_default	tokio::task::spawn_blocking({ let state = state.clone(); move || { state.with_read_db(|conn| { [ birdnet_db::s
+omitted	crates/birdnet-web/src/routes/health.rs	prometheus_metrics	unwrap_or_default	tokio::task::spawn_blocking({ let state = state.clone(); move || { state.with_read_db(|conn| { birdnet_db::aud
+fail-closed	crates/birdnet-web/src/routes/images.rs	has_been_heard	unwrap_or	state .with_read_db(|conn| { conn.query_row( "SELECT EXISTS(SELECT 1 FROM detections WHERE Sci_Name = ?1)", [s
+setting-default	crates/birdnet-web/src/routes/livestream.rs	resolve_default_source	unwrap_or_else	birdnet_db::settings::get_or(conn, LIVESTREAM_SOURCE_SETTING, "") .unwrap_or_else(|e| { tracing::warn!(error =
+not-a-read	crates/birdnet-web/src/routes/livestream.rs	wait_for_first_audio	ok	tokio::task::spawn_blocking(move || { let mut buf = vec![0u8; TAP_CHUNK_BYTES]; let n = subscription.read(&mut
+decoration	crates/birdnet-web/src/routes/pages/behavioral.rs	analytics_config_partial	unwrap_or_else	tokio::task::spawn_blocking({ let state = state.clone(); move || { state.with_analytics_read(|db| { ( db.exten
+decoration	crates/birdnet-web/src/routes/pages/cmdk.rs	render_recent	let-ok	let Ok(..) = conn.prepare( "SELECT Com_Name, Date || ' ' || Time AS at FROM detections_analytic ORDER BY Date 
+decoration	crates/birdnet-web/src/routes/pages/cmdk.rs	render_recent	unwrap_or_default	tokio::task::spawn_blocking(move || { state2.with_read_db(|conn| { let Ok(mut stmt) = conn.prepare( "SELECT Co
+decoration	crates/birdnet-web/src/routes/pages/cmdk.rs	species_hits	let-ok	let Ok(..) = conn.prepare(&sql)
+decoration	crates/birdnet-web/src/routes/pages/cmdk.rs	species_hits	unwrap_or_default	tokio::task::spawn_blocking(move || { state2.with_read_db(|conn| { let pattern = birdnet_db::sqlite::like_cont
+setting-default	crates/birdnet-web/src/routes/pages/confidence.rs	station_floor	ok	birdnet_db::settings::get_or(conn, SETTING_KEY, "") .ok()
+setting-default	crates/birdnet-web/src/routes/pages/confidence.rs	station_floor	unwrap_or_else	birdnet_db::settings::get_or(conn, SETTING_KEY, "") .ok() .and_then(|v| parse_floor(&v)) .unwrap_or_else(defau
+handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_acoustic_network	ok	state .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS)) .ok()
+handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_companion	ok	state .with_read_db(|conn| {
+handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_cooccurrence_matrix	ok	state .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS)) .ok()
+handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_correlation_pairs	ok	state .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 25, MIN_SHARED_BLOCKS)) .ok()
+decoration	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	species_list_partial	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 7).unwrap_or_default()
+decoration	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	top_species_partial	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default()
+decoration	crates/birdnet-web/src/routes/pages/dashboard/stats.rs	stats_partial	unwrap_or_default	birdnet_db::sqlite::daily_counts(conn, 12).unwrap_or_default()
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	delete_comment	match-err	match state.with_db(|conn| detection_comments::delete(conn, id)) { Err .. }
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	match-err	match state.with_read_db(|conn| detection_comments::list(conn, date, time, sci_name)) { Err .. }
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || render_thread(&st, &date, &time, &sci_name, None)) .await .unwrap_or_else(
+decoration	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	unwrap_or_default	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
+task-panic	crates/birdnet-web/src/routes/pages/health.rs	station_health_line_partial	unwrap_or_default	tokio::task::spawn_blocking(move || {
+handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) }) .ok()
+handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| species_sparklines(conn, days)) .ok()
+handled	crates/birdnet-web/src/routes/pages/migration.rs	stats_partial	ok	s.with_read_db(|conn| stats_fragment(conn, &today, s.names())) .ok()
+omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()
+omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()? .trim() .parse() .ok()
+omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "longitude", "") .ok()
+omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "longitude", "") .ok()? .trim() .parse() .ok()
+decoration	crates/birdnet-web/src/routes/pages/name_search.rs	stored_name_for_typed	is_ok	conn .query_row( "SELECT 1 FROM detections WHERE Com_Name = ?1 COLLATE NOCASE \ OR Sci_Name = ?1 COLLATE NOCAS
+decoration	crates/birdnet-web/src/routes/pages/name_search.rs	stored_name_for_typed	ok	conn.query_row( "SELECT Com_Name FROM detections WHERE Sci_Name = ?1 LIMIT 1", [sci], |r| r.get::<_, String>(0
+decoration	crates/birdnet-web/src/routes/pages/name_search.rs	stored_name_for_typed	unwrap_or_else	names .scientific_name_for(typed) .and_then(|sci| { conn.query_row( "SELECT Com_Name FROM detections WHERE Sci
+tracked:TD-4	crates/birdnet-web/src/routes/pages/onboarding.rs	add_source	match-err	match AudioSourceStore::insert(conn, &new) { Err .. }
+tracked:TD-4	crates/birdnet-web/src/routes/pages/onboarding.rs	add_source	match-err	match AudioSourceStore::list(conn) { Err .. }
+tracked:TD-4	crates/birdnet-web/src/routes/pages/onboarding.rs	onboarding_save	match-err	match set_first_admin_password(state, &form.password) { Err .. }
+tracked:TD-4	crates/birdnet-web/src/routes/pages/onboarding.rs	onboarding_save	ok	settings::ensure_settings_table(conn).ok()
+handled	crates/birdnet-web/src/routes/pages/provenance.rs	provenance_note_partial	unwrap_or_else	tokio::task::spawn_blocking(move || { state.with_read_db(|conn| { let batches = birdnet_db::sqlite::list_impor
+handled	crates/birdnet-web/src/routes/pages/recordings.rs	fetch_clips	unwrap_or_else	tokio::task::spawn_blocking(move || {
+decoration	crates/birdnet-web/src/routes/pages/search.rs	search_page	unwrap_or_default	state .with_read_db(birdnet_db::sqlite::known_sources) .unwrap_or_default()
+decoration	crates/birdnet-web/src/routes/pages/search.rs	search_page	unwrap_or_default	tokio::task::spawn_blocking({ let state = state.clone(); move || { state .with_read_db(birdnet_db::sqlite::kno
+decoration	crates/birdnet-web/src/routes/pages/species_pages.rs	list_view	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default()
+decoration	crates/birdnet-web/src/routes/pages/species_pages.rs	photos_view	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default()
+decoration	crates/birdnet-web/src/routes/pages/species_pages.rs	species_detail_page	unwrap_or_default	conn.query_row( "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1", [&com_name], |row| row.get::<_,
+decoration	crates/birdnet-web/src/routes/pages/species_pages.rs	species_detail_page	unwrap_or_default	tokio::task::spawn_blocking(move || { state.with_read_db(|conn| {
+decoration	crates/birdnet-web/src/routes/pages/species_pages.rs	species_info_partial	unwrap_or_default	conn.query_row( "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1", [&com_name], |row| row.get::<_,
+decoration	crates/birdnet-web/src/routes/pages/species_pages.rs	species_info_partial	unwrap_or_default	tokio::task::spawn_blocking(move || { state_clone.with_read_db(|conn| { conn.query_row( "SELECT Sci_Name FROM 
+task-panic	crates/birdnet-web/src/routes/pages/species_pages.rs	species_page	unwrap_or_default	tokio::task::spawn_blocking(move || match view { "photos" => photos_view(&st, filter, s2.as_deref(), t2.as_ref
+handled	crates/birdnet-web/src/routes/pages/station_health.rs	gather	match-err	match state.with_read_db(|conn| birdnet_db::audio_levels::drift_by_source(conn, 7, 30)) { Err .. }
+fail-closed	crates/birdnet-web/src/routes/pages/station_health.rs	gather	unwrap_or	birdnet_db::sqlite::quick_check(conn).unwrap_or(false)
+handled	crates/birdnet-web/src/routes/pages/station_health.rs	gather	unwrap_or_else	tokio::task::spawn_blocking(move || { let sys = system_info::sample(); let (disk, scratch) = super::station_is
+omitted	crates/birdnet-web/src/routes/pages/station_issues.rs	recorded_integrity	ok	birdnet_db::sqlite::last_run_result(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK) .ok()
+fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	map_or	birdnet_db::settings::get_or(conn, "onboarding_complete", "false") .map_or(true, |v| v == "true")
+fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	map_or	birdnet_db::sqlite::detection_count(conn).map_or(true, |n| n > 0)
+fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	unwrap_or_default	birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default()
+fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	unwrap_or_default	birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default()
+handled	crates/birdnet-web/src/routes/pages/today.rs	live_capture_state	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
+decoration	crates/birdnet-web/src/routes/pages/today.rs	today_daystrip_partial	unwrap_or_default	conn.range(&from, &to).unwrap_or_default()
+handled	crates/birdnet-web/src/routes/pages/today.rs	today_nudge_partial	unwrap_or_else	tokio::task::spawn_blocking(move || { state.with_read_db(|conn| {
+omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default()
+omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default()
+omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	conn.range(&from, &to).unwrap_or_default()
+omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	tokio::task::spawn_blocking(move || { let capture = live_capture_state(&state); state.with_read_db(|conn| { le
+setting-default	crates/birdnet-web/src/routes/spectrogram/look.rs	load	ok	birdnet_db::settings::get(conn, key).ok()
+setting-default	crates/birdnet-web/src/routes/spectrogram/mod.rs	serve_spectrogram	unwrap_or_else	birdnet_db::settings::get_or(conn, "raw_spectrogram", "false") .unwrap_or_else(|_| "false".to_owned())
+handled	crates/birdnet-web/src/routes/system.rs	db_health	is_ok	conn.query_row("SELECT 1", [], |row| row.get::<_, i64>(0)) .is_ok()
+handled	crates/birdnet-web/src/routes/system.rs	health	unwrap_or	tokio::task::spawn_blocking({ let state = state.clone(); move || db_health(&state) }) .await .unwrap_or(DbHeal
+handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source)) { Err .. }
+handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24)) { Err .. }
+handled	crates/birdnet-web/src/state.rs	approve_quarantine	ok	self.with_read_db(|conn| { birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name) }) .ok
+handled	crates/birdnet-web/src/state.rs	run_blocking	match-err	match tokio::task::spawn_blocking(move || f(&state)).await { Err .. }
+task-panic	crates/birdnet-web/src/tls.rs	on_the_pool	ok	tokio::task::spawn_blocking(move || work(&cert, &key)) .await .ok()
+task-panic	crates/birdnet-web/src/tls.rs	spawn_renewer	ok	tokio::task::spawn_blocking(move || self_signed_expiry(&state_dir)) .await .ok()
+setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()
+setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	unwrap_or	birdnet_db::settings::get_or(conn, "rare_species_days", "30") .unwrap_or_else(|_| "30".to_owned()) .trim() .pa
+setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	unwrap_or_else	birdnet_db::settings::get_or(conn, "rare_species_days", "30") .unwrap_or_else(|_| "30".to_owned())
+setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or	birdnet_db::settings::get_or(conn, key, &default.to_string()) .unwrap_or_else(|_| default.to_string()) .trim()
+setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or_else	birdnet_db::settings::get_or(conn, key, &default.to_string()) .unwrap_or_else(|_| default.to_string())
+handled	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { birdnet_integrations::auto_update::check_for_update(current_versio
+not-a-read	src/app.rs	serve	ok	conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0)) .ok()
+task-panic	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { integrations::with_persisted_blur_seed(client, data_dir.as_deref()
+handled	src/capture/sources.rs	resolve_sources_from_db	ok	AudioSourceStore::list(conn).ok()
+handled	src/capture/sources.rs	seed_sources_from_config	match-err	match state.with_db(|conn| conn.insert(&new)) { Err .. }
+handled	src/daemon/duplicate.rs	reread	match-err	match state.with_db(birdnet_db::sqlite::get_species_interval_map) { Err .. }
+fail-closed	src/daemon/processor.rs	before_this_one	map_or	self.state .with_db(|conn| { birdnet_db::sqlite::species_detection_count_between(conn, sci_name, from, self.da
+fail-closed	src/daemon/processor.rs	current	match-err	match state.with_db(birdnet_db::sqlite::get_species_threshold_map) { Err .. }
+fail-closed	src/daemon/processor.rs	event_processor	is_ok_and	birdnet_db::sqlite::detection_count_for_species_date( conn, &detection.date, &detection.scientific_name, )
+fail-closed	src/daemon/processor.rs	new	match-err	match state.with_db(birdnet_db::dynamic_thresholds::load_all) { Err .. }
+fail-closed	src/daemon/processor.rs	post_soundscape_for_row	match-err	match tokio::task::spawn_blocking(move || std::fs::read(&path)).await { Err .. }
+fail-closed	src/helpers/auth.rs	admin_is_open	is_ok_and	state .with_db(|conn| conn.find_user_by_name("admin")) .is_ok_and(|admin| accounts::is_legacy_password_hash(&a
+handled	src/helpers/auth.rs	purge_legacy_credential_settings	is_err	ensure_settings_table(conn).is_err()
+handled	src/helpers/auth.rs	purge_legacy_credential_settings	unwrap_or	delete(conn, key).unwrap_or(false)
+tracked:TD-3	src/helpers/boot_journal.rs	record_boot	unwrap_or	birdnet_db::sqlite::detection_count(conn).unwrap_or(0)
+tracked:TD-3	src/helpers/boot_journal.rs	record_boot	unwrap_or_default	conn.list() .map(|rows| { rows.into_iter() .filter(|s| s.kind == SourceKind::UsbAlsa) .map(|s| s.device_id) .c
+setting-default	src/helpers/settings_overlay.rs	overlay_db_settings	ok	ensure_settings_table(conn).ok()
+setting-default	src/helpers/settings_overlay.rs	overlay_db_settings	unwrap_or_default	list(conn, None).unwrap_or_default()
+setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	is_ok	set(conn, key, value, *category).is_ok()
+setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	ok	ensure_settings_table(conn).ok()
+setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	unwrap_or_default	list(conn, None) .map(|rows| rows.into_iter().map(|s| s.key).collect()) .unwrap_or_default()
+handled	src/helpers/state.rs	observed_names	match-err	match state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 100_000)) { Err .. }
+fail-closed	src/helpers/system.rs	locked_clips	match-err	match state.with_db(birdnet_db::sqlite::locked_file_names) { Err .. }
+handled	src/integrations/acoustic_health.rs	sample_once	match-err	match state.with_db(|conn| record_sample(conn, &date, hour, &source, assessment.level)) { Err .. }
+handled	src/integrations/acoustic_health.rs	sample_once	match-err	match state.with_db(|conn| { record_observation(conn, &date, hour, &source, &assessment.bands, broadband) }) {
+handled	src/integrations/acoustic_health.rs	spawn_acoustic_health	match-err	match pruner.with_db(|conn| birdnet_db::audio_levels::prune(conn, KEEP_DAYS)) { Err .. }
+handled	src/integrations/acoustic_health.rs	spawn_acoustic_health	match-err	match tokio::task::spawn_blocking(move || { let mut w = watch; let outcome = sample_once(&probe, &dir, &mut w)
+handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or	tokio::task::spawn_blocking(move || { db_state.with_db(|conn| { birdnet_db::sqlite::seconds_since_last_detecti
+handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or	tokio::task::spawn_blocking(move || { effort_state.with_db(|conn| { birdnet_db::sqlite::total_recording_second
+handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or_else	birdnet_db::sqlite::seconds_since_last_detection(conn).unwrap_or_else(|e| { tracing::debug!(error = %e, "deadm
+handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or_else	birdnet_db::sqlite::total_recording_seconds(conn).unwrap_or_else(|e| { tracing::debug!(error = %e, "deadman ef
+cache	src/integrations/ebird.rs	poll_loop	ok	tokio::task::spawn_blocking(move || ebird::load(&path)) .await .ok()
+fail-closed	src/integrations/effort.rs	sample_once	unwrap_or_default	AudioSourceStore::list(conn).unwrap_or_default()
+setting-default	src/integrations/email.rs	create_email_notifier	ok	ensure_settings_table(conn).ok()
+setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_cooldown_secs", "300"), "300") .parse::<u64>() .unwrap_or(300)
+setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_min_confidence", "0.80"), "0.80") .parse::<f64>() .unwrap_or(0.80)
+setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_smtp_port", "587"), "587") .parse::<u16>() .unwrap_or(587)
+setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or_default	state .with_db(|conn| { ensure_settings_table(conn).ok(); Ok::<String, birdnet_db::settings::SettingsError>(s(
+setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or_else	state .with_db(|conn| { let smtp_port = s(get_or(conn, "email_smtp_port", "587"), "587") .parse::<u16>() .unwr
+setting-default	src/integrations/email.rs	sender_name	ok	birdnet_db::settings::get_or(conn, "email_from_name", DEFAULT_SENDER_NAME) .ok()
+handled	src/integrations/mqtt_presence.rs	spawn_mqtt_presence	match-err	match tokio::task::spawn_blocking(move || open.shutdown()).await { Err .. }
+handled	src/integrations/mqtt_presence.rs	tick_presence	match-err	match tokio::task::spawn_blocking(move || PresenceSession::connect(&cfg)).await { Err .. }
+tracked:TD-1	src/integrations/station_health.rs	check_maintenance	ok	birdnet_db::sqlite::last_run_result(conn, job) .ok()
+tracked:TD-1	src/integrations/station_health.rs	check_metric_rules	unwrap_or_default	birdnet_db::metric_rules::list(conn).unwrap_or_default()
+tracked:TD-1	src/integrations/station_health.rs	check_sources	unwrap_or_default	AudioSourceStore::list(conn).unwrap_or_default()
+omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::outbound_queue::depth(conn, birdnet_integrations::birdweather::QUEUE_KIND) .ok()
+omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::last_hour_count(conn) .ok()
+omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::seconds_since_last_detection(conn) .ok()
+handled	src/integrations/station_health.rs	spawn_station_health	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || evaluate(&probe_state)).await
+handled	src/integrations/store_forward.rs	apply_disposition	match-err	match birdnet_db::outbound_queue::mark_failure(conn, id, &error, now) { Err .. }
+write-outcome	src/integrations/weather.rs	poll_loop	is_ok	conn.upsert(row).is_ok()
+write-outcome	src/integrations/weather.rs	poll_loop	unwrap_or	conn.prune_older_than_days(RETENTION_DAYS).unwrap_or(0)
+task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || { helpers::models::install_from_catalogue(&id, &dest) }) .await .unwrap_or
+handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(build_weekly_report).await { Err .. }
+handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(move |s| already_sent(s, now_secs)).await { Err .. }
+decoration	crates/birdnet-web/src/display.rs	load	ok	birdnet_db::settings::get(conn, key).ok()
+setting-default	crates/birdnet-web/src/routes/admin/migration/clip_import.rs	setup	ok	birdnet_db::settings::get_or(conn, key, "") .ok()
+handled	crates/birdnet-web/src/routes/admin/migration/clip_import.rs	run_handler	match-err	match setup_state .with_db(|conn| clips::protect_imported(conn, &setup.protected, true)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/migration/conf_import.rs	apply_with_file	match-err	match apply(conn, assignments) { Err .. }
+omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
+handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_hourly_totals	ok	state.with_read_db(|conn| hourly_totals(conn, days)).ok()
+omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
+setting-default	src/helpers/migrate_cli.rs	settings_of	unwrap_or_default	birdnet_db::settings::list(conn, None) .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect()) .unwr
+omitted	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	listened_for	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, first, last)) .ok()
+omitted	crates/birdnet-web/src/routes/admin/audio.rs	count_oobs	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	listen_default	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/audio.rs	sources_body	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	reset_learned_thresholds	match-err	match crate::routes::dynamic_thresholds::reset(state, &which) { Err .. }
+omitted	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	daily_chart_partial	ok	crate::routes::pages::listening::effort_by_date( conn, &first.date, &crate::routes::pages::today_date_string()
+omitted	crates/birdnet-web/src/routes/pages/species_pages.rs	species_daily_partial	ok	super::listening::effort_by_date(conn, &a.date, &b.date).ok()
+omitted	crates/birdnet-web/src/routes/pages/species_pages.rs	species_year_partial	ok	super::listening::effort_by_date(conn, &a.date, &b.date).ok()
+omitted	crates/birdnet-web/src/routes/pages/year_in_review.rs	content	ok	super::listening::effort_by_date(conn, &start, &today).ok()
+handled	crates/birdnet-web/src/routes/weather.rs	for_detection	match-err	match hour_row(state, &day, hour) { Err .. }
+handled	crates/birdnet-web/src/routes/weather.rs	hourly_day	match-err	match day_rows(state, &date) { Err .. }
+handled	crates/birdnet-web/src/routes/weather.rs	hourly_hour	match-err	match hour_row(state, &date, hour) { Err .. }
+not-a-read	crates/birdnet-web/src/routes/admin/https.rs	download_ca	match-err	match state.run_blocking(move |_| std::fs::read(&path)).await { Err .. }
+omitted	crates/birdnet-web/src/routes/pages/dawn_chorus.rs	sky_over	unwrap_or	super::civil_twilight_local(conn).unwrap_or((None, None))
+handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	state .with_read_db(|conn| { let ridges = collect_ridges(conn, year, MAX_RIDGES)?; let diversity = weekly_dive
+task-panic	crates/birdnet-web/src/routes/dashboard_image.rs	serve_image	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || open_picture(&path)).await
+task-panic	crates/birdnet-web/src/routes/dashboard_image.rs	serve_image	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || stat(&for_stat)).await
+handled	crates/birdnet-web/src/routes/dynamic_thresholds.rs	list	match-err	match public_snapshot(state, now_ms) { Err .. }
+handled	crates/birdnet-web/src/routes/dynamic_thresholds.rs	one	match-err	match public_snapshot(state, epoch_ms()) { Err .. }
+handled	crates/birdnet-web/src/routes/dynamic_thresholds.rs	stats	match-err	match public_snapshot(state, epoch_ms()) { Err .. }
+omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| { conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) 
+handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state.with_read_db(|conn| weekly_heatmap(conn, days)).ok()
+handled	crates/birdnet-web/src/routes/pages/terrain.rs	compute_terrain	ok	state .with_read_db(|conn| -> rusqlite::Result<Terrain> { let rows = collect_rows(conn, days)?;
+omitted	crates/birdnet-web/src/routes/pages/terrain.rs	compute_terrain	ok	super::listening::effort_by_date(conn, &from, &today).ok()
+decoration	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	compute_ts_diversity	ok	state .with_read_db(|conn| { conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) 
+handled	crates/birdnet-web/src/routes/weather.rs	for_detection	match-err	match state.with_read_db(|c| { c.query_row( "SELECT detected_at_utc FROM detections_analytic \ WHERE Date = ?1
+handled	crates/birdnet-web/src/routes/weather.rs	latest	match-err	match state.with_read_db(birdnet_db::weather::WeatherStore::latest) { Err .. }

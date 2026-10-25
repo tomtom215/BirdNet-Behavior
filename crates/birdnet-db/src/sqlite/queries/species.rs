@@ -803,8 +803,109 @@ pub fn delete_species_threshold(conn: &Connection, sci_name: &str) -> Result<(),
     Ok(())
 }
 
+/// A per-species minimum interval between recorded detections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeciesInterval {
+    /// Scientific name of the species.
+    pub sci_name: String,
+    /// Seconds that must pass before the species is recorded again.
+    pub min_interval_secs: i64,
+}
+
+/// Get every per-species minimum interval, by scientific name.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn get_species_intervals(conn: &Connection) -> Result<Vec<SpeciesInterval>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT sci_name, min_interval_secs FROM species_intervals ORDER BY sci_name")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SpeciesInterval {
+                sci_name: row.get(0)?,
+                min_interval_secs: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Get the per-species minimum intervals as a map (`sci_name` → seconds).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn get_species_interval_map(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, i64>, DbError> {
+    Ok(get_species_intervals(conn)?
+        .into_iter()
+        .map(|i| (i.sci_name, i.min_interval_secs))
+        .collect())
+}
+
+/// Set a per-species minimum interval, in seconds (upsert).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure, including a non-positive `secs` (the
+/// column refuses it).
+pub fn set_species_interval(conn: &Connection, sci_name: &str, secs: i64) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO species_intervals (sci_name, min_interval_secs) VALUES (?1, ?2)
+         ON CONFLICT(sci_name) DO UPDATE SET min_interval_secs = ?2",
+        params![sci_name, secs],
+    )?;
+    Ok(())
+}
+
+/// Remove a per-species minimum interval (the species then uses the station's).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn delete_species_interval(conn: &Connection, sci_name: &str) -> Result<(), DbError> {
+    conn.execute(
+        "DELETE FROM species_intervals WHERE sci_name = ?1",
+        params![sci_name],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    /// A per-species interval round-trips, upserts, deletes, and the column
+    /// refuses a non-positive value (0 would read as "no interval" upstream and
+    /// as a stored row here; it must not exist).
+    #[test]
+    fn a_species_interval_round_trips_and_refuses_nonsense() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        assert!(get_species_intervals(&conn).unwrap().is_empty());
+        set_species_interval(&conn, "Strix aluco", 60).unwrap();
+        set_species_interval(&conn, "Strix aluco", 90).unwrap();
+        set_species_interval(&conn, "Pica pica", 5).unwrap();
+        let map = get_species_interval_map(&conn).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map["Strix aluco"], 90,
+            "the second set must replace the first"
+        );
+        assert_eq!(
+            get_species_intervals(&conn).unwrap()[0].sci_name,
+            "Pica pica"
+        );
+        for bad in [0, -1] {
+            assert!(
+                set_species_interval(&conn, "Turdus merula", bad).is_err(),
+                "{bad} was stored"
+            );
+        }
+        delete_species_interval(&conn, "Strix aluco").unwrap();
+        assert_eq!(get_species_interval_map(&conn).unwrap().len(), 1);
+    }
+
     /// The whole-history species aggregates must be served by a covering index.
     ///
     /// These three run on every load of the species list, the life list and a

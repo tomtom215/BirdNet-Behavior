@@ -56,6 +56,12 @@ enum Action {
     /// `--migration-report`: describe what a pending data-rewriting migration
     /// would change, without applying it, then exit.
     MigrationReport,
+    /// `--import-birdnet-pi-conf`: read a BirdNET-Pi installation's settings
+    /// and show, or with `--apply-import` write, what they become; then exit.
+    ImportBirdnetPiConf,
+    /// `--import-birdnet-pi-clips`: find, or with `--apply-import` bring
+    /// across, the recordings of imported detections; then exit.
+    ImportBirdnetPiClips,
     /// `--rebuild-species-summary`: recompute the maintained per-species
     /// totals from the detections and exit.
     RebuildSpeciesSummary,
@@ -99,6 +105,10 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::ChannelReport
     } else if cli.migration_report {
         Action::MigrationReport
+    } else if cli.import_birdnet_pi_conf.is_some() {
+        Action::ImportBirdnetPiConf
+    } else if cli.import_birdnet_pi_clips.is_some() {
+        Action::ImportBirdnetPiClips
     } else if cli.rebuild_species_summary {
         Action::RebuildSpeciesSummary
     } else if cli.decrypt_backup.is_some() {
@@ -127,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `parse_tracked`, not `parse`: it additionally records which arguments the
     // operator really supplied, which is what lets a value set in the admin UI
     // beat a clap `default_value` while still losing to an explicit flag.
-    let cli = Cli::parse_tracked();
+    let mut cli = Cli::parse_tracked();
 
     // Resolve the log filter before anything else: a startup problem that is
     // only visible at `debug` is exactly the one an operator needs to have
@@ -223,11 +233,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // A key nothing reads is a setting the operator believes is in
             // force and is not: say so here, where the journal is read, as
             // well as in the doctor.
-            for unknown in c.unknown_keys() {
+            let unknown_keys = c.unknown_keys();
+            for unknown in &unknown_keys {
                 tracing::warn!(
                     key = %unknown.key,
                     config = %cli.config.display(),
                     "{unknown}"
+                );
+            }
+            // A BirdNET-Pi file copied across as it is draws forty of those.
+            // The lines above each say what to do; this says that there is a
+            // way to do all of it at once.
+            if unknown_keys
+                .iter()
+                .filter(|u| u.birdnet_pi.is_some())
+                .count()
+                >= 5
+            {
+                tracing::info!(
+                    config = %cli.config.display(),
+                    "this looks like a BirdNET-Pi birdnet.conf: Station, Data in the browser, or \
+                     `--import-birdnet-pi-conf`, reads it and shows what each setting becomes here"
                 );
             }
             Some(c)
@@ -240,6 +266,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for unknown in helpers::env_keys::unknown_env_vars() {
         tracing::warn!(name = %unknown.name, "{unknown}");
+    }
+
+    // What the browser installed and chose is what this start runs: a station
+    // with no `--model`, `MODEL_PATH` or watch directory looks in its model
+    // directory for the default classifier and uses a stream directory of its
+    // own, instead of starting with the web page and no listening.
+    if matches!(
+        dispatch_subcommand(&cli),
+        Action::RunServer | Action::Doctor(_)
+    ) {
+        let applied = helpers::station_defaults::apply(&mut cli, config.as_ref());
+        if applied.classifier {
+            tracing::info!(
+                model = ?cli.model,
+                range_filter = applied.range_filter,
+                "no classifier is configured; using the BirdNET V2.4 installed in the model directory"
+            );
+        }
+        if let Some(dir) = &applied.watch_dir {
+            tracing::info!(dir = %dir.display(), "no watch directory is configured; capture segments go here");
+        }
     }
 
     // Maintenance commands and the doctor preflight each run and exit before
@@ -261,6 +308,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(code);
         }
         Action::MigrationReport => return helpers::run_migration_report(config.as_ref()),
+        Action::ImportBirdnetPiConf => {
+            let code = helpers::migrate_cli::run_import_conf(&cli, config.as_ref());
+            std::process::exit(code);
+        }
+        Action::ImportBirdnetPiClips => {
+            let code = helpers::migrate_cli::run_import_clips(&cli, config.as_ref());
+            std::process::exit(code);
+        }
         Action::RebuildSpeciesSummary => {
             return helpers::run_rebuild_species_summary(config.as_ref());
         }
@@ -296,9 +351,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let code = support::run(&cli, config.as_ref(), &dest);
             std::process::exit(code);
         }
-        Action::RunServer => app::run(cli, config, log_broadcaster).await,
+        Action::RunServer => {
+            let result = app::run(cli, config, log_broadcaster).await;
+            // A restart asked for from the browser on a station nothing
+            // supervises: the server has finished shutting down, so run the
+            // same program again in this process.
+            if birdnet_web::restart::reexec_requested() {
+                restart_in_place();
+            }
+            result
+        }
     }
 }
+
+/// Replace this process with a fresh copy of the same program and arguments.
+///
+/// Returns only when that failed, after saying why and exiting nonzero, so that
+/// a supervisor which does exist (a container restart policy) still gets to
+/// start the station again.
+#[cfg(unix)]
+fn restart_in_place() {
+    use std::os::unix::process::CommandExt as _;
+    match birdnet_web::restart::reexec_command() {
+        Ok(mut command) => {
+            tracing::info!("restarting: running the program again");
+            let error = command.exec();
+            tracing::error!(%error, "could not restart in place; exiting so a supervisor can start the station");
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not find the program to restart; exiting");
+        }
+    }
+    std::process::exit(1);
+}
+
+#[cfg(not(unix))]
+fn restart_in_place() {}
 
 /// The log filter a `SIGHUP` applies: the startup rule, read again.
 ///
@@ -375,6 +463,28 @@ mod tests {
             dispatch_subcommand(&cli(&["--migration-report"])),
             Action::MigrationReport
         );
+    }
+
+    /// The BirdNET-Pi imports are run-and-exit commands, ahead of the doctor, and
+    /// they only show unless told to apply.
+    #[test]
+    fn the_birdnet_pi_imports_are_run_and_exit_commands() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--import-birdnet-pi-conf", "/home/pi/BirdNET-Pi"])),
+            Action::ImportBirdnetPiConf
+        );
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--import-birdnet-pi-clips", "/home/pi/BirdSongs"])),
+            Action::ImportBirdnetPiClips
+        );
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--import-birdnet-pi-conf", "/x", "--doctor"])),
+            Action::ImportBirdnetPiConf
+        );
+        let parsed = cli(&["--import-birdnet-pi-conf", "/x"]);
+        assert!(!parsed.apply_import, "the default is to look");
+        assert_eq!(parsed.clips_mode, "copy");
+        assert!(cli(&["--import-birdnet-pi-conf", "/x", "--apply-import"]).apply_import);
     }
 
     /// The dry-run must not be reachable only by an operator who happens not to

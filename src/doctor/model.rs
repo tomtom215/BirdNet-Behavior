@@ -56,9 +56,10 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
             ));
         }
     } else {
-        out.push(Check::skip(
+        out.push(Check::warn(
             "ONNX model file",
-            "no --model / MODEL_PATH configured (will use the bundled default at startup)",
+            "no --model / MODEL_PATH configured: the web UI will run, but nothing will be analysed until a classifier is installed",
+            "open the station in a browser and install one under Settings → Capture, or run `birdnet-behavior --install-model birdnet-v24`",
         ));
     }
 
@@ -367,11 +368,25 @@ mod tests {
         Cli::parse_from(["birdnet-behavior"])
     }
 
+    /// No model configured means the detection daemon does not start (the web UI
+    /// does), so this is a warning that names the two ways to install one, and
+    /// must not claim a bundled default: none ships.
     #[test]
-    fn skip_when_unconfigured() {
+    fn warns_when_unconfigured_and_says_how_to_install_one() {
         let checks = check_model(&cli(), None);
         assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].status, Status::Skip);
+        assert_eq!(checks[0].status, Status::Warn);
+        let text = format!(
+            "{} {}",
+            checks[0].message,
+            checks[0].remediation.as_deref().unwrap_or("")
+        );
+        assert!(!text.contains("bundled"), "no model is bundled: {text}");
+        assert!(
+            text.contains("--install-model"),
+            "names the CLI route: {text}"
+        );
+        assert!(text.contains("Settings"), "names the browser route: {text}");
     }
 
     /// A config-file-driven install (the standard systemd setup) must have

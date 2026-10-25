@@ -5,6 +5,8 @@
 
   Reads/writes localStorage keys already wired by layout.html:
     theme         → 'light' | 'dark'
+    bnb-time      → 'auto' | '24h' | '12h'   (read by display-format.js)
+    bnb-temp      → 'auto' | 'celsius' | 'fahrenheit'
     bnb-density   → 'compact' | 'regular' | 'comfy'
 
   Adds two new keys (read by app.css media-query overrides — see DIFF.md):
@@ -70,6 +72,42 @@
         <button type="button" role="radio" aria-checked="false" class="btn" data-value="high">High</button>
       </div>
     </div>
+
+    <!-- Clock and temperature: the station's default unless chosen here
+         (static/display-format.js re-prints every marked time and temperature). -->
+    <div class="prefs-row">
+      <div class="prefs-label">
+        <div class="dpf-label">Clock</div>
+        <div class="bnb-meta">12- or 24-hour times. Station default follows the owner's setting.</div>
+      </div>
+      <div class="seg" data-prefs-key="bnb-time" role="radiogroup" aria-label="Clock">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="auto">Station</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="24h">24h</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="12h">12h</button>
+      </div>
+    </div>
+
+    <div class="prefs-row">
+      <div class="prefs-label">
+        <div class="dpf-label">Temperature</div>
+        <div class="bnb-meta">Celsius or Fahrenheit. Station default follows the owner's setting.</div>
+      </div>
+      <div class="seg" data-prefs-key="bnb-temp" role="radiogroup" aria-label="Temperature">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="auto">Station</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="celsius">°C</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="fahrenheit">°F</button>
+      </div>
+    </div>
+
+    <!-- Listening aids: boost, rumble cut, compressor (static/listen-fx.js,
+         which builds the controls and keeps its own localStorage key). -->
+    <div class="prefs-row prefs-row-stack">
+      <div class="prefs-label">
+        <div class="dpf-label">Listening</div>
+        <div class="bnb-meta">For quiet clips and noisy sites. Applies to every clip you play here.</div>
+      </div>
+      <div data-listen-fx></div>
+    </div>
   </div>
 
   <div class="bnb-meta dpf-foot">
@@ -84,6 +122,7 @@
     padding: var(--pad-2) 0; border-top: 0.5px solid var(--hairline);
   }
   #display-prefs .prefs-row:first-child { border-top: 0; padding-top: 0; }
+  #display-prefs .prefs-row-stack { grid-template-columns: 1fr; }
   #display-prefs .seg .btn { min-width: 76px; }
   @media (max-width: 540px) {
     #display-prefs .prefs-row { grid-template-columns: 1fr; }
@@ -130,13 +169,26 @@
     set('bnb-contrast', value);
   }
 
+  // The clock and the temperature unit: stored here, printed by
+  // static/display-format.js, which may not have loaded yet when this runs.
+  function applyDisplay(key) {
+    return function (value) {
+      set(key, value);
+      if (window.bnbDisplay) window.bnbDisplay.refresh();
+    };
+  }
+
   var APPLIERS = {
+    'bnb-time': applyDisplay('bnb-time'),
+    'bnb-temp': applyDisplay('bnb-temp'),
     'theme': applyTheme,
     'bnb-density': applyDensity,
     'bnb-motion': applyMotion,
     'bnb-contrast': applyContrast,
   };
   var DEFAULTS = {
+    'bnb-time': 'auto',
+    'bnb-temp': 'auto',
     'theme': 'auto',
     'bnb-density': 'regular',
     'bnb-motion': 'auto',

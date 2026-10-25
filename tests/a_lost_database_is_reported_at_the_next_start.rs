@@ -123,7 +123,8 @@ fn a_database_that_held_detections_and_is_gone_is_reported_at_the_next_start() {
         let (_, body) = get(port, "/api/v2/health").expect("health");
         assert!(
             body.contains(r#""boot_anomalies":[]"#),
-            "a first start has nothing to compare to: {body}"
+            "a first start has nothing to compare to: {}",
+            body.escape_debug()
         );
     }
     assert!(
@@ -141,10 +142,12 @@ fn a_database_that_held_detections_and_is_gone_is_reported_at_the_next_start() {
     let (head, body) = get(port, "/api/v2/health").expect("health");
     assert!(
         body.contains(r#""boot_anomalies":["db_lost"]"#),
-        "the lost database must be named: {body}"
+        "the lost database must be named: {}",
+        body.escape_debug()
     );
     assert!(
         head.starts_with("HTTP/1.1 200"),
-        "not strict: the container supervisor must not restart it: {head}"
+        "not strict: the container supervisor must not restart it: {}",
+        head.escape_debug()
     );
 }

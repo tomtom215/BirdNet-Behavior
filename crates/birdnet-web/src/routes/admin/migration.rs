@@ -8,12 +8,17 @@
 //!
 //! The source file is **never modified**.
 
+mod clip_import;
+mod conf_handlers;
+pub mod conf_import;
+mod conf_view;
 mod render;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::Html;
-use axum::{Form, Router, routing::get};
+use axum::{Router, routing::get};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -30,6 +35,47 @@ use render::UploadPreview;
 
 /// Shared migration state (one active job at a time).
 type MigrationState = Arc<Mutex<Option<ProgressHandle>>>;
+
+/// Take the one import slot, or `None` while an import still owns it.
+///
+/// Decided and claimed under one lock, with the new handle already in a stage
+/// that counts as running: a handle left in `Pending` between "claimed" and
+/// "the worker's first update" was read as "not running", so two requests in
+/// that window both started, shared one temporary file name, and each could
+/// clear the other's temporaries.
+fn claim_slot(slot: &MigrationState) -> Option<ProgressHandle> {
+    let progress = ProgressHandle::new();
+    progress.set_stage(MigrationStage::Detecting, "Starting…");
+    {
+        let mut guard = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.as_ref().is_some_and(|p| !p.snapshot().is_terminal()) {
+            return None;
+        }
+        *guard = Some(progress.clone());
+    }
+    Some(progress)
+}
+
+/// Run an import's work on the calling (blocking) thread; if it panics, the
+/// stage becomes `Failed` instead of staying wherever it was.
+///
+/// Without this a panic in the worker left the stage non-terminal for good: the
+/// page polled a bar that never moved, and every later import was refused as
+/// "still running" until the station restarted.
+pub(super) fn run_guarded(progress: &ProgressHandle, work: impl FnOnce()) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
+        tracing::error!("an import worker panicked");
+        progress.fail(
+            "The import stopped unexpectedly. The station's log has the details. Nothing is \
+             running now, so you can start it again.",
+        );
+    }
+}
+
+/// The message for a refused second import.
+pub(super) const ALREADY_RUNNING: &str = "Another import is still running. Wait for it to finish.";
 
 /// An uploaded file that has been validated and is waiting for the operator to
 /// say "yes, import it".
@@ -164,8 +210,45 @@ const MAX_UPLOAD_BYTES: usize = 4 * 1024 * 1024 * 1024;
 pub fn router() -> Router<AppState> {
     let migration_state: MigrationState = Arc::new(Mutex::new(None));
     let staged_upload: StagedUpload = Arc::new(Mutex::new(None));
+    let staged_conf: conf_import::StagedConf = Arc::new(Mutex::new(None));
+    let conf_lines: conf_import::ConfigLines = Arc::new(Mutex::new(None));
 
     Router::new()
+        .route(
+            "/admin/migrate/conf/preview",
+            axum::routing::post({
+                let sc = Arc::clone(&staged_conf);
+                move |state, multipart| conf_handlers::preview_handler(state, multipart, sc)
+            })
+            // Eight small text files at most; far below the database upload's ceiling.
+            .layer(DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
+        .route(
+            "/admin/migrate/conf/apply",
+            axum::routing::post({
+                let sc = Arc::clone(&staged_conf);
+                let cl = Arc::clone(&conf_lines);
+                move |state, user, form| conf_handlers::apply_handler(state, user, sc, cl, form)
+            }),
+        )
+        .route(
+            "/admin/migrate/clips/preview",
+            axum::routing::post(clip_import::preview_handler),
+        )
+        .route(
+            "/admin/migrate/clips/run",
+            axum::routing::post({
+                let ms = Arc::clone(&migration_state);
+                move |state, form| clip_import::run_handler(state, ms, form)
+            }),
+        )
+        .route(
+            "/admin/migrate/conf/lines",
+            get({
+                let cl = Arc::clone(&conf_lines);
+                move |query| std::future::ready(conf_handlers::lines_handler(&cl, query))
+            }),
+        )
         .route("/admin/migrate", get(migration_page))
         .route(
             "/admin/migrate/validate",
@@ -200,7 +283,7 @@ pub fn router() -> Router<AppState> {
             "/admin/migrate/progress",
             get({
                 let ms = Arc::clone(&migration_state);
-                move || progress_handler(ms)
+                move |query| progress_handler(ms, query)
             }),
         )
         .route("/admin/migrate/batches", get(batches_handler))
@@ -280,7 +363,7 @@ struct DeleteBatchForm {
 /// half the application and not the other half.
 async fn delete_batch_handler(
     State(state): State<AppState>,
-    Form(form): Form<DeleteBatchForm>,
+    HtmxForm(form): HtmxForm<DeleteBatchForm>,
 ) -> Html<String> {
     let batch_id = form.batch_id;
     let list_state = state.clone();
@@ -396,7 +479,7 @@ struct ProvenanceForm {
 /// than merging everything because the disagreement is invisible.
 async fn provenance_handler(
     State(state): State<AppState>,
-    Form(form): Form<ProvenanceForm>,
+    HtmxForm(form): HtmxForm<ProvenanceForm>,
 ) -> Html<String> {
     let exclude = form.exclude.as_deref() == Some("true");
     let write_state = state.clone();
@@ -467,25 +550,8 @@ struct MigrateForm {
     source_label: Option<String>,
     /// The source station's UTC offset in seconds, if the operator gave one.
     /// Absent means "same clock as this station", which shifts nothing.
-    #[serde(default, deserialize_with = "empty_string_as_none")]
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     source_utc_offset_secs: Option<i64>,
-}
-
-/// Treat a blank form field as absent rather than as a parse error.
-///
-/// An HTML number input that the operator left alone posts `""`, which serde
-/// would otherwise reject — turning "I did not answer the optional question"
-/// into a 422 on the whole import.
-fn empty_string_as_none<'de, D>(d: D) -> Result<Option<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let raw = Option::<String>::deserialize(d)?;
-    Ok(raw
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse().ok()))
 }
 
 /// This station's configured coordinates, for the import's location check.
@@ -537,7 +603,7 @@ fn import_options(form: &MigrateForm) -> birdnet_migrate::ImportOptions {
 
 async fn validate_handler(
     State(state): State<AppState>,
-    Form(form): Form<MigrateForm>,
+    HtmxForm(form): HtmxForm<MigrateForm>,
 ) -> Result<Html<String>, StatusCode> {
     let source_path = PathBuf::from(&form.source_path);
     // The station's own coordinates, so the report can say whether this file
@@ -558,6 +624,30 @@ async fn validate_handler(
 // ---------------------------------------------------------------------------
 // POST /admin/migrate/upload  (multipart upload → validate + run)
 // ---------------------------------------------------------------------------
+
+/// The upload stopped arriving: the connection dropped, or the file is larger
+/// than the station accepts. Answered in the result slot, because a `400` or
+/// `413` is never swapped by htmx and the person would see the progress bar
+/// stop and nothing else.
+fn upload_cut_off(e: &dyn std::fmt::Display) -> Html<String> {
+    tracing::warn!(error = %e, "migration upload stopped arriving");
+    Html(render::upload_error(
+        "The upload stopped before the whole file arrived, or the file is larger than this \
+         station accepts. Nothing was imported. Try again, or import it from a folder on the \
+         station instead.",
+    ))
+}
+
+/// The station could not do something with the upload that only the station
+/// can see (a full disk, a folder it cannot write); said plainly, with the
+/// detail in the log.
+fn upload_refused(what: &str, e: &dyn std::fmt::Display) -> Html<String> {
+    tracing::error!(error = %e, what, "migration upload could not be staged");
+    Html(render::upload_error(&format!(
+        "The station could not {what}. Nothing was imported. Check that the disk is not full, \
+         then try again."
+    )))
+}
 
 async fn upload_handler(
     State(state): State<AppState>,
@@ -585,20 +675,27 @@ async fn upload_handler(
     let staging = staging_dir(state.db_path());
     let tmp = tokio::task::spawn_blocking(move || StagedFile::create_in(&staging))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let tmp = match tmp {
+        Ok(t) => t,
+        Err(e) => return Ok(upload_refused("make room to receive the upload", &e)),
+    };
     let tmp_path = tmp.path().to_path_buf();
 
     let mut bytes_written: u64 = 0;
     let mut found_field = false;
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-    {
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Ok(upload_cut_off(&e)),
+        };
         match field.name() {
             Some("source_label") => {
-                let text = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let text = match field.text().await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(upload_cut_off(&e)),
+                };
                 let text = text.trim();
                 if !text.is_empty() {
                     source_label = Some(text.to_owned());
@@ -606,7 +703,10 @@ async fn upload_handler(
                 continue;
             }
             Some("source_utc_offset_secs") => {
-                let text = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let text = match field.text().await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(upload_cut_off(&e)),
+                };
                 // A field the operator left alone posts "": absent, not zero.
                 // Zero is a real answer ("the source ran on UTC") and must stay
                 // distinguishable from "I did not say".
@@ -619,18 +719,25 @@ async fn upload_handler(
         if let Some(name) = field.file_name() {
             file_name = name.to_string();
         }
-        let mut out = tokio::fs::File::create(&tmp_path)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        while let Some(chunk) = field.chunk().await.map_err(|_| StatusCode::BAD_REQUEST)? {
-            out.write_all(&chunk)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            bytes_written += chunk.len() as u64;
+        let mut out = match tokio::fs::File::create(&tmp_path).await {
+            Ok(f) => f,
+            Err(e) => return Ok(upload_refused("save the uploaded file", &e)),
+        };
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    if let Err(e) = out.write_all(&chunk).await {
+                        return Ok(upload_refused("save the uploaded file", &e));
+                    }
+                    bytes_written += chunk.len() as u64;
+                }
+                Ok(None) => break,
+                Err(e) => return Ok(upload_cut_off(&e)),
+            }
         }
-        out.flush()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Err(e) = out.flush().await {
+            return Ok(upload_refused("save the uploaded file", &e));
+        }
         found_field = true;
     }
 
@@ -723,6 +830,7 @@ async fn upload_handler(
 /// with. See [`StagedUpload`].
 #[derive(serde::Deserialize)]
 struct ConfirmForm {
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     token: Option<u64>,
 }
 
@@ -736,7 +844,7 @@ async fn upload_confirm_handler(
     State(state): State<AppState>,
     migration_state: MigrationState,
     staged: StagedUpload,
-    Form(form): Form<ConfirmForm>,
+    HtmxForm(form): HtmxForm<ConfirmForm>,
 ) -> Result<Html<String>, StatusCode> {
     // Before the staging is taken: a caller dropped at this await (a client
     // that hung up) must leave the upload staged, not discard it.
@@ -759,7 +867,7 @@ async fn upload_confirm_handler(
         file_name,
         options,
         rows_hint,
-        token: _,
+        token: staged_token,
     }) = staged_now
     else {
         return Ok(Html(render::upload_error(
@@ -768,48 +876,57 @@ async fn upload_confirm_handler(
         )));
     };
 
+    let Some(progress) = claim_slot(&migration_state) else {
+        // The upload stays staged: refusing the click must not cost the file.
+        *staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Staged {
+            tmp,
+            file_name,
+            options,
+            rows_hint,
+            token: staged_token,
+        });
+        return Ok(Html(render::upload_error(ALREADY_RUNNING)));
+    };
     let tmp_path = tmp.path().to_path_buf();
     let dest_path = state.db_path().to_path_buf();
-    let progress = ProgressHandle::new();
-    {
-        let mut guard = migration_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(progress.clone());
-    }
 
     tokio::task::spawn_blocking(move || {
-        let _keep_tmp = tmp; // keeps the temp file alive until migration finishes
-        progress.update(MigrationProgress {
-            stage: MigrationStage::Importing,
-            rows_imported: 0,
-            rows_total: rows_hint,
-            message: format!("Importing {file_name}…"),
-            error: None,
+        let worker_progress = progress.clone();
+        run_guarded(&worker_progress, move || {
+            let _keep_tmp = tmp; // keeps the temp file alive until migration finishes
+            progress.update(MigrationProgress {
+                stage: MigrationStage::Importing,
+                rows_imported: 0,
+                rows_total: rows_hint,
+                message: format!("Importing {file_name}…"),
+                error: None,
+            });
+            match birdnet_migrate::birdnet_pi::run_migration_with_options(
+                &tmp_path, &dest_path, false, &progress, &options, station,
+            ) {
+                Ok(summary) => {
+                    tracing::info!(
+                        file = %file_name,
+                        imported = summary.imported_rows,
+                        skipped = summary.skipped_rows,
+                        "upload migration completed"
+                    );
+                    // Same rebuild the server-path `run_handler` does: the import
+                    // wrote back-dated history straight to SQLite, so the DuckDB
+                    // analytics copy must be rebuilt or the incremental startup sync
+                    // skips every imported row as "older than the latest already
+                    // synced" — uploaded history would silently never reach the
+                    // behavioural / time-series analytics.
+                    rebuild_analytics_after_import(&state, &progress);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "upload migration failed");
+                    progress.fail(e.to_string());
+                }
+            }
         });
-        match birdnet_migrate::birdnet_pi::run_migration_with_options(
-            &tmp_path, &dest_path, false, &progress, &options, station,
-        ) {
-            Ok(summary) => {
-                tracing::info!(
-                    file = %file_name,
-                    imported = summary.imported_rows,
-                    skipped = summary.skipped_rows,
-                    "upload migration completed"
-                );
-                // Same rebuild the server-path `run_handler` does: the import
-                // wrote back-dated history straight to SQLite, so the DuckDB
-                // analytics copy must be rebuilt or the incremental startup sync
-                // skips every imported row as "older than the latest already
-                // synced" — uploaded history would silently never reach the
-                // behavioural / time-series analytics.
-                rebuild_analytics_after_import(&state, &progress);
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "upload migration failed");
-                progress.fail(e.to_string());
-            }
-        }
     });
 
     // O-18: sticky warn toast so the user knows the import is in flight even
@@ -826,48 +943,47 @@ async fn upload_confirm_handler(
 
 async fn run_handler(
     State(state): State<AppState>,
-    Form(form): Form<MigrateForm>,
+    HtmxForm(form): HtmxForm<MigrateForm>,
     migration_state: MigrationState,
 ) -> Result<Html<String>, StatusCode> {
     let options = import_options(&form);
     let station = state.run_blocking(station_coords).await;
     let source_path = PathBuf::from(form.source_path);
     let dest_path = state.db_path().to_path_buf();
-    let progress = ProgressHandle::new();
-    {
-        let mut guard = migration_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(progress.clone());
-    }
+    let Some(progress) = claim_slot(&migration_state) else {
+        return Ok(Html(render::upload_error(ALREADY_RUNNING)));
+    };
     tokio::task::spawn_blocking(move || {
-        progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
-        match birdnet_migrate::birdnet_pi::run_migration_with_options(
-            &source_path,
-            &dest_path,
-            false,
-            &progress,
-            &options,
-            station,
-        ) {
-            Ok(s) => {
-                tracing::info!(
-                    imported = s.imported_rows,
-                    skipped = s.skipped_rows,
-                    "migration completed"
-                );
-                // The import wrote back-dated history straight to SQLite. Rebuild
-                // the DuckDB analytics copy so that history reaches the
-                // behavioural / time-series analytics with its original
-                // timestamps — the incremental startup sync would skip every
-                // imported row as "older than the latest already synced".
-                rebuild_analytics_after_import(&state, &progress);
+        let worker_progress = progress.clone();
+        run_guarded(&worker_progress, move || {
+            progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
+            match birdnet_migrate::birdnet_pi::run_migration_with_options(
+                &source_path,
+                &dest_path,
+                false,
+                &progress,
+                &options,
+                station,
+            ) {
+                Ok(s) => {
+                    tracing::info!(
+                        imported = s.imported_rows,
+                        skipped = s.skipped_rows,
+                        "migration completed"
+                    );
+                    // The import wrote back-dated history straight to SQLite. Rebuild
+                    // the DuckDB analytics copy so that history reaches the
+                    // behavioural / time-series analytics with its original
+                    // timestamps — the incremental startup sync would skip every
+                    // imported row as "older than the latest already synced".
+                    rebuild_analytics_after_import(&state, &progress);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "migration failed");
+                    progress.fail(e.to_string());
+                }
             }
-            Err(e) => {
-                tracing::error!(error = %e, "migration failed");
-                progress.fail(e.to_string());
-            }
-        }
+        });
     });
     // O-18: sticky warn toast so the user knows the import is in flight even
     // after navigating away from the progress card.
@@ -918,8 +1034,19 @@ const fn rebuild_analytics_after_import(_state: &AppState, _progress: &ProgressH
 // GET /admin/migrate/progress
 // ---------------------------------------------------------------------------
 
+/// Which step is asking: the history import (the default) or the recordings.
+#[derive(Debug, Deserialize)]
+struct ProgressQuery {
+    #[serde(rename = "for")]
+    step: Option<String>,
+}
+
 #[allow(clippy::unused_async)] // required by axum Handler trait
-async fn progress_handler(migration_state: MigrationState) -> Html<String> {
+async fn progress_handler(
+    migration_state: MigrationState,
+    axum::extract::Query(query): axum::extract::Query<ProgressQuery>,
+) -> Html<String> {
+    let clips = query.step.as_deref() == Some("clips");
     let snap: Option<MigrationProgress> = {
         let guard = migration_state
             .lock()
@@ -927,12 +1054,18 @@ async fn progress_handler(migration_state: MigrationState) -> Html<String> {
         guard.as_ref().map(ProgressHandle::snapshot)
     };
     let Some(p) = snap else {
-        return Html(
+        return Html(if clips {
+            r#"<div id="clips-progress" class="amig-empty">Nothing is running.</div>"#.to_string()
+        } else {
             r#"<div id="migrate-progress" class="amig-empty">No migration in progress.</div>"#
-                .to_string(),
-        );
+                .to_string()
+        });
     };
-    Html(render::progress_bar(&p))
+    Html(if clips {
+        render::clips_progress_bar(&p)
+    } else {
+        render::progress_bar(&p)
+    })
 }
 
 #[cfg(test)]
@@ -961,5 +1094,71 @@ mod tests {
     fn render_import_started_has_progress_poll() {
         let html = render::import_started();
         assert!(html.contains("/admin/migrate/progress"));
+    }
+
+    // ---- one import at a time, and a panic ends one --------------------------
+
+    use super::{ALREADY_RUNNING, MigrationState, claim_slot, run_guarded};
+    use birdnet_migrate::progress::{MigrationStage, ProgressHandle};
+    use std::sync::{Arc, Barrier, Mutex};
+
+    #[test]
+    fn of_many_simultaneous_requests_exactly_one_gets_the_slot() {
+        for _ in 0..50 {
+            let slot: MigrationState = Arc::new(Mutex::new(None));
+            let barrier = Arc::new(Barrier::new(8));
+            // Spawned in a loop and joined afterwards: a lazy chain would join
+            // each before the next started and never fill the barrier.
+            let mut threads = Vec::new();
+            for _ in 0..8 {
+                let (slot, barrier) = (Arc::clone(&slot), Arc::clone(&barrier));
+                threads.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_slot(&slot).is_some()
+                }));
+            }
+            let winners = threads
+                .into_iter()
+                .map(|t| t.join().expect("thread"))
+                .filter(|won| *won)
+                .count();
+            assert_eq!(winners, 1, "{ALREADY_RUNNING}");
+        }
+    }
+
+    #[test]
+    fn a_claimed_slot_counts_as_running_before_the_worker_has_said_anything() {
+        let slot: MigrationState = Arc::new(Mutex::new(None));
+        let first = claim_slot(&slot).expect("free");
+        let stage = first.snapshot().stage;
+        assert!(
+            !matches!(stage, MigrationStage::Pending) && !first.snapshot().is_terminal(),
+            "{stage:?}: a request in this window was read as 'not running'"
+        );
+        assert!(claim_slot(&slot).is_none());
+        // The counterpart: once it finishes, the next import may start.
+        first.set_stage(MigrationStage::Complete, "done");
+        assert!(claim_slot(&slot).is_some());
+    }
+
+    #[test]
+    fn a_worker_that_panics_leaves_a_failed_import_not_a_running_one() {
+        let slot: MigrationState = Arc::new(Mutex::new(None));
+        let progress = claim_slot(&slot).expect("free");
+        let worker = progress.clone();
+        std::thread::spawn(move || run_guarded(&worker, || panic!("boom")))
+            .join()
+            .expect("the guard catches it");
+        let snap = progress.snapshot();
+        assert_eq!(snap.stage, MigrationStage::Failed);
+        assert!(snap.error.as_deref().is_some_and(|e| e.contains("stopped")));
+        assert!(
+            claim_slot(&slot).is_some(),
+            "later imports must not be refused until a restart"
+        );
+        // And a worker that does not panic is left exactly as it set itself.
+        let ok = ProgressHandle::new();
+        run_guarded(&ok, || ok.set_stage(MigrationStage::Complete, "fine"));
+        assert_eq!(ok.snapshot().stage, MigrationStage::Complete);
     }
 }

@@ -1,6 +1,6 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eighteen token-gated endpoints — ten writes and eight reads — under [Changing a station](#changing-a-station).
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen token-gated endpoints — eleven writes and eight reads — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
@@ -19,7 +19,7 @@ curl http://localhost:8502/api/v2/health
 ```json
 {
   "status": "healthy",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "database": "ok",
   "analytics": true,
   "detection_daemon": "running",
@@ -193,7 +193,8 @@ The rest of the export family (`detections/export/raven`, the per-clip Raven and
 | `GET /api/v2/species/image/{scientific_name}/file` | — | The cached picture itself (a custom image first, then the provider's), with a five-minute `private` cache header on the picture and on the `404` |
 | `GET /api/v2/recordings` | `species` (matched against the file name), `limit` (default 50, at most 500), `offset` | List the files in the recordings directory: `filename`, `size_bytes`, `modified_secs`, `content_type` |
 | `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip, honouring `Range` requests (`206`); the type follows the extension (WAV, MP3, FLAC, Ogg, AAC) |
-| `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached; with the `raw_spectrogram` setting on, never labelled |
+| `GET /api/v2/spectrogram/{filename}` | `species`, `confidence`, `time` (the overlay label), `thumb=1` (a small bare preview) | A PNG spectrogram of that clip, rendered on demand and cached, in the station's `spectrogram_colormap` and `spectrogram_range_db`; with the `raw_spectrogram` setting on, never labelled. `ETag` and `Cache-Control: private, no-cache`; a matching `If-None-Match` is `304` |
+| `GET /api/v2/dashboard-image` | — | The file named by the `dashboard_image` setting, as the PNG, JPEG, GIF or WebP it is by its first bytes; `404` for anything else, a missing file or one over 8 MiB. `ETag`, `private, no-cache`, `304` on a match |
 
 
 ### Why isn't a bird heard here?
@@ -216,7 +217,7 @@ The rest of the export family (`detections/export/raven`, the per-clip Raven and
 
 `verdict` is `admitted`, `admitted-by-whitelist` (under the threshold, allowed by the Always allowed list), `held-back-by-range` (under the threshold) or `held-back-by-lists` (over it, kept out by your include or exclude list). `week` defaults to the current week; `q` matches either name, or the name in the station's language; `admitted=false` is the held-back species. A `week` outside 1–48, an `admitted` that is not `true` or `false`, and a `limit` outside 1–1000 are a `400` that names the range and does not run the model (the model reads a week it does not know as "no seasonal information" and answers with a year-round list, so the value is refused rather than clamped).
 
-A station that cannot say answers **`503`** with a `reason` and no `species` key, because an empty list would read as "nothing occurs here": `no-location` (the station has no coordinates), `no-range-model` (no range model is loaded: the filter is off and every species the classifier knows is a candidate), `range-model-failed` (the model is there and would not run; the log has the reason), or `no-detection-daemon` (this process does not run the detection daemon). The coordinates are rounded to one decimal place (about 11 km) because the endpoint is as open as the rest of the read API. The same answer is the page at `/species/occurrence`, linked from the Species page.
+A station that cannot say answers **`503`** with a `reason` and no `species` key, because an empty list would read as "nothing occurs here": `no-location` (the station has no coordinates), `no-range-model` (no range model is loaded: the filter is off and every species the classifier knows is a candidate), `range-model-failed` (the model is there and would not run; the log has the reason), or `no-detection-daemon` (this process does not run the detection daemon). The coordinates are rounded to one decimal place (about 11 km), so this endpoint adds no precision of its own; that is not a way of hiding the location, which the public pages already show more exactly (sunrise and sunset times on Today and the Dawn chorus, and each detection's own latitude and longitude). The same answer is the page at `/species/occurrence`, linked from the Species page.
 
 ## Time-series & analytics
 
@@ -401,7 +402,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all eighteen answer `404`: the write surface does not exist rather
+Until you do, all nineteen answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
@@ -440,6 +441,7 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `GET` | `/api/v2/detections/comments` | Read one detection's comment thread, oldest first |
 | `POST` | `/api/v2/detections/comments` | Add a comment (1–2000 characters) |
 | `POST` | `/api/v2/detections/comments/delete` | Withdraw one comment by `id` |
+| `POST` | `/api/v2/dynamic-thresholds/reset` | Forget what the station learned about one species (`{"species": "Strix aluco"}`) or all of them (`{"all": true, "confirm": true}`) |
 | `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
 | `PUT` | `/api/v2/settings` | Change one or more settings |
 | `POST` | `/api/v2/control/restart` | Restart the station |

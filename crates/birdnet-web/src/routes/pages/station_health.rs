@@ -29,6 +29,7 @@ use crate::system_info::{self, format_bytes, format_uptime};
 /// One vitals tile: CPU / memory / temperature / disk.
 struct Vital {
     label: &'static str,
+    /// Trusted HTML: a formatted number, or a marked temperature.
     value: String,
     /// Meter fill 0–100, or `None` for a value with no natural ratio.
     pct: Option<f64>,
@@ -100,6 +101,9 @@ struct Snapshot {
     occurrence: OccurrenceFilterState,
     /// Classifiers failing every window (`e853776`), by id.
     failing_classifiers: Vec<String>,
+    /// What a scan of the watch folder found, when the folder is known and
+    /// readable.
+    recordings_folder: Option<crate::watch_folder::FolderScan>,
 }
 
 /// Render the operator Health surface for the public Station Health tab.
@@ -113,7 +117,8 @@ async fn gather(state: &AppState) -> Snapshot {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
         let sys = system_info::sample();
-        let (disk, scratch) = super::station_issues::disks(state.db_path());
+        let (disk, scratch) =
+            super::station_issues::pinned_or(&state, || super::station_issues::disks(state.db_path()));
 
         let read = state.with_read_db(|conn| {
             let listed = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
@@ -220,6 +225,9 @@ async fn gather(state: &AppState) -> Snapshot {
                 .filter(|(_, h)| h.is_failing())
                 .map(|(id, _)| id)
                 .collect(),
+            recordings_folder: state
+                .watch_dir()
+                .and_then(|dir| crate::watch_folder::scan(&dir)),
         }
     })
     .await
@@ -255,6 +263,7 @@ async fn gather(state: &AppState) -> Snapshot {
             candidates: None,
         },
         failing_classifiers: Vec::new(),
+        recordings_folder: None,
     })
 }
 
@@ -298,7 +307,7 @@ fn build_vitals(
             let t = f64::from(t);
             Vital {
                 label: "Temperature",
-                value: format!("{t:.0}°C"),
+                value: crate::display::temperature(t, 0, true),
                 pct: Some((t / 90.0 * 100.0).clamp(0.0, 100.0)),
                 sub: "core".to_string(),
                 warn: t > 70.0,
@@ -385,6 +394,7 @@ fn facts(s: &Snapshot) -> super::station_issues::Facts<'_> {
         source_names: &s.source_names,
         filter_admits_nothing: s.occurrence.admits_nothing(),
         failing_classifiers: &s.failing_classifiers,
+        recordings_folder: s.recordings_folder.as_ref(),
     }
 }
 
@@ -461,7 +471,7 @@ fn source_panel(s: &Snapshot) -> String {
             .map_or_else(|| "Unlabelled source".to_string(), escape_html);
         let last = a.last_time.as_deref().map_or_else(
             || "—".to_string(),
-            |t| escape_html(t.get(0..5).unwrap_or(t)),
+            |t| crate::display::clock(t.get(0..5).unwrap_or(t)),
         );
         let _ = write!(
             out,
@@ -638,7 +648,9 @@ fn vitals_row(vitals: &[Vital]) -> String {
             "<div class=\"st-vital\"><div class=\"lab\">{label}</div>\
              <div class=\"v\">{value}</div>{meter}<div class=\"sub\">{sub}</div></div>",
             label = v.label,
-            value = escape_html(&v.value),
+            // HTML by construction: every value is a number the code formatted
+            // or the display formatter's marked temperature, never typed text.
+            value = v.value,
             sub = escape_html(&v.sub),
         );
     }
@@ -875,6 +887,7 @@ mod tests {
                 candidates: None,
             },
             failing_classifiers: Vec::new(),
+            recordings_folder: None,
         }
     }
 

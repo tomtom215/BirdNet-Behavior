@@ -37,8 +37,15 @@
         '<div class="bnb-meta mono rc-hp-time">0:00</div>' +
       '</div>';
     container.querySelector('.rc-hp-name').textContent = btn.getAttribute('data-clip-name') || 'Clip';
-    container.querySelector('.rc-hp-meta').textContent = btn.getAttribute('data-clip-meta') || '';
-    var src = btn.getAttribute('data-play-src');
+    // `data-clip-meta` is "HH:MM:SS · date · conf%"; its time is printed in the
+    // reader's clock (static/display-format.js).
+    var meta = (btn.getAttribute('data-clip-meta') || '').split(' · ');
+    if (window.bnbDisplay) {
+      var shown = window.bnbDisplay.formatClock(meta[0], window.bnbDisplay.effective().time);
+      if (shown) meta[0] = shown;
+    }
+    container.querySelector('.rc-hp-meta').textContent = meta.join(' · ');
+    var src = window.bnbSameOrigin(btn.getAttribute('data-play-src'));
     var dl = container.querySelector('.rc-hp-dl');
     if (dl && src) { dl.setAttribute('href', src); dl.setAttribute('download', ''); }
     var row = btn.closest('.rc-row');
@@ -246,7 +253,8 @@
     selectedRows().forEach(function (r) {
       var p = r.querySelector('[data-play-src]'); if (!p) return;
       var a = document.createElement('a');
-      a.href = p.getAttribute('data-play-src'); a.setAttribute('download', '');
+      var h = window.bnbSameOrigin(p.getAttribute('data-play-src')); if (!h) return;
+      a.href = h; a.setAttribute('download', '');
       document.body.appendChild(a); a.click(); a.remove();
     });
   });
@@ -500,8 +508,16 @@
   // stream is used as before.
   var useHls = !!(audio && audio.canPlayType &&
     audio.canPlayType('application/vnd.apple.mpegurl'));
-  var session = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
-    : String(Date.now()) + Math.random().toString(16).slice(2);
+  // `randomUUID` exists only in a secure context, so a station served over
+  // plain http://pi.local has `getRandomValues` and not `randomUUID`. The id
+  // is not a secret (the station only counts distinct tabs by it), but it is
+  // made from the browser's CSPRNG all the same.
+  var session = (function () {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    var b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    return Array.prototype.map.call(b, function (x) { return (x < 16 ? '0' : '') + x.toString(16); }).join('');
+  })();
   var hls = null;        // {token} while on an HLS stream
   var heartbeat = null;
   function post(path, body) {

@@ -19,8 +19,7 @@ period and nothing earlier; on New Year's Day it starts again from nothing.
 - a display headline and four big-number tiles (detections, species heard,
   species new to your list — first heard on this station this year — and the
   busiest day),
-- an **activity tape** — one moss-intensity cell per week of the year — that
-  shows its rhythm at a glance,
+- a **calendar of the year** — a cell for every day since 1 January, a column a week, coloured by how many detections that day (the busiest day is ringed and named; a day the station was not listening is hatched, so it is not mistaken for a quiet one) — that shows its rhythm at a glance,
 - the year's species leaderboard with banding-code avatars,
 - a milestones strip (first voice of the year, most-heard species, busiest day, newest arrival),
 - and a closing tally.

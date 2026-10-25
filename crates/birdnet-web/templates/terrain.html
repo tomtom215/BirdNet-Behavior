@@ -1,0 +1,76 @@
+<!--
+  The soundscape terrain: the station's last 30, 90 or 365 days as a landscape (hour of day
+  across, day into the distance, height and colour the number heard).
+
+  Empty on purpose: static/terrain.js fetches /pages/terrain-data, draws the flat grid, and
+  loads the 3D view (and three.js with it) only when somebody asks for it. See
+  routes/pages/terrain.rs and static/terrain.js for what each part promises.
+-->
+<div class="bnb-card pad tr-card" id="terrain" data-tr-feed="/pages/terrain-data" data-tr-table="/pages/terrain-table" data-tr-days="90">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Soundscape terrain</div>
+      <h2 class="sh-h">The station's sound, as a landscape</h2>
+    </div>
+    <div class="seg" data-tr="range" role="group" aria-label="Days shown">
+      <button type="button" class="btn" data-days="30" aria-pressed="false">30 days</button>
+      <button type="button" class="btn active" data-days="90" aria-pressed="true">90 days</button>
+      <button type="button" class="btn" data-days="365" aria-pressed="false">1 year</button>
+    </div>
+  </div>
+  <p class="bnb-meta tr-lede">
+    <b>Across: the hours of the day. Down: the days, the newest at the bottom.</b> The colour
+    and, in 3D, the height of each patch are how much was heard in that hour of that day. A
+    ridge that runs the length of the picture is an hour that is busy every day; a single
+    peak is a day something happened.
+  </p>
+  <div class="tr-controls">
+    <div class="tr-ctl">
+      <span class="bnb-meta" id="tr-view-l">View</span>
+      <div class="seg" data-tr="view" role="group" aria-labelledby="tr-view-l">
+        <button type="button" class="btn active" data-view="grid" aria-pressed="true">Grid</button>
+        <button type="button" class="btn" data-view="3d" aria-pressed="false">3D terrain</button>
+      </div>
+    </div>
+    <div class="tr-ctl">
+      <span class="bnb-meta" id="tr-colour-l">Colour by</span>
+      <div class="seg" data-tr="colour" role="group" aria-labelledby="tr-colour-l">
+        <button type="button" class="btn active" data-colour="activity" aria-pressed="true">How much</button>
+        <button type="button" class="btn" data-colour="species" aria-pressed="false">Who was heard most</button>
+      </div>
+    </div>
+  </div>
+  <div class="tr-stage" data-view="grid">
+    <div class="tr-grid">
+      <canvas class="tr-grid-canvas" tabindex="0" role="img" aria-label="Soundscape terrain (loading)" aria-describedby="tr-help"></canvas>
+    </div>
+    <div class="tr-3d" hidden>
+      <canvas class="tr-gl-canvas" tabindex="0" role="img" aria-label="Soundscape terrain in 3D (loading)" aria-describedby="tr-help"></canvas>
+      <div class="tr-labels" aria-hidden="true"></div>
+    </div>
+    <p class="tr-msg bnb-meta" role="status"></p>
+  </div>
+  <p class="tr-readout bnb-meta" aria-live="polite">Point at the picture, or use the arrow keys, to read an hour.</p>
+  <div class="tr-legend">
+    <div class="tr-key tr-key-activity ck-scale">
+      <span class="ck-steps" aria-hidden="true"><i class="ck-sw ck-q1"></i><i class="ck-sw ck-q2"></i><i class="ck-sw ck-q3"></i><i class="ck-sw ck-q4"></i><i class="ck-sw ck-q5"></i><i class="ck-sw ck-q6"></i><i class="ck-sw ck-q7"></i></span>
+      <span class="bnb-meta">From none to <span class="tr-key-max">—</span> detections in the busiest hour. Colour and height are the square root of the count, so a quiet hour beside a busy one is still there.</span>
+    </div>
+    <div class="viz-legend tr-key tr-key-species" aria-label="Species colours"></div>
+    <div class="ck-scale">
+      <span class="ck-off" aria-hidden="true"></span>
+      <span class="bnb-meta">Flat and hatched: the station was not listening that day, or the hour has not happened yet. That is not the same as quiet.</span>
+    </div>
+  </div>
+  <p class="bnb-meta tr-help" id="tr-help">
+    Grid: arrow keys move through the hours and days. 3D terrain: drag to turn it, scroll
+    (after clicking it) or pinch to zoom; arrow keys turn it, plus and minus zoom, Home puts
+    it back, and Shift with the arrows moves the cursor. Everything is also in the table below.
+  </p>
+  <details class="pt-disc tr-numbers">
+    <summary>See the numbers — detections by day and hour</summary>
+    <div class="tr-table-slot"></div>
+  </details>
+  <noscript><p class="bnb-meta">The terrain is drawn by a script; the numbers behind it are in the other charts on this page.</p></noscript>
+</div>
+<script type="module" src="/static/terrain.js?v={{version}}"></script>

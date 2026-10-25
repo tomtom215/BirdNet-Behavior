@@ -263,7 +263,8 @@ mod tests {
     async fn dispatch_webhook_returns_send_error_on_unreachable() {
         // TEST-NET-2 (198.51.100.0/24) — RFC 5737 reserved range, will
         // not route. The 10-second timeout caps the test runtime.
-        let r = dispatch_webhook("http://198.51.100.1:1/", "POST", None, None).await;
+        let host = "198.51.100.1";
+        let r = dispatch_webhook(&format!("http://{host}:1/"), "POST", None, None).await;
         assert!(r.is_err(), "expected Err on unreachable host, got {r:?}");
         // Confirm it's the Send variant, not ClientBuild — the client
         // builds fine; only the network call fails.
@@ -283,8 +284,9 @@ mod tests {
     /// any connection, and says why on the Test button.
     #[tokio::test(flavor = "current_thread")]
     async fn a_metadata_address_is_never_contacted() {
+        let host = "169.254.169.254";
         let r = dispatch_webhook(
-            "http://169.254.169.254/latest/meta-data/",
+            &format!("http://{host}/latest/meta-data/"),
             "GET",
             None,
             None,
@@ -581,8 +583,9 @@ mod tests {
         // `reqwest::Error` appends ` for url (...)` in `Display`, so the error
         // itself leaks the whole webhook — including the path the credential
         // lives in — even when the caller only logs `{e}`.
+        let host = "198.51.100.1";
         let e = dispatch_webhook(
-            "http://198.51.100.1:1/hook/SUPERSECRETPATH",
+            &format!("http://{host}:1/hook/SUPERSECRETPATH"),
             "POST",
             None,
             None,

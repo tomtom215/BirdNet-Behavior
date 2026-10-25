@@ -14,7 +14,7 @@ const swPath = process.argv[2];
 const source = fs.readFileSync(swPath, 'utf8');
 const ORIGIN = 'https://station.test';
 
-function makeCaches() {
+function makeCaches(precached) {
   const stores = new Map();
   return {
     stores,
@@ -25,7 +25,7 @@ function makeCaches() {
       return {
         match: async (r) => entries.get(key(r)),
         put: async (r, res) => { entries.set(key(r), res); },
-        addAll: async () => {},
+        addAll: async (urls) => { precached.push(...urls); },
       };
     },
     keys: async () => [...stores.keys()],
@@ -42,14 +42,16 @@ function basic(body, { headers = {}, redirected = false, status = 200 } = {}) {
   return res;
 }
 
-function boot(network) {
+function boot(network, scriptPath = '/static/sw.js') {
   const listeners = {};
-  const caches = makeCaches();
+  const precached = [];
+  const caches = makeCaches(precached);
+  let skips = 0;
   const sandbox = {
     self: {
-      location: { href: `${ORIGIN}/static/sw.js?v=test`, origin: ORIGIN },
+      location: { href: `${ORIGIN}${scriptPath}?v=test`, origin: ORIGIN },
       addEventListener: (type, fn) => { listeners[type] = fn; },
-      skipWaiting() {},
+      skipWaiting() { skips += 1; },
       clients: { claim() {} },
     },
     caches,
@@ -57,7 +59,7 @@ function boot(network) {
     URL, Response, Headers, Promise, console,
   };
   vm.runInNewContext(source, sandbox);
-  return { listeners, caches };
+  return { listeners, caches, skips: () => skips, precached };
 }
 
 // Ask the worker for `path`. Reports whether it took the request on at all, and
@@ -103,6 +105,15 @@ async function scenario(response, path = '/today') {
   };
 }
 
+// Deliver a `message` event as the browser would: `origin` is the sender's
+// origin, which for a same-origin client is the worker's own. Returns how many
+// times the worker called `skipWaiting()` because of it.
+function post(worker, data, origin) {
+  const before = worker.skips();
+  worker.listeners.message({ data, origin });
+  return worker.skips() - before;
+}
+
 const out = {
   // An open station's page: kept, and served again with the network down.
   public_page: await scenario(() => basic('<p>public dashboard</p>', { headers: { 'content-type': 'text/html' } })),
@@ -118,5 +129,32 @@ const out = {
 const net = boot(async () => basic('x'));
 out.admin_handled = (await ask(net, '/admin/overview')).handled;
 out.login_handled = (await ask(net, '/login')).handled;
+
+// `SKIP_WAITING` is the one message the worker acts on. It is honoured from the
+// worker's own origin (the page that registered it) and from nowhere else, and
+// the worker still ignores a message that is not that one.
+out.skip_waiting = {
+  from_own_origin: post(net, { type: 'SKIP_WAITING' }, ORIGIN),
+  from_another_origin: post(net, { type: 'SKIP_WAITING' }, 'https://other.test'),
+  from_no_origin: post(net, { type: 'SKIP_WAITING' }, undefined),
+  another_message: post(net, { type: 'SOMETHING_ELSE' }, ORIGIN),
+  no_data: post(net, undefined, ORIGIN),
+};
+
+// What the install asks the network for. Served from the root, every URL is
+// `/static/…`; served from `<base>/static/sw.js` (BIRDNET_BASE_PATH) every one
+// is `<base>/static/…`. A URL outside the prefix on a station under one is a
+// request to the host, which on a shared host is another application's.
+async function installRequests(scriptPath) {
+  const worker = boot(async () => basic('x'), scriptPath);
+  let done;
+  worker.listeners.install({ waitUntil: (p) => { done = p; } });
+  await done;
+  return worker.precached;
+}
+out.precache = {
+  root: await installRequests('/static/sw.js'),
+  under_bn: await installRequests('/bn/static/sw.js'),
+};
 
 console.log(JSON.stringify(out));

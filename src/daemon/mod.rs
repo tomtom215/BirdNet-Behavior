@@ -222,13 +222,26 @@ pub fn start_detection_daemon(
     notification_template: NotificationTemplate,
     in_flight: birdnet_core::detection::daemon::InFlight,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
+    // Told to the web layer before anything can stop the daemon from starting:
+    // the Station Health page scans this folder for recordings whose names the
+    // daemon cannot read, and the Capture tab says where it is, which matters
+    // most on a station whose model is not installed yet.
+    if let Some(dir) = cli
+        .watch_dir
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("RECS_DIR").map(std::path::PathBuf::from)))
+    {
+        state.set_watch_dir(dir);
+    }
     let Some((model_path, labels_path, watch_dir)) = resolve_required_paths(cli, config) else {
         tracing::warn!(
             "detection daemon NOT started: model, labels, or watch_dir not configured — the web \
              UI will run but NO audio will be analysed and NO detections recorded"
         );
         tracing::warn!(
-            "configure --model, --labels, --watch-dir (or MODEL_PATH, LABELS_PATH, RECS_DIR in the config file) and restart"
+            "open the station in a browser and install the classifier from the setup page \
+             (Settings → Capture), then restart it from there; or set --model, --labels and \
+             --watch-dir (MODEL_PATH, LABELS_PATH and RECS_DIR in the config file)"
         );
         return None;
     };

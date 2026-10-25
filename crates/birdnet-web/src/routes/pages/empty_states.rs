@@ -14,12 +14,74 @@
 const SHELL_OPEN: &str = r#"<div class="empty-state">"#;
 const SHELL_CLOSE: &str = "</div>";
 
-/// Empty state shown when no detections have been recorded yet today.
+/// What the station can truthfully say about listening while its feed is empty.
+///
+/// The empty feed used to say "The station is listening" whatever the station
+/// was doing, so it sat beside a hero pill reading "not recording" and a
+/// checklist row reading "Not listening yet". It is now chosen from the same
+/// capture status those two read (see `dashboard::partials::yard_state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YardState {
+    /// A microphone is recording and the detector is running.
+    Listening,
+    /// Sources are configured and the supervisor has not reported yet.
+    Starting,
+    /// A microphone is recording, the detector is not running.
+    DetectorOff,
+    /// Sources are configured and none is recording.
+    NotRecording,
+    /// No audio source is set up.
+    NoMicrophone,
+    /// The audio sources could not be read, so nothing is claimed.
+    Unknown,
+}
+
+/// Empty state shown when no detections have been recorded yet today, and
+/// the station is listening. See [`quiet_yard_while`] for the other states.
 pub fn quiet_yard() -> String {
+    quiet_yard_while(YardState::Listening)
+}
+
+/// The empty feed, saying only what is true of the station right now.
+pub fn quiet_yard_while(state: YardState) -> String {
+    let (heading, line) = match state {
+        YardState::Listening => (
+            "A quiet yard.",
+            "The station is listening \u{2014} nothing has flown by yet.".to_owned(),
+        ),
+        YardState::Starting => (
+            "A quiet yard.",
+            "The station is starting up \u{2014} nothing has flown by yet.".to_owned(),
+        ),
+        YardState::DetectorOff => (
+            "Nothing identified yet.",
+            "The microphone is recording, but the detector is not running, so nothing can be \
+             identified. <a href=\"/admin/doctor\" class=\"es-link\">See Diagnostics \u{2192}</a>"
+                .to_owned(),
+        ),
+        YardState::NotRecording => (
+            "Nothing heard yet.",
+            "The station is not recording right now, so nothing can be heard. \
+             <a href=\"/station/capture\" class=\"es-link\">Check the microphone \u{2192}</a>"
+                .to_owned(),
+        ),
+        YardState::NoMicrophone => (
+            "Nothing heard yet.",
+            "No microphone is set up, so the station has nothing to listen with. \
+             <a href=\"/station/capture\" class=\"es-link\">Add one in Settings \u{2192} Capture</a>"
+                .to_owned(),
+        ),
+        YardState::Unknown => (
+            "Nothing flown by yet.",
+            "No detections yet today.".to_owned(),
+        ),
+    };
     format!(
-        r#"{SHELL_OPEN}<svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true"><defs><linearGradient id="es-qy" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--moss)" stop-opacity="0.35"/><stop offset="100%" stop-color="var(--moss)" stop-opacity="0.05"/></linearGradient></defs><line x1="6" y1="60" x2="114" y2="60" stroke="var(--hairline)" stroke-width="0.7"/><g fill="url(#es-qy)"><rect x="14" y="50" width="3" height="10" rx="1"/><rect x="34" y="42" width="3" height="18" rx="1"/><rect x="54" y="34" width="3" height="26" rx="1"/><rect x="74" y="42" width="3" height="18" rx="1"/><rect x="94" y="50" width="3" height="10" rx="1"/></g><circle cx="60" cy="22" r="3" fill="var(--moss)" opacity="0.4"/><circle cx="60" cy="22" r="9" fill="none" stroke="var(--moss)" stroke-opacity="0.15"/></svg><p class="display es-h">A quiet yard.</p><p class="bnb-meta es-sub">The station is listening — nothing has flown by yet.</p>{SHELL_CLOSE}"#,
+        r#"{SHELL_OPEN}{QUIET_YARD_SVG}<p class="display es-h">{heading}</p><p class="bnb-meta es-sub">{line}</p>{SHELL_CLOSE}"#,
     )
 }
+
+const QUIET_YARD_SVG: &str = r#"<svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true"><defs><linearGradient id="es-qy" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--moss)" stop-opacity="0.35"/><stop offset="100%" stop-color="var(--moss)" stop-opacity="0.05"/></linearGradient></defs><line x1="6" y1="60" x2="114" y2="60" stroke="var(--hairline)" stroke-width="0.7"/><g fill="url(#es-qy)"><rect x="14" y="50" width="3" height="10" rx="1"/><rect x="34" y="42" width="3" height="18" rx="1"/><rect x="54" y="34" width="3" height="26" rx="1"/><rect x="74" y="42" width="3" height="18" rx="1"/><rect x="94" y="50" width="3" height="10" rx="1"/></g><circle cx="60" cy="22" r="3" fill="var(--moss)" opacity="0.4"/><circle cx="60" cy="22" r="9" fill="none" stroke="var(--moss)" stroke-opacity="0.15"/></svg>"#;
 
 /// Empty state shown when the species life-list or gallery is empty.
 pub fn no_species() -> String {

@@ -63,9 +63,16 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "clip_retention_days",
     "image_cache_dir",
     "custom_image_dir",
+    "dashboard_image",
+    "dashboard_image_title",
     "max_files_per_species",
     "purge_threshold",
+    "full_disk_action",
     "raw_spectrogram",
+    "spectrogram_colormap",
+    "spectrogram_range_db",
+    "time_format",
+    "temperature_unit",
     "extraction_length",
     "rare_species_days",
     "stream_retention_secs",
@@ -85,6 +92,17 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "email_min_confidence",
     "email_cooldown_secs",
 ];
+
+/// Every key the settings form and the settings API can write: the
+/// hand-written fields and the table-driven ones.
+#[must_use]
+pub fn all_form_keys() -> Vec<&'static str> {
+    SETTINGS_FORM_KEYS
+        .iter()
+        .copied()
+        .chain(super::extra::keys())
+        .collect()
+}
 
 /// Flat form payload from the admin settings POST.
 ///
@@ -198,16 +216,38 @@ pub struct SettingsForm {
     pub image_cache_dir: Option<String>,
     /// Filesystem path to operator-supplied custom species images (overrides Wikipedia cache).
     pub custom_image_dir: Option<String>,
+    /// Absolute path of a picture shown on the Today page (a site photograph
+    /// or a camera snapshot another program keeps current). BirdNET-Pi's
+    /// `CUSTOM_IMAGE`; not the per-species `custom_image_dir`.
+    pub dashboard_image: Option<String>,
+    /// The title shown over that picture (`CUSTOM_IMAGE_TITLE`).
+    pub dashboard_image_title: Option<String>,
     /// Maximum number of WAV recordings stored per species before the oldest are rotated.
     pub max_files_per_species: Option<String>,
     /// Disk-use threshold (percentage, 0–100) at which the oldest recordings are purged
     /// regardless of age.
     pub purge_threshold: Option<String>,
+    /// What a full recordings disk does: `purge` deletes the oldest clips
+    /// (the default); `keep` records nothing more and deletes nothing.
+    /// BirdNET-Pi's `FULL_DISK`.
+    pub full_disk_action: Option<String>,
     /// Suppress the species/confidence overlay on generated spectrograms.
     ///
     /// BirdNET-Pi's `RAW_SPECTROGRAM`, with one honest difference: theirs also
     /// removes axes, and this renderer has never drawn any.
     pub raw_spectrogram: Option<String>,
+    /// Colour map the spectrograms are drawn in: `viridis` (the default),
+    /// `magma`, `inferno`, `grey` or `grey_inverted`.
+    pub spectrogram_colormap: Option<String>,
+    /// Dynamic range of the spectrograms in dB: `60`, `80` (the default), `100`
+    /// or `120`. Cells further than this below the loudest are drawn as the floor.
+    pub spectrogram_range_db: Option<String>,
+    /// The clock times are printed in by default: `24h` (the default) or `12h`.
+    /// Each browser may choose otherwise on the Display card.
+    pub time_format: Option<String>,
+    /// The unit temperatures are printed in by default: `celsius` (the
+    /// default) or `fahrenheit`. Each browser may choose otherwise.
+    pub temperature_unit: Option<String>,
     /// Seconds of audio saved around each detection (BirdNET-Pi:
     /// `EXTRACTION_LENGTH`). The field existed in `ExtractionConfig` from the
     /// start and was never reachable from the UI, so every station ran the
@@ -272,6 +312,12 @@ pub struct SettingsForm {
     pub email_min_confidence: Option<String>,
     /// Per-species email cooldown in seconds. Suppresses repeat emails within this window.
     pub email_cooldown_secs: Option<String>,
+    /// The table-driven settings ([`super::extra::EXTRA_SETTINGS`]): every
+    /// submitted name that is not a field above. Not listed in
+    /// [`SETTINGS_FORM_KEYS`]; [`all_form_keys`] adds them. A name that is in
+    /// neither is not saved (the page never sends one; the API refuses it).
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, String>,
 }
 
 impl std::fmt::Debug for SettingsForm {

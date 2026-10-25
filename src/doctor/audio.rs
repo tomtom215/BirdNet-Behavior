@@ -53,12 +53,29 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
 
     let mut out = Vec::new();
 
+    // The sources the station's database holds: what the browser's Capture tab
+    // writes, and what capture reads once it has any (see below). A station set
+    // up from the browser has no `--alsa-device` and no `ALSA_CARD`, so reading
+    // only those called it "no audio source configured" while the Capture tab
+    // listed one.
+    let db_rows = database_sources(config);
+    let in_database = db_rows.as_deref().unwrap_or_default();
+
     match configured.len() {
+        0 if !in_database.is_empty() => out.push(Check::pass(
+            "Audio source",
+            format!(
+                "{} set up in the station's database (Settings \u{2192} Capture)",
+                describe_sources(in_database)
+            ),
+        )),
         0 => out.push(Check::warn(
             "Audio source",
             "no audio source configured (no live detections will be produced)",
-            "set one of: --alsa-device, --pipewire-device, --rtsp-url, --rtsp-urls, \
-             or the equivalent ALSA_CARD / RTSP_URL / PIPEWIRE_DEVICE config keys",
+            "add a microphone or a network stream under Settings \u{2192} Capture in the browser. \
+             On the machine itself you can instead set one of --alsa-device, --pipewire-device, \
+             --rtsp-url, --rtsp-urls, or the equivalent ALSA_CARD / RTSP_URL / PIPEWIRE_DEVICE \
+             config keys",
         )),
         1 => out.push(Check::pass(
             "Audio source",
@@ -88,7 +105,7 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
     // This is the same shape as the CADDY_PWD defect: two readers of one
     // setting, disagreeing, with the diagnostic reading the wrong one. It is
     // resolved the same way — by consulting what the runtime consults.
-    let db_sources = effective_alsa_devices(config);
+    let db_sources = db_rows.as_ref().map(|rows| alsa_devices_of(rows));
     match db_sources.as_deref() {
         Some(devices) if !devices.is_empty() => {
             for dev in devices {
@@ -144,8 +161,27 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
 /// the database's health, and a doctor that failed because the DB was corrupt
 /// would block the startup that repairs it, which is the trap this release
 /// spent its time removing.
+#[cfg(test)]
 fn effective_alsa_devices(config: Option<&Config>) -> Option<Vec<String>> {
-    use birdnet_db::audio_sources::{AudioSourceStore, SourceKind};
+    database_sources(config).map(|rows| alsa_devices_of(&rows))
+}
+
+/// The device of every ALSA row in `rows`.
+fn alsa_devices_of(rows: &[birdnet_db::audio_sources::AudioSource]) -> Vec<String> {
+    use birdnet_db::audio_sources::SourceKind;
+    rows.iter()
+        .filter(|s| s.kind == SourceKind::UsbAlsa)
+        .map(|s| s.device_id.clone())
+        .collect()
+}
+
+/// Every source the station's database holds that has not been removed, read
+/// the way capture reads them. `None` when the table cannot be consulted (see
+/// `effective_alsa_devices`).
+fn database_sources(
+    config: Option<&Config>,
+) -> Option<Vec<birdnet_db::audio_sources::AudioSource>> {
+    use birdnet_db::audio_sources::AudioSourceStore;
 
     let db_path = crate::helpers::db_path_from_config(config);
     if !db_path.exists() {
@@ -158,13 +194,37 @@ fn effective_alsa_devices(config: Option<&Config>) -> Option<Vec<String>> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .ok()?;
-    let rows = conn.list().ok()?;
-    Some(
-        rows.into_iter()
-            .filter(|s| s.kind == SourceKind::UsbAlsa)
-            .map(|s| s.device_id)
-            .collect(),
-    )
+    conn.list().ok()
+}
+
+/// "1 USB microphone", "2 network streams", "1 USB microphone and 1 network
+/// stream": counts by kind and never the device or address, because a stream
+/// address can carry a password and this line goes into the support bundle.
+fn describe_sources(rows: &[birdnet_db::audio_sources::AudioSource]) -> String {
+    use birdnet_db::audio_sources::SourceKind;
+    let count = |kind: SourceKind| rows.iter().filter(|s| s.kind == kind).count();
+    let part = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let parts: Vec<String> = [
+        part(
+            count(SourceKind::UsbAlsa),
+            "USB microphone",
+            "USB microphones",
+        ),
+        part(
+            count(SourceKind::PipeWire),
+            "PipeWire microphone",
+            "PipeWire microphones",
+        ),
+        part(count(SourceKind::Rtsp), "network stream", "network streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    parts.join(" and ")
 }
 
 /// An ALSA source with no `arecord` to read it (LC-4).
@@ -768,6 +828,68 @@ card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
         ))
         .unwrap();
         crate::helpers::test_support::config_with(&[("DB_PATH", db_path.to_str().unwrap())])
+    }
+
+    /// A station set up from the browser has no `--alsa-device` and no
+    /// `ALSA_CARD`: its microphone is a row in `audio_sources`. The doctor read
+    /// only the first two and called it "no audio source configured" while the
+    /// Capture tab listed one.
+    #[test]
+    fn a_source_added_in_the_browser_is_a_source_not_a_warning() {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.insert(&NewAudioSource::defaults(
+            "src_rtsp_1".to_string(),
+            SourceKind::Rtsp,
+            "rtsp://user:hunter2@camera.invalid:554/audio".to_string(),
+        ))
+        .unwrap();
+        drop(conn);
+        let config =
+            crate::helpers::test_support::config_with(&[("DB_PATH", db_path.to_str().unwrap())]);
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_audio_source(&cli, Some(&config));
+        assert_eq!(checks[0].name, "Audio source");
+        assert_eq!(
+            checks[0].status,
+            Status::Pass,
+            "the database has a source: {:?}",
+            checks[0]
+        );
+        assert!(
+            checks[0].message.contains("1 network stream"),
+            "{}",
+            checks[0].message
+        );
+        assert!(
+            !checks[0].message.contains("hunter2") && !checks[0].message.contains("camera"),
+            "the line goes into the support bundle and must not carry the address: {}",
+            checks[0].message
+        );
+    }
+
+    /// The counterpart: a database with no source is still the warning, and the
+    /// first thing it says is something to do in the browser.
+    #[test]
+    fn a_database_with_no_source_still_warns_and_leads_with_the_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        drop(conn);
+        let config =
+            crate::helpers::test_support::config_with(&[("DB_PATH", db_path.to_str().unwrap())]);
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_audio_source(&cli, Some(&config));
+        assert_eq!(checks[0].status, Status::Warn, "{:?}", checks[0]);
+        let fix = checks[0].remediation.as_deref().expect("a fix");
+        assert!(
+            fix.starts_with("add a microphone") && fix.contains("Settings"),
+            "the reader meets the browser path first: {fix}"
+        );
     }
 
     #[test]

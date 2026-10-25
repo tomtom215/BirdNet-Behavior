@@ -1,0 +1,701 @@
+{
+"note": "rows the real daemon (fresh-install configuration, files dropped in the watch directory) stored; see tools/parity/README.md",
+"clips": {
+"pica_pica_30s": [
+{
+"offset_s": 3.0,
+"sci": "Pica pica",
+"com": "Eurasian Magpie",
+"confidence": 0.9122954607009888,
+"week_stored": 7
+},
+{
+"offset_s": 12.0,
+"sci": "Pica pica",
+"com": "Eurasian Magpie",
+"confidence": 0.931797444820404,
+"week_stored": 7
+},
+{
+"offset_s": 21.0,
+"sci": "Pica pica",
+"com": "Eurasian Magpie",
+"confidence": 0.886367917060852,
+"week_stored": 7
+}
+],
+"soundscape_ba_12s": [
+{
+"offset_s": 0.0,
+"sci": "Poecile atricapillus",
+"com": "Black-capped Chickadee",
+"confidence": 0.751777708530426,
+"week_stored": 18
+}
+],
+"tawny_owl_s32_9s": [
+{
+"offset_s": 0.0,
+"sci": "Strix aluco",
+"com": "Tawny Owl",
+"confidence": 0.9918233752250671,
+"week_stored": 7
+},
+{
+"offset_s": 3.0,
+"sci": "Strix aluco",
+"com": "Tawny Owl",
+"confidence": 0.9972431659698486,
+"week_stored": 7
+}
+],
+"ij_stereo_48k_12s": [
+{
+"offset_s": 0.0,
+"sci": "Parus major",
+"com": "Great Tit",
+"confidence": 0.7056180834770203,
+"week_stored": 12
+},
+{
+"offset_s": 9.0,
+"sci": "Turdus philomelos",
+"com": "Song Thrush",
+"confidence": 0.7511972784996033,
+"week_stored": 12
+}
+],
+"ij_mono_48k_12s": [
+{
+"offset_s": 9.0,
+"sci": "Turdus philomelos",
+"com": "Song Thrush",
+"confidence": 0.7496170997619629,
+"week_stored": 12
+}
+],
+"ij_mono_44k1_12s": [
+{
+"offset_s": 0.0,
+"sci": "Parus major",
+"com": "Great Tit",
+"confidence": 0.7096503376960754,
+"week_stored": 12
+},
+{
+"offset_s": 9.0,
+"sci": "Turdus philomelos",
+"com": "Song Thrush",
+"confidence": 0.7338017821311951,
+"week_stored": 12
+}
+],
+"ij_mono_22k05_12s": [
+{
+"offset_s": 9.0,
+"sci": "Turdus philomelos",
+"com": "Song Thrush",
+"confidence": 0.7405040860176086,
+"week_stored": 12
+}
+],
+"dawn_chorus_10172_12123": [
+{
+"offset_s": 9.0,
+"sci": "Sphecotheres vieilloti",
+"com": "Australasian Figbird",
+"confidence": 0.7016120553016663,
+"week_stored": 19
+},
+{
+"offset_s": 12.0,
+"sci": "Sphecotheres vieilloti",
+"com": "Australasian Figbird",
+"confidence": 0.7065571546554565,
+"week_stored": 19
+},
+{
+"offset_s": 15.0,
+"sci": "Sphecotheres vieilloti",
+"com": "Australasian Figbird",
+"confidence": 0.7200092077255249,
+"week_stored": 19
+},
+{
+"offset_s": 18.0,
+"sci": "Sphecotheres vieilloti",
+"com": "Australasian Figbird",
+"confidence": 0.7692093253135681,
+"week_stored": 19
+}
+],
+"dawn_chorus_11089_13107": [
+{
+"offset_s": 6.0,
+"sci": "Phylloscopus collybita",
+"com": "Common Chiffchaff",
+"confidence": 0.7781999707221985,
+"week_stored": 27
+},
+{
+"offset_s": 15.0,
+"sci": "Phylloscopus collybita",
+"com": "Common Chiffchaff",
+"confidence": 0.7666329145431519,
+"week_stored": 27
+}
+],
+"wind_10774_12777": [
+{
+"offset_s": 27.0,
+"sci": "Erithacus rubecula",
+"com": "European Robin",
+"confidence": 0.7491098642349243,
+"week_stored": 31
+}
+],
+"frogs_insects_11544_13596": [
+{
+"offset_s": 21.0,
+"sci": "Apus apus",
+"com": "Common Swift",
+"confidence": 0.8121016621589661,
+"week_stored": 30
+},
+{
+"offset_s": 27.0,
+"sci": "Apus apus",
+"com": "Common Swift",
+"confidence": 0.9768776893615723,
+"week_stored": 30
+}
+],
+"dawn_chorus_18822_21834": [
+{
+"offset_s": 0.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.9795755743980408,
+"week_stored": 27
+},
+{
+"offset_s": 6.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.7060856819152832,
+"week_stored": 27
+},
+{
+"offset_s": 9.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.9089326858520508,
+"week_stored": 27
+},
+{
+"offset_s": 12.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.8317559361457825,
+"week_stored": 27
+},
+{
+"offset_s": 15.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.7550342679023743,
+"week_stored": 27
+},
+{
+"offset_s": 21.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.9245943427085876,
+"week_stored": 27
+},
+{
+"offset_s": 27.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.9283124208450317,
+"week_stored": 27
+}
+],
+"quiet_13819_16127": [
+{
+"offset_s": 0.0,
+"sci": "Cuculus canorus",
+"com": "Common Cuckoo",
+"confidence": 0.9494880437850952,
+"week_stored": 18
+}
+],
+"quiet_16537_19216": [
+{
+"offset_s": 0.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8438006639480591,
+"week_stored": 28
+},
+{
+"offset_s": 3.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.9207614064216614,
+"week_stored": 28
+},
+{
+"offset_s": 6.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.9353274703025818,
+"week_stored": 28
+},
+{
+"offset_s": 9.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.9030635356903076,
+"week_stored": 28
+},
+{
+"offset_s": 12.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8821621537208557,
+"week_stored": 28
+},
+{
+"offset_s": 15.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8274264335632324,
+"week_stored": 28
+},
+{
+"offset_s": 18.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8387718796730042,
+"week_stored": 28
+},
+{
+"offset_s": 21.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8942630887031555,
+"week_stored": 28
+},
+{
+"offset_s": 24.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8488130569458008,
+"week_stored": 28
+},
+{
+"offset_s": 27.0,
+"sci": "Podiceps cristatus",
+"com": "Great Crested Grebe",
+"confidence": 0.8684288263320923,
+"week_stored": 28
+}
+],
+"named_songbirds_10075_12022": [
+{
+"offset_s": 0.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9191868901252747,
+"week_stored": 19
+},
+{
+"offset_s": 3.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9664844870567322,
+"week_stored": 19
+},
+{
+"offset_s": 6.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9862459897994995,
+"week_stored": 19
+},
+{
+"offset_s": 9.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.974982500076294,
+"week_stored": 19
+},
+{
+"offset_s": 15.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9730322957038879,
+"week_stored": 19
+},
+{
+"offset_s": 24.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9739493131637573,
+"week_stored": 19
+},
+{
+"offset_s": 27.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9590344429016113,
+"week_stored": 19
+}
+],
+"named_corvids_gulls_16619_19308": [
+{
+"offset_s": 0.0,
+"sci": "Picus viridis",
+"com": "Eurasian Green Woodpecker",
+"confidence": 0.7917493581771851,
+"week_stored": 5
+},
+{
+"offset_s": 3.0,
+"sci": "Picus viridis",
+"com": "Eurasian Green Woodpecker",
+"confidence": 0.7696748971939087,
+"week_stored": 5
+}
+],
+"named_corvids_gulls_2104_70923": [
+{
+"offset_s": 0.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.7784366011619568,
+"week_stored": 35
+},
+{
+"offset_s": 6.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.8704219460487366,
+"week_stored": 35
+},
+{
+"offset_s": 9.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.8354305028915405,
+"week_stored": 35
+},
+{
+"offset_s": 12.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.8776072263717651,
+"week_stored": 35
+},
+{
+"offset_s": 15.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.7840547561645508,
+"week_stored": 35
+},
+{
+"offset_s": 18.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.8428444862365723,
+"week_stored": 35
+},
+{
+"offset_s": 21.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.9338690638542175,
+"week_stored": 35
+},
+{
+"offset_s": 24.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.7201166749000549,
+"week_stored": 35
+},
+{
+"offset_s": 27.0,
+"sci": "Garrulus glandarius",
+"com": "Eurasian Jay",
+"confidence": 0.7525175213813782,
+"week_stored": 35
+}
+],
+"bird_choruses_13201_15433": [
+{
+"offset_s": 9.0,
+"sci": "Fringilla coelebs",
+"com": "Common Chaffinch",
+"confidence": 0.801844596862793,
+"week_stored": 12
+},
+{
+"offset_s": 21.0,
+"sci": "Fringilla coelebs",
+"com": "Common Chaffinch",
+"confidence": 0.7193281054496765,
+"week_stored": 12
+}
+],
+"bird_choruses_14681_17122": [
+{
+"offset_s": 9.0,
+"sci": "Troglodytes troglodytes",
+"com": "Eurasian Wren",
+"confidence": 0.9122533202171326,
+"week_stored": 18
+},
+{
+"offset_s": 24.0,
+"sci": "Troglodytes troglodytes",
+"com": "Eurasian Wren",
+"confidence": 0.9666016697883606,
+"week_stored": 18
+}
+],
+"bird_choruses_18815_21827": [
+{
+"offset_s": 18.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.921195924282074,
+"week_stored": 16
+},
+{
+"offset_s": 21.0,
+"sci": "Columba palumbus",
+"com": "Common Wood-Pigeon",
+"confidence": 0.9282751679420471,
+"week_stored": 16
+},
+{
+"offset_s": 24.0,
+"sci": "Aegithalos caudatus",
+"com": "Long-tailed Tit",
+"confidence": 0.7577508687973022,
+"week_stored": 16
+}
+],
+"named_songbirds_13133_15363": [
+{
+"offset_s": 0.0,
+"sci": "Passer domesticus",
+"com": "House Sparrow",
+"confidence": 0.7233748435974121,
+"week_stored": 12
+},
+{
+"offset_s": 18.0,
+"sci": "Passer domesticus",
+"com": "House Sparrow",
+"confidence": 0.8363713622093201,
+"week_stored": 12
+},
+{
+"offset_s": 21.0,
+"sci": "Passer domesticus",
+"com": "House Sparrow",
+"confidence": 0.7320099472999573,
+"week_stored": 12
+}
+],
+"farm_wetland_10050_11994": [
+{
+"offset_s": 18.0,
+"sci": "Cygnus olor",
+"com": "Mute Swan",
+"confidence": 0.8053140640258789,
+"week_stored": 18
+},
+{
+"offset_s": 21.0,
+"sci": "Cygnus olor",
+"com": "Mute Swan",
+"confidence": 0.991183876991272,
+"week_stored": 18
+},
+{
+"offset_s": 27.0,
+"sci": "Cygnus olor",
+"com": "Mute Swan",
+"confidence": 0.9177706241607666,
+"week_stored": 18
+}
+],
+"named_songbirds_13513_15765": [
+{
+"offset_s": 0.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.7257086038589478,
+"week_stored": 17
+},
+{
+"offset_s": 3.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9477471709251404,
+"week_stored": 17
+},
+{
+"offset_s": 6.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9917729496955872,
+"week_stored": 17
+},
+{
+"offset_s": 9.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.7504874467849731,
+"week_stored": 17
+},
+{
+"offset_s": 15.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9346967339515686,
+"week_stored": 17
+},
+{
+"offset_s": 21.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9334943294525146,
+"week_stored": 17
+},
+{
+"offset_s": 24.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.9892467856407166,
+"week_stored": 17
+},
+{
+"offset_s": 27.0,
+"sci": "Luscinia megarhynchos",
+"com": "Common Nightingale",
+"confidence": 0.7075493931770325,
+"week_stored": 17
+}
+],
+"named_songbirds_16880_19663": [
+{
+"offset_s": 6.0,
+"sci": "Erithacus rubecula",
+"com": "European Robin",
+"confidence": 0.7025201916694641,
+"week_stored": 9
+}
+],
+"named_nonpasserine_10785_12789": [
+{
+"offset_s": 0.0,
+"sci": "Dendrocopos major",
+"com": "Great Spotted Woodpecker",
+"confidence": 0.8069556355476379,
+"week_stored": 22
+},
+{
+"offset_s": 12.0,
+"sci": "Dendrocopos major",
+"com": "Great Spotted Woodpecker",
+"confidence": 0.7354303598403931,
+"week_stored": 22
+},
+{
+"offset_s": 27.0,
+"sci": "Dendrocopos major",
+"com": "Great Spotted Woodpecker",
+"confidence": 0.7872644066810608,
+"week_stored": 22
+}
+],
+"named_corvids_gulls_10268_12220": [
+{
+"offset_s": 0.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.7834081649780273,
+"week_stored": 20
+},
+{
+"offset_s": 3.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9305544495582581,
+"week_stored": 20
+},
+{
+"offset_s": 6.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.8216318488121033,
+"week_stored": 20
+},
+{
+"offset_s": 9.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9338856339454651,
+"week_stored": 20
+},
+{
+"offset_s": 12.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9656879901885986,
+"week_stored": 20
+},
+{
+"offset_s": 15.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9464685916900635,
+"week_stored": 20
+},
+{
+"offset_s": 18.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9497034549713135,
+"week_stored": 20
+},
+{
+"offset_s": 21.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9428982138633728,
+"week_stored": 20
+},
+{
+"offset_s": 24.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9721225500106812,
+"week_stored": 20
+},
+{
+"offset_s": 27.0,
+"sci": "Corvus frugilegus",
+"com": "Rook",
+"confidence": 0.9619385004043579,
+"week_stored": 20
+}
+]
+}
+}

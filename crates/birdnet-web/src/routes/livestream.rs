@@ -381,17 +381,29 @@ pub(super) async fn start_encoder(
         })
         .await;
     let resolved = match looked_up {
-        Some(resolved) => resolved,
-        None if asked_for_id => {
+        Ok(Some(resolved)) => resolved,
+        // The table answered and the row is not there: a statement about the
+        // station, and the right one to make.
+        Ok(None) if asked_for_id => {
             return Err(refuse(
                 StatusCode::NOT_FOUND,
                 "no such audio source".to_owned(),
             ));
         }
-        None => {
+        Ok(None) => {
             return Err(refuse(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "no audio source configured".to_owned(),
+            ));
+        }
+        // The table did not answer. Neither "no such source" (404) nor "none
+        // configured" is true, and a player that retries a 503 will find the
+        // source again once the database does.
+        Err(e) => {
+            tracing::warn!(error = %e, "live stream: the audio sources could not be read");
+            return Err(refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the audio sources could not be read".to_owned(),
             ));
         }
     };
@@ -779,12 +791,16 @@ struct ResolvedSource {
 /// Resolve a `?source_id=` query value by looking up the configured
 /// `audio_sources` row.
 ///
-/// Returns `None` when the row is missing, disabled, or the DB read itself
-/// fails. Callers treat all three as "404 no such source".
-fn resolve_by_source_id(state: &AppState, id: &str) -> Option<ResolvedSource> {
+/// `Ok(None)` when the row is missing or disabled (the caller answers "404 no
+/// such source"); `Err` when the table could not be read, which is not the same
+/// fact and is answered `503`.
+fn resolve_by_source_id(
+    state: &AppState,
+    id: &str,
+) -> Result<Option<ResolvedSource>, birdnet_db::audio_sources::AudioSourceError> {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let sources = state.with_read_db(|conn| AudioSourceStore::list(conn).ok())?;
-    pick_by_id(&sources, id)
+    let sources = state.with_read_db(AudioSourceStore::list)?;
+    Ok(pick_by_id(&sources, id))
 }
 
 /// The settings key naming the `audio_sources` row `/stream` serves by default.
@@ -798,20 +814,28 @@ pub const LIVESTREAM_SOURCE_SETTING: &str = "livestream_source";
 ///
 /// DB-only, in two steps: the row named by [`LIVESTREAM_SOURCE_SETTING`] if it
 /// is set and still enabled, else the first non-disabled `audio_sources` row
-/// (in `created_at ASC` order). Returns `None` when the table is empty or
-/// unreadable, in which case the caller responds with `503 Service
-/// Unavailable`. (The legacy single-string `state.audio_source()` fallback was
+/// (in `created_at ASC` order). `Ok(None)` when the table has no such row and
+/// `Err` when it could not be read; the caller answers both `503 Service
+/// Unavailable`, with the reason that is true. (The legacy single-string `state.audio_source()` fallback was
 /// retired in O-13 — sources are managed exclusively through the
 /// `audio_sources` table now.)
-fn resolve_default_source(state: &AppState) -> Option<ResolvedSource> {
+fn resolve_default_source(
+    state: &AppState,
+) -> Result<Option<ResolvedSource>, birdnet_db::audio_sources::AudioSourceError> {
     use birdnet_db::audio_sources::AudioSourceStore;
     let (sources, configured) = state.with_read_db(|conn| {
-        (
-            AudioSourceStore::list(conn).unwrap_or_default(),
-            birdnet_db::settings::get_or(conn, LIVESTREAM_SOURCE_SETTING, "").unwrap_or_default(),
-        )
-    });
-    pick_default(&sources, &configured)
+        let sources = AudioSourceStore::list(conn)?;
+        // The named default is a preference, and the fallback on a missing one is
+        // the documented behaviour, so an unreadable setting is read the same way:
+        // as unset, with the reason in the log.
+        let configured = birdnet_db::settings::get_or(conn, LIVESTREAM_SOURCE_SETTING, "")
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "live stream: the default-source setting could not be read; using the first enabled source");
+                String::new()
+            });
+        Ok::<_, birdnet_db::audio_sources::AudioSourceError>((sources, configured))
+    })?;
+    Ok(pick_default(&sources, &configured))
 }
 
 /// The id of the source `/stream` serves for a request with no `?source_id=`.
@@ -823,7 +847,10 @@ fn resolve_default_source(state: &AppState) -> Option<ResolvedSource> {
 /// spelling — which is exactly how a setting comes to be stored and never read.
 #[cfg(test)]
 pub(crate) fn default_source_id(state: &AppState) -> Option<String> {
-    resolve_default_source(state).map(|resolved| resolved.id)
+    resolve_default_source(state)
+        .ok()
+        .flatten()
+        .map(|resolved| resolved.id)
 }
 
 /// Pure helper: the configured default if it is still there, else the first

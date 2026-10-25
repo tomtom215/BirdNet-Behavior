@@ -33,24 +33,31 @@ pub(super) async fn detections_partial(
     let today = today_date_string();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        // What the empty feed may claim, from the capture status the hero pill
+        // and the first-run checklist read. Resolved before the feed's own
+        // read so the three cannot disagree; only used when the feed is empty.
+        let yard = yard_state(
+            crate::routes::pages::today::live_capture_state(&state),
+            state.detection_daemon_running(),
+        );
         state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
             // Propagated, not defaulted: without the map the "first ever" badge
             // is simply absent, which reads as *this was not a first*.
             let first_seen = birdnet_db::sqlite::species_first_detection(conn)?;
             let floor = crate::routes::pages::confidence::station_floor(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen, floor))
+            Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen, floor, yard))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, first_seen, floor))) => {
+        Ok(Ok((detections, first_seen, floor, yard))) => {
             if detections.is_empty() {
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    crate::routes::pages::empty_states::quiet_yard(),
+                    crate::routes::pages::empty_states::quiet_yard_while(yard),
                 );
             }
             // The key to the bars below, once, where they first appear.
@@ -72,6 +79,25 @@ pub(super) async fn detections_partial(
     }
 }
 
+/// What the empty feed may say, from the capture status and the detector.
+///
+/// Pure, so the table can be read off a test.
+pub(super) const fn yard_state(
+    capture: crate::routes::pages::today::CaptureState,
+    detector_running: bool,
+) -> crate::routes::pages::empty_states::YardState {
+    use crate::routes::pages::empty_states::YardState;
+    use crate::routes::pages::today::CaptureState;
+    match capture {
+        CaptureState::NoSource => YardState::NoMicrophone,
+        CaptureState::Down => YardState::NotRecording,
+        CaptureState::Unreadable => YardState::Unknown,
+        CaptureState::Unknown => YardState::Starting,
+        CaptureState::Up if detector_running => YardState::Listening,
+        CaptureState::Up => YardState::DetectorOff,
+    }
+}
+
 /// Render one live-feed row in the redesigned dashboard style.
 fn render_feed_row(
     html: &mut String,
@@ -86,7 +112,7 @@ fn render_feed_row(
     let shown = names.name(&d.sci_name, &d.com_name);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
-    let time_short = d.time.get(0..5).unwrap_or(&d.time);
+    let time_short = crate::display::clock(d.time.get(0..5).unwrap_or(&d.time));
 
     // Marks the one detection that *was* the species' first ever — not every
     // detection of a species whose first was recent. `first_seen` used to hold
@@ -205,7 +231,7 @@ fn render_best_row(
 ) {
     let enc = simple_url_encode(&d.com_name);
     let shown = names.name(&d.sci_name, &d.com_name);
-    let time_short = d.time.get(0..5).unwrap_or(&d.time);
+    let time_short = crate::display::clock(d.time.get(0..5).unwrap_or(&d.time));
     // Same exact-instant rule as the feed row above.
     let tag = first_seen.get(&d.sci_name).map_or("", |fs| {
         if *fs != format!("{} {}", d.date, d.time) {
@@ -443,7 +469,7 @@ pub(super) async fn hourly_chart_partial(
         Ok(Ok(hours)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_hourly_chart(&hours),
+            render_hourly_chart("dash-hourly", &hours),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -460,15 +486,29 @@ pub(super) async fn hourly_chart_partial(
 pub(super) async fn daily_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
+    let today = crate::routes::pages::today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::daily_counts(conn, 7)?;
+            // The station's own record of when it was listening, so a day it was off is
+            // not drawn as a quiet one. Unreadable means unknown, which draws nothing.
+            let effort = days.first().and_then(|first| {
+                crate::routes::pages::listening::effort_by_date(
+                    conn,
+                    &first.date,
+                    &crate::routes::pages::today_date_string(),
+                )
+                .ok()
+            });
+            Ok::<_, birdnet_db::sqlite::DbError>((days, effort))
+        })
     })
     .await;
     match result {
-        Ok(Ok(days)) => (
+        Ok(Ok((days, effort))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_daily_chart(&days),
+            render_daily_chart("dash-daily", &days, Some(&today), effort.as_ref()),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -540,7 +580,7 @@ pub(super) async fn most_recent_partial(
     let com_safe = escape_html(names.name(&det.sci_name, &det.com_name));
     let sci_safe = escape_html(&det.sci_name);
     let date_safe = escape_html(&det.date);
-    let time_safe = escape_html(&det.time);
+    let time_safe = crate::display::clock(&det.time);
     let enc = simple_url_encode(&det.com_name);
 
     let audio_html = det

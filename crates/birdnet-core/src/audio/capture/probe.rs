@@ -184,6 +184,129 @@ pub fn probe_alsa_rates(device: &str) -> RateSupport {
     }
 }
 
+/// How loud a short recording from a microphone was.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Level {
+    /// Root-mean-square level, in dB relative to full scale (0 is the loudest a
+    /// sample can be; a quiet room is around -60).
+    pub rms_dbfs: f64,
+    /// The loudest single sample, in dB relative to full scale.
+    pub peak_dbfs: f64,
+}
+
+/// Why a level could not be measured, in words for the person at the page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LevelError {
+    /// The device string is not one a sound card is named by.
+    BadDevice,
+    /// `arecord` is not installed on the station.
+    NoArecord,
+    /// `arecord` ran and said it could not open the device.
+    Refused(String),
+    /// Nothing came back, or too little to measure.
+    NoAudio,
+}
+
+impl std::fmt::Display for LevelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadDevice => f.write_str("That is not a sound card name."),
+            Self::NoArecord => f.write_str(
+                "The station cannot record a test: the `arecord` program (package alsa-utils) is not installed.",
+            ),
+            Self::Refused(why) => write!(
+                f,
+                "The microphone could not be opened ({why}). If the station is already listening with it, it is busy — that is normal, and Listen live will show it working."
+            ),
+            Self::NoAudio => f.write_str("The microphone gave no sound to measure."),
+        }
+    }
+}
+
+/// Whether `device` is shaped like an ALSA card name (`plughw:CARD=Device,DEV=0`,
+/// `hw:1,0`).
+///
+/// Nothing `arecord -D` would read as something else gets through. The value
+/// is passed as one argument, never to a shell; this keeps it to a card name
+/// and not an arbitrary PCM definition.
+#[must_use]
+pub fn is_card_name(device: &str) -> bool {
+    !device.is_empty()
+        && device.len() <= 64
+        && device.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b':' | b'=' | b',' | b'_' | b'-' | b'.')
+        })
+        && (device.starts_with("plughw:")
+            || device.starts_with("hw:")
+            || device.starts_with("sysdefault:"))
+}
+
+/// The level of `samples` (signed 16-bit, little-endian bytes).
+///
+/// Pure, so the arithmetic is tested without a sound card. Fewer than 200
+/// samples is not a measurement.
+#[must_use]
+pub fn level_of_s16le(bytes: &[u8]) -> Option<Level> {
+    let samples: Vec<f64> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| f64::from(i16::from_le_bytes(*c)) / 32768.0)
+        .collect();
+    if samples.len() < 200 {
+        return None;
+    }
+    // At most a few hundred thousand samples (two seconds), far inside f64's 52 bits.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a two-second recording is a few hundred thousand samples"
+    )]
+    let n = samples.len() as f64;
+    let rms = (samples.iter().map(|s| s * s).sum::<f64>() / n).sqrt();
+    let peak = samples.iter().fold(0.0_f64, |m, s| m.max(s.abs()));
+    // 20*log10, floored so digital silence reads as a very quiet number and not
+    // as negative infinity, which JSON cannot carry.
+    let db = |x: f64| 20.0 * x.max(1e-6).log10();
+    Some(Level {
+        rms_dbfs: db(rms),
+        peak_dbfs: db(peak),
+    })
+}
+
+/// Record about two seconds from `device` and measure how loud it was.
+///
+/// The one step of the setup wizard's microphone test that touches hardware, so
+/// it is **not** exercised by this project's tests (CI has no sound card):
+/// the decisions around it — [`is_card_name`], [`level_of_s16le`] — are.
+///
+/// # Errors
+///
+/// A [`LevelError`] whose message says what to do about it.
+pub fn measure_level(device: &str) -> Result<Level, LevelError> {
+    if !is_card_name(device) {
+        return Err(LevelError::BadDevice);
+    }
+    let out = run_with_timeout(
+        Command::new("arecord").args([
+            "-D", device, "-q", "-d", "2", "-f", "S16_LE", "-r", "48000", "-c", "1", "-t", "raw",
+        ]),
+        Duration::from_secs(8),
+    )
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            LevelError::NoArecord
+        } else {
+            LevelError::Refused(e.to_string())
+        }
+    })?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr);
+        let why = why.lines().next().unwrap_or("it refused").trim();
+        return Err(LevelError::Refused(why.to_owned()));
+    }
+    level_of_s16le(&out.stdout).ok_or(LevelError::NoAudio)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RateSupport, parse_hw_params_rates, pick_rate};
@@ -443,5 +566,54 @@ mod tests {
             pick_rate(&RateSupport::Discrete(vec![32_000]), 32_000),
             None
         );
+    }
+
+    // ── level test ──────────────────────────────────────────────────────
+
+    #[test]
+    fn only_card_names_are_passed_to_arecord() {
+        use super::is_card_name;
+        for ok in [
+            "plughw:CARD=Device,DEV=0",
+            "hw:1,0",
+            "plughw:1,0",
+            "sysdefault:CARD=PRO",
+        ] {
+            assert!(is_card_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "default",
+            "plughw:1,0; rm -rf /",
+            "plughw:1,0 -f x",
+            "file:/etc/passwd",
+            "plughw:$(id)",
+            "{pcm.x}",
+            "hw:1,0\nsecond",
+        ] {
+            assert!(!is_card_name(bad), "{bad:?}");
+        }
+    }
+
+    /// A full-scale square wave is 0 dBFS; half scale is about -6 dB; silence
+    /// is far below any room; too little data is no measurement.
+    #[test]
+    fn the_level_of_known_signals() {
+        use super::level_of_s16le;
+        let wave = |amp: i16| -> Vec<u8> {
+            (0..2000)
+                .flat_map(|i| (if i % 2 == 0 { amp } else { -amp }).to_le_bytes())
+                .collect()
+        };
+        let full = level_of_s16le(&wave(i16::MAX)).expect("level");
+        assert!(full.rms_dbfs > -0.1 && full.peak_dbfs > -0.1, "{full:?}");
+        let half = level_of_s16le(&wave(16384)).expect("level");
+        assert!((half.rms_dbfs + 6.02).abs() < 0.1, "{half:?}");
+        let silent = level_of_s16le(&vec![0u8; 4000]).expect("level");
+        assert!(
+            silent.rms_dbfs < -100.0 && silent.rms_dbfs.is_finite(),
+            "{silent:?}"
+        );
+        assert!(level_of_s16le(&wave(1000)[..100]).is_none(), "50 samples");
     }
 }

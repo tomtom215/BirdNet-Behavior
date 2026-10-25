@@ -137,7 +137,7 @@ pub fn probe_duration_secs(path: &Path) -> Option<f64> {
     Some(num_frames as f64 / f64::from(sample_rate))
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)]
 fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioData, DecodeError> {
     use symphonia::core::audio::GenericAudioBufferRef;
     use symphonia::core::codecs::audio::AudioDecoderOptions;

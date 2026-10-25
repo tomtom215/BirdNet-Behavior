@@ -1,0 +1,36 @@
+/* Listening aids (static/listen-fx.js): boost, rumble cut, evener.
+   Loaded by the script itself, only on a page that has the controls.
+   Colours, spacing and type come from the design tokens in app.css. */
+.lfx { display: grid; gap: var(--space-12); max-width: 36rem; }
+.lfx[hidden] { display: none; }
+.lfx-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 10rem) minmax(0, 1fr) 4.5rem;
+  align-items: center;
+  gap: var(--space-12);
+}
+.lfx-row > label { font-size: var(--fs-sm); color: var(--fg-2); }
+.lfx-row > input[type="range"] { width: 100%; min-height: 24px; accent-color: var(--moss); }
+.lfx-out {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.lfx-check {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-8);
+}
+.lfx-check > label { color: var(--fg); }
+.lfx-note { margin: 0; }
+@media (max-width: 540px) {
+  .lfx-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: var(--space-4); }
+  .lfx-row > input[type="range"] { grid-column: 1 / -1; grid-row: 2; }
+  .lfx-check { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+
+/* The fold the controls sit in on a page that is about one clip. */
+.lfx-fold { margin-top: var(--space-12); }
+.lfx-fold > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--fg-2); padding: var(--space-4) 0; }
+.lfx-fold[open] > summary { margin-bottom: var(--space-8); }

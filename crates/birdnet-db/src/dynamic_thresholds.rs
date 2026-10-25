@@ -100,6 +100,31 @@ pub fn load_all(conn: &Connection) -> Result<Vec<LearnedThreshold>, DbError> {
     Ok(rows)
 }
 
+/// Delete one species' stored level, returning how many rows went (0 or 1).
+///
+/// The name is matched without regard to ASCII case, as the read route is: a
+/// reset of `turdus merula` used to report success, record itself in the audit
+/// trail and delete nothing, because the stored name is `Turdus merula`.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on `SQLite` failure.
+pub fn delete_one(conn: &Connection, sci_name: &str) -> Result<usize, DbError> {
+    Ok(conn.execute(
+        "DELETE FROM dynamic_thresholds WHERE sci_name = ?1 COLLATE NOCASE",
+        params![sci_name],
+    )?)
+}
+
+/// Delete every stored level, returning how many rows went.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on `SQLite` failure.
+pub fn delete_all(conn: &Connection) -> Result<usize, DbError> {
+    Ok(conn.execute("DELETE FROM dynamic_thresholds", [])?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +144,43 @@ mod tests {
             first_learned_ms: 0,
             last_confirmed_ms: expires - 1000,
         }
+    }
+
+    /// The table, the read route and the tracker must agree on what a name is:
+    /// `turdus merula` is `Turdus merula`. The counterpart is that a different
+    /// species is untouched.
+    #[test]
+    fn deleting_one_ignores_the_case_of_the_name() {
+        let conn = db();
+        replace_all(
+            &conn,
+            &[row("Turdus merula", 2, 5000), row("Strix aluco", 1, 9000)],
+        )
+        .expect("write");
+        assert_eq!(delete_one(&conn, "turdus merula").unwrap(), 1);
+        assert_eq!(
+            delete_one(&conn, "TURDUS MERULA").unwrap(),
+            0,
+            "already gone"
+        );
+        let left = load_all(&conn).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].sci_name, "Strix aluco", "another species went too");
+    }
+
+    #[test]
+    fn deleting_one_or_all_reports_what_went() {
+        let conn = db();
+        replace_all(
+            &conn,
+            &[row("Turdus merula", 2, 5000), row("Strix aluco", 1, 9000)],
+        )
+        .expect("write");
+        assert_eq!(delete_one(&conn, "Strix aluco").unwrap(), 1);
+        assert_eq!(delete_one(&conn, "Strix aluco").unwrap(), 0);
+        assert_eq!(load_all(&conn).unwrap().len(), 1);
+        assert_eq!(delete_all(&conn).unwrap(), 1);
+        assert_eq!(delete_all(&conn).unwrap(), 0);
     }
 
     #[test]

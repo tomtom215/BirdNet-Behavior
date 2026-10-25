@@ -60,9 +60,10 @@ pub struct LoginThrottle {
 /// afterwards let a parallel burst through: every request passed the check
 /// while none had yet recorded, so the global limiter's burst of sixty was
 /// sixty guesses, not five. Dropping an `Attempt` leaves the failure counted;
-/// [`LoginThrottle::succeeded`] withdraws it.
+/// [`LoginThrottle::succeeded`] withdraws it (and forgets the client's other
+/// failures); [`LoginThrottle::withdraw`] withdraws only it.
 #[derive(Debug)]
-#[must_use = "drop it for a failure, or pass it to `succeeded`"]
+#[must_use = "drop it for a failure, or pass it to `succeeded` or `withdraw`"]
 pub struct Attempt {
     client: IpAddr,
     voucher: Option<IpAddr>,
@@ -110,6 +111,37 @@ impl LoginThrottle {
         let Attempt { client, voucher } = attempt;
         if let Ok(mut tables) = self.tables.lock() {
             tables.0.remove(&client);
+            if let Some(v) = voucher
+                && let Some(recent) = tables.1.get_mut(&v)
+            {
+                recent.pop_back();
+                if recent.is_empty() {
+                    tables.1.remove(&v);
+                }
+            }
+        }
+    }
+
+    /// The attempt was neither a guess nor a sign-in (the users could not be
+    /// read, so nothing was said about the password): take back the one failure
+    /// it was charged and leave the rest of the history alone.
+    ///
+    /// [`Self::succeeded`] is not this. It forgets every failure the client has
+    /// accumulated, which is right once the right password has been typed and
+    /// wrong when the station merely failed to look: a client with four wrong
+    /// guesses would get a fresh five by finding a moment the database was
+    /// unreadable.
+    // By value on purpose: see `succeeded`.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn withdraw(&self, attempt: Attempt) {
+        let Attempt { client, voucher } = attempt;
+        if let Ok(mut tables) = self.tables.lock() {
+            if let Some(recent) = tables.0.get_mut(&client) {
+                recent.pop_back();
+                if recent.is_empty() {
+                    tables.0.remove(&client);
+                }
+            }
             if let Some(v) = voucher
                 && let Some(recent) = tables.1.get_mut(&v)
             {
@@ -367,5 +399,34 @@ mod tests {
             "A's failure stands"
         );
         assert_eq!(t.tracked_addresses(), 1);
+    }
+    /// `withdraw` takes back only the failure its attempt was charged; `succeeded`
+    /// forgets the lot. The Unavailable arm of the sign-in needs the first.
+    #[test]
+    fn withdrawing_an_attempt_keeps_the_failures_before_it() {
+        let t = LoginThrottle::default();
+        for _ in 0..3 {
+            drop(t.begin(A, None).expect("allowed"));
+        }
+        let attempt = t.begin(A, None).expect("the fourth is allowed");
+        t.withdraw(attempt);
+        // Three stand: two more are allowed, the sixth call is refused.
+        drop(t.begin(A, None).expect("fourth"));
+        drop(t.begin(A, None).expect("fifth"));
+        assert!(
+            t.begin(A, None).is_err(),
+            "the three earlier failures stand"
+        );
+
+        // Counterpart: `succeeded` forgets the history, as it always did.
+        let t = LoginThrottle::default();
+        for _ in 0..3 {
+            drop(t.begin(A, None).expect("allowed"));
+        }
+        t.succeeded(t.begin(A, None).expect("allowed"));
+        for _ in 0..5 {
+            drop(t.begin(A, None).expect("a clean slate"));
+        }
+        assert!(t.begin(A, None).is_err());
     }
 }

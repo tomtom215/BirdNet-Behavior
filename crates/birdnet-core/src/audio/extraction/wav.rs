@@ -18,7 +18,6 @@ use super::ExtractionError;
 /// # Errors
 ///
 /// Returns [`ExtractionError::Write`] if writing fails.
-#[allow(clippy::cast_possible_truncation)]
 pub(super) fn write_wav_clip(
     samples: &[f32],
     sample_rate: u32,

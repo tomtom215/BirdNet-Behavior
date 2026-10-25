@@ -25,7 +25,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use axum::extract::{Form, Query, State};
+use crate::routes::form::HtmxForm;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -231,10 +232,12 @@ async fn fetch_clips(
     offset: u32,
 ) -> ClipsData {
     let state = state.clone();
-    let present = recording_basenames(&state.recording_dir());
     // The typed search also covers the station's own language.
     let also = super::name_search::also_species(state.names(), search.as_deref());
     tokio::task::spawn_blocking(move || {
+        // One `read_dir` of the whole recordings directory: with the queries, on the
+        // blocking pool, not a runtime worker.
+        let present = recording_basenames(&state.recording_dir());
         state.with_read_db(|conn| {
             assemble_clips(
                 birdnet_db::sqlite::recent_clips(
@@ -403,7 +406,7 @@ fn render_clip_row(
     let shown = names.name(&d.sci_name, &d.com_name);
     let com_name = escape_html(shown);
     let sci_name = escape_html(&d.sci_name);
-    let time = escape_html(&d.time);
+    let time = crate::display::clock(&d.time);
     let date = escape_html(&d.date);
     let key = escape_html(&super::search::row_key(d));
     // `recordings.html` puts this straight into `.rc-hp-meta` when a clip
@@ -571,13 +574,21 @@ pub(super) fn base_name(file: &str) -> String {
 /// honest streaming sonogram, a source picker, and the live-detection trickle.
 async fn live_view(state: &AppState, source: Option<&str>) -> String {
     let state_q = state.clone();
-    let sources = tokio::task::spawn_blocking(move || {
-        state_q.with_read_db(|conn| AudioSourceStore::list(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
+    // A source list that could not be read is not a station with no microphone:
+    // the picker would say "no source yet" to an operator whose microphone is
+    // recording.
+    let sources = tokio::task::spawn_blocking(move || state_q.with_read_db(AudioSourceStore::list))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|read| read.map_err(|e| e.to_string()));
 
-    let options = super::listen::source_options_for(&sources, source);
+    let options = match &sources {
+        Ok(sources) => super::listen::source_options_for(sources, source),
+        Err(e) => {
+            tracing::warn!(error = %e, "live view: the audio sources could not be listed");
+            super::listen::unreadable_options()
+        }
+    };
     let trickle_skel = super::skeletons::feed_rows(6);
 
     format!(
@@ -629,7 +640,7 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
 async fn lock_clip(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, true);
     let result = tokio::task::spawn_blocking(move || {
@@ -660,7 +671,7 @@ async fn lock_clip(
 async fn unlock_clip(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     let button = lock_button(&row, false);
     let result = tokio::task::spawn_blocking(move || {
@@ -713,7 +724,7 @@ fn clip_write(
 async fn delete_clip(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(row): Form<crate::state::RowRef>,
+    HtmxForm(row): HtmxForm<crate::state::RowRef>,
 ) -> axum::response::Response {
     // Paired write: the analytics copy is incremental and cannot notice a
     // removal on its own. See `AppState::delete_detection`, which also

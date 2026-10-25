@@ -133,6 +133,11 @@ async fn serve(
     // carried to the settings seed below, which must not copy them into the
     // database.
     let (config, secret_files) = helpers::resolve_secret_files(config);
+    // Keys in an existing config file that now do what they say; a station that
+    // upgraded with one set is doing something different from last week.
+    for notice in helpers::startup_notices::notices(config.as_ref()) {
+        tracing::info!("{notice}");
+    }
     match &config_decision {
         helpers::startup_config::ConfigDecision::Loaded => {}
         helpers::startup_config::ConfigDecision::Reverted { errors, last_good } => {
@@ -313,6 +318,11 @@ async fn serve(
         .with_supervised_by_systemd(
             birdnet_web::routes::admin::system_controls::supervised_by_systemd(),
         )
+        // Where nothing supervises the process (the binary run from a terminal,
+        // a container without a restart policy) a restart request makes it shut
+        // down and run itself again, so the browser can finish what it started:
+        // the setup wizard ends on a restart. `main` does the exec.
+        .with_self_restart(cfg!(unix))
         // OP-1: `--doctor` and `--support-bundle` from the browser. The hooks
         // are read-only clones of the command line and the configuration, so
         // a GET runs the checks and never the repairs.
@@ -365,6 +375,9 @@ async fn serve(
     // changes apply on restart (as the settings page already states). Done here
     // — after the DB-backed state exists, before any subsystem reads config.
     let config = helpers::overlay_db_settings(config, &state);
+
+    // Which sites may frame the station (off unless EMBED_ORIGINS lists some).
+    helpers::embedding::apply_embed_origins(&state, config.as_ref());
 
     // Say once, at start, exactly what offline mode turned off — so the answer
     // to "does this station phone home?" is in the journal rather than in a
@@ -440,14 +453,39 @@ async fn serve(
 
     // Create integration clients.
     let apprise_client = integrations::create_apprise_client(&cli, config.as_ref());
-    let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
+    // The blur offset is kept beside the database so it is the same after a
+    // restart (see `fuzz_location` for what a fixed offset does and does not hide).
+    let birdweather_client = match integrations::create_birdweather_client(&cli, config.as_ref()) {
+        Some(client) => {
+            let data_dir = db_path.parent().map(std::path::Path::to_path_buf);
+            // A file read (and, once, a write): off the async workers. If the
+            // task dies the client is gone with it, which is the fail-closed
+            // answer for a client that was about to post a blurred position.
+            match tokio::task::spawn_blocking(move || {
+                integrations::with_persisted_blur_seed(client, data_dir.as_deref())
+            })
+            .await
+            {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    tracing::error!(error = %e, "BirdWeather uploads are OFF: the blur-seed task failed");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     let email_notifier = integrations::create_email_notifier(&state);
     // What "Test all channels" can reach (DD-24): the integrations this
     // binary built, wrapped as probes the web layer runs on demand.
-    state.set_notification_probes(integrations::notification_probes(
+    let mut probes = integrations::notification_probes(
         integrations::get_mqtt_client_ref(&cli, config.as_ref()),
         email_notifier.clone(),
-    ));
+    );
+    // eBird and weather are not channels, so "Test all" leaves them out; they
+    // have a button each (P-15).
+    (probes.ebird, probes.weather) = integrations::data_source_probes(config.as_ref());
+    state.set_notification_probes(probes);
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
     // Cloned before the detection pipeline takes ownership: the presence
@@ -617,6 +655,36 @@ async fn serve(
         daemon_handle.is_some(),
         std::sync::atomic::Ordering::Relaxed,
     );
+    // What the browser's classifier panel reports: where an install would land,
+    // what this start asked the detection engine to run, and whether it came up.
+    state
+        .classifier_setup()
+        .configure(birdnet_web::classifier_setup::Layout {
+            model_dir: helpers::models::model_dir(config.as_ref()),
+            model: cli.model.clone().or_else(|| {
+                config
+                    .as_ref()
+                    .and_then(|c| c.get("MODEL_PATH"))
+                    .map(std::path::PathBuf::from)
+            }),
+            range_filter: cli.metadata_model.clone().or_else(|| {
+                config
+                    .as_ref()
+                    .and_then(|c| c.get("METADATA_MODEL_PATH"))
+                    .map(std::path::PathBuf::from)
+            }),
+            started: daemon_handle.is_some(),
+            web_only: cli.web_only,
+        });
+    // The settings pages tell a change the running station has not picked up
+    // from one it has by comparing each row's last write with this moment, which
+    // is after the start-up seeding of the table and before anyone can save.
+    if let Some(now) = state.with_db(|conn| {
+        conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0))
+            .ok()
+    }) {
+        state.pending_restart().mark_booted(now);
+    }
     // ...and keep it true only while the loop thread is alive (PR-5 / OP-2):
     // stored once, the flag reported a daemon that died after boot as running
     // to `?strict=1` for the life of the process.
@@ -735,6 +803,13 @@ async fn serve(
             .into());
         }
     };
+    // What the Access tab's "Secure connection" card says (P-22).
+    state.set_https_status(birdnet_web::routes::admin::https::HttpsStatus {
+        mode: tls_plan.settings.mode,
+        https_addr: tls_plan.https_addr.map(|a| a.to_string()),
+        state_dir: tls_plan.settings.state_dir.clone(),
+        waiting_for_clock: tls_deferred_for_clock,
+    });
     if tls_plan.settings.mode == birdnet_web::tls::TlsMode::SelfSigned {
         tracing::info!(
             ca = %birdnet_web::tls::ca_certificate_path(&tls_plan.settings.state_dir).display(),

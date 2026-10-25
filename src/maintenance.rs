@@ -287,6 +287,14 @@ async fn run_loop(
     }
 }
 
+/// Whether `path` exists, asked of the blocking pool rather than answered by a
+/// `stat` on a runtime worker: these passes run on the same runtime as every
+/// request, and a `stat` is a disk read like any other when the card is busy.
+/// An error is "not there", as with `Path::exists`.
+async fn present(path: &Path) -> bool {
+    tokio::fs::try_exists(path).await.unwrap_or(false)
+}
+
 /// Prune the append-only operational tables.
 ///
 /// # Why this is a scheduled job and was not
@@ -317,7 +325,7 @@ async fn run_loop(
 /// logs should keep recording birds. The whole job is skipped when the clock is
 /// implausible — see `clock_is_safe_for_retention`.
 async fn run_log_retention(db_path: &Path) {
-    if !db_path.exists() {
+    if !present(db_path).await {
         tracing::debug!("log retention skipped: db not present yet");
         return;
     }
@@ -420,7 +428,7 @@ impl LogRetention {
 /// answer rather than on a second implementation of it. It runs only when drift
 /// is actually found, so the daily cost is the check.
 async fn run_summary_audit(db_path: &Path) {
-    if !db_path.exists() {
+    if !present(db_path).await {
         tracing::debug!("summary audit skipped: db not present yet");
         return;
     }
@@ -568,7 +576,7 @@ async fn due(
     interval: Duration,
     attempted: &HashMap<&'static str, i64>,
 ) -> bool {
-    if !db_path.exists() {
+    if !present(db_path).await {
         return false;
     }
     let owned = db_path.to_path_buf();
@@ -708,7 +716,7 @@ fn halt_ingest_if_corrupt(verdict: Option<bool>, ingest_halted: &AtomicBool) {
 /// badge distinguishes "failed" from "not established", and only the first is
 /// a red badge.
 async fn run_integrity_check(db_path: &Path) -> Option<bool> {
-    if !db_path.exists() {
+    if !present(db_path).await {
         tracing::debug!("integrity check skipped: db not present yet");
         return None;
     }
@@ -743,7 +751,7 @@ async fn run_integrity_check(db_path: &Path) -> Option<bool> {
 /// without bound on a long-running install. Best-effort and fully logged; a
 /// failure never aborts the maintenance loop.
 async fn run_session_prune(db_path: &Path) {
-    if !db_path.exists() {
+    if !present(db_path).await {
         tracing::debug!("session prune skipped: db not present yet");
         return;
     }
@@ -870,7 +878,7 @@ const STALE_PART_AGE: Duration = Duration::from_secs(60 * 60);
 /// answered 404, and nothing counted them. This pass stamps every such row,
 /// removes the `.part` files a killed writer left, and reports both.
 async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Reconciliation {
-    if !db_path.exists() {
+    if !present(db_path).await {
         return Reconciliation::default();
     }
     let db_path = db_path.to_path_buf();
@@ -1031,7 +1039,7 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
 /// Locked clips are exempt and the detection rows survive, exactly as for the
 /// per-species cap.
 async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
-    if days == 0 || !db_path.exists() {
+    if days == 0 || !present(db_path).await {
         return;
     }
     let db_path = db_path.to_path_buf();
@@ -1118,7 +1126,7 @@ async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
 ///     forever (which would grow without bound, re-attempting thousands of
 ///     deletes a day on a station with a year of history).
 async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u32) {
-    if cap == 0 || !db_path.exists() {
+    if cap == 0 || !present(db_path).await {
         return;
     }
     let db_path = db_path.to_path_buf();
@@ -1181,7 +1189,7 @@ async fn run_backup(
     backup_dir: &Path,
     offsite: Option<&OffsiteConfig>,
 ) -> BackupOutcome {
-    if !db_path.exists() {
+    if !present(db_path).await {
         tracing::debug!("backup+vacuum skipped: db not present yet");
         // Nothing to back up is not a failed backup. A fresh station must not
         // page its operator on its first tick.
@@ -1254,7 +1262,7 @@ async fn run_backup(
 /// disk space; a failed backup costs the ability to recover at all, and that
 /// asymmetry is why the backup's verdict was never the reclaim's.
 async fn run_space_reclaim(db_path: &Path) {
-    if !db_path.exists() {
+    if !present(db_path).await {
         tracing::debug!("space reclaim skipped: db not present yet");
         return;
     }
@@ -1381,7 +1389,7 @@ async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) -> b
 /// Remove the oldest backups so at most `keep` remain. A missing backup
 /// directory is treated as success (nothing to prune).
 async fn prune_old_backups(backup_dir: &Path, keep: usize) -> std::io::Result<()> {
-    if !backup_dir.exists() {
+    if !present(backup_dir).await {
         return Ok(());
     }
     let dir = backup_dir.to_path_buf();

@@ -165,6 +165,12 @@ fn crumbs(text: &str) -> Vec<Crumb> {
                 head: head.to_owned(),
                 steps,
             });
+            // Resume after the breadcrumb just read: a step can be named
+            // "Detection Settings", and the word inside it starts no path of
+            // its own. Reading it as one reported 19 correct paths as
+            // misdirections, all of the shape "Settings → Capture → Detection
+            // Settings → Minimum Confidence".
+            from = from.max(text.len() - rest.len());
         }
     }
     found
@@ -321,6 +327,23 @@ fn the_scan_reads_breadcrumbs_the_way_a_reader_does() {
         one("under Settings -> Capture").steps,
         vec!["Capture".to_string()]
     );
+
+    // A step that is itself called "... Settings" is a step, not a second
+    // breadcrumb: one path in, one path out. Counterpart: a real second
+    // breadcrumb later in the same line is still found.
+    let all = crumbs("under Settings → Capture → Detection Settings → Minimum Confidence (0–1)");
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(
+        all[0].steps,
+        vec![
+            "Capture".to_string(),
+            "Detection Settings".to_string(),
+            "Minimum Confidence".to_string()
+        ]
+    );
+    let two = crumbs("under Settings → Capture → Species, or Settings → Nowhere → X");
+    assert_eq!(two.len(), 2, "{two:?}");
+    assert_eq!(two[1].steps[0], "Nowhere");
 
     // Wrapped lines are joined before the scan, so the arrow and its step meet.
     let flat = flatten(

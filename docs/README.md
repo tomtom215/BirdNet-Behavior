@@ -6,7 +6,7 @@ Where each kind of question is answered, and how much to trust each answer.
 |---|---|---|
 | running or using a station | [`book/`](book/) — **the manual** | User documentation. Kept true by gates (links, sample output, retired claims). The only part of `docs/` that ships in a release |
 | working on the code | [`architecture/`](architecture/), [`../CLAUDE.md`](../CLAUDE.md) | Architecture: how it is built and why. Design notes, partly older than the code; `architecture/13-implementation-status.md` says how to check what is current |
-| deciding what to build | [`design/`](design/), [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md) | Proposals and comparisons. **Nothing in a proposal is implemented** unless the file says it has landed |
+| deciding what to build | [`design/`](design/), [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md), [`TECH_DEBT.md`](TECH_DEBT.md) | Proposals, comparisons and known debt. **Nothing in a proposal is implemented** unless the file says it has landed; `design/charts.md` and `design/charts-relational.md` are the exceptions, the rules of charts that are built |
 | asking what happened before | [`archive/`](archive/) | Dated working records of earlier sessions. Not current documentation |
 
 ## Using and running a station
@@ -32,7 +32,7 @@ promise. Today:
 |---|---|---|
 | `…/BirdNet-Behavior/` (the root) | the manual of the **latest stable release** | when a release tag is pushed |
 | `…/BirdNet-Behavior/vX.Y.Z/` | the manual of release `X.Y.Z`, built from that tag | rebuilt from its tag on every run; its words do not change |
-| `…/BirdNet-Behavior/dev/` | the manual on `main`: **documents features that may not be released** | on a push to `main` that touches `docs/book/**` |
+| `…/BirdNet-Behavior/dev/` | the manual on `main`: **documents features that may not be released** | on a push to `main` that touches `docs/book/**`, the book theme, `book.toml` or the docs scripts (`docs.yml` lists the paths) |
 | `/help` in the binary | the manual that was in the tree when that binary was built | never; it is the manual for the binary serving it |
 
 Only releases from `v0.17.1` on have a `/vX.Y.Z/` manual; for anything older the
@@ -62,6 +62,9 @@ repository-relative for that reason.
   workflow, and the checks `main` should require.
 - [`HANDOFF.md`](HANDOFF.md) — what only the maintainer can do, and where the
   next working session starts.
+- [`TECH_DEBT.md`](TECH_DEBT.md) — defects that are known, have evidence and were not
+  fixed by the change that found them; a test reads it, and a row is deleted in the
+  commit that fixes it.
 
 ## How it is built
 
@@ -86,8 +89,9 @@ None of these describes software that exists.
 - [`design/handover/`](design/handover/) — the design handover the interface was
   built from, kept as provenance.
 - [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md) — what BirdNet-Behavior
-  does not yet do that BirdNET-Pi and birdnet-go do, with the evidence per row.
-  The one *planning* document here that is still open.
+  does not yet do that BirdNET-Pi and birdnet-go do, with the evidence per row;
+  Part 10 says what is and is not at parity with BirdNET-Pi. The one *planning*
+  document here that is still open.
 
 ## Records, not status
 

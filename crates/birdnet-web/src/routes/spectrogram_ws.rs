@@ -93,16 +93,18 @@ pub fn router() -> Router<AppState> {
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    let permit = match state
-        .live_sockets()
-        .admit(crate::live_sockets::Kind::Spectrogram, &headers)
-    {
-        Ok(permit) => permit,
-        Err(refused) => return refused,
-    };
+    let permit =
+        match state
+            .live_sockets()
+            .admit(crate::live_sockets::Kind::Spectrogram, &headers, &uri)
+        {
+            Ok(permit) => permit,
+            Err(refused) => return refused,
+        };
     let broadcast = state.spectrogram_broadcast();
     let shutdown = state.subscribe_shutdown();
     ws.on_upgrade(move |socket| async move {

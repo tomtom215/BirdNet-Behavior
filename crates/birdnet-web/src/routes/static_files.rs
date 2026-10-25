@@ -48,14 +48,32 @@ const BASE_PATH_JS: &[u8] = include_bytes!("../../static/base-path.js");
 /// Holds `every` polls back while the tab is hidden (M13).
 const POLL_VISIBILITY_JS: &[u8] = include_bytes!("../../static/poll-visibility.js");
 const CLIP_PLAYER_JS: &[u8] = include_bytes!("../../static/clip-player.js");
+/// Prints clock times and temperatures in the reader's choice (P-16).
+const DISPLAY_FORMAT_JS: &[u8] = include_bytes!("../../static/display-format.js");
+/// Gain, high-pass and compressor for every player, in the browser (P-8).
+const LISTEN_FX_JS: &[u8] = include_bytes!("../../static/listen-fx.js");
+/// The styles of those controls, which the script loads when it builds them.
+const LISTEN_FX_CSS: &[u8] = include_bytes!("../../static/css/listen-fx.css");
 /// Keeps SVG chart labels legible at any scale (see the script's header).
 const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
+/// Hover, focus, keyboard and entrance for every chart (see the script's header).
+const CHART_KIT_JS: &[u8] = include_bytes!("../../static/chart-kit.js");
+/// The soundscape terrain (Patterns, "When active"): the grid, and the 3D view's controls.
+const TERRAIN_JS: &[u8] = include_bytes!("../../static/terrain.js");
+/// The part of three.js the terrain uses, built by `tools/vendor-three/build.sh`; loaded by the
+/// terrain's script the first time somebody opens the 3D view and by nothing else. Its
+/// provenance, licence and size budget are in `static/vendor/three/README.md`.
+const THREE_JS: &[u8] = include_bytes!("../../static/vendor/three/three.module.min.js");
 
 /// Type-to-filter for the admin settings page (embedded at compile time).
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
 
 /// Select-all for the search page's bulk action bar (embedded at compile time).
 const SEARCH_SELECT_JS: &[u8] = include_bytes!("../../static/search-select.js");
+
+/// Install the species model, restart and wait for the station (setup wizard,
+/// Capture tab, settings banner). Embedded at compile time.
+const SETUP_CONTROLS_JS: &[u8] = include_bytes!("../../static/setup-controls.js");
 
 /// Self-hosted webfonts (latin + latin-ext subsets), embedded at compile time
 /// so the UI renders fully offline with no CDN dependency. `Inter Tight` (UI),
@@ -158,11 +176,18 @@ pub fn router() -> Router<AppState> {
         .route("/static/poll-visibility.js", get(poll_visibility_js))
         .route("/static/base-path.js", get(base_path_js))
         .route("/static/clip-player.js", get(clip_player_js))
+        .route("/static/listen-fx.js", get(listen_fx_js))
+        .route("/static/display-format.js", get(display_format_js))
         .route("/static/chart-text.js", get(chart_text_js))
+        .route("/static/chart-kit.js", get(chart_kit_js))
+        .route("/static/terrain.js", get(terrain_js))
+        .route("/static/vendor/three/three.module.min.js", get(three_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
+        .route("/static/setup-controls.js", get(setup_controls_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
+        .route("/static/css/listen-fx.css", get(listen_fx_css))
         .route("/static/fonts/{file}", get(font_file))
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
@@ -284,6 +309,69 @@ async fn poll_visibility_js() -> impl IntoResponse {
     )
 }
 
+async fn chart_kit_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        CHART_KIT_JS,
+    )
+}
+
+async fn terrain_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        TERRAIN_JS,
+    )
+}
+
+/// The `ETag` of the vendored library: the first sixteen hex digits of its SHA-256, quoted. The
+/// bytes never change inside a build, so it is computed once.
+fn three_etag() -> &'static str {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let digest = sha2::Sha256::digest(THREE_JS);
+        let mut hex = String::from("\"");
+        for b in digest.iter().take(8) {
+            let _ = write!(hex, "{b:02x}");
+        }
+        hex.push('"');
+        hex
+    });
+    ETAG.as_str()
+}
+
+/// The vendored three.js: a large file that changes only when the library is bumped, so it is
+/// cached for a year and revalidated by hash. The page asks for it with `?v=<the file's hash>`,
+/// which makes the long cache safe: a new build is a new URL.
+async fn three_js(headers: axum::http::HeaderMap) -> axum::response::Response {
+    let etag = three_etag();
+    let fresh = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|t| t.trim().trim_start_matches("W/") == etag)
+        });
+    let common = [
+        (header::ETAG, etag),
+        (header::CACHE_CONTROL, IMMUTABLE),
+        (header::CONTENT_TYPE, "application/javascript"),
+    ];
+    if fresh {
+        (StatusCode::NOT_MODIFIED, common).into_response()
+    } else {
+        (StatusCode::OK, common, THREE_JS).into_response()
+    }
+}
+
 async fn chart_text_js() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -321,6 +409,17 @@ async fn settings_filter_js() -> impl IntoResponse {
     )
 }
 
+async fn setup_controls_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        SETUP_CONTROLS_JS,
+    )
+}
+
 async fn search_select_js() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -329,6 +428,40 @@ async fn search_select_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         SEARCH_SELECT_JS,
+    )
+}
+
+async fn display_format_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        DISPLAY_FORMAT_JS,
+    )
+}
+
+async fn listen_fx_css() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LISTEN_FX_CSS,
+    )
+}
+
+async fn listen_fx_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Requested with `?v=<version>` like the other app scripts.
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LISTEN_FX_JS,
     )
 }
 
@@ -451,6 +584,22 @@ mod tests {
         // write a `style` attribute (setAttribute / cssText), which it forbids.
         assert!(!js.contains("setAttribute(\"style\""));
         assert!(!js.contains("cssText"));
+    }
+
+    /// The chart kit renders species names into tooltips and a live region: only
+    /// ever as text. And it must not write a `style` attribute, which the CSP
+    /// forbids; `style.setProperty` goes through the CSSOM, which it allows.
+    #[test]
+    fn chart_kit_embedded_and_safe() {
+        let js = std::str::from_utf8(CHART_KIT_JS).unwrap();
+        assert!(js.contains("svg[data-ck]"));
+        assert!(!js.contains(".innerHTML"));
+        assert!(!js.contains("insertAdjacentHTML"));
+        assert!(!js.contains("setAttribute(\"style\""));
+        assert!(!js.contains("cssText"));
+        // Plain script: no module syntax, no network.
+        assert!(!js.contains("import "));
+        assert!(!js.contains("fetch("));
     }
 
     #[test]

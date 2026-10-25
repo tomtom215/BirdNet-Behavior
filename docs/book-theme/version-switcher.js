@@ -13,7 +13,13 @@
     var id = window.bnbDocs;
     if (!id || typeof path_to_root === "undefined") return;
 
-    var bookRoot = new URL(path_to_root, window.location.href);
+    // `document.baseURI`, not the page's own URL: GitHub Pages serves the root
+    // book's 404.html for an address that does not exist (`/v9.9.9/`), and mdBook
+    // gives that one page a `<base href>` at the book root so its sidebar links
+    // resolve. Reading the location there put `versions.json` under the missing
+    // directory, so the one page a reader of a bad version address lands on had
+    // no way to leave it. On every other page the two are the same.
+    var bookRoot = new URL(path_to_root, document.baseURI);
     var siteRoot = id.depth === 1 ? new URL("../", bookRoot) : bookRoot;
     var page = window.location.pathname.slice(bookRoot.pathname.length) || "index.html";
 

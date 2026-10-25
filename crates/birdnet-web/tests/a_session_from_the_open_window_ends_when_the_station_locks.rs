@@ -133,7 +133,9 @@ async fn the_wizard_first_password_signs_the_open_window_out() {
         res.headers()
             .get(header::LOCATION)
             .and_then(|v| v.to_str().ok()),
-        Some("/"),
+        // The wizard ends on its "done" page (25843ca); a refused password goes
+        // back to `/onboarding?error=password`, which is what this guards.
+        Some("/onboarding/done"),
         "the wizard refused the password"
     );
 

@@ -379,7 +379,7 @@ fn a_parse_error_never_quotes_the_url() {
     // Parse errors are logged. Every URL in this file carries a credential in
     // its path, so an error that echoed its input would publish a working
     // webhook to the operator's journal — and to any support bundle.
-    let secrets = [
+    let canaries = [
         (
             "tgram://999888777:SUPERSECRETBOTTOKEN/",
             "SUPERSECRETBOTTOKEN",
@@ -390,11 +390,11 @@ fn a_parse_error_never_quotes_the_url() {
         ("pover://SUPERSECRETAPPTOKEN", "SUPERSECRETAPPTOKEN"),
         ("tgram://SUPERSECRETNOCOLON/12315544/", "SUPERSECRETNOCOLON"),
     ];
-    for (url, secret) in secrets {
+    for (url, canary) in canaries {
         let err = parse(url).expect_err("should not parse");
         let rendered = format!("{err} {err:?}");
         assert!(
-            !rendered.contains(secret),
+            !rendered.contains(canary),
             "error for {url:?} leaked its input: {rendered}"
         );
     }

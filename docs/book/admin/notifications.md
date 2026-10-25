@@ -32,6 +32,12 @@ sends. The same applies to the minimum notification confidence
 the species allow/exclude lists, and the message templates. Changes take effect
 on the next restart.
 
+### When to notify
+
+The **Notification Trigger** is one of: **every detection**; **the first of each species, each day**; **a species seen five times or fewer in a week**; **both of those** (not every detection); or **never**. These are BirdNET-Pi's three switches (`APPRISE_NOTIFY_EACH_DETECTION`, `_NEW_SPECIES_EACH_DAY` and `_NEW_SPECIES`) in every combination that behaves differently: "every detection" already announces everything the other two would. In `birdnet.conf` it is `APPRISE_TRIGGER`, which takes a word or a comma-separated list (`each`, `new-species`, `new-species-daily`, `off`).
+
+When more than one rule matches a detection, **one** message is sent and `$reason` names each of them (`first time today, only seen 3 times in last 7d`); BirdNET-Pi sends one message per rule. A station moved from BirdNET-Pi with all three switches at 0 has the trigger **never**, as it did there. Moving a `birdnet.conf` is covered by [Migrating from BirdNET-Pi](../guides/migration.md).
+
 The **Send Test Push Notification** button under **Settings → Alerts** (`/station/alerts`) uses the values saved on the
 Settings page, so a successful test means live detections will notify too.
 
@@ -132,6 +138,18 @@ channels** on the notifications test page publishes a real message to
 notifier, beside push and BirdWeather; a run in which no channel is configured
 says that nothing was tested rather than that everything passed.
 
+Three more integrations have a button of their own on that page, each showing
+the real answer rather than a reassurance: **MQTT broker** (publishes one
+message and reports the broker's refusal, the TLS error or the connect error as
+it came), **eBird** (asks eBird for the recent observations around the station
+with the configured key, so a refused key reads "eBird refused the API key
+(403)", not "unreachable") and **Weather** (fetches from the configured
+provider). A button is disabled, with the setting to change beside it, until
+that integration is configured; one that is configured but cannot start (an
+eBird key with no station coordinates, an unknown weather provider) is enabled
+and answers with that reason. They test what the *running* station was started
+with, so a value saved a moment ago shows up after a restart.
+
 ### TLS
 
 ```text
@@ -158,6 +176,30 @@ Either way the broker's certificate must carry `CA:FALSE`. A plain
 `openssl req -x509` — what most "make a self-signed certificate" recipes give —
 defaults to `CA:TRUE`, and the connection then fails with `CaUsedAsEndEntity`.
 Add `-addext basicConstraints=critical,CA:FALSE` when generating it.
+
+#### A broker that asks for a client certificate
+
+Brokers set to require mutual TLS (Mosquitto `require_certificate true`, AWS
+IoT, EMQX with `verify_peer`) want the station to present a certificate of its
+own:
+
+```text
+BIRDNET_MQTT_CLIENT_CERT=/etc/birdnet/mqtt-client.pem
+BIRDNET_MQTT_CLIENT_KEY=/etc/birdnet/mqtt-client-key.pem
+```
+
+Both are PEM files and both are needed; naming one without the other is refused
+before any connection is made, and so is a key that does not belong to the
+certificate. Setting a client certificate turns TLS on by itself. The same two
+fields are under **Settings → Alerts → Home Assistant & MQTT**. Paths are to files on the
+station, which is how birdnet-go's "managed" certificates are stored too; this
+station does not take an uploaded private key through the browser.
+
+`birdnet-behavior --doctor` has an **MQTT TLS** line that opens each file and
+checks the pair without connecting, so a typo in a path is found before the
+first detection rather than as one warning per detection. It does not report
+when a certificate expires: reading a certificate's validity dates needs an
+X.509 parser the station does not carry.
 
 With `--mqtt-ha-discovery`, the station registers itself in Home Assistant automatically, so the latest detection, species count and confidence appear as entities you can put on a dashboard or trigger automations from.
 

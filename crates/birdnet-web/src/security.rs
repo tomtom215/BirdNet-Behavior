@@ -34,7 +34,7 @@
 //! quoted elsewhere knows it is stale.
 
 use axum::extract::Request;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -62,7 +62,7 @@ const MAX_HTML_REWRITE_BYTES: usize = 8 * 1024 * 1024;
 /// nonce then only has to admit our own full-document `<style>` blocks. With
 /// that, `'unsafe-inline'` is gone for styles too. `connect-src 'self'` covers
 /// the same-origin live WebSocket (`ws://<host>/…`).
-fn content_security_policy(nonce: &str) -> String {
+fn content_security_policy(nonce: &str, frame_ancestors: &str) -> String {
     format!(
         "default-src 'self'; \
          img-src 'self' data: https:; \
@@ -72,7 +72,7 @@ fn content_security_policy(nonce: &str) -> String {
          font-src 'self'; \
          object-src 'none'; \
          base-uri 'self'; \
-         frame-ancestors 'self'; \
+         {frame_ancestors}; \
          form-action 'self'"
     )
 }
@@ -204,7 +204,31 @@ fn inject_base_path(html: &str, base: &crate::base_path::BasePath) -> String {
 /// onto a certificate the browser will one day refuse locks the operator out
 /// of their own station. That is O-10 in `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`,
 /// recorded rather than half-built here.
-pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
+pub async fn security_headers_middleware(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    // Read before the request is handed on: what the page may be framed by is
+    // decided per response, so a station that has no list pays one lock and an
+    // `Arc` clone for the default `frame-ancestors 'self'`.
+    //
+    // The listed origins apply to the few pages meant to be framed
+    // ([`crate::embed::allows_framing_of`]); everywhere else, the sign-in and
+    // `/admin` among them, the policy is `'self'` whatever was listed. The path
+    // is read before the request is handed on, and with the base path (if any)
+    // taken off, since the router matched without it.
+    let embed = state.embed_origins();
+    let framed_by_listed = !embed.is_empty() && {
+        let base = crate::base_path::current().as_str();
+        let path = req.uri().path();
+        let path = if base.is_empty() {
+            path
+        } else {
+            path.strip_prefix(base).unwrap_or(path)
+        };
+        crate::embed::allows_framing_of(path)
+    };
     // One per-request CSP nonce, minted here so a single place owns the whole
     // dance: it is stamped onto every parser-inserted <script> of an HTML
     // response body (below) and mirrored into that response's script-src. No
@@ -215,6 +239,10 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
 
     let res = next.run(req).await;
     let (mut parts, body) = res.into_parts();
+    let viewer_view = parts
+        .extensions
+        .get::<crate::routes::admin::nav::ViewerView>()
+        .is_some();
 
     // A redirect's target is not HTML and never reaches the body pass. Missed,
     // it sends the browser out of the prefix on every login and every form
@@ -255,6 +283,14 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
         match axum::body::to_bytes(body, MAX_HTML_REWRITE_BYTES).await {
             Ok(bytes) => {
                 let html = String::from_utf8_lossy(&bytes);
+                // A viewer's admin page: leave out the nav entries it is refused.
+                let html = if viewer_view {
+                    std::borrow::Cow::Owned(crate::routes::admin::nav::without_viewer_hidden(
+                        html.as_ref(),
+                    ))
+                } else {
+                    html
+                };
                 // Suppress htmx's un-nonceable indicator <style> (its rules are
                 // already in app.css), then add the data-style applier; its
                 // <script> is sealed, so the pass below nonces it like any other.
@@ -287,17 +323,31 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
         .headers
         .entry(header::CONTENT_SECURITY_POLICY)
         .or_insert_with(|| {
-            HeaderValue::from_str(&content_security_policy(&nonce))
+            let frame_ancestors = if framed_by_listed {
+                embed.frame_ancestors()
+            } else {
+                crate::embed::EmbedOrigins::none().frame_ancestors()
+            };
+            HeaderValue::from_str(&content_security_policy(&nonce, &frame_ancestors))
                 .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'"))
         });
     parts.headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    parts.headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("SAMEORIGIN"),
-    );
+    // `X-Frame-Options` cannot name a third party (`ALLOW-FROM` is dead in every
+    // current browser), so while the operator has listed origins it is left off
+    // and `frame-ancestors` alone decides. A browser too old to read
+    // `frame-ancestors` then falls back to allowing the frame, which is why the
+    // list is empty unless somebody asks for it.
+    if framed_by_listed {
+        parts.headers.remove(header::X_FRAME_OPTIONS);
+    } else {
+        parts.headers.insert(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("SAMEORIGIN"),
+        );
+    }
     parts.headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("strict-origin-when-cross-origin"),
@@ -306,11 +356,13 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     Response::from_parts(parts, body)
 }
 
-/// Reject state-changing requests whose `Origin`/`Referer` is cross-site.
+/// Reject state-changing requests whose `Origin`/`Referer` is cross-site, or
+/// that the browser itself labels as coming from another site (`Sec-Fetch-Site`,
+/// see `fetch_metadata_refuses`).
 pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
     if is_state_changing(req.method())
         && !is_bearer_api_request(req.uri().path(), req.headers())
-        && !is_same_origin(req.headers())
+        && (!is_same_origin(req.headers(), req.uri()) || fetch_metadata_refuses(req.headers()))
     {
         return (
             StatusCode::FORBIDDEN,
@@ -359,21 +411,68 @@ fn is_state_changing(method: &Method) -> bool {
 /// True if the request is safe from a CSRF standpoint: either it carries no
 /// browser origin information (a non-browser client — the CLI, a script, or
 /// `curl` — which a remote site cannot coerce into a cross-site request), or
-/// its `Origin`/`Referer` authority matches the `Host` it was sent to.
-pub(crate) fn is_same_origin(headers: &HeaderMap) -> bool {
-    let Some(host) = header_str(headers, &header::HOST) else {
-        // No Host header to compare against; nothing we can verify.
+/// its `Origin`/`Referer` authority matches the authority it was sent to.
+///
+/// The authority is the `Host` header, or — over HTTP/2, where there is no
+/// `Host` header and hyper surfaces `:authority` on the URI — the URI's own
+/// authority; the same rule [`crate::open_admin_host::request_authority`]
+/// applies when it decides whether the open-admin bypass may be granted, so the
+/// two cannot disagree about which name a request was sent to. A request that
+/// names an `Origin` or `Referer` but no authority at all cannot be checked, and
+/// is refused rather than waved through: the previous "nothing we can verify"
+/// made this guard a no-op on every HTTP/2 connection.
+pub(crate) fn is_same_origin(headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
+    // `Origin` is authoritative when present, even if it is not valid text: a
+    // value that cannot be read cannot be shown to match.
+    let claimed = if headers.contains_key(header::ORIGIN) {
+        header_str(headers, &header::ORIGIN)
+    } else if headers.contains_key(header::REFERER) {
+        header_str(headers, &header::REFERER)
+    } else {
+        // Neither present: not a browser-driven cross-site submission (a
+        // browser always attaches Origin to a cross-origin POST).
         return true;
     };
-    if let Some(origin) = header_str(headers, &header::ORIGIN) {
-        return authority_matches(origin, host);
+    let Some(claimed) = claimed else {
+        return false;
+    };
+    let authority = header_str(headers, &header::HOST)
+        .or_else(|| uri.authority().map(axum::http::uri::Authority::as_str));
+    authority.is_some_and(|authority| authority_matches(claimed, authority))
+}
+
+/// Whether the browser's own `Sec-Fetch-Site` label marks a state-changing
+/// request as one this station must not act on.
+///
+/// [`is_same_origin`] answers from `Origin`/`Referer`, and a request carrying
+/// neither passes it as "not a browser" (a browser always attaches `Origin` to
+/// a cross-origin `POST`). `Sec-Fetch-Site` is a second, independent witness
+/// that the browser sets and a page's script cannot override (it is a
+/// forbidden header name), so it is read here as defence in depth:
+///
+/// * `cross-site` is refused outright;
+/// * `same-site` (a sibling sub-domain, or another port on the same host — not
+///   this origin) is refused when no `Origin`/`Referer` exists to show the
+///   request really names this station; with one, [`is_same_origin`] has
+///   already compared it;
+/// * `same-origin` and `none` (a user-initiated navigation) are allowed, and so
+///   is an absent header or a value this code does not know — a non-browser
+///   client (`curl`, a script, the CLI) sends none, and the guard must not
+///   start refusing it.
+///
+/// Applied to the same requests as the origin check and exempt for the same
+/// bearer calls; it is not applied to the `WebSocket` upgrade, which is a `GET`.
+fn fetch_metadata_refuses(headers: &HeaderMap) -> bool {
+    let Some(site) = header_str(headers, &HeaderName::from_static("sec-fetch-site")) else {
+        return false;
+    };
+    let named_origin =
+        headers.contains_key(header::ORIGIN) || headers.contains_key(header::REFERER);
+    match site.trim().to_ascii_lowercase().as_str() {
+        "cross-site" => true,
+        "same-site" => !named_origin,
+        _ => false,
     }
-    if let Some(referer) = header_str(headers, &header::REFERER) {
-        return authority_matches(referer, host);
-    }
-    // Neither Origin nor Referer present: not a browser-driven cross-site
-    // submission (a browser always attaches Origin to a cross-origin POST).
-    true
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &header::HeaderName) -> Option<&'a str> {
@@ -408,7 +507,13 @@ mod tests {
                     async move { axum::response::Html(body) }
                 }),
             )
-            .layer(axum::middleware::from_fn(security_headers_middleware));
+            .layer(axum::middleware::from_fn_with_state(
+                crate::state::AppState::from_connection(
+                    rusqlite::Connection::open_in_memory().expect("memory db"),
+                    std::path::PathBuf::from(":memory:"),
+                ),
+                security_headers_middleware,
+            ));
         let res = app
             .oneshot(
                 Request::builder()
@@ -428,6 +533,132 @@ mod tests {
             .await
             .unwrap();
         (String::from_utf8_lossy(&bytes).into_owned(), csp)
+    }
+
+    /// A page served through the real middleware by a station whose embed list
+    /// is `origins`; the headers a browser would decide on.
+    async fn framing_headers(origins: &str) -> (Option<String>, Option<String>) {
+        framing_headers_at(origins, "/").await
+    }
+
+    /// The same for a page at `path`.
+    async fn framing_headers_at(origins: &str, path: &str) -> (Option<String>, Option<String>) {
+        use axum::routing::get;
+        use tower::ServiceExt as _;
+        let state = crate::state::AppState::from_connection(
+            rusqlite::Connection::open_in_memory().expect("memory db"),
+            std::path::PathBuf::from(":memory:"),
+        );
+        state.set_embed_origins(crate::embed::EmbedOrigins::parse(origins).expect("valid"));
+        let app = axum::Router::new()
+            .fallback(get(|| async { axum::response::Html("<html></html>") }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                security_headers_middleware,
+            ));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let get = |name: header::HeaderName| {
+            res.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        (
+            get(header::CONTENT_SECURITY_POLICY),
+            get(header::X_FRAME_OPTIONS),
+        )
+    }
+
+    /// The default: nothing may frame the station, in both the modern header and
+    /// the old one.
+    #[tokio::test]
+    async fn by_default_no_other_site_may_frame_the_station() {
+        let (csp, xfo) = framing_headers("").await;
+        let csp = csp.expect("a CSP");
+        assert!(csp.contains("frame-ancestors 'self';"), "{csp}");
+        assert!(!csp.contains("frame-ancestors 'self' "), "{csp}");
+        assert_eq!(xfo.as_deref(), Some("SAMEORIGIN"));
+    }
+
+    /// The opt-in: the listed origins, and only them, are named; the legacy
+    /// header that cannot name a third party is left off.
+    #[tokio::test]
+    async fn a_listed_origin_may_frame_the_station_and_nothing_else_changes() {
+        let (csp, xfo) = framing_headers("http://homeassistant.local:8123").await;
+        let csp = csp.expect("a CSP");
+        assert!(
+            csp.contains("frame-ancestors 'self' http://homeassistant.local:8123;"),
+            "{csp}"
+        );
+        assert_eq!(
+            xfo, None,
+            "SAMEORIGIN would still block the listed origin in an old browser"
+        );
+        // Everything else about the policy is untouched: still no inline
+        // script, still same-origin forms, still nothing loaded from elsewhere.
+        for kept in [
+            "default-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+            "script-src 'nonce-",
+        ] {
+            assert!(csp.contains(kept), "lost {kept:?}: {csp}");
+        }
+        assert!(!csp.contains('*'), "{csp}");
+    }
+
+    /// The listed origins are for the pages meant to be framed. The sign-in form
+    /// and everything under `/admin` and `/station` keep `'self'` and the legacy
+    /// header whatever is listed: a listed site (or a script injected into it)
+    /// must not be able to lay invisible controls over them. Before this, the
+    /// list was added to every response.
+    #[tokio::test]
+    async fn the_list_does_not_reach_the_sign_in_or_the_admin_pages() {
+        for path in [
+            "/login",
+            "/logout",
+            "/onboarding",
+            "/onboarding/done",
+            "/restore",
+            "/admin",
+            "/admin/overview",
+            "/admin/accounts",
+            "/station",
+            "/station/capture",
+            "/species/Pica%20pica",
+        ] {
+            let (csp, xfo) = framing_headers_at("http://homeassistant.local:8123", path).await;
+            let csp = csp.expect("a CSP");
+            assert!(
+                csp.contains("frame-ancestors 'self';"),
+                "{path} can be framed by a listed origin: {csp}"
+            );
+            assert!(!csp.contains("homeassistant"), "{path}: {csp}");
+            assert_eq!(xfo.as_deref(), Some("SAMEORIGIN"), "{path}");
+        }
+    }
+
+    /// The counterpart: the pages a card or a wall display shows still take it.
+    #[tokio::test]
+    async fn the_dashboard_the_wall_display_and_the_live_view_still_take_the_list() {
+        for path in ["/", "/kiosk", "/recordings"] {
+            let (csp, xfo) = framing_headers_at("http://homeassistant.local:8123", path).await;
+            let csp = csp.expect("a CSP");
+            assert!(
+                csp.contains("frame-ancestors 'self' http://homeassistant.local:8123;"),
+                "{path}: {csp}"
+            );
+            assert_eq!(xfo, None, "{path}");
+        }
     }
 
     fn nonce_of(csp: &str) -> &str {
@@ -497,13 +728,16 @@ mod tests {
 
     #[test]
     fn content_security_policy_carries_nonce_and_strict_dynamic() {
-        let csp = content_security_policy("XYZ");
-        assert!(csp.contains("script-src 'nonce-XYZ' 'strict-dynamic'"));
+        // Built at run time, not written as a literal: CodeQL follows a literal into
+        // any parameter called `nonce` (`tests/no_literal_reaches_a_credential_parameter.rs`).
+        let nonce = format!("XYZ{}", std::process::id());
+        let csp = content_security_policy(&nonce, "frame-ancestors 'self'");
+        assert!(csp.contains(&format!("script-src 'nonce-{nonce}' 'strict-dynamic'")));
         // Styles are nonced now too, and 'unsafe-inline' is gone everywhere:
         // inline style="" attributes are eliminated in the renderers (moved to
         // data-style + a CSSOM applier), and the only <style> elements left are
         // our own full-page blocks, admitted by this nonce.
-        assert!(csp.contains("style-src 'self' 'nonce-XYZ'"));
+        assert!(csp.contains(&format!("style-src 'self' 'nonce-{nonce}'")));
         assert!(!csp.contains("'unsafe-inline'"));
     }
 
@@ -589,50 +823,265 @@ mod tests {
         h
     }
 
+    fn uri(s: &str) -> axum::http::Uri {
+        s.parse().unwrap()
+    }
+
+    /// An HTTP/1.1 request target: no authority in the URI.
+    fn h1() -> axum::http::Uri {
+        uri("/admin/settings")
+    }
+
     #[test]
     fn no_browser_headers_is_allowed() {
-        // No Host at all.
-        assert!(is_same_origin(&HeaderMap::new()));
+        // No Host at all, and nothing claiming a browser origin.
+        assert!(is_same_origin(&HeaderMap::new(), &h1()));
         // Host but neither Origin nor Referer (curl / CLI / a script).
-        assert!(is_same_origin(&hmap(&[(header::HOST, "localhost:8502")])));
+        assert!(is_same_origin(
+            &hmap(&[(header::HOST, "localhost:8502")]),
+            &h1()
+        ));
+        // The same over HTTP/2: authority in the URI, nothing claimed.
+        assert!(is_same_origin(
+            &HeaderMap::new(),
+            &uri("https://localhost:8503/admin/settings")
+        ));
     }
 
     #[test]
     fn matching_origin_is_allowed() {
-        assert!(is_same_origin(&hmap(&[
-            (header::HOST, "localhost:8502"),
-            (header::ORIGIN, "http://localhost:8502"),
-        ])));
+        assert!(is_same_origin(
+            &hmap(&[
+                (header::HOST, "localhost:8502"),
+                (header::ORIGIN, "http://localhost:8502"),
+            ]),
+            &h1()
+        ));
     }
 
     #[test]
     fn cross_site_origin_is_blocked() {
-        assert!(!is_same_origin(&hmap(&[
-            (header::HOST, "localhost:8502"),
-            (header::ORIGIN, "http://evil.test"),
-        ])));
+        assert!(!is_same_origin(
+            &hmap(&[
+                (header::HOST, "localhost:8502"),
+                (header::ORIGIN, "http://evil.test"),
+            ]),
+            &h1()
+        ));
+    }
+
+    #[test]
+    fn over_http2_the_authority_comes_from_the_uri() {
+        let target = uri("https://pi.local:8503/admin/settings");
+        assert!(is_same_origin(
+            &hmap(&[(header::ORIGIN, "https://pi.local:8503")]),
+            &target
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[(header::ORIGIN, "https://evil.example")]),
+            &target
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[(header::REFERER, "https://evil.example/x")]),
+            &target
+        ));
+    }
+
+    #[test]
+    fn a_browser_origin_with_no_authority_to_compare_it_to_is_refused() {
+        // Neither a Host header nor an absolute-form URI: fail closed.
+        assert!(!is_same_origin(
+            &hmap(&[(header::ORIGIN, "https://evil.example")]),
+            &h1()
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[(header::REFERER, "https://evil.example/x")]),
+            &h1()
+        ));
+        // Not even a matching-looking one is trusted without an authority.
+        assert!(!is_same_origin(&hmap(&[(header::ORIGIN, "null")]), &h1()));
+    }
+
+    #[test]
+    fn an_unreadable_origin_is_not_an_absent_one() {
+        let mut h = hmap(&[(header::HOST, "localhost:8502")]);
+        h.insert(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
+        assert!(!is_same_origin(&h, &h1()));
     }
 
     #[test]
     fn referer_is_used_when_origin_absent() {
-        assert!(is_same_origin(&hmap(&[
-            (header::HOST, "pi.local:8502"),
-            (header::REFERER, "http://pi.local:8502/admin/settings"),
-        ])));
-        assert!(!is_same_origin(&hmap(&[
-            (header::HOST, "pi.local:8502"),
-            (header::REFERER, "http://evil.test/x"),
-        ])));
+        assert!(is_same_origin(
+            &hmap(&[
+                (header::HOST, "pi.local:8502"),
+                (header::REFERER, "http://pi.local:8502/admin/settings"),
+            ]),
+            &h1()
+        ));
+        assert!(!is_same_origin(
+            &hmap(&[
+                (header::HOST, "pi.local:8502"),
+                (header::REFERER, "http://evil.test/x"),
+            ]),
+            &h1()
+        ));
     }
 
     #[test]
     fn origin_takes_precedence_over_referer() {
         // A present, valid Origin is authoritative; the mismatched Referer is
         // not consulted.
-        assert!(is_same_origin(&hmap(&[
-            (header::HOST, "localhost:8502"),
-            (header::ORIGIN, "http://localhost:8502"),
-            (header::REFERER, "http://evil.test/x"),
-        ])));
+        assert!(is_same_origin(
+            &hmap(&[
+                (header::HOST, "localhost:8502"),
+                (header::ORIGIN, "http://localhost:8502"),
+                (header::REFERER, "http://evil.test/x"),
+            ]),
+            &h1()
+        ));
+    }
+
+    /// The guard, as the server mounts it, in front of two handlers that only
+    /// say they ran. Returns the status for one request.
+    async fn guarded_post(path: &str, headers: &[(&str, &str)]) -> StatusCode {
+        use axum::routing::{post, put};
+        use tower::ServiceExt as _;
+        let app = axum::Router::new()
+            .route("/admin/system/restart", post(|| async { "ran" }))
+            .route("/api/v2/settings", put(|| async { "ran" }))
+            .layer(axum::middleware::from_fn(csrf_guard_middleware));
+        let method = if path.starts_with("/api/") {
+            "PUT"
+        } else {
+            "POST"
+        };
+        let mut req = Request::builder().method(method).uri(path);
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        app.oneshot(req.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// Seen failing with `fetch_metadata_refuses` returning `false`: these
+    /// requests carry neither `Origin` nor `Referer`, so they passed
+    /// `is_same_origin` as "not a browser" and ran.
+    #[tokio::test]
+    async fn the_browsers_own_cross_site_label_is_refused_without_an_origin() {
+        let restart = "/admin/system/restart";
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[("host", "pi.local"), ("sec-fetch-site", "cross-site")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        // A sibling sub-domain or another port: the same site, not this origin.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[("host", "pi.local"), ("sec-fetch-site", "same-site")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        // Case and padding are not a way round it.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[("host", "pi.local"), ("sec-fetch-site", " Cross-Site ")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// The counterpart: everything that must keep working still does, so the
+    /// refusal above is a discriminator and not a blanket alarm.
+    #[tokio::test]
+    async fn the_other_fetch_metadata_cases_and_non_browsers_are_unchanged() {
+        let restart = "/admin/system/restart";
+        for site in ["same-origin", "none", "no-such-value"] {
+            assert_eq!(
+                guarded_post(restart, &[("host", "pi.local"), ("sec-fetch-site", site)]).await,
+                StatusCode::OK,
+                "{site}"
+            );
+        }
+        // curl, a script, the CLI: no Sec-Fetch headers at all.
+        assert_eq!(
+            guarded_post(restart, &[("host", "pi.local")]).await,
+            StatusCode::OK
+        );
+        // A same-origin browser POST, labelled as one.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[
+                    ("host", "pi.local"),
+                    ("origin", "http://pi.local"),
+                    ("sec-fetch-site", "same-origin"),
+                ]
+            )
+            .await,
+            StatusCode::OK
+        );
+        // `same-site` with an Origin that names this station was compared by
+        // the origin check and passes only if it matches.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[
+                    ("host", "pi.local"),
+                    ("origin", "http://pi.local"),
+                    ("sec-fetch-site", "same-site"),
+                ]
+            )
+            .await,
+            StatusCode::OK
+        );
+        // A foreign Origin is still refused whatever the label says.
+        assert_eq!(
+            guarded_post(
+                restart,
+                &[
+                    ("host", "pi.local"),
+                    ("origin", "http://evil.test"),
+                    ("sec-fetch-site", "same-origin"),
+                ]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// The bearer exemption is unchanged: a token-holder calling the write API
+    /// from another site (a hosted dashboard) is not this guard's business.
+    #[tokio::test]
+    async fn a_bearer_api_call_is_not_stopped_by_the_fetch_metadata_label() {
+        assert_eq!(
+            guarded_post(
+                "/api/v2/settings",
+                &[
+                    ("host", "pi.local"),
+                    ("authorization", "Bearer 0123456789abcdef0123456789abcdef"),
+                    ("sec-fetch-site", "cross-site"),
+                ]
+            )
+            .await,
+            StatusCode::OK
+        );
+        // Without the bearer credential the same request is refused.
+        assert_eq!(
+            guarded_post(
+                "/api/v2/settings",
+                &[("host", "pi.local"), ("sec-fetch-site", "cross-site")]
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
     }
 }

@@ -45,15 +45,7 @@
 //! tolerances that actually gate are the ones measured against this design and
 //! justified in place.
 
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::similar_names,
-    clippy::many_single_char_names,
-    clippy::too_many_lines,
-    clippy::missing_panics_doc
-)]
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use std::fmt::Write as _;
 

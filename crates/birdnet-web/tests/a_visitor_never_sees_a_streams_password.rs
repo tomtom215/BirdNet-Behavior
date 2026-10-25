@@ -22,7 +22,9 @@ const SRT_PASS: &str = "srtpass-77c1";
 fn station() -> axum::Router {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
-    let hash = birdnet_db::accounts::hash_password("admin-password-1").expect("hash");
+    let hash =
+        birdnet_db::accounts::hash_password(&format!("admin-password-{}", std::process::id()))
+            .expect("hash");
     conn.execute(
         "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
         [&hash],

@@ -51,6 +51,8 @@ on:
       - "scripts/build-versioned-docs.sh"
       - "scripts/test-build-versioned-docs.sh"
       - "scripts/check-book-links.py"
+      - "scripts/check-docs-site.mjs"
+      - "scripts/check-release-tag.sh"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
@@ -60,6 +62,8 @@ on:
       - "scripts/build-versioned-docs.sh"
       - "scripts/test-build-versioned-docs.sh"
       - "scripts/check-book-links.py"
+      - "scripts/check-docs-site.mjs"
+      - "scripts/check-release-tag.sh"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -90,6 +94,16 @@ jobs:
           # Every release tag is rebuilt from its own sources.
           fetch-depth: 0
           fetch-tags: true
+      - name: The tag is one that may publish
+        # `release.yml` runs beside this workflow, not before it, so a tag it
+        # will reject (`validate`) still moved the site root here: a tag on a
+        # commit that is not on `main`, or one whose Cargo.toml names another
+        # version, published its manual as "latest". The same gate the image
+        # workflow applies (docker.yml) refuses both before anything is built.
+        # It cannot know that a later `release.yml` job will fail; RELEASING.md
+        # says so and says how to take such a tag back.
+        if: github.ref_type == 'tag'
+        run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME" origin/main
       - name: Self-test the versioned-docs script
         # Synthetic tags and a stub mdbook: seconds, no network. It is what
         # shows `/dev/` coming from `main` on a tag run, and a pull request's
@@ -111,6 +125,18 @@ jobs:
           # job would stop grading the change it runs for.
           DOCS_DEV_REF: ${{ github.event_name == 'pull_request' && 'HEAD' || 'origin/main' }}
         run: ./scripts/build-versioned-docs.sh docs/.book-build
+      - name: Install the browser the site check drives
+        working-directory: tools/visual-qa
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Check the built site in a browser
+        # What the two steps above cannot see, because neither loads a page:
+        # the version switcher is there and lists every version, each banner
+        # names the right release, the 404 page a bad version address lands on
+        # lets the reader leave it, search results open, and a phone's menu bar
+        # does not clip the book title. Served the way Pages serves it.
+        run: node scripts/check-docs-site.mjs docs/.book-build
       # Pages packaging is deploy-only: a pull request has no Pages token and
       # nothing to publish, so these steps would fail or waste a run.
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

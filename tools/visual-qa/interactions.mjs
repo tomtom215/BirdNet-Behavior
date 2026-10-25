@@ -339,12 +339,12 @@ async function wizardCardsByKeyboard(page) {
     check('wizard: page exists', false, 'no #ob-next on /onboarding');
     return;
   }
-  // The threshold cards are step 4; the password step accepts two blank
-  // fields as "not now".
-  for (let i = 0; i < 3; i++) await page.click('#ob-next');
+  // The threshold cards are step 5 (Welcome, Model, Location, Microphone come
+  // first); the password step accepts two blank fields as "not now".
+  for (let i = 0; i < 4; i++) await page.click('#ob-next');
   const active = await page.$eval('.ob-step.active', (s) => s.dataset.step);
-  check('wizard: reached the threshold step', active === '4', `active step is ${active}`);
-  if (active !== '4') return;
+  check('wizard: reached the threshold step', active === '5', `active step is ${active}`);
+  if (active !== '5') return;
 
   const before = await page.inputValue('#ob-conf');
   // Keyboard only from here. Tab forward until focus is inside a threshold

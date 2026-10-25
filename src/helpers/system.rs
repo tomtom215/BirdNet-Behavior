@@ -80,9 +80,24 @@ pub fn start_disk_manager(
     let purge_threshold = if cli.disk_purge_threshold > 0 {
         cli.disk_purge_threshold
     } else {
-        config
-            .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
-            .unwrap_or(DEFAULT_PURGE_THRESHOLD)
+        // A percentage of the disk, 1 to 100. `0` parsed as a perfectly good
+        // `u8` and meant "purge continuously", and anything above 100 meant
+        // "never": both reach this line from a config file or the settings table
+        // without anything having stopped them, and the first deletes recordings.
+        // Outside the range the station uses the default and says so.
+        let configured = config.and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok());
+        match configured {
+            Some(v) if (1..=100).contains(&v) => v,
+            Some(v) => {
+                tracing::warn!(
+                    value = v,
+                    default = DEFAULT_PURGE_THRESHOLD,
+                    "DISK_PURGE_THRESHOLD must be a percentage from 1 to 100; using the default"
+                );
+                DEFAULT_PURGE_THRESHOLD
+            }
+            None => DEFAULT_PURGE_THRESHOLD,
+        }
     };
 
     // The clips a species always keeps when the disk-full purge runs (S-2).
@@ -120,6 +135,14 @@ pub fn start_disk_manager(
         let state = state.clone();
         std::sync::Arc::new(move || locked_clips(&state))
     };
+
+    // What a full recordings disk does: delete the oldest clips (the default),
+    // or hold the recording and keep every one (BirdNET-Pi's `FULL_DISK=keep`).
+    // Only the persistent clips directory takes it. The transient stream
+    // directory holds raw capture segments that are worth nothing once read,
+    // and a RAM-backed one that fills must still be drained or capture itself
+    // stops being able to write.
+    let full_disk_action = resolve_full_disk_action(config);
 
     let mut handles = Vec::new();
 
@@ -167,6 +190,7 @@ pub fn start_disk_manager(
                 // Raw segments carry no species; oldest-first is right here.
                 purge_policy: PurgePolicy::OldestFirst,
                 raw_keep,
+                hold_flag: None,
             },
             "stream",
         ));
@@ -180,6 +204,11 @@ pub fn start_disk_manager(
     // monitor a directory nothing necessarily writes to.
     let recordings_dir = state.recording_dir();
     let already_monitored = cli.watch_dir.as_ref().is_some_and(|w| *w == recordings_dir);
+    if let Some(notice) =
+        super::startup_notices::keep_overridden_by_watch_dir(full_disk_action, already_monitored)
+    {
+        tracing::warn!("{notice}");
+    }
     if !already_monitored {
         // `disk_usage` shells out to `df`, which fails on a path that does not
         // exist — and the recordings dir is only created lazily by the first
@@ -197,7 +226,7 @@ pub fn start_disk_manager(
                 DiskManagerConfig {
                     monitored_dir: recordings_dir,
                     purge_threshold,
-                    full_disk_action: FullDiskAction::Purge,
+                    full_disk_action,
                     max_files_per_species,
                     check_interval_secs: 60,
                     exclude_paths: cli.disk_exclude.clone(),
@@ -216,6 +245,7 @@ pub fn start_disk_manager(
                     // species-aware purge walks it; nothing is kept from here.
                     raw_keep: None,
                     stream_max_bytes: 0,
+                    hold_flag: Some(state.metrics().recording_held_flag()),
                 },
                 "recordings",
             ));
@@ -223,6 +253,33 @@ pub fn start_disk_manager(
     }
 
     handles
+}
+
+/// What a full recordings disk does, from `FULL_DISK` (`purge` or `keep`).
+///
+/// `purge` is the default and what any station that never set the key has
+/// always done. Anything else than the two words is logged and treated as
+/// `purge`, because that is the behaviour the key's absence has: `--doctor`
+/// flags the value (`check_full_disk` in `birdnet_core::config::validate`),
+/// which is where a typo should be fixed.
+pub fn resolve_full_disk_action(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_core::audio::capture::FullDiskAction {
+    use birdnet_core::audio::capture::FullDiskAction;
+    let Some(raw) = config.and_then(|c| c.get("FULL_DISK")) else {
+        return FullDiskAction::Purge;
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "purge" => FullDiskAction::Purge,
+        "keep" => FullDiskAction::Keep,
+        other => {
+            tracing::warn!(
+                value = other,
+                "FULL_DISK is neither purge nor keep; deleting the oldest clips when the disk is full, as when it is not set"
+            );
+            FullDiskAction::Purge
+        }
+    }
 }
 
 /// Spawn one disk-manager thread for `config`, logging what it will do.
@@ -252,6 +309,7 @@ fn spawn_manager(
         dir = %config.monitored_dir.display(),
         max_files_per_species = config.max_files_per_species,
         purge_threshold = config.purge_threshold,
+        when_full = ?config.full_disk_action,
         stream_retention_secs = config.stream_retention_secs,
         stream_max_bytes = config.stream_max_bytes,
         excluded_paths = config.exclude_paths.len(),
@@ -355,6 +413,22 @@ pub fn start_live_spectrogram(
     Some(handle)
 }
 
+/// What the Avahi service file does, and does not do, for the log line.
+///
+/// The file advertises a **service** (`_http._tcp`, named `<name> on <host>`)
+/// so that a browser or phone that lists web services on the network finds the
+/// station. It creates no host name: `<hostname>.local` resolves because
+/// `avahi-daemon` publishes the machine's own name, whatever services are
+/// registered, and a station is reachable as `birdnet.local` only if the
+/// machine is called `birdnet`. BirdNET-Pi's `avahi-alias` does publish a
+/// second name; this does not. The line used to say "discoverable as
+/// birdnet.local", which the file does not do.
+const fn avahi_written_message() -> &'static str {
+    "Avahi service file written: the station is advertised on the local network as a web \
+     service. Its address is http://<this machine's name>.local while avahi-daemon runs; \
+     this file does not publish a name of its own"
+}
+
 /// Generate an Avahi mDNS service file for local network discovery.
 pub fn maybe_install_avahi_service(port: u16, site_name: &str) {
     let avahi_dir = std::path::Path::new("/etc/avahi/services");
@@ -391,7 +465,8 @@ pub fn maybe_install_avahi_service(port: u16, site_name: &str) {
     match std::fs::write(&service_file, xml) {
         Ok(()) => tracing::info!(
             path = %service_file.display(),
-            "Avahi mDNS service file written — station discoverable as birdnet.local"
+            "{}",
+            avahi_written_message()
         ),
         Err(e) => tracing::debug!(
             error = %e,
@@ -404,9 +479,37 @@ pub fn maybe_install_avahi_service(port: u16, site_name: &str) {
 mod tests {
     use super::{
         DEFAULT_PURGE_THRESHOLD, DEFAULT_STREAM_MAX_MB, DEFAULT_STREAM_RETENTION_SECS,
-        locked_clips, maybe_install_avahi_service, start_disk_manager,
+        avahi_written_message, locked_clips, maybe_install_avahi_service, resolve_full_disk_action,
+        start_disk_manager,
     };
-    use crate::helpers::test_support::{default_cli, test_state_in};
+    use crate::helpers::test_support::{config_with, default_cli, test_state_in};
+    use birdnet_core::audio::capture::FullDiskAction;
+
+    /// A-19: the log line named an address the file does not create.
+    #[test]
+    fn the_avahi_line_does_not_promise_a_name_the_file_does_not_publish() {
+        let said = avahi_written_message();
+        assert!(!said.contains("birdnet.local"), "{said}");
+        assert!(said.contains("<this machine's name>.local"), "{said}");
+    }
+
+    /// A-4: `FULL_DISK` reaches the recordings disk manager. Unset is what every
+    /// station has always done; `keep` is BirdNET-Pi's, in any case.
+    #[test]
+    fn full_disk_is_read_from_the_config_and_defaults_to_purge() {
+        assert_eq!(resolve_full_disk_action(None), FullDiskAction::Purge);
+        let cfg = config_with(&[("FULL_DISK", "keep")]);
+        assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Keep);
+        let cfg = config_with(&[("FULL_DISK", " KEEP ")]);
+        assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Keep);
+        let cfg = config_with(&[("FULL_DISK", "purge")]);
+        assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Purge);
+        // A typo deletes as an unset key does, and `--doctor` says so.
+        let cfg = config_with(&[("FULL_DISK", "keeep")]);
+        assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Purge);
+        let cfg = config_with(&[("FULL_DISK", "")]);
+        assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Purge);
+    }
 
     #[test]
     fn locked_clips_are_unknown_not_empty_when_the_database_fails() {

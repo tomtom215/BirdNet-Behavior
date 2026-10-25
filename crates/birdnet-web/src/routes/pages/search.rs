@@ -775,7 +775,7 @@ fn render_results(
             name_q = super::simple_url_encode(&d.com_name),
             name = escape_html(names.name(&d.sci_name, &d.com_name)),
             date = escape_html(&d.date),
-            time = escape_html(&d.time),
+            time = crate::display::clock(&d.time),
         );
     }
     html.push_str("</ul></form>");

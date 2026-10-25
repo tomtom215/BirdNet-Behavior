@@ -34,6 +34,8 @@
 //! ```
 
 pub mod birdnet_pi;
+pub mod clips;
+pub mod conf;
 pub mod error;
 pub mod progress;
 pub mod provenance;

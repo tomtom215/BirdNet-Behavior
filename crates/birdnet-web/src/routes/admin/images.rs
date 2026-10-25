@@ -14,9 +14,10 @@
 
 use std::fmt::Write as _;
 
+use crate::routes::form::HtmxForm;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse};
-use axum::{Form, Router, routing::get};
+use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use crate::routes::pages::toast::{self, Toast};
@@ -145,7 +146,7 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
 async fn add_blacklist(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
-    Form(form): Form<BlacklistForm>,
+    HtmxForm(form): HtmxForm<BlacklistForm>,
 ) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
         let added = state.with_db(|conn| {

@@ -13,6 +13,7 @@
 //! | `email`         | SMTP email alerts section                      |
 
 mod audio;
+mod badges;
 mod detection;
 mod email;
 mod location;
@@ -25,6 +26,14 @@ use std::fmt::Write as _;
 
 use birdnet_core::i18n::NameLocalizer;
 
+pub(crate) use badges::PENDING_KEY;
+
+/// The pseudo-setting the page loader adds when the station has an active
+/// audio-source row: the rows, one per line (`kind<TAB>name<TAB>device`). Never
+/// stored. See `handler::audio_sources_summary`.
+pub(crate) const AUDIO_SOURCES_KEY: &str = "__audio_sources";
+pub(crate) use system::language_options;
+
 /// Every settings section on the full page, in the order it is rendered:
 /// `(anchor id, heading text)`.
 ///
@@ -35,14 +44,20 @@ use birdnet_core::i18n::NameLocalizer;
 /// never mentions, is not representable without the two disagreeing.
 /// `settings_index_matches_rendered_sections` asserts both directions against
 /// the real rendered HTML rather than trusting that.
-pub(crate) const SECTIONS: [(&str, &str); 9] = [
+pub(crate) const SECTIONS: &[(&str, &str)] = &[
     ("audio", "Audio Capture"),
     ("location", "Location &amp; Recording Schedule"),
     ("detection", "Detection Settings"),
+    ("filters", "Detection filters"),
     ("notifications", "Notifications"),
+    ("alert-limits", "Alert limits"),
+    ("mqtt", "Home Assistant &amp; MQTT"),
     ("species", "Species Filters"),
     ("system", "System &amp; Display"),
     ("auth", "Web Authentication"),
+    ("storage", "Storage"),
+    ("online", "Online services"),
+    ("backups", "Backups"),
     ("email", "Email Alerts"),
     // Rendered after the form, not inside it: its buttons each save at once,
     // and inside the form they would submit it.
@@ -69,7 +84,7 @@ fn section_index() -> String {
     </div>
     <ol class="set-index__list">"#,
     );
-    for (id, title) in SECTIONS {
+    for &(id, title) in SECTIONS {
         // `r##"…"##`: the href contains `"#`, which would close an `r#"…"#`.
         let _ = write!(out, r##"<li><a href="#set-{id}">{title}</a></li>"##);
     }
@@ -143,10 +158,15 @@ fn fixed_form_default(key: &str) -> &'static str {
         "night_inhibit" | "raw_spectrogram" => "false",
         "notify_trigger" => "each",
         "overlap" | "privacy_threshold" => "0.0",
+        "full_disk_action" => "purge",
         "purge_threshold" => "95",
         "recording_schedule" => "all-day",
         "segment_duration" => "15",
         "sf_thresh" => "0.03",
+        "spectrogram_colormap" => "viridis",
+        "spectrogram_range_db" => "80",
+        "temperature_unit" => "celsius",
+        "time_format" => "24h",
         "stream_max_mb" => "512",
         "stream_retention_secs" => "600",
         "weekly_report_schedule" => "monday",
@@ -280,6 +300,9 @@ pub(crate) static SETTINGS_FORM_CSS: crate::seal::Sealed = crate::seal::Sealed::
       .btn-primary:hover { background: var(--moss-ink); }
       .alert-success { background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
                          border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .alert-warn { background: var(--dawn-soft); border: 1px solid var(--dawn-soft); color: var(--dawn-ink);
+                       border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .save-picture-note { margin: 0.4rem 0 0; }
       .alert-error { background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
                        border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
       .alert-icon { vertical-align: -2px; margin-right: 0.4rem; }
@@ -310,6 +333,13 @@ pub(crate) static SETTINGS_FORM_CSS: crate::seal::Sealed = crate::seal::Sealed::
       .save-row { display: flex; align-items: center; gap: 1rem; }
       .save-note { color: var(--fg-3); font-size: 0.875rem; }
       .save-note.dim { color: var(--fg-4); font-size: 0.8rem; }
+      /* The audio-source list shown in place of the capture addresses. */
+      .set-sources { border: 1px solid var(--border); border-radius: 0.5rem; background: var(--bg);
+                     padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .set-sources p { margin: 0 0 0.5rem; font-size: 0.875rem; color: var(--fg-2); }
+      .set-sources p.hint { margin-top: 0.5rem; margin-bottom: 0; }
+      .set-sources__list { margin: 0 0 0.25rem; padding-left: 1.2rem; font-size: 0.875rem; }
+      .set-sources__list li { margin-bottom: 0.25rem; overflow-wrap: anywhere; }
     </style>",
 );
 
@@ -328,6 +358,8 @@ pub(crate) enum Section {
     Email,
     /// System, display, retention, auth.
     System,
+    /// One of the table-driven groups ([`super::extra`]).
+    Extra(super::extra::Group),
 }
 
 /// Render the chosen settings `sections` wrapped in one form that posts to
@@ -354,23 +386,34 @@ pub(crate) fn render_section_form(
             Section::Notifications => notifications::render(&mut out, settings),
             Section::Email => email::render(&mut out, settings),
             Section::System => system::render(&mut out, settings, names),
+            Section::Extra(group) => super::extra::render_group(&mut out, *group, settings),
         }
     }
     out.push_str(
         r#"<div class="save-row">
     <button type="submit" class="btn btn-primary">Save settings</button>
     <span id="save-spinner" class="htmx-indicator save-note">Saving…</span>
-    <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
+    <span class="save-note dim">Each setting says when it applies. The ones marked <em>after restart</em> wait until you restart the station.</span>
   </div>
 </form></div>"#,
     );
-    out
+    finish(&out, settings)
+}
+
+/// The finished markup: every field badged with when it applies, and the
+/// banner for saved changes still waiting for a restart in front.
+fn finish(out: &str, settings: &HashMap<String, String>) -> String {
+    let badged = badges::add_applies_badges(out);
+    let banner = badges::pending_banner(settings, &badged);
+    let script = crate::routes::admin::classifier::CONTROLS_SCRIPT.as_str();
+    format!("{banner}{badged}{script}")
 }
 
 pub(super) fn render_settings_form(
     settings: &HashMap<String, String>,
     names: &NameLocalizer,
 ) -> String {
+    use super::extra::Group;
     let mut out = String::with_capacity(16_384);
     out.push_str(
         r##"<form hx-post="/admin/settings" hx-target="#settings-feedback"
@@ -379,9 +422,15 @@ pub(super) fn render_settings_form(
     audio::render(&mut out, settings);
     location::render(&mut out, settings);
     detection::render(&mut out, settings);
+    super::extra::render_group(&mut out, Group::Filters, settings);
     notifications::render(&mut out, settings);
+    super::extra::render_group(&mut out, Group::AlertLimits, settings);
+    super::extra::render_group(&mut out, Group::Mqtt, settings);
     species::render(&mut out, settings);
     system::render(&mut out, settings, names);
+    super::extra::render_group(&mut out, Group::Storage, settings);
+    super::extra::render_group(&mut out, Group::Online, settings);
+    super::extra::render_group(&mut out, Group::Backups, settings);
     email::render(&mut out, settings);
     out.push_str(
         r#"
@@ -391,12 +440,12 @@ pub(super) fn render_settings_form(
       Saving…
     </span>
     <span class="save-note dim">
-      Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.
+      Each setting says when it applies. The ones marked <em>after restart</em> wait until you restart the station.
     </span>
   </div>
 </form>"#,
     );
-    out
+    finish(&out, settings)
 }
 
 #[cfg(test)]

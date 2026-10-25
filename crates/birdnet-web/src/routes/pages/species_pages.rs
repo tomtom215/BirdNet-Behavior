@@ -10,7 +10,7 @@ use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use super::atoms::{avatar, conf_bar, conf_pill, sparkline, species_code, species_color};
-use super::charts::{render_daily_chart, render_hourly_chart};
+use super::charts::{render_daily_chart_pair, render_hourly_chart};
 use super::{SPECIES_DETAIL_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
 
@@ -127,6 +127,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/species-hourly", get(species_hourly_partial))
         .route("/pages/species-detections", get(species_detections_partial))
         .route("/pages/species-daily", get(species_daily_partial))
+        .route("/pages/species-year", get(species_year_partial))
         .route("/pages/species-info", get(species_info_partial))
         .route("/pages/species-companions", get(species_companions_partial))
         .route("/pages/species-hero", get(species_hero_partial))
@@ -549,8 +550,9 @@ fn active_this_week(spark: Option<&Vec<i64>>) -> bool {
     spark.is_some_and(|d| d.iter().rev().take(7).sum::<i64>() > 0)
 }
 
-/// Build the cumulative-species accumulation points (`(label, cum)`), binned by
-/// month, mirroring the pre-spine life-list page.
+/// Build the cumulative-species accumulation points (`(label, cum)`): every month from the
+/// first species through this month, whether or not it added one, so the x axis is time and the
+/// curve ends at the present (the life-list partial draws the same curve; this is one function).
 fn accumulation_points(
     first_seen: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, i64)> {
@@ -560,14 +562,11 @@ fn accumulation_points(
             *monthly.entry(month.to_string()).or_default() += 1;
         }
     }
-    let mut cum: i64 = 0;
-    monthly
-        .iter()
-        .map(|(month, &c)| {
-            cum += i64::from(c);
-            (month.get(2..).unwrap_or(month).to_string(), cum)
-        })
-        .collect()
+    let this_month = super::today_date_string()
+        .get(..7)
+        .unwrap_or_default()
+        .to_string();
+    super::life_list::accumulation_points(&monthly, &this_month)
 }
 
 /// Count of species whose first-ever detection falls in the current year.
@@ -749,7 +748,7 @@ async fn species_hourly_partial(
         Ok(Ok(hours)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_hourly_chart(&hours),
+            render_hourly_chart("species-hourly", &hours),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -775,21 +774,30 @@ async fn species_daily_partial(
         );
     };
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| birdnet_db::sqlite::species_daily_counts(conn, &name, 14))
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::species_daily_counts(conn, &name, 14)?;
+            // When the station was listening, so a day it was off is not drawn as a day this
+            // bird was quiet. Unreadable means unknown, which draws nothing.
+            let effort = match (days.first(), days.last()) {
+                (Some(a), Some(b)) => super::listening::effort_by_date(conn, &a.date, &b.date).ok(),
+                _ => None,
+            };
+            Ok::<_, birdnet_db::sqlite::DbError>((days, effort))
+        })
     })
     .await;
     match result {
         // Fourteen calendar days, zeros included: fourteen empty bars say
         // nothing a sentence does not say better.
-        Ok(Ok(days)) if days.iter().all(|d| d.count == 0) => (
+        Ok(Ok((days, _))) if days.iter().all(|d| d.count == 0) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
             r#"<p class="cht-empty">Not heard in the last 14 days.</p>"#.to_string(),
         ),
-        Ok(Ok(days)) => (
+        Ok(Ok((days, effort))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_daily_chart(&days),
+            render_daily_chart_pair("species-daily", &days, None, effort.as_ref()),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -801,6 +809,68 @@ async fn species_daily_partial(
             super::error_states::failed_partial("this species' daily chart")
         }
     }
+}
+
+/// The year as a calendar for one species: a cell a day for the last 365 days, coloured by
+/// how many times it was heard, with the days the station was not listening hatched so they
+/// are not read as days the bird was quiet.
+async fn species_year_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl axum::response::IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::species_daily_counts(conn, &name, 365)?;
+            let effort = match (days.first(), days.last()) {
+                (Some(a), Some(b)) => super::listening::effort_by_date(conn, &a.date, &b.date).ok(),
+                _ => None,
+            };
+            Ok::<_, birdnet_db::sqlite::DbError>((days, effort))
+        })
+    })
+    .await;
+    let html = match result {
+        Ok(Ok((days, _))) if days.iter().all(|d| d.count == 0) => {
+            r#"<p class="cht-empty">Not heard in the last year.</p>"#.to_string()
+        }
+        Ok(Ok((days, effort))) => {
+            let counts: std::collections::BTreeMap<String, i64> = days
+                .iter()
+                .filter(|d| d.count > 0)
+                .map(|d| (d.date.clone(), d.count))
+                .collect();
+            let (from, to) = (
+                days.first().map_or("", |d| d.date.as_str()),
+                days.last().map_or("", |d| d.date.as_str()),
+            );
+            super::viz::heat::calendar(&super::viz::heat::Calendar {
+                id: "species-year",
+                from,
+                to,
+                counts: &counts,
+                effort: effort.as_ref(),
+                unit: "detections",
+                name: "This species through the year",
+            })
+        }
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species year calendar: query failed");
+            return super::error_states::failed_partial("this species' year");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species year calendar: task failed");
+            return super::error_states::failed_partial("this species' year");
+        }
+    };
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 async fn species_detections_partial(
@@ -839,7 +909,7 @@ async fn species_detections_partial(
                     html,
                     r"<tr><td>{conf}</td><td>{t}</td><td>{dt}</td></tr>",
                     conf = conf_pill(d.confidence * 100.0, floor),
-                    t = escape_html(&d.time),
+                    t = crate::display::clock(&d.time),
                     dt = escape_html(&d.date),
                 );
             }
@@ -1096,19 +1166,22 @@ async fn species_status_partial(
 async fn species_hero_partial(
     State(state): State<AppState>,
     Query(query): Query<SpeciesQuery>,
-) -> impl axum::response::IntoResponse {
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
     let Some(name) = query.name else {
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
             String::new(),
-        );
+        )
+            .into_response();
     };
 
     let lookup_name = name.clone();
     let state_clone = state.clone();
-    let best = tokio::task::spawn_blocking(move || {
-        state_clone.with_read_db(|conn| {
+    let read = tokio::task::spawn_blocking(move || {
+        state_clone.with_read_db(|conn| -> Result<_, rusqlite::Error> {
+            use rusqlite::OptionalExtension as _;
             // Shares `CLIP_AVAILABLE` with every other play-button surface, so
             // this page cannot end up offering audio the Recordings browser
             // knows has been reclaimed.
@@ -1119,6 +1192,11 @@ async fn species_hero_partial(
                  ORDER BY Confidence DESC LIMIT 1",
                 clip = birdnet_db::sqlite::CLIP_AVAILABLE,
             );
+            // `optional()` is the discrimination: no row is "no clip yet", an
+            // error is "could not look". Both used to be `.ok()` -> `None`, and
+            // the page told the operator of a station whose database had failed
+            // that no recording had been captured for a bird heard a hundred
+            // times.
             let best = conn
                 .query_row(&sql, [&lookup_name], |r| {
                     Ok((
@@ -1128,24 +1206,39 @@ async fn species_hero_partial(
                         r.get::<_, String>(3)?,
                     ))
                 })
-                .ok();
+                .optional()?;
             // With nothing to play, whether there ever was anything: retention
             // reclaims clips and keeps the rows, and "no recording captured"
             // is false for a bird recorded a hundred times last spring.
-            let reclaimed = best.is_none()
-                && conn
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM detections_analytic \
-                         WHERE Com_Name = ?1 AND Clip_Pruned_At IS NOT NULL)",
-                        [&lookup_name],
-                        |r| r.get::<_, bool>(0),
-                    )
-                    .unwrap_or(false);
-            (best, reclaimed)
+            let reclaimed = if best.is_none() {
+                conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM detections_analytic \
+                     WHERE Com_Name = ?1 AND Clip_Pruned_At IS NOT NULL)",
+                    [&lookup_name],
+                    |r| r.get::<_, bool>(0),
+                )?
+            } else {
+                false
+            };
+            Ok((best, reclaimed))
         })
     })
-    .await
-    .unwrap_or((None, false));
+    .await;
+
+    let best = match read {
+        Ok(Ok(best)) => best,
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species hero: query failed");
+            return super::error_states::failed_partial("this species' best recording")
+                .into_response();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species hero: task failed");
+            return super::error_states::failed_partial("this species' best recording")
+                .into_response();
+        }
+    };
 
     let (Some((date, time, conf, file_name)), _) = best else {
         let (caption, note) = if best.1 {
@@ -1161,7 +1254,7 @@ async fn species_hero_partial(
 <div class="bnb-photo spp-photo-empty" data-caption="{caption}"></div>
 <p class="bnb-meta spp-mt8">{note}</p>"#
         );
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
+        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html).into_response();
     };
 
     let basename = std::path::Path::new(&file_name)
@@ -1169,7 +1262,7 @@ async fn species_hero_partial(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or(file_name);
     let safe_file = escape_html(&basename);
-    let time_short = time.get(0..5).unwrap_or(&time);
+    let time_short = crate::display::clock(time.get(0..5).unwrap_or(&time));
     let conf_pct = conf * 100.0;
 
     // The hero is the *recording* — the spectrogram and audio of the loudest
@@ -1182,7 +1275,7 @@ async fn species_hero_partial(
 <div class="bnb-meta mono spp-mt8">{conf_pct:.0}% confidence · {date} {time_short}</div>"#,
     );
 
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html).into_response()
 }
 
 /// HTMX partial: companion species (co-occurrence).
@@ -1214,7 +1307,7 @@ async fn species_companions_partial(
                 );
             }
             let mut html = String::from(
-                r"<table><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
+                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
             );
             for c in &companions {
                 let enc = simple_url_encode(&c.companion);

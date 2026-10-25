@@ -62,12 +62,29 @@ struct DataFacts {
     /// Snapshot files, newest first.
     snapshots: Vec<Snapshot>,
     snapshot_bytes: u64,
-    /// When the scheduled backup + VACUUM job last completed, if ever.
-    scheduled_last_run_unix: Option<i64>,
+    /// When the scheduled backup + VACUUM job last completed.
+    scheduled_last_run: ScheduledRun,
     /// Filesystem holding the database and recordings.
     disk_used_pct: Option<f64>,
     disk_available_bytes: u64,
     now_unix: u64,
+}
+
+/// What the station knows about the scheduled backup's last run.
+///
+/// Three facts, not two: a read that failed is not a job that has never run. The
+/// panel answers the first with "first automatic backup due shortly", which on a
+/// station whose database could not be asked reads as reassurance about a backup
+/// nobody can vouch for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ScheduledRun {
+    /// The job has no recorded run.
+    #[default]
+    Never,
+    /// It last completed at this Unix time.
+    At(i64),
+    /// The record could not be read.
+    Unknown,
 }
 
 /// Read the real state of the station's data. Blocking; callers already run
@@ -117,10 +134,16 @@ fn gather(state: &AppState) -> DataFacts {
     snapshots.sort_by_key(|s| std::cmp::Reverse(s.modified_unix));
     let snapshot_bytes = snapshots.iter().map(|s| s.bytes).sum();
 
-    let scheduled_last_run_unix = state.with_read_db(|conn| {
+    let scheduled_last_run = match state.with_read_db(|conn| {
         birdnet_db::sqlite::last_run_unix(conn, birdnet_db::sqlite::JOB_BACKUP_VACUUM)
-            .unwrap_or(None)
-    });
+    }) {
+        Ok(Some(at)) => ScheduledRun::At(at),
+        Ok(None) => ScheduledRun::Never,
+        Err(e) => {
+            tracing::warn!(error = %e, "backup panel: the last scheduled run could not be read");
+            ScheduledRun::Unknown
+        }
+    };
 
     let (disk_used_pct, disk_available_bytes) = birdnet_core::audio::capture::disk_usage(&data_dir)
         .map_or((None, 0), |u| (Some(u.used_percent()), u.available_bytes));
@@ -131,7 +154,7 @@ fn gather(state: &AppState) -> DataFacts {
         recordings_bytes,
         snapshots,
         snapshot_bytes,
-        scheduled_last_run_unix,
+        scheduled_last_run,
         disk_used_pct,
         disk_available_bytes,
         now_unix: std::time::SystemTime::now()
@@ -257,18 +280,17 @@ fn render_body(f: &DataFacts) -> String {
     // A job with no recorded run is due immediately (see `crate::maintenance`),
     // so on a fresh station the first automatic backup is minutes away, not a
     // week — say that rather than the bare "hasn't happened".
-    let next_sub = f.scheduled_last_run_unix.map_or_else(
-        || "first automatic backup due shortly".to_string(),
-        |last| {
-            format!(
-                "scheduled backup {}",
-                until(
-                    i64::try_from(f.now_unix).unwrap_or(i64::MAX),
-                    last + birdnet_db::sqlite::BACKUP_VACUUM_INTERVAL_SECS,
-                )
+    let next_sub = match f.scheduled_last_run {
+        ScheduledRun::Never => "first automatic backup due shortly".to_string(),
+        ScheduledRun::At(last) => format!(
+            "scheduled backup {}",
+            until(
+                i64::try_from(f.now_unix).unwrap_or(i64::MAX),
+                last + birdnet_db::sqlite::BACKUP_VACUUM_INTERVAL_SECS,
             )
-        },
-    );
+        ),
+        ScheduledRun::Unknown => "the last scheduled run could not be read".to_string(),
+    };
 
     let disk_value = f
         .disk_used_pct
@@ -574,7 +596,7 @@ mod tests {
                 },
             ],
             snapshot_bytes: 8_294_304,
-            scheduled_last_run_unix: Some(1_773_532_800),
+            scheduled_last_run: ScheduledRun::At(1_773_532_800),
             disk_used_pct: Some(61.4),
             disk_available_bytes: 12_884_901_888,
             now_unix: 1_773_619_200, // one day after the newest snapshot

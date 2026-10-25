@@ -47,7 +47,8 @@ pub mod types;
 
 pub use discovery::{HaDiscovery, HaDiscoveryConfig};
 pub use publisher::{
-    KEEPALIVE_SECS, PRESENCE_OFFLINE, PRESENCE_ONLINE, PresenceSession, publish, publish_with,
+    KEEPALIVE_SECS, PRESENCE_OFFLINE, PRESENCE_ONLINE, PresenceSession, check_tls, publish,
+    publish_with,
 };
 pub use types::{
     ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel, SpeciesHistory, TlsConfig,
