@@ -32,7 +32,8 @@ protobuf==5.29.6
 pygments==2.21.0
 requests==2.34.2
 rich==15.0.0
-setuptools==84.0.0
+# setuptools 84.1.0 (was 84.0.0): GHSA-xmj3-9gf7-h52w, a Windows path escape in legacy wheel installs. A build tool only, no numerics.
+setuptools==84.1.0
 six==1.17.0
 tensorboard==2.19.0
 tensorboard-data-server==0.7.2
