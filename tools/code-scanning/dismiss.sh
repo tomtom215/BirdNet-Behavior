@@ -42,7 +42,7 @@ dismiss() { # number, reason (false positive | won't fix | used in tests), comme
 
 # Validate every comment before changing anything: a dry pass over the same script.
 if [ "${APPLY:-}" = 1 ] && [ -z "${DISMISS_PREFLIGHT:-}" ]; then
-  APPLY= DISMISS_PREFLIGHT=1 bash "$0" >/dev/null
+  APPLY='' DISMISS_PREFLIGHT=1 bash "$0" >/dev/null
 fi
 
 # --- rust/path-injection (11): CodeQL models axum's `State<AppState>` extractor as a remote source ---
