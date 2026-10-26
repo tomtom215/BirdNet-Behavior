@@ -260,6 +260,16 @@ it says otherwise.
    path-filtered macOS job in `ci.yml` would catch it; none exists); `cargo test` for
    `birdnet-core` on macOS is untested and probably hits the same symbol; the release job's
    `--features analytics` build on macOS is not what the probe built.
+   Two more workflows failed on both tag pushes (`71539e5` on 2026-10-25, `f7ff337` on 2026-10-26)
+   and were not read after the first: **Docker** failed its tag gate in 9 s with "cannot find
+   origin/main" because `fetch-depth: ${{ startsWith(github.ref, 'refs/tags/') && 0 || 1 }}` is
+   always 1 (0 is falsy); the checkout log shows `--depth=1`. It is `fetch-depth: 0` now, and
+   `scripts/check-ci-config.py` refuses the `cond && <falsy> || x` shape. A tag's workflows run
+   from the tagged commit, so those two tags' image runs cannot be repaired by re-running them.
+   **Docs**' `build` job passed but its `deploy` job failed in 1 s with no steps and no log
+   (HTTP 404). The cause was not read; PLAUSIBLE: the `github-pages` environment allows only
+   `main`, not tags (Settings → Environments → github-pages → Deployment branches and tags; the
+   failed job's page names the rule if so). Nothing in the repo documents that setting.
 2. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
    another machine stops notifications until the file is copied in again.
 3. **The interface text is English only (A-5).** Medium, large. Species names come in 35
