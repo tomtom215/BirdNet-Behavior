@@ -1220,6 +1220,42 @@ def check_runners_are_pinned(workflows_glob: str = ".github/workflows/*.yml") ->
     check(seen >= 20, f"the reader found the runners it is judging ({seen})")
 
 
+# `cond && 0 || x` cannot select 0: the `&&` yields 0, which is falsy, so the `||` yields x.
+FALSY_THEN_FALLBACK = re.compile(r"&&\s*(?:-?0|false|null|''|\"\")\s*\|\|")
+EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.S)
+
+
+def check_and_or_never_selects_a_falsy_value(
+        workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """No expression is `cond && <falsy> || x`, which always yields `x`.
+
+    docker.yml's checkout said `fetch-depth: ${{ startsWith(github.ref, 'refs/tags/')
+    && 0 || 1 }}` to take the full history on a tag push. `0` is falsy, so it
+    was always 1; the tag gate (`check-release-tag.sh`) then had no `origin/main`
+    to look at and every tag push failed it, the first time one ran (v0.18.0).
+    """
+    print("\nNo expression picks a falsy value with `cond && 0 || x`")
+    check(bool(FALSY_THEN_FALLBACK.search("${{ a && 0 || 1 }}")),
+          "the pattern sees `a && 0 || 1`, the shape that broke")
+    check(bool(FALSY_THEN_FALLBACK.search("${{ a && false || b }}")),
+          "the pattern sees `a && false || b`")
+    check(not FALSY_THEN_FALLBACK.search("${{ a && 1 || 0 }}"),
+          "the pattern passes `a && 1 || 0` (the falsy value is the fallback)")
+    check(not FALSY_THEN_FALLBACK.search("${{ a && b || c }}"),
+          "the pattern passes `a && b || c`")
+    seen = 0
+    offenders: list[str] = []
+    for path in sorted(glob.glob(workflows_glob)):
+        text = open(path).read()
+        for match in EXPRESSION.finditer(text):
+            seen += 1
+            if FALSY_THEN_FALLBACK.search(match.group(0)):
+                line = text.count("\n", 0, match.start()) + 1
+                offenders.append(f"{path}:{line}")
+    check(not offenders, f"no `cond && <falsy> || x` expression ({', '.join(offenders) or 'none'})")
+    check(seen >= 100, f"the reader found the expressions it is judging ({seen})")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -1545,6 +1581,7 @@ def main(argv: list[str] | None = None) -> int:
     check_docs_publish_main_as_dev()
     check_release_notes_link_the_versions_manual()
     check_runners_are_pinned()
+    check_and_or_never_selects_a_falsy_value()
     check_headroom_arithmetic()
     check_observed_rule()
 

@@ -224,8 +224,12 @@ jobs:
           # The validator has been mutation-clean since it was added; any
           # regression at all is a real test-coverage gap, so both shards keep
           # max_missed at 0.
-          - { label: "validate.rs [1/2]", slug: validate.rs-1, shard: "0/2", file: crates/birdnet-core/src/config/validate.rs, max_missed: 0 }
-          - { label: "validate.rs [2/2]", slug: validate.rs-2, shard: "1/2", file: crates/birdnet-core/src/config/validate.rs, max_missed: 0 }
+          # 2026-10-26: `main`'s last five runs put validate.rs [2/2] at 35m of
+          # the 45m default, 77%, over the 75% line (`check_duration_headroom`).
+          # 50 puts 35m at 70%. Both shards, because equal-sized shards differ by
+          # about a fifth either way.
+          - { label: "validate.rs [1/2]", slug: validate.rs-1, shard: "0/2", file: crates/birdnet-core/src/config/validate.rs, timeout_minutes: 50, max_missed: 0 }
+          - { label: "validate.rs [2/2]", slug: validate.rs-2, shard: "1/2", file: crates/birdnet-core/src/config/validate.rs, timeout_minutes: 50, max_missed: 0 }
           # Three shards. Unsharded, this row measured 35m49s against the
           # 45-minute default on the scheduled full run of 2026-09-14
           # (run 34826747143, on `main`) — 80% of budget, over the 75% line,
@@ -257,6 +261,12 @@ jobs:
             slug: inference-model.rs-1
             shard: "0/3"
             file: crates/birdnet-core/src/inference/model.rs
+            # 2026-10-26: `main`'s last five runs put [2/3] at 36m and [3/3] at 38m
+            # of the 45m default, 79% and 84%, over the 75% line
+            # (`check_duration_headroom`); the "free to grow by half again"
+            # projection above did not hold. 60 puts 38m at 63%. All three
+            # shards, for the same spread between equal-sized shards.
+            timeout_minutes: 60
             # Wrapper-method mutants on `BirdNetModel` (`infer_sample_rate`,
             # `recommended_chunk_samples`, `is_probability_output`,
             # setters, `predict`) used to be uncatchable without a real
@@ -270,11 +280,13 @@ jobs:
             slug: inference-model.rs-2
             shard: "1/3"
             file: crates/birdnet-core/src/inference/model.rs
+            timeout_minutes: 60
             max_missed: 0
           - label: "inference/model.rs [3/3]"
             slug: inference-model.rs-3
             shard: "2/3"
             file: crates/birdnet-core/src/inference/model.rs
+            timeout_minutes: 60
             max_missed: 0
           - label: audio/extraction/extractor.rs
             slug: audio-extraction-extractor.rs
@@ -376,9 +388,12 @@ jobs:
           # 2026-10-22: a later `main` window put civil.rs [2/3] at 58m, 78% of
           # 75, over the same 75% line. 85 puts 58m at 68%. Same cause, same
           # remedy, same instruction to bring it down when the cache is fixed.
-          - { label: "civil.rs [1/3]", slug: civil.rs-1, shard: "0/3", file: crates/birdnet-core/src/civil.rs, timeout_minutes: 85, max_missed: 0 }
-          - { label: "civil.rs [2/3]", slug: civil.rs-2, shard: "1/3", file: crates/birdnet-core/src/civil.rs, timeout_minutes: 85, max_missed: 0 }
-          - { label: "civil.rs [3/3]", slug: civil.rs-3, shard: "2/3", file: crates/birdnet-core/src/civil.rs, timeout_minutes: 85, max_missed: 0 }
+          #
+          # 2026-10-26: a later window again, civil.rs [2/3] at 71m, 84% of 85.
+          # 100 puts 71m at 71%; the ceiling `check_timeouts` allows is 120.
+          - { label: "civil.rs [1/3]", slug: civil.rs-1, shard: "0/3", file: crates/birdnet-core/src/civil.rs, timeout_minutes: 100, max_missed: 0 }
+          - { label: "civil.rs [2/3]", slug: civil.rs-2, shard: "1/3", file: crates/birdnet-core/src/civil.rs, timeout_minutes: 100, max_missed: 0 }
+          - { label: "civil.rs [3/3]", slug: civil.rs-3, shard: "2/3", file: crates/birdnet-core/src/civil.rs, timeout_minutes: 100, max_missed: 0 }
           # Globbed, because this stopped being one file in 0.7.2 (#145),
           # which split it into mod/read/write/search/locks. The matrix kept
           # naming `detections.rs` and nothing noticed for two months: the

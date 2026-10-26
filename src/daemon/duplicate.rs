@@ -351,6 +351,16 @@ mod tests {
         assert!(admitted(&mut g, "Turdus merula", "05:00:01"));
     }
 
+    #[test]
+    fn a_positive_interval_is_enabled_and_says_so() {
+        // The two tests above only ever read `false`, so a body of `false` passed
+        // them: cargo-mutants, "replace DuplicateGate::is_enabled -> bool with
+        // false", survived on main after #265. One second is the smallest window
+        // and 0 the boundary `> 0` excludes.
+        assert!(DuplicateGate::new(1).is_enabled());
+        assert!(DuplicateGate::new(300).is_enabled());
+    }
+
     // ── a species' own interval (migration 56) ──────────────────────────
 
     /// Whether the gate admitted `sci` at `hms` under a species interval.
