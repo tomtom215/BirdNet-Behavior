@@ -61,7 +61,7 @@
 //!
 //! Independent of the manual, and run first because a package build returns
 //! before reaching the manual: on `aarch64-apple-darwin` the ONNX Runtime
-//! library `ort-sys` downloads contains CoreML objects that call Clang's
+//! library `ort-sys` downloads contains `CoreML` objects that call Clang's
 //! `___isPlatformVersionAtLeast`. Rust's `std` defines that symbol, but weakly,
 //! and the link of 0.18.0's release build did not take it from there
 //! ("Undefined symbols for architecture arm64"). Adding Clang's own
