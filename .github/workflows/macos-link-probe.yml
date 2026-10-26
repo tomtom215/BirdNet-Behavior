@@ -1,9 +1,9 @@
 name: macOS link probe (throwaway)
 
-# Not for merge. Isolates why `Build aarch64-apple-darwin` failed to link on v0.18.0
-# ("Undefined symbols ... ___isPlatformVersionAtLeast" from libort_sys's CoreML objects)
-# when v0.17.1 linked. Builds without `--features analytics`: the failing reference is in ort-sys,
-# not in DuckDB, and the bundled DuckDB compile is most of the release job's 16 minutes.
+# Not for merge. Checks that build.rs's link_clang_runtime() alone (no RUSTFLAGS) lets the
+# aarch64-apple-darwin binary link, and that the result starts. Run 40257984945 showed the same
+# job without that function failing with "Undefined symbols ... ___isPlatformVersionAtLeast".
+# Builds without `--features analytics`: the failing reference is in ort-sys, not in DuckDB.
 
 on:
   push:
@@ -15,25 +15,9 @@ permissions:
 
 jobs:
   probe:
-    name: ${{ matrix.name }}
+    name: build.rs supplies the Clang runtime
     runs-on: macos-14
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: current tree (control; expected to fail as v0.18.0 did)
-            ort: ""
-            clang_rt: false
-          - name: ort pinned to rc.13 (what v0.17.1 shipped)
-            ort: "2.0.0-rc.13"
-            clang_rt: false
-          - name: ort pinned to rc.14
-            ort: "2.0.0-rc.14"
-            clang_rt: false
-          - name: current tree + libclang_rt.osx.a on the link line
-            ort: ""
-            clang_rt: true
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,38 +28,21 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-darwin
 
-      - name: Versions in play
-        run: |
-          rustc --version
-          xcodebuild -version || true
-          clang --version | head -1
-          sw_vers
-
-      - name: Pin ort
-        if: matrix.ort != ''
-        run: |
-          sed -i '' -E 's|^(ort = \{ version = )"[^"]+"|\1"='"${{ matrix.ort }}"'"|' Cargo.toml
-          grep -n '^ort = ' Cargo.toml
-          cargo update -p ort --precise "${{ matrix.ort }}"
-          grep -A1 -E '^name = "ort(-sys)?"$' Cargo.lock
-
-      - name: Find the Clang runtime
-        if: matrix.clang_rt
-        run: |
-          rt="$(clang --print-file-name=libclang_rt.osx.a)"
-          echo "clang reports: $rt"
-          case "$rt" in /*) test -f "$rt" ;; *) echo "::error::libclang_rt.osx.a not found"; exit 1 ;; esac
-          echo "RUSTFLAGS=-C link-arg=$rt" >> "$GITHUB_ENV"
-
       - name: Build
         run: |
-          if [ -n "${{ matrix.ort }}" ]; then locked=""; else locked="--locked"; fi
-          cargo build --release $locked --target aarch64-apple-darwin --bin birdnet-behavior 2>&1 | tee build.log
+          rustc --version
+          cargo build --release --locked --target aarch64-apple-darwin --bin birdnet-behavior 2>&1 | tee build.log
           exit "${PIPESTATUS[0]}"
 
-      - name: Result
+      - name: What build.rs chose
         if: always()
         run: |
+          grep -h -E 'libclang_rt|found no Clang runtime' build.log || echo "no build.rs message in the log (quiet on success is normal)"
           echo "undefined-symbol lines: $(grep -c 'Undefined symbols' build.log || true)"
-          grep -A6 'Undefined symbols' build.log | head -12 || true
-          ls -l target/aarch64-apple-darwin/release/birdnet-behavior 2>&1 || true
+          ls -l target/aarch64-apple-darwin/release/birdnet-behavior
+
+      - name: The binary starts
+        run: |
+          bin=target/aarch64-apple-darwin/release/birdnet-behavior
+          "$bin" --version
+          "$bin" --help | head -5
