@@ -270,6 +270,11 @@ it says otherwise.
    (HTTP 404). The cause was not read; PLAUSIBLE: the `github-pages` environment allows only
    `main`, not tags (Settings → Environments → github-pages → Deployment branches and tags; the
    failed job's page names the rule if so). Nothing in the repo documents that setting.
+   Also found while reading `main` after #265, and fixed in #270: the full mutation run missed
+   `DuplicateGate::is_enabled -> bool with false` (every test of it read `false`; a pull request's
+   `--in-diff` run cannot see a line it did not change), and `CI config` found four mutation
+   shards over its 75% line on `main`'s latest runs (`civil.rs [2/3]` 71m of 85, `model.rs [2/3]` and
+   `[3/3]` 36m and 38m of 45, `validate.rs [2/2]` 35m of 45), now 100, 60 and 50.
 2. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
    another machine stops notifications until the file is copied in again.
 3. **The interface text is English only (A-5).** Medium, large. Species names come in 35
@@ -338,23 +343,27 @@ it says otherwise.
 
 ## 6. Where to start
 
-`main` carries the release preparation for **0.18.0** (2026-10-23): a plain `cargo update`
-(`4e6bdd1`), then the version bump and the changelog roll (`14ae57d`: `Cargo.toml`,
-`CITATION.cff`, `openapi.json`, `docs/book/reference/api.md`, `STABILITY.md`, `Cargo.lock`),
-merged with #265. No tag exists: `v0.18.0` was pushed once and deleted (section 5, item 1), and
-none should be pushed before steps 1 and 2.
+The 0.18.0 preparation (a plain `cargo update`, `4e6bdd1`; the bump and changelog roll, `14ae57d`)
+merged with #265, and the macOS link fix with #266. The maintainer then pushed `v0.18.0` a second
+time (2026-10-26, on `f7ff337`, the merge of #266); **that tag exists**, its Release run 40306761292
+was still running when last read (the Docker image and the Docs deploy had already failed, section 5
+item 1), and the maintainer chose to release **0.18.1** next. Pull request #270 carries 0.18.1: the
+Docker fix, a mutation test, four mutation-shard budgets, and the bump to 0.18.1 with its changelog
+section dated 2026-10-26.
 
-1. Merge the pull request that carries the macOS link fix (`build.rs`) when its CI is green.
+1. Merge #270 when its CI is green.
 2. Run the **dry run** (`release.yml`, `workflow_dispatch`, version blank) on `main` after the
    merge, with `Build aarch64-apple-darwin` and every `Upgrade from vA.B.C` row green; it is the
    only workflow that builds the macOS target. Then
-   `git tag -a v0.18.0 -m "Release v0.18.0" && git push origin v0.18.0`. The release date
-   (`CHANGELOG.md` heading, `CITATION.cff` `date-released`) is 2026-10-23; change both if the
+   `git tag -a v0.18.1 -m "Release v0.18.1" && git push origin v0.18.1`. The release date
+   (`CHANGELOG.md` heading, `CITATION.cff` `date-released`) is 2026-10-26; change both if the
    tag lands on another day, because `validate` checks the heading's form and the CITATION
-   version, not that the date is today's.
+   version, not that the date is today's. Read the Docker and Docs runs as well as Release's: all
+   three start on a tag push, and both of the others failed on v0.18.0 without anyone reading them.
+   Before the tag, let `github-pages` accept tags (section 5, item 1) or Docs' `deploy` will fail again.
 3. **After the tag**: the README says "unreleased" 11 times (and the installation chapter once)
-   about things 0.18.0 ships, and names `v0.17.1` as what installs the V3.0 preview
-   (line 131). Make those true of 0.18.0 in a small follow-up pull request; also run
+   about things 0.18.x ships, and names `v0.17.1` as what installs the V3.0 preview
+   (line 131). Make those true in a small follow-up pull request; also run
    `scripts/gen-cli-help.sh` and confirm `docs/book/_generated/cli-help.txt` is unchanged.
 4. Done 2026-10-25: the maintainer ran `APPLY=1 tools/code-scanning/dismiss.sh` (16 dismissals)
    and the CodeQL results check on #265 went from 12 alerts to "No new alerts". What the script
