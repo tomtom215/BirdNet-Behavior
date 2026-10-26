@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-26
+
+### Fixed
+
+- **The container image is built from a release tag again.** The image workflow checks
+  that a tag is on `main` before it publishes anything, and its checkout asked for the full
+  history with `fetch-depth: ${{ startsWith(github.ref, 'refs/tags/') && 0 || 1 }}`. In a
+  GitHub expression `0` is falsy, so that is always `1`: the checkout was shallow, there was
+  no `origin/main` to look at, and the check refused the tag within seconds. It is the first
+  tag push the check has seen, so 0.18.0 has no container image and this release is the first
+  since 0.17.1 to ask for one. The checkout is now `fetch-depth: 0`, and
+  `scripts/check-ci-config.py` refuses that shape in any workflow expression.
+- **One mutant in the duplicate-detection gate was uncovered.** Every test of
+  `DuplicateGate::is_enabled` asserted that it was false, so a body of `false` passed them
+  all; a test now asserts it is true for a positive interval. No behaviour changed.
+
+### Changed
+
+- **CI budgets** for the mutation shards that crossed the 75% line on `main`'s latest runs:
+  `civil.rs` 85 → 100 minutes, `inference/model.rs` 45 → 60, `validate.rs` 45 → 50.
+
 ## [0.18.0] - 2026-10-23
 
 ### Security
@@ -11080,7 +11101,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.1...v0.17.0

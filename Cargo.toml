@@ -16,7 +16,7 @@ resolver = "2"
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.18.0"
+version = "0.18.1"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -38,18 +38,18 @@ categories = ["science", "multimedia::audio"]
 # `workspace.package.version` (RELEASING.md step 1). `cargo package --workspace`
 # fails when they do not, and the `crates are publishable` job and the release
 # `validate` job run it.
-birdnet-core = { path = "crates/birdnet-core", version = "0.18.0" }
-birdnet-db = { path = "crates/birdnet-db", version = "0.18.0" }
+birdnet-core = { path = "crates/birdnet-core", version = "0.18.1" }
+birdnet-db = { path = "crates/birdnet-db", version = "0.18.1" }
 # `default-features = false`: the binary drives analytics through its own
 # `analytics` feature (which enables `birdnet-web/analytics`), so a slim
 # `--no-default-features` build stays free of the bundled-libduckdb dependency
 # even though birdnet-web now enables analytics by default for standalone use.
-birdnet-web = { path = "crates/birdnet-web", version = "0.18.0", default-features = false }
-birdnet-integrations = { path = "crates/birdnet-integrations", version = "0.18.0" }
-birdnet-behavioral = { path = "crates/birdnet-behavioral", version = "0.18.0" }
-birdnet-timeseries = { path = "crates/birdnet-timeseries", version = "0.18.0" }
-birdnet-migrate = { path = "crates/birdnet-migrate", version = "0.18.0" }
-birdnet-scheduler = { path = "crates/birdnet-scheduler", version = "0.18.0" }
+birdnet-web = { path = "crates/birdnet-web", version = "0.18.1", default-features = false }
+birdnet-integrations = { path = "crates/birdnet-integrations", version = "0.18.1" }
+birdnet-behavioral = { path = "crates/birdnet-behavioral", version = "0.18.1" }
+birdnet-timeseries = { path = "crates/birdnet-timeseries", version = "0.18.1" }
+birdnet-migrate = { path = "crates/birdnet-migrate", version = "0.18.1" }
+birdnet-scheduler = { path = "crates/birdnet-scheduler", version = "0.18.1" }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
