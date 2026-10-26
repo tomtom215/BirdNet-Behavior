@@ -36,7 +36,9 @@ cargo test --workspace --all-features
 #    crates/birdnet-web/openapi.json: info.version  (release validate enforces this)
 #    CHANGELOG.md: [Unreleased] -> ## [X.Y.Z] - YYYY-MM-DD  (+ fresh [Unreleased])
 # 2. Get CI green on main.
-# 3. (Optional but recommended) Rehearse via the dry run — see below.
+# 3. Rehearse via the dry run — see below. It is the only workflow that builds the
+#    aarch64-apple-darwin target (no pull-request job does); v0.18.0's first tag failed
+#    there, after the rest of the release had passed.
 # 4. Tag and push:
 git checkout main && git pull origin main
 git tag -a vX.Y.Z -m "Release vX.Y.Z"

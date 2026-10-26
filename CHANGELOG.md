@@ -1097,6 +1097,13 @@ is described under *Changed* or *Fixed*.
   new one; the six `TODO(O-nn-followup)` comments are resolved or recorded in
   `docs/TECH_DEBT.md`, and a test refuses a new one; 24 `#[allow]` attributes that silenced
   nothing are deleted and 19 more trimmed to the lints they still silence.
+- **The Apple Silicon macOS binary links again.** The ONNX Runtime update (`ort` 2.0.0-rc.15)
+  brought CoreML code that calls Clang's `___isPlatformVersionAtLeast`, and the link of
+  `aarch64-apple-darwin` failed with "Undefined symbols", so a first attempt at this release
+  built no macOS binary. `build.rs` now adds Clang's own `libclang_rt.osx.a` to the binary's
+  link line on macOS, which also covers a source build or `cargo install` on a Mac. The Linux
+  binaries are unaffected. A macOS runner built the tree with it and the binary started; no Mac
+  has run it for anything beyond `--version` and `--help`.
 
 ### Added
 

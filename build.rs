@@ -56,10 +56,22 @@
 //! a `cargo install` binary answers `/help` with its "docs unavailable" panel
 //! until `BNB_HELP_DIR` points at a rendered copy, as the release archives'
 //! `help/` directory is.
+//!
+//! ## Clang's runtime on macOS
+//!
+//! Independent of the manual, and run first because a package build returns
+//! before reaching the manual: on `aarch64-apple-darwin` the ONNX Runtime
+//! library `ort-sys` downloads contains `CoreML` objects that call Clang's
+//! `___isPlatformVersionAtLeast`. Rust's `std` defines that symbol, but weakly,
+//! and the link of 0.18.0's release build did not take it from there
+//! ("Undefined symbols for architecture arm64"). Adding Clang's own
+//! `libclang_rt.osx.a` to the binary's link line resolves it; see
+//! [`link_clang_runtime`].
 
 use std::path::{Path, PathBuf};
 
 fn main() {
+    link_clang_runtime();
     if is_published_package() {
         return;
     }
@@ -115,6 +127,35 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(" <- ")
         );
+    }
+}
+
+/// On macOS, add Clang's runtime library (`libclang_rt.osx.a`) to the link line
+/// of this package's binaries.
+///
+/// The path is asked of `cc`, the linker driver rustc uses by default, so it is
+/// the runtime of the Xcode or Command Line Tools install that does the link.
+/// `cc --print-file-name` prints the bare file name when it finds nothing, so
+/// only an absolute path to a file that exists is used; otherwise this says so
+/// and leaves the link as it was, where the original "Undefined symbols" error
+/// will still name the symbol.
+fn link_clang_runtime() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    let runtime = std::process::Command::new("cc")
+        .arg("--print-file-name=libclang_rt.osx.a")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|printed| PathBuf::from(printed.trim()))
+        .filter(|path| path.is_absolute() && path.is_file());
+    match runtime {
+        Some(path) => println!("cargo:rustc-link-arg-bins={}", path.display()),
+        None => println!(
+            "cargo:warning=`cc --print-file-name=libclang_rt.osx.a` found no Clang runtime; if the link fails with ___isPlatformVersionAtLeast undefined, install Xcode or the Command Line Tools"
+        ),
     }
 }
 

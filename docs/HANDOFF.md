@@ -3,16 +3,18 @@
 What only the maintainer can do, what the last working session did and did not
 verify, and where the next one should start. This file was **rewritten**, not
 appended to, on 2026-10-21 and its sections 3 to 6 were brought up to date on 2026-10-22 for
-the tree at the commit named in section 4. Facts about GitHub were read on 2026-10-21 with
+the tree at the commit named in section 4; the header, section 5 item 1 and section 6 were
+corrected on 2026-10-26 after the first release attempt failed. Facts about GitHub were read on 2026-10-21 with
 read-only `gh api` calls, each named in section 1; read them again before relying on them.
 Anything not attributed to a command is marked as reported, read or unknown.
 
-The working branch is `claude/amazing-babbage-nxiuuc`, pushed to `origin`. `main` is `ea2d439`, the
-merge of #264 (`gh api repos/tomtom215/BirdNet-Behavior/commits/main`); the branch is
-`git rev-list --count origin/main..HEAD` commits ahead of it and `git diff --shortstat
-origin/main HEAD` is the size of the difference (both move; the commands are the source).
-A **draft pull request, [#265](https://github.com/tomtom215/BirdNet-Behavior/pull/265), was opened on
-2026-10-22**; the verification in section 4 predates it, and no CI result is recorded in this file.
+The working branch is `claude/amazing-babbage-nxiuuc`, pushed to `origin`.
+[#265](https://github.com/tomtom215/BirdNet-Behavior/pull/265) (opened as a draft on 2026-10-22) was
+**merged on 2026-10-25 as `71539e5`**; `git log -1 origin/main` is the source for where `main` is
+now. The verification in section 4 predates #265's CI. The CI on #265's last head was read while it
+ran: the CodeQL results check passed after the maintainer's dismissals, and `Tests (x86_64)`, the
+accessibility sweep and five mutation shards were still running when last read, so their end state
+is not recorded here. **0.18.0 has not been released**; section 5, item 1 says why.
 
 ## 1. Repository settings only the maintainer can change
 
@@ -217,8 +219,7 @@ them (`184b3db`, `2e63d18`, `ba1f5a1`, `59762e1`, `7282666`); the commit message
 and I re-ran only the resampler one myself. The documentation pass's counts (56 migrations, 155 config keys, 106 paths and 108
 operations in `openapi.json`) date from 2026-10-21 and were not repeated.
 
-**Not verified:** a CI run of any workflow on this branch (the draft pull request #265 was opened after this
-section was written); OpenSSF Scorecard
+**Not verified:** OpenSSF Scorecard
 (it cannot run here); an upgrade or fresh install on a real systemd host
 (`installer/test/upgrade-e2e.sh`); a real Raspberry Pi, soundcard, GPU or screen reader; iOS
 or macOS Safari (only Playwright's Linux WebKit); birdnet-go (its source was read, never run).
@@ -241,9 +242,24 @@ maintainer can settle are listed in `dismiss.sh`'s closing text.
 Severity is a judgement. Everything here was found or confirmed in the last session unless
 it says otherwise.
 
-1. **CI on this branch has not been read.** Draft pull request #265 was opened on 2026-10-22,
-   so the `pull_request` workflows run for the first time; read them. A full CI run is about
-   45 minutes and each push cancels the run in progress.
+1. **0.18.0 is not released: the macOS build did not link.** High, until it is. After #265
+   merged, the maintainer pushed `v0.18.0`. `release.yml` run 40237669090 built both Linux targets,
+   but `Build aarch64-apple-darwin` failed at the link step with `Undefined symbols for
+   architecture arm64: "___isPlatformVersionAtLeast"`, from the CoreML objects in the ONNX Runtime
+   library `ort-sys` 2.0.0-rc.15 downloads. Every job after the builds was skipped, so no GitHub
+   Release exists and nothing reached crates.io; the maintainer deleted the tag. v0.17.1 had linked
+   the same target (`ort` rc.13). Probe run 40257984945 (macos-14, rustc 1.99.1): the unchanged tree
+   failed the same way; the same tree with Xcode's `libclang_rt.osx.a` added to the link line linked;
+   `ort` rc.13 does not compile with this code (it uses the rc.14 `Session::builder(&Environment)`
+   API), and rc.14 also failed at Build, for a reason nobody read. Rust 1.99.1's `std` defines the
+   symbol too, weakly, and the link did not take it from there; why was not established.
+   The fix is in `build.rs` (`link_clang_runtime`, `cargo:rustc-link-arg-bins`, on macOS targets
+   only). Probe run 40259852343 built the tree with that and no `RUSTFLAGS` in 18m14s with 0
+   undefined symbols, and the binary ran `--version` and `--help`. **Not covered:** nothing builds
+   the macOS target on a pull request, so the next break of this kind shows only at tag time (a
+   path-filtered macOS job in `ci.yml` would catch it; none exists); `cargo test` for
+   `birdnet-core` on macOS is untested and probably hits the same symbol; the release job's
+   `--features analytics` build on macOS is not what the probe built.
 2. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
    another machine stops notifications until the file is copied in again.
 3. **The interface text is English only (A-5).** Medium, large. Species names come in 35
@@ -312,16 +328,16 @@ it says otherwise.
 
 ## 6. Where to start
 
-This branch carries the release preparation for **0.18.0** (2026-10-23): a plain `cargo update`
-(its own commit, `4e6bdd1`), then the version bump and the changelog roll (`14ae57d`: `Cargo.toml`,
-`CITATION.cff`, `openapi.json`, `docs/book/reference/api.md`, `STABILITY.md`, `Cargo.lock`). No
-tag exists, and none should be pushed before steps 1 and 2.
+`main` carries the release preparation for **0.18.0** (2026-10-23): a plain `cargo update`
+(`4e6bdd1`), then the version bump and the changelog roll (`14ae57d`: `Cargo.toml`,
+`CITATION.cff`, `openapi.json`, `docs/book/reference/api.md`, `STABILITY.md`, `Cargo.lock`),
+merged with #265. No tag exists: `v0.18.0` was pushed once and deleted (section 5, item 1), and
+none should be pushed before steps 1 and 2.
 
-1. Read the CI run on draft pull request #265 (`claude/amazing-babbage-nxiuuc`) and merge when
-   it is green. Expect to fix what only CI shows: the previous branch's first run on #264 found
-   a mutation survivor, 17 CodeQL alerts and more mutation survivors that no local run had.
+1. Merge the pull request that carries the macOS link fix (`build.rs`) when its CI is green.
 2. Run the **dry run** (`release.yml`, `workflow_dispatch`, version blank) on `main` after the
-   merge, with every `Upgrade from vA.B.C` row green. Then
+   merge, with `Build aarch64-apple-darwin` and every `Upgrade from vA.B.C` row green; it is the
+   only workflow that builds the macOS target. Then
    `git tag -a v0.18.0 -m "Release v0.18.0" && git push origin v0.18.0`. The release date
    (`CHANGELOG.md` heading, `CITATION.cff` `date-released`) is 2026-10-23; change both if the
    tag lands on another day, because `validate` checks the heading's form and the CITATION
@@ -330,9 +346,9 @@ tag exists, and none should be pushed before steps 1 and 2.
    about things 0.18.0 ships, and names `v0.17.1` as what installs the V3.0 preview
    (line 131). Make those true of 0.18.0 in a small follow-up pull request; also run
    `scripts/gen-cli-help.sh` and confirm `docs/book/_generated/cli-help.txt` is unchanged.
-4. Run `APPLY=1 tools/code-scanning/dismiss.sh` with a maintainer token for the dismissals it
-   lists, and read what it prints for the Scorecard items only a maintainer can settle. The CodeQL
-   check on #265 stays red until this is done (12 alerts).
+4. Done 2026-10-25: the maintainer ran `APPLY=1 tools/code-scanning/dismiss.sh` (16 dismissals)
+   and the CodeQL results check on #265 went from 12 alerts to "No new alerts". What the script
+   prints for the Scorecard items only a maintainer can settle (#1, #8, #9, #165) is still open.
 5. Make the settings in section 1 (private vulnerability reporting, the five labels,
    topics, `protect-main`), then publish to crates.io by hand in two batches
    (`RELEASING.md`, "Publishing to crates.io").
