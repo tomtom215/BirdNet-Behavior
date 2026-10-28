@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `gen-third-party-licenses.py` now reads the engine's major from the crate version instead of
     assuming 1.
 
+- **`rusqlite` 0.41 and the SQLite it bundles, 3.54.1 (from 3.53.2).** One test helper needed a change:
+  `Connection::trace_v2` takes `&mut self` and returns a `Result` now (the helper ignored what would have
+  been a silent failure to install the trace the test reads). The workspace library tests and every
+  `birdnet-db` integration test pass. Comments elsewhere that say "measured on SQLite 3.53.2" are dated
+  measurements and were not re-taken.
+
 - **A plain `cargo update`** (20 packages, all inside their declared ranges): `notify` 8.2.1, `realfft` 3.5.1,
   `uuid` 1.29.0, `smallvec` 1.16.4, `rustix` 1.1.6, `xattr` 1.7.0, `unicode-width` 0.2.3, `openssl-probe` 0.2.2,
   `ctutils` 0.4.6 and the `pest` family 2.9.5 for the manual's renderer, plus `backtrace`, `gimli`,
