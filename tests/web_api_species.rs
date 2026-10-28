@@ -285,7 +285,10 @@ async fn species_detail_page_returns_html() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    // A bound on what is read, not a claim about the page's size: the page was 66,908 bytes when
+    // the hatch defs, the credits link and the credit line went in, over the 65,536 it had been
+    // read with. (20 KB on the wire, gzipped.)
+    let body = axum::body::to_bytes(response.into_body(), 1 << 17)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);

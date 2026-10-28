@@ -132,11 +132,15 @@ fn render_content(
     lead.push('.');
     let _ = write!(
         html,
-        r#"<div class="rp-hero">
-  <div class="eyebrow">Year in review · {year} {help_link}</div>
-  <h1>Your year in <em>birdsong</em>.</h1>
-  <p class="lead">{lead}</p>
-</div>"#,
+        "{}",
+        super::frame::page_head(&super::frame::Head {
+            eyebrow: &format!("Reports · year in review · {year}"),
+            help: &help_link,
+            title: "Your year in <em>birdsong</em>.",
+            lead: "",
+            lede: &lead,
+            aside: super::frame::PRINT_BUTTON,
+        }),
     );
 
     // ── Stat band ─────────────────────────────────────────────────────────

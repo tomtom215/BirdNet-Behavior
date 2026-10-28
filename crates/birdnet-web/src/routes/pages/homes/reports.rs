@@ -62,33 +62,26 @@ async fn reports_page(
         _ => crate::routes::pages::weekly_report::content(),
     };
     let content = format!(
-        "{tabs}{print}{body}",
+        "{tabs}{script}{body}",
         tabs = subtabs("/reports", "tab", TABS, tab.key),
-        print = PRINT_BAR.replace(
-            "{{help_link}}",
-            &crate::routes::pages::help::help_link(crate::routes::pages::help::Topic::Reports),
-        ),
+        script = PRINT_SCRIPT.as_str(),
     );
     let title = format!("Reports · {}", tab.label);
     crate::routes::pages::render_page_for_request(&title, &content, "reports", &headers)
 }
 
-/// A CSP-safe "Save as PDF" affordance: a real button that triggers the
-/// browser's print dialog (the existing `print.css` `@media print` rules then
-/// produce a clean, light-palette, page-broken document). The delegated click
-/// handler is an inline `<script>` — the security layer stamps it with the
-/// per-request CSP nonce, like every other inline script. `data-print-hide`
-/// keeps the button itself out of the printed output.
-static PRINT_BAR: crate::seal::Sealed = crate::seal::Sealed::new(
-    r#"<div class="rp-meta">
-  <span class="rp-print bnb-meta">Make a keepsake — print this recap or save it as a PDF. {{help_link}}</span>
-  <button type="button" class="bnb-btn ghost rp-pdf" data-print data-print-hide>⎙ Save as PDF</button>
-</div>
-<script>
+/// The handler for the "Save as PDF" button each report head carries
+/// ([`crate::routes::pages::frame::PRINT_BUTTON`]): a real button that triggers the browser's
+/// print dialog (the existing `print.css` `@media print` rules then produce a clean,
+/// light-palette, page-broken document). The delegated click handler is an inline `<script>`
+/// — the security layer stamps it with the per-request CSP nonce, like every other inline
+/// script. `data-print-hide` keeps the button itself out of the printed output.
+static PRINT_SCRIPT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<script>
 document.addEventListener('click', function (e) {
   if (e.target.closest('[data-print]')) { e.preventDefault(); window.print(); }
 });
-</script>"#,
+</script>",
 );
 
 #[cfg(test)]

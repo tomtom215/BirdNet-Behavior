@@ -3,7 +3,7 @@
 
 <!-- The two headline trends this tab leads with: busier? and more varied? -->
 <div class="grid-2 tsh-row">
-    <div class="bnb-card pad">
+    <div class="bnb-card pad fig">
         <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 30 complete days · 7-day average, against the 30 before</div><h2 class="sh-h">Detections per day</h2></div></div>
         <div class="ts-slot" hx-get="/pages/ts-daily"
              hx-trigger="load"
@@ -12,7 +12,7 @@
         </div>
     </div>
 
-    <div class="bnb-card pad">
+    <div class="bnb-card pad fig">
         <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 30 days · against the 30 before</div><h2 class="sh-h">Species richness</h2></div></div>
         <div class="ts-slot" hx-get="/pages/ts-diversity"
              hx-trigger="load"
@@ -45,7 +45,7 @@
        same 90-day hour-of-day average that "When active" draws better, and the species
        accumulation curve is the Life list's; both live there now (see the links below). -->
   <div class="grid-2 tsh-row">
-      <div class="bnb-card pad">
+      <div class="bnb-card pad fig">
           <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 24 h</div><h2 class="sh-h">Peak 15-minute windows</h2></div></div>
           <div hx-get="/pages/ts-peak"
                hx-trigger="toggle from:closest details once, intersect once"
@@ -54,7 +54,7 @@
           </div>
       </div>
 
-      <div class="bnb-card pad">
+      <div class="bnb-card pad fig">
           <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 3 days · gap ≥ 30 min</div><h2 class="sh-h">Activity sessions</h2></div></div>
           <p class="tsh-card-lede">
               Continuous-presence windows separated by inactivity gaps.
@@ -67,7 +67,7 @@
       </div>
   </div>
 
-  <div class="bnb-card pad tsh-row">
+  <div class="bnb-card pad fig tsh-row">
       <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>90 days · z &gt; 2.0</div><h2 class="sh-h">Anomaly detection</h2></div></div>
       <p class="tsh-card-lede">
           Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.

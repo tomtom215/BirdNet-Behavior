@@ -89,6 +89,25 @@ fn hash_of(svg: &str) -> String {
         .to_owned()
 }
 
+/// The page measures the screen and sends `ar`, from a hidden control that starts at 1.6. A wall
+/// display runs unattended for months, so a request that arrives with the value blank (a script
+/// that failed, an address typed by hand) draws the default sheet and does not answer `400`. A
+/// value that is not a number is still refused: turning it into "default" would be a silent guess.
+#[tokio::test]
+async fn a_blank_aspect_ratio_draws_the_default_sheet_but_a_garbled_one_is_refused() {
+    let today = date(0);
+    let state = state_with(|c| seed(c, &today, "06:10", "Turdus merula", "Eurasian Blackbird", 2));
+    let (status, _, svg) = get(&state, "/pages/kiosk-content?ar=").await;
+    assert_eq!(status, StatusCode::OK, "{svg}");
+    assert!(svg.contains(r#"class="plate-svg""#), "{svg}");
+    let (status, _, _) = get(&state, "/pages/kiosk-content?ar=wide").await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "a value that is not a number is refused"
+    );
+}
+
 #[tokio::test]
 async fn the_plate_is_drawn_from_what_was_heard_today_most_heard_first() {
     let today = date(0);

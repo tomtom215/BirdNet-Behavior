@@ -43,4 +43,9 @@
   if (c === 'high') {
     el.setAttribute('data-contrast', 'high');
   }
+
+  var il = read('bnb-illustration');
+  if (il === 'plate') {
+    el.setAttribute('data-illustration', 'plate');
+  }
 })();

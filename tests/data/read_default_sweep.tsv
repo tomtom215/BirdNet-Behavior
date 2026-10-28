@@ -262,3 +262,4 @@ omitted	crates/birdnet-web/src/routes/pages/terrain.rs	compute_terrain	ok	super:
 decoration	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	compute_ts_diversity	ok	state .with_read_db(|conn| { conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) 
 handled	crates/birdnet-web/src/routes/weather.rs	for_detection	match-err	match state.with_read_db(|c| { c.query_row( "SELECT detected_at_utc FROM detections_analytic \ WHERE Date = ?1
 handled	crates/birdnet-web/src/routes/weather.rs	latest	match-err	match state.with_read_db(birdnet_db::weather::WeatherStore::latest) { Err .. }
+omitted	crates/birdnet-web/src/routes/pages/terrain.rs	sun_by_day	let-ok	let Ok(..) = conn.prepare( "SELECT CAST(ROUND((julianday(?1 || ' 12:00:00', 'localtime') \ - julianday(?1 || '

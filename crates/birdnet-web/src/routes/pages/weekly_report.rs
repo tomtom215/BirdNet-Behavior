@@ -29,10 +29,20 @@ pub struct WeekParams {
 /// The weekly-report surface (shell only; content loaded by HTMX), rendered
 /// for embedding by `homes::reports` ("Weekly" tab).
 pub(super) fn content() -> String {
-    // The help link is on the Reports home's own row now (`homes::reports`), the same for all
-    // three tabs; this tab used to carry its own eyebrow and an `h2` that repeated the tab's
-    // name above the report's `h1`.
-    WEEKLY_SHELL_HTML.to_owned()
+    // The head is static, like every other tab's: the page's title and its help link are there
+    // before the report is. What the week *said* ("A steady week so far") arrives with the
+    // report, as its headline.
+    format!(
+        "{}{WEEKLY_SHELL_HTML}",
+        super::frame::page_head(&super::frame::Head {
+            eyebrow: "Reports · this week",
+            help: &super::help::help_link(super::help::Topic::Reports),
+            title: "The week, <em>recapped</em>",
+            lead: "Seven days at a glance.",
+            lede: "How the week compares with the same days of the last, who sang most, and who is new.",
+            aside: super::frame::PRINT_BUTTON,
+        }),
+    )
 }
 
 /// HTMX partial: the weekly report content for a given week.
@@ -181,7 +191,7 @@ fn render_weekly_content(
     );
     let _ = write!(
         html,
-        r#"<div class="rp-hero"><div class="eyebrow">Weekly report</div><h1>{}</h1><p class="lead">{}</p></div>"#,
+        r#"<h2 class="display wk-headline">{}</h2><p class="bnb-lede wk-lede">{}</p>"#,
         words.headline, words.lead,
     );
 

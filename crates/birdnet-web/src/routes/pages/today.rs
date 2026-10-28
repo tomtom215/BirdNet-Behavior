@@ -1136,7 +1136,9 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
             peak_hour = h;
         }
     }
-    let dawn: i64 = hourly[4..9].iter().sum();
+    let dawn: i64 = hourly[super::frame::DAWN_FIRST_HOUR..=super::frame::DAWN_LAST_HOUR]
+        .iter()
+        .sum();
 
     let stats_oob = format!(
         r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_clock}</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,

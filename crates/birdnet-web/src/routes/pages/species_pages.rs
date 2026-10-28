@@ -966,10 +966,13 @@ async fn species_info_partial(
     };
 
     // The /file image route is cache-only, so warm this species' photo in the
-    // background (non-blocking) on first view — a later view then shows it.
+    // background (non-blocking) on first view — a later view then shows it. A picture cached
+    // before credits were kept is replaced the same way, by one that comes with its credit.
     if let Some(cache) = state.image_cache()
         && !img_key.is_empty()
-        && cache.get_cached(&img_key).is_none()
+        && cache
+            .get_cached(&img_key)
+            .is_none_or(|img| img.credit.is_none())
     {
         let key_bg = img_key.clone();
         tokio::spawn(async move {
@@ -988,15 +991,32 @@ async fn species_info_partial(
                 alt = escape_html(&shown),
             );
         }
-        if let Some(desc) = &image.description {
-            let _ = write!(html, r#"<p class="spp-desc">{}</p>"#, escape_html(desc));
-        }
-        if let Some(url) = &image.wiki_url {
+        // The picture's credit: who made it, where it is from and on what terms. A picture is
+        // not shown without one, so this is not optional decoration.
+        if image.cached_path.is_some()
+            && let Some(credit) = &image.credit
+        {
             let _ = write!(
                 html,
-                r#"<p><a href="{}" target="_blank" rel="noopener">View on Wikipedia</a></p>"#,
-                escape_html(url),
+                r#"<p class="bnb-meta spp-credit">Photo: {} · <a href="/system/credits">All picture credits</a></p>"#,
+                super::credits::credit_html(credit),
             );
+        }
+        // The description is the article's opening, which is Wikipedia's text: CC BY-SA, so it
+        // is said where it is from and linked to its source.
+        if let Some(desc) = &image.description {
+            let _ = write!(html, r#"<p class="spp-desc">{}</p>"#, escape_html(desc));
+            if let Some(url) = image
+                .wiki_url
+                .as_deref()
+                .and_then(super::credits::safe_href)
+            {
+                let _ = write!(
+                    html,
+                    r#"<p class="bnb-meta">Text from <a href="{}" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA 4.0).</p>"#,
+                    escape_html(url),
+                );
+            }
         }
     }
 

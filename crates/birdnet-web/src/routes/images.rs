@@ -20,6 +20,10 @@ pub fn router() -> Router<AppState> {
             "/species/image/{scientific_name}/file",
             get(species_image_file),
         )
+        .route(
+            "/species/plate/{scientific_name}/file",
+            get(species_plate_file),
+        )
 }
 
 /// Get species image metadata (URL, cache status, description).
@@ -53,6 +57,7 @@ async fn species_image_info(
                 "description": image.description,
                 "wiki_url": image.wiki_url,
                 "width": image.width,
+                "credit": image.credit,
             })),
         );
     }
@@ -81,6 +86,7 @@ async fn species_image_info(
                 "description": image.description,
                 "wiki_url": image.wiki_url,
                 "width": image.width,
+                "credit": image.credit,
             })),
         ),
         Err(e) => (
@@ -156,6 +162,61 @@ fn image_error(status: StatusCode, msg: &str) -> axum::response::Response {
         .into_response()
 }
 
+/// The operator's own picture of a species, if they put one in the custom image directory: one
+/// file per species. (Not BirdNET-Pi's `CUSTOM_IMAGE`, which is one picture of the site; that is
+/// `routes/dashboard_image.rs`.) It answers with the `custom` source header, which is how the
+/// kiosk knows it is art somebody made and draws it as it is.
+async fn custom_picture(
+    state: &AppState,
+    scientific_name: &str,
+) -> Option<axum::response::Response> {
+    let custom_dir = state.custom_image_dir()?;
+    let key = scientific_name.to_lowercase().replace(' ', "_");
+    // Reject path separators / traversal in the URL-decoded species segment so a request like
+    // `/api/v2/species/image/..%2f..%2fetc%2fpasswd/file` can't escape the custom image
+    // directory. An unsafe key simply falls through to the cache path (which strips `/` in its
+    // own key derivation). `replace(' ', "_")` only handles spaces, not `/`.
+    if key.contains('/') || key.contains('\\') || key.contains("..") || key.contains('\0') {
+        return None;
+    }
+    for ext in ["jpg", "jpeg", "png", "webp"] {
+        let candidate = custom_dir.join(format!("{key}.{ext}"));
+        if let Ok(bytes) = tokio::fs::read(&candidate).await {
+            let content_type = match ext {
+                "png" => "image/png",
+                "webp" => "image/webp",
+                _ => "image/jpeg",
+            };
+            return Some(
+                (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, content_type),
+                        (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+                        // The kiosk plate engraves a photograph but draws art as it is made, and
+                        // this is the only way it can tell which one it was handed.
+                        (IMAGE_SOURCE_HEADER, "custom"),
+                    ],
+                    bytes,
+                )
+                    .into_response(),
+            );
+        }
+    }
+    None
+}
+
+/// The content type a cached picture is served as, from its extension.
+fn content_type_of(path: &std::path::Path) -> &'static str {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map_or("image/jpeg", |ext| match ext.to_lowercase().as_str() {
+            "png" => "image/png",
+            "webp" => "image/webp",
+            _ => "image/jpeg",
+        })
+}
+
 /// Serve the species image file bytes.
 ///
 /// Checks the custom image directory first, then the Wikipedia cache, fetching
@@ -166,43 +227,8 @@ async fn species_image_file(
     State(state): State<AppState>,
     Path(scientific_name): Path<String>,
 ) -> impl IntoResponse {
-    // Check the custom image directory first: one file per species. (Not
-    // BirdNET-Pi's `CUSTOM_IMAGE`, which is one picture of the site; that is
-    // `routes/dashboard_image.rs`.)
-    if let Some(custom_dir) = state.custom_image_dir() {
-        let key = scientific_name.to_lowercase().replace(' ', "_");
-        // Reject path separators / traversal in the URL-decoded species segment
-        // so a request like `/api/v2/species/image/..%2f..%2fetc%2fpasswd/file`
-        // can't escape the custom image directory. An unsafe key simply falls
-        // through to the Wikipedia cache path below (which strips `/` in its own
-        // key derivation). `replace(' ', "_")` only handles spaces, not `/`.
-        let key_is_safe =
-            !key.contains('/') && !key.contains('\\') && !key.contains("..") && !key.contains('\0');
-        for ext in &["jpg", "jpeg", "png", "webp"] {
-            if !key_is_safe {
-                break;
-            }
-            let candidate = custom_dir.join(format!("{key}.{ext}"));
-            if let Ok(bytes) = tokio::fs::read(&candidate).await {
-                let content_type = match *ext {
-                    "png" => "image/png",
-                    "webp" => "image/webp",
-                    _ => "image/jpeg",
-                };
-                return (
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, content_type),
-                        (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
-                        // The kiosk plate engraves a photograph but draws art as it is made,
-                        // and this is the only way it can tell which one it was handed.
-                        (IMAGE_SOURCE_HEADER, "custom"),
-                    ],
-                    bytes,
-                )
-                    .into_response();
-            }
-        }
+    if let Some(custom) = custom_picture(&state, &scientific_name).await {
+        return custom;
     }
 
     let Some(cache) = state.image_cache() else {
@@ -285,21 +311,63 @@ async fn species_image_file(
         return image_error(StatusCode::NOT_FOUND, "cached file not readable");
     };
 
-    // Determine content type from extension
-    let content_type = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map_or("image/jpeg", |ext| match ext.to_lowercase().as_str() {
-            "png" => "image/png",
-            "webp" => "image/webp",
-            _ => "image/jpeg",
-        });
+    let content_type = content_type_of(&path);
 
     (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Serve a species' picture for the kiosk plate: the operator's own art if they supplied some,
+/// else the public-domain plate the index names for the species, fetched from Wikimedia Commons on
+/// the first ask and kept. `404` for a species with no plate, which is the normal case (about
+/// 7% of BirdNET's species have one): the plate then asks for the photograph instead.
+///
+/// The answer carries `X-Bnb-Image-Source: plate`, so the kiosk draws it whole, as a plate, and
+/// not engraved as a photograph. Gated like the photograph endpoint: only species this station
+/// has heard are fetched. The admin photo blacklist is not consulted: it names photograph URLs
+/// an operator withdrew, and a plate is a curated public-domain work; to replace one, put a
+/// picture in the custom image directory, which is looked at first.
+async fn species_plate_file(
+    State(state): State<AppState>,
+    Path(scientific_name): Path<String>,
+) -> impl IntoResponse {
+    if let Some(custom) = custom_picture(&state, &scientific_name).await {
+        return custom;
+    }
+    let Some(cache) = state.plate_cache() else {
+        return image_error(StatusCode::NOT_FOUND, "plates not configured");
+    };
+    let image = if let Some(image) = cache.get_cached(&scientific_name) {
+        image
+    } else {
+        let name = scientific_name.clone();
+        if !state.run_blocking(move |s| has_been_heard(s, &name)).await {
+            return image_error(StatusCode::NOT_FOUND, "image not available");
+        }
+        match cache.get_image(&scientific_name).await {
+            Ok(image) => image,
+            Err(_) => return image_error(StatusCode::NOT_FOUND, "no plate for this species"),
+        }
+    };
+    let Some(path) = image.cached_path else {
+        return image_error(StatusCode::NOT_FOUND, "no plate available");
+    };
+    let Ok(bytes) = tokio::fs::read(&path).await else {
+        return image_error(StatusCode::NOT_FOUND, "cached file not readable");
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type_of(&path)),
+            (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+            (IMAGE_SOURCE_HEADER, "plate"),
         ],
         bytes,
     )

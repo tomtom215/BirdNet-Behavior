@@ -900,7 +900,9 @@ fn day_table(ribbons: &[ChorusRibbon], names: &birdnet_core::i18n::NameLocalizer
     t.push_str("</tr></thead><tbody>");
     for ribbon in ribbons {
         let total: f32 = ribbon.hours.iter().sum();
-        let dawn: f32 = ribbon.hours[5..9].iter().sum();
+        let dawn: f32 = ribbon.hours[super::frame::DAWN_FIRST_HOUR..=super::frame::DAWN_LAST_HOUR]
+            .iter()
+            .sum();
         let _ = write!(
             t,
             r#"<tr><th scope="row">{name}</th><td class="num">{peak}</td><td class="num">{dawn_pct:.0}%</td><td class="num">{total}</td>"#,

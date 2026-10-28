@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use super::types::{ImageError, SpeciesImage};
+use super::types::{ImageCredit, ImageError, SpeciesImage};
 
 /// Maximum number of cached species images (disk files + index entries).
 ///
@@ -74,6 +74,7 @@ impl DiskCache {
                 width: self.thumb_width,
                 description: None,
                 wiki_url: None,
+                credit: self.read_credit(cache_key),
             };
             self.index
                 .lock()
@@ -145,6 +146,7 @@ impl DiskCache {
                     width: self.thumb_width,
                     description: None,
                     wiki_url: None,
+                    credit: None,
                 });
             entry.cached_path = Some(path.clone());
         }
@@ -161,6 +163,9 @@ impl DiskCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(cache_key);
+        // The credit goes with the picture: a credit left behind would be put on the next
+        // picture stored under this name, which is somebody else's.
+        let _ = std::fs::remove_file(self.credit_path_for(cache_key));
         let path = self.path_for(cache_key);
         match std::fs::remove_file(&path) {
             Ok(()) => true,
@@ -187,8 +192,16 @@ impl DiskCache {
         entry.url.clone_from(&img.url);
         entry.description.clone_from(&img.description);
         entry.wiki_url.clone_from(&img.wiki_url);
+        entry.credit.clone_from(&img.credit);
         if entry.cached_path.is_none() {
             entry.cached_path.clone_from(&img.cached_path);
+        }
+        drop(index);
+        match &img.credit {
+            Some(credit) => self.write_credit(cache_key, credit),
+            None => {
+                let _ = std::fs::remove_file(self.credit_path_for(cache_key));
+            }
         }
     }
 
@@ -213,6 +226,33 @@ impl DiskCache {
     /// Full path for a given cache key.
     fn path_for(&self, cache_key: &str) -> PathBuf {
         self.cache_dir.join(format!("{cache_key}.jpg"))
+    }
+
+    /// Where the credit for `cache_key` is kept: beside the picture, as `{key}.credit.json`.
+    fn credit_path_for(&self, cache_key: &str) -> PathBuf {
+        self.cache_dir.join(format!("{cache_key}.credit.json"))
+    }
+
+    /// The credit kept beside a picture. `None` when there is none, or it is not readable: a
+    /// picture whose credit cannot be read is treated as one that has none, and is replaced.
+    fn read_credit(&self, cache_key: &str) -> Option<ImageCredit> {
+        let text = std::fs::read_to_string(self.credit_path_for(cache_key)).ok()?;
+        let credit: ImageCredit = serde_json::from_str(&text).ok()?;
+        credit.is_attributable().then_some(credit)
+    }
+
+    /// Keep `credit` beside the picture, written to a temporary name and renamed into place so
+    /// a power cut leaves the old credit or the new one and never half of one.
+    fn write_credit(&self, cache_key: &str, credit: &ImageCredit) {
+        let path = self.credit_path_for(cache_key);
+        let part = path.with_extension("json.part");
+        let result = serde_json::to_vec_pretty(credit)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&part, bytes))
+            .and_then(|()| std::fs::rename(&part, &path));
+        if let Err(e) = result {
+            tracing::warn!(key = cache_key, error = %e, "could not keep the picture's credit");
+        }
     }
 
     /// Scan the cache directory and populate the index.
@@ -252,6 +292,7 @@ impl DiskCache {
                 .and_then(|s| s.to_str())
                 .unwrap_or_default()
                 .to_string();
+            let credit = self.read_credit(&stem);
             index.insert(
                 stem,
                 SpeciesImage {
@@ -260,6 +301,7 @@ impl DiskCache {
                     width: self.thumb_width,
                     description: None,
                     wiki_url: None,
+                    credit,
                 },
             );
             count += 1;
@@ -357,6 +399,101 @@ mod tests {
         let cache = DiskCache::new(&dir, 300).unwrap();
         assert_eq!(cache.len(), 2);
         assert!(cache.contains("turdus_merula"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn a_credit() -> ImageCredit {
+        ImageCredit {
+            title: "Common blackbird".into(),
+            author: "J. Smith".into(),
+            source: "Wikimedia Commons".into(),
+            source_url: "https://commons.wikimedia.org/wiki/File:X.jpg".into(),
+            licence: "CC BY-SA 4.0".into(),
+            licence_url: "https://creativecommons.org/licenses/by-sa/4.0/".into(),
+        }
+    }
+
+    fn an_image(credit: Option<ImageCredit>) -> SpeciesImage {
+        SpeciesImage {
+            url: "https://upload.wikimedia.org/x.jpg".into(),
+            cached_path: None,
+            width: 300,
+            description: None,
+            wiki_url: None,
+            credit,
+        }
+    }
+
+    /// The credit is what makes the picture lawful to show, so it has to outlive the process:
+    /// before it was written to disk, a restart turned every cached picture into one nobody
+    /// could be credited for.
+    #[test]
+    fn a_credit_is_kept_beside_the_picture_and_survives_a_restart() {
+        let dir = std::env::temp_dir().join("birdnet_diskcache_credit_restart");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let cache = DiskCache::new(&dir, 300).unwrap();
+            cache.store("turdus_merula", b"fake-jpeg").unwrap();
+            cache.update_metadata("turdus_merula", &an_image(Some(a_credit())));
+        }
+        assert!(dir.join("turdus_merula.credit.json").exists());
+        let reopened = DiskCache::new(&dir, 300).unwrap();
+        assert_eq!(
+            reopened.get("turdus_merula").unwrap().credit,
+            Some(a_credit()),
+            "read back by the scan"
+        );
+        assert_eq!(reopened.len(), 1, "the credit file is not a picture");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A credit left behind would be put on the next picture stored under the same name, which
+    /// is somebody else's.
+    #[test]
+    fn removing_a_picture_removes_its_credit() {
+        let dir = std::env::temp_dir().join("birdnet_diskcache_credit_remove");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = DiskCache::new(&dir, 300).unwrap();
+        cache.store("turdus_merula", b"fake-jpeg").unwrap();
+        cache.update_metadata("turdus_merula", &an_image(Some(a_credit())));
+        assert!(dir.join("turdus_merula.credit.json").exists());
+        cache.remove("turdus_merula");
+        assert!(!dir.join("turdus_merula.credit.json").exists());
+        cache.store("turdus_merula", b"another-bird").unwrap();
+        assert!(
+            DiskCache::new(&dir, 300)
+                .unwrap()
+                .get("turdus_merula")
+                .unwrap()
+                .credit
+                .is_none(),
+            "the new picture does not inherit the old one's credit"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A credit that cannot be read, or that names no source to follow, is no credit: the
+    /// picture is treated as uncredited and replaced, never shown with a half of one.
+    #[test]
+    fn a_credit_that_is_unreadable_or_names_no_source_reads_as_none() {
+        let dir = std::env::temp_dir().join("birdnet_diskcache_credit_bad");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.jpg"), b"x").unwrap();
+        std::fs::write(dir.join("a.credit.json"), b"{not json").unwrap();
+        std::fs::write(dir.join("b.jpg"), b"x").unwrap();
+        std::fs::write(
+            dir.join("b.credit.json"),
+            serde_json::to_vec(&ImageCredit {
+                author: "Somebody".into(),
+                ..ImageCredit::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let cache = DiskCache::new(&dir, 300).unwrap();
+        assert!(cache.get("a").unwrap().credit.is_none(), "unreadable");
+        assert!(cache.get("b").unwrap().credit.is_none(), "no source page");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -80,7 +80,7 @@ pub(super) fn content() -> String {
 static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
     r##"{{page_head}}
 
-<div class="bnb-card pad">
+<div class="bnb-card pad fig">
   <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">same 5-min block</span></div>
   <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
@@ -99,7 +99,7 @@ static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
   </details>
 </div>
 
-<div class="bnb-card pad">
+<div class="bnb-card pad fig">
   <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Lookup</div><h2 class="sh-h">Companion species</h2></div></div>
   <p class="bnb-meta co-meta-gap">Enter a species to see which others are commonly detected on the same day.</p>
   <div class="co-lookup-row">

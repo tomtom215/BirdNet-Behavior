@@ -36,6 +36,10 @@ pub const fn is_dawn_hour(hour: usize) -> bool {
     hour >= DAWN_FIRST_HOUR && hour <= DAWN_LAST_HOUR
 }
 
+/// The "Save as PDF" button the report pages carry in their head. Its handler is the one script
+/// `homes/reports.rs` writes into the page.
+pub const PRINT_BUTTON: &str = r#"<button type="button" class="bnb-btn ghost rp-pdf" data-print data-print-hide>⎙ Save as PDF</button>"#;
+
 /// The opening of a page or tab.
 pub struct Head<'a> {
     /// Small-caps line above the headline. Text.

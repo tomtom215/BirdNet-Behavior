@@ -26,6 +26,7 @@ pub(crate) mod cmdk;
 pub(crate) mod confidence;
 pub(crate) mod confirm;
 pub mod correlation;
+pub(crate) mod credits;
 pub mod dashboard;
 pub mod dawn_chorus;
 pub mod detection_comments;
@@ -93,6 +94,13 @@ pub(crate) static CONFIRM_MODAL_HTML: crate::seal::Sealed = crate::seal::Sealed:
 pub(crate) static TOAST_REGION_HTML: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
     "../../../templates/_partial_toast_region.html"
 ));
+/// Hatch patterns for the "plate" chart style: one zero-size `<svg>` of `<pattern>`s that
+/// `app.css` points marks at under `html[data-illustration="plate"]`. On every page, drawn on
+/// none of them until the reader chooses the style (Display → Charts). Sealed like every other
+/// authored template, though it holds no script or style tag.
+pub(crate) static ILLUSTRATION_DEFS_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
+    include_str!("../../../templates/_partial_illustration_defs.html"),
+);
 /// Real footer (O-26) — site-meta only, destinations live in the topnav.
 pub(crate) static FOOTER_HTML: crate::seal::Sealed =
     crate::seal::Sealed::new(include_str!("../../../templates/_partial_footer.html"));
@@ -158,6 +166,7 @@ pub fn router() -> Router<AppState> {
         .merge(cmdk::router())
         .merge(help::router())
         .merge(changelog::router())
+        .merge(credits::router())
         .route(
             "/pages/today-phrase",
             get(today_phrase::today_phrase_partial),
@@ -245,6 +254,7 @@ fn render_page_inner(
         .replace("{{title}}", &escape_html(title))
         .replace("{{active_nav}}", active_nav)
         .replace("{{topnav_links}}", &topnav_links)
+        .replace("{{illustration_defs}}", ILLUSTRATION_DEFS_HTML.as_str())
         .replace("{{footer}}", FOOTER_HTML.as_str())
         .replace("{{tabbar}}", TABBAR_HTML.as_str())
         .replace("{{tabbar_slots}}", &tabbar_slots)
@@ -759,6 +769,31 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// The plate chart style paints marks with `url(#bnb-hatch-…)`, which resolves only if the pattern
+    /// file is in the same document. Every full page carries it once, and the slot is filled before
+    /// the body, so text a visitor typed into the body cannot expand it.
+    #[test]
+    fn every_page_carries_the_hatch_patterns() {
+        use axum::http::HeaderMap;
+        let html = render_page_for_request("Test", "<p>x</p>", "today", &HeaderMap::new()).0;
+        assert!(
+            !html.contains("{{illustration_defs}}"),
+            "the slot was not filled"
+        );
+        for id in ["1", "2", "3", "4", "5", "6", "7", "8", "other"] {
+            let tag = format!(r#"<pattern id="bnb-hatch-{id}""#);
+            assert_eq!(html.matches(&tag).count(), 1, "{tag}");
+        }
+        let echoed = render_page_for_request(
+            "Test",
+            "<input value=\"{{illustration_defs}}\">",
+            "today",
+            &HeaderMap::new(),
+        )
+        .0;
+        assert_eq!(echoed.matches(r#"<pattern id="bnb-hatch-1""#).count(), 1);
     }
 
     #[test]

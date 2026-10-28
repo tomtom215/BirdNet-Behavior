@@ -10,6 +10,9 @@ const BASE = process.env.BASE || 'http://127.0.0.1:8502';
 const OUT = process.env.OUT || '/home/user/BirdNet-Behavior/docs/book/images';
 const W = 1440;
 const MAXH = parseInt(process.env.MAXH || '1500', 10);
+// ONLY=kiosk.png captures just the images whose name contains it (default: all), so one figure can be
+// refreshed without touching the rest.
+const ONLY = process.env.ONLY || '';
 const enc = encodeURIComponent;
 const T = new Date();
 const TODAY = `${T.getUTCFullYear()}-${String(T.getUTCMonth() + 1).padStart(2, '0')}-${String(T.getUTCDate()).padStart(2, '0')}`;
@@ -59,6 +62,7 @@ const PAGES = [
 // Same knob as qa.mjs / axe.mjs: sandboxes ship their own Chromium rather than the build this playwright pins.
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 for (const [name, route, theme] of PAGES) {
+  if (ONLY && !name.includes(ONLY)) continue;
   const ctx = await browser.newContext({
     viewport: { width: W, height: 1000 },
     deviceScaleFactor: 1,

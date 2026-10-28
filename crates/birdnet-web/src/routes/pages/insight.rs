@@ -175,6 +175,49 @@ pub fn leader_sentence(named: &[(String, i64)], total: i64) -> Option<String> {
     Some(s)
 }
 
+/// A whole number of hours in words for the few a window takes, else digits.
+#[allow(clippy::cast_possible_truncation)] // a window is a few hours
+fn hours_in_words(hours: f32) -> String {
+    match hours.round() as i32 {
+        1 => "one".to_owned(),
+        2 => "two".to_owned(),
+        3 => "three".to_owned(),
+        4 => "four".to_owned(),
+        n => n.to_string(),
+    }
+}
+
+/// What the terrain found about sunrise, as plain text: how much of what was heard fell within
+/// `half_window` hours either side of it, against what an even spread of the day would put
+/// there (`chance`). `share` and `chance` are fractions, 0 to 1.
+///
+/// Three readings, because the comparison can go three ways and only one of them is "song
+/// peaks at sunrise": clearly more than an even spread, clearly less, or about the same. `None`
+/// for numbers that are not fractions.
+#[must_use]
+pub fn sunrise_sentence(share: f64, chance: f64, half_window: f32) -> Option<String> {
+    if !(0.0..=1.0).contains(&share) || !(0.0..=1.0).contains(&chance) || chance <= 0.0 {
+        return None;
+    }
+    let pct = |f: f64| format!("{:.0}", (f * 100.0).round());
+    let (has, even) = (pct(share), pct(chance));
+    let window = hours_in_words(half_window);
+    let ratio = share / chance;
+    Some(if ratio >= 1.25 {
+        format!(
+            "{has}% of what was heard fell within {window} hours either side of sunrise, against {even}% if song were spread evenly through the day."
+        )
+    } else if ratio <= 0.8 {
+        format!(
+            "Little of it gathers at sunrise: {has}% fell within {window} hours either side, where an even spread would give {even}%."
+        )
+    } else {
+        format!(
+            "Sunrise makes little difference here: {has}% fell within {window} hours either side, about what an even spread would give ({even}%)."
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +368,37 @@ mod tests {
     fn a_leader_needs_a_window_worth_describing() {
         assert_eq!(leader_sentence(&[("Blue Jay".to_owned(), 5)], 29), None);
         assert_eq!(leader_sentence(&[], 100), None);
+    }
+
+    #[test]
+    fn a_dawn_concentrated_soundscape_is_compared_with_an_even_spread() {
+        let s = sunrise_sentence(0.62, 4.0 / 24.0, 2.0).unwrap();
+        assert_eq!(
+            s,
+            "62% of what was heard fell within two hours either side of sunrise, against 17% if song were spread evenly through the day."
+        );
+    }
+
+    /// The three ways the comparison can go each say a different thing; a station that sings at
+    /// night is not told that song peaks at sunrise.
+    #[test]
+    fn the_sunrise_reading_follows_the_comparison_both_ways() {
+        let chance = 4.0 / 24.0;
+        let more = sunrise_sentence(0.40, chance, 2.0).unwrap();
+        let about = sunrise_sentence(0.17, chance, 2.0).unwrap();
+        let less = sunrise_sentence(0.05, chance, 2.0).unwrap();
+        assert!(more.contains("against"), "{more}");
+        assert!(about.contains("little difference"), "{about}");
+        assert!(less.contains("Little of it gathers"), "{less}");
+        assert_ne!(more, about);
+        assert_ne!(about, less);
+    }
+
+    #[test]
+    fn numbers_that_are_not_fractions_say_nothing() {
+        assert!(sunrise_sentence(1.2, 0.17, 2.0).is_none());
+        assert!(sunrise_sentence(-0.1, 0.17, 2.0).is_none());
+        assert!(sunrise_sentence(0.5, 0.0, 2.0).is_none());
+        assert!(sunrise_sentence(f64::NAN, 0.17, 2.0).is_none());
     }
 }

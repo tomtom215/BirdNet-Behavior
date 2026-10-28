@@ -152,6 +152,8 @@ export const ROUTES = [
   ['notifications', '/notifications'],
   ['quarantine', '/quarantine'],
   ['kiosk', '/kiosk'],
+  // Every footer links here; the fixture seeds credited photographs, one uncredited one and a plate.
+  ['credits', '/system/credits'],
 
   // ── Admin pages that have not folded into a Station tab yet ────────────
   ['admin', '/admin'],

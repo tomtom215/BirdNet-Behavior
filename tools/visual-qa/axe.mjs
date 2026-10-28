@@ -31,6 +31,8 @@ const BASE = process.env.BASE || 'http://127.0.0.1:8502';
 // than the build this playwright pinned (same knob as interactions.mjs).
 const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
 const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
+// Display → Charts: 'plate' runs every route with the plate chart style on (default: standard).
+const ILLUSTRATION = process.env.ILLUSTRATION || '';
 const FAIL_ON = new Set(
   (process.env.AXE_FAIL_ON || 'serious,critical').split(',').filter(Boolean),
 );
@@ -105,13 +107,14 @@ async function main() {
       ...VP_TABLE[vp],
       colorScheme: theme === 'dark' ? 'dark' : 'light',
     });
-    await context.addInitScript((t) => {
+    await context.addInitScript(([t, il]) => {
       try {
         localStorage.setItem('theme', t);
+        if (il) localStorage.setItem('bnb-illustration', il);
       } catch (e) {
         /* ignore */
       }
-    }, theme);
+    }, [theme, ILLUSTRATION]);
     const page = await context.newPage();
 
     for (const [name, route] of ROUTES) {

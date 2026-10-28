@@ -59,6 +59,8 @@ import { ROUTES } from './qa.mjs';
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
 const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
 const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
+// Display → Charts: 'plate' runs every route with the plate chart style on (default: standard).
+const ILLUSTRATION = process.env.ILLUSTRATION || '';
 const VP_TABLE = {
   desktop: { viewport: { width: 1440, height: 900 }, hasTouch: false },
   mobile: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
@@ -358,13 +360,14 @@ async function main() {
         deviceScaleFactor: 1,
         colorScheme: theme === 'dark' ? 'dark' : 'light',
       });
-      await context.addInitScript((t) => {
+      await context.addInitScript(([t, il]) => {
         try {
           localStorage.setItem('theme', t);
+          if (il) localStorage.setItem('bnb-illustration', il);
         } catch (e) {
           /* ignore */
         }
-      }, theme);
+      }, [theme, ILLUSTRATION]);
       const page = await context.newPage();
       for (const [name, route] of ROUTES) {
         if (ONLY && !name.includes(ONLY)) continue;

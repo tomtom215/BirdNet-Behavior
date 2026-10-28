@@ -71,7 +71,8 @@ impl Mode {
 pub(super) struct KioskQuery {
     /// `plate`, `latest` or `numbers`.
     mode: Option<String>,
-    /// Width over height of the screen, as the page measured it.
+    /// Width over height of the screen, as the page measured it. Blank is "not measured".
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     ar: Option<f64>,
     /// The digest of the plate the page already shows.
     h: Option<String>,

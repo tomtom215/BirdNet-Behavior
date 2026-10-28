@@ -10,6 +10,8 @@
 
 use std::fmt::Write as _;
 
+use birdnet_integrations::species_images::PlateIndex;
+
 use super::layout::{self, Placement, Rect};
 use crate::routes::pages::{escape_html, group_thousands};
 
@@ -470,7 +472,7 @@ fn write_figures(svg: &mut String, input: &Input<'_>, sheet: &Sheet, placements:
         let sci_size = (p.w / 14.0).clamp(15.0, 26.0);
         let _ = writeln!(
             svg,
-            r#"<g class="plate-fig" data-sci="{sci_attr}" data-state="none">
+            r#"<g class="plate-fig" data-sci="{sci_attr}" data-state="none"{work_attr}>
 <title>{com}: {count} {detections}</title>
 <ellipse class="plate-cart" cx="{cx:.1}" cy="{cy:.1}" rx="{rx:.1}" ry="{ry:.1}"/>
 {cart_text}<image class="plate-pic" x="{left:.1}" y="{top:.1}" width="{pw:.1}" height="{ph:.1}" preserveAspectRatio="xMidYMid slice"/>
@@ -480,6 +482,13 @@ fn write_figures(svg: &mut String, input: &Input<'_>, sheet: &Sheet, placements:
 <text class="plate-com" x="{cx:.1}" y="{cy2:.1}" text-anchor="middle">{com_up}</text>
 </g>"#,
             sci_attr = escape_html(&bird.sci),
+            // The book this species' public-domain plate is from, if the index has one: the
+            // script names the books it drew in the foot, and has no index of its own.
+            work_attr = PlateIndex::embedded()
+                .plate_for(&bird.sci)
+                .map_or_else(String::new, |(_, work)| {
+                    format!(r#" data-work="{}""#, escape_html(&work.citation()))
+                }),
             com = escape_html(&bird.com),
             count = group_thousands(i64::try_from(bird.count).unwrap_or(i64::MAX)),
             detections = if bird.count == 1 {
@@ -561,22 +570,22 @@ fn write_colophon(svg: &mut String, input: &Input<'_>, sheet: &Sheet) {
             "Engraved by the station from photographs · size follows the number of detections"
                 .to_owned()
         },
-        |c| format!("Plates: {c}"),
+        |c| format!("Art: {c}"),
     );
+    // The room the foot has: the script rewrites it from what was drawn and measures against this.
+    // Four fifths of the width: "Plate layout after fugleramme" takes the right hand end, and what
+    // is left of the sheet is room for the books, the credits address and the sentence about size.
+    let room = (sheet.w - 2.0 * (MARK + PAD)) * 0.8;
     let _ = write!(
         svg,
-        r#"<text class="plate-colophon" x="{x0:.0}" y="{fy:.0}">{colophon}</text>
+        r#"<text class="plate-colophon" id="plate-colophon" data-max="{room:.0}" data-art="{art}" x="{x0:.0}" y="{fy:.0}">{colophon}</text>
 <text class="plate-colophon" x="{x1:.0}" y="{fy:.0}" text-anchor="end">Plate layout after fugleramme</text>
 </svg>"#,
         x0 = MARK + PAD,
         x1 = sheet.w - MARK - PAD,
         fy = sheet.h - MARK - 16.0,
-        colophon = escape_html(&fit(
-            &colophon,
-            13.0,
-            (sheet.w - 2.0 * (MARK + PAD)) * 0.66,
-            Face::Sans
-        )),
+        art = escape_html(input.credit.unwrap_or_default()),
+        colophon = escape_html(&fit(&colophon, 13.0, room, Face::Sans)),
     );
 }
 
@@ -740,6 +749,61 @@ mod tests {
         let name = "BLACK-CAPPED CHICKADEE";
         assert_eq!(fit(name, 11.5, 210.0, Face::Caps), name);
         assert!(fit(name, 11.5, 150.0, Face::Caps).ends_with('…'));
+    }
+
+    /// A figure whose species has a public-domain plate says which book it is from, so the script
+    /// can name the books it actually drew in the foot; a species with none says nothing.
+    #[test]
+    fn a_species_with_a_plate_names_its_work_and_one_without_does_not() {
+        let mut h = heard(2);
+        h[0].sci = "Turdus merula".into();
+        let svg = render(&input(&h));
+        let (_, work) = PlateIndex::embedded()
+            .plate_for("Turdus merula")
+            .expect("the index has a blackbird plate");
+        let figure = |sci: &str| {
+            svg.split("<g class=\"plate-fig\"")
+                .find(|f| f.contains(&format!("data-sci=\"{sci}\"")))
+                .and_then(|f| f.split('>').next())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert!(
+            figure("Turdus merula")
+                .contains(&format!("data-work=\"{}\"", escape_html(&work.citation()))),
+            "{}",
+            figure("Turdus merula")
+        );
+        assert!(
+            !figure("Genus species1").contains("data-work"),
+            "{}",
+            figure("Genus species1")
+        );
+    }
+
+    /// The foot is rewritten by the script from what was drawn, so it carries what the script needs:
+    /// an id, the room it has, and the operator's credit for their own art.
+    #[test]
+    fn the_foot_carries_what_the_script_rewrites_it_from() {
+        let h = heard(1);
+        let mut input = input(&h);
+        input.credit = Some("Mina \"Wren\" Ortiz, linocut");
+        let svg = render(&input);
+        let foot = svg
+            .split("<text class=\"plate-colophon\"")
+            .nth(1)
+            .and_then(|f| f.split('>').next())
+            .unwrap_or_default();
+        assert!(foot.contains("id=\"plate-colophon\""), "{foot}");
+        assert!(foot.contains("data-max=\""), "{foot}");
+        assert!(
+            foot.contains("data-art=\"Mina &quot;Wren&quot; Ortiz, linocut\""),
+            "{foot}"
+        );
+        assert!(
+            svg.contains("Art: Mina &quot;Wren&quot; Ortiz, linocut"),
+            "no script: the art is credited"
+        );
     }
 
     #[test]

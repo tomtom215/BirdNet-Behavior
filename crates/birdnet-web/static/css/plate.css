@@ -15,6 +15,11 @@
   --plate-ink-2: #5b4a38;
   --plate-rule: #8a7458;
   --plate-wash: 0.52;
+  /* What a public-domain plate is multiplied by when the script draws it: white by day, because the
+     browser multiplies the plate into the sheet itself (below), so the paper of the print is the
+     paper of the sheet, fibres included; a lit, slightly dimmed print by night, which stays a print
+     on the dark ground. */
+  --plate-mount: #ffffff;
   margin: 0;
   background: var(--plate-paper);
   color: var(--plate-ink);
@@ -26,6 +31,7 @@
   --plate-ink-2: #b6a888;
   --plate-rule: #7a6a50;
   --plate-wash: 0.62;
+  --plate-mount: #cbbf9f;
 }
 
 /* The app's page chrome (washes behind the page, `main`'s centred column with its padding and
@@ -95,3 +101,8 @@
 .plate-ui a { color: inherit; text-decoration: none; }
 .plate-ui a[aria-current="true"] { text-decoration: underline; text-underline-offset: 3px; }
 .plate-ui a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+
+/* By day a public-domain plate is multiplied into the sheet: its levelled paper is white, so it
+   vanishes into the sheet's own paper and only the ink and colour of the plate remain. At night it is
+   a lit print and is not blended. */
+.plate-page:not([data-night="1"]) .plate-fig[data-kind="plate"] .plate-pic { mix-blend-mode: multiply; }

@@ -125,7 +125,7 @@ pub fn init_image_cache(
                 provider,
                 "species image cache enabled"
             );
-            state.with_image_cache(cache)
+            with_plate_cache(state.with_image_cache(cache), &cache_dir)
         }
         Err(e) => {
             // A misconfigured Flickr key lands here. Falling back to Wikipedia
@@ -138,12 +138,40 @@ pub fn init_image_cache(
                 "configured image provider unavailable; falling back to Wikipedia"
             );
             match birdnet_integrations::species_images::ImageCache::with_wikipedia(&cache_dir) {
-                Ok(cache) => state.with_image_cache(cache),
+                Ok(cache) => with_plate_cache(state.with_image_cache(cache), &cache_dir),
                 Err(e) => {
                     tracing::warn!(error = %e, "species image cache not available (non-fatal)");
                     state
                 }
             }
+        }
+    }
+}
+
+/// Add the public-domain plate cache, in a `plates/` directory inside the photo cache's. The
+/// photo cache's scan skips anything that is not a file, so the two do not see each other.
+/// Plates come from the index built into the binary and are downloaded from Wikimedia Commons the
+/// first time the kiosk asks, under the same offline switch and opt-out as the photographs (this
+/// is only reached when those are on). A directory that cannot be made costs the kiosk its plates
+/// and nothing else.
+fn with_plate_cache(
+    state: birdnet_web::state::AppState,
+    image_cache_dir: &std::path::Path,
+) -> birdnet_web::state::AppState {
+    use birdnet_integrations::species_images::{ImageCache, PLATE_WIDTH, PlateProvider};
+    let dir = image_cache_dir.join("plates");
+    match ImageCache::new(
+        &dir,
+        std::sync::Arc::new(PlateProvider::embedded()),
+        PLATE_WIDTH,
+    ) {
+        Ok(cache) => {
+            tracing::info!(path = %dir.display(), cached = cache.cached_count(), "plate cache enabled");
+            state.with_plate_cache(cache)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "plate cache not available (non-fatal)");
+            state
         }
     }
 }
@@ -909,6 +937,13 @@ mod tests {
             tmp.path().join("images").is_dir(),
             "default cache dir should be created beside the database"
         );
+        // The public-domain plates the kiosk draws are cached in a folder of their own inside
+        // it, so a plate is never mistaken for a photograph.
+        assert!(state.plate_cache().is_some());
+        assert!(
+            tmp.path().join("images").join("plates").is_dir(),
+            "the plate cache lives in `plates/` inside the picture cache"
+        );
     }
 
     #[test]
@@ -920,6 +955,10 @@ mod tests {
         cli.image_cache_dir = Some(std::path::PathBuf::new());
         let state = init_image_cache(test_state(), &cli, None, &db_path);
         assert!(state.image_cache().is_none());
+        assert!(
+            state.plate_cache().is_none(),
+            "no picture downloads means no plate downloads either"
+        );
         assert!(
             !tmp.path().join("images").exists(),
             "opt-out must not create the default cache dir"
