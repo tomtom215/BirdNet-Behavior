@@ -1013,7 +1013,7 @@ async fn species_info_partial(
             {
                 let _ = write!(
                     html,
-                    r#"<p class="bnb-meta">Text from <a href="{}" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA 4.0).</p>"#,
+                    r#"<p class="bnb-meta spp-source">Text from <a href="{}" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA 4.0).</p>"#,
                     escape_html(url),
                 );
             }

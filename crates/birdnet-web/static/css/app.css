@@ -688,6 +688,13 @@ a:hover { text-decoration: underline; }
    title on a phone (`display: block` at <=520px); axe's link-in-text-block caught
    the link in it on the first mobile run after that rule landed. */
 .st-h3-note a,
+/* The species page's picture credit ("Photo: title by author, licence · All picture
+   credits") and the line crediting the Wikipedia text under it: sentences with links
+   inside them, rendered for a species whose picture has been fetched and credited.
+   axe's link-in-text-block caught both in CI, in the light theme, on the species
+   pages (desktop and phone). */
+.spp-credit a,
+.spp-source a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;
