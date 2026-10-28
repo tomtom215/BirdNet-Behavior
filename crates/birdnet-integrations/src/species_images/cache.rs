@@ -22,9 +22,23 @@ const DEFAULT_MAX_ENTRIES: usize = 2000;
 ///
 /// A key is derived from the species name in a request path, and the cache is public API:
 /// it checks the key itself rather than trusting whoever built it. Punctuation is allowed
-/// (`larus_sp.`, `anas_(domestic)`); a separator, `.`, `..` and the empty name are not.
+/// (`larus_sp.`, `anas_(domestic)`); a separator, `..` anywhere in the key, `.` and the empty
+/// name are not.
+///
+/// Every public method that takes a key also starts with `key.contains("..")` written out in
+/// place. That is the one check of a path's text that CodeQL's `rust/path-injection` query
+/// recognises as a guard (it reads the receiver of a `contains` with a literal `".."`, and does
+/// not look through a helper such as this one), so the scanner sees the check this function
+/// makes.
 fn is_plain_name(key: &str) -> bool {
-    !key.contains('\0') && Path::new(key).file_name().is_some_and(|name| name == key)
+    !key.contains('\0')
+        && !key.contains("..")
+        && Path::new(key).file_name().is_some_and(|name| name == key)
+}
+
+/// The error for a key that is not a single file name.
+fn not_a_name(key: &str) -> ImageError {
+    ImageError::CacheDir(format!("{key:?} is not a single file name"))
 }
 
 /// On-disk image cache with an in-memory lookup index.
@@ -65,6 +79,9 @@ impl DiskCache {
     ///
     /// Returns `None` when not present in the index or on disk.
     pub fn get(&self, cache_key: &str) -> Option<SpeciesImage> {
+        if cache_key.contains("..") {
+            return None;
+        }
         // Check index first.
         {
             let index = self
@@ -97,6 +114,9 @@ impl DiskCache {
 
     /// Return `true` if a cached image file exists for `cache_key`.
     pub fn contains(&self, cache_key: &str) -> bool {
+        if cache_key.contains("..") {
+            return false;
+        }
         {
             let index = self
                 .index
@@ -121,9 +141,12 @@ impl DiskCache {
     /// when the cache is full or `cache_key` is not a single file name.
     #[allow(clippy::significant_drop_tightening)]
     pub fn store(&self, cache_key: &str, bytes: &[u8]) -> Result<PathBuf, ImageError> {
-        let path = self.path_for(cache_key).ok_or_else(|| {
-            ImageError::CacheDir(format!("{cache_key:?} is not a single file name"))
-        })?;
+        if cache_key.contains("..") {
+            return Err(not_a_name(cache_key));
+        }
+        let path = self
+            .path_for(cache_key)
+            .ok_or_else(|| not_a_name(cache_key))?;
 
         // Check capacity before writing (don't grow the index beyond max_entries).
         {
@@ -171,6 +194,9 @@ impl DiskCache {
     ///
     /// Returns `true` if a file was deleted. A missing file is not an error.
     pub fn remove(&self, cache_key: &str) -> bool {
+        if cache_key.contains("..") {
+            return false;
+        }
         self.index
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -198,6 +224,9 @@ impl DiskCache {
     /// Called after a successful fetch to persist the URL alongside the path.
     #[allow(clippy::significant_drop_tightening)]
     pub fn update_metadata(&self, cache_key: &str, img: &SpeciesImage) {
+        if cache_key.contains("..") {
+            return;
+        }
         if !is_plain_name(cache_key) {
             return;
         }
@@ -563,11 +592,13 @@ mod tests {
             "victim.jpg is not a cached picture"
         );
         assert!(!cache.contains("../victim"));
-        for key in ["", ".", "..", "a/b", "/etc/passwd"] {
+        for key in ["", ".", "..", "a/b", "/etc/passwd", "a..b", "..a", "a.."] {
             assert!(
                 cache.store(key, b"x").is_err(),
-                "{key:?} is not a file name"
+                "{key:?} is not a file name, or holds `..`"
             );
+            assert!(!cache.contains(key), "{key:?}");
+            assert!(cache.get(key).is_none(), "{key:?}");
         }
         let _ = std::fs::remove_dir_all(&parent);
     }
@@ -589,7 +620,8 @@ mod tests {
     }
 
     /// The counterpart: scientific names carry punctuation, and a check that refused them would
-    /// stop a species being cached at all. Only a key that is more than one file name is refused.
+    /// stop a species being cached at all. Only a key that is more than one file name, or that
+    /// holds `..` anywhere, is refused.
     #[test]
     fn a_key_with_punctuation_in_it_is_still_a_file_name() {
         let dir = std::env::temp_dir().join("birdnet_diskcache_punctuation");
@@ -599,7 +631,7 @@ mod tests {
             "larus_sp.",
             "passer_domesticus_×_hispaniolensis",
             "anas_(domestic)",
-            "a..b",
+            "a.b",
         ] {
             cache.store(key, b"fake-jpeg").unwrap();
             cache.update_metadata(key, &an_image(Some(a_credit())));
