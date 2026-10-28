@@ -393,23 +393,24 @@ Corollaries, each learned the same way:
   database: its build-script output holds generated tables of literals, and the
   query had not finished after 40 minutes on a database that included it (a
   `--build-mode=none` database without it took 18 minutes to build).
-- **Reading `rust/path-injection`'s barriers did not clear its alert.** The
-  query at the tag the pinned `codeql-action` bundles (`src/defaults.json`,
-  CLI 2.27.2; `TaintedPathExtensions.qll` and `TaintedPath.ql`, identical to
-  `main`'s) lists two barriers: a `contains("..")` on a `String` or `str` with
-  the literal `".."`, in place, in the function that holds the value; and a
-  normalisation such as `canonicalize` followed by a prefix check. The cache
-  fixed a real traversal (`remove("../victim")` deleted a file beside it) with a
-  validating helper (`is_plain_name`, comparing with `Path::file_name`), and the
-  alert stayed open; it fixed it again with the literal `contains("..")` written
-  in place in every method that takes a key, and the alert stayed open on the
-  same statement. Why the second form was not accepted is undetermined, and
-  `custom_picture`, which has that check, is no evidence either way: nothing
-  here shows the scanner ever reached it. `DiskCache::remove` now deletes a
-  file it found by listing the directory (`DiskCache::existing`), so no path
-  built from the key reaches `remove_file`; that removes the flow instead of
-  guarding it. Fetch the `.qll` with `curl` and read it, then let the scanner
-  grade the fix — the reading is a hypothesis.
+- **Read the repo's dismissals before the scanner's query.**
+  `tools/code-scanning/dismiss.sh` records that CodeQL's `rust/path-injection`
+  takes axum's `State<AppState>` extractor as a remote source, so a configured
+  directory reaches every file operation on it as "user-provided"; the picture
+  cache's `remove_file` (alert 23) was dismissed for that reason. Three alerts
+  on the cache's new credit files were answered by reading the query
+  (`TaintedPathExtensions.qll` at the tag the pinned `codeql-action` bundles,
+  CLI 2.27.2) and putting a check on the *key*: a helper comparing with
+  `Path::file_name`, then a `contains("..")` written in place, then deleting a
+  file found by listing the directory. None cleared an alert, and the last one
+  is on `read_dir(&self.cache_dir)`, an argument that holds no key. The
+  traversal was real (`remove("../victim")` deleted a file beside the cache)
+  and the key check is right without the scanner; but a new file operation on
+  a configured directory is a new alert of the dismissed class, and its answer
+  is a maintainer's dismissal (a token with `security_events: write`; a session
+  token has `read`), not another form of guard. The alert page was not
+  readable from here, so that the source is `State` for 173 and 174 is
+  inferred from 175, not seen.
 - **A job stops at its first red step, so everything behind it has not run.**
   `a11y.yml` runs axe and then thirteen more browser gates; when axe failed on
   the plate branch's pull request none of them reported. Run the steps behind a

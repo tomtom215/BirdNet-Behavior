@@ -26,10 +26,9 @@ const DEFAULT_MAX_ENTRIES: usize = 2000;
 /// name are not.
 ///
 /// Every public method that takes a key also starts with `key.contains("..")` written out in
-/// place. That is the one check of a path's text that CodeQL's `rust/path-injection` query
-/// recognises as a guard (it reads the receiver of a `contains` with a literal `".."`, and does
-/// not look through a helper such as this one), so the scanner sees the check this function
-/// makes.
+/// place. They repeat this function's check: they were added on the reading that CodeQL's
+/// `rust/path-injection` query accepts that form and not a helper, and the alert stayed open
+/// with them in place. With all five removed, the tests in this file still pass.
 fn is_plain_name(key: &str) -> bool {
     !key.contains('\0')
         && !key.contains("..")

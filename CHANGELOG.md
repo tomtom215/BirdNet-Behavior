@@ -42,9 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credit file added beside each picture, CodeQL's `rust/path-injection` flagged the removal of it. Before,
   `remove("../victim")` on a cache beside `victim.jpg` deleted that file; three tests fail on the old code,
   and `a_key_with_punctuation_in_it_is_still_a_file_name` holds that species names with dots, brackets and
-  `×` still cache. The query did not close on two forms of the check (a comparison with `Path::file_name`
-  inside a helper, then a `contains("..")` written in place in each method that takes a key), so `remove`
-  now deletes a file found by listing the cache directory, which no key can steer outside it. The credit lines on the species page are underlined like the other prose links (axe's
+  `×` still cache. The alert stayed open through three forms of the check (a comparison with `Path::file_name`
+  inside a helper, a `contains("..")` written in place, and deleting a file found by listing the cache
+  directory). The last alert's argument is the configured cache directory, which CodeQL takes as a remote
+  source through axum's `State` (`tools/code-scanning/dismiss.sh` records the same for the cache's earlier
+  alert), so no check on the key can clear it. The credit lines on the species page are underlined like the other prose links (axe's
   `link-in-text-block`, in the light theme).
   On a phone each row stacks, its cells printing their column's name. The browser gates grade the page
   (`/system/credits` is in their route list; the screenshot fixture seeds credited pictures, an uncredited one and a
