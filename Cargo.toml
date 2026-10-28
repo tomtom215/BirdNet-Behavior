@@ -64,30 +64,39 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "backup", "limits"] }
-# `~` pins the bundled DuckDB version: the `10506` component is DuckDB 1.5.6
-# itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST be a
+# `~` pins the bundled DuckDB version: the `20000` component is DuckDB 2.0.0
+# itself (MNNPP: major, then minor and patch as two digits; 1.5.6 was `10506`),
+# and the trailing `.x` is only duckdb-rs's binding revision. It MUST be a
 # version both extension registries publish builds under, because every embed
 # and every runtime INSTALL fetches from `<registry>/v<duckdb>/<platform>/`:
 #
 # - `icu` is a C++ extension and loads only into the exact DuckDB version it
 #   was built for (`allow_extensions_metadata_mismatch` does not bypass this).
-# - `behavioral` v0.10.0 is built on DuckDB's stable C API (footer ABI
-#   `C_STRUCT`, C API v1.2.0), so DuckDB 1.5.6 accepts it by its own rule —
-#   same C API major, no newer than the engine's (`src/main/extension.cpp`).
-#   Up to v0.9.1 it was `C_STRUCT_UNSTABLE` and as version-locked as ICU.
+# - `behavioral` v0.10.1 is built on DuckDB's stable C API (footer ABI
+#   `C_STRUCT`, C API v1.2.0). DuckDB 2.0.0 keeps that API at v1.5.6
+#   (`duckdb_extension.h`, read from the sources `libduckdb-sys` 1.20000.0
+#   compiles) and accepts any major-1 target up to it, so it loads by DuckDB's own
+#   rule (`src/main/extension.cpp`), as v0.10.0 did into 1.5.6. It does **not**
+#   follow the engine's release version any more, which is why
+#   `birdnet-behavioral` reads the engine's C API version from a table.
 #
-# Verified, not assumed: the community CDN's `v1.5.6` artifacts for
-# linux_amd64 and linux_arm64 carry footers `C_STRUCT / v0.10.0 / v1.2.0`, and
-# `file` reports x86-64 and aarch64 respectively (the upstream changelog notes
-# an earlier GitHub-release arm64 artifact that was x86-64). The `v1.5.6` ICU
-# builds carry `CPP / v1.5.6 / v1.5.6`.
+# The crate compiles the 2.0.0 release commit (`d54cbbe3df`, the `git_revision`
+# of the official 2.0.0 wheel) with DuckDB's fallback version macros, so unlabelled
+# it reports `v2.0.0-dev88614`, looks for extensions under the commit hash, and
+# refuses the published `icu`. `.cargo/config.toml` sets the two macros;
+# `the_engine_names_itself_as_a_release` is the gate. Measured 2026-10-28, not assumed.
+#
+# Verified, not assumed: the registries' `v2.0.0` artifacts for linux_amd64 and
+# linux_arm64 carry footers `C_STRUCT / v0.10.1 / v1.2.0` (behavioral) and
+# `CPP / v2.0.0 / v2.0.0` (icu), and `file` reports x86-64 and aarch64
+# respectively. `extension_pins.rs` records which of them could be loaded here.
 #
 # When bumping, confirm the new build actually LOADs — an HTTP 200 on the
 # version path is not sufficient, because a freshly published artifact can lag
 # and still embed the previous DuckDB version in its footer until the
 # community-extensions rebuild propagates. (The `v1.5.4` path long served a
 # byte-identical copy of the old v0.8.0/1.5.3 build.)
-duckdb = { version = "~1.10506", features = ["bundled"] }
+duckdb = { version = "~1.20000", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }

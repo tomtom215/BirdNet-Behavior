@@ -512,23 +512,33 @@ fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
+/// The newest stable (`C_STRUCT`) C API version an engine at `engine` loads.
+///
+/// Up to DuckDB 1.x this is the engine's own release version
+/// (`DUCKDB_EXTENSION_API_VERSION_{MAJOR,MINOR,PATCH}` = 1, 5, 6 in 1.5.6). It
+/// is **not** after that: DuckDB 2.0.0 keeps the stable API at **1.5.6**
+/// (`src/include/duckdb_extension.h`) and adds a second, major-2 API with "no
+/// stable surface yet", which `GetInvalidMetadataError` refuses for a `C_STRUCT`
+/// footer outright. Reading the engine's release version as its C API version,
+/// as this did through 1.5.6, rejects `behavioral` v0.10.x (target `v1.2.0`) on
+/// 2.0.0, which loads it. The C API version is not readable at run time (no SQL
+/// function reports it, and `libduckdb-sys` exports no constant for it), so for
+/// an engine past 1.x this table stands in for it; a later engine that raises
+/// it needs a row here, and the `LOAD` test in CI is what notices.
+const fn stable_c_api_of(engine: (u64, u64, u64)) -> (u64, u64, u64) {
+    if engine.0 <= 1 { engine } else { (1, 5, 6) }
+}
+
 /// Whether an engine at version `engine` accepts an extension whose footer
 /// declares ABI `abi` and version target `embedded_for`.
 ///
-/// This is DuckDB's own rule (1.5.6, `src/main/extension.cpp`,
+/// This is DuckDB's own rule (1.5.6 and 2.0.0, `src/main/extension.cpp`,
 /// `ParsedExtensionMetaData::GetInvalidMetadataError`):
 ///
 /// - `CPP` and `C_STRUCT_UNSTABLE`: the target is a `DuckDB` version and must
 ///   equal the engine's exactly.
-/// - `C_STRUCT`: the target is a C API version; it must share the engine's C
-///   API major and be no newer than the engine's C API version.
-///
-/// The engine's C API version is not readable at run time (no SQL function
-/// reports it, and `libduckdb-sys` exports no constant for it), so it is taken
-/// to be the engine's release version — which is what DuckDB 1.5.6 defines it
-/// as (`DUCKDB_EXTENSION_API_VERSION_{MAJOR,MINOR,PATCH}` = 1, 5, 6). Should a
-/// later engine's C API version lag its release, this can only *miss* a
-/// mismatch, never invent one; the `LOAD` test in CI still catches it.
+/// - `C_STRUCT`: the target is a C API version; it must share the stable C
+///   API's major and be no newer than its version ([`stable_c_api_of`]).
 ///
 /// An unrecorded ABI is compared exactly, as every extension was before
 /// `C_STRUCT`. An engine version that does not parse is "could not tell", not
@@ -546,11 +556,10 @@ pub fn version_target_accepted(abi: Option<&str>, embedded_for: &str, engine: &s
         return false;
     };
     let (target_major, target_minor, target_patch) = target;
-    let (engine_major, engine_minor, engine_patch) = engine;
+    let (api_major, api_minor, api_patch) = stable_c_api_of(engine);
     // `VersioningUtils::IsSupportedCAPIVersion`, branch for branch.
-    target_major == engine_major
-        && (target_minor < engine_minor
-            || (target_minor == engine_minor && target_patch <= engine_patch))
+    target_major == api_major
+        && (target_minor < api_minor || (target_minor == api_minor && target_patch <= api_patch))
 }
 
 /// Classify an embedded extension against the linked engine.
@@ -988,7 +997,7 @@ impl AnalyticsDb {
         EMBEDDED_EXTENSION_PLATFORM
     }
 
-    /// The bundled `DuckDB` engine version (e.g. `v1.5.6`).
+    /// The bundled `DuckDB` engine version (e.g. `v2.0.0`).
     ///
     /// The community registry serves extensions under this version's path, and
     /// an embedded extension must satisfy it by the rule in
@@ -1456,7 +1465,8 @@ mod tests {
             (Some("CPP"), "v1.5.3", "v1.5.5", amd, arm, Some(Both)),
             // Stable C API (behavioral >= v0.10.0): target is a C API version,
             // accepted when no newer than the engine's within the same major.
-            // `v1.2.0` into `v1.5.6` is exactly the published v0.10.0 build.
+            // `v1.2.0` into `v1.5.6` is exactly the published v0.10.0 build
+            // (and v0.10.1's, which targets the same C API).
             (Some("C_STRUCT"), "v1.2.0", "v1.5.6", amd, amd, None),
             (Some("C_STRUCT"), "v1.5.6", "v1.5.6", amd, amd, None),
             (
@@ -1492,6 +1502,38 @@ mod tests {
                 Some(DuckDbVersion),
             ),
             (Some("C_STRUCT"), "v2.0.0", "v1.5.6", amd, arm, Some(Both)),
+            // DuckDB 2.0.0 keeps the stable C API at v1.5.6 and refuses a
+            // major-2 `C_STRUCT` target, so v0.10.x's `v1.2.0` still loads and
+            // nothing newer than 1.5.6 does. Reading the engine's release
+            // version as its C API version rejected every one of these.
+            (Some("C_STRUCT"), "v1.2.0", "v2.0.0", amd, amd, None),
+            (Some("C_STRUCT"), "v1.5.6", "v2.0.0", amd, amd, None),
+            (
+                Some("C_STRUCT"),
+                "v1.5.7",
+                "v2.0.0",
+                amd,
+                amd,
+                Some(DuckDbVersion),
+            ),
+            (
+                Some("C_STRUCT"),
+                "v2.0.0",
+                "v2.0.0",
+                amd,
+                amd,
+                Some(DuckDbVersion),
+            ),
+            // The exact-match ABIs follow the release version across the major.
+            (Some("CPP"), "v2.0.0", "v2.0.0", arm, arm, None),
+            (
+                Some("CPP"),
+                "v1.5.6",
+                "v2.0.0",
+                arm,
+                arm,
+                Some(DuckDbVersion),
+            ),
             // DuckDB refuses a C API version it cannot parse.
             (
                 Some("C_STRUCT"),
@@ -1571,15 +1613,28 @@ mod tests {
         assert!(!db.extension_loaded());
     }
 
+    /// The bundled engine must call itself the release it is, not a `-dev`
+    /// snapshot of it.
+    ///
+    /// DuckDB names its extension directory, and the version a `CPP` extension
+    /// (`icu`) must have been built for, after the version string when that
+    /// string is a release and after the commit hash when it is not. `libduckdb-sys`
+    /// 1.20000.0 compiles the 2.0.0 release commit with the fallback macros, so
+    /// without the `CXXFLAGS` define in `.cargo/config.toml` this reads
+    /// `v2.0.0-dev88614`, the published `icu` build is refused, and every
+    /// date-ranged query fails. A prefix check (`starts_with("v2.0")`) passes
+    /// either way, which is why this compares the whole string. If it trips
+    /// because the pin moved, re-check the extensions as `RELEASING.md` says.
     #[test]
-    fn duckdb_version_reports_bundled_engine() {
+    fn the_engine_names_itself_as_a_release() {
         let (db, _tmp) = make_db();
         let v = db.duckdb_version().expect("version() should be readable");
-        // The bundled DuckDB is pinned to 1.5.x so it matches the DuckDB the
-        // published `behavioral` community extension targets (see the duckdb
-        // pin in the workspace Cargo.toml). If this trips, the pin moved and
-        // the extension compatibility must be re-checked before shipping.
-        assert!(v.starts_with("v1.5"), "unexpected DuckDB version: {v:?}");
+        assert_eq!(
+            v, "v2.0.0",
+            "the bundled engine reports {v:?}; a `-dev` suffix means the version macros in \
+             .cargo/config.toml did not reach the libduckdb-sys build (an overriding \
+             CXXFLAGS in the environment, or a build outside this tree)"
+        );
     }
 
     #[test]

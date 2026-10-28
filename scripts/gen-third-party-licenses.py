@@ -224,9 +224,10 @@ def engine_versions(meta: dict[tuple[str, str], dict]) -> dict[str, str]:
         sys.exit(f"ort-sys downloads ONNX Runtime versions {sorted(found)}; expected exactly one")
     versions["onnxruntime"] = found.pop()
     duck = next(p for (n, _), p in meta.items() if n == "libduckdb-sys")
-    # libduckdb-sys 1.10506.0 bundles DuckDB 1.5.6: major, then minor and patch as two digits.
+    # The crate's middle component is the engine version as MNNPP: 10506 is DuckDB 1.5.6,
+    # 20000 is 2.0.0. (The crate's own major stays 1 across both, so it says nothing.)
     number = int(duck["version"].split(".")[1])
-    versions["duckdb"] = f"{duck['version'].split('.')[0]}.{number // 100 % 100}.{number % 100}"
+    versions["duckdb"] = f"{number // 10000}.{number // 100 % 100}.{number % 100}"
     js = read_text(os.path.join(ROOT, "crates/birdnet-web/static/htmx.min.js"))
     versions["htmx"] = re.search(r'version:"([^"]+)"', js).group(1)
     # three.js: the version the build recipe pins, which must also be the one the committed

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DuckDB 2.0.0** (`duckdb` 1.20000.0, from 1.5.6), with `behavioral` **v0.10.1** and `icu`
+  v2.0.0 embedded and pinned by sha256 (`extension_pins.rs`). Three things the move needed that a
+  version bump does not show:
+  - *The crate's engine called itself `v2.0.0-dev88614`.* `libduckdb-sys` 1.20000.0 compiles the
+    2.0.0 release commit (`d54cbbe3df`, the `git_revision` of the official wheel) with DuckDB's
+    fallback version macros. DuckDB names the extension directory after the version string only
+    when it is a release, and after the commit hash otherwise; no registry serves a build under
+    the hash, and the published `icu` was refused ("built specifically for DuckDB version
+    'v2.0.0'"), which would have emptied every date-ranged dashboard. `.cargo/config.toml` now
+    sets `DUCKDB_VERSION` and `DUCKDB_PATCH_VERSION` through `CXXFLAGS`, and
+    `the_engine_names_itself_as_a_release` fails without it. A build made outside this tree
+    (`cargo install`) does not get the define; `RELEASING.md` says what that costs.
+  - *DuckDB 2.0.0's stable C API is still v1.5.6.* The runtime check that decides whether an
+    embedded `C_STRUCT` extension fits the engine read the engine's release version as its C API
+    version, which would have reported `behavioral` (target `v1.2.0`) as unloadable on 2.0.0
+    although DuckDB loads it. It now reads the C API from a table
+    (`stable_c_api_of`); `a_correctly_built_binary_reports_no_mismatch` failed on the old rule.
+  - *The licence set follows the engine:* `third_party/duckdb-2.0.0/` (no `libpg_query`, which 2.0.0
+    no longer bundles; the ICU text is carried over from 1.5.6), and
+    `gen-third-party-licenses.py` now reads the engine's major from the crate version instead of
+    assuming 1.
+
 ## [0.18.1] - 2026-10-26
 
 ### Fixed

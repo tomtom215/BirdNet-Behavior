@@ -1,0 +1,23 @@
+# Build-wide cargo configuration.
+
+[env]
+# Label the bundled DuckDB as the release it is.
+#
+# `libduckdb-sys` 1.20000.0 compiles the DuckDB 2.0.0 release commit (`d54cbbe3df`,
+# the `git_revision` of the official 2.0.0 wheel) but with the in-source fallback
+# version macros, so the engine called itself `v2.0.0-dev88614`. DuckDB names the
+# directory it fetches extensions from, and the version a `CPP` extension must have
+# been built for, after its version string only when that string is a release; with
+# `-dev` in it the name is the commit hash, no registry serves a build under it, and
+# the published `icu` 2.0.0 refused to load ("built specifically for DuckDB version
+# 'v2.0.0'"). `pragma_version.cpp` guards each macro with `#ifndef`, so a define from
+# the compiler's command line replaces the fallback exactly as the release build's
+# does. `cc` splits `CXXFLAGS` on whitespace and hands the pieces to the compiler
+# without a shell, so the double quotes are part of the macro, as intended.
+#
+# This relabels; it does not change code. If the crate is ever built from other
+# sources (a different `libduckdb-sys` version), re-read `pragma_version.cpp` before
+# trusting it, and see `birdnet-behavioral`'s `the_engine_names_itself_as_a_release`.
+# It also does not reach a build made outside this tree (`cargo install` of the
+# published crate takes no `.cargo/config.toml`); `RELEASING.md` says what that costs.
+CXXFLAGS = '-DDUCKDB_VERSION="v2.0.0" -DDUCKDB_PATCH_VERSION="0"'

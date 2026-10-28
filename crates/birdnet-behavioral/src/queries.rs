@@ -207,7 +207,8 @@ pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM du
 /// `TRY_CAST` may still turn into a `detection_timestamp`, so the row passes
 /// the hour filter and lands in a day group. On such a group the behavioural
 /// functions answer NULL rather than a verdict (measured against the published
-/// extension, DuckDB 1.5.6 + `behavioral` v0.10.0):
+/// extension, DuckDB 1.5.6 + `behavioral` v0.10.0, and held since by this crate's
+/// tests on DuckDB 2.0.0 + v0.10.1):
 ///
 /// - `sequence_match` / `sequence_count` return NULL for a group whose
 ///   timestamps are all NULL. Up to v0.9.1 they returned `false` / `0`; the

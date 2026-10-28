@@ -273,10 +273,10 @@ broken. The `store` object is the part that differs:
     "detections": 412903,
     "unplaceable_detections": 3,
     "detections_placeable": 412900,
-    "engine_duckdb_version": "v1.5.6",
+    "engine_duckdb_version": "v2.0.0",
     "engine_platform": "linux_arm64",
     "embedded_extension": {
-      "version": "v0.10.0",
+      "version": "v0.10.1",
       "duckdb_version": "v1.2.0",
       "abi": "C_STRUCT",
       "platform": "linux_arm64",
@@ -296,8 +296,9 @@ broken. The `store` object is the part that differs:
   both, and both fail the same way at `LOAD`. How `duckdb_version` is read
   depends on `abi`: for `CPP` and `C_STRUCT_UNSTABLE` it is a DuckDB version
   that must equal the engine's; for `C_STRUCT` (behavioral v0.10.0 and later)
-  it is a C API version, and any engine of the same major at or above it
-  accepts the extension — so `v1.2.0` against a `v1.5.6` engine is correct. Rebuild against
+  it is a C API version, and any engine whose stable C API has the same major and is
+  at or above it accepts the extension — so `v1.2.0` against a `v2.0.0` engine (whose
+  stable C API stays at v1.5.6) is correct. Rebuild against
   `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
 - `self_test` other than `"ok"` while `extension_loaded` is `true` — the
   extension loaded but one of its functions answered a fixed check differently
