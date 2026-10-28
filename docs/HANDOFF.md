@@ -465,13 +465,13 @@ Done 2026-10-28, on `claude/serene-hamilton-6wlll0`: the bundled DuckDB is 2.0.0
 v0.10.1 and `icu` v2.0.0 embedded and loaded; `the_engine_names_itself_as_a_release` and
 `a_correctly_built_binary_reports_no_mismatch` are the gates that failed without the first two fixes the bump needed; the
 third, `keep_duckdb_extension_registrar` in `build.rs`, is guarded by the aarch64 Docker image build (changelog, *Changed*).
-**First, next session:** read pull request #271's current checks; this is a snapshot at its fifth push after it was
-opened. These findings were this branch's and were fixed: the typos check on the two generated plate-index files
+**First, next session:** read pull request #271's current checks; this is a snapshot taken while it was open.
+These findings were this branch's and were fixed: the typos check on the two generated plate-index files
 (`.typos.toml`), a docs link to `/system/credits`, two rustdoc lints, the GNU ld link of the DuckDB archive (which only
 the aarch64 Docker image build showed, and which passed there on `2b2a4c1`), CodeQL's `rust/path-injection` on the
-picture cache (a key is checked to be one file name where the path is built, and the first scan after that fix still
-raised the alert, because the query only recognises a `contains("..")` written in place in the method; the cache has
-that now, and the next scan shows whether it closes the alert), and axe's `link-in-text-block` on the species page's credit lines. The axe job stops at its
+picture cache (the traversal was real and is closed and tested; a key is checked to be one file name, and the scan
+raised the alert again with that check in a helper and again with a `contains("..")` written in place, so `remove`
+now deletes a file found by listing the directory; whether the scanner accepts that is the first thing to read), and axe's `link-in-text-block` on the species page's credit lines. The axe job stops at its
 first failing step, so I ran the thirteen gates behind it locally against a **fresh** fixture started the way the
 workflow starts it (a long-lived one is not the same: it hid the axe finding); they found, all in the kiosk work, that
 the plate is 2.8 px on a phone (it now opens on Numbers under 1180 px; item 22), two defects of the Numbers face's

@@ -203,10 +203,10 @@ impl DiskCache {
             .remove(cache_key);
         // The credit goes with the picture: a credit left behind would be put on the next
         // picture stored under this name, which is somebody else's.
-        if let Some(credit) = self.credit_path_for(cache_key) {
+        if let Some(credit) = self.existing(&format!("{cache_key}.credit.json")) {
             let _ = std::fs::remove_file(credit);
         }
-        let Some(path) = self.path_for(cache_key) else {
+        let Some(path) = self.existing(&format!("{cache_key}.jpg")) else {
             return false;
         };
         match std::fs::remove_file(&path) {
@@ -276,6 +276,17 @@ impl DiskCache {
     /// Full path for a given cache key, or `None` when the key is not a single file name.
     fn path_for(&self, cache_key: &str) -> Option<PathBuf> {
         is_plain_name(cache_key).then(|| self.cache_dir.join(format!("{cache_key}.jpg")))
+    }
+
+    /// The file called `name` in the cache directory, if there is one, found by listing the
+    /// directory and comparing names rather than by building a path from `name`: what `remove`
+    /// deletes is a file that is already in this directory whatever `name` holds.
+    fn existing(&self, name: &str) -> Option<PathBuf> {
+        std::fs::read_dir(&self.cache_dir)
+            .ok()?
+            .flatten()
+            .find(|entry| entry.file_name() == name)
+            .map(|entry| entry.path())
     }
 
     /// Where the credit for `cache_key` is kept: beside the picture, as `{key}.credit.json`.
@@ -570,6 +581,9 @@ mod tests {
     fn removing_a_key_that_leaves_the_directory_deletes_nothing_outside_it() {
         let (parent, cache) = cache_beside_files("birdnet_diskcache_escape_remove");
         assert!(!cache.remove("../victim"), "no cached picture was removed");
+        // An absolute key holds no `..`: `Path::join` would let it replace the cache directory.
+        let absolute = parent.join("victim").to_string_lossy().into_owned();
+        assert!(!cache.remove(&absolute), "nor one named by its full path");
         for file in ["victim.jpg", "victim.credit.json"] {
             assert!(
                 parent.join(file).exists(),
