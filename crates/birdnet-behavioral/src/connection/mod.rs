@@ -538,7 +538,7 @@ const fn stable_c_api_of(engine: (u64, u64, u64)) -> (u64, u64, u64) {
 /// - `CPP` and `C_STRUCT_UNSTABLE`: the target is a `DuckDB` version and must
 ///   equal the engine's exactly.
 /// - `C_STRUCT`: the target is a C API version; it must share the stable C
-///   API's major and be no newer than its version ([`stable_c_api_of`]).
+///   API's major and be no newer than its version (`stable_c_api_of`).
 ///
 /// An unrecorded ABI is compared exactly, as every extension was before
 /// `C_STRUCT`. An engine version that does not parse is "could not tell", not

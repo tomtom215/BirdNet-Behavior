@@ -40,7 +40,7 @@
 //! Attribution is required by every licence in the set, so an image whose
 //! photographer the index does not name is not used, and each one is shown with
 //! the photographer, the licence and a link to AviCommons, as the structured
-//! [`ImageCredit`](super::ImageCredit) every provider supplies.
+//! [`ImageCredit`] every provider supplies.
 //!
 //! # Matching
 //!
