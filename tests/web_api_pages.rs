@@ -137,7 +137,7 @@ async fn species_page_returns_html() {
 
     // The v3-spine Species home: the page-head headline, the view switcher,
     // and the server-rendered List table.
-    assert!(html.contains("Who you've heard"));
+    assert!(html.contains("Who you've <em>heard</em>"));
     assert!(html.contains("sp-seg"));
     assert!(html.contains("sp-table"));
 }
@@ -413,7 +413,10 @@ async fn analytics_page_returns_html() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Behavioral Analytics"));
+    // The tab's own head: the family eyebrow, a headline in the same voice as its siblings, and
+    // the lede that says this is the research tier.
+    assert!(html.contains("How your birds <em>behave</em>"));
+    assert!(html.contains("The research tier"));
     // Behavior tab is a defined-in-place masonry since the Patterns reskin:
     // each card carries a sentence-case eyebrow + a plain-English headline.
     assert!(html.contains("Activity sessions"));

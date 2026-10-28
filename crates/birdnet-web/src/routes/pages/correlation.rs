@@ -65,34 +65,23 @@ const MAX_SPECIES: usize = 10;
 
 /// The co-occurrence surface, rendered for embedding by `homes::patterns`.
 pub(super) fn content() -> String {
-    CORRELATION_CONTENT.replace(
-        "{{help_link}}",
-        &super::help::help_link(super::help::Topic::Analytics),
-    )
+    let ranges = r#"<div class="seg" id="range-controls" role="group" aria-label="Time range"><button type="button" class="btn active" data-days="30" aria-pressed="true">30 days</button><button type="button" class="btn" data-days="90" aria-pressed="false">90 days</button><button type="button" class="btn" data-days="180" aria-pressed="false">6 months</button><button type="button" class="btn" data-days="365" aria-pressed="false">1 year</button></div>"#;
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::Analytics),
+        title: "Who sings with <em>whom</em>",
+        lead: "Species joined by a ribbon are often heard in the same five-minute block.",
+        lede: "A wider, darker ribbon means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause: they may just share the same good morning.",
+        aside: ranges,
+    });
+    CORRELATION_CONTENT.replace("{{page_head}}", &head)
 }
 
 static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
-    r##"<div class="page-head">
-  <div>
-    <div class="bnb-eyebrow">Behavioral analytics</div>
-    <h1 class="display co-h1">Who sings with whom</h1>
-    {{help_link}}
-    <p class="bnb-lede co-mt"><b>Species joined by a ribbon are often heard in the same five-minute block.</b> A wider, darker ribbon means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause — they may just share the same good morning.</p>
-  </div>
-  <!-- role/name/state: this row conveyed the selected range with a CSS
-       class alone. `templates/today.html` already does the same control with
-       `role="group"` + `aria-pressed`, so the pattern was in the codebase.
-       `type="button"` because the default is submit. -->
-  <div class="seg" id="range-controls" role="group" aria-label="Time range">
-    <button type="button" class="btn active" data-days="30" aria-pressed="true">30 days</button>
-    <button type="button" class="btn" data-days="90" aria-pressed="false">90 days</button>
-    <button type="button" class="btn" data-days="180" aria-pressed="false">6 months</button>
-    <button type="button" class="btn" data-days="365" aria-pressed="false">1 year</button>
-  </div>
-</div>
+    r##"{{page_head}}
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">same 5-min block</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">same 5-min block</span></div>
   <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
@@ -111,7 +100,7 @@ static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Lookup</div><h2 class="sh-h">Companion species</h2></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Lookup</div><h2 class="sh-h">Companion species</h2></div></div>
   <p class="bnb-meta co-meta-gap">Enter a species to see which others are commonly detected on the same day.</p>
   <div class="co-lookup-row">
     <input type="text" id="species-input" class="co-species-input"

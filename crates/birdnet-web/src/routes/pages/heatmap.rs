@@ -9,6 +9,8 @@
 //! | `GET /pages/heatmap-grid`    | HTMX partial — SVG heatmap grid      |
 //! | `GET /pages/hourly-totals`   | HTMX partial — bar chart by hour     |
 
+use std::fmt::Write as _;
+
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
@@ -41,59 +43,106 @@ struct HeatmapQuery {
 // Page content — embedded in the Patterns home ("When active" tab)
 // ---------------------------------------------------------------------------
 
-/// The heatmap surface, rendered for embedding by `homes::patterns`.
-pub(super) fn content() -> String {
-    // O-20 help link drops a methodology shortcut next to the top eyebrow.
-    HEATMAP_CONTENT.replace(
-        "{{help_link}}",
-        &super::help::help_link(super::help::Topic::Analytics),
+/// The ranges the page offers, in days. One control sets every figure on the tab; the terrain
+/// shows the nearest range it can draw that is not shorter than the choice (a month at least).
+const RANGES: [(u32, &str); 5] = [
+    (7, "7 days"),
+    (14, "14 days"),
+    (30, "30 days"),
+    (90, "90 days"),
+    (365, "1 year"),
+];
+
+/// The range the page opens on. A week is too short to tell weekdays apart or to draw a
+/// landscape, so the page opens on a month.
+const DEFAULT_DAYS: u32 = 30;
+
+/// The range control. `role`/`aria-pressed` carry the selection (a CSS class alone said nothing
+/// to a screen reader); `type="button"` because the default is submit.
+fn range_control() -> String {
+    let mut out = String::from(
+        r#"<div class="seg" id="range-controls" role="group" aria-label="Time range for every chart on this page">"#,
+    );
+    for (days, label) in RANGES {
+        let on = days == DEFAULT_DAYS;
+        let _ = write!(
+            out,
+            r#"<button type="button" class="btn{}" data-days="{days}" aria-pressed="{on}">{label}</button>"#,
+            if on { " active" } else { "" }
+        );
+    }
+    out.push_str("</div>");
+    out
+}
+
+/// A figure whose body is an HTMX slot filled by `url` at the default range.
+fn slot_figure(f: &super::frame::Figure<'_>, id: &str, url: &str, loading: &str) -> String {
+    let body = format!(
+        r#"<div id="{id}" hx-get="{url}?days={DEFAULT_DAYS}" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">{loading}</p>
+  </div>"#
+    );
+    super::frame::figure(&super::frame::Figure { body: &body, ..*f })
+}
+
+/// The heatmap surface, rendered for embedding by `homes::patterns`: the head, then the
+/// soundscape as the lead figure, then the three that zoom in (who, which hours, which
+/// weekdays). `terrain` is the terrain card's markup.
+pub(super) fn content(terrain: &str) -> String {
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::Analytics),
+        title: "When the yard is <em>alive</em>",
+        lead: "When your birds are out, and who is singing.",
+        lede: "Four views of the same days, from the whole soundscape down to a single hour. The range on the right sets all of them.",
+        aside: &range_control(),
+    });
+    let stream = slot_figure(
+        &super::frame::Figure {
+            topic: "Who's singing, over time",
+            title: "Activity streamgraph",
+            action: None,
+            note: "Each band is one species; its thickness is that day's detection count, stacked around a centre line. Dates run left to right.",
+            body: "",
+        },
+        "activity-streamgraph",
+        "/pages/activity-streamgraph",
+        "Loading streamgraph...",
+    );
+    let hours = slot_figure(
+        &super::frame::Figure {
+            topic: "Hour by hour",
+            title: "Detections by hour",
+            action: Some(("/patterns?tab=dawn", "See who sings when →")),
+            note: "Totals for every hour of the day over the chosen range. Dawn (05:00 to 09:00) and dusk (18:00 to 22:00) bars are green; the rest are grey.",
+            body: "",
+        },
+        "hourly-totals",
+        "/pages/hourly-totals",
+        "Loading chart...",
+    );
+    let grid = slot_figure(
+        &super::frame::Figure {
+            topic: "Hour × weekday",
+            title: "Activity grid",
+            action: None,
+            note: "A stronger colour means more birds heard in that hour (the key under the grid runs from none to most). The bars at the right and along the bottom are the totals for each weekday and each hour.",
+            body: "",
+        },
+        "heatmap-grid",
+        "/pages/heatmap-grid",
+        "Loading heatmap...",
+    );
+    format!(
+        "{head}\n{terrain}\n{stream}\n{hours}\n{grid}\n{}",
+        RANGE_SCRIPT.as_str()
     )
 }
 
-static HEATMAP_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
-    r#"<div class="page-head">
-  <div>
-    <div class="bnb-eyebrow hm-eyebrow"><span>Behavioral analytics</span>{{help_link}}</div>
-    <h1 class="display hm-h1">When the yard is alive</h1>
-    <p class="bnb-lede hm-lede"><b>When your birds are out, and who is singing.</b> Two views of the same days: the flow of species over time, then the hours they favour.</p>
-  </div>
-  <!-- role/name/state: this row conveyed the selected range with a CSS
-       class alone. `templates/today.html` already does the same control with
-       `role="group"` + `aria-pressed`, so the pattern was in the codebase.
-       `type="button"` because the default is submit. -->
-  <div class="seg" id="range-controls" role="group" aria-label="Time range">
-    <button type="button" class="btn active" data-days="7" aria-pressed="true">7 days</button>
-    <button type="button" class="btn" data-days="14" aria-pressed="false">14 days</button>
-    <button type="button" class="btn" data-days="30" aria-pressed="false">30 days</button>
-    <button type="button" class="btn" data-days="90" aria-pressed="false">90 days</button>
-  </div>
-</div>
-
-<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Who's singing, over time</div><h2 class="sh-h">Activity streamgraph</h2></div></div>
-  <p class="bnb-meta hm-chart-note">Each band is one species; its thickness is that day's detection count, stacked around a centre line. Dates run left to right.</p>
-  <div id="activity-streamgraph" hx-get="/pages/activity-streamgraph?days=7" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading streamgraph...</p>
-  </div>
-</div>
-
-<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Hour × day-of-week</div><h3>Activity grid</h3></div></div>
-  <p class="bnb-meta hm-chart-note">A stronger colour means more birds heard that hour (the key under the grid runs from none to most). Mornings light up first — the dawn chorus — with a smaller evening lift. Quiet on the left of each row is the middle of the night.</p>
-  <div id="heatmap-grid" hx-get="/pages/heatmap-grid?days=7" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading heatmap...</p>
-  </div>
-</div>
-
-<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">All days combined</div><h2 class="sh-h">Detections by hour</h2></div><a class="action" href="/patterns?tab=dawn">See who sings when →</a></div>
-  <p class="bnb-meta hm-hourly-note">Totals for every hour. Dawn (5–8 am) and dusk (6–9 pm) bars are green; the rest are grey.</p>
-  <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading chart...</p>
-  </div>
-</div>
-
-<script>
+/// Sets every figure from the one range control: the three partials by `htmx.ajax`, the terrain
+/// by an event it listens for (`bnb:range`, on its card).
+static RANGE_SCRIPT: crate::seal::Sealed = crate::seal::Sealed::new(
+    r"<script>
 function loadDays(days, btn) {
   document.querySelectorAll('#range-controls .btn').forEach(function (b) {
     b.classList.remove('active');
@@ -104,12 +153,14 @@ function loadDays(days, btn) {
   htmx.ajax('GET', '/pages/activity-streamgraph?days=' + days, '#activity-streamgraph');
   htmx.ajax('GET', '/pages/heatmap-grid?days=' + days, '#heatmap-grid');
   htmx.ajax('GET', '/pages/hourly-totals?days=' + days, '#hourly-totals');
+  var t = document.getElementById('terrain');
+  if (t) t.dispatchEvent(new CustomEvent('bnb:range', { detail: { days: days } }));
 }
 document.getElementById('range-controls').addEventListener('click', function(e) {
   const btn = e.target.closest('button[data-days]');
   if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
 });
-</script>"#,
+</script>",
 );
 
 // ---------------------------------------------------------------------------
@@ -166,12 +217,12 @@ fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
                 super::viz::kit::hour_floor(super::now_hour_local()),
             )
         });
-    Some(render_heatmap_svg(
-        &cells,
-        occurrences,
-        listened.is_some(),
-        days,
-        now,
+    let take = super::insight::weekday_sentence(&weekday_counts(&cells), occurrences, days)
+        .map(|s| super::frame::takeaway(&s))
+        .unwrap_or_default();
+    Some(format!(
+        "{take}{}",
+        render_heatmap_svg(&cells, occurrences, listened.is_some(), days, now)
     ))
 }
 
@@ -179,7 +230,7 @@ async fn heatmap_grid_partial(
     State(state): State<AppState>,
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
-    let days = query.days.unwrap_or(7).min(365);
+    let days = query.days.unwrap_or(DEFAULT_DAYS).min(365);
     let html = cached_fragment(
         &state,
         format!("heatmap-grid:{days}"),
@@ -203,14 +254,20 @@ fn compute_hourly_totals(state: &AppState, days: u32) -> Option<String> {
     } else {
         None
     };
-    Some(render_hourly_bars(&totals, solar, days))
+    let take = super::insight::hours_sentence(&hour_array(&totals))
+        .map(|s| super::frame::takeaway(&s))
+        .unwrap_or_default();
+    Some(format!(
+        "{take}{}",
+        render_hourly_bars(&totals, solar, days)
+    ))
 }
 
 async fn hourly_totals_partial(
     State(state): State<AppState>,
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
-    let days = query.days.unwrap_or(7).min(365);
+    let days = query.days.unwrap_or(DEFAULT_DAYS).min(365);
     let html = cached_fragment(
         &state,
         format!("hourly-totals:{days}"),
@@ -239,6 +296,19 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
             .cmp(&a.1.iter().sum::<i64>())
             .then_with(|| a.0.cmp(&b.0))
     });
+    // What the window held, for the sentence above the chart: every species' total, and the
+    // busiest first by their stored names (shown in the station's language below).
+    let total: i64 = series.iter().map(|(_, d)| d.iter().sum::<i64>()).sum();
+    let named: Vec<(String, i64)> = series
+        .iter()
+        .take(3)
+        .map(|(name, d)| {
+            (
+                state.names().name_of_stored(name).to_owned(),
+                d.iter().sum::<i64>(),
+            )
+        })
+        .collect();
     // The eight busiest are drawn one by one; every other species is one more band,
     // so a day's thickness is still that day's detections and not "the top eight's".
     let rest = series.split_off(series.len().min(8));
@@ -275,10 +345,12 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
             .ok()?;
         super::listening::listened_days(&effort, end, n_days)
     });
-    Some(super::viz::streamgraph(
-        &series,
-        today.as_deref(),
-        listened.as_deref(),
+    let take = super::insight::leader_sentence(&named, total)
+        .map(|s| super::frame::takeaway(&s))
+        .unwrap_or_default();
+    Some(format!(
+        "{take}{}",
+        super::viz::streamgraph(&series, today.as_deref(), listened.as_deref())
     ))
 }
 
@@ -286,7 +358,7 @@ async fn streamgraph_partial(
     State(state): State<AppState>,
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
-    let days = query.days.unwrap_or(7).clamp(2, 365);
+    let days = query.days.unwrap_or(DEFAULT_DAYS).clamp(2, 365);
     let html = cached_fragment(
         &state,
         format!("streamgraph:{days}"),
@@ -307,20 +379,35 @@ async fn streamgraph_partial(
 /// read, so the first visit (and each background refresh) is instant.
 pub fn prewarm(state: &AppState) {
     let cache = state.analytics_cache();
-    if let Some(h) = compute_streamgraph(state, 7) {
-        cache.put("streamgraph:7".to_string(), h);
+    if let Some(h) = compute_streamgraph(state, DEFAULT_DAYS) {
+        cache.put(format!("streamgraph:{DEFAULT_DAYS}"), h);
     }
-    if let Some(h) = compute_heatmap_grid(state, 7) {
-        cache.put("heatmap-grid:7".to_string(), h);
+    if let Some(h) = compute_heatmap_grid(state, DEFAULT_DAYS) {
+        cache.put(format!("heatmap-grid:{DEFAULT_DAYS}"), h);
     }
-    if let Some(h) = compute_hourly_totals(state, 7) {
-        cache.put("hourly-totals:7".to_string(), h);
+    if let Some(h) = compute_hourly_totals(state, DEFAULT_DAYS) {
+        cache.put(format!("hourly-totals:{DEFAULT_DAYS}"), h);
     }
 }
 
 // ---------------------------------------------------------------------------
 // SVG heatmap renderer
 // ---------------------------------------------------------------------------
+
+/// Detections by `[weekday][hour]` (Sunday first) from the query's cells.
+fn weekday_counts(cells: &[HeatmapCell]) -> [[i64; 24]; 7] {
+    let mut counts = [[0_i64; 24]; 7];
+    for cell in cells {
+        // A malformed row (a bad `Time`, imported) is skipped, not indexed: `panic = "abort"`.
+        if let Some(c) = counts
+            .get_mut(usize::from(cell.dow))
+            .and_then(|row| row.get_mut(usize::from(cell.hour)))
+        {
+            *c = cell.count;
+        }
+    }
+    counts
+}
 
 /// The activity grid: see [`super::viz::heat::hour_by_weekday`].
 fn render_heatmap_svg(
@@ -336,20 +423,9 @@ fn render_heatmap_svg(
         </p>"#
             .to_string();
     }
-    let mut counts = [[0_i64; 24]; 7];
-    for cell in cells {
-        // A malformed row (a bad `Time`, imported) is skipped, not indexed: `panic = "abort"`.
-        if let (Some(row), Some(slot)) = (
-            counts.get_mut(usize::from(cell.dow)),
-            Some(usize::from(cell.hour)),
-        ) && let Some(c) = row.get_mut(slot)
-        {
-            *c = cell.count;
-        }
-    }
     super::viz::heat::hour_by_weekday(&super::viz::heat::HourByWeekday {
         id: "heat-hour-weekday",
-        counts,
+        counts: weekday_counts(cells),
         occurrences,
         coverage_known,
         window_days,
@@ -371,6 +447,21 @@ pub(crate) fn heat_color(t: f64) -> String {
 // Hourly bar chart renderer
 // ---------------------------------------------------------------------------
 
+/// Detections by hour of the day, 0 to 23.
+///
+/// An hour outside that comes from a malformed `Time` (the BirdNET-Pi importer copies those
+/// through), and is skipped: indexing with it panicked, and `panic = "abort"` took the station
+/// down with the page.
+fn hour_array(totals: &[birdnet_db::sqlite::HourTotal]) -> [i64; 24] {
+    let mut by_hour = [0_i64; 24];
+    for h in totals {
+        if let Some(slot) = by_hour.get_mut(usize::from(h.hour)) {
+            *slot = h.count;
+        }
+    }
+    by_hour
+}
+
 fn render_hourly_bars(
     totals: &[birdnet_db::sqlite::HourTotal],
     solar: Option<(f64, f64)>,
@@ -382,15 +473,7 @@ fn render_hourly_bars(
         </p>"#
             .to_string();
     }
-    // An hour outside 0–23 comes from a malformed `Time` (the BirdNET-Pi importer
-    // copies those through), and is skipped: indexing with it panicked, and
-    // `panic = "abort"` took the station down with the page.
-    let mut by_hour = [0_i64; 24];
-    for h in totals {
-        if let Some(slot) = by_hour.get_mut(usize::from(h.hour)) {
-            *slot = h.count;
-        }
-    }
+    let by_hour = hour_array(totals);
     // One hue for the hours the page is about (dawn 5-8, dusk 18-21), a neutral for
     // the rest. It was amber against green, which is the pair a reader who cannot
     // tell red from green cannot tell apart.

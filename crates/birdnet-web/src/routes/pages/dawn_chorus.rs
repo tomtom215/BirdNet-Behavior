@@ -65,14 +65,21 @@ pub(super) fn content() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
     let moon_badge = super::overlays::moon_badge(now_secs);
+    let pills = format!(
+        r#"<div class="pill-row dc-pills"><span class="bnb-pill">Last 60 days</span><span class="bnb-pill">Per-species normalized</span>{moon_badge}<a class="bnb-pill" href="/patterns?tab=migration">Phenology →</a></div>"#
+    );
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::DawnChorus),
+        title: "The dawn chorus, <em>by species</em>.",
+        lead: "Who sings, and when.",
+        lede: r#"Each ring is one species; its ribbon swells outward at the hours it's most active, normalized to its own peak so a quiet wren reads as clearly as a loud cardinal. Midnight is at the top; the line is now. <span id="sun-line" hidden>Sunrise <span id="sun-rise" class="mono"></span>, sunset <span id="sun-set" class="mono"></span>.</span>"#,
+        aside: &pills,
+    });
     PAGE_HTML
+        .replace("{{page_head}}", &head)
         .replace("{{skel_polar}}", super::skeletons::polar_plot())
         .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6))
-        .replace("{{moon_badge}}", &moon_badge)
-        .replace(
-            "{{help_link}}",
-            &super::help::help_link(super::help::Topic::DawnChorus),
-        )
 }
 
 // ---------------------------------------------------------------------------

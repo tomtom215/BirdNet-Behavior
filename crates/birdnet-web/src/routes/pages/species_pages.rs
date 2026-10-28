@@ -181,17 +181,14 @@ async fn species_page(
     .await
     .unwrap_or_default();
 
-    let help = super::help::help_link(super::help::Topic::Species);
-    let head = format!(
-        r#"<div class="page-head" data-screen-label="Species head">
-  <div>
-    <div class="bnb-eyebrow"><span>Species</span>{help}</div>
-    <h1 class="display sp-h1">Who you've heard</h1>
-    <p class="bnb-meta sp-lede">Every bird your station has identified — browse the list, the photos, or your growing life list.</p>
-  </div>
-  <a class="bnb-btn" href="/species/occurrence">Why isn't a bird heard here?</a>
-</div>"#
-    );
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Species",
+        help: &super::help::help_link(super::help::Topic::Species),
+        title: "Who you've <em>heard</em>",
+        lead: "Every bird your station has identified.",
+        lede: "Browse the list, the photos, or your growing life list.",
+        aside: r#"<a class="bnb-btn" href="/species/occurrence">Why isn't a bird heard here?</a>"#,
+    });
     let content = format!(
         "{head}{controls}{body}",
         controls = controls(view, filter, search.as_deref(), taxon.as_ref())

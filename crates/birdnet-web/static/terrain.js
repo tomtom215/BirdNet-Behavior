@@ -319,10 +319,14 @@ function url(p) {
   return typeof window.bnbUrl === "function" ? window.bnbUrl(p) : p;
 }
 
+/** The ranges the server can draw, shortest first (`terrain::RANGES`). */
+const RANGES = [30, 90, 365];
+
 class Terrain {
   constructor(card) {
     this.card = card;
-    this.days = Number(card.dataset.trDays) || 90;
+    this.days = Number(card.dataset.trDays) || 30;
+    this.span = card.querySelector('[data-tr="span"]');
     this.view = "grid";
     this.colour = "activity";
     this.data = null;
@@ -342,8 +346,15 @@ class Terrain {
     this.readout = card.querySelector(".tr-readout");
     this.legend = card.querySelector(".tr-legend");
     this.idleText = this.readout ? this.readout.textContent : "";
+    this.say();
     this.bind();
     this.load();
+  }
+
+  /** Which range the card is showing, in words. */
+  say() {
+    if (!this.span) return;
+    this.span.textContent = this.days === 365 ? "Last year" : `Last ${this.days} days`;
   }
 
   // ── controls ──
@@ -362,8 +373,14 @@ class Terrain {
         fn(b);
       });
     };
-    seg("range", (b) => {
-      this.days = Number(b.dataset.days);
+    // The page owns the range (one control for every figure on the tab). The card follows it,
+    // showing the shortest range it can draw that is not shorter than the choice, and says which.
+    this.card.addEventListener("bnb:range", (e) => {
+      const want = Number((e.detail && e.detail.days) || this.days);
+      const days = RANGES.find((r) => r >= want) || RANGES[RANGES.length - 1];
+      if (days === this.days) return;
+      this.days = days;
+      this.say();
       this.load();
     });
     seg("view", (b) => this.setView(b.dataset.view));

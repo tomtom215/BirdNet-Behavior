@@ -64,7 +64,10 @@ async fn reports_page(
     let content = format!(
         "{tabs}{print}{body}",
         tabs = subtabs("/reports", "tab", TABS, tab.key),
-        print = PRINT_BAR,
+        print = PRINT_BAR.replace(
+            "{{help_link}}",
+            &crate::routes::pages::help::help_link(crate::routes::pages::help::Topic::Reports),
+        ),
     );
     let title = format!("Reports · {}", tab.label);
     crate::routes::pages::render_page_for_request(&title, &content, "reports", &headers)
@@ -78,7 +81,7 @@ async fn reports_page(
 /// keeps the button itself out of the printed output.
 static PRINT_BAR: crate::seal::Sealed = crate::seal::Sealed::new(
     r#"<div class="rp-meta">
-  <span class="rp-print bnb-meta">Make a keepsake — print this recap or save it as a PDF.</span>
+  <span class="rp-print bnb-meta">Make a keepsake — print this recap or save it as a PDF. {{help_link}}</span>
   <button type="button" class="bnb-btn ghost rp-pdf" data-print data-print-hide>⎙ Save as PDF</button>
 </div>
 <script>

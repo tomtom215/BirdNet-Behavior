@@ -1,20 +1,10 @@
 <!-- Time Series Analytics Dashboard -->
-<!-- Same head as every other Patterns tab: an eyebrow that names the family and
-     carries the help link, a serif title with one word in the accent, a lede. This
-     one was the odd one out: "Analytics" over "Time series", and the help link on a
-     line of its own. -->
-<div class="bnb-eyebrow tsh-eyebrow"><span>Behavioral analytics · trends</span>{{help_link}}</div>
-<h1 class="display tsh-h1">Is your yard getting <em>busier</em>?</h1>
-<p class="bnb-lede tsh-lede">
-    <b>Busier, or quieter.</b> Detections per day over the last two
-    weeks, and how many different species you've heard over the last month. A rising species count often
-    matters more than raw detections — it means more kinds of birds are finding your patch.
-</p>
+{{page_head}}
 
 <!-- The two headline trends this tab leads with: busier? and more varied? -->
 <div class="grid-2 tsh-row">
     <div class="bnb-card pad">
-        <div class="section-header"><div><div class="bnb-eyebrow">last 30 complete days · 7-day average, against the 30 before</div><h2 class="sh-h">Detections per day</h2></div></div>
+        <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 30 complete days · 7-day average, against the 30 before</div><h2 class="sh-h">Detections per day</h2></div></div>
         <div class="ts-slot" hx-get="/pages/ts-daily"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -23,7 +13,7 @@
     </div>
 
     <div class="bnb-card pad">
-        <div class="section-header"><div><div class="bnb-eyebrow">last 30 days · against the 30 before</div><h2 class="sh-h">Species richness</h2></div></div>
+        <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 30 days · against the 30 before</div><h2 class="sh-h">Species richness</h2></div></div>
         <div class="ts-slot" hx-get="/pages/ts-diversity"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -51,31 +41,21 @@
 <details class="pt-disc">
   <summary>See the full analytics dashboard</summary>
 
-  <!-- Heatmap + Peak Windows -->
+  <!-- The hour-of-day heatmap and the polar activity clock that used to be here drew the
+       same 90-day hour-of-day average that "When active" draws better, and the species
+       accumulation curve is the Life list's; both live there now (see the links below). -->
   <div class="grid-2 tsh-row">
       <div class="bnb-card pad">
-          <div class="section-header"><div><div class="bnb-eyebrow">90-day average</div><h2 class="sh-h">Hour-of-day activity heatmap</h2></div></div>
-          <div hx-get="/pages/ts-heatmap"
-               hx-trigger="toggle from:closest details once, intersect once"
-               hx-swap="innerHTML">
-              <span class="htmx-indicator">Loading heatmap…</span>
-          </div>
-      </div>
-
-      <div class="bnb-card pad">
-          <div class="section-header"><div><div class="bnb-eyebrow">last 24 h</div><h2 class="sh-h">Peak 15-minute windows</h2></div></div>
+          <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 24 h</div><h2 class="sh-h">Peak 15-minute windows</h2></div></div>
           <div hx-get="/pages/ts-peak"
                hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
               <span class="htmx-indicator">Loading peak windows…</span>
           </div>
       </div>
-  </div>
 
-  <!-- Activity Sessions + Anomaly Detection -->
-  <div class="grid-2 tsh-row">
       <div class="bnb-card pad">
-          <div class="section-header"><div><div class="bnb-eyebrow">last 3 days · gap ≥ 30 min</div><h2 class="sh-h">Activity sessions</h2></div></div>
+          <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 3 days · gap ≥ 30 min</div><h2 class="sh-h">Activity sessions</h2></div></div>
           <p class="tsh-card-lede">
               Continuous-presence windows separated by inactivity gaps.
           </p>
@@ -85,185 +65,25 @@
               <span class="htmx-indicator">Loading sessions…</span>
           </div>
       </div>
+  </div>
 
-      <div class="bnb-card pad">
-          <div class="section-header"><div><div class="bnb-eyebrow">90 days · z &gt; 2.0</div><h2 class="sh-h">Anomaly detection</h2></div></div>
-          <p class="tsh-card-lede">
-              Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
-          </p>
-          <div hx-get="/pages/ts-anomalies"
-               hx-trigger="toggle from:closest details once, intersect once"
-               hx-swap="innerHTML">
-              <span class="htmx-indicator">Detecting anomalies…</span>
-          </div>
+  <div class="bnb-card pad tsh-row">
+      <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>90 days · z &gt; 2.0</div><h2 class="sh-h">Anomaly detection</h2></div></div>
+      <p class="tsh-card-lede">
+          Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
+      </p>
+      <div hx-get="/pages/ts-anomalies"
+           hx-trigger="toggle from:closest details once, intersect once"
+           hx-swap="innerHTML">
+          <span class="htmx-indicator">Detecting anomalies…</span>
       </div>
   </div>
 
-  <!-- Polar Activity Clock + Species Accumulation -->
-  <div class="grid-2 tsh-row">
-      <div class="bnb-card pad">
-          <div class="section-header"><div><div class="bnb-eyebrow">90-day hourly average</div><h2 class="sh-h">Polar activity clock</h2></div></div>
-          <p class="tsh-card-lede">
-              Radial chart showing bird activity intensity by hour of day. Each spoke = 1 hour (0–23).
-          </p>
-          <div id="polar-clock-container" class="tsh-polar-center">
-              <svg id="polar-clock" width="320" height="320" viewBox="0 0 320 320"
-                   aria-label="Polar activity clock" role="img">
-                  <text x="160" y="170" text-anchor="middle" fill="var(--text-muted)"
-                        font-size="12">Loading…</text>
-              </svg>
-          </div>
-      </div>
-
-      <div class="bnb-card pad">
-          <div class="section-header"><div><div class="bnb-eyebrow">cumulative discovery</div><h2 class="sh-h">Species accumulation</h2></div></div>
-          <p class="tsh-card-lede">
-              Cumulative new species discovered over time — species accumulation curve.
-          </p>
-          <div hx-get="/pages/life-accumulation"
-               hx-trigger="toggle from:closest details once, intersect once"
-               hx-swap="innerHTML">
-              <span class="htmx-indicator">Loading accumulation…</span>
-          </div>
-      </div>
-  </div>
+  <p class="bnb-meta tsh-see-also">
+      Looking for the hours of the day? That is <a href="/patterns">When active</a>.
+      The growing species list is on the <a href="/species?view=lifelist">Life list</a>.
+  </p>
 </details>
-
-<script>
-(function () {
-    // Polar activity clock — renders hour-of-day heatmap data as a radial SVG.
-    // Fetches from /api/v2/timeseries/heatmap and renders 24 spokes.
-    var SVG_NS = 'http://www.w3.org/2000/svg';
-    var CX = 160, CY = 160, R_MAX = 130, R_MIN = 28;
-
-    function polarToXY(angleDeg, r) {
-        var rad = (angleDeg - 90) * Math.PI / 180;
-        return [CX + r * Math.cos(rad), CY + r * Math.sin(rad)];
-    }
-
-    function renderPolarClock(hourData) {
-        // hourData: array of {hour: 0..23, avg_detections: float}
-        var svg = document.getElementById('polar-clock');
-        while (svg.firstChild) svg.removeChild(svg.firstChild);
-
-        var maxVal = hourData.reduce(function (m, d) { return Math.max(m, d.avg_detections); }, 0.001);
-
-        var HOURS = 24;
-        var sliceAngle = 360 / HOURS;
-
-        // Draw concentric reference rings
-        [0.25, 0.5, 0.75, 1.0].forEach(function (frac) {
-            var r = R_MIN + (R_MAX - R_MIN) * frac;
-            var circle = document.createElementNS(SVG_NS, 'circle');
-            circle.setAttribute('cx', CX);
-            circle.setAttribute('cy', CY);
-            circle.setAttribute('r', r);
-            circle.setAttribute('fill', 'none');
-            circle.setAttribute('stroke', 'var(--border)');
-            circle.setAttribute('stroke-width', '0.5');
-            svg.appendChild(circle);
-        });
-
-        // Draw each hour wedge
-        hourData.forEach(function (d) {
-            var frac = d.avg_detections / maxVal;
-            var r = R_MIN + (R_MAX - R_MIN) * frac;
-            var startAngle = d.hour * sliceAngle - sliceAngle / 2;
-            var endAngle = startAngle + sliceAngle;
-
-            var p1 = polarToXY(startAngle, R_MIN);
-            var p2 = polarToXY(startAngle, r);
-            var p3 = polarToXY(endAngle, r);
-            var p4 = polarToXY(endAngle, R_MIN);
-
-            var largeArc = sliceAngle > 180 ? 1 : 0;
-            var d_attr = [
-                'M', p1[0], p1[1],
-                'L', p2[0], p2[1],
-                'A', r, r, 0, largeArc, 1, p3[0], p3[1],
-                'L', p4[0], p4[1],
-                'A', R_MIN, R_MIN, 0, largeArc, 0, p1[0], p1[1],
-                'Z'
-            ].join(' ');
-
-            var path = document.createElementNS(SVG_NS, 'path');
-            path.setAttribute('d', d_attr);
-            // The theme's moss ramp, by opacity, so the clock follows light,
-            // dark and high contrast like every other chart on the page.
-            path.setAttribute('fill', 'var(--moss)');
-            path.setAttribute('fill-opacity', String(0.18 + 0.72 * frac));
-            path.setAttribute('stroke', 'var(--bg)');
-            path.setAttribute('stroke-width', '1');
-            svg.appendChild(path);
-
-            // Hour labels at N, 3, 6, 9, 12, 15, 18, 21
-            if (d.hour % 3 === 0) {
-                var labelPt = polarToXY(d.hour * sliceAngle, R_MAX + 16);
-                var text = document.createElementNS(SVG_NS, 'text');
-                text.setAttribute('x', labelPt[0]);
-                text.setAttribute('y', labelPt[1]);
-                text.setAttribute('text-anchor', 'middle');
-                text.setAttribute('dominant-baseline', 'middle');
-                text.setAttribute('fill', 'var(--text-muted)');
-                text.setAttribute('font-size', '10');
-                text.textContent = d.hour + 'h';
-                svg.appendChild(text);
-            }
-        });
-
-        // Centre label
-        var centre = document.createElementNS(SVG_NS, 'text');
-        centre.setAttribute('x', CX);
-        centre.setAttribute('y', CY + 4);
-        centre.setAttribute('text-anchor', 'middle');
-        centre.setAttribute('fill', 'var(--text-muted)');
-        centre.setAttribute('font-size', '9');
-        centre.textContent = '90d avg';
-        svg.appendChild(centre);
-    }
-
-    function say(message) {
-        var svg = document.getElementById('polar-clock');
-        while (svg.firstChild) svg.removeChild(svg.firstChild);
-        var t = document.createElementNS(SVG_NS, 'text');
-        t.setAttribute('x', '160'); t.setAttribute('y', '170');
-        t.setAttribute('text-anchor', 'middle');
-        t.setAttribute('fill', 'var(--text-muted)');
-        t.setAttribute('font-size', '12');
-        t.textContent = message;
-        svg.appendChild(t);
-    }
-
-    // Fetch heatmap data and render. The endpoint answers
-    // `{"heatmap": [{hour_of_day, avg_detections_per_day, …}], "total": n}`;
-    // this used to look for `data`/`rows` and `hour`/`avg_detections`, found
-    // none of them, and drew 24 zeros — a flat clock on every station.
-    var base = (document.body && document.body.dataset.basePath) || '';
-    fetch(base + '/api/v2/timeseries/heatmap?days=90')
-        .then(function (r) {
-            if (!r.ok) { throw new Error('HTTP ' + r.status); }
-            return r.json();
-        })
-        .then(function (json) {
-            var rows = Array.isArray(json.heatmap) ? json.heatmap : [];
-            if (rows.length === 0) {
-                say('No detections in the last 90 days');
-                return;
-            }
-            var byHour = {};
-            rows.forEach(function (r) {
-                byHour[r.hour_of_day] = {hour: r.hour_of_day, avg_detections: r.avg_detections_per_day || 0};
-            });
-            renderPolarClock(Array.from({length: 24}, function (_, i) {
-                return byHour[i] || {hour: i, avg_detections: 0};
-            }));
-        })
-        .catch(function () {
-            // A failure is not an empty clock: say so.
-            say('Could not load the activity clock');
-        });
-})();
-</script>
 
 <!-- API reference card — developer material, so it ships collapsed: the
      dashboard reads as a field tool, not an API manual, and the table stays

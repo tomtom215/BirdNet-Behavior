@@ -29,11 +29,10 @@ pub struct WeekParams {
 /// The weekly-report surface (shell only; content loaded by HTMX), rendered
 /// for embedding by `homes::reports` ("Weekly" tab).
 pub(super) fn content() -> String {
-    // O-20 help link wires the eyebrow to the Reports mdBook page.
-    WEEKLY_SHELL_HTML.replace(
-        "{{help_link}}",
-        &super::help::help_link(super::help::Topic::Reports),
-    )
+    // The help link is on the Reports home's own row now (`homes::reports`), the same for all
+    // three tabs; this tab used to carry its own eyebrow and an `h2` that repeated the tab's
+    // name above the report's `h1`.
+    WEEKLY_SHELL_HTML.to_owned()
 }
 
 /// HTMX partial: the weekly report content for a given week.
@@ -48,15 +47,14 @@ async fn weekly_partial(
 
     let week_end = add_days(&week_start, 6);
     let prev_week = add_days(&week_start, -7);
-    let prev_week_end = add_days(&prev_week, 6);
     let next_week = add_days(&week_start, 7);
     let today = today_string();
     let is_current = week_start <= today && today <= week_end;
+    let compared_days = complete_days(&week_start, &today, is_current);
 
     let week_start2 = week_start.clone();
     let week_end2 = week_end.clone();
     let prev_week_c = prev_week.clone();
-    let prev_week_end_c = prev_week_end.clone();
     let names = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -67,21 +65,40 @@ async fn weekly_partial(
             let top = birdnet_db::sqlite::weekly_top_species(conn, &week_start, &week_end, 1000)?;
             let new = birdnet_db::sqlite::weekly_new_species(conn, &week_start, &week_end)?;
             let daily = birdnet_db::sqlite::range_daily_counts(conn, &week_start, &week_end)?;
-            let prev_total =
-                birdnet_db::sqlite::weekly_detection_count(conn, &prev_week_c, &prev_week_end_c)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((total, top, new, daily, prev_total))
+            // Like for like: a week still being lived is held against the same days of the
+            // week before, not the whole of it. (It used to be held against the whole of it,
+            // so every Monday-to-Wednesday visitor was told it was "a quieter week".)
+            let compare = if compared_days == 0 {
+                None
+            } else {
+                let last = i64::from(compared_days) - 1;
+                Some(Comparison {
+                    days: compared_days,
+                    this: birdnet_db::sqlite::weekly_detection_count(
+                        conn,
+                        &week_start,
+                        &add_days(&week_start, last),
+                    )?,
+                    before: birdnet_db::sqlite::weekly_detection_count(
+                        conn,
+                        &prev_week_c,
+                        &add_days(&prev_week_c, last),
+                    )?,
+                })
+            };
+            Ok::<_, birdnet_db::sqlite::DbError>((total, top, new, daily, compare))
         })
     })
     .await;
 
     let html = match result {
-        Ok(Ok((total, top, new_species, daily, prev_total))) => render_weekly_content(
+        Ok(Ok((total, top, new_species, daily, compare))) => render_weekly_content(
             &week_start2,
             &week_end2,
             &prev_week,
             &next_week,
             total,
-            prev_total,
+            compare,
             &top,
             &new_species,
             &daily,
@@ -115,7 +132,7 @@ fn render_weekly_content(
     prev_week: &str,
     next_week: &str,
     total: i64,
-    prev_total: i64,
+    compare: Option<Comparison>,
     top: &[(String, String, i64)],
     new_species: &[(String, String, String)],
     daily: &[birdnet_db::sqlite::DailyCount],
@@ -155,42 +172,21 @@ fn render_weekly_content(
     // ── Editorial hero ────────────────────────────────────────────────────
     let species_count = top.len();
     let new_count = new_species.len();
-    let delta_pct = if prev_total > 0 {
-        ((total - prev_total) as f64 / prev_total as f64 * 100.0).round() as i64
-    } else {
-        0
-    };
-    let headline = if total == 0 {
-        "A <em>silent</em> week."
-    } else if delta_pct >= 10 {
-        "A <em>loud</em> week."
-    } else if delta_pct <= -10 {
-        "A <em>quieter</em> week."
-    } else {
-        "A <em>steady</em> week."
-    };
-    let mut lead = format!("<b>{total} detections</b> from <b>{species_count} species</b>");
-    if prev_total > 0 && delta_pct != 0 {
-        let word = if delta_pct > 0 { "busier" } else { "quieter" };
-        let _ = write!(lead, " — {}% {word} than the week before", delta_pct.abs());
-    }
-    if new_count > 0 {
-        let plural = if new_count == 1 { "bird" } else { "birds" };
-        let _ = write!(lead, ", and {new_count} {plural} new to your list");
-    }
-    lead.push('.');
+    let words = week_words(
+        total,
+        species_count,
+        new_count,
+        compare.as_ref(),
+        is_current,
+    );
     let _ = write!(
         html,
-        r#"<div class="rp-hero"><div class="eyebrow">Weekly report</div><h1>{headline}</h1><p class="lead">{lead}</p></div>"#,
+        r#"<div class="rp-hero"><div class="eyebrow">Weekly report</div><h1>{}</h1><p class="lead">{}</p></div>"#,
+        words.headline, words.lead,
     );
 
-    // ── Stat band ─────────────────────────────────────────────────────────
-    let det_detail = if prev_total > 0 {
-        let arrow = if delta_pct >= 0 { "↑" } else { "↓" };
-        format!("{arrow} {}% vs last week", delta_pct.abs())
-    } else {
-        "first full week".to_string()
-    };
+    // ── Stat band ───────────────────────────────────────────────────────
+    let det_detail = words.detail;
     let species_detail = if new_count > 0 {
         format!("+{new_count} first-ever")
     } else {
@@ -392,11 +388,107 @@ fn today_string() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// What the week says about itself
+// ---------------------------------------------------------------------------
+
+/// A week held against the one before it, over the same days.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Comparison {
+    /// How many days of each week were compared (1 to 7).
+    pub(super) days: u32,
+    /// Detections in those days of this week.
+    pub(super) this: i64,
+    /// Detections in the same days of the week before.
+    pub(super) before: i64,
+}
+
+/// How many of the week's days are over, and so fair to compare.
+///
+/// A past week is whole. A week still being lived has Monday to yesterday: today is not over,
+/// and a half-heard Wednesday against a whole one would read as a falling week every morning.
+pub(super) fn complete_days(week_start: &str, today: &str, is_current: bool) -> u32 {
+    if !is_current {
+        return 7;
+    }
+    let elapsed = date_to_epoch_days(today) - date_to_epoch_days(week_start);
+    u32::try_from(elapsed.clamp(0, 6)).unwrap_or(0)
+}
+
+/// The report's headline, its lead sentence and the detections tile's small print.
+pub(super) struct WeekWords {
+    /// `A <em>loud</em> week.`
+    pub(super) headline: String,
+    /// The sentence under it, authored markup.
+    pub(super) lead: String,
+    /// The note under the detections number.
+    pub(super) detail: String,
+}
+
+/// Say what the week was. A week still in progress says "so far", and is compared only over the
+/// days that are done.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "counts are far below 2^53 and the result is a whole percentage"
+)]
+pub(super) fn week_words(
+    total: i64,
+    species: usize,
+    new_species: usize,
+    compare: Option<&Comparison>,
+    is_current: bool,
+) -> WeekWords {
+    let so_far = if is_current { " so far" } else { "" };
+    let delta = compare
+        .filter(|c| c.before > 0)
+        .map(|c| (c.this - c.before) as f64 / c.before as f64 * 100.0)
+        .map(|d| d.round() as i64);
+    let against = compare.map_or_else(String::new, |c| match c.days {
+        7 => "the week before".to_owned(),
+        1 => "the same day last week".to_owned(),
+        n => format!("the same {n} days last week"),
+    });
+    let headline = if total == 0 {
+        "A <em>silent</em> week.".to_owned()
+    } else if compare.is_none() && is_current {
+        "A week just <em>beginning</em>.".to_owned()
+    } else {
+        match delta {
+            Some(d) if d >= 10 => format!("A <em>loud</em> week{so_far}."),
+            Some(d) if d <= -10 => format!("A <em>quieter</em> week{so_far}."),
+            _ => format!("A <em>steady</em> week{so_far}."),
+        }
+    };
+    let mut lead = format!("<b>{total} detections</b> from <b>{species} species</b>{so_far}");
+    if let Some(d) = delta.filter(|d| *d != 0) {
+        let word = if d > 0 { "busier" } else { "quieter" };
+        let _ = write!(lead, " — {}% {word} than {against}", d.abs());
+    }
+    if new_species > 0 {
+        let plural = if new_species == 1 { "bird" } else { "birds" };
+        let _ = write!(lead, ", and {new_species} {plural} new to your list");
+    }
+    lead.push('.');
+    let detail = match delta {
+        Some(d) => {
+            let arrow = if d >= 0 { "↑" } else { "↓" };
+            format!("{arrow} {}% vs {against}", d.abs())
+        }
+        None if is_current => "week in progress".to_owned(),
+        None => "first full week".to_owned(),
+    };
+    WeekWords {
+        headline,
+        lead,
+        detail,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Static HTML shell
 // ---------------------------------------------------------------------------
 
 const WEEKLY_SHELL_HTML: &str = r#"<div class="page-content wk-content">
-  <div class="bnb-eyebrow wk-eyebrow"><span>The backyard bulletin</span>{{help_link}}</div><h2 class="display wk-h2">Weekly report</h2>
   <div id="weekly-content"
        hx-get="/pages/weekly-content"
        hx-trigger="load"
@@ -565,5 +657,118 @@ mod tests {
         assert_eq!(monday.len(), 10);
         assert_eq!(&monday[4..5], "-");
         assert_eq!(&monday[7..8], "-");
+    }
+
+    #[test]
+    fn a_past_week_is_whole_and_a_current_one_is_monday_to_yesterday() {
+        assert_eq!(complete_days("2026-10-19", "2026-11-05", false), 7);
+        // 2026-10-26 is a Monday.
+        assert_eq!(complete_days("2026-10-26", "2026-10-26", true), 0);
+        assert_eq!(complete_days("2026-10-26", "2026-10-28", true), 2);
+        assert_eq!(complete_days("2026-10-26", "2026-11-01", true), 6);
+    }
+
+    /// The defect: on a Wednesday the report held the days so far against the whole of last
+    /// week and called it "a quieter week, N% quieter than the week before", whatever those
+    /// days had heard.
+    #[test]
+    fn a_week_in_progress_is_held_against_the_same_days_of_the_last_one() {
+        // Two complete days: 70 now against 75 then. Whole last week was 227.
+        let c = Comparison {
+            days: 2,
+            this: 70,
+            before: 75,
+        };
+        let w = week_words(107, 13, 0, Some(&c), true);
+        assert_eq!(
+            w.headline, "A <em>steady</em> week so far.",
+            "{}",
+            w.headline
+        );
+        assert!(
+            w.lead
+                .contains("107 detections</b> from <b>13 species</b> so far"),
+            "{}",
+            w.lead
+        );
+        assert!(
+            !w.lead.contains("quieter than the week before"),
+            "{}",
+            w.lead
+        );
+        assert_eq!(w.detail, "↓ 7% vs the same 2 days last week");
+    }
+
+    #[test]
+    fn a_real_fall_over_the_same_days_is_still_called_quieter() {
+        let c = Comparison {
+            days: 3,
+            this: 40,
+            before: 100,
+        };
+        let w = week_words(55, 9, 1, Some(&c), true);
+        assert_eq!(w.headline, "A <em>quieter</em> week so far.");
+        assert!(
+            w.lead
+                .contains("60% quieter than the same 3 days last week"),
+            "{}",
+            w.lead
+        );
+        assert!(
+            w.lead.ends_with(", and 1 bird new to your list."),
+            "{}",
+            w.lead
+        );
+    }
+
+    #[test]
+    fn a_finished_week_is_compared_whole_and_says_nothing_about_so_far() {
+        let c = Comparison {
+            days: 7,
+            this: 300,
+            before: 200,
+        };
+        let w = week_words(300, 20, 0, Some(&c), false);
+        assert_eq!(w.headline, "A <em>loud</em> week.");
+        assert!(
+            w.lead.contains("50% busier than the week before"),
+            "{}",
+            w.lead
+        );
+        assert!(!w.lead.contains("so far"));
+        assert_eq!(w.detail, "↑ 50% vs the week before");
+    }
+
+    #[test]
+    fn monday_morning_makes_no_comparison_at_all() {
+        let w = week_words(12, 4, 0, None, true);
+        assert_eq!(w.headline, "A week just <em>beginning</em>.");
+        assert!(!w.lead.contains('%'), "{}", w.lead);
+        assert_eq!(w.detail, "week in progress");
+    }
+
+    #[test]
+    fn a_week_that_had_nothing_before_it_compares_with_nothing() {
+        let c = Comparison {
+            days: 7,
+            this: 30,
+            before: 0,
+        };
+        let w = week_words(30, 5, 0, Some(&c), false);
+        assert_eq!(w.headline, "A <em>steady</em> week.");
+        assert_eq!(w.detail, "first full week");
+    }
+
+    #[test]
+    fn a_silent_week_is_silent_whatever_came_before() {
+        let c = Comparison {
+            days: 7,
+            this: 0,
+            before: 80,
+        };
+        assert_eq!(
+            week_words(0, 0, 0, Some(&c), false).headline,
+            "A <em>silent</em> week."
+        );
     }
 }
