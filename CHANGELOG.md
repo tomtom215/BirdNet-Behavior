@@ -21,12 +21,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bird heard last. The idea is fugleramme's (<https://github.com/arnegiacomo/fugleramme>, Arne
   Giacomo Munthe-Kaas); no code or artwork is shared. New in `birdnet-db`:
   `species_heard_on`, from `detections_analytic`, so a rejected bird is not on the wall.
+- **Every picture is shown with its credit.** A photograph fetched from Wikipedia and Wikimedia Commons,
+  AviCommons or Flickr is kept with its title, author, source and licence (a `{key}.credit.json` beside the
+  file) and shown under the picture on the species page, in `/api/v2/species/image/{scientific_name}` as
+  `credit`, and on a new page, `/system/credits`, which every page's footer links to and which lists the
+  credited pictures the station holds for the birds it has heard. Until now the credit existed, for two of
+  the three sources, only in the `description` of a JSON answer no page read, and the licences those
+  pictures are under (CC BY, CC BY-SA) require it to be shown. A picture whose credit cannot be read, or
+  whose licence is not a free one, is not used; a picture cached before credits were kept is replaced by a
+  credited one the first time it is asked for (it is not given a guessed credit), and the credits page says
+  how many are waiting. A link in a credit is followed only if it is an `http` or `https` address.
+  On a phone each row stacks, its cells printing their column's name. The browser gates grade the page
+  (`/system/credits` is in their route list; the screenshot fixture seeds credited pictures, an uncredited one and a
+  plate), and `book.mjs` takes `ONLY=<image name>` to refresh one picture of the manual.
+- **Display → Charts → Plate.** A per-browser choice (`bnb-illustration`, `data-illustration="plate"`) that
+  draws each figure as a ruled sheet of paper with an italic title and draws each categorical series (the
+  species in the streamgraph, the dawn and dusk bars, the migration ridges) in its own colour with straight
+  strokes cut across it, in the manner of a field guide. The first version hatched everything and was
+  worse to read: measured with the lines averaged into the area, adjacent steps of the heat-grid legend
+  differed by 5.3 to 5.7 L\* against 6.9 to 9.2 flat. It now keeps colour as the first cue and the stroke as a
+  second, and draws sequential scales (the heat grid, co-occurrence ribbons, the terrain) flat. The stroke
+  is the darker of the page's two colours in each theme, 3.19:1 or better against every series colour in
+  light and 4.49:1 in dark, which `a_plate_stroke_can_be_seen_on_every_colour_it_crosses` holds (WCAG
+  1.4.11 asks 3:1). `the_plate_chart_style_keeps_its_promises.rs` holds that no sequential class is
+  hatched and that the stylesheet and the pattern file name the same patterns. `tools/visual-qa/axe.mjs`
+  and `layout.mjs` take `ILLUSTRATION=plate`; both are clean with it on (axe: 168 route, theme and
+  viewport states; layout: 336).
+- **The soundscape terrain says what it found and marks the sun.** Above the terrain, one sentence compares
+  the share of the window's detections heard within two hours either side of sunrise with an even spread
+  (four hours of twenty-four) and says which of three things is so: clearly more (at least 1.25 times the
+  even share), clearly less (at most 0.8 times), or about the same. It is left out for a window under
+  seven days or under 30 detections. A dashed line on each day marks sunrise and sunset on the station's
+  local clock, with the offset in force on that day, so a change of clocks bends the line where it should.
+  The text is in the JSON as `take`.
+- **The kiosk draws public-domain plates where there are any.** `/api/v2/species/plate/{scientific_name}/file`
+  serves the operator's own art (`X-Bnb-Image-Source: custom`), else the nineteenth-century plate a built-in index
+  names for the species (`plate`), else `404`, and the kiosk then asks for the photograph as before, so a bird with
+  a plate never downloads a photograph it will not draw. The index (`crates/birdnet-integrations/data/plates/index.json`,
+  built by `tools/plate-index/`, report in `tools/plate-index/report.md`) names a file on Wikimedia Commons from
+  Gould's bird books, Naumann's *Naturgeschichte der Vögel Mitteleuropas* or the von Wrights' *Svenska fåglar*, only
+  when Commons' own metadata calls it public domain, CC0 or Public Domain Mark and it shows one species; scans their
+  uploader re-licensed (CC BY-SA) are left out. It covers **458 of BirdNET V2.4's 6,515 species (7.0%)**, mostly European and Asian
+  ones: 17 of a fixed sample of 40 common European and North American species, and 1 of the 15 species in the North
+  American screenshot fixture. A plate is fetched from Commons the first time the bird is heard, into `plates/`
+  inside the picture cache, under the same offline switch as the photographs. In the browser its page is cut away
+  (`pageBounds`), then cut again to its ink, so the birds fill the figure; its paper is levelled and, by day,
+  multiplied into the sheet, so only the plate's ink and colour remain, and by night it is a lit print on the dark
+  ground. A plate that is a picture to its edge is drawn as it is. The foot is rewritten from what was drawn: the
+  books, whether a photograph was engraved, and the address of `/system/credits`, which lists the books and the
+  plates held. A plate is credited to its work's author, not the file's free-text one, which on Commons is what the
+  uploader typed (for Naumann it holds a digitiser's name and an email address).
 - **Patterns pages share one frame.** `pages/frame.rs` gives every tab the same head (the help
   link in the same place) and every chart a numbered figure with a how-to-read caption;
   `pages/insight.rs` writes the one-sentence finding above a chart from numbers the chart already
   holds, and says nothing on too little data.
 
 ### Changed
+
+- **Flickr's CC BY-ND is no longer fetched** (`ALLOWED_LICENSES` is now `4,5,7,8,9,10`, without 6). The kiosk
+  engraves a photograph, which is an adaptation, and an ND licence does not allow one. A Flickr photo whose
+  licence id is not in that list, or that has no page to credit, is refused.
+- **Recordings and the three Reports tabs open with the shared page head** (`frame::page_head`, one `<h1>`,
+  the help link in the eyebrow; the print button is in the head on Weekly and Year in Review), and the
+  CSS that styled the old openings, and other CSS no markup used any more, is gone. Today keeps its own hero, whose headline is written from the day's data and set at the larger hero size,
+  and is held to the two rules it can share by `today_has_one_h1_and_the_help_link_in_its_eyebrow`.
+- **Fourteen hand-written figure cards (on the Patterns tabs and the analytics dashboards) carry the `fig`
+  class** their "Fig. N" number implies; they were plain cards among sheets under the Plate style.
+  `every_card_that_numbers_itself_is_a_figure_sheet` reads the marker and demands the class.
 
 - **DuckDB 2.0.0** (`duckdb` 1.20000.0, from 1.5.6), with `behavioral` **v0.10.1** and `icu`
   v2.0.0 embedded and pinned by sha256 (`extension_pins.rs`). Three things the move needed that a
@@ -65,6 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spectrogram bit-identical (the parity harness needs the model files, which this session did not have).
 
 ### Fixed
+
+- **The kiosk answered `400` to a blank `ar`.** The page sends the screen's width over height from a hidden
+  control; `?ar=` with the value empty (a script that failed, an address typed by hand) was rejected with "cannot
+  parse float from empty string", on a display that runs unattended. A blank `ar` now draws the default sheet; a
+  value that is not a number is still refused. (`a_blank_aspect_ratio_draws_the_default_sheet_but_a_garbled_one_is_refused`,
+  red against the old handler.)
 
 - **The weekly report called an unfinished week "quieter".** It held this week's detections so
   far against the whole of last week's, so until Sunday every station was told its week was

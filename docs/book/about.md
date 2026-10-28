@@ -18,7 +18,7 @@ Licensed under [**CC BY-NC-SA 4.0**](https://creativecommons.org/licenses/by-nc-
 
 > **Non-commercial use only.** You may not use this project to build a commercial product. See [`LICENSE`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE) and [`LICENSE-UPSTREAM`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE-UPSTREAM) for full terms.
 
-Bird photographs are fetched on demand from Wikipedia and Wikimedia Commons and, where enabled, AviCommons and Flickr, and cached on the station. Each keeps the licence its photographer gave it: they are not all CC BY-SA. The photographer's credit for an AviCommons or Flickr picture is carried in the `description` of the image API's answer (`/api/v2/species/image/{scientific_name}`); **the station's own pages do not print it yet**, and a Wikipedia thumbnail carries none. If you show the station's pictures publicly, credit them yourself.
+Bird photographs are fetched on demand from Wikipedia and Wikimedia Commons and, where enabled, AviCommons and Flickr, and cached on the station. Each keeps the licence its photographer gave it: they are not all CC BY-SA. Each picture is shown with its title, author, source and licence: under the picture on a species page, in the image API's answer (`/api/v2/species/image/{scientific_name}`, field `credit`), and on [Picture credits](/system/credits), which every page's footer links to. A picture that cannot be credited, or whose licence is not a free one, is not used. The kiosk engraves photographs, which is an adaptation of them, so licences that forbid adaptations are not fetched.
 
 ## Related projects
 
