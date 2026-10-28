@@ -35,6 +35,7 @@ const PAGES = [
   '/patterns?tab=dawn', '/patterns?tab=migration', '/patterns?tab=trends',
   '/recordings', '/recordings?view=clips', '/recordings?view=live', '/reports',
   '/search', '/station', '/notifications', '/quarantine', '/admin/settings',
+  '/kiosk', '/kiosk?mode=numbers',
 ];
 
 async function drive(page, path) {
@@ -65,6 +66,12 @@ async function main() {
   await page.waitForTimeout(700);
   await page.keyboard.press('ArrowDown');
   await Promise.all([page.waitForLoadState('networkidle').catch(() => {}), page.keyboard.press('Enter')]);
+
+  // The kiosk's way out is a key, and the address it goes to is built in the browser.
+  current = 'kiosk: Escape';
+  await drive(page, '/kiosk');
+  await Promise.all([page.waitForLoadState('networkidle').catch(() => {}), page.keyboard.press('Escape')]);
+  await page.waitForTimeout(500);
 
   current = 'today: expand, play, live detection';
   await drive(page, '/');

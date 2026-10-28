@@ -878,6 +878,57 @@ pub fn species_for_date(
     Ok(rows)
 }
 
+/// One species heard on one day: how often, and between when and when.
+///
+/// What the kiosk plate is drawn from. Times are the stored local wall-clock
+/// `HH:MM:SS`; the page prints them through `display`, never as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeciesHeard {
+    /// Scientific name, the species' identity (a common name can change with
+    /// the station's language or a relabel; this does not).
+    pub sci_name: String,
+    /// A common name stored for it that day.
+    pub com_name: String,
+    /// Detections that day, rejected ones excluded.
+    pub count: i64,
+    /// Time of the first detection that day.
+    pub first_time: String,
+    /// Time of the latest detection that day.
+    pub last_time: String,
+}
+
+/// Every species heard on `date`, most heard first, ties in name order.
+///
+/// Reads `detections_analytic`, as the Today page's top-species card does, so a
+/// bird the operator rejected is not drawn on the wall while the page beside it
+/// says it was never heard. The tie-break is not decoration: the plate's
+/// layout and its change-detection digest are both functions of this order, and
+/// a database free to return equal counts in any order would redraw (and
+/// re-engrave) the wall display on every poll.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_heard_on(conn: &Connection, date: &str) -> Result<Vec<SpeciesHeard>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Sci_Name, MIN(Com_Name), COUNT(*), MIN(Time), MAX(Time) \
+         FROM detections_analytic WHERE Date = ?1 \
+         GROUP BY Sci_Name ORDER BY COUNT(*) DESC, Sci_Name",
+    )?;
+    let rows = stmt
+        .query_map(params![date], |row| {
+            Ok(SpeciesHeard {
+                sci_name: row.get(0)?,
+                com_name: row.get(1)?,
+                count: row.get(2)?,
+                first_time: row.get(3)?,
+                last_time: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Per-day detection counts with distinct-species totals, oldest day first.
 ///
 /// Powers the Reports History heat-calendar: one cell per day, coloured by
@@ -961,7 +1012,9 @@ mod tests {
     use super::*;
     use crate::sqlite::connection::open_or_create;
     use crate::sqlite::queries::detections::insert_detection;
-    use crate::sqlite::queries::detections::test_support::temp_db_with_data;
+    use crate::sqlite::queries::detections::test_support::{
+        insert_test_detection, temp_db_with_data, test_conn,
+    };
     use crate::sqlite::types::DetectionRecord;
 
     /// 2026-10-25T00:30:00Z — local 02:30 in Berlin on the first pass through
@@ -1573,6 +1626,88 @@ mod tests {
         assert_eq!(rows[0].1, "Turdus merula");
         assert_eq!(rows[0].2, 2);
         assert_eq!(rows[1].2, 1);
+    }
+
+    #[test]
+    fn species_heard_on_gives_each_species_its_count_and_its_first_and_last_time() {
+        let (_tmp, conn) = temp_db_with_data();
+        let rows = species_heard_on(&conn, "2026-03-11").unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                SpeciesHeard {
+                    sci_name: "Turdus merula".into(),
+                    com_name: "Eurasian Blackbird".into(),
+                    count: 2,
+                    first_time: "06:30:00".into(),
+                    last_time: "07:00:00".into(),
+                },
+                SpeciesHeard {
+                    sci_name: "Erithacus rubecula".into(),
+                    com_name: "European Robin".into(),
+                    count: 1,
+                    first_time: "06:45:00".into(),
+                    last_time: "06:45:00".into(),
+                },
+            ]
+        );
+        // Another day's bird is not on this day's plate, and an empty day is empty.
+        assert!(rows.iter().all(|r| r.sci_name != "Parus major"));
+        assert!(species_heard_on(&conn, "2026-03-09").unwrap().is_empty());
+    }
+
+    /// A rejected detection is not heard: not in the count, and not in the span
+    /// either. The 07:00 blackbird is the latest of its day; once rejected the
+    /// day's last blackbird is 06:30, which a reader of the raw table would miss.
+    #[test]
+    fn species_heard_on_leaves_out_what_the_operator_rejected() {
+        let (_tmp, conn) = temp_db_with_data();
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Time = '07:00:00'",
+            [],
+        )
+        .unwrap();
+        let rows = species_heard_on(&conn, "2026-03-11").unwrap();
+        let blackbird = rows.iter().find(|r| r.sci_name == "Turdus merula").unwrap();
+        assert_eq!(blackbird.count, 1);
+        assert_eq!(blackbird.last_time, "06:30:00");
+        // The counterpart: a species whose every detection was rejected disappears.
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+        let rows = species_heard_on(&conn, "2026-03-11").unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+    }
+
+    /// Equal counts come back in name order whatever order they were stored in,
+    /// and a species is one row even when its common name was stored two ways.
+    #[test]
+    fn species_heard_on_breaks_ties_by_name_and_groups_by_scientific_name() {
+        let conn = test_conn();
+        for (time, com, sci) in [
+            ("05:00:00", "Wren", "Troglodytes troglodytes"),
+            ("05:10:00", "Blackbird", "Turdus merula"),
+            ("05:20:00", "Eurasian Blackbird", "Turdus merula"),
+            ("05:30:00", "Wren", "Troglodytes troglodytes"),
+            ("05:40:00", "Robin", "Erithacus rubecula"),
+        ] {
+            insert_test_detection(&conn, "2026-04-01", time, com, sci, 0.9);
+        }
+        let rows = species_heard_on(&conn, "2026-04-01").unwrap();
+        let order: Vec<(&str, i64)> = rows
+            .iter()
+            .map(|r| (r.sci_name.as_str(), r.count))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("Troglodytes troglodytes", 2),
+                ("Turdus merula", 2),
+                ("Erithacus rubecula", 1),
+            ]
+        );
     }
 
     #[test]

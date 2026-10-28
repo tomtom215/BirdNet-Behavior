@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The kiosk is a plate.** `/kiosk` draws today's birds as a page from a field guide: one figure
+  per species, larger the more it was heard (area follows the square root of the count, with a
+  floor so a bird heard once is still drawn), the Latin name beneath, a numbered key at the foot
+  and the sheet numbered by the day of the year. It is redrawn only when the birds change (the
+  page polls with a digest and the server answers `204`), shows yesterday's birds in the small
+  hours and says so, and has a day and a night palette chosen from the station's sunrise and
+  sunset (`?night=1|0`, `?paper=0` for a small board). Each photograph is engraved in the browser
+  and shown whole; a picture in `CUSTOM_IMAGE_DIR` is drawn as it was made, and a `CREDITS.txt`
+  beside it is printed in the foot. The old display is `?mode=numbers`; `?mode=latest` shows the
+  bird heard last. The idea is fugleramme's (<https://github.com/arnegiacomo/fugleramme>, Arne
+  Giacomo Munthe-Kaas); no code or artwork is shared. New in `birdnet-db`:
+  `species_heard_on`, from `detections_analytic`, so a rejected bird is not on the wall.
+- **Patterns pages share one frame.** `pages/frame.rs` gives every tab the same head (the help
+  link in the same place) and every chart a numbered figure with a how-to-read caption;
+  `pages/insight.rs` writes the one-sentence finding above a chart from numbers the chart already
+  holds, and says nothing on too little data.
+
 ### Changed
 
 - **DuckDB 2.0.0** (`duckdb` 1.20000.0, from 1.5.6), with `behavioral` **v0.10.1** and `icu`
@@ -44,6 +63,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (read from the package metadata; `cargo deny` itself is not installed here). The workspace library tests
   pass with the same counts as before the update. Not checked: that `realfft` 3.5.1 leaves the mel
   spectrogram bit-identical (the parity harness needs the model files, which this session did not have).
+
+### Fixed
+
+- **The weekly report called an unfinished week "quieter".** It held this week's detections so
+  far against the whole of last week's, so until Sunday every station was told its week was
+  quieter than the one before, and by how much. It now compares the days that are over with the
+  same days of last week, says "so far", and makes no comparison on a Monday morning.
+  `the_weekly_report_compares_like_with_like` fails on the old page.
+- **The When tab had two range controls that did not agree, and Trends drew three charts that
+  When already draws.** One control sets all four charts; Trends links to where the others live.
+- **`NOTICE` and `docs/book/about.md` said photographer attribution is "shown on each image".** No
+  page prints it; the credit for AviCommons and Flickr pictures is only in the image API's
+  `description`. Both now say so. The gap itself is not closed.
 
 ## [0.18.1] - 2026-10-26
 

@@ -10,6 +10,7 @@ BirdNet-Behavior stands on the shoulders of the conservation-bioacoustics commun
 - **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** — the original Raspberry Pi implementation, by [Patrick McGuire](https://github.com/mcguirepr89).
 - **[BirdNET-Pi fork](https://github.com/Nachtzuster/BirdNET-Pi)** — the maintained fork, by [Nachtzuster](https://github.com/Nachtzuster).
 - **[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral)** — the behavioral-analytics engine, by [tomtom215](https://github.com/tomtom215).
+- **[fugleramme](https://github.com/arnegiacomo/fugleramme)** — the idea behind the kiosk's plate: a frame that draws the birds heard as nineteenth-century natural-history plates and redraws only when they change, by Arne Giacomo Munthe-Kaas. No code or artwork is shared; its code is MIT and its artwork CC BY-SA 4.0, which this project's licence cannot carry. See [Kiosk Mode](guide/kiosk.md).
 
 ## License
 
@@ -17,7 +18,7 @@ Licensed under [**CC BY-NC-SA 4.0**](https://creativecommons.org/licenses/by-nc-
 
 > **Non-commercial use only.** You may not use this project to build a commercial product. See [`LICENSE`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE) and [`LICENSE-UPSTREAM`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE-UPSTREAM) for full terms.
 
-Bird photographs are cached from Wikimedia Commons under CC BY-SA, with attribution shown on each image.
+Bird photographs are fetched on demand from Wikipedia and Wikimedia Commons and, where enabled, AviCommons and Flickr, and cached on the station. Each keeps the licence its photographer gave it: they are not all CC BY-SA. The photographer's credit for an AviCommons or Flickr picture is carried in the `description` of the image API's answer (`/api/v2/species/image/{scientific_name}`); **the station's own pages do not print it yet**, and a Wikipedia thumbnail carries none. If you show the station's pictures publicly, credit them yourself.
 
 ## Related projects
 

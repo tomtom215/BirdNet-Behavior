@@ -132,6 +132,11 @@ fn has_been_heard(state: &AppState, scientific_name: &str) -> bool {
 /// pages are not ours to let a cache serve to somebody else.
 const IMAGE_CACHE_CONTROL: &str = "private, max-age=300";
 
+/// Which kind of picture a file response is: `custom` for a file the operator put in the custom
+/// image directory, absent for everything the provider chain fetched. `static/plate.js` reads it.
+const IMAGE_SOURCE_HEADER: axum::http::HeaderName =
+    axum::http::HeaderName::from_static("x-bnb-image-source");
+
 /// Build a JSON `{"error": msg}` response for the image file endpoint.
 ///
 /// Carries [`IMAGE_CACHE_CONTROL`] as well. A species the provider has no
@@ -189,6 +194,9 @@ async fn species_image_file(
                     [
                         (header::CONTENT_TYPE, content_type),
                         (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+                        // The kiosk plate engraves a photograph but draws art as it is made,
+                        // and this is the only way it can tell which one it was handed.
+                        (IMAGE_SOURCE_HEADER, "custom"),
                     ],
                     bytes,
                 )

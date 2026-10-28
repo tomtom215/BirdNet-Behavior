@@ -146,7 +146,13 @@ async fn every_surface_agrees(floor: &str, floor_pct: u32) {
         ("/species?view=list".to_string(), "Species list"),
         ("/pages/detection-reviews-queue".to_string(), "Review queue"),
         (format!("/reports/day?date={today}"), "Open day"),
-        ("/pages/kiosk-content".to_string(), "Kiosk"),
+        // The kiosk's plate (the default face) draws no confidence, so the gate grades the face
+        // that does. Pointing it at the plate would fail "drew no confidence at all", which is
+        // the plate being what it is and not a surface that disagrees.
+        (
+            "/pages/kiosk-content?mode=numbers".to_string(),
+            "Kiosk (numbers)",
+        ),
     ];
     // Collected, not asserted one by one: the failure is the whole list of
     // disagreements, which is what shows the defect was five rules and not one

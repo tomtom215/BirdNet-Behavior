@@ -1,0 +1,97 @@
+/* The kiosk's plate (`/kiosk`, `routes/pages/plate`).
+ *
+ * A page from a field guide: paper, ink, a plate-mark, Latin names. Loaded by the kiosk page
+ * after app.css, so the design tokens (fonts, motion) are in scope. The plate has its own
+ * day and night pair rather than following the app theme: a wall display is dark by default
+ * and a plate is paper, and the server picks lamplight after dusk (`data-night`).
+ *
+ * Idea after fugleramme (Arne Giacomo Munthe-Kaas, MIT): a frame that draws the birds
+ * heard as natural-history plates. No code or artwork is shared with it.
+ */
+
+.plate-page {
+  --plate-paper: #ede3cd;
+  --plate-ink: #2a2017;
+  --plate-ink-2: #5b4a38;
+  --plate-rule: #8a7458;
+  --plate-wash: 0.52;
+  margin: 0;
+  background: var(--plate-paper);
+  color: var(--plate-ink);
+  overflow: hidden;
+}
+.plate-page[data-night="1"] {
+  --plate-paper: #1c1710;
+  --plate-ink: #e8dcc2;
+  --plate-ink-2: #b6a888;
+  --plate-rule: #7a6a50;
+  --plate-wash: 0.62;
+}
+
+/* The app's page chrome (washes behind the page, `main`'s centred column with its padding and
+   flex layout) is for pages with navigation. The plate is the whole screen. */
+.plate-page::before { content: none; }
+.plate-page #kiosk-content { display: block; width: 100vw; max-width: none; height: 100vh; margin: 0; padding: 0; }
+.plate-svg { display: block; width: 100vw; height: 100vh; }
+
+/* Slow drift against burn-in: a few pixels over ten minutes, off for anyone who asked for
+   less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .plate-svg { animation: plate-drift 600s var(--ease-in-out) infinite alternate; }
+}
+@keyframes plate-drift {
+  from { transform: translate(-0.4vmin, -0.3vmin); }
+  to { transform: translate(0.4vmin, 0.3vmin); }
+}
+
+/* Paper. */
+.plate-paper { fill: var(--plate-paper); }
+/* The brown of the fibre and the foxing is in the filters' colour matrices (`render.rs`): a
+   filter replaces what it filters, so a fill here would colour nothing. The foxing is faint by
+   design: it is a stain on the paper, not a pattern on it. */
+.plate-fibre { filter: url(#plate-fibre); opacity: 0.55; mix-blend-mode: multiply; pointer-events: none; }
+.plate-foxing { filter: url(#plate-foxing); opacity: 0.27; mix-blend-mode: multiply; pointer-events: none; }
+.plate-svg[data-paper="0"] .plate-fibre,
+.plate-svg[data-paper="0"] .plate-foxing,
+.plate-svg[data-night="1"] .plate-fibre,
+.plate-svg[data-night="1"] .plate-foxing { display: none; }
+.plate-mark { fill: none; stroke: var(--plate-ink); stroke-width: 1.4px; }
+.plate-mark-inner { fill: none; stroke: var(--plate-ink-2); stroke-width: 1px; }
+
+/* Title block. */
+.plate-no { font-family: var(--font-ui); font-weight: 500; font-size: 15px; letter-spacing: 0.32em; text-transform: uppercase; fill: var(--plate-ink-2); }
+.plate-title { font-family: var(--font-display); font-style: italic; font-size: 58px; fill: var(--plate-ink); }
+.plate-sub { font-family: var(--font-display); font-size: 21px; fill: var(--plate-ink-2); }
+.plate-rule { stroke: var(--plate-rule); stroke-width: 1px; }
+.plate-lozenge { fill: var(--plate-paper); stroke: var(--plate-rule); stroke-width: 1px; }
+
+/* A figure: a hatched oval with the Latin name in it until the picture arrives. */
+.plate-cart { fill: url(#plate-hatch); stroke: var(--plate-ink-2); stroke-width: 1px; opacity: 0.55; }
+.plate-hatch-line { stroke: var(--plate-ink-2); stroke-width: 1px; opacity: 0.45; }
+.plate-cart-name { font-family: var(--font-display); font-style: italic; fill: var(--plate-ink); paint-order: stroke; stroke: var(--plate-paper); stroke-width: 6px; stroke-linejoin: round; }
+.plate-pic { opacity: 0; transition: opacity var(--dur-slower) var(--ease-out); mix-blend-mode: multiply; }
+.plate-svg[data-night="1"] .plate-pic { mix-blend-mode: normal; }
+.plate-fig[data-state="ready"] .plate-pic { opacity: 1; }
+.plate-fig[data-state="ready"] .plate-cart,
+.plate-fig[data-state="ready"] .plate-cart-name { opacity: 0; }
+.plate-num-ring { fill: var(--plate-paper); stroke: var(--plate-ink); stroke-width: 1px; }
+.plate-num { font-family: var(--font-ui); font-weight: 500; font-size: 13px; fill: var(--plate-ink); font-variant-numeric: tabular-nums; }
+.plate-sci { font-family: var(--font-display); font-style: italic; fill: var(--plate-ink); }
+.plate-com { font-family: var(--font-ui); font-weight: 500; font-size: 11.5px; letter-spacing: 0.2em; fill: var(--plate-ink-2); }
+.plate-empty .plate-sci { font-size: 24px; }
+
+/* The key. */
+.plate-key-n { font-family: var(--font-ui); font-weight: 500; font-size: 12px; fill: var(--plate-ink-2); font-variant-numeric: tabular-nums; }
+.plate-key-sci { font-family: var(--font-display); font-style: italic; font-size: 17px; fill: var(--plate-ink); }
+.plate-key-c { font-family: var(--font-ui); font-size: 13px; fill: var(--plate-ink-2); font-variant-numeric: tabular-nums; }
+.plate-key-more { font-family: var(--font-display); font-style: italic; font-size: 16px; fill: var(--plate-ink-2); }
+.plate-colophon { font-family: var(--font-ui); font-size: 13px; letter-spacing: 0.06em; fill: var(--plate-ink-2); }
+
+/* The way out and the way between displays: faint until someone is at the screen. */
+.plate-ui { position: fixed; z-index: 2; font-family: var(--font-ui); font-size: 13px; color: var(--plate-ink-2); opacity: 0.35; transition: opacity var(--dur-base) var(--ease-out); }
+.plate-ui:hover, .plate-ui:focus-within { opacity: 1; }
+.plate-exit { top: 14px; right: 18px; }
+.plate-modes { top: 14px; left: 18px; display: flex; gap: 12px; }
+.plate-ui a { color: inherit; text-decoration: none; }
+.plate-ui a[aria-current="true"] { text-decoration: underline; text-underline-offset: 3px; }
+.plate-ui a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }

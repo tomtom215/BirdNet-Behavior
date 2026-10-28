@@ -74,9 +74,13 @@ Downloaded, not distributed with the source or the archives
 * Other classifiers (for example Google Perch v2, as an ONNX conversion hosted
   on Hugging Face) are fetched only when the operator runs
   `birdnet-behavior --install-model`; their terms are their publishers'.
-* Species photographs are cached from Wikimedia Commons (and, when enabled,
-  Flickr) under the licence each photograph carries, with the attribution that
-  licence requires shown beside it.
+* Species photographs are cached from Wikipedia and Wikimedia Commons and, when
+  enabled, AviCommons and Flickr, under the licence each photograph carries.
+  The station's pages do not print a photographer's credit: it is in the
+  `description` of the image API's answer for AviCommons and Flickr pictures,
+  and a Wikipedia thumbnail has none. Whoever shows the pictures publicly owes
+  the credit their licence asks for. The kiosk's plate engraves these
+  photographs in the browser, which is an adaptation of them.
 
 In the repository only
 ----------------------
@@ -88,6 +92,18 @@ In the repository only
 * crates/birdnet-integrations/src/testdata/ holds small samples of public API
   responses (eBird, MET Norway) kept as test fixtures. They are not in any
   release archive.
+
+Credited, not included
+-----------------------
+
+* The kiosk's plate (crates/birdnet-web/src/routes/pages/dashboard/plate) is a new
+  implementation of an idea from fugleramme, https://github.com/arnegiacomo/fugleramme,
+  by Arne Giacomo Munthe-Kaas: a display that draws the birds heard as
+  nineteenth-century natural-history plates and redraws only when they change.
+  Nothing of fugleramme is in this repository or its builds. Its code is MIT and
+  its artwork CC BY-SA 4.0; this project's licence cannot carry the artwork, so
+  the plate engraves the station's own photographs, or draws art the operator
+  supplies, instead.
 
 Not affiliated
 --------------
