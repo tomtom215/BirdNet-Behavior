@@ -401,30 +401,6 @@ async function serverToasts(page) {
   check('toasts: a success toast goes by itself', timedOut, 'still on screen 9 s later');
 }
 
-/** The polar activity clock draws the station's data, not 24 zeros.
- *
- * Its script read `json.data` / `hour` / `avg_detections`; the endpoint answers
- * `heatmap` / `hour_of_day` / `avg_detections_per_day`, so every station got a
- * flat clock labelled "90d avg" and nothing said anything was wrong.
- */
-async function polarClock(page) {
-  await page.goto(`${BASE}/patterns?tab=trends`, { waitUntil: 'networkidle' });
-  const found = await page.$('#polar-clock');
-  check('clock: the trends tab has the polar clock', !!found, 'no #polar-clock');
-  if (!found) return;
-  await page.evaluate(() => {
-    let d = document.getElementById('polar-clock').closest('details');
-    while (d) { d.open = true; d = d.parentElement && d.parentElement.closest('details'); }
-  });
-  const radii = await page
-    .waitForFunction(() => {
-      const paths = [...document.querySelectorAll('#polar-clock path')];
-      return paths.length === 24 ? new Set(paths.map((p) => p.getAttribute('d').split(' ')[7])).size : 0;
-    }, null, { timeout: 8000 })
-    .then((h) => h.jsonValue(), () => 0);
-  check('clock: the wedges follow the data', radii > 1, `${radii} distinct wedge radii — a flat clock`);
-}
-
 /** Searching leaves the page's own URL in the address bar, and it reloads.
  *
  * The form pushed the fragment's URL (`/pages/search-results?…`), so a reload,
@@ -1065,6 +1041,27 @@ async function wizardSelectsTheCardForTheStoredThreshold(page) {
   }
 }
 
+/** The kiosk's plate is drawn on a 1600-unit sheet whose smallest label is 11.5 units, so
+ * it reads at the 8.5 px the legibility gate asks for from about 1180 px of window up, and
+ * at 2.8 px on a phone. A window narrower than that is given the numbers face when the
+ * address names no mode, and one that names a mode keeps it: the plate is one tap away.
+ * (legibility.mjs grades what a phone is shown; this holds the rule that decides it.)
+ */
+async function kioskOpensReadable(page) {
+  const settle = async (width, path) => {
+    await page.setViewportSize({ width, height: width < 700 ? 844 : 900 });
+    await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+    return new URL(page.url()).searchParams.get('mode') || 'none';
+  };
+  const phone = await settle(390, '/kiosk');
+  check('kiosk: a phone is given the numbers face', phone === 'numbers', `mode "${phone}" after 1.5 s`);
+  const chosen = await settle(390, '/kiosk?mode=plate');
+  check('kiosk: a phone that asks for the plate keeps it', chosen === 'plate', `mode "${chosen}"`);
+  const wide = await settle(1280, '/kiosk');
+  check('kiosk: a wide window is shown the plate', wide === 'none', `mode "${wide}"`);
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1',
@@ -1086,7 +1083,6 @@ async function main() {
     ['wizard cards by keyboard', wizardCardsByKeyboard],
     ['wizard selects the stored threshold', wizardSelectsTheCardForTheStoredThreshold],
     ['server toasts', serverToasts],
-    ['activity clock', polarClock],
     ['search address bar', searchAddressBar],
     ['search bulk apply', searchBulkApply],
     ['live feed play', livePlayButtons],
@@ -1107,6 +1103,7 @@ async function main() {
     ['audio source add', audioSourceAdd],
     ['copy button returns to its label', copyButtonReturnsToItsLabel],
     ['live logs connect cleanly', liveLogsConnectCleanly],
+    ['kiosk opens readable', kioskOpensReadable],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

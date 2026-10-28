@@ -33,6 +33,25 @@
 (function () {
   'use strict';
 
+  /* The sheet is drawn on 1600 units and scaled to the window, and its smallest label
+     (`.plate-com`, 11.5 units) is 8.5 px at 1180 px of window and 2.8 px on a phone. A
+     window narrower than that is given the numbers face unless the address names a mode,
+     so a phone opens on something it can read and the plate stays one tap away. */
+  var MIN_SHEET_PX = 1180;
+  if (!/[?&]mode=/.test(location.search) && window.innerWidth < MIN_SHEET_PX) {
+    location.replace(location.pathname + '?mode=numbers');
+    return;
+  }
+
+  /* The operator's "Reduced" motion setting (Display preferences, `bnb-motion`). This page does
+     not carry the preference guard the other pages do, so without this the sheet's slow drift
+     ignores it; the OS setting is read by the stylesheet. */
+  try {
+    if (localStorage.getItem('bnb-motion') === 'reduced') {
+      document.documentElement.setAttribute('data-motion', 'reduced');
+    }
+  } catch (e) { /* storage blocked: the OS setting still applies */ }
+
   var SVG_NS = 'http://www.w3.org/2000/svg';
   var XLINK_NS = 'http://www.w3.org/1999/xlink';
 
@@ -282,11 +301,12 @@
   }
 
   // One picture from `url`, with which kind of picture it is (`X-Bnb-Image-Source`), or null when
-  // the endpoint has none for this species. A species with no plate is the common case, and 404
-  // is how it says so.
+  // the endpoint has none for this species. A species with no plate is the common case, and the
+  // plate endpoint says so with 204, which a browser does not log; the photograph endpoint says
+  // 404 for a species with no photograph.
   function fetchPicture(url) {
     return fetch(url, { credentials: 'same-origin' }).then(function (r) {
-      if (!r.ok) return null;
+      if (r.status === 204 || !r.ok) return null;
       var source = r.headers.get('X-Bnb-Image-Source') || 'photo';
       return r.blob().then(function (blob) { return { blob: blob, source: source }; });
     });

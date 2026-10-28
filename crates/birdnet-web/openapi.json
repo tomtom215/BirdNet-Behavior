@@ -3765,7 +3765,7 @@
           "species"
         ],
         "summary": "Species plate bytes",
-        "description": "The picture the kiosk plate draws for a species: a picture in the configured custom image directory first (header `X-Bnb-Image-Source: custom`), else the public-domain plate the built-in index names for it (`X-Bnb-Image-Source: plate`), fetched from Wikimedia Commons on the first request and kept. 404 for a species with no plate, which is most species; the kiosk then asks the photograph endpoint. Only species the station has detected are fetched.",
+        "description": "The picture the kiosk plate draws for a species: a picture in the configured custom image directory first (header `X-Bnb-Image-Source: custom`), else the public-domain plate the built-in index names for it (`X-Bnb-Image-Source: plate`), fetched from Wikimedia Commons on the first request and kept. 204 for a species with no plate, which is most species; the kiosk then asks the photograph endpoint. Only species the station has detected are fetched.",
         "operationId": "speciesPlateFile",
         "parameters": [
           {
@@ -3796,8 +3796,11 @@
               }
             }
           },
+          "204": {
+            "description": "No plate for this species, or the station keeps none: nothing to show, not an error."
+          },
           "404": {
-            "description": "No plate for this species, or not a species this station has detected."
+            "description": "Not a species this station has detected."
           }
         }
       }

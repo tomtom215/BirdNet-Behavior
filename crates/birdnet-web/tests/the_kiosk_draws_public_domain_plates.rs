@@ -1,7 +1,7 @@
 //! The kiosk draws a public-domain plate where there is one.
 //!
 //! `/api/v2/species/plate/{name}/file` answers with, in order: the operator's own art for the
-//! species, the nineteenth-century plate the built-in index names for it, or `404` (most species:
+//! species, the nineteenth-century plate the built-in index names for it, or `204` (most species:
 //! the books are of European and Asian birds), on which the kiosk asks for the photograph.
 //! Each answer says which it is in `X-Bnb-Image-Source`, and the plate is only ever fetched for a
 //! bird this station has heard, like a photograph.
@@ -136,19 +136,29 @@ async fn the_operators_own_art_is_served_before_the_plate() {
     assert_eq!(body, b"their-art");
 }
 
-/// Most species have no plate. The endpoint says `404` and the kiosk goes on to the photograph; it
-/// does so after asking its provider once, which is what a heard bird is entitled to.
+/// Most species have no plate. The endpoint says `204` (nothing to show, which is not a failure, so
+/// a browser logs nothing for each of them) and the kiosk goes on to the photograph; it does so after
+/// asking its provider once, which is what a heard bird is entitled to. The answer may be kept for a
+/// while, or a kiosk that redraws would ask again every time.
 #[tokio::test]
-async fn a_heard_bird_with_no_plate_is_a_404_after_one_look() {
+async fn a_heard_bird_with_no_plate_is_a_204_after_one_look() {
     let dir = tempfile::tempdir().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
-    let (status, headers, _) = request(
+    let (status, headers, body) = request(
         &station(&dir, &calls, true),
         "/api/v2/species/plate/Cardinalis%20cardinalis/file",
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(source(&headers), "", "a refusal is not a picture");
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(source(&headers), "", "no picture, so no source");
+    assert!(body.is_empty());
+    assert!(
+        headers
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("max-age")),
+        "{headers:?}"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -166,8 +176,9 @@ async fn a_bird_the_station_has_not_heard_is_not_looked_up() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+/// A station with no plate cache has no plates to offer, which is the same answer as a bird with none.
 #[tokio::test]
-async fn a_station_without_a_plate_cache_answers_404_not_an_error() {
+async fn a_station_without_a_plate_cache_answers_204_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let (status, _, body) = request(
@@ -175,8 +186,8 @@ async fn a_station_without_a_plate_cache_answers_404_not_an_error() {
         "/api/v2/species/plate/Turdus%20merula/file",
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(String::from_utf8_lossy(&body).contains("plates not configured"));
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
 }
 
 /// The plate's credit is on the credits page like a photograph's, with the books the plates are

@@ -162,6 +162,16 @@ fn image_error(status: StatusCode, msg: &str) -> axum::response::Response {
         .into_response()
 }
 
+/// "Nothing to show": `204`, kept as long as an error answer is, so a kiosk that redraws does not
+/// ask again each time.
+fn no_picture() -> axum::response::Response {
+    (
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, IMAGE_CACHE_CONTROL)],
+    )
+        .into_response()
+}
+
 /// The operator's own picture of a species, if they put one in the custom image directory: one
 /// file per species. (Not BirdNET-Pi's `CUSTOM_IMAGE`, which is one picture of the site; that is
 /// `routes/dashboard_image.rs`.) It answers with the `custom` source header, which is how the
@@ -326,8 +336,10 @@ async fn species_image_file(
 
 /// Serve a species' picture for the kiosk plate: the operator's own art if they supplied some,
 /// else the public-domain plate the index names for the species, fetched from Wikimedia Commons on
-/// the first ask and kept. `404` for a species with no plate, which is the normal case (about
-/// 7% of BirdNET's species have one): the plate then asks for the photograph instead.
+/// the first ask and kept. `204` for a species with no plate, which is the normal case (about
+/// 7% of BirdNET's species have one): the kiosk then asks for the photograph instead. It is not a
+/// `404` because nothing is missing, and a browser logs a failed request for every `404`, once per
+/// species on every redraw.
 ///
 /// The answer carries `X-Bnb-Image-Source: plate`, so the kiosk draws it whole, as a plate, and
 /// not engraved as a photograph. Gated like the photograph endpoint: only species this station
@@ -342,7 +354,7 @@ async fn species_plate_file(
         return custom;
     }
     let Some(cache) = state.plate_cache() else {
-        return image_error(StatusCode::NOT_FOUND, "plates not configured");
+        return no_picture();
     };
     let image = if let Some(image) = cache.get_cached(&scientific_name) {
         image
@@ -353,11 +365,11 @@ async fn species_plate_file(
         }
         match cache.get_image(&scientific_name).await {
             Ok(image) => image,
-            Err(_) => return image_error(StatusCode::NOT_FOUND, "no plate for this species"),
+            Err(_) => return no_picture(),
         }
     };
     let Some(path) = image.cached_path else {
-        return image_error(StatusCode::NOT_FOUND, "no plate available");
+        return no_picture();
     };
     let Ok(bytes) = tokio::fs::read(&path).await else {
         return image_error(StatusCode::NOT_FOUND, "cached file not readable");

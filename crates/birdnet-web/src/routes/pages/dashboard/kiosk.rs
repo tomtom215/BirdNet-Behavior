@@ -22,7 +22,7 @@ pub(super) static NUMBERS_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 <title>BirdNet-Behavior · Kiosk</title>
 <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
 <style>
-  body { padding:4vh 5vw; overflow:hidden; }
+  body { padding:max(4vh,44px) 5vw 4vh; overflow:hidden; }
   .kiosk-head { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:4vh; }
   .kiosk-head .title { font-family:var(--font-display); font-size:clamp(28px,4vw,52px); letter-spacing:-0.02em; margin:0; font-weight:400; }
   .stats { display:flex; gap:24px; justify-content:center; margin-bottom:4vh; flex-wrap:wrap; }
@@ -40,11 +40,13 @@ pub(super) static NUMBERS_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .kiosk-exit { position:fixed; top:14px; right:18px; color:var(--fg-3);
                 font-size:13px; text-decoration:none; transition:opacity .2s; }
   .kiosk-exit:hover, .kiosk-exit:focus-visible { opacity:1; }
-  /* The way to the other faces, as faint as the way out. */
+  /* The way to the other faces, in the same quiet colour as the way out. Not dimmed with
+     `opacity`: that took its contrast under the floor on a phone, which this face now opens
+     on, and the body's top padding keeps the heading clear of it at 320 px. */
   .kiosk-modes { position:fixed; top:14px; left:18px; display:flex; gap:12px; font-size:13px;
-                 color:var(--fg-3); opacity:.5; transition:opacity .2s; }
-  .kiosk-modes:hover, .kiosk-modes:focus-within { opacity:1; }
+                 color:var(--fg-3); }
   .kiosk-modes a { color:inherit; text-decoration:none; }
+  .kiosk-modes a:hover, .kiosk-modes a:focus-visible { color:var(--fg); }
   .kiosk-modes a[aria-current="true"] { text-decoration:underline; text-underline-offset:3px; }
 </style>
 </head>

@@ -41,9 +41,9 @@
 .plate-svg { display: block; width: 100vw; height: 100vh; }
 
 /* Slow drift against burn-in: a few pixels over ten minutes, off for anyone who asked for
-   less motion. */
+   less motion, in the OS or under Display preferences (`plate.js` sets `data-motion`). */
 @media (prefers-reduced-motion: no-preference) {
-  .plate-svg { animation: plate-drift 600s var(--ease-in-out) infinite alternate; }
+  :root:not([data-motion="reduced"]) .plate-svg { animation: plate-drift 600s var(--ease-in-out) infinite alternate; }
 }
 @keyframes plate-drift {
   from { transform: translate(-0.4vmin, -0.3vmin); }
