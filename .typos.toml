@@ -51,6 +51,14 @@ extend-exclude = [
     # read it as the input a real station has, misspellings included
     # (Miscellanous, precentile) and a list of audio formats (`caf`).
     "crates/birdnet-migrate/tests/data/birdnet_pi_default.conf",
+    # The plate index and its report, written by tools/plate-index/build.py from
+    # Wikimedia Commons' category and file names and held to the generator by
+    # `build.py --verify`. Latin epithets that read as English words (a kite, an
+    # accentor, a cuckoo, in the binomials and in Commons file names) are the
+    # data: changing one to please a spell-checker would name a species or a
+    # file that does not exist. The README beside them is prose and stays checked.
+    "crates/birdnet-integrations/data/plates/index.json",
+    "tools/plate-index/report.md",
     # Vendored / minified JS (htmx, etc.) — too dense for spell-check and
     # not our code to fix.
     "**/static/htmx.min.js",
