@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `gen-third-party-licenses.py` now reads the engine's major from the crate version instead of
     assuming 1.
 
+- **A plain `cargo update`** (20 packages, all inside their declared ranges): `notify` 8.2.1, `realfft` 3.5.1,
+  `uuid` 1.29.0, `smallvec` 1.16.4, `rustix` 1.1.6, `xattr` 1.7.0, `unicode-width` 0.2.3, `openssl-probe` 0.2.2,
+  `ctutils` 0.4.6 and the `pest` family 2.9.5 for the manual's renderer, plus `backtrace`, `gimli`,
+  `object` and `addr2line`. Every new package is MIT, Apache-2.0 or Zlib, which `deny.toml` allows
+  (read from the package metadata; `cargo deny` itself is not installed here). The workspace library tests
+  pass with the same counts as before the update. Not checked: that `realfft` 3.5.1 leaves the mel
+  spectrogram bit-identical (the parity harness needs the model files, which this session did not have).
+
 ## [0.18.1] - 2026-10-26
 
 ### Fixed
