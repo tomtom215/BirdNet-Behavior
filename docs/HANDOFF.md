@@ -18,7 +18,7 @@ is not recorded here. **0.18.0 has not been released**; section 5, item 1 says w
 
 **2026-10-28 additions.** A later session worked on `claude/serene-hamilton-6wlll0`, branched from
 `d0fcfdb` (the merge of #270, which is `origin/main` in this checkout; GitHub was not re-read),
-and pushed it. No pull request has been opened for it. It moved the engine to DuckDB 2.0.0, gave the
+and pushed it; it is pull request #271 (section 6 says what its CI found). It moved the engine to DuckDB 2.0.0, gave the
 Patterns, Species and Weekly pages one frame, added the kiosk plate and the public-domain plate tier behind
 it, put a credit on every picture, added the Plate chart style and the terrain's sunrise finding, and wrote
 `docs/design/ux-audit-2026-10.md`. Section 3 (last bullets), section 4 (its last subsection), section 5 (items 15
@@ -203,8 +203,8 @@ the commits to read first (hashes valid on this branch).
 
 - *2026-10-28, branch `claude/serene-hamilton-6wlll0` (`git log d0fcfdb..`):*
   - *Engine and dependencies* (`105c620`, `8c59d2c`, `c7fe862`): DuckDB 2.0.0 with `behavioral` v0.10.1 and `icu` v2.0.0,
-    `rusqlite` 0.41 (SQLite 3.54.1), a plain `cargo update`. The two things the engine bump needed (its self-reported
-    version, and the stable C API table) are in the changelog.
+    `rusqlite` 0.41 (SQLite 3.54.1), a plain `cargo update`. What the engine bump needed beyond a version change (its
+    self-reported version, the stable C API table, and a `build.rs` link argument for GNU ld) is in the changelog.
   - *Page frames* (`013dad2`): `pages/frame.rs` and `pages/insight.rs`, one range on the When tab, the weekly report
     compared like with like. Recordings and the three Reports tabs moved onto the frame afterwards.
   - *The kiosk plate* (`de7045e`): `/kiosk` as a page from a field guide, after fugleramme (credited in `README.md`,
@@ -289,8 +289,9 @@ Gates seen failing, each against a mutant or the old code (details in the commit
 
 **Not verified (2026-10-28):** anything on a Raspberry Pi; the sunrise and sunset lines across a change of clocks (the
 container's zone is UTC, and setting another needs `unsafe`); Firefox, WebKit, macOS and arm64 on this branch;
-`scripts/check-ci-config.py` (needs `cargo-mutants`); CI on this branch (no pull request, so no workflow has run);
-whether the backup includes the new `plates/` folder in the picture cache; the plate tier on more than twelve
+`scripts/check-ci-config.py` (needs `cargo-mutants`); the GNU ld link argument in `build.rs` on aarch64 itself (it was
+reproduced and fixed on x86_64 with `-C link-arg=-fuse-ld=bfd`, and the aarch64 Docker image build is the first run
+there); whether the backup includes the new `plates/` folder in the picture cache; the plate tier on more than twelve
 real plates and the engraving on more than four real photographs.
 
 ## 5. Open items, with severity
@@ -455,11 +456,15 @@ section dated 2026-10-26.
 
 Done 2026-10-28, on `claude/serene-hamilton-6wlll0`: the bundled DuckDB is 2.0.0 (`duckdb` 1.20000.0), with `behavioral`
 v0.10.1 and `icu` v2.0.0 embedded and loaded; `the_engine_names_itself_as_a_release` and
-`a_correctly_built_binary_reports_no_mismatch` are the gates that failed without the two fixes the bump needed (changelog,
-*Changed*). **First, next session:** open a pull request for that branch and read its CI: no workflow has run on it, and
-pull-request-triggered gates never see an un-PR'd branch. The browser gates (`tools/visual-qa`) and the mutation shards
-are the ones most likely to say something new, since this branch changed the interface, the stylesheet and the picture
-cache. Then the two decisions in section 5, items 15 and 16.
+`a_correctly_built_binary_reports_no_mismatch` are the gates that failed without the first two fixes the bump needed; the
+third, `keep_duckdb_extension_registrar` in `build.rs`, is guarded by the aarch64 Docker image build (changelog, *Changed*).
+**First, next session:** read pull request #271's current checks; this is a snapshot of its first three pushes. Four
+findings were this branch's and were fixed: the typos check on the two generated plate-index files (`.typos.toml`), a
+docs link to `/system/credits`, two rustdoc lints, and the GNU ld link of the DuckDB archive, which only the aarch64
+Docker image build showed. Two were red on `main` too and are not this branch's: OSV-Scanner (`block-buffer` 0.10.4,
+GHSA-qwgh-2vcv-g2f7, no fixed version) and the CI-config check (eight mutation shards at 97 to 101% of their timeout, one
+at 78%, and a stale `a11y.yml` `# observed` annotation); both are a maintainer's decision. Then the two decisions in
+section 5, items 15 and 16.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 

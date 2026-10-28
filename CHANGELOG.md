@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `every_card_that_numbers_itself_is_a_figure_sheet` reads the marker and demands the class.
 
 - **DuckDB 2.0.0** (`duckdb` 1.20000.0, from 1.5.6), with `behavioral` **v0.10.1** and `icu`
-  v2.0.0 embedded and pinned by sha256 (`extension_pins.rs`). Three things the move needed that a
+  v2.0.0 embedded and pinned by sha256 (`extension_pins.rs`). Four things the move needed that a
   version bump does not show:
   - *The crate's engine called itself `v2.0.0-dev88614`.* `libduckdb-sys` 1.20000.0 compiles the
     2.0.0 release commit (`d54cbbe3df`, the `git_revision` of the official wheel) with DuckDB's
@@ -106,6 +106,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     version, which would have reported `behavioral` (target `v1.2.0`) as unloadable on 2.0.0
     although DuckDB loads it. It now reads the C API from a table
     (`stable_c_api_of`); `a_correctly_built_binary_reports_no_mismatch` failed on the old rule.
+  - *GNU ld could not link the binary.* `libduckdb-sys` 1.20000.0 links a small archive whole-archive,
+    which asks for `duckdb_register_static_extensions`, and rustc puts it on the link line after the
+    rlib that carries libduckdb, so GNU ld has passed the defining object by then
+    ("undefined reference"). lld takes any order, and it is what rustc 1.99.1 links x86_64 Linux
+    with here, which is why the debug builds linked. The Docker image build for aarch64 (Rust 1.95, `/usr/bin/ld`) failed this way; the same
+    error comes from the x86_64 debug binary with `-C link-arg=-fuse-ld=bfd`. `build.rs` now passes
+    `-Wl,--undefined=duckdb_register_static_extensions` on Linux with `analytics`, and that link
+    succeeds. Only the root package's own targets get it: a test binary of another crate linked with
+    GNU ld was not tried.
   - *The licence set follows the engine:* `third_party/duckdb-2.0.0/` (no `libpg_query`, which 2.0.0
     no longer bundles; the ICU text is carried over from 1.5.6), and
     `gen-third-party-licenses.py` now reads the engine's major from the crate version instead of
