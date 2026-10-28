@@ -37,12 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose licence is not a free one, is not used; a picture cached before credits were kept is replaced by a
   credited one the first time it is asked for (it is not given a guessed credit), and the credits page says
   how many are waiting. A link in a credit is followed only if it is an `http` or `https` address.
-  The picture cache now refuses a key that is not a single file name (`../victim`, `a/b`, `.`, `..`, the
-  empty name): the key is derived from the name in a request path, and with the credit file added beside
-  each picture, CodeQL's `rust/path-injection` flagged the removal of it. Before, `remove("../victim")` on
-  a cache beside `victim.jpg` deleted that file; three tests fail on the old code, and
-  `a_key_with_punctuation_in_it_is_still_a_file_name` holds that species names with dots, brackets and `×`
-  still cache. The credit lines on the species page are underlined like the other prose links (axe's
+  The picture cache now refuses a key that is not a single file name or that holds `..` (`../victim`,
+  `a/b`, `a..b`, `.`, the empty name): the key is derived from the name in a request path, and with the
+  credit file added beside each picture, CodeQL's `rust/path-injection` flagged the removal of it. Before,
+  `remove("../victim")` on a cache beside `victim.jpg` deleted that file; three tests fail on the old code,
+  and `a_key_with_punctuation_in_it_is_still_a_file_name` holds that species names with dots, brackets and
+  `×` still cache. The query did not accept the first form of the check (a comparison with `Path::file_name`
+  inside a helper); the one it recognises is a `contains("..")` written in place in each method that takes a
+  key, which the cache now has as well, as `custom_picture` already did. The credit lines on the species page are underlined like the other prose links (axe's
   `link-in-text-block`, in the light theme).
   On a phone each row stacks, its cells printing their column's name. The browser gates grade the page
   (`/system/credits` is in their route list; the screenshot fixture seeds credited pictures, an uncredited one and a

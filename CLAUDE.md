@@ -393,6 +393,16 @@ Corollaries, each learned the same way:
   database: its build-script output holds generated tables of literals, and the
   query had not finished after 40 minutes on a database that included it (a
   `--build-mode=none` database without it took 18 minutes to build).
+- **`rust/path-injection` recognises two things, and a validating helper is
+  neither.** Read from the query at the tag the pinned `codeql-action` bundles
+  (`src/defaults.json`, CLI 2.27.2; `TaintedPathExtensions.qll` and
+  `TaintedPath.ql`, identical to `main`'s): a `contains("..")` on a `String` or
+  `str` with the literal `".."`, in place, in the function that holds the value;
+  or a normalisation such as `canonicalize` followed by a prefix check. A check
+  made inside `is_plain_name(key)`, or by comparing with `Path::file_name`,
+  fixed a real traversal (`remove("../victim")` deleted a file beside the cache)
+  and left the alert open. `custom_picture` already carried the first form and was
+  never flagged. Fetch the `.qll` with `curl` and read it before guessing.
 - **A job stops at its first red step, so everything behind it has not run.**
   `a11y.yml` runs axe and then thirteen more browser gates; when axe failed on
   the plate branch's pull request none of them reported. Run the steps behind a
