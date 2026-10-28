@@ -393,6 +393,27 @@ Corollaries, each learned the same way:
   database: its build-script output holds generated tables of literals, and the
   query had not finished after 40 minutes on a database that included it (a
   `--build-mode=none` database without it took 18 minutes to build).
+- **A job stops at its first red step, so everything behind it has not run.**
+  `a11y.yml` runs axe and then thirteen more browser gates; when axe failed on
+  the plate branch's pull request none of them reported. Run the steps behind a
+  red one yourself before pushing the fix for it, or the next push finds the
+  next gate and costs another CI cycle: on the plate branch they found the kiosk's
+  captions at 2.8 px on a phone, a console 404 per species, a reduced-motion
+  setting that never reached an animation, and a gate left behind for a chart
+  that had been removed.
+- **Start the fixture the way the workflow does before believing a local sweep.**
+  A `screenshot_server` that had been up for a while passed axe on a species page
+  that a fresh one, with an empty data directory and no extra settings, failed on
+  three states. Use a new `BNB_FIXTURE_DIR` and the workflow's environment, and
+  put a second fixture on another port (`BNB_FIXTURE_ADDR`) to try a rebuilt
+  binary without disturbing a run in progress.
+- **lld resolves archive symbols in any order; GNU ld does not.** rustc 1.99.1
+  links x86_64 Linux with lld, so a static archive that lands before the library
+  it needs links there and fails with `undefined reference` under GNU ld, which is
+  what the aarch64 Docker image (Rust 1.95) used. `cargo rustc -p <pkg> --bin
+  <bin> -- -C link-arg=-fuse-ld=bfd` reproduces it on x86_64, and `-- --print
+  link-args` prints the order. It was `libduckdb-sys` 1.20000.0's autoregister
+  archive; `build.rs` passes `--undefined=duckdb_register_static_extensions`.
 
 ### Key Dependencies
 

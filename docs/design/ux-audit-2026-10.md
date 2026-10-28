@@ -62,5 +62,6 @@ name and an email address); a plate is credited to its work's author.
   and setting another one needs `unsafe`, so a day that crosses a change of clocks has not been run.
 - `scripts/check-ci-config.py` could not run here (no `cargo-mutants`).
 - arm64, macOS, Firefox and WebKit were not run on this change.
-- The Plate tier's console shows a `404` for every species without a plate (the normal case). It is a design choice,
-  noted here because it looks like an error in a browser's log.
+- The plate endpoint answers `204`, not `404`, for a species with no plate (the normal case), because the strict visual
+  sweep found a console line per species on the kiosk. The photograph endpoint still answers `404` for a species with no
+  photograph, and `qa.mjs` counts and drops those; a station whose pictures are all missing logs one per species.

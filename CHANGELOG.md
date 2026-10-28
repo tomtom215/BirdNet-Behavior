@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bird heard last. The idea is fugleramme's (<https://github.com/arnegiacomo/fugleramme>, Arne
   Giacomo Munthe-Kaas); no code or artwork is shared. New in `birdnet-db`:
   `species_heard_on`, from `detections_analytic`, so a rejected bird is not on the wall.
+  The sheet is drawn on 1600 units and its smallest caption is 11.5, so the plate reads at the 8.5 px
+  the browser gates ask of a chart label only from about 1180 px of window up; at 390 px they were 2.8 px
+  (`legibility.mjs`, which found it). A window narrower than that now opens `/kiosk` on `?mode=numbers`
+  (the old display, readable at any width) unless the address names a mode, and `kioskOpensReadable`
+  in `interactions.mjs` holds the rule: the phone case failed before, the two cases that keep the plate
+  passed. The plate on a small screen is still small if it is asked for.
 - **Every picture is shown with its credit.** A photograph fetched from Wikipedia and Wikimedia Commons,
   AviCommons or Flickr is kept with its title, author, source and licence (a `{key}.credit.json` beside the
   file) and shown under the picture on the species page, in `/api/v2/species/image/{scientific_name}` as
@@ -31,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose licence is not a free one, is not used; a picture cached before credits were kept is replaced by a
   credited one the first time it is asked for (it is not given a guessed credit), and the credits page says
   how many are waiting. A link in a credit is followed only if it is an `http` or `https` address.
+  The picture cache now refuses a key that is not a single file name (`../victim`, `a/b`, `.`, `..`, the
+  empty name): the key is derived from the name in a request path, and with the credit file added beside
+  each picture, CodeQL's `rust/path-injection` flagged the removal of it. Before, `remove("../victim")` on
+  a cache beside `victim.jpg` deleted that file; three tests fail on the old code, and
+  `a_key_with_punctuation_in_it_is_still_a_file_name` holds that species names with dots, brackets and `×`
+  still cache. The credit lines on the species page are underlined like the other prose links (axe's
+  `link-in-text-block`, in the light theme).
   On a phone each row stacks, its cells printing their column's name. The browser gates grade the page
   (`/system/credits` is in their route list; the screenshot fixture seeds credited pictures, an uncredited one and a
   plate), and `book.mjs` takes `ONLY=<image name>` to refresh one picture of the manual.
@@ -56,7 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The text is in the JSON as `take`.
 - **The kiosk draws public-domain plates where there are any.** `/api/v2/species/plate/{scientific_name}/file`
   serves the operator's own art (`X-Bnb-Image-Source: custom`), else the nineteenth-century plate a built-in index
-  names for the species (`plate`), else `404`, and the kiosk then asks for the photograph as before, so a bird with
+  names for the species (`plate`), else `204` (nothing to show; a `404` logged a failed request in the browser for
+  every species without a plate, which the strict visual sweep caught on the kiosk), and the kiosk then asks for the photograph as before, so a bird with
   a plate never downloads a photograph it will not draw. The index (`crates/birdnet-integrations/data/plates/index.json`,
   built by `tools/plate-index/`, report in `tools/plate-index/report.md`) names a file on Wikimedia Commons from
   Gould's bird books, Naumann's *Naturgeschichte der Vögel Mitteleuropas* or the von Wrights' *Svenska fåglar*, only

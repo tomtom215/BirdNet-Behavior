@@ -8,6 +8,8 @@
 | **Latest** | `/kiosk?mode=latest` | The bird heard most recently, large. |
 | **Numbers** | `/kiosk?mode=numbers` | The original display: today's count, the all-time total, species, and a list of the latest detections. |
 
+The plate is drawn for a wide screen: its smallest captions are set at 8.5 px or more only in a window about 1180 px wide or wider. In a narrower window (a phone, or a 7-inch Pi display at 800 × 480) `/kiosk` opens on **Numbers** instead, and `/kiosk?mode=plate` asks for the plate there anyway.
+
 To leave kiosk mode, click the dimmed **Exit** link in the top-right corner, or press **Esc** — either returns you to the full dashboard. Both links stay faint so they never compete with the display, and brighten when someone is at the screen.
 
 ## The plate

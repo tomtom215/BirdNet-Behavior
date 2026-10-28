@@ -22,7 +22,7 @@ and pushed it; it is pull request #271 (section 6 says what its CI found). It mo
 Patterns, Species and Weekly pages one frame, added the kiosk plate and the public-domain plate tier behind
 it, put a credit on every picture, added the Plate chart style and the terrain's sunrise finding, and wrote
 `docs/design/ux-audit-2026-10.md`. Section 3 (last bullets), section 4 (its last subsection), section 5 (items 15
-to 21) and the DuckDB paragraph of section 6 were updated for it; **everything else in this file is as it was on
+to 22) and the DuckDB paragraph of section 6 were updated for it; **everything else in this file is as it was on
 2026-10-26 and was not re-read.**
 
 ## 1. Repository settings only the maintainer can change
@@ -288,10 +288,10 @@ Gates seen failing, each against a mutant or the old code (details in the commit
 `a_blank_aspect_ratio_draws_the_default_sheet_but_a_garbled_one_is_refused` (400 on the old handler).
 
 **Not verified (2026-10-28):** anything on a Raspberry Pi; the sunrise and sunset lines across a change of clocks (the
-container's zone is UTC, and setting another needs `unsafe`); Firefox, WebKit, macOS and arm64 on this branch;
-`scripts/check-ci-config.py` (needs `cargo-mutants`); the GNU ld link argument in `build.rs` on aarch64 itself (it was
-reproduced and fixed on x86_64 with `-C link-arg=-fuse-ld=bfd`, and the aarch64 Docker image build is the first run
-there); whether the backup includes the new `plates/` folder in the picture cache; the plate tier on more than twelve
+container's zone is UTC, and setting another needs `unsafe`); Firefox, WebKit and macOS on this branch; arm64 beyond
+CI (the aarch64 Docker image build passed on `2b2a4c1`, which is what ran the `build.rs` GNU ld argument there; nothing
+else was run on arm64 by hand);
+`scripts/check-ci-config.py` (needs `cargo-mutants`); whether the backup includes the new `plates/` folder in the picture cache; the plate tier on more than twelve
 real plates and the engraving on more than four real photographs.
 
 ## 5. Open items, with severity
@@ -399,8 +399,15 @@ it says otherwise.
 19. **The empty, loading and failed vocabulary is still page by page; Today keeps its own hero.** Low.
     `tests/every_home_opens_with_the_shared_page_head.rs` holds Today to the two structural rules it shares.
 20. **The soundscape terrain stays a flat canvas under the Plate chart style.** Low.
-21. **The plate tier asks for a plate that most species do not have**, so a browser's log shows a `404` per such
-    species. Low, by design: the alternative was a second index in the page.
+21. **The plate tier asks for a plate that most species do not have**, which is one extra request per species. Low. It
+    answers `204`, so a browser logs nothing for it (it answered `404` first, and the strict visual sweep failed on the
+    console line per species); the alternative was a second index in the page.
+22. **The plate is only readable on a wide screen.** Medium for a small Pi display. The sheet is 1600 units wide and its
+    smallest caption 11.5, so a caption is 8.5 px at about 1180 px of window and 2.8 px at 390 px (`legibility.mjs`
+    measured 84 captions under 8.5 px on a phone). `static/plate.js` now sends a window under 1180 px to
+    `?mode=numbers` unless the address names a mode; `kioskOpensReadable` in `interactions.mjs` holds it. A 7-inch
+    800 × 480 display therefore opens on Numbers; its owner can ask for `?mode=plate` and gets small captions.
+    Making the plate itself legible there needs a layout drawn for the screen, not scaled to it.
 
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
@@ -458,10 +465,18 @@ Done 2026-10-28, on `claude/serene-hamilton-6wlll0`: the bundled DuckDB is 2.0.0
 v0.10.1 and `icu` v2.0.0 embedded and loaded; `the_engine_names_itself_as_a_release` and
 `a_correctly_built_binary_reports_no_mismatch` are the gates that failed without the first two fixes the bump needed; the
 third, `keep_duckdb_extension_registrar` in `build.rs`, is guarded by the aarch64 Docker image build (changelog, *Changed*).
-**First, next session:** read pull request #271's current checks; this is a snapshot of its first three pushes. Four
-findings were this branch's and were fixed: the typos check on the two generated plate-index files (`.typos.toml`), a
-docs link to `/system/credits`, two rustdoc lints, and the GNU ld link of the DuckDB archive, which only the aarch64
-Docker image build showed. Two were red on `main` too and are not this branch's: OSV-Scanner (`block-buffer` 0.10.4,
+**First, next session:** read pull request #271's current checks; this is a snapshot at its fifth push after it was
+opened. These findings were this branch's and were fixed: the typos check on the two generated plate-index files
+(`.typos.toml`), a docs link to `/system/credits`, two rustdoc lints, the GNU ld link of the DuckDB archive (which only
+the aarch64 Docker image build showed, and which passed there on `2b2a4c1`), CodeQL's `rust/path-injection` on the
+picture cache (a key is now checked to be one file name where the path is built; whether CodeQL accepts that is the
+next scan's to show), and axe's `link-in-text-block` on the species page's credit lines. The axe job stops at its
+first failing step, so I ran the thirteen gates behind it locally against a **fresh** fixture started the way the
+workflow starts it (a long-lived one is not the same: it hid the axe finding); they found, all in the kiosk work, that
+the plate is 2.8 px on a phone (it now opens on Numbers under 1180 px; item 22), two defects of the Numbers face's
+mode links, a console 404 per species without a plate (the endpoint answers 204 now), the operator's reduced motion
+not reaching the plate's drift, and a gate left behind for the polar clock I had removed. All pass locally against the
+rebuilt fixture; the same run in CI is the check. Two were red on `main` too and are not this branch's: OSV-Scanner (`block-buffer` 0.10.4,
 GHSA-qwgh-2vcv-g2f7, no fixed version) and the CI-config check (eight mutation shards at 97 to 101% of their timeout, one
 at 78%, and a stale `a11y.yml` `# observed` annotation); both are a maintainer's decision. Then the two decisions in
 section 5, items 15 and 16.
