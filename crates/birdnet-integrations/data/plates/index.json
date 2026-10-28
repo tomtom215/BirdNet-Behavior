@@ -1,0 +1,4644 @@
+{
+  "generated": "2026-10-28",
+  "plates": {
+    "Acanthis flammea": {
+      "file": "Carduelis flammea 1.jpg",
+      "height": 1380,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Carduelis_flammea_1.jpg",
+      "width": 938,
+      "work": "naumann"
+    },
+    "Accipiter nisus": {
+      "file": "GouldBirdsEuropeISparrow Hawk.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeISparrow_Hawk.jpg",
+      "width": 1823,
+      "work": "gould-europe"
+    },
+    "Acrocephalus arundinaceus": {
+      "file": "GouldBirdsEuropeIIReed Wren.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIReed_Wren.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Acrocephalus palustris": {
+      "file": "GouldBirdsEuropeIIMarsh Warbler.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIMarsh_Warbler.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Actenoides concretus": {
+      "file": "ActenoidesConcretusGould.jpg",
+      "height": 2668,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:ActenoidesConcretusGould.jpg",
+      "width": 1826,
+      "work": "gould-asia"
+    },
+    "Actenoides lindsayi": {
+      "file": "ActenoidesLindsayiGould.jpg",
+      "height": 2755,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:ActenoidesLindsayiGould.jpg",
+      "width": 1666,
+      "work": "gould-asia"
+    },
+    "Aegithalos concinnus": {
+      "file": "PsaltriaConcinnaGould.jpg",
+      "height": 2184,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PsaltriaConcinnaGould.jpg",
+      "width": 1491,
+      "work": "gould-asia"
+    },
+    "Aegolius funereus": {
+      "file": "Nyvtale Tengmalmi.jpg",
+      "height": 6092,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Nyvtale_Tengmalmi.jpg",
+      "width": 3993,
+      "work": "gould-britain"
+    },
+    "Aegypius monachus": {
+      "file": "GouldBirdsEuropeICinerousVulture.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeICinerousVulture.jpg",
+      "width": 3728,
+      "work": "gould-europe"
+    },
+    "Aethopyga ignicauda": {
+      "file": "AethopygaIgnicaudaGould.jpg",
+      "height": 1140,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:AethopygaIgnicaudaGould.jpg",
+      "width": 886,
+      "work": "gould-asia"
+    },
+    "Aethopyga vigorsii": {
+      "file": "AethopygaVigorsiiGould.jpg",
+      "height": 2216,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:AethopygaVigorsiiGould.jpg",
+      "width": 1705,
+      "work": "gould-asia"
+    },
+    "Ailuroedus maculosus": {
+      "file": "Ailuroedus maculosus - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Ailuroedus_maculosus_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3562,
+      "work": "gould-new-guinea"
+    },
+    "Alauda arvensis": {
+      "file": "Alauda arvensis.jpg",
+      "height": 752,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Alauda_arvensis.jpg",
+      "width": 944,
+      "work": "von-wright"
+    },
+    "Alca torda": {
+      "file": "Alca torda Keulemans.jpg",
+      "height": 4721,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Alca_torda_Keulemans.jpg",
+      "width": 6347,
+      "work": "naumann"
+    },
+    "Alcedo atthis": {
+      "file": "GouldBirdsEuropeIIKingfisher.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIKingfisher.jpg",
+      "width": 3580,
+      "work": "gould-europe"
+    },
+    "Alectoris graeca": {
+      "file": "Alectoris graeca.jpg",
+      "height": 1491,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Alectoris_graeca.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Amaurornis phoenicurus": {
+      "file": "AmaurornisPhoenicurusGould.jpg",
+      "height": 3993,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:AmaurornisPhoenicurusGould.jpg",
+      "width": 5313,
+      "work": "gould-asia"
+    },
+    "Anas platyrhynchos": {
+      "file": "Stockente-Naumann.jpg",
+      "height": 4283,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Stockente-Naumann.jpg",
+      "width": 6208,
+      "work": "naumann"
+    },
+    "Anser albifrons": {
+      "file": "Svenska Fåglar (Anser albifrons).jpg",
+      "height": 1091,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Svenska_F%C3%A5glar_(Anser_albifrons).jpg",
+      "width": 1141,
+      "work": "von-wright"
+    },
+    "Anser anser": {
+      "file": "Svenska Fåglar (Anser anser).jpg",
+      "height": 1143,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Svenska_F%C3%A5glar_(Anser_anser).jpg",
+      "width": 1149,
+      "work": "von-wright"
+    },
+    "Anser brachyrhynchus": {
+      "file": "Svenska Fåglar (Anser brachyrhynchus).jpg",
+      "height": 1119,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Svenska_F%C3%A5glar_(Anser_brachyrhynchus).jpg",
+      "width": 1010,
+      "work": "von-wright"
+    },
+    "Anser erythropus": {
+      "file": "Svenska Fåglar (Anser erythropus).jpg",
+      "height": 1219,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Svenska_F%C3%A5glar_(Anser_erythropus).jpg",
+      "width": 1202,
+      "work": "von-wright"
+    },
+    "Anser fabalis": {
+      "file": "GouldBirdsEuropeVBean Goose.jpg",
+      "height": 3697,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBean_Goose.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Anser indicus": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LXXX) (9240085888).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LXXX)_(9240085888).jpg",
+      "width": 1752,
+      "work": "gould-century"
+    },
+    "Anthus campestris": {
+      "file": "GouldBirdsEuropeIITawny Pipit.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIITawny_Pipit.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Anthus cervinus": {
+      "file": "BirdsAsiaJohnGoIVGoul 0272.jpg",
+      "height": 5317,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0272.jpg",
+      "width": 7664,
+      "work": "gould-asia"
+    },
+    "Anthus petrosus": {
+      "file": "GouldBirdsEuropeIIRock Pipit.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRock_Pipit.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Anthus pratensis": {
+      "file": "GouldBirdsEuropeIIMeadow Pipit.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIMeadow_Pipit.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Anthus richardi": {
+      "file": "GouldBirdsEuropeIIRichards Pipit.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRichards_Pipit.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Anthus trivialis": {
+      "file": "BirdsAsiaJohnGoIVGoul 0268.jpg",
+      "height": 7674,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0268.jpg",
+      "width": 5317,
+      "work": "gould-asia"
+    },
+    "Aplonis grandis": {
+      "file": "Aplonis grandis - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Aplonis_grandis_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3727,
+      "work": "gould-new-guinea"
+    },
+    "Aplonis metallica": {
+      "file": "Aplonis metallica - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Aplonis_metallica_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3773,
+      "work": "gould-new-guinea"
+    },
+    "Aquila chrysaetos": {
+      "file": "GouldBirdsEuropeIGolden Eagle.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIGolden_Eagle.jpg",
+      "width": 1864,
+      "work": "gould-europe"
+    },
+    "Aquila heliaca": {
+      "file": "GouldBirdsEuropeIImperial Eagle.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIImperial_Eagle.jpg",
+      "width": 3728,
+      "work": "gould-europe"
+    },
+    "Aquila nipalensis": {
+      "file": "Aquila nipalensis by Naumann.jpg",
+      "height": 1410,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Aquila_nipalensis_by_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Ardea purpurea": {
+      "file": "Ardea purpurea.jpg",
+      "height": 1557,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Ardea_purpurea.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Ardenna grisea": {
+      "file": "GouldBirdsEuropeVCinereous Shearwater.jpg",
+      "height": 3740,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVCinereous_Shearwater.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Ardeola ralloides": {
+      "file": "Czapla modronosa.jpg",
+      "height": 1222,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Czapla_modronosa.jpg",
+      "width": 931,
+      "work": "naumann"
+    },
+    "Artamus cinereus": {
+      "file": "Artamus cinereus by John Gould.jpg",
+      "height": 2886,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Artamus_cinereus_by_John_Gould.jpg",
+      "width": 1813,
+      "work": "gould-australia"
+    },
+    "Asio flammeus": {
+      "file": "GouldBirdsEuropeIShort-Eared Owl.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIShort-Eared_Owl.jpg",
+      "width": 3736,
+      "work": "gould-europe"
+    },
+    "Asio otus": {
+      "file": "Otis Vulgaris.jpg",
+      "height": 6217,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Otis_Vulgaris.jpg",
+      "width": 4088,
+      "work": "gould-britain"
+    },
+    "Athene noctua": {
+      "file": "Athene Noctua.jpg",
+      "height": 6093,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Athene_Noctua.jpg",
+      "width": 3839,
+      "work": "gould-britain"
+    },
+    "Aythya ferina": {
+      "file": "Svenska Fåglar (Aythya ferina).jpg",
+      "height": 1022,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Svenska_F%C3%A5glar_(Aythya_ferina).jpg",
+      "width": 1006,
+      "work": "von-wright"
+    },
+    "Bartramia longicauda": {
+      "file": "Bartramia longicauda.jpg",
+      "height": 924,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Bartramia_longicauda.jpg",
+      "width": 927,
+      "work": "naumann"
+    },
+    "Botaurus stellaris": {
+      "file": "Botaurus stellaris drawing.jpg",
+      "height": 1577,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Botaurus_stellaris_drawing.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Branta bernicla": {
+      "file": "Svenska Fåglar (Branta bernicla).jpg",
+      "height": 1332,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Svenska_F%C3%A5glar_(Branta_bernicla).jpg",
+      "width": 1380,
+      "work": "von-wright"
+    },
+    "Branta leucopsis": {
+      "file": "GouldBirdsEuropeVBernicle Goose.jpg",
+      "height": 3744,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBernicle_Goose.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Bubo bengalensis": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. III) (9237209051).jpg",
+      "height": 2728,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._III)_(9237209051).jpg",
+      "width": 1781,
+      "work": "gould-century"
+    },
+    "Bubo bubo": {
+      "file": "Bubo Maximus.jpg",
+      "height": 6228,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Bubo_Maximus.jpg",
+      "width": 4151,
+      "work": "gould-britain"
+    },
+    "Bubo scandiacus": {
+      "file": "GouldBirdsEuropeISnowy Owl.jpg",
+      "height": 2796,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeISnowy_Owl.jpg",
+      "width": 1840,
+      "work": "gould-europe"
+    },
+    "Bucanetes githagineus": {
+      "file": "BirdsAsiaJohnGoVGoul 0132.jpg",
+      "height": 7321,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0132.jpg",
+      "width": 4970,
+      "work": "gould-asia"
+    },
+    "Buceros bicornis": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. XLIV) (9240034068).jpg",
+      "height": 2730,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._XLIV)_(9240034068).jpg",
+      "width": 1775,
+      "work": "gould-century"
+    },
+    "Burhinus oedicnemus": {
+      "file": "Triel.jpg",
+      "height": 879,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Triel.jpg",
+      "width": 1260,
+      "work": "naumann"
+    },
+    "Buteo buteo": {
+      "file": "GouldBirdsEuropeICommon Buzzard.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeICommon_Buzzard.jpg",
+      "width": 1823,
+      "work": "gould-europe"
+    },
+    "Buteo lagopus": {
+      "file": "GouldBirdsEuropeIRough-legged Buzzard.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIRough-legged_Buzzard.jpg",
+      "width": 3617,
+      "work": "gould-europe"
+    },
+    "Calcarius lapponicus": {
+      "file": "Calcarius lapponicus m.jpg",
+      "height": 746,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Calcarius_lapponicus_m.jpg",
+      "width": 828,
+      "work": "von-wright"
+    },
+    "Calidris minuta": {
+      "file": "Calidris alpina schinzi and Calidris minuta by Naumann.jpg",
+      "height": 535,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Calidris_alpina_schinzi_and_Calidris_minuta_by_Naumann.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Calidris pugnax": {
+      "file": "Ruff90.jpg",
+      "height": 6787,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Ruff90.jpg",
+      "width": 4433,
+      "work": "naumann"
+    },
+    "Calliope calliope": {
+      "file": "BirdsAsiaJohnGoIVGoul 0160.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0160.jpg",
+      "width": 5252,
+      "work": "gould-asia"
+    },
+    "Calliope pectoralis": {
+      "file": "BirdsAsiaJohnGoIVGoul 0164.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0164.jpg",
+      "width": 5252,
+      "work": "gould-asia"
+    },
+    "Calliope tschebaiewi": {
+      "file": "BirdsAsiaJohnGoIVGoul 0168.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0168.jpg",
+      "width": 5252,
+      "work": "gould-asia"
+    },
+    "Caprimulgus europaeus": {
+      "file": "GouldBirdsEuropeIIEuropean Goatsucker.jpg",
+      "height": 2777,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIEuropean_Goatsucker.jpg",
+      "width": 1826,
+      "work": "gould-europe"
+    },
+    "Caprimulgus ruficollis": {
+      "file": "GouldBirdsEuropeIIRed-collared Goatsucker.jpg",
+      "height": 2777,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRed-collared_Goatsucker.jpg",
+      "width": 1826,
+      "work": "gould-europe"
+    },
+    "Carduelis carduelis": {
+      "file": "BirdsAsiaJohnGoVGoul 0076.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0076.jpg",
+      "width": 4849,
+      "work": "gould-asia"
+    },
+    "Carpodacus erythrinus": {
+      "file": "Carpodacus erythrinus & Carpodacus roseus.jpg",
+      "height": 1269,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Carpodacus_erythrinus_%26_Carpodacus_roseus.jpg",
+      "width": 923,
+      "work": "naumann"
+    },
+    "Carpodacus rubicilla": {
+      "file": "Carpodacus rubicilla; Gould & Richter.jpg",
+      "height": 5669,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Carpodacus_rubicilla;_Gould_%26_Richter.jpg",
+      "width": 3887,
+      "work": "gould-asia"
+    },
+    "Carpodacus sibiricus": {
+      "file": "BirdsAsiaJohnGoVGoul 0116.jpg",
+      "height": 7321,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0116.jpg",
+      "width": 4970,
+      "work": "gould-asia"
+    },
+    "Carterornis chrysomela": {
+      "file": "Monarcha kordensis - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Monarcha_kordensis_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3716,
+      "work": "gould-new-guinea"
+    },
+    "Catreus wallichii": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0080.jpg",
+      "height": 4451,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0080.jpg",
+      "width": 7072,
+      "work": "gould-asia"
+    },
+    "Cecropis daurica": {
+      "file": "HirundoDauricaGould.jpg",
+      "height": 1735,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HirundoDauricaGould.jpg",
+      "width": 1310,
+      "work": "gould-asia"
+    },
+    "Cepphus grylle": {
+      "file": "GouldBirdsEuropeVBlack Guillemot.jpg",
+      "height": 4558,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBlack_Guillemot.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Cercotrichas galactotes": {
+      "file": "GouldBirdsEuropeIIRufous Sedge Warbler.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRufous_Sedge_Warbler.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Certhia himalayana": {
+      "file": "BirdsAsiaJohnGoIVGoul 0240.jpg",
+      "height": 7650,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0240.jpg",
+      "width": 5280,
+      "work": "gould-asia"
+    },
+    "Ceryle rudis": {
+      "file": "GouldBirdsEuropeIIBlackandWhite Kingfisher.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlackandWhite_Kingfisher.jpg",
+      "width": 3614,
+      "work": "gould-europe"
+    },
+    "Cettia cetti": {
+      "file": "GouldBirdsEuropeIICetti Warbler.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIICetti_Warbler.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Charadrius dubius": {
+      "file": "Charadrius dubius.jpg",
+      "height": 549,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Charadrius_dubius.jpg",
+      "width": 917,
+      "work": "naumann"
+    },
+    "Charadrius hiaticula": {
+      "file": "Charadrius hiaticula (Naumann).jpg",
+      "height": 529,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Charadrius_hiaticula_(Naumann).jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Chlamydera maculata": {
+      "file": "Chlamydodera occipitalis - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Chlamydodera_occipitalis_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3726,
+      "work": "gould-new-guinea"
+    },
+    "Chlamydera nuchalis": {
+      "file": "Chlamydodera orientalis - The Birds of New Guinea.jpg",
+      "height": 3839,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Chlamydodera_orientalis_-_The_Birds_of_New_Guinea.jpg",
+      "width": 5795,
+      "work": "gould-new-guinea"
+    },
+    "Chlidonias hybrida": {
+      "file": "Whiskeredtern65.jpg",
+      "height": 1912,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Whiskeredtern65.jpg",
+      "width": 2816,
+      "work": "naumann"
+    },
+    "Chlidonias leucopterus": {
+      "file": "Hydrochelidon - Naumann - Naturgeschichte der Vögel Mitteleuropas.jpg",
+      "height": 5096,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Hydrochelidon_-_Naumann_-_Naturgeschichte_der_V%C3%B6gel_Mitteleuropas.jpg",
+      "width": 7467,
+      "work": "naumann"
+    },
+    "Chlidonias niger": {
+      "file": "GouldBirdsEuropeVBlack Tern.jpg",
+      "height": 3607,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBlack_Tern.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Chloris chloris": {
+      "file": "Carduelis chloris f.jpg",
+      "height": 573,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Carduelis_chloris_f.jpg",
+      "width": 911,
+      "work": "von-wright"
+    },
+    "Chloropsis aurifrons": {
+      "file": "PhyllornisHodgsoniGould.jpg",
+      "height": 2772,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PhyllornisHodgsoniGould.jpg",
+      "width": 1777,
+      "work": "gould-asia"
+    },
+    "Chrysococcyx xanthorhynchus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0196.jpg",
+      "height": 6948,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0196.jpg",
+      "width": 4467,
+      "work": "gould-asia"
+    },
+    "Chrysolophus amherstiae": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0088.jpg",
+      "height": 4491,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0088.jpg",
+      "width": 6912,
+      "work": "gould-asia"
+    },
+    "Chrysolophus pictus": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0084.jpg",
+      "height": 4445,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0084.jpg",
+      "width": 7008,
+      "work": "gould-asia"
+    },
+    "Chrysophlegma flavinucha": {
+      "file": "BirdsAsiaJohnGoVIGoul 0152.jpg",
+      "height": 6901,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0152.jpg",
+      "width": 4281,
+      "work": "gould-asia"
+    },
+    "Cicinnurus regius": {
+      "file": "Cicinnurus regius - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Cicinnurus_regius_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3669,
+      "work": "gould-new-guinea"
+    },
+    "Ciconia ciconia": {
+      "file": "Ciconia ciconia by Naumann.jpg",
+      "height": 1518,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Ciconia_ciconia_by_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Ciconia nigra": {
+      "file": "Schwarzstörche Naumann.jpg",
+      "height": 1579,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Schwarzst%C3%B6rche_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Cinclosoma ajax": {
+      "file": "Cinclosoma ajax - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Cinclosoma_ajax_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3786,
+      "work": "gould-new-guinea"
+    },
+    "Cinclus cinclus": {
+      "file": "BirdsAsiaJohnGoIVGoul 0104.jpg",
+      "height": 5111,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0104.jpg",
+      "width": 7664,
+      "work": "gould-asia"
+    },
+    "Cinclus pallasii": {
+      "file": "BirdsAsiaJohnGoIVGoul 0096.jpg",
+      "height": 5111,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0096.jpg",
+      "width": 7664,
+      "work": "gould-asia"
+    },
+    "Cinnyris asiaticus": {
+      "file": "PurpleSunbirdGould.jpg",
+      "height": 1581,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PurpleSunbirdGould.jpg",
+      "width": 1239,
+      "work": "gould-asia"
+    },
+    "Circaetus gallicus": {
+      "file": "GouldBirdsEuropeIShort-toed Eagle.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIShort-toed_Eagle.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Circus aeruginosus": {
+      "file": "Circus Aeruginosus.jpg",
+      "height": 4050,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Circus_Aeruginosus.jpg",
+      "width": 6168,
+      "work": "gould-britain"
+    },
+    "Circus cyaneus": {
+      "file": "GouldBirdsEuropeIHen Harrier.jpg",
+      "height": 1899,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIHen_Harrier.jpg",
+      "width": 2785,
+      "work": "gould-europe"
+    },
+    "Circus macrourus": {
+      "file": "GouldBirdsEuropeIPallid Harrier.jpg",
+      "height": 3764,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIPallid_Harrier.jpg",
+      "width": 5570,
+      "work": "gould-europe"
+    },
+    "Circus pygargus": {
+      "file": "GouldBirdsEuropeIAsh-coloured Harrier.jpg",
+      "height": 1908,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIAsh-coloured_Harrier.jpg",
+      "width": 2785,
+      "work": "gould-europe"
+    },
+    "Cissa chinensis": {
+      "file": "BirdsAsiaJohnGoVGoul 0224.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0224.jpg",
+      "width": 5080,
+      "work": "gould-asia"
+    },
+    "Cisticola juncidis": {
+      "file": "GouldBirdsEuropeIIFan-tail Warbler.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIFan-tail_Warbler.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Clamator glandarius": {
+      "file": "Clamator glandarius.jpg",
+      "height": 1356,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Clamator_glandarius.jpg",
+      "width": 938,
+      "work": "naumann"
+    },
+    "Clanga clanga": {
+      "file": "GouldBirdsEuropeISpotted Eagle.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeISpotted_Eagle.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Clangula hyemalis": {
+      "file": "The birds of Europe (1837) (white background).jpg",
+      "height": 789,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:The_birds_of_Europe_(1837)_(white_background).jpg",
+      "width": 1674,
+      "work": "gould-europe"
+    },
+    "Coccothraustes coccothraustes": {
+      "file": "C coccothraustes naumann.jpg",
+      "height": 1565,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:C_coccothraustes_naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Coccyzus americanus": {
+      "file": "Coccyzus Americanus by John Gould.jpg",
+      "height": 2816,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Coccyzus_Americanus_by_John_Gould.jpg",
+      "width": 1881,
+      "work": "gould-europe"
+    },
+    "Cochoa viridis": {
+      "file": "Birds of Asia - by John Gould (Plate 1) (7609237540).jpg",
+      "height": 3143,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_1)_(7609237540).jpg",
+      "width": 2139,
+      "work": "gould-asia"
+    },
+    "Colluricincla megarhyncha": {
+      "file": "Pachycephalopsis fortis - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pachycephalopsis_fortis_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3724,
+      "work": "gould-new-guinea"
+    },
+    "Columba livia": {
+      "file": "BirdsAsiaJohnGoVIGoul 0232.jpg",
+      "height": 6990,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0232.jpg",
+      "width": 4465,
+      "work": "gould-asia"
+    },
+    "Columba oenas": {
+      "file": "Columba oenas 2.jpg",
+      "height": 1023,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Columba_oenas_2.jpg",
+      "width": 1167,
+      "work": "von-wright"
+    },
+    "Columba palumbus": {
+      "file": "Wood pigeon.jpg",
+      "height": 1366,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Wood_pigeon.jpg",
+      "width": 956,
+      "work": "gould-europe"
+    },
+    "Copsychus malabaricus": {
+      "file": "CopsychusSuavisGould.jpg",
+      "height": 2371,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:CopsychusSuavisGould.jpg",
+      "width": 1557,
+      "work": "gould-asia"
+    },
+    "Coracias benghalensis": {
+      "file": "CoraciasIndicaGould.jpg",
+      "height": 6104,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:CoraciasIndicaGould.jpg",
+      "width": 3780,
+      "work": "gould-asia"
+    },
+    "Coracias garrulus": {
+      "file": "GouldBirdsEuropeIIRoller.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRoller.jpg",
+      "width": 3631,
+      "work": "gould-europe"
+    },
+    "Corvus cornix": {
+      "file": "Corvus cornix (PD).jpg",
+      "height": 2000,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Corvus_cornix_(PD).jpg",
+      "width": 1397,
+      "work": "naumann"
+    },
+    "Corvus frugilegus": {
+      "file": "Rook paint.jpg",
+      "height": 1556,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rook_paint.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Corydon sumatranus": {
+      "file": "CorydonSumatranusGould.jpg",
+      "height": 2872,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:CorydonSumatranusGould.jpg",
+      "width": 1963,
+      "work": "gould-asia"
+    },
+    "Coturnix coromandelica": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0044.jpg",
+      "height": 4424,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0044.jpg",
+      "width": 6944,
+      "work": "gould-asia"
+    },
+    "Cracticus torquatus": {
+      "file": "Cracticus destructor by John Gould.jpg",
+      "height": 2886,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Cracticus_destructor_by_John_Gould.jpg",
+      "width": 1813,
+      "work": "gould-australia"
+    },
+    "Crex crex": {
+      "file": "Crex crex00.jpg",
+      "height": 1440,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Crex_crex00.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Cuculus canorus": {
+      "file": "Cuculus canorus.jpg",
+      "height": 834,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Cuculus_canorus.jpg",
+      "width": 1260,
+      "work": "naumann"
+    },
+    "Curruca hortensis": {
+      "file": "GouldBirdsEuropeIIOrpheus Warbler.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIOrpheus_Warbler.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Cutia nipalensis": {
+      "file": "CutiaNipalensisGould.jpg",
+      "height": 1071,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:CutiaNipalensisGould.jpg",
+      "width": 825,
+      "work": "gould-asia"
+    },
+    "Cyanistes caeruleus": {
+      "file": "GouldBirdsEuropeIIIBlue Tit.jpg",
+      "height": 5584,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIIBlue_Tit.jpg",
+      "width": 3653,
+      "work": "gould-europe"
+    },
+    "Cyanistes cyanus": {
+      "file": "GouldBirdsEuropeIIIAzure Tit.jpg",
+      "height": 5584,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIIAzure_Tit.jpg",
+      "width": 3653,
+      "work": "gould-europe"
+    },
+    "Cygnus cygnus": {
+      "file": "Cygnus cygnus by Naumann.jpg",
+      "height": 875,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Cygnus_cygnus_by_Naumann.jpg",
+      "width": 1260,
+      "work": "naumann"
+    },
+    "Cymbirhynchus macrorhynchos": {
+      "file": "CymbirhynchusMacrorhynchusGould.jpg",
+      "height": 2106,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:CymbirhynchusMacrorhynchusGould.jpg",
+      "width": 1958,
+      "work": "gould-asia"
+    },
+    "Daphoenositta chrysoptera": {
+      "file": "Sitella albata - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Sitella_albata_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3702,
+      "work": "gould-new-guinea"
+    },
+    "Delichon urbicum": {
+      "file": "GouldBirdsEuropeIIMartin.jpg",
+      "height": 5553,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIMartin.jpg",
+      "width": 3609,
+      "work": "gould-europe"
+    },
+    "Dendrocitta vagabunda": {
+      "file": "DendrocittaVagabundaGould.jpg",
+      "height": 1124,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:DendrocittaVagabundaGould.jpg",
+      "width": 812,
+      "work": "gould-century"
+    },
+    "Dendrocopos hyperythrus": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. L) (9237262425).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._L)_(9237262425).jpg",
+      "width": 1739,
+      "work": "gould-century"
+    },
+    "Dendrocopos leucotos": {
+      "file": "BirdsAsiaJohnGoVIGoul 0072.jpg",
+      "height": 6937,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0072.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Dendrocopos major": {
+      "file": "BirdsAsiaJohnGoVIGoul 0076.jpg",
+      "height": 6937,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0076.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Dendrocoptes auriceps": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LII) (9237264813).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LII)_(9237264813).jpg",
+      "width": 1717,
+      "work": "gould-century"
+    },
+    "Dendronanthus indicus": {
+      "file": "BirdsAsiaJohnGoIVGoul 0276.jpg",
+      "height": 5317,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0276.jpg",
+      "width": 7664,
+      "work": "gould-asia"
+    },
+    "Dicaeum aeneum": {
+      "file": "Dicaeum aeneum - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Dicaeum_aeneum_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3792,
+      "work": "gould-new-guinea"
+    },
+    "Dicaeum cruentatum": {
+      "file": "Birds of Asia - by John Gould (Plate 39) (7609277998).jpg",
+      "height": 3157,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_39)_(7609277998).jpg",
+      "width": 2231,
+      "work": "gould-asia"
+    },
+    "Dicaeum hirundinaceum": {
+      "file": "Dicaeum fulgidum - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Dicaeum_fulgidum_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3792,
+      "work": "gould-new-guinea"
+    },
+    "Dicaeum tristrami": {
+      "file": "Dicaeum tristrami - The Birds of New Guinea (cropped).jpg",
+      "height": 2240,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Dicaeum_tristrami_-_The_Birds_of_New_Guinea_(cropped).jpg",
+      "width": 3792,
+      "work": "gould-new-guinea"
+    },
+    "Drepanornis albertisi": {
+      "file": "Drepanornis albertisi - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Drepanornis_albertisi_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3749,
+      "work": "gould-new-guinea"
+    },
+    "Dryobates minor": {
+      "file": "Dendrocopos minor male.jpg",
+      "height": 1408,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Dendrocopos_minor_male.jpg",
+      "width": 1054,
+      "work": "naumann"
+    },
+    "Dumetia hyperythra": {
+      "file": "BirdsAsiaJohnGoIVGoul 0028.jpg",
+      "height": 7654,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0028.jpg",
+      "width": 5059,
+      "work": "gould-asia"
+    },
+    "Edolisoma montanum": {
+      "file": "Edolisoma montanum - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Edolisoma_montanum_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3791,
+      "work": "gould-new-guinea"
+    },
+    "Elanoides forficatus": {
+      "file": "The birds of Europe (9398548273).jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:The_birds_of_Europe_(9398548273).jpg",
+      "width": 1832,
+      "work": "gould-europe"
+    },
+    "Elanus caeruleus": {
+      "file": "Birds of Asia - by John Gould (Plate 12) (7046324731).jpg",
+      "height": 3146,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_12)_(7046324731).jpg",
+      "width": 2187,
+      "work": "gould-asia"
+    },
+    "Emberiza aureola": {
+      "file": "Emberiza aureola and Emberiza caesia by Naumann.jpg",
+      "height": 1549,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Emberiza_aureola_and_Emberiza_caesia_by_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Emberiza bruniceps": {
+      "file": "BirdsAsiaJohnGoVGoul 0064.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0064.jpg",
+      "width": 4849,
+      "work": "gould-asia"
+    },
+    "Emberiza buchanani": {
+      "file": "BirdsAsiaJohnGoVGoul 0052.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0052.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza cia": {
+      "file": "Emberiza cia.jpg",
+      "height": 667,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Emberiza_cia.jpg",
+      "width": 931,
+      "work": "naumann"
+    },
+    "Emberiza cineracea": {
+      "file": "BirdsAsiaJohnGoVGoul 0040.jpg",
+      "height": 7199,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0040.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza cirlus": {
+      "file": "Emberiza cirlus.jpg",
+      "height": 880,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Emberiza_cirlus.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Emberiza citrinella": {
+      "file": "Emberiza citrinella 2.jpg",
+      "height": 673,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Emberiza_citrinella_2.jpg",
+      "width": 979,
+      "work": "von-wright"
+    },
+    "Emberiza elegans": {
+      "file": "BirdsAsiaJohnGoVGoul 0056.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0056.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza fucata": {
+      "file": "BirdsAsiaJohnGoVGoul 0044.jpg",
+      "height": 7199,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0044.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza hortulana": {
+      "file": "Three Emberiza Species by Naumann.jpg",
+      "height": 1277,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Three_Emberiza_Species_by_Naumann.jpg",
+      "width": 907,
+      "work": "naumann"
+    },
+    "Emberiza melanocephala": {
+      "file": "BirdsAsiaJohnGoVGoul 0060.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0060.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza pusilla": {
+      "file": "BirdsAsiaJohnGoVGoul 0036.jpg",
+      "height": 7199,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0036.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza rustica": {
+      "file": "BirdsAsiaJohnGoVGoul 0048.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0048.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Emberiza schoeniclus": {
+      "file": "Rohrammer.jpg",
+      "height": 1309,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rohrammer.jpg",
+      "width": 907,
+      "work": "naumann"
+    },
+    "Emberiza stewarti": {
+      "file": "BirdsAsiaJohnGoVGoul 0032.jpg",
+      "height": 7199,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0032.jpg",
+      "width": 4830,
+      "work": "gould-asia"
+    },
+    "Enicurus leschenaulti": {
+      "file": "BirdsAsiaJohnGoIVGoul 0288.jpg",
+      "height": 7674,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0288.jpg",
+      "width": 5317,
+      "work": "gould-asia"
+    },
+    "Enicurus maculatus": {
+      "file": "BirdsAsiaJohnGoIVGoul 0280.jpg",
+      "height": 7674,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0280.jpg",
+      "width": 5317,
+      "work": "gould-asia"
+    },
+    "Eophona migratoria": {
+      "file": "BirdsAsiaJohnGoVGoul 0084.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0084.jpg",
+      "width": 4866,
+      "work": "gould-asia"
+    },
+    "Eophona personata": {
+      "file": "BirdsAsiaJohnGoVGoul 0080.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0080.jpg",
+      "width": 4849,
+      "work": "gould-asia"
+    },
+    "Erithacus rubecula": {
+      "file": "GouldBirdsEuropeIIRobin.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRobin.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Erythrogenys erythrogenys": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LV) (9240047228).jpg",
+      "height": 2737,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LV)_(9240047228).jpg",
+      "width": 1691,
+      "work": "gould-century"
+    },
+    "Erythropitta granatina": {
+      "file": "BirdsAsiaJohnGoVGoul 0276.jpg",
+      "height": 7294,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0276.jpg",
+      "width": 5107,
+      "work": "gould-asia"
+    },
+    "Erythropitta ussheri": {
+      "file": "BirdsAsiaJohnGoVGoul 0308.jpg",
+      "height": 7331,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0308.jpg",
+      "width": 5126,
+      "work": "gould-asia"
+    },
+    "Eurylaimus javanicus": {
+      "file": "EurylaimusJavanicusGould.jpg",
+      "height": 2904,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:EurylaimusJavanicusGould.jpg",
+      "width": 1902,
+      "work": "gould-asia"
+    },
+    "Falco amurensis": {
+      "file": "FalcoAmurensisGould.jpg",
+      "height": 1847,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:FalcoAmurensisGould.jpg",
+      "width": 1460,
+      "work": "gould-asia"
+    },
+    "Falco columbarius": {
+      "file": "GouldBirdsEuropeIMerlin.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIMerlin.jpg",
+      "width": 1832,
+      "work": "gould-europe"
+    },
+    "Falco naumanni": {
+      "file": "GouldBirdsEuropeILesser Kestrel.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeILesser_Kestrel.jpg",
+      "width": 1832,
+      "work": "gould-europe"
+    },
+    "Falco peregrinus": {
+      "file": "GouldBirdsEuropeIPeregrine Falcon.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIPeregrine_Falcon.jpg",
+      "width": 3583,
+      "work": "gould-europe"
+    },
+    "Falco rusticolus": {
+      "file": "GouldBirdsEuropeIJer Falcon.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIJer_Falcon.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Falco subbuteo": {
+      "file": "GouldBirdsEuropeIHobby.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIHobby.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Falco tinnunculus": {
+      "file": "GouldBirdsEuropeIKestrel.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIKestrel.jpg",
+      "width": 3608,
+      "work": "gould-europe"
+    },
+    "Falco vespertinus": {
+      "file": "GouldBirdsEuropeIRed-footed Falcon.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIRed-footed_Falcon.jpg",
+      "width": 3664,
+      "work": "gould-europe"
+    },
+    "Ficedula parva": {
+      "file": "GouldBirdsEuropeIIRed-breasted Flycatcher.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRed-breasted_Flycatcher.jpg",
+      "width": 3614,
+      "work": "gould-europe"
+    },
+    "Fratercula arctica": {
+      "file": "Fratercula arctica.jpg",
+      "height": 1048,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Fratercula_arctica.jpg",
+      "width": 808,
+      "work": "von-wright"
+    },
+    "Fringilla coelebs": {
+      "file": "The birds of Europe (1837) (14749620464).jpg",
+      "height": 3254,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:The_birds_of_Europe_(1837)_(14749620464).jpg",
+      "width": 1942,
+      "work": "gould-europe"
+    },
+    "Fringilla montifringilla": {
+      "file": "GouldBirdsEuropeIIIBramble Finch.jpg",
+      "height": 5584,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIIBramble_Finch.jpg",
+      "width": 3563,
+      "work": "gould-europe"
+    },
+    "Fulica atra": {
+      "file": "Fulica atra by Naumann.jpg",
+      "height": 1053,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Fulica_atra_by_Naumann.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Galerida theklae": {
+      "file": "Galerida theklae.jpg",
+      "height": 649,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Galerida_theklae.jpg",
+      "width": 831,
+      "work": "naumann"
+    },
+    "Gallinago gallinago": {
+      "file": "Gallinago gallinago hamburg.jpg",
+      "height": 7379,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gallinago_gallinago_hamburg.jpg",
+      "width": 5152,
+      "work": "naumann"
+    },
+    "Gallinago media": {
+      "file": "Gallinago media.jpg",
+      "height": 1322,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gallinago_media.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Gallinula chloropus": {
+      "file": "Gallinula chloropus by Naumann.jpg",
+      "height": 1117,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gallinula_chloropus_by_Naumann.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Galloperdix spadicea": {
+      "file": "BirdsAsiaJohnGoVIGoul 0280.jpg",
+      "height": 4688,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0280.jpg",
+      "width": 6976,
+      "work": "gould-asia"
+    },
+    "Garrulus glandarius": {
+      "file": "BirdsAsiaJohnGoVGoul 0240.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0240.jpg",
+      "width": 5098,
+      "work": "gould-asia"
+    },
+    "Gavia arctica": {
+      "file": "Gavia Keulemans.jpg",
+      "height": 4896,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gavia_Keulemans.jpg",
+      "width": 6472,
+      "work": "naumann"
+    },
+    "Gelochelidon nilotica": {
+      "file": "GouldBirdsEuropeV Gull-billed Tern.jpg",
+      "height": 3607,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeV_Gull-billed_Tern.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Geokichla sibirica": {
+      "file": "GouldBirdsEuropeIISiberianThrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIISiberianThrush.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Gerygone levigaster": {
+      "file": "Gerygone levigaster by John Gould.jpg",
+      "height": 2886,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gerygone_levigaster_by_John_Gould.jpg",
+      "width": 1834,
+      "work": "gould-australia"
+    },
+    "Glaucidium passerinum": {
+      "file": "GouldBirdsIEuropeISparrow Owl.jpg",
+      "height": 2796,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsIEuropeISparrow_Owl.jpg",
+      "width": 1788,
+      "work": "gould-europe"
+    },
+    "Gyps fulvus": {
+      "file": "GouldBirdsEuropeIGriffonVulture.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIGriffonVulture.jpg",
+      "width": 3728,
+      "work": "gould-europe"
+    },
+    "Haematopus ostralegus": {
+      "file": "Oystercatcher, drawing by naumann 1905.jpg",
+      "height": 522,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Oystercatcher,_drawing_by_naumann_1905.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Haematortyx sanguiniceps": {
+      "file": "BirdsAsiaJohnGoVIGoul 0288.jpg",
+      "height": 4582,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0288.jpg",
+      "width": 7040,
+      "work": "gould-asia"
+    },
+    "Halcyon pileata": {
+      "file": "HalcyonAtricapillusGould.jpg",
+      "height": 2756,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HalcyonAtricapillusGould.jpg",
+      "width": 1722,
+      "work": "gould-asia"
+    },
+    "Halcyon smyrnensis": {
+      "file": "HalcyonGularisGould.jpg",
+      "height": 2805,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HalcyonGularisGould.jpg",
+      "width": 1782,
+      "work": "gould-asia"
+    },
+    "Haliaeetus albicilla": {
+      "file": "Haliaeetus albicilla - Naumann.jpg",
+      "height": 1569,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Haliaeetus_albicilla_-_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Haliaeetus leucocephalus": {
+      "file": "GouldBirdsEuropeIWhite-headed Eagle.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIWhite-headed_Eagle.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Harpactes ardens": {
+      "file": "Birds of Asia - by John Gould (Plate 76) (6900289862).jpg",
+      "height": 3158,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_76)_(6900289862).jpg",
+      "width": 2214,
+      "work": "gould-asia"
+    },
+    "Harpactes diardii": {
+      "file": "HarpactesDiardiGould.jpg",
+      "height": 2706,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HarpactesDiardiGould.jpg",
+      "width": 1972,
+      "work": "gould-asia"
+    },
+    "Harpactes duvaucelii": {
+      "file": "HarpactesDuvauceliGould.jpg",
+      "height": 2282,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HarpactesDuvauceliGould.jpg",
+      "width": 1898,
+      "work": "gould-asia"
+    },
+    "Harpactes erythrocephalus": {
+      "file": "Harpactes erythrocephalus-GouldBirdsAsiaAAA1.jpg",
+      "height": 2652,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Harpactes_erythrocephalus-GouldBirdsAsiaAAA1.jpg",
+      "width": 1941,
+      "work": "gould-asia"
+    },
+    "Harpactes fasciatus": {
+      "file": "MalabarTrogonGould.jpg",
+      "height": 2915,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MalabarTrogonGould.jpg",
+      "width": 1848,
+      "work": "gould-asia"
+    },
+    "Harpactes kasumba": {
+      "file": "HarpactesKasumbaGould.jpg",
+      "height": 2761,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HarpactesKasumbaGould.jpg",
+      "width": 1826,
+      "work": "gould-asia"
+    },
+    "Harpactes oreskios": {
+      "file": "HarpactesOreskiosGould.jpg",
+      "height": 2744,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HarpactesOreskiosGould.jpg",
+      "width": 1902,
+      "work": "gould-asia"
+    },
+    "Harpactes orrhophaeus": {
+      "file": "HarpactesRutilusGould.jpg",
+      "height": 2915,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HarpactesRutilusGould.jpg",
+      "width": 1810,
+      "work": "gould-asia"
+    },
+    "Harpyopsis novaeguineae": {
+      "file": "Harpyopsis novaeguineae - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Harpyopsis_novaeguineae_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3803,
+      "work": "gould-new-guinea"
+    },
+    "Hemicircus canente": {
+      "file": "BirdsAsiaJohnGoVIGoul 0080.jpg",
+      "height": 6937,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0080.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Hemicircus concretus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0084.jpg",
+      "height": 6937,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0084.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Hemiprocne comata": {
+      "file": "Birds of Asia - by John Gould (Plate 25) (6900236782).jpg",
+      "height": 3146,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_25)_(6900236782).jpg",
+      "width": 2187,
+      "work": "gould-asia"
+    },
+    "Hemiprocne coronata": {
+      "file": "Birds of Asia - by John Gould (Plate 21) (7046331165).jpg",
+      "height": 3146,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_21)_(7046331165).jpg",
+      "width": 2187,
+      "work": "gould-asia"
+    },
+    "Hemiprocne longipennis": {
+      "file": "DendrochelidonWallaceiGould.jpg",
+      "height": 5016,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:DendrochelidonWallaceiGould.jpg",
+      "width": 3652,
+      "work": "gould-asia"
+    },
+    "Hemiprocne mystacea": {
+      "file": "DendrochelidonMystaceusGould.jpg",
+      "height": 5204,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:DendrochelidonMystaceusGould.jpg",
+      "width": 3444,
+      "work": "gould-asia"
+    },
+    "Heteromyias cinereifrons": {
+      "file": "Heteromyias cinereifrons - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Heteromyias_cinereifrons_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3710,
+      "work": "gould-new-guinea"
+    },
+    "Hieraaetus pennatus": {
+      "file": "GouldBirdsEuropeIBooted Eagle.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIBooted_Eagle.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Hippolais olivetorum": {
+      "file": "GouldBirdsEuropeIIOlive Tree Salicaria.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIOlive_Tree_Salicaria.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Hirundo rustica": {
+      "file": "GouldBirdsEuropeIIChimney Swallow.jpg",
+      "height": 5553,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIChimney_Swallow.jpg",
+      "width": 3651,
+      "work": "gould-europe"
+    },
+    "Hirundo smithii": {
+      "file": "HirundoSmithiiGould.jpg",
+      "height": 1176,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HirundoSmithiiGould.jpg",
+      "width": 856,
+      "work": "gould-asia"
+    },
+    "Hydrornis baudii": {
+      "file": "BirdsAsiaJohnGoVGoul 0296.jpg",
+      "height": 7331,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0296.jpg",
+      "width": 5089,
+      "work": "gould-asia"
+    },
+    "Hydrornis caeruleus": {
+      "file": "BirdsAsiaJohnGoVGoul 0332.jpg",
+      "height": 5082,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0332.jpg",
+      "width": 7328,
+      "work": "gould-asia"
+    },
+    "Hydrornis cyaneus": {
+      "file": "BirdsAsiaJohnGoVGoul 0328.jpg",
+      "height": 7331,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0328.jpg",
+      "width": 5091,
+      "work": "gould-asia"
+    },
+    "Hydrornis irena": {
+      "file": "BirdsAsiaJohnGoVGoul 0340.jpg",
+      "height": 7331,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0340.jpg",
+      "width": 5091,
+      "work": "gould-asia"
+    },
+    "Hypsipetes leucocephalus": {
+      "file": "HypsipetesNigerrimaGould.jpg",
+      "height": 2608,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HypsipetesNigerrimaGould.jpg",
+      "width": 1787,
+      "work": "gould-asia"
+    },
+    "Ibidorhyncha struthersii": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LXXIX) (9240083940).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LXXIX)_(9240083940).jpg",
+      "width": 1785,
+      "work": "gould-century"
+    },
+    "Ichthyaetus audouinii": {
+      "file": "GouldBirdsEuropeVAudouins Gull.jpg",
+      "height": 3658,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVAudouins_Gull.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Ichthyaetus melanocephalus": {
+      "file": "GouldBirdsEuropeVBlack-headed Gull.jpg",
+      "height": 3658,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBlack-headed_Gull.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Irena puella": {
+      "file": "IrenaPuellaGould.jpg",
+      "height": 2822,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:IrenaPuellaGould.jpg",
+      "width": 1926,
+      "work": "gould-asia"
+    },
+    "Ithaginis cruentus": {
+      "file": "BloodPheasantGouldRichter.jpg",
+      "height": 1080,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BloodPheasantGouldRichter.jpg",
+      "width": 1140,
+      "work": "gould-century"
+    },
+    "Jynx ruficollis": {
+      "file": "BirdsAsiaJohnGoVIGoul 0160.jpg",
+      "height": 6948,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0160.jpg",
+      "width": 4237,
+      "work": "gould-asia"
+    },
+    "Jynx torquilla": {
+      "file": "Jynx torquilla.jpg",
+      "height": 1372,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Jynx_torquilla.jpg",
+      "width": 930,
+      "work": "naumann"
+    },
+    "Lacedo pulchella": {
+      "file": "CarcineutesPulchellusGould.jpg",
+      "height": 1353,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:CarcineutesPulchellusGould.jpg",
+      "width": 1020,
+      "work": "gould-asia"
+    },
+    "Lagopus lagopus": {
+      "file": "カラフトライチョウ.jpg",
+      "height": 1497,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:%E3%82%AB%E3%83%A9%E3%83%95%E3%83%88%E3%83%A9%E3%82%A4%E3%83%81%E3%83%A7%E3%82%A6.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Lagopus muta": {
+      "file": "Lagopus mutus Naumann.jpg",
+      "height": 1488,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lagopus_mutus_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Lanius collurio": {
+      "file": "GouldBirdsEuropeIIRed-backed Shrike.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRed-backed_Shrike.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Lanius excubitor": {
+      "file": "GouldBirdsEuropeIIGreatShrike.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIGreatShrike.jpg",
+      "width": 3614,
+      "work": "gould-europe"
+    },
+    "Lanius meridionalis": {
+      "file": "GouldBirdsEuropeIIGreat Grey Shrike.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIGreat_Grey_Shrike.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Lanius minor": {
+      "file": "GouldBirdsEuropeIILesser Grey Shrike.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIILesser_Grey_Shrike.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Lanius senator": {
+      "file": "GouldBirdsEuropeIIWoodchat.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIWoodchat.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Larus argentatus": {
+      "file": "Larus argentatus Gould.jpg",
+      "height": 851,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Larus_argentatus_Gould.jpg",
+      "width": 1276,
+      "work": "gould-europe"
+    },
+    "Leiopicus mahrattensis": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LI) (9237263495).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LI)_(9237263495).jpg",
+      "width": 1739,
+      "work": "gould-century"
+    },
+    "Leiothrix argentauris": {
+      "file": "BirdsAsiaJohnGoIVGoul 0072.jpg",
+      "height": 7654,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0072.jpg",
+      "width": 5059,
+      "work": "gould-asia"
+    },
+    "Leiothrix lutea": {
+      "file": "BirdsAsiaJohnGoIVGoul 0068.jpg",
+      "height": 7654,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0068.jpg",
+      "width": 5059,
+      "work": "gould-asia"
+    },
+    "Leptopoecile sophiae": {
+      "file": "Birds of Asia - by John Gould (Plate 62) (7609304830).jpg",
+      "height": 3127,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_62)_(7609304830).jpg",
+      "width": 2194,
+      "work": "gould-asia"
+    },
+    "Locustella fluviatilis": {
+      "file": "GouldBirdsEuropeIIReed Locustelle.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIReed_Locustelle.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Locustella luscinioides": {
+      "file": "GouldBirdsEuropeIIWillow Locustelle.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIWillow_Locustelle.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Locustella naevia": {
+      "file": "GouldBirdsEuropeIIBrake Locustelle.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBrake_Locustelle.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Lonchura castaneothorax": {
+      "file": "Lonchura castaneothorax ramsayi - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lonchura_castaneothorax_ramsayi_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3680,
+      "work": "gould-new-guinea"
+    },
+    "Lophophanes cristatus": {
+      "file": "Naumann (II. 19) (8090124681).jpg",
+      "height": 1822,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Naumann_(II._19)_(8090124681).jpg",
+      "width": 1264,
+      "work": "naumann"
+    },
+    "Lophophanes dichrous": {
+      "file": "ParusDichrousGould.jpg",
+      "height": 2134,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:ParusDichrousGould.jpg",
+      "width": 1618,
+      "work": "gould-asia"
+    },
+    "Lophophorus impejanus": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LX) (9240055086).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LX)_(9240055086).jpg",
+      "width": 1739,
+      "work": "gould-century"
+    },
+    "Lophorina superba": {
+      "file": "Lophorina superba - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lophorina_superba_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3706,
+      "work": "gould-new-guinea"
+    },
+    "Lophura leucomelanos": {
+      "file": "KaleejPheasant.jpg",
+      "height": 4562,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:KaleejPheasant.jpg",
+      "width": 6956,
+      "work": "gould-asia"
+    },
+    "Loxia curvirostra": {
+      "file": "BirdsAsiaJohnGoVGoul 0172.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0172.jpg",
+      "width": 5013,
+      "work": "gould-asia"
+    },
+    "Loxia leucoptera": {
+      "file": "Loxia leucoptera and Loxia bifasciata by Naumann.jpg",
+      "height": 1332,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Loxia_leucoptera_and_Loxia_bifasciata_by_Naumann.jpg",
+      "width": 931,
+      "work": "naumann"
+    },
+    "Loxia pytyopsittacus": {
+      "file": "Loxia pytyopsittacus, male.jpg",
+      "height": 831,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Loxia_pytyopsittacus,_male.jpg",
+      "width": 921,
+      "work": "von-wright"
+    },
+    "Lullula arborea": {
+      "file": "Lullula arborea.jpg",
+      "height": 740,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lullula_arborea.jpg",
+      "width": 802,
+      "work": "von-wright"
+    },
+    "Luscinia luscinia": {
+      "file": "GouldBirdsEuropeIIThrush Nightingale.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIThrush_Nightingale.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Luscinia megarhynchos": {
+      "file": "GouldBirdsEuropeIINightingale.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIINightingale.jpg",
+      "width": 3589,
+      "work": "gould-europe"
+    },
+    "Luscinia svecica": {
+      "file": "GouldBirdsEuropeIIBlue-throated Warbler.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlue-throated_Warbler.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Lymnocryptes minimus": {
+      "file": "Naumann9Naum 0235 Gallinago gallinula.jpg",
+      "height": 7379,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Naumann9Naum_0235_Gallinago_gallinula.jpg",
+      "width": 5152,
+      "work": "naumann"
+    },
+    "Lyrurus tetrix": {
+      "file": "Tetrao tetrix from ja.jpg",
+      "height": 1520,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Tetrao_tetrix_from_ja.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Machaerirhynchus nigripectus": {
+      "file": "Machaerirhynchus nigripectus - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Machaerirhynchus_nigripectus_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3686,
+      "work": "gould-new-guinea"
+    },
+    "Malurus alboscapulatus": {
+      "file": "Malurus alboscapulatus - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Malurus_alboscapulatus_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3694,
+      "work": "gould-new-guinea"
+    },
+    "Melampitta lugubris": {
+      "file": "Melampitta lugubris - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Melampitta_lugubris_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3695,
+      "work": "gould-new-guinea"
+    },
+    "Melanitta nigra": {
+      "file": "GouldBirdsEuropeVBlack Scoter.jpg",
+      "height": 3757,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBlack_Scoter.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Melanochlora sultanea": {
+      "file": "MelanochloraSultaneaGould.jpg",
+      "height": 1011,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MelanochloraSultaneaGould.jpg",
+      "width": 873,
+      "work": "gould-asia"
+    },
+    "Meliarchus sclateri": {
+      "file": "Meliarchus sclateri - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Meliarchus_sclateri_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3678,
+      "work": "gould-new-guinea"
+    },
+    "Melithreptus chloropsis": {
+      "file": "Melithreptus chloropsis - The Birds of Australia.jpg",
+      "height": 4500,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Melithreptus_chloropsis_-_The_Birds_of_Australia.jpg",
+      "width": 3120,
+      "work": "gould-australia"
+    },
+    "Menura novaehollandiae": {
+      "file": "Lyre bird.jpg",
+      "height": 5742,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lyre_bird.jpg",
+      "width": 3797,
+      "work": "gould-australia"
+    },
+    "Merops apiaster": {
+      "file": "GouldBirdsEuropeIIBee Eater.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBee_Eater.jpg",
+      "width": 3580,
+      "work": "gould-europe"
+    },
+    "Merops leschenaulti": {
+      "file": "MeropsLeschenaultiGould.jpg",
+      "height": 2827,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MeropsLeschenaultiGould.jpg",
+      "width": 1721,
+      "work": "gould-asia"
+    },
+    "Merops philippinus": {
+      "file": "Birds of Asia - by John Gould (Plate 36) (6900264266).jpg",
+      "height": 3146,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_36)_(6900264266).jpg",
+      "width": 2219,
+      "work": "gould-asia"
+    },
+    "Milvus migrans": {
+      "file": "MilvusGovindaGould.jpg",
+      "height": 2761,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MilvusGovindaGould.jpg",
+      "width": 1919,
+      "work": "gould-asia"
+    },
+    "Milvus milvus": {
+      "file": "GouldBirdsEuropeIKite.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIKite.jpg",
+      "width": 1832,
+      "work": "gould-europe"
+    },
+    "Monticola saxatilis": {
+      "file": "Monticola saxatilis NAUMANN.jpg",
+      "height": 1216,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Monticola_saxatilis_NAUMANN.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Monticola solitarius": {
+      "file": "GouldBirdsEuropeIIBlue Thrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlue_Thrush.jpg",
+      "width": 3617,
+      "work": "gould-europe"
+    },
+    "Morus bassanus": {
+      "file": "GouldBirdsEuropeVBlack-tailed Gannet.jpg",
+      "height": 3675,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVBlack-tailed_Gannet.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Motacilla alba": {
+      "file": "BirdsAsiaJohnGoIVGoul 0256.jpg",
+      "height": 7650,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0256.jpg",
+      "width": 5305,
+      "work": "gould-asia"
+    },
+    "Motacilla cinerea": {
+      "file": "GouldBirdsEuropeIIGrey Wagtail.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIGrey_Wagtail.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Motacilla citreola": {
+      "file": "BirdsAsiaJohnGoIVGoul 0264.jpg",
+      "height": 5305,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0264.jpg",
+      "width": 7648,
+      "work": "gould-asia"
+    },
+    "Motacilla flava": {
+      "file": "GouldBirdsEuropeIIGrey-headed Wagtail.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIGrey-headed_Wagtail.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Motacilla maderaspatensis": {
+      "file": "BirdsAsiaJohnGoIVGoul 0252.jpg",
+      "height": 7650,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0252.jpg",
+      "width": 5305,
+      "work": "gould-asia"
+    },
+    "Muscicapa striata": {
+      "file": "GouldBirdsEuropeIISpotted Flycatcher.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIISpotted_Flycatcher.jpg",
+      "width": 3614,
+      "work": "gould-europe"
+    },
+    "Mycerobas carnipes": {
+      "file": "BirdsAsiaJohnGoVGoul 0092.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0092.jpg",
+      "width": 4915,
+      "work": "gould-asia"
+    },
+    "Myiagra ferrocyanea": {
+      "file": "Myiagra ferrocyanea - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Myiagra_ferrocyanea_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3716,
+      "work": "gould-new-guinea"
+    },
+    "Myzomela rosenbergii": {
+      "file": "Myzomela rosenbergii - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Myzomela_rosenbergii_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3717,
+      "work": "gould-new-guinea"
+    },
+    "Nestor meridionalis": {
+      "file": "New Zealand kaka.jpg",
+      "height": 1903,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:New_Zealand_kaka.jpg",
+      "width": 1280,
+      "work": "gould-australia"
+    },
+    "Nucifraga caryocatactes": {
+      "file": "GouldBirdsEuropeIIINutcracker.jpg",
+      "height": 5584,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIINutcracker.jpg",
+      "width": 3563,
+      "work": "gould-europe"
+    },
+    "Numenius arquata": {
+      "file": "Curlew06.jpg",
+      "height": 1481,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Curlew06.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Nyctyornis amictus": {
+      "file": "NyctyornisAmictusGould.jpg",
+      "height": 2928,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:NyctyornisAmictusGould.jpg",
+      "width": 1880,
+      "work": "gould-asia"
+    },
+    "Nyctyornis athertoni": {
+      "file": "NyctyornisAthertoniGould.jpg",
+      "height": 2860,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:NyctyornisAthertoniGould.jpg",
+      "width": 1880,
+      "work": "gould-asia"
+    },
+    "Oenanthe deserti": {
+      "file": "BirdsAsiaJohnGoIVGoul 0132.jpg",
+      "height": 5199,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0132.jpg",
+      "width": 7616,
+      "work": "gould-asia"
+    },
+    "Oenanthe hispanica": {
+      "file": "GouldBirdsEuropeIIBlack-eared Wheatear.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlack-eared_Wheatear.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Oenanthe leucura": {
+      "file": "GouldBirdsEuropeIIBlack Wheatear.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlack_Wheatear.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Oenanthe oenanthe": {
+      "file": "GouldBirdsEuropeIIWheatear.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIWheatear.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Oenanthe pleschanka": {
+      "file": "BirdsAsiaJohnGoIVGoul 0124.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0124.jpg",
+      "width": 5173,
+      "work": "gould-asia"
+    },
+    "Onychognathus tristramii": {
+      "file": "BirdsAsiaJohnGoVGoul 0188.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0188.jpg",
+      "width": 5043,
+      "work": "gould-asia"
+    },
+    "Oreocharis arfaki": {
+      "file": "Oreocharis arfaki - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Oreocharis_arfaki_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3666,
+      "work": "gould-new-guinea"
+    },
+    "Oriolus chinensis": {
+      "file": "OriolusChinensisGould.jpg",
+      "height": 2233,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:OriolusChinensisGould.jpg",
+      "width": 1920,
+      "work": "gould-asia"
+    },
+    "Oriolus oriolus": {
+      "file": "GouldBirdsEuropeIIGolden Oriole.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIGolden_Oriole.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Orthonyx novaeguineae": {
+      "file": "Orthonyx novaeguineae - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Orthonyx_novaeguineae_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3786,
+      "work": "gould-new-guinea"
+    },
+    "Orthotomus sutorius": {
+      "file": "BirdsAsiaJohnGoIVGoul 0036.jpg",
+      "height": 6192,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0036.jpg",
+      "width": 4368,
+      "work": "gould-asia"
+    },
+    "Otidiphaps nobilis": {
+      "file": "BirdsAsiaJohnGoVIGoul 0220.jpg",
+      "height": 4465,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0220.jpg",
+      "width": 6976,
+      "work": "gould-asia"
+    },
+    "Otus scops": {
+      "file": "Scops Zorca.jpg",
+      "height": 6208,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Scops_Zorca.jpg",
+      "width": 4045,
+      "work": "gould-britain"
+    },
+    "Pachycephala macrorhyncha": {
+      "file": "Pachycephala fuscoflava - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pachycephala_fuscoflava_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3767,
+      "work": "gould-new-guinea"
+    },
+    "Pachycephala orioloides": {
+      "file": "Pachycephala christophori - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pachycephala_christophori_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3742,
+      "work": "gould-new-guinea"
+    },
+    "Pachycephala philippinensis": {
+      "file": "Birds of Asia - by John Gould (Plate 12) (7609250522).jpg",
+      "height": 3146,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_12)_(7609250522).jpg",
+      "width": 2157,
+      "work": "gould-asia"
+    },
+    "Pachycephala schlegelii": {
+      "file": "Pachycephala schlegelii - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pachycephala_schlegelii_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3705,
+      "work": "gould-new-guinea"
+    },
+    "Pachycephala simplex": {
+      "file": "Pachycephala brunnea - The Birds of New Guinea.jpg",
+      "height": 5803,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pachycephala_brunnea_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3767,
+      "work": "gould-new-guinea"
+    },
+    "Pandion haliaetus": {
+      "file": "GouldBirdsEuropeIOsprey.jpg",
+      "height": 2785,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIOsprey.jpg",
+      "width": 1823,
+      "work": "gould-europe"
+    },
+    "Panurus biarmicus": {
+      "file": "Beardedtit46.jpg",
+      "height": 6605,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Beardedtit46.jpg",
+      "width": 4704,
+      "work": "naumann"
+    },
+    "Paradisaea minor": {
+      "file": "Paradisaea papuana - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Paradisaea_papuana_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3732,
+      "work": "gould-new-guinea"
+    },
+    "Paradisaea rubra": {
+      "file": "Paradisaea sanguinea - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Paradisaea_sanguinea_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3737,
+      "work": "gould-new-guinea"
+    },
+    "Parus cinereus": {
+      "file": "ParusCinereusGould.jpg",
+      "height": 2288,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:ParusCinereusGould.jpg",
+      "width": 1837,
+      "work": "gould-asia"
+    },
+    "Parus minor": {
+      "file": "ParusMinorGould.jpg",
+      "height": 2304,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:ParusMinorGould.jpg",
+      "width": 1595,
+      "work": "gould-asia"
+    },
+    "Parus monticolus": {
+      "file": "Birds of Asia - by John Gould (Plate 57) (7609300466).jpg",
+      "height": 3127,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_57)_(7609300466).jpg",
+      "width": 2208,
+      "work": "gould-asia"
+    },
+    "Passer ammodendri": {
+      "file": "BirdsAsiaJohnGoVGoul 0068.jpg",
+      "height": 7285,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0068.jpg",
+      "width": 4849,
+      "work": "gould-asia"
+    },
+    "Passer domesticus": {
+      "file": "Passer domesticus m.jpg",
+      "height": 672,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Passer_domesticus_m.jpg",
+      "width": 914,
+      "work": "von-wright"
+    },
+    "Pastor roseus": {
+      "file": "Sturnus roseus.jpg",
+      "height": 1395,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Sturnus_roseus.jpg",
+      "width": 977,
+      "work": "naumann"
+    },
+    "Perdicula asiatica": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0024.jpg",
+      "height": 4443,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0024.jpg",
+      "width": 6960,
+      "work": "gould-asia"
+    },
+    "Perdicula erythrorhyncha": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0020.jpg",
+      "height": 4389,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0020.jpg",
+      "width": 6960,
+      "work": "gould-asia"
+    },
+    "Pericrocotus flammeus": {
+      "file": "PericrocotusFlammeusGould.jpg",
+      "height": 2849,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PericrocotusFlammeusGould.jpg",
+      "width": 1634,
+      "work": "gould-asia"
+    },
+    "Periparus rubidiventris": {
+      "file": "ParusRubidiventrisGould.jpg",
+      "height": 1991,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:ParusRubidiventrisGould.jpg",
+      "width": 1600,
+      "work": "gould-asia"
+    },
+    "Periparus rufonuchalis": {
+      "file": "Birds of Asia - by John Gould (Plate 60) (7609302892).jpg",
+      "height": 3127,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_60)_(7609302892).jpg",
+      "width": 2194,
+      "work": "gould-asia"
+    },
+    "Pernis apivorus": {
+      "file": "GouldBirdsEuropeIHoney Buzzard.jpg",
+      "height": 5570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIHoney_Buzzard.jpg",
+      "width": 3646,
+      "work": "gould-europe"
+    },
+    "Petrochelidon fluvicola": {
+      "file": "HirundoFluvicolaGould.jpg",
+      "height": 2128,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:HirundoFluvicolaGould.jpg",
+      "width": 1496,
+      "work": "gould-asia"
+    },
+    "Phasianus colchicus": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0164.jpg",
+      "height": 4629,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0164.jpg",
+      "width": 7056,
+      "work": "gould-asia"
+    },
+    "Phodilus badius": {
+      "file": "PhodilusBadiusGould.jpg",
+      "height": 2777,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PhodilusBadiusGould.jpg",
+      "width": 1870,
+      "work": "gould-asia"
+    },
+    "Phoenicurus ochruros": {
+      "file": "BirdsAsiaJohnGoIVGoul 0156.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0156.jpg",
+      "width": 5252,
+      "work": "gould-asia"
+    },
+    "Phoenicurus phoenicurus": {
+      "file": "GouldBirdsEuropeIIRedstart.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRedstart.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Phylloscopus bonelli": {
+      "file": "Phylloscopus bonelli.jpg",
+      "height": 2012,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Phylloscopus_bonelli.jpg",
+      "width": 2544,
+      "work": "naumann"
+    },
+    "Phylloscopus borealis": {
+      "file": "Arcticwarbler248.jpg",
+      "height": 1896,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Arcticwarbler248.jpg",
+      "width": 2676,
+      "work": "naumann"
+    },
+    "Phylloscopus collybita": {
+      "file": "BirdsAsiaJohnGoIVGoul 0244.jpg",
+      "height": 7650,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0244.jpg",
+      "width": 5280,
+      "work": "gould-asia"
+    },
+    "Phylloscopus inornatus": {
+      "file": "Phylloscopus inornatus. John Gould.jpg",
+      "height": 1569,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Phylloscopus_inornatus._John_Gould.jpg",
+      "width": 1811,
+      "work": "gould-britain"
+    },
+    "Phylloscopus nitidus": {
+      "file": "Phylloscopus nitidus Keulemans.jpg",
+      "height": 2004,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Phylloscopus_nitidus_Keulemans.jpg",
+      "width": 2044,
+      "work": "naumann"
+    },
+    "Phylloscopus proregulus": {
+      "file": "GouldBirdsEuropeIIDalmatian Regulus.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIDalmatian_Regulus.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Phylloscopus sibilatrix": {
+      "file": "Phylloscopus sibilatrix. John Gould. The birds of Great Britain.jpg",
+      "height": 2443,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Phylloscopus_sibilatrix._John_Gould._The_birds_of_Great_Britain.jpg",
+      "width": 1696,
+      "work": "gould-britain"
+    },
+    "Phylloscopus trochiloides": {
+      "file": "Phylloscopus trochiloides NAUMANN.jpg",
+      "height": 1667,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Phylloscopus_trochiloides_NAUMANN.jpg",
+      "width": 2425,
+      "work": "naumann"
+    },
+    "Phylloscopus trochilus": {
+      "file": "Phylloscopus trochilus. John Gould. Great Britain.jpg",
+      "height": 1896,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Phylloscopus_trochilus._John_Gould._Great_Britain.jpg",
+      "width": 2038,
+      "work": "gould-britain"
+    },
+    "Pica bottanensis": {
+      "file": "BirdsAsiaJohnGoVGoul 0236.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0236.jpg",
+      "width": 5098,
+      "work": "gould-asia"
+    },
+    "Pica pica": {
+      "file": "BirdsAsiaJohnGoVGoul 0232.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0232.jpg",
+      "width": 5098,
+      "work": "gould-asia"
+    },
+    "Picoides tridactylus": {
+      "file": "Picoides tridactylus NAUMANN.jpg",
+      "height": 1356,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Picoides_tridactylus_NAUMANN.jpg",
+      "width": 875,
+      "work": "naumann"
+    },
+    "Picus canus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0148.jpg",
+      "height": 6948,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0148.jpg",
+      "width": 4237,
+      "work": "gould-asia"
+    },
+    "Picus squamatus": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. XLVIII) (9240039002).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._XLVIII)_(9240039002).jpg",
+      "width": 1718,
+      "work": "gould-century"
+    },
+    "Picus viridis": {
+      "file": "Naumann gruenspecht.jpg",
+      "height": 1419,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Naumann_gruenspecht.jpg",
+      "width": 931,
+      "work": "naumann"
+    },
+    "Pinicola enucleator": {
+      "file": "Pinicola enucleator.jpg",
+      "height": 930,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pinicola_enucleator.jpg",
+      "width": 1154,
+      "work": "von-wright"
+    },
+    "Pitta brachyura": {
+      "file": "BirdsAsiaJohnGoVGoul 0264.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0264.jpg",
+      "width": 5107,
+      "work": "gould-asia"
+    },
+    "Pitta maxima": {
+      "file": "Pitta maxima - The Birds of New Guinea.jpg",
+      "height": 3728,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pitta_maxima_-_The_Birds_of_New_Guinea.jpg",
+      "width": 5803,
+      "work": "gould-new-guinea"
+    },
+    "Pitta megarhyncha": {
+      "file": "BirdsAsiaJohnGoVGoul 0288.jpg",
+      "height": 7331,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0288.jpg",
+      "width": 5089,
+      "work": "gould-asia"
+    },
+    "Pitta sordida": {
+      "file": "BirdsAsiaJohnGoVGoul 0312.jpg",
+      "height": 7331,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0312.jpg",
+      "width": 5107,
+      "work": "gould-asia"
+    },
+    "Plectrophenax nivalis": {
+      "file": "Plectrophenax nivalis.jpg",
+      "height": 7617,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Plectrophenax_nivalis.jpg",
+      "width": 5207,
+      "work": "naumann"
+    },
+    "Plegadis falcinellus": {
+      "file": "Ibis kasztanowatyRB.jpg",
+      "height": 1183,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Ibis_kasztanowatyRB.jpg",
+      "width": 907,
+      "work": "naumann"
+    },
+    "Pluvialis apricaria": {
+      "file": "Pluvialis apricaria.jpg",
+      "height": 1288,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pluvialis_apricaria.jpg",
+      "width": 1250,
+      "work": "von-wright"
+    },
+    "Podiceps cristatus": {
+      "file": "Podiceps cristatus Naumann.jpg",
+      "height": 4985,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Podiceps_cristatus_Naumann.jpg",
+      "width": 7408,
+      "work": "naumann"
+    },
+    "Podoces hendersoni": {
+      "file": "BirdsAsiaJohnGoVGoul 0252.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0252.jpg",
+      "width": 5107,
+      "work": "gould-asia"
+    },
+    "Poecile cinctus": {
+      "file": "Parus cinctus.jpg",
+      "height": 810,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Parus_cinctus.jpg",
+      "width": 900,
+      "work": "von-wright"
+    },
+    "Polyplectron bicalcaratum": {
+      "file": "PeacockPheasantGould.jpg",
+      "height": 625,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PeacockPheasantGould.jpg",
+      "width": 893,
+      "work": "gould-century"
+    },
+    "Porphyrio melanotus": {
+      "file": "Gould Eastern swamp hen.jpg",
+      "height": 1364,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gould_Eastern_swamp_hen.jpg",
+      "width": 2000,
+      "work": "gould-australia"
+    },
+    "Porzana porzana": {
+      "file": "Porzana porzana naumann.jpg",
+      "height": 1539,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Porzana_porzana_naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Prunella collaris": {
+      "file": "BirdsAsiaJohnGoIVGoul 0180.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0180.jpg",
+      "width": 5252,
+      "work": "gould-asia"
+    },
+    "Prunella modularis": {
+      "file": "GouldBirdsEuropeIIHedge Accentor.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIHedge_Accentor.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Prunella montanella": {
+      "file": "BirdsAsiaJohnGoIVGoul 0172.jpg",
+      "height": 6022,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0172.jpg",
+      "width": 3912,
+      "work": "gould-asia"
+    },
+    "Prunella rubeculoides": {
+      "file": "BirdsAsiaJohnGoIVGoul 0192.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0192.jpg",
+      "width": 5252,
+      "work": "gould-asia"
+    },
+    "Prunella strophiata": {
+      "file": "BirdsAsiaJohnGoIVGoul 0196.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0196.jpg",
+      "width": 5280,
+      "work": "gould-asia"
+    },
+    "Psarisomus dalhousiae": {
+      "file": "PsarisomusDalhousiaeGould.jpg",
+      "height": 2926,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:PsarisomusDalhousiaeGould.jpg",
+      "width": 1897,
+      "work": "gould-asia"
+    },
+    "Pseudopodoces humilis": {
+      "file": "BirdsAsiaJohnGoVGoul 0260.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0260.jpg",
+      "width": 5107,
+      "work": "gould-asia"
+    },
+    "Pseudorectes ferrugineus": {
+      "file": "Rectes leucorhynchus - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rectes_leucorhynchus_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3754,
+      "work": "gould-new-guinea"
+    },
+    "Psittacula columboides": {
+      "file": "BirdsAsiaJohnGoVIGoul 0036.jpg",
+      "height": 6869,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0036.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Psittacula cyanocephala": {
+      "file": "BirdsAsiaJohnGoVIGoul 0020.jpg",
+      "height": 6869,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0020.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Psittacula finschii": {
+      "file": "BirdsAsiaJohnGoVIGoul 0040.jpg",
+      "height": 6869,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0040.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Psittacula longicauda": {
+      "file": "BirdsAsiaJohnGoVIGoul 0024.jpg",
+      "height": 6869,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0024.jpg",
+      "width": 4361,
+      "work": "gould-asia"
+    },
+    "Pterocles orientalis": {
+      "file": "Pterocles orientalis Naumann.jpg",
+      "height": 698,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Pterocles_orientalis_Naumann.jpg",
+      "width": 925,
+      "work": "naumann"
+    },
+    "Pterocles senegallus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0256.jpg",
+      "height": 4547,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0256.jpg",
+      "width": 6976,
+      "work": "gould-asia"
+    },
+    "Pterorhinus chinensis": {
+      "file": "GarrulaxChinensisGould.jpg",
+      "height": 2744,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GarrulaxChinensisGould.jpg",
+      "width": 1744,
+      "work": "gould-asia"
+    },
+    "Ptiloris magnificus": {
+      "file": "Ptiloris magnificus - The birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Ptiloris_magnificus_-_The_birds_of_New_Guinea.jpg",
+      "width": 3735,
+      "work": "gould-new-guinea"
+    },
+    "Ptyonoprogne rupestris": {
+      "file": "GouldBirdsEuropeIIRock Martin.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRock_Martin.jpg",
+      "width": 3580,
+      "work": "gould-europe"
+    },
+    "Pucrasia macrolopha": {
+      "file": "KoklassRichter.jpg",
+      "height": 4518,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:KoklassRichter.jpg",
+      "width": 6994,
+      "work": "gould-asia"
+    },
+    "Pycnonotus sinensis": {
+      "file": "IxusSinensisGould.jpg",
+      "height": 2002,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:IxusSinensisGould.jpg",
+      "width": 1617,
+      "work": "gould-asia"
+    },
+    "Pyrrhocorax pyrrhocorax": {
+      "file": "GouldBirdsEuropeIIIAlpine Chough.jpg",
+      "height": 5584,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIIAlpine_Chough.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Pyrrhula pyrrhula": {
+      "file": "BirdsAsiaJohnGoVGoul 0148.jpg",
+      "height": 7321,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0148.jpg",
+      "width": 5013,
+      "work": "gould-asia"
+    },
+    "Rallus aquaticus": {
+      "file": "Rallus aquaticus.jpg",
+      "height": 1554,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rallus_aquaticus.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Regulus regulus": {
+      "file": "BirdsAsiaJohnGoIVGoul 0248.jpg",
+      "height": 7650,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0248.jpg",
+      "width": 5280,
+      "work": "gould-asia"
+    },
+    "Remiz pendulinus": {
+      "file": "Naumann (II. 17) (8090126140).jpg",
+      "height": 1824,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Naumann_(II._17)_(8090126140).jpg",
+      "width": 1293,
+      "work": "naumann"
+    },
+    "Rhipidura dryas": {
+      "file": "Rhipidura dryas - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rhipidura_dryas_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3698,
+      "work": "gould-new-guinea"
+    },
+    "Rhipidura leucothorax": {
+      "file": "Rhipidura leucothorax - The Birds of New Guinea.jpg",
+      "height": 5823,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rhipidura_leucothorax_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3705,
+      "work": "gould-new-guinea"
+    },
+    "Rhodospiza obsoleta": {
+      "file": "BirdsAsiaJohnGoVGoul 0124.jpg",
+      "height": 7321,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0124.jpg",
+      "width": 4970,
+      "work": "gould-asia"
+    },
+    "Riparia riparia": {
+      "file": "GouldBirdsEuropeIISand Martin.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIISand_Martin.jpg",
+      "width": 3580,
+      "work": "gould-europe"
+    },
+    "Sasia abnormis": {
+      "file": "BirdsAsiaJohnGoVIGoul 0172.jpg",
+      "height": 6948,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0172.jpg",
+      "width": 4237,
+      "work": "gould-asia"
+    },
+    "Sasia ochracea": {
+      "file": "BirdsAsiaJohnGoVIGoul 0168.jpg",
+      "height": 6948,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0168.jpg",
+      "width": 4237,
+      "work": "gould-asia"
+    },
+    "Saxicola maurus": {
+      "file": "BirdsAsiaJohnGoIVGoul 0144.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0144.jpg",
+      "width": 5199,
+      "work": "gould-asia"
+    },
+    "Saxicola rubetra": {
+      "file": "GouldBirdsEuropeIIWhinchat.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIWhinchat.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Saxicola rubicola": {
+      "file": "GouldBirdsEuropeIIStonechat.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIStonechat.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Scenopoeetes dentirostris": {
+      "file": "Scenopoeus dentirostris - The Birds of New Guinea.jpg",
+      "height": 5795,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Scenopoeus_dentirostris_-_The_Birds_of_New_Guinea.jpg",
+      "width": 3800,
+      "work": "gould-new-guinea"
+    },
+    "Scolopax rusticola": {
+      "file": "Scolopax rusticola.jpg",
+      "height": 1164,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Scolopax_rusticola.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Seleucidis melanoleucus": {
+      "file": "Seleucides nigricans - The Birds of New Guinea (2).jpg",
+      "height": 5830,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Seleucides_nigricans_-_The_Birds_of_New_Guinea_(2).jpg",
+      "width": 3761,
+      "work": "gould-new-guinea"
+    },
+    "Serilophus lunatus": {
+      "file": "SerilophusLunatusGould.jpg",
+      "height": 2029,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:SerilophusLunatusGould.jpg",
+      "width": 1507,
+      "work": "gould-asia"
+    },
+    "Sitta cinnamoventris": {
+      "file": "SittaCinnamoventrisGould.jpg",
+      "height": 1356,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:SittaCinnamoventrisGould.jpg",
+      "width": 861,
+      "work": "gould-asia"
+    },
+    "Sitta europaea": {
+      "file": "GouldBirdsEuropeIIIAsiatic Nuthatch.jpg",
+      "height": 5584,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIIAsiatic_Nuthatch.jpg",
+      "width": 3563,
+      "work": "gould-europe"
+    },
+    "Sitta himalayensis": {
+      "file": "SittaHimalayensisGould.jpg",
+      "height": 1224,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:SittaHimalayensisGould.jpg",
+      "width": 813,
+      "work": "gould-asia"
+    },
+    "Sitta nagaensis": {
+      "file": "SittaNagaensisGould.jpg",
+      "height": 2634,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:SittaNagaensisGould.jpg",
+      "width": 1716,
+      "work": "gould-asia"
+    },
+    "Sitta neumayer": {
+      "file": "Rocknuthatch.JPG",
+      "height": 2396,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Rocknuthatch.JPG",
+      "width": 2965,
+      "work": "naumann"
+    },
+    "Somateria spectabilis": {
+      "file": "Prachteiderente2.jpg",
+      "height": 650,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Prachteiderente2.jpg",
+      "width": 934,
+      "work": "naumann"
+    },
+    "Spatula clypeata": {
+      "file": "Anas clypeata by Naumann.jpg",
+      "height": 537,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Anas_clypeata_by_Naumann.jpg",
+      "width": 800,
+      "work": "naumann"
+    },
+    "Spilornis cheela": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. I) (9237206163).jpg",
+      "height": 2728,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._I)_(9237206163).jpg",
+      "width": 1764,
+      "work": "gould-century"
+    },
+    "Spinus spinus": {
+      "file": "Carduelis spinus f.jpg",
+      "height": 1044,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Carduelis_spinus_f.jpg",
+      "width": 1290,
+      "work": "von-wright"
+    },
+    "Sterna paradisaea": {
+      "file": "GouldBirdsEuropeVArctic Tern.jpg",
+      "height": 3607,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeVArctic_Tern.jpg",
+      "width": 5561,
+      "work": "gould-europe"
+    },
+    "Streptopelia turtur": {
+      "file": "Turtle Dove.jpg",
+      "height": 1442,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Turtle_Dove.jpg",
+      "width": 954,
+      "work": "gould-europe"
+    },
+    "Strix aluco": {
+      "file": "Syrnium Aluco.jpg",
+      "height": 6190,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Syrnium_Aluco.jpg",
+      "width": 3956,
+      "work": "gould-britain"
+    },
+    "Strix ocellata": {
+      "file": "SyrniumOcellatumGould.jpg",
+      "height": 2668,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:SyrniumOcellatumGould.jpg",
+      "width": 1688,
+      "work": "gould-asia"
+    },
+    "Strix uralensis": {
+      "file": "GouldBirdsEuropeIUral Owl.jpg",
+      "height": 2796,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIUral_Owl.jpg",
+      "width": 1849,
+      "work": "gould-europe"
+    },
+    "Strix varia": {
+      "file": "GouldBirdsEuropeIBarred Owl.jpg",
+      "height": 2784,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIBarred_Owl.jpg",
+      "width": 1818,
+      "work": "gould-europe"
+    },
+    "Sturnus unicolor": {
+      "file": "BirdsAsiaJohnGoVGoul 0176.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0176.jpg",
+      "width": 5013,
+      "work": "gould-asia"
+    },
+    "Sturnus vulgaris": {
+      "file": "BirdsAsiaJohnGoVGoul 0184.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0184.jpg",
+      "width": 5025,
+      "work": "gould-asia"
+    },
+    "Surnia ulula": {
+      "file": "Surnia Funerea.jpg",
+      "height": 6200,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Surnia_Funerea.jpg",
+      "width": 4068,
+      "work": "gould-britain"
+    },
+    "Suthora nipalensis": {
+      "file": "SuthoraNipalensisGould.jpg",
+      "height": 1035,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:SuthoraNipalensisGould.jpg",
+      "width": 879,
+      "work": "gould-asia"
+    },
+    "Sylvia atricapilla": {
+      "file": "GouldBirdsEuropeII Blackcap.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeII_Blackcap.jpg",
+      "width": 3636,
+      "work": "gould-europe"
+    },
+    "Sylvia borin": {
+      "file": "Sylvia borin.jpg",
+      "height": 723,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Sylvia_borin.jpg",
+      "width": 804,
+      "work": "von-wright"
+    },
+    "Syrrhaptes paradoxus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0248.jpg",
+      "height": 4547,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0248.jpg",
+      "width": 6976,
+      "work": "gould-asia"
+    },
+    "Terpsiphone paradisi": {
+      "file": "MuscipetaParadisiGould.jpg",
+      "height": 2916,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MuscipetaParadisiGould.jpg",
+      "width": 1804,
+      "work": "gould-asia"
+    },
+    "Tetrao urogallus": {
+      "file": "Tetrao urogallus by Naumann.jpg",
+      "height": 1570,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Tetrao_urogallus_by_Naumann.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Tetrastes bonasia": {
+      "file": "Gelinotte.jpg",
+      "height": 957,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Gelinotte.jpg",
+      "width": 1453,
+      "work": "gould-europe"
+    },
+    "Tetrax tetrax": {
+      "file": "Tetrax tetrax.jpg",
+      "height": 1386,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Tetrax_tetrax.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Tichodroma muraria": {
+      "file": "Naumann (II. 24) (8090129572).jpg",
+      "height": 1746,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Naumann_(II._24)_(8090129572).jpg",
+      "width": 1172,
+      "work": "naumann"
+    },
+    "Treron sphenurus": {
+      "file": "A century of birds from the Himalaya Mountains (TAB. LVII) (9240049902).jpg",
+      "height": 2732,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:A_century_of_birds_from_the_Himalaya_Mountains_(TAB._LVII)_(9240049902).jpg",
+      "width": 1739,
+      "work": "gould-century"
+    },
+    "Tringa nebularia": {
+      "file": "Tringa erythropus svartsnaeppa.jpg",
+      "height": 1492,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Tringa_erythropus_svartsnaeppa.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Troglodytes troglodytes": {
+      "file": "BirdsAsiaJohnGoIVGoul 0212.jpg",
+      "height": 7618,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoIVGoul_0212.jpg",
+      "width": 5280,
+      "work": "gould-asia"
+    },
+    "Turdus albocinctus": {
+      "file": "MerulaAlbocinctaGould.jpg",
+      "height": 2739,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MerulaAlbocinctaGould.jpg",
+      "width": 1799,
+      "work": "gould-asia"
+    },
+    "Turdus atrogularis": {
+      "file": "GouldBirdsEuropeIIBlack-throated Thrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlack-throated_Thrush.jpg",
+      "width": 3703,
+      "work": "gould-europe"
+    },
+    "Turdus boulboul": {
+      "file": "MerulaBoulboulGould.jpg",
+      "height": 2860,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MerulaBoulboulGould.jpg",
+      "width": 1831,
+      "work": "gould-asia"
+    },
+    "Turdus eunomus": {
+      "file": "Turdus eunomus (Naumann).jpg",
+      "height": 1614,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "filename",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Turdus_eunomus_(Naumann).jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Turdus iliacus": {
+      "file": "Turdus iliacus NAUMANN.jpg",
+      "height": 1356,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Turdus_iliacus_NAUMANN.jpg",
+      "width": 891,
+      "work": "naumann"
+    },
+    "Turdus merula": {
+      "file": "GouldBirdsEuropeIIBlackbird.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIBlackbird.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Turdus migratorius": {
+      "file": "GouldBirdsEuropeIIMigratory Ouzel.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIMigratory_Ouzel.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Turdus naumanni": {
+      "file": "GouldBirdsEuropeIINaumannsThrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIINaumannsThrush.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Turdus pallidus": {
+      "file": "GouldBirdsEuropeIIPallidThrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIPallidThrush.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Turdus philomelos": {
+      "file": "Turdus philomelos.jpg",
+      "height": 1560,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Turdus_philomelos.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Turdus rubrocanus": {
+      "file": "TurdusGouldiGould.jpg",
+      "height": 1936,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:TurdusGouldiGould.jpg",
+      "width": 1716,
+      "work": "gould-asia"
+    },
+    "Turdus ruficollis": {
+      "file": "TurdusRuficollisGould.jpg",
+      "height": 1908,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:TurdusRuficollisGould.jpg",
+      "width": 1639,
+      "work": "gould-asia"
+    },
+    "Turdus torquatus": {
+      "file": "GouldBirdsEuropeIIRing Ouzel.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIRing_Ouzel.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Turdus unicolor": {
+      "file": "MerulaUnicolorGould.jpg",
+      "height": 2073,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:MerulaUnicolorGould.jpg",
+      "width": 1689,
+      "work": "gould-asia"
+    },
+    "Turdus viscivorus": {
+      "file": "GouldBirdsEuropeIIMissel Thrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIMissel_Thrush.jpg",
+      "width": 3667,
+      "work": "gould-europe"
+    },
+    "Turnix suscitator": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0052.jpg",
+      "height": 4424,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0052.jpg",
+      "width": 6944,
+      "work": "gould-asia"
+    },
+    "Turnix sylvaticus": {
+      "file": "BirdsAsiaJohnGoVIIGoul 0048.jpg",
+      "height": 4424,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIIGoul_0048.jpg",
+      "width": 6944,
+      "work": "gould-asia"
+    },
+    "Tyto alba": {
+      "file": "Strix Flammea.jpg",
+      "height": 6179,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Strix_Flammea.jpg",
+      "width": 4063,
+      "work": "gould-britain"
+    },
+    "Upupa epops": {
+      "file": "Birds of Asia - by John Gould (Plate 66) (6900282962).jpg",
+      "height": 3146,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Birds_of_Asia_-_by_John_Gould_(Plate_66)_(6900282962).jpg",
+      "width": 2214,
+      "work": "gould-asia"
+    },
+    "Uria aalge": {
+      "file": "Uria aalge.jpg",
+      "height": 1102,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Uria_aalge.jpg",
+      "width": 946,
+      "work": "von-wright"
+    },
+    "Urocissa caerulea": {
+      "file": "BirdsAsiaJohnGoVGoul 0192.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0192.jpg",
+      "width": 5043,
+      "work": "gould-asia"
+    },
+    "Urocissa erythroryncha": {
+      "file": "BirdsAsiaJohnGoVGoul 0196.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0196.jpg",
+      "width": 5043,
+      "work": "gould-asia"
+    },
+    "Urocissa flavirostris": {
+      "file": "BirdsAsiaJohnGoVGoul 0212.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0212.jpg",
+      "width": 5089,
+      "work": "gould-asia"
+    },
+    "Urocissa ornata": {
+      "file": "BirdsAsiaJohnGoVGoul 0220.jpg",
+      "height": 7257,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVGoul_0220.jpg",
+      "width": 5080,
+      "work": "gould-asia"
+    },
+    "Xema sabini": {
+      "file": "Larus sabini.jpg",
+      "height": 522,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Larus_sabini.jpg",
+      "width": 866,
+      "work": "naumann"
+    },
+    "Xenus cinereus": {
+      "file": "Xenus cinereus.jpg",
+      "height": 1359,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Xenus_cinereus.jpg",
+      "width": 1102,
+      "work": "naumann"
+    },
+    "Yungipicus canicapillus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0112.jpg",
+      "height": 6904,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0112.jpg",
+      "width": 4279,
+      "work": "gould-asia"
+    },
+    "Yungipicus nanus": {
+      "file": "BirdsAsiaJohnGoVIGoul 0136.jpg",
+      "height": 6948,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:BirdsAsiaJohnGoVIGoul_0136.jpg",
+      "width": 4237,
+      "work": "gould-asia"
+    },
+    "Zoothera aurea": {
+      "file": "GouldBirdsEuropeIIWhitesThrush.jpg",
+      "height": 5532,
+      "licence": "Public domain",
+      "licence_url": "",
+      "matched_by": "category",
+      "page_url": "https://commons.wikimedia.org/wiki/File:GouldBirdsEuropeIIWhitesThrush.jpg",
+      "width": 3585,
+      "work": "gould-europe"
+    }
+  },
+  "schema": 1,
+  "works": {
+    "gould-asia": {
+      "author": "John Gould; Richard Bowdler Sharpe",
+      "commons_category": "Category:The Birds of Asia (John Gould)",
+      "note": "739 files seen in 9 categories; 272 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "The Birds of Asia",
+      "years": "1850-1883"
+    },
+    "gould-australia": {
+      "author": "John Gould",
+      "commons_category": "Category:The Birds of Australia (John Gould)",
+      "note": "815 files seen in 1 category; 8 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "The Birds of Australia",
+      "years": "1840-1848"
+    },
+    "gould-britain": {
+      "author": "John Gould",
+      "commons_category": "Category:The Birds of Great Britain (illustrations by John Gould)",
+      "note": "75 files seen in 1 category; 16 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "The Birds of Great Britain",
+      "years": "1862-1873"
+    },
+    "gould-century": {
+      "author": "John Gould; Elizabeth Gould",
+      "commons_category": "Category:A Century of Birds from the Himalaya Mountains (illustrations by John Gould)",
+      "note": "94 files seen in 1 category; 22 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "A Century of Birds from the Himalaya Mountains",
+      "years": "1830-1832"
+    },
+    "gould-europe": {
+      "author": "John Gould",
+      "commons_category": "Category:The Birds of Europe (Gould)",
+      "note": "659 files seen in 6 categories; 167 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "The Birds of Europe",
+      "years": "1832-1837"
+    },
+    "gould-new-guinea": {
+      "author": "John Gould; Richard Bowdler Sharpe",
+      "commons_category": "Category:The Birds of New Guinea (John Gould)",
+      "note": "378 files seen in 5 categories; 57 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "The Birds of New Guinea and the adjacent Papuan Islands",
+      "years": "1875-1888"
+    },
+    "naumann": {
+      "author": "Johann Friedrich Naumann; Carl R. Hennicke",
+      "commons_category": "Category:Naturgeschichte der Vögel Mitteleuropas",
+      "note": "777 files seen in 12 categories; 165 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "Naturgeschichte der Vögel Mitteleuropas",
+      "years": ""
+    },
+    "von-wright": {
+      "author": "Magnus von Wright; Wilhelm von Wright; Ferdinand von Wright",
+      "commons_category": "Category:Svenska fåglar (von Wright)",
+      "note": "411 files seen in 1 category; 53 files accepted as single-species public-domain plates of at least 800 px",
+      "title": "Svenska fåglar",
+      "years": ""
+    }
+  }
+}
