@@ -44,7 +44,7 @@ jobs:
     # more states than it did: this job took 42m52s on #265 (2026-10-22) against the 45
     # minutes it had, and 37m on main before that. 90 keeps a cold-cache run under the 75%
     # line scripts/check-ci-config.py holds every job to.
-    timeout-minutes: 90  # observed 21m41s
+    timeout-minutes: 90  # observed 37m21s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free up runner disk space
