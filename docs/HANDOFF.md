@@ -484,7 +484,8 @@ the day sheet, because the kiosk picks its palette from the sun and the gates gr
 the route list now holds `/kiosk?night=0` and `/kiosk?night=1`). Two checks were red on `main` too and are not this
 branch's: OSV-Scanner, now waived by #272 (merged), and the CI-config check, whose `a11y.yml` annotation #272 fixed and
 whose nine mutation rows read `main`'s last five runs, so they clear as runs without an apt stall replace those with
-one (#273, open, would stop them reddening pull requests that edit no budget). Then the two decisions in section 5,
+one. #273 (merged) now holds a pull request to the budgets it edits, so they should no longer redden this one; the
+first `CI config` run after the merge of `main` (3bc8865) is where to confirm it. Then the two decisions in section 5,
 items 15 and 16, and CodeQL alert 175 on the picture cache, which is a maintainer's dismissal.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
