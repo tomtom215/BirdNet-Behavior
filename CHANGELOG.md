@@ -156,6 +156,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abort on panic, which the advisory's precondition needs to be caught). The fixed 0.12.1 is
   already in the lock for the newer digest chain; the entry goes when axum and tungstenite
   move to it.
+- **`CI config` holds a pull request to the budgets it edits.** Its run-history checks (a job
+  near its timeout, a stale `# observed`) read `main`'s last five runs, so a stalled apt mirror
+  on 2026-10-25 and 10-26 put nine mutation rows over the line on every pull request that ran the
+  check afterwards, whether or not it touched a budget. On a `pull_request` event those two checks now
+  apply to the job rows whose budget, and the `timeout-minutes:` lines whose budget or `# observed`,
+  differ from the pull request's base (the first parent of the merge commit, so the job's checkout is
+  two commits deep). Push, schedule and dispatch runs still check every row, so an outgrown budget
+  goes red on `main`; a pull request whose base cannot be found is checked on every row too.
+  `scripts/check-ci-config.py` records the incident (12) and tests the rule in both directions.
 
 ### Fixed
 
@@ -193,7 +202,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code, because the kiosk picks its palette from the sun and the route list held one bare `/kiosk`.
   The selector now covers it, and the browser gates list `/kiosk?night=0` and `/kiosk?night=1`, so
   both palettes are graded on every run whatever the hour.
-
 
 ## [0.18.1] - 2026-10-26
 

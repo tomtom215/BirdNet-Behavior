@@ -141,6 +141,13 @@ jobs:
     timeout-minutes: 15  # observed 1m17s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A pull request is checked out as a merge commit whose first parent is
+          # its base. Checks 4 and 5 hold a pull request only to the budgets it
+          # edits, which they read from the difference to that parent
+          # (scripts/check-ci-config.py, incident 12); depth 1 has no parent, and
+          # they would fall back to every row.
+          fetch-depth: 2
       # The check runs `cargo mutants --list`, and without this step its first
       # `cargo` call is also where rustup installs the toolchain and the
       # components `rust-toolchain.toml` names. When that failed, every row

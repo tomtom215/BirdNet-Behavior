@@ -20,7 +20,7 @@ request.
 | `docs.yml` | pull requests touching `docs/book/**`, the book theme or its scripts; pushes to `main`; version tags | self-tests the build script against synthetic tags, refuses a tag that is not on `main` or disagrees with `Cargo.toml`, builds the versioned manual (`/dev/` from `origin/main`; a pull request builds its own tree), link-checks every tree, loads the built site in a browser (version switcher, 404, search, phone menu bar, axe), deploys it to GitHub Pages |
 | `install-smoke.yml` | pull requests touching `install.sh`, `installer/lib/**`, `src/**`, `crates/**` or the manifests | runs `install.sh` in a container with no systemd and no network and loads the web UI |
 | `upgrade.yml` | pull requests touching the installer, `src/**`, `crates/**` or the manifests | upgrades from the previous releases on a real systemd host, then rolls back |
-| `mutation.yml` | pull requests touching the mutation-tested paths or `.github/workflows/**`; Mondays | the CI-config checks, then cargo-mutants on the paths that decide what a station records |
+| `mutation.yml` | pull requests touching the mutation-tested paths or `.github/workflows/**`; Mondays | the CI-config checks (on a pull request, the run-history ones apply to the budgets it edits; every row on push, Mondays and dispatch), then cargo-mutants on the paths that decide what a station records |
 | `release.yml` | version tags | validates the tag, re-runs the gates, builds each target, attests and packages, upgrades from the previous releases, then publishes and verifies the GitHub Release |
 | `publish-model.yml` | manual | mirrors the model files to the shared model release, failing unless every sha256 matches the pins in `installer/lib/10-config.sh` |
 
