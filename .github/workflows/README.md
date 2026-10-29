@@ -13,7 +13,7 @@ request.
 | `coverage.yml` | every push and pull request | line coverage with cargo-llvm-cov; informational |
 | `codeql.yml` | every push and pull request, and Tuesdays | CodeQL (`security-extended`) over Rust, the workflows themselves, the JavaScript the UI serves, and the Python gate scripts; results in the Security tab |
 | `fuzz.yml` | pull requests touching the audio decoder, the label parser or `fuzz/**`; Wednesdays | libFuzzer on the two parsers of untrusted input (the audio decoder and the label-file parser), with production arithmetic; 60 seconds a target on a pull request, 10 minutes a week |
-| `osv.yml` | every push and pull request, and daily | OSV-Scanner over `Cargo.lock` and the browser-QA lockfile; any finding fails the job |
+| `osv.yml` | every push and pull request, and daily | OSV-Scanner over `Cargo.lock` and the browser-QA lockfile; any finding not waived in `osv-scanner.toml` (reason and expiry date) fails the job |
 | `scorecard.yml` | pushes, branch-protection changes, and Mondays | the OpenSSF Scorecard of the repository, published and uploaded to code scanning; a dashboard, not a gate |
 | `a11y.yml` | pull requests touching `crates/birdnet-web/**`, `tools/visual-qa/**`, or this file | axe accessibility, the interaction gate, the chart-label legibility gate, the base-path gate, the visual-QA sweep, in a real browser at desktop and phone size |
 | `docker.yml` | pull requests touching `Dockerfile`, `.dockerignore`, `docker/**`; pushes except ones that touch only `docs/**`, Markdown, `ci.yml` or `release.yml`; version tags | the multi-arch image, booted with networking off to assert the extensions load; signed on release |
