@@ -679,7 +679,24 @@ jobs:
         # PATH. We need the tests to actually run during mutation testing
         # (so the surviving-mutant count for those branches stays at 0),
         # so install ffmpeg unconditionally.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        #
+        # Bounded, and quick to give up on a stalled mirror. In `main`'s five latest
+        # runs (2026-10-19 to 10-26) 19 of the 172 shard jobs spent 5 minutes or more
+        # here, 16 of them 15 or more (up to 35.7), all on 10-25 and 10-26, against a
+        # median of 0.3. The log of one (detections [1/8], run 40320382733) shows
+        # azure.archive.ubuntu.com going quiet for 2.5 to 4 minutes at a time in the
+        # middle of the download, then `Ign:`. The `CI config` job reported nine rows at
+        # 78% to 101% of their budget, six of them cancelled at it; every one had a stalled
+        # install in the run it was measured on, and where its mutation step finished that
+        # step took no longer than usual. The install spent the budget, not the mutants.
+        # A 20 s timeout with three retries gives up on a stalled connection sooner, and
+        # the step limit stops a bad mirror from taking the whole shard budget: the job
+        # fails here, by name, instead.
+        timeout-minutes: 15
+        run: |
+          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_opts[@]}" update
+          sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg
 
       - name: Run mutation testing on ${{ matrix.file }}
         # `--file` restricts mutation to one source file at a time so each

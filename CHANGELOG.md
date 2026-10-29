@@ -151,6 +151,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (read from the package metadata; `cargo deny` itself is not installed here). The workspace library tests
   pass with the same counts as before the update. Not checked: that `realfft` 3.5.1 leaves the mel
   spectrogram bit-identical (the parity harness needs the model files, which this session did not have).
+- **OSV-Scanner waives GHSA-qwgh-2vcv-g2f7 until 2026-12-01** in a new `osv-scanner.toml`
+  (`block_buffer` 0.10.4, reached through `sha1` 0.10.7 from axum and tungstenite; release builds
+  abort on panic, which the advisory's precondition needs to be caught). The fixed 0.12.1 is
+  already in the lock for the newer digest chain; the entry goes when axum and tungstenite
+  move to it.
 
 ### Fixed
 
@@ -170,6 +175,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`NOTICE` and `docs/book/about.md` said photographer attribution is "shown on each image".** No
   page prints it; the credit for AviCommons and Flickr pictures is only in the image API's
   `description`. Both now say so. The gap itself is not closed.
+- **A stalled apt mirror no longer spends a mutation shard's budget.** In `main`'s five latest
+  `Mutation testing` runs, 19 of 172 shard jobs spent 5 minutes or more in `Install ffmpeg`
+  (16 of them 15 or more, up to 35.7), all on 2026-10-25 and 10-26, against a median of 0.3;
+  the log of one shows `azure.archive.ubuntu.com` going quiet for 2.5 to 4 minutes mid-download.
+  Nine rows were then reported by the `CI config` job at 78% to 101% of their budget, six of them
+  cancelled at it, and each had such an install in the run it was measured on. The step now
+  gives up on a stalled connection after 20 s (three retries) and is limited to 15 minutes, so
+  a bad mirror fails that step by name. The check reads `main`'s last five runs, so those nine
+  findings clear as five runs without a stall replace the ones that had it.
+- **The a11y job's `# observed` annotation** is regenerated (`21m41s` → `37m21s`, the median of
+  its last five runs on `main`; the job has grown with the gates added since it was written).
+
 
 ## [0.18.1] - 2026-10-26
 
