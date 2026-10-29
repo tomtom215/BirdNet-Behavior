@@ -183,6 +183,17 @@ Corollaries, each learned the same way:
   clean, and the finding looked like noise from a server restart. When a
   state is only reachable through JS, either drive it in the gate or check it
   mechanically without a browser — do not let a green sweep stand for it.
+- **A page whose palette follows the clock is graded in whichever palette the
+  clock gives.** The kiosk picks paper or lamplight from the sun (`data-night`,
+  set by the server; before 06:00 or from 20:00 without coordinates) and
+  `ROUTES` held one bare `/kiosk`. The focus gate passed at 20:15 UTC and failed
+  at 06:50 on the same code: the exit link is `a.plate-ui`, not a link inside a
+  `.plate-ui`, so `.plate-ui a:focus-visible` never reached it and it kept the
+  app's green ring, 1.47:1 on the paper and fine on the dark ground. Every
+  earlier local and CI run had happened to be after dusk. The route list now
+  holds `/kiosk?night=0` and `/kiosk?night=1`, so every shared gate grades both.
+  Anything the server decides from the clock, the sun or the calendar needs each
+  of its states in the route list, not one of them by luck.
 - **A value validated at startup is not a value validated.** `validate()` ran
   on the config file at boot and `overlay_db_settings` laid the settings table
   over the result afterwards, so nothing ever checked a number typed into

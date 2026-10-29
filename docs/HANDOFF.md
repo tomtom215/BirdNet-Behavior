@@ -478,11 +478,14 @@ first failing step, so I ran the thirteen gates behind it locally against a **fr
 workflow starts it (a long-lived one is not the same: it hid the axe finding); they found, all in the kiosk work, that
 the plate is 2.8 px on a phone (it now opens on Numbers under 1180 px; item 22), two defects of the Numbers face's
 mode links, a console 404 per species without a plate (the endpoint answers 204 now), the operator's reduced motion
-not reaching the plate's drift, and a gate left behind for the polar clock I had removed. All pass locally against the
-rebuilt fixture; the same run in CI is the check. Two were red on `main` too and are not this branch's: OSV-Scanner (`block-buffer` 0.10.4,
-GHSA-qwgh-2vcv-g2f7, no fixed version) and the CI-config check (eight mutation shards at 97 to 101% of their timeout, one
-at 78%, and a stale `a11y.yml` `# observed` annotation); both are a maintainer's decision. Then the two decisions in
-section 5, items 15 and 16.
+not reaching the plate's drift, and a gate left behind for the polar clock I had removed. Those passed locally, and CI then
+found one more that a local run after dusk could not: the kiosk's exit link had the app's green focus ring, 1.47:1 on
+the day sheet, because the kiosk picks its palette from the sun and the gates graded whichever the clock gave (fixed;
+the route list now holds `/kiosk?night=0` and `/kiosk?night=1`). Two checks were red on `main` too and are not this
+branch's: OSV-Scanner, now waived by #272 (merged), and the CI-config check, whose `a11y.yml` annotation #272 fixed and
+whose nine mutation rows read `main`'s last five runs, so they clear as runs without an apt stall replace those with
+one (#273, open, would stop them reddening pull requests that edit no budget). Then the two decisions in section 5,
+items 15 and 16, and CodeQL alert 175 on the picture cache, which is a maintainer's dismissal.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 

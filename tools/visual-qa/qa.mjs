@@ -151,7 +151,11 @@ export const ROUTES = [
   ['detection-reviews', '/detection-reviews'],
   ['notifications', '/notifications'],
   ['quarantine', '/quarantine'],
-  ['kiosk', '/kiosk'],
+  // The plate has its own pair of palettes and picks one from the sun, so a bare `/kiosk` is graded in
+  // whichever the CI clock gives: the focus gate passed at 20:15 UTC (lamplight) and failed at 06:50
+  // (paper) on the same code. `?night=` forces one, so both are graded on every run.
+  ['kiosk-day', '/kiosk?night=0'],
+  ['kiosk-night', '/kiosk?night=1'],
   // Every footer links here; the fixture seeds credited photographs, one uncredited one and a plate.
   ['credits', '/system/credits'],
 

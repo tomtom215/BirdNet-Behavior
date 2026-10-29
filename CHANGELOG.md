@@ -186,6 +186,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   findings clear as five runs without a stall replace the ones that had it.
 - **The a11y job's `# observed` annotation** is regenerated (`21m41s` → `37m21s`, the median of
   its last five runs on `main`; the job has grown with the gates added since it was written).
+- **The kiosk's "Exit" link shows a readable focus ring on the day sheet.** The plate's own rule,
+  `.plate-ui a:focus-visible`, reaches the links inside the mode bar but not the exit link, which
+  carries the class itself, so it kept the app's green ring: 1.47:1 on the paper, readable only on
+  the dark ground. The focus gate passed at 20:15 UTC (lamplight) and failed at 06:50 on the same
+  code, because the kiosk picks its palette from the sun and the route list held one bare `/kiosk`.
+  The selector now covers it, and the browser gates list `/kiosk?night=0` and `/kiosk?night=1`, so
+  both palettes are graded on every run whatever the hour.
 
 
 ## [0.18.1] - 2026-10-26
