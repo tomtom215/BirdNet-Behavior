@@ -214,6 +214,16 @@ pub fn format_temperature(
     format!("{sign}{rounded:.decimals$}°{letter}")
 }
 
+/// A clock time reduced to canonical `HH:MM`: `16:31:37` is `16:31`. `None` when `time` is not
+/// `HH:MM` or `HH:MM:SS`.
+///
+/// For a caller that writes its own marked element (an SVG `<tspan>`) and wants the minute the
+/// reader's clock will print, not the second a stored time carries.
+#[must_use]
+pub fn clock_minutes(time: &str) -> Option<String> {
+    parse_clock(time).map(|(h, m, _)| format!("{h:02}:{m:02}"))
+}
+
 /// The attribute that marks an element as a clock time (for an element the
 /// caller writes itself, such as an SVG `<text>`): `data-clk="16:31:37"`.
 /// A value that is not a time is left unmarked.
@@ -337,6 +347,16 @@ mod tests {
 
     fn cases() -> serde_json::Value {
         serde_json::from_str(CASES).expect("the shared table parses")
+    }
+
+    #[test]
+    fn minutes_drop_the_seconds_and_refuse_what_is_not_a_time() {
+        assert_eq!(clock_minutes("16:31:37").as_deref(), Some("16:31"));
+        assert_eq!(clock_minutes("06:05").as_deref(), Some("06:05"));
+        assert_eq!(clock_minutes("24:00"), None);
+        assert_eq!(clock_minutes("6:05"), None);
+        assert_eq!(clock_minutes("16:31:99"), None);
+        assert_eq!(clock_minutes(""), None);
     }
 
     #[test]

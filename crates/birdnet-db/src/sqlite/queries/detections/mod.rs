@@ -27,15 +27,15 @@ pub use locks::{
     locked_file_names, unlock_detection, unlock_detection_at,
 };
 pub use read::{
-    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, analytic_detection_count,
+    CLIP_AVAILABLE, RecordingsFilter, SpeciesHeard, TodayFilter, analytic_detection_count,
     analytic_detection_count_for_date, analytic_detections, analytic_detections_above,
     analytic_species_count_for_date, best_detections_for_date, com_name_for,
     concurrent_detections_from_other_sources, detected_at_utc_for, detection_at, detection_count,
     detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_for_clip, detections_per_day,
     recent_clips, recent_clips_count, recent_detections, seconds_since_last_detection,
-    species_detection_count_between, species_for_date, todays_detection_count, todays_detections,
-    todays_source_activity, unstamped_detection_count,
+    species_detection_count_between, species_for_date, species_heard_on, todays_detection_count,
+    todays_detections, todays_source_activity, unstamped_detection_count,
 };
 pub use search::{SearchTerm, like_contains, parse_search_term};
 pub use write::{

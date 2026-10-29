@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <!-- FOUC guard: resolve theme before first paint. -->
-    <script>(function(){var read=function(k){try{return localStorage.getItem(k)}catch(e){return null}};var t=read('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=read('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=read('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=read('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');})();</script>
+    <script>(function(){var read=function(k){try{return localStorage.getItem(k)}catch(e){return null}};var t=read('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=read('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=read('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=read('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');var il=read('bnb-illustration');if(il==='plate')document.documentElement.setAttribute('data-illustration','plate');})();</script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} · BirdNet-Behavior</title>
@@ -52,6 +52,7 @@
     <script src="/static/base-path.js?v={{version}}"></script>
 </head>
 <body>
+    {{illustration_defs}}
     <a href="#main-content" class="skip-link">Skip to content</a>
     <!-- No `role="navigation"` here. A <header> that is a direct child of
          <body> is already the page's `banner` landmark; re-roling it as

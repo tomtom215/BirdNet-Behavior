@@ -6,30 +6,7 @@
 
   Drop-in: register at /analytics/dawn-chorus (see DIFF.md).
 -->
-<div class="page-head dc-head" data-screen-label="Dawn chorus" data-om-validate>
-  <div>
-    <div class="bnb-eyebrow dc-eyebrow">
-      <span>Behavioral analytics · circadian</span>
-      {{help_link}}
-    </div>
-    <h1 class="display dc-h1">
-      The dawn chorus, <em>by species</em>.
-    </h1>
-    <p class="bnb-lede dc-lede">
-      <b>Who sings, and when.</b> Each ring is one species; its ribbon swells outward
-      at the hours it's most active, normalized to its own peak so a quiet wren reads
-      as clearly as a loud cardinal. Midnight is at the top; the line is now.
-      <span id="sun-line" hidden>Sunrise <span id="sun-rise" class="mono"></span>,
-      sunset <span id="sun-set" class="mono"></span>.</span>
-    </p>
-  </div>
-  <div class="pill-row dc-pills">
-    <span class="bnb-pill">Last 60 days</span>
-    <span class="bnb-pill">Per-species normalized</span>
-    {{moon_badge}}
-    <a class="bnb-pill" href="/patterns?tab=migration">Phenology →</a>
-  </div>
-</div>
+{{page_head}}
 
 <!-- Polar plot — the one picture this tab leads with -->
 <div class="bnb-card pad dc-polar-card">
@@ -43,10 +20,10 @@
 </div>
 
 <!-- Each bird's day, flat: the same numbers as the rings, one row per species -->
-<div class="bnb-card pad dc-list-card">
+<div class="bnb-card pad fig dc-list-card">
   <div class="section-header">
     <div>
-      <div class="bnb-eyebrow">Hour by hour</div>
+      <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Hour by hour</div>
       <h2 class="sh-h">Each bird's day</h2>
     </div>
     <a class="action" href="/species">All species →</a>

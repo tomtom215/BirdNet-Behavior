@@ -61,6 +61,7 @@ impl ImageProvider for Stub {
                 width: 300,
                 description: None,
                 wiki_url: None,
+                credit: None,
             }),
             Err(ImageError::NotFound(s)) => Err(ImageError::NotFound(s.clone())),
             Err(ImageError::Api(s)) => Err(ImageError::Api(s.clone())),

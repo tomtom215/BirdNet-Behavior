@@ -34,10 +34,21 @@ pub fn router() -> Router<AppState> {
 /// The behavioral-analytics surface, rendered for embedding by
 /// `homes::patterns` ("Behavior" tab).
 pub(super) fn content() -> String {
-    ANALYTICS_PAGE_HTML.replace(
-        "{{help_link}}",
-        &super::help::help_link(super::help::Topic::Analytics),
-    )
+    let status = r#"<div class="bnb-card pad an-status" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML"><div class="value">--</div><div class="label">Analytics Status</div></div>"#;
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::Analytics),
+        title: "How your birds <em>behave</em>",
+        lead: "The research tier: every term explained in plain English.",
+        lede: "These come from the behavioural analytics engine; you never need them to enjoy your station, but they're here when you're curious.",
+        aside: status,
+    });
+    let gap = birdnet_behavioral::types::SessionizeParams::default()
+        .gap_minutes
+        .to_string();
+    ANALYTICS_PAGE_HTML
+        .replace("{{page_head}}", &head)
+        .replace("{{session_gap}}", &gap)
 }
 
 /// HTMX partial: activity sessions table.

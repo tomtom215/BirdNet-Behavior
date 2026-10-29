@@ -12,6 +12,7 @@
   Adds two new keys (read by app.css media-query overrides — see DIFF.md):
     bnb-motion    → 'auto' | 'reduced'
     bnb-contrast  → 'auto' | 'high'
+    bnb-illustration → 'standard' | 'plate'   (read by app.css: `html[data-illustration="plate"]`)
 -->
 <div class="bnb-card pad" id="display-prefs" data-screen-label="Display preferences">
   <div class="section-header">
@@ -99,6 +100,19 @@
       </div>
     </div>
 
+    <!-- Illustration: the charts as plates (hatched like an engraving, on paper) or as
+         the standard flat colour. Only the look changes; every number is the same. -->
+    <div class="prefs-row">
+      <div class="prefs-label">
+        <div class="dpf-label">Charts</div>
+        <div class="bnb-meta">Standard, or drawn as plates in a field guide: hatching in place of flat colour, on paper.</div>
+      </div>
+      <div class="seg" data-prefs-key="bnb-illustration" role="radiogroup" aria-label="Chart style">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="standard">Standard</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="plate">Plate</button>
+      </div>
+    </div>
+
     <!-- Listening aids: boost, rumble cut, compressor (static/listen-fx.js,
          which builds the controls and keeps its own localStorage key). -->
     <div class="prefs-row prefs-row-stack">
@@ -168,6 +182,10 @@
     html.setAttribute('data-contrast', value);
     set('bnb-contrast', value);
   }
+  function applyIllustration(value) {
+    html.setAttribute('data-illustration', value);
+    set('bnb-illustration', value);
+  }
 
   // The clock and the temperature unit: stored here, printed by
   // static/display-format.js, which may not have loaded yet when this runs.
@@ -185,6 +203,7 @@
     'bnb-density': applyDensity,
     'bnb-motion': applyMotion,
     'bnb-contrast': applyContrast,
+    'bnb-illustration': applyIllustration,
   };
   var DEFAULTS = {
     'bnb-time': 'auto',
@@ -193,6 +212,7 @@
     'bnb-density': 'regular',
     'bnb-motion': 'auto',
     'bnb-contrast': 'auto',
+    'bnb-illustration': 'standard',
   };
 
   // Mark the currently-selected button in each group + apply current values.

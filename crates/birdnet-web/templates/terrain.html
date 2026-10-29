@@ -1,23 +1,23 @@
 <!--
   The soundscape terrain: the station's last 30, 90 or 365 days as a landscape (hour of day
-  across, day into the distance, height and colour the number heard).
+  across, day into the distance, height and colour the number heard). The range is chosen on the
+  page, not here: the page dispatches `bnb:range` on this card.
 
   Empty on purpose: static/terrain.js fetches /pages/terrain-data, draws the flat grid, and
   loads the 3D view (and three.js with it) only when somebody asks for it. See
   routes/pages/terrain.rs and static/terrain.js for what each part promises.
 -->
-<div class="bnb-card pad tr-card" id="terrain" data-tr-feed="/pages/terrain-data" data-tr-table="/pages/terrain-table" data-tr-days="90">
+<div class="bnb-card pad tr-card fig" id="terrain" data-tr-feed="/pages/terrain-data" data-tr-table="/pages/terrain-table" data-tr-days="30">
   <div class="section-header">
     <div>
-      <div class="bnb-eyebrow">Soundscape terrain</div>
+      <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Soundscape terrain</div>
       <h2 class="sh-h">The station's sound, as a landscape</h2>
     </div>
-    <div class="seg" data-tr="range" role="group" aria-label="Days shown">
-      <button type="button" class="btn" data-days="30" aria-pressed="false">30 days</button>
-      <button type="button" class="btn active" data-days="90" aria-pressed="true">90 days</button>
-      <button type="button" class="btn" data-days="365" aria-pressed="false">1 year</button>
-    </div>
+    <!-- The range is the page's: one control for every figure on the tab. The card follows it
+         (a month at the least: a landscape of seven days is a strip) and says which it is showing. -->
+    <span class="bnb-meta tr-span" data-tr="span" role="status">Last 30 days</span>
   </div>
+  <p class="fig-take tr-take" data-tr="take" hidden></p>
   <p class="bnb-meta tr-lede">
     <b>Across: the hours of the day. Down: the days, the newest at the bottom.</b> The colour
     and, in 3D, the height of each patch are how much was heard in that hour of that day. A
@@ -57,6 +57,10 @@
       <span class="bnb-meta">From none to <span class="tr-key-max">—</span> detections in the busiest hour. Colour and height are the square root of the count, so a quiet hour beside a busy one is still there.</span>
     </div>
     <div class="viz-legend tr-key tr-key-species" aria-label="Species colours"></div>
+    <div class="ck-scale tr-sun-key" data-tr="sun-key" hidden>
+      <span class="tr-sun-swatch" aria-hidden="true"></span>
+      <span class="bnb-meta">Dashed lines: sunrise and sunset on each day, on the station's local clock.</span>
+    </div>
     <div class="ck-scale">
       <span class="ck-off" aria-hidden="true"></span>
       <span class="bnb-meta">Flat and hatched: the station was not listening that day, or the hour has not happened yet. That is not the same as quiet.</span>

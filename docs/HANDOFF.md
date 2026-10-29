@@ -16,6 +16,15 @@ ran: the CodeQL results check passed after the maintainer's dismissals, and `Tes
 accessibility sweep and five mutation shards were still running when last read, so their end state
 is not recorded here. **0.18.0 has not been released**; section 5, item 1 says why.
 
+**2026-10-28 additions.** A later session worked on `claude/serene-hamilton-6wlll0`, branched from
+`d0fcfdb` (the merge of #270, which is `origin/main` in this checkout; GitHub was not re-read),
+and pushed it; it is pull request #271 (section 6 says what its CI found). It moved the engine to DuckDB 2.0.0, gave the
+Patterns, Species and Weekly pages one frame, added the kiosk plate and the public-domain plate tier behind
+it, put a credit on every picture, added the Plate chart style and the terrain's sunrise finding, and wrote
+`docs/design/ux-audit-2026-10.md`. Section 3 (last bullets), section 4 (its last subsection), section 5 (items 15
+to 22) and the DuckDB paragraph of section 6 were updated for it; **everything else in this file is as it was on
+2026-10-26 and was not re-read.**
+
 ## 1. Repository settings only the maintainer can change
 
 Read on 2026-10-21 (`gh api repos/tomtom215/BirdNet-Behavior/…`). These are settings,
@@ -192,6 +201,21 @@ the commits to read first (hashes valid on this branch).
   alerts were reproduced locally and fixed in code or listed for dismissal
   (`tools/code-scanning/dismiss.sh`).
 
+- *2026-10-28, branch `claude/serene-hamilton-6wlll0` (`git log d0fcfdb..`):*
+  - *Engine and dependencies* (`105c620`, `8c59d2c`, `c7fe862`): DuckDB 2.0.0 with `behavioral` v0.10.1 and `icu` v2.0.0,
+    `rusqlite` 0.41 (SQLite 3.54.1), a plain `cargo update`. What the engine bump needed beyond a version change (its
+    self-reported version, the stable C API table, and a `build.rs` link argument for GNU ld) is in the changelog.
+  - *Page frames* (`013dad2`): `pages/frame.rs` and `pages/insight.rs`, one range on the When tab, the weekly report
+    compared like with like. Recordings and the three Reports tabs moved onto the frame afterwards.
+  - *The kiosk plate* (`de7045e`): `/kiosk` as a page from a field guide, after fugleramme (credited in `README.md`,
+    `NOTICE` and the changelog; no code or artwork shared).
+  - *Pictures and credits:* every picture kept with title, author, source and licence (`species_images::ImageCredit`),
+    shown under the picture, in the image JSON and on `/system/credits`; Flickr CC BY-ND no longer requested; a public-domain
+    plate tier (`species_images/plates.rs`, `/api/v2/species/plate/{name}/file`, `static/plate.js`) from an index built by
+    `tools/plate-index/`.
+  - *Display → Charts → Plate* (`bnb-illustration`, `app.css` "Plate charts"): colour first, strokes second, sequential
+    scales flat; the terrain says whether song gathers at sunrise and marks sunrise and sunset.
+
 ## 4. What was verified, and by what command
 
 The test suite and the lint gates (the first five rows) were run again on 2026-10-23 on the tree
@@ -236,6 +260,39 @@ other rule on the list (`hard-coded-cryptographic-value`, `cleartext-logging`,
 GitHub's analysis: GitHub's alert states change only after an analysis of the default branch,
 and a dismissal is tied to a code fingerprint, so a changed line can reopen one. The Scorecard items that only a
 maintainer can settle are listed in `dismiss.sh`'s closing text.
+
+### 2026-10-28 (branch `claude/serene-hamilton-6wlll0`, container with `~/.duckdb` moved aside)
+
+| Command | Printed |
+|---|---|
+| `cargo test -p birdnet-web --features analytics --no-fail-fast`, the library and 25 batches of up to six test files | 149 `test result:` lines, 2078 passed, 0 failed |
+| `cargo test -p birdnet-integrations`; `cargo test -p birdnet-db` | 560 passed, 0 failed; 575 passed, 0 failed |
+| `cargo test -p birdnet-behavior --no-fail-fast` (root tests), 12 batches of up to six, then `web_api_pages` | 74 `test result:` lines, 414 passed, 0 failed; `--bins` (the binary's own tests): 1150 passed, 0 failed in 4 results |
+| `cargo clippy -p birdnet-web -p birdnet-integrations -p birdnet-db -p birdnet-behavior --all-targets --features birdnet-web/analytics` (the analytics feature only, not CI's `--no-default-features` and `--all-features` variants); `cargo fmt --check --all` | exit 0 with 0 warnings or errors; exit 0 |
+| `ILLUSTRATION=plate node tools/visual-qa/axe.mjs`; `... layout.mjs` | 168 route/theme/viewport states with 0 violations; 336 page states with no finding |
+| `node tools/visual-qa/base-path.mjs` | PASS: every same-origin request stayed under `/bn` |
+| `python3 -I tools/plate-index/build.py --verify`; the same with `--offline --generated 2026-10-28` from the cache | `verify: 0 problem(s) in crates/birdnet-integrations/data/plates/index.json`; byte-identical (`index.json` sha256 `c43a4d15c7e553ff984888613a6979e9428c3a426fa8d9a6af897927ce2c50cf`, `report.md` `de996c9804aad45ddfba270ed7d318633d33507149b48db50af0457d505ac416`) |
+
+The first full root run found six failures, each a gate catching this branch's own change: a
+sunrise default, now classified `omitted` with its reason in `tests/data/read_default_sweep.tsv`; a blank `ar` on the kiosk that answered 400
+(fixed, with a test); a credit write that blocked a runtime worker (now `spawn_blocking`); three public-address
+types that `no_secret_in_derived_debug_guard` took for credentials (named in its table with reasons); a test provider
+that returned an uncredited picture (now credited); and the species page, which grew past a 64 KiB read bound in a
+test. Batches stop at their first failing file, so the whole sweep was run again with `--no-fail-fast`.
+
+Gates seen failing, each against a mutant or the old code (details in the commit messages):
+`a_plate_stroke_can_be_seen_on_every_colour_it_crosses` (two mutants, 2.09:1 and 2.93:1),
+`the_plate_chart_style_keeps_its_promises` and `every_page_carries_the_hatch_patterns` (three mutants),
+`every_numbered_figure_is_a_sheet` (14 cards named), `the_kiosk_draws_public_domain_plates` (three mutants),
+`today_has_one_h1_and_the_help_link_in_its_eyebrow`, the plate credit tests (an `@` appended to the author),
+`a_blank_aspect_ratio_draws_the_default_sheet_but_a_garbled_one_is_refused` (400 on the old handler).
+
+**Not verified (2026-10-28):** anything on a Raspberry Pi; the sunrise and sunset lines across a change of clocks (the
+container's zone is UTC, and setting another needs `unsafe`); Firefox, WebKit and macOS on this branch; arm64 beyond
+CI (the aarch64 Docker image build passed on `2b2a4c1`, which is what ran the `build.rs` GNU ld argument there; nothing
+else was run on arm64 by hand);
+`scripts/check-ci-config.py` (needs `cargo-mutants`); whether the backup includes the new `plates/` folder in the picture cache; the plate tier on more than twelve
+real plates and the engraving on more than four real photographs.
 
 ## 5. Open items, with severity
 
@@ -324,6 +381,34 @@ it says otherwise.
     files; and a real clock never equals a `Duration`, so put a time comparison in a
     function of its two durations.
 
+15. **The plate index covers 7.0% of species, mostly European and Asian.** Low to medium. 458 of BirdNET V2.4's 6,515
+    (`tools/plate-index/report.md`); 17 of a fixed sample of 40 common European and North American species; 1 of the 15 in
+    the North American fixture. The licence rule (Commons' own metadata must say public domain, CC0 or Public Domain
+    Mark) costs at most 46 species; **10 of them are lost only to "No restrictions" files** (`Copyrighted=True`, mostly
+    Flickr Commons scans), which are probably free in fact and which the rule refuses. Accepting them is the
+    maintainer's decision, not a script's. Plates exist only in the work categories the crawl read; a plate filed only
+    under a species category is not found.
+16. **The works' years in the index are typed constants.** Low. Checked against bibliographies: Europe 1832–1837, Australia
+    1840–1848, Great Britain 1862–1873, New Guinea 1875–1888, Asia 1850–1883 (other sources say 1880 or 1886), the
+    Century 1830–1832 (one paper says 1830–1833). Naumann's and von Wright's are empty because they were not verified.
+    Whether each chosen plate shows the bird the index names was not checked against its own caption.
+17. **Plates are drawn smaller than photographs.** Low. A folio plate is portrait and the figure boxes are landscape.
+    A box shape that follows the picture needs the layout to know it before the picture arrives.
+18. **Pictures cached before credits were kept are replaced only when asked for.** Low. A station that never opens a
+    species page keeps them uncredited; `/system/credits` counts them. There is no sweep that refreshes them.
+19. **The empty, loading and failed vocabulary is still page by page; Today keeps its own hero.** Low.
+    `tests/every_home_opens_with_the_shared_page_head.rs` holds Today to the two structural rules it shares.
+20. **The soundscape terrain stays a flat canvas under the Plate chart style.** Low.
+21. **The plate tier asks for a plate that most species do not have**, which is one extra request per species. Low. It
+    answers `204`, so a browser logs nothing for it (it answered `404` first, and the strict visual sweep failed on the
+    console line per species); the alternative was a second index in the page.
+22. **The plate is only readable on a wide screen.** Medium for a small Pi display. The sheet is 1600 units wide and its
+    smallest caption 11.5, so a caption is 8.5 px at about 1180 px of window and 2.8 px at 390 px (`legibility.mjs`
+    measured 84 captions under 8.5 px on a phone). `static/plate.js` now sends a window under 1180 px to
+    `?mode=numbers` unless the address names a mode; `kioskOpensReadable` in `interactions.mjs` holds it. A 7-inch
+    800 × 480 display therefore opens on Numbers; its owner can ask for `?mode=plate` and gets small captions.
+    Making the plate itself legible there needs a layout drawn for the screen, not scaled to it.
+
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
   cross-site check (403; behind a reverse proxy whose `Origin` differs from `Host`, every
@@ -376,9 +461,32 @@ section dated 2026-10-26.
 7. Close A-24 (section 5, item 2): a migrated station's notifications stop on restore until
    `apprise.txt` is copied in again.
 
-Not done, on request: moving the bundled DuckDB to 2.0.0 (`duckdb` 1.20000.0 on crates.io). The
-`icu` and `behavioral` v0.10.0 builds exist on both registries for `v2.0.0` (footers read
-`CPP v2.0.0 v2.0.0` and `C_STRUCT v0.10.0 v1.2.0`), but nothing was loaded into a 2.0.0 engine.
+Done 2026-10-28, on `claude/serene-hamilton-6wlll0`: the bundled DuckDB is 2.0.0 (`duckdb` 1.20000.0), with `behavioral`
+v0.10.1 and `icu` v2.0.0 embedded and loaded; `the_engine_names_itself_as_a_release` and
+`a_correctly_built_binary_reports_no_mismatch` are the gates that failed without the first two fixes the bump needed; the
+third, `keep_duckdb_extension_registrar` in `build.rs`, is guarded by the aarch64 Docker image build (changelog, *Changed*).
+**First, next session:** read pull request #271's current checks; this is a snapshot taken while it was open.
+These findings were this branch's and were fixed: the typos check on the two generated plate-index files
+(`.typos.toml`), a docs link to `/system/credits`, two rustdoc lints, the GNU ld link of the DuckDB archive (which only
+the aarch64 Docker image build showed, and which passed there on `2b2a4c1`), CodeQL's `rust/path-injection` on the
+picture cache's new credit files (the traversal was real and is closed and tested; three forms of check on the key left
+the alert open, and the last alert's argument is `&self.cache_dir`, the configured directory that
+`tools/code-scanning/dismiss.sh` says CodeQL takes as a remote source through axum's `State`, as it did for the cache's
+dismissed alert 23. That is a false positive for a maintainer's token to dismiss, not one more check; the five in-place
+`..` checks in `cache.rs` repeat `is_plain_name` and the tests pass without them), and axe's `link-in-text-block` on the species page's credit lines. The axe job stops at its
+first failing step, so I ran the thirteen gates behind it locally against a **fresh** fixture started the way the
+workflow starts it (a long-lived one is not the same: it hid the axe finding); they found, all in the kiosk work, that
+the plate is 2.8 px on a phone (it now opens on Numbers under 1180 px; item 22), two defects of the Numbers face's
+mode links, a console 404 per species without a plate (the endpoint answers 204 now), the operator's reduced motion
+not reaching the plate's drift, and a gate left behind for the polar clock I had removed. Those passed locally, and CI then
+found one more that a local run after dusk could not: the kiosk's exit link had the app's green focus ring, 1.47:1 on
+the day sheet, because the kiosk picks its palette from the sun and the gates graded whichever the clock gave (fixed;
+the route list now holds `/kiosk?night=0` and `/kiosk?night=1`). Two checks were red on `main` too and are not this
+branch's: OSV-Scanner, now waived by #272 (merged), and the CI-config check, whose `a11y.yml` annotation #272 fixed and
+whose nine mutation rows read `main`'s last five runs, so they clear as runs without an apt stall replace those with
+one. #273 (merged) now holds a pull request to the budgets it edits, so they should no longer redden this one; the
+first `CI config` run after the merge of `main` (3bc8865) is where to confirm it. Then the two decisions in section 5,
+items 15 and 16, and CodeQL alert 175 on the picture cache, which is a maintainer's dismissal.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 

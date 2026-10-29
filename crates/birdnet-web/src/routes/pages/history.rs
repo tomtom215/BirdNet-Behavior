@@ -105,7 +105,15 @@ pub(super) async fn content(state: AppState) -> String {
 fn history_error() -> String {
     let help_link = super::help::help_link(super::help::Topic::Reports);
     format!(
-        r#"<div class="rp-hero"><div class="eyebrow">History {help_link}</div><h1>Browse past days</h1></div>{}"#,
+        "{}{}",
+        super::frame::page_head(&super::frame::Head {
+            eyebrow: "Reports · history",
+            help: &help_link,
+            title: "Browse past <em>days</em>",
+            lead: "",
+            lede: "",
+            aside: "",
+        }),
         super::error_states::could_not_load("your detection history"),
     )
 }
@@ -116,7 +124,15 @@ fn render_history(days: &[birdnet_db::sqlite::DayCount]) -> String {
     let mut html = String::new();
     let _ = write!(
         html,
-        r#"<div class="rp-hero"><div class="eyebrow">History {help_link}</div><h1>Browse past days</h1><p class="lead">Every day your station has listened. Darker squares were busier — open one to see its hours and top species.</p></div>"#,
+        "{}",
+        super::frame::page_head(&super::frame::Head {
+            eyebrow: "Reports · history",
+            help: &help_link,
+            title: "Browse past <em>days</em>",
+            lead: "Every day your station has listened.",
+            lede: "Darker squares were busier — open one to see its hours and top species.",
+            aside: "",
+        }),
     );
 
     let Some(latest) = days.last() else {

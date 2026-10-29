@@ -130,6 +130,9 @@ struct AppStateInner {
     analytics_readers: Option<crate::db_pool::Pool<AnalyticsDb>>,
     /// Species image cache (Wikipedia/Wikimedia Commons).
     image_cache: Option<Arc<ImageCache>>,
+    /// Public-domain plates for the kiosk, cached apart from the photographs so a plate is never
+    /// mistaken for one (it has its own directory, its own credits and its own miss memory).
+    plate_cache: Option<Arc<ImageCache>>,
     /// Broadcast channel for live detection WebSocket streaming.
     detection_broadcast: DetectionBroadcast,
     /// Broadcast channel for live log SSE streaming.
@@ -359,6 +362,7 @@ impl AppState {
                 #[cfg(feature = "analytics")]
                 analytics_readers: None,
                 image_cache: None,
+                plate_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
@@ -630,6 +634,7 @@ impl AppState {
                 #[cfg(feature = "analytics")]
                 analytics_readers,
                 image_cache: None,
+                plate_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
@@ -699,6 +704,7 @@ impl AppState {
                 #[cfg(feature = "analytics")]
                 analytics_readers: None,
                 image_cache: None,
+                plate_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
@@ -759,6 +765,15 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_image_cache");
         Self {
             inner: rebuild_inner(inner, |s| s.image_cache = Some(Arc::new(cache))),
+        }
+    }
+
+    /// Set the public-domain plate cache.
+    #[must_use]
+    pub fn with_plate_cache(self, cache: ImageCache) -> Self {
+        let inner = unwrap_inner(self.inner, "with_plate_cache");
+        Self {
+            inner: rebuild_inner(inner, |s| s.plate_cache = Some(Arc::new(cache))),
         }
     }
 
@@ -1694,6 +1709,11 @@ impl AppState {
     /// Get the species image cache, if configured.
     pub fn image_cache(&self) -> Option<Arc<ImageCache>> {
         self.inner.image_cache.clone()
+    }
+
+    /// Get the public-domain plate cache, if configured.
+    pub fn plate_cache(&self) -> Option<Arc<ImageCache>> {
+        self.inner.plate_cache.clone()
     }
 
     /// Get the detection broadcast channel for WebSocket streaming.

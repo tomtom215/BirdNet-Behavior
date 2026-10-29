@@ -158,11 +158,11 @@ COPY . .
 # BEHAVIORAL_EXTENSION_OPTIONAL is set (below); with it, the variable stays
 # unset and the image falls back to the runtime LOAD / INSTALL FROM community
 # path.
-# MUST equal the DuckDB version libduckdb-sys bundles — the `duckdb = "~1.10506"`
-# pin in the root Cargo.toml, where `10506` encodes DuckDB 1.5.6. Both registries
+# MUST equal the DuckDB version libduckdb-sys bundles — the `duckdb = "~1.20000"`
+# pin in the root Cargo.toml, where `20000` encodes DuckDB 2.0.0. Both registries
 # publish per engine version, and ICU (a C++ extension) loads only into the exact
 # version it was built for; `allow_extensions_metadata_mismatch` does not bypass
-# that. `behavioral` v0.10.0 is a stable-C-API build that would load into older
+# that. `behavioral` v0.10.1 is a stable-C-API build that would load into other
 # engines too, but it is only published under the paths of engines it was built
 # for, so this path still has to name the bundled engine.
 #
@@ -178,7 +178,7 @@ COPY . .
 # `crates/birdnet-behavioral/build.rs` refuses to embed bytes whose footer it
 # cannot parse and records what they target, and `docker.yml` boots the built
 # image with networking disabled and asserts the extension loads.
-ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.6"
+ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v2.0.0"
 # The platform whose extension builds are embedded. Empty by default, so it is
 # derived from the platform this stage builds for: BuildKit sets TARGETARCH
 # (amd64 / arm64 — DuckDB's linux_amd64 / linux_arm64), and without BuildKit

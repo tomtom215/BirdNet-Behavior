@@ -60,6 +60,11 @@ const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
 const CHART_KIT_JS: &[u8] = include_bytes!("../../static/chart-kit.js");
 /// The soundscape terrain (Patterns, "When active"): the grid, and the 3D view's controls.
 const TERRAIN_JS: &[u8] = include_bytes!("../../static/terrain.js");
+/// The kiosk plate's picture engraver (`/kiosk`): fetches each species' picture and draws it
+/// into its oval as line-work. The plate is complete without it.
+const PLATE_JS: &[u8] = include_bytes!("../../static/plate.js");
+/// The kiosk plate's paper, ink and type.
+const PLATE_CSS: &[u8] = include_bytes!("../../static/css/plate.css");
 /// The part of three.js the terrain uses, built by `tools/vendor-three/build.sh`; loaded by the
 /// terrain's script the first time somebody opens the 3D view and by nothing else. Its
 /// provenance, licence and size budget are in `static/vendor/three/README.md`.
@@ -181,6 +186,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/chart-text.js", get(chart_text_js))
         .route("/static/chart-kit.js", get(chart_kit_js))
         .route("/static/terrain.js", get(terrain_js))
+        .route("/static/plate.js", get(plate_js))
         .route("/static/vendor/three/three.module.min.js", get(three_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
@@ -188,6 +194,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
         .route("/static/css/listen-fx.css", get(listen_fx_css))
+        .route("/static/css/plate.css", get(plate_css))
         .route("/static/fonts/{file}", get(font_file))
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
@@ -328,6 +335,28 @@ async fn terrain_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         TERRAIN_JS,
+    )
+}
+
+async fn plate_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        PLATE_JS,
+    )
+}
+
+async fn plate_css() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        PLATE_CSS,
     )
 }
 

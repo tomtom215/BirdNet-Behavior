@@ -72,6 +72,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     link_clang_runtime();
+    keep_duckdb_extension_registrar();
     if is_published_package() {
         return;
     }
@@ -156,6 +157,33 @@ fn link_clang_runtime() {
         None => println!(
             "cargo:warning=`cc --print-file-name=libclang_rt.osx.a` found no Clang runtime; if the link fails with ___isPlatformVersionAtLeast undefined, install Xcode or the Command Line Tools"
         ),
+    }
+}
+
+/// On Linux with analytics, make the linker take DuckDB's
+/// `duckdb_register_static_extensions` whatever order it meets the archives in.
+///
+/// `libduckdb-sys` 1.20000.0 links a small archive whole-archive (its static
+/// initializer calls that function, so the linked extensions register) and
+/// documents it as going before libduckdb. rustc puts the archive on the link
+/// line after the `libduckdb-sys` rlib that carries libduckdb, so the object
+/// defining the function has been passed by the time the archive asks for it.
+/// lld resolves archive symbols in any order and links this; GNU ld does not,
+/// and stops with "undefined reference to `duckdb_register_static_extensions`".
+/// That was the Docker image build for aarch64, whose pinned Rust 1.95 links
+/// there with `/usr/bin/ld`; the same error comes out of this package's debug
+/// binary on x86_64 with `-C link-arg=-fuse-ld=bfd`.
+///
+/// `--undefined` makes the symbol wanted from the start, so the linker takes
+/// the defining member when it scans the rlib. It is only named when analytics
+/// is on, because without DuckDB there is no definition and the link would fail
+/// the other way, and only on Linux, where the failure was seen: macOS and
+/// Windows linkers take other spellings and were not run.
+fn keep_duckdb_extension_registrar() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && std::env::var_os("CARGO_FEATURE_ANALYTICS").is_some()
+    {
+        println!("cargo:rustc-link-arg=-Wl,--undefined=duckdb_register_static_extensions");
     }
 }
 

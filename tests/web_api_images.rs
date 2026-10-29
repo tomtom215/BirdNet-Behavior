@@ -19,7 +19,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt;
 
-use birdnet_integrations::species_images::{ImageCache, ImageError, ImageProvider, SpeciesImage};
+use birdnet_integrations::species_images::{
+    ImageCache, ImageCredit, ImageError, ImageProvider, SpeciesImage,
+};
 use birdnet_web::server::build_router;
 use birdnet_web::state::AppState;
 
@@ -83,6 +85,15 @@ impl ImageProvider for LocalProvider {
                 width: 300,
                 description: None,
                 wiki_url: None,
+                // A picture the provider cannot credit is not used, so the stand-in has one.
+                credit: Some(ImageCredit {
+                    title: "Throwaway".into(),
+                    author: "A. Tester".into(),
+                    source: "Wikimedia Commons".into(),
+                    source_url: "https://commons.wikimedia.org/wiki/File:Throwaway.jpg".into(),
+                    licence: "CC0".into(),
+                    licence_url: String::new(),
+                }),
             })
         })
     }

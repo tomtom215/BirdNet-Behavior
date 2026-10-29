@@ -295,6 +295,8 @@ The complete, navigable documentation lives in the manual, built with [mdBook](h
 - **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** — original Pi implementation by [Patrick McGuire](https://github.com/mcguirepr89)
 - **[BirdNET-Pi fork](https://github.com/Nachtzuster/BirdNET-Pi)** — maintained fork by [Nachtzuster](https://github.com/Nachtzuster)
 - **[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral)** — behavioral analytics by [tomtom215](https://github.com/tomtom215)
+- **[fugleramme](https://github.com/arnegiacomo/fugleramme)** — the idea behind the kiosk's plate (the birds heard, drawn as natural-history plates), by [Arne Giacomo Munthe-Kaas](https://github.com/arnegiacomo). A new implementation: no code or artwork is shared
+- **Public-domain plates** — the nineteenth-century plates the kiosk draws are from the bird books of John Gould, Johann Friedrich Naumann's *Naturgeschichte der Vögel Mitteleuropas* and the von Wrights' *Svenska fåglar*, fetched from [Wikimedia Commons](https://commons.wikimedia.org/) (never bundled) for the birds that have one; the index and its licence rules are in [`tools/plate-index/`](tools/plate-index/)
 
 ---
 

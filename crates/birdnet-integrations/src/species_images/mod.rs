@@ -34,6 +34,7 @@ pub mod avicommons;
 pub mod cache;
 pub mod chain;
 pub mod flickr;
+pub mod plates;
 pub mod provider;
 pub mod types;
 pub mod wikipedia;
@@ -42,8 +43,9 @@ pub use avicommons::AviCommonsClient;
 pub use cache::DiskCache;
 pub use chain::FallbackProvider;
 pub use flickr::FlickrClient;
+pub use plates::{PLATE_WIDTH, Plate, PlateIndex, PlateProvider, Work};
 pub use provider::ImageProvider;
-pub use types::{ImageError, SpeciesImage};
+pub use types::{ImageCredit, ImageError, SpeciesImage, licence_is_restricted, strip_html};
 pub use wikipedia::WikipediaClient;
 
 use std::collections::HashMap;
@@ -278,26 +280,48 @@ impl ImageCache {
     pub async fn get_image(&self, scientific_name: &str) -> Result<SpeciesImage, ImageError> {
         let key = Self::cache_key(scientific_name);
 
-        // Fast path: in-memory index / disk hit.
-        if let Some(img) = self.disk.get(&key) {
-            return Ok(img);
-        }
+        // Fast path: in-memory index / disk hit that knows who made it.
+        //
+        // A picture cached before credits were kept has no credit and cannot be given one:
+        // the provider may since have changed, so what it would name is not necessarily the
+        // author of these bytes. It is replaced instead, by a fresh fetch that brings its own
+        // credit. Until that succeeds (offline, throttled) the old picture is still served,
+        // and the attempt is not repeated for a minute.
+        let legacy = match self.disk.get(&key) {
+            Some(img) if img.credit.is_some() => return Ok(img),
+            Some(img) if self.miss_is_fresh(&key) => return Ok(img),
+            Some(img) => Some(img),
+            None => None,
+        };
 
         // Second fast path: the provider has already said it has nothing for
         // this species, recently enough to believe. A miss writes no file, so
         // without this the disk check above can never short-circuit it.
-        if self.miss_is_fresh(&key) {
+        if legacy.is_none() && self.miss_is_fresh(&key) {
             return Err(ImageError::NotFound(scientific_name.to_string()));
         }
 
         // Slow path: fetch from provider.
         let mut img = match self.provider.fetch(scientific_name).await {
             Ok(img) => img,
-            Err(e) => {
-                self.record_miss(&key, &e);
-                return Err(e);
-            }
+            Err(e) => return self.fetch_failed(&key, legacy, e),
         };
+
+        // A picture nobody can be credited for is not kept. Every provider in this crate
+        // supplies a credit or refuses; this is the rule for one that does not.
+        if !img
+            .credit
+            .as_ref()
+            .is_some_and(ImageCredit::is_attributable)
+        {
+            return self.fetch_failed(
+                &key,
+                legacy,
+                ImageError::NotFound(format!(
+                    "{scientific_name}: the provider gave a picture with no credit"
+                )),
+            );
+        }
 
         // Download and store the image bytes. Uses a User-Agent'd client
         // (Wikimedia rejects anonymous requests) and only caches a genuine
@@ -328,17 +352,53 @@ impl ImageCache {
             // otherwise repeat the whole round trip.
             let bytes = match download.await {
                 Ok(bytes) => bytes,
-                Err(e) => {
-                    self.record_miss(&key, &e);
-                    return Err(e);
-                }
+                Err(e) => return self.fetch_failed(&key, legacy, e),
             };
             let path = self.disk.store(&key, &bytes)?;
             img.cached_path = Some(path);
         }
 
-        self.disk.update_metadata(&key, &img);
+        // Keeps the credit beside the picture: a file write, so off the runtime's worker.
+        let (disk, owned_key, snapshot) = (Arc::clone(&self.disk), key.clone(), img.clone());
+        if let Err(e) =
+            tokio::task::spawn_blocking(move || disk.update_metadata(&owned_key, &snapshot)).await
+        {
+            tracing::warn!(error = %e, key = %key, "could not record a picture's credit");
+        }
         Ok(img)
+    }
+
+    /// A fetch that did not produce a credited picture.
+    ///
+    /// For a species with nothing cached this is a miss, as it always was. For a cached picture
+    /// that has no credit it is a reason to keep showing the old picture while the cause is the
+    /// network, and a reason to *drop* it when the provider answered that it has no picture it
+    /// may show (a file since marked non-free, a licence that forbids adaptation): an old picture
+    /// nobody can be credited for must not outlive the rule that refuses new ones.
+    fn fetch_failed(
+        &self,
+        key: &str,
+        legacy: Option<SpeciesImage>,
+        error: ImageError,
+    ) -> Result<SpeciesImage, ImageError> {
+        self.record_miss(key, &error);
+        match (legacy, &error) {
+            (Some(_), ImageError::NotFound(_)) => {
+                self.disk.remove(key);
+                Err(error)
+            }
+            (Some(old), _) => Ok(old),
+            (None, _) => Err(error),
+        }
+    }
+
+    /// The credit for a species' picture, fetching the picture first if it is not cached or
+    /// was cached without one.
+    pub async fn credit_for(&self, scientific_name: &str) -> Option<ImageCredit> {
+        self.get_image(scientific_name)
+            .await
+            .ok()
+            .and_then(|img| img.credit)
     }
 
     /// `true` when this species was recently looked up and came back empty.
@@ -675,6 +735,184 @@ mod tests {
             2,
             "an eviction must clear the remembered miss as well as the file"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A provider that answers with whatever it was told to, and counts being asked.
+    struct Scripted {
+        answer: Box<dyn Fn() -> Result<SpeciesImage, ImageError> + Send + Sync>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl ImageProvider for Scripted {
+        fn fetch<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _scientific_name: &'life1 str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<SpeciesImage, ImageError>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let result = (self.answer)();
+            Box::pin(async move { result })
+        }
+    }
+
+    fn scripted_cache(
+        dir: &std::path::Path,
+        answer: impl Fn() -> Result<SpeciesImage, ImageError> + Send + Sync + 'static,
+    ) -> (ImageCache, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cache = ImageCache {
+            provider: Arc::new(Scripted {
+                answer: Box::new(answer),
+                calls: Arc::clone(&calls),
+            }),
+            disk: Arc::new(DiskCache::new(dir, 300).unwrap()),
+            misses: Arc::new(Mutex::new(HashMap::new())),
+        };
+        (cache, calls)
+    }
+
+    fn credited() -> SpeciesImage {
+        SpeciesImage {
+            // No URL: the cache has nothing to download, which keeps these tests off the network.
+            url: String::new(),
+            cached_path: None,
+            width: 300,
+            description: None,
+            wiki_url: None,
+            credit: Some(ImageCredit {
+                title: "Common blackbird".into(),
+                author: "J. Smith".into(),
+                source: "Wikimedia Commons".into(),
+                source_url: "https://commons.wikimedia.org/wiki/File:X.jpg".into(),
+                licence: "CC BY-SA 4.0".into(),
+                licence_url: String::new(),
+            }),
+        }
+    }
+
+    fn calls(n: &Arc<std::sync::atomic::AtomicUsize>) -> usize {
+        n.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The rule for a provider that does not follow the rule: a picture nobody can be credited
+    /// for is not kept, and the credit is what is kept beside it.
+    #[tokio::test]
+    async fn a_picture_with_no_credit_is_refused_and_one_with_a_credit_keeps_it() {
+        let dir = tmpdir("no_credit");
+        let (cache, _) = scripted_cache(&dir, || {
+            Ok(SpeciesImage {
+                credit: None,
+                ..credited()
+            })
+        });
+        let err = cache.get_image("Turdus merula").await.unwrap_err();
+        assert!(matches!(err, ImageError::NotFound(_)), "{err:?}");
+        assert!(!dir.join("turdus_merula.credit.json").exists());
+
+        // Credit with no page to follow is not a credit either.
+        let (cache, _) = scripted_cache(&dir, || {
+            let mut img = credited();
+            img.credit.as_mut().unwrap().source_url = String::new();
+            Ok(img)
+        });
+        assert!(cache.get_image("Turdus merula").await.is_err());
+
+        // The counterpart: a credited picture is accepted and its credit is written down.
+        let (cache, _) = scripted_cache(&dir, || Ok(credited()));
+        let img = cache.get_image("Turdus merula").await.unwrap();
+        assert_eq!(img.credit.unwrap().author, "J. Smith");
+        assert!(dir.join("turdus_merula.credit.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A picture cached before credits were kept is replaced by a credited one, once, and the
+    /// provider is not asked again.
+    #[tokio::test]
+    async fn a_picture_cached_without_a_credit_is_replaced_once() {
+        let dir = tmpdir("legacy_replaced");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("turdus_merula.jpg"), b"old picture").unwrap();
+        let (cache, asked) = scripted_cache(&dir, || Ok(credited()));
+        assert!(cache.get_cached("Turdus merula").unwrap().credit.is_none());
+
+        let img = cache.get_image("Turdus merula").await.unwrap();
+        assert_eq!(img.credit.unwrap().licence, "CC BY-SA 4.0");
+        assert_eq!(calls(&asked), 1);
+        assert!(dir.join("turdus_merula.credit.json").exists());
+
+        cache.get_image("Turdus merula").await.unwrap();
+        assert_eq!(
+            calls(&asked),
+            1,
+            "credited now, so the provider is not asked again"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While the network is the problem the old picture is still shown, and the attempt is not
+    /// repeated on every render.
+    #[tokio::test]
+    async fn an_uncredited_picture_is_kept_while_only_the_network_failed() {
+        let dir = tmpdir("legacy_kept_offline");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("turdus_merula.jpg"), b"old picture").unwrap();
+        let (cache, asked) = scripted_cache(&dir, || Err(ImageError::Http("offline".into())));
+        for _ in 0..4 {
+            let img = cache.get_image("Turdus merula").await.unwrap();
+            assert!(img.cached_path.is_some() && img.credit.is_none());
+        }
+        assert_eq!(
+            calls(&asked),
+            1,
+            "one attempt, then the transient miss holds"
+        );
+        assert!(dir.join("turdus_merula.jpg").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When the provider answers that it has no picture it may show (a file since marked
+    /// non-free, a licence that forbids adaptation), the old uncredited one must not outlive
+    /// the rule: it is removed.
+    #[tokio::test]
+    async fn an_uncredited_picture_is_dropped_when_the_provider_will_no_longer_show_one() {
+        let dir = tmpdir("legacy_dropped");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("turdus_merula.jpg"), b"old picture").unwrap();
+        let (cache, _) = scripted_cache(&dir, || Err(ImageError::NotFound("non-free".into())));
+        assert!(cache.get_image("Turdus merula").await.is_err());
+        assert!(
+            !dir.join("turdus_merula.jpg").exists(),
+            "the picture is gone"
+        );
+        assert!(cache.get_cached("Turdus merula").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A provider that hands back a picture with no credit during the replacement is the same
+    /// answer as one that has no picture it may show.
+    #[tokio::test]
+    async fn a_replacement_with_no_credit_does_not_keep_the_old_picture_either() {
+        let dir = tmpdir("legacy_replacement_uncredited");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("turdus_merula.jpg"), b"old picture").unwrap();
+        let (cache, _) = scripted_cache(&dir, || {
+            Ok(SpeciesImage {
+                credit: None,
+                ..credited()
+            })
+        });
+        assert!(cache.get_image("Turdus merula").await.is_err());
+        assert!(!dir.join("turdus_merula.jpg").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

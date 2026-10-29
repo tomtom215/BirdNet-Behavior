@@ -64,14 +64,21 @@ pub(super) fn content() -> String {
     let year = current_year();
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-20 help link drops the methodology shortcut into the eyebrow.
+    let pills = format!(
+        r#"<div class="pill-row mig-pills"><span class="bnb-pill">Calendar year {year}</span><span class="bnb-pill">Seasonal birds only</span><span class="bnb-pill">vs. last year</span></div>"#
+    );
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::Phenology),
+        title: "Arrivals and <em>departures</em>.",
+        lead: "Each ridge is one species' year.",
+        lede: "Week by week, scaled to its own busiest week so a small-population migrant stays visible. Colour says when it peaks: green in the spring migration window, amber in the fall one. A steady bird holds a low ribbon; a migrant spikes and vanishes. Under the ridges: how many different species were heard each week.",
+        aside: &pills,
+    });
     PAGE_HTML
-        .replace("{{year}}", &year.to_string())
+        .replace("{{page_head}}", &head)
         .replace("{{skel_migration_stats}}", &super::skeletons::stat_row(4))
         .replace("{{skel_ridgeline}}", super::skeletons::ridgeline())
-        .replace(
-            "{{help_link}}",
-            &super::help::help_link(super::help::Topic::Phenology),
-        )
 }
 
 // ---------------------------------------------------------------------------

@@ -148,6 +148,7 @@ fn client(dir: &Path) -> AviCommonsClient {
 fn the_image_address_is_the_documented_one_at_the_smallest_sufficient_size() {
     let dir = tempfile::tempdir().unwrap();
     let entry = Entry {
+        sci_name: "Haemorhous mexicanus".into(),
         code: "houfin".into(),
         key: "111".into(),
         by: "A".into(),
@@ -181,13 +182,50 @@ fn the_credit_names_the_photographer_the_licence_and_links_back() {
     let c = client(dir.path());
     let img = c.species_image(&index.by_species["haemorhous mexicanus"]);
     assert_eq!(
-        img.description.as_deref(),
-        Some("Photograph by A Photographer, CC BY 4.0, via Avicommons.")
+        img.credit.as_ref().map(ImageCredit::line).as_deref(),
+        Some("Haemorhous mexicanus by A Photographer, AviCommons, CC BY 4.0")
+    );
+    assert!(
+        img.description.is_none(),
+        "the credit is not repeated as a description"
     );
     assert_eq!(
         img.wiki_url.as_deref(),
         Some("https://avicommons.org/species/houfin")
     );
+    let credit = img.credit.expect("a structured credit");
+    assert_eq!(credit.author, "A Photographer");
+    assert_eq!(credit.source, "AviCommons");
+    assert_eq!(credit.source_url, "https://avicommons.org/species/houfin");
+    assert_eq!(credit.licence, "CC BY 4.0");
+    assert_eq!(
+        credit.licence_url,
+        "https://creativecommons.org/licenses/by/4.0/"
+    );
+    assert!(credit.is_attributable());
+}
+
+#[test]
+fn a_licence_links_to_its_page_only_when_the_version_is_known() {
+    assert_eq!(
+        licence_url("CC BY 4.0"),
+        "https://creativecommons.org/licenses/by/4.0/"
+    );
+    assert_eq!(
+        licence_url("CC BY-SA 3.0"),
+        "https://creativecommons.org/licenses/by-sa/3.0/"
+    );
+    assert_eq!(
+        licence_url("CC0"),
+        "https://creativecommons.org/publicdomain/zero/1.0/"
+    );
+    assert_eq!(licence_url("CC BY"), "", "no version, no link");
+    assert_eq!(
+        licence_url("CC BY-SA 3.0-de"),
+        "",
+        "a regional port is not guessed at"
+    );
+    assert_eq!(licence_url("something else"), "");
 }
 
 /// A fresh copy on disk is used with no request: this is what keeps a station

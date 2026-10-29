@@ -507,7 +507,8 @@ impl AnalyticsDb {
     /// that notices. It reads no station data.
     ///
     /// The expected values were measured against the published v0.10.0 build
-    /// (DuckDB 1.5.6), not derived. The two "same instant" checks pin the
+    /// (DuckDB 1.5.6), not derived, and the tests that run this check still pass
+    /// against v0.10.1 on DuckDB 2.0.0. The two "same instant" checks pin the
     /// ordering contract the builders rely on (`'strict_increase'`, `(?t>0)`):
     /// two species heard in one chunk are not an order.
     ///

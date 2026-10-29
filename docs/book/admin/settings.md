@@ -143,16 +143,20 @@ FLICKR_FILTER_EMAIL=you@example.com
 
 ### Licensing
 
-Only the Creative Commons licences that permit commercial use are requested —
-CC BY, CC BY-SA, CC BY-ND, CC0, Public Domain Mark, Flickr Commons, and US
-Government works. Your station's page may end up published; the station cannot
-know whether that counts as commercial, so it asks only for photographs where
-the answer does not matter.
+Only the Creative Commons licences that permit commercial use and adaptation are
+requested — CC BY, CC BY-SA, CC0, Public Domain Mark, Flickr Commons, and US
+Government works. CC BY-ND is left out on purpose: the kiosk engraves a photograph
+in the browser, which is an adaptation, and an ND licence does not allow one. Your
+station's page may end up published; the station cannot know whether that counts as
+commercial, so it asks only for photographs where the answer does not matter. A
+photograph whose licence is not on that list is refused, not shown.
 
 Attribution is not optional under CC BY and CC BY-SA, so every photograph is
-shown with its photographer's name and a link to the Flickr page carrying the
-licence terms. A photograph Flickr returns with no photographer named is
-skipped rather than shown uncredited.
+shown with its title, its photographer's name, a link to the Flickr page and the
+licence. They appear under the picture on the species page and together on
+**Picture credits** (`/system/credits`, linked from every page's footer). A
+photograph Flickr returns with no photographer named is skipped rather than shown
+uncredited.
 
 ### Notes
 

@@ -101,6 +101,81 @@ pub(crate) struct Terrain {
     pub(crate) species: Vec<String>,
     /// The days.
     pub(crate) days: Vec<DayCells>,
+    /// Sunrise and sunset on each day, as fractional hours on the station's local clock, oldest
+    /// day first; `None` for a day the sun does not rise or set. Empty when the station has no
+    /// location, in which case nothing is drawn or said about the sun.
+    pub(crate) sun: Vec<Option<(f32, f32)>>,
+}
+
+impl Terrain {
+    /// This terrain with the sun's times on each of its days.
+    pub(crate) fn with_sun(mut self, sun: Vec<Option<(f32, f32)>>) -> Self {
+        self.sun = if sun.len() == self.days.len() {
+            sun
+        } else {
+            Vec::new()
+        };
+        self
+    }
+}
+
+/// How much of what was heard fell close to sunrise.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SunShare {
+    /// The share of detections inside the window, 0 to 1.
+    pub(crate) share: f64,
+    /// The share an even spread over the day would put there: the window's length over 24.
+    pub(crate) chance: f64,
+    /// Detections counted.
+    pub(crate) total: u64,
+}
+
+/// Half the window around sunrise the takeaway measures: two hours either side.
+pub(crate) const SUNRISE_HALF_WINDOW: f32 = 2.0;
+
+/// The share of what was heard that fell within `half_window` hours either side of sunrise.
+///
+/// Each hour's cell covers `[h, h + 1)` and counts for the part of it inside the window, so a
+/// window that starts at 04:40 takes two-thirds of the 04:00 cell and not all of it. Only days
+/// with a sunrise and a station that was listening count, and on the last day only the hours
+/// that have happened: a quiet stretch the station was not there for is not evidence that
+/// nothing sang. `None` when there is no sun to measure from, fewer than a week of days to
+/// measure, or too little heard to say anything.
+pub(crate) fn sunrise_share(t: &Terrain, half_window: f32) -> Option<SunShare> {
+    if t.sun.is_empty() {
+        return None;
+    }
+    let (mut inside, mut total, mut days) = (0.0_f64, 0_u64, 0_usize);
+    for (i, day) in t.days.iter().enumerate() {
+        let Some(Some((rise, _))) = t.sun.get(i) else {
+            continue;
+        };
+        if day.off {
+            continue;
+        }
+        let last = i + 1 == t.days.len();
+        let (lo, hi) = (f64::from(rise - half_window), f64::from(rise + half_window));
+        days += 1;
+        for (h, &n) in day.n.iter().enumerate() {
+            if last && h > usize::from(t.hour_now) {
+                continue;
+            }
+            let start = f64::from(u32::try_from(h).unwrap_or(0));
+            let overlap = (hi.min(start + 1.0) - lo.max(start)).max(0.0);
+            inside += f64::from(n) * overlap;
+            total += u64::from(n);
+        }
+    }
+    if days < 7 || i64::try_from(total).unwrap_or(i64::MAX) < super::insight::MIN_DETECTIONS {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let share = inside / total as f64;
+    Some(SunShare {
+        share,
+        chance: f64::from(2.0 * half_window) / 24.0,
+        total,
+    })
 }
 
 /// One row of the query: `(date, hour, species, detections)`.
@@ -187,7 +262,13 @@ pub(crate) fn build(
         hour_now,
         species: ranked.iter().map(|(n, _)| display(n)).collect(),
         days: out,
+        sun: Vec::new(),
     }
+}
+
+/// `x` to two decimals (a hundredth of an hour is thirty-six seconds).
+fn round2(x: f32) -> f64 {
+    (f64::from(x) * 100.0).round() / 100.0
 }
 
 /// The terrain as the JSON `static/terrain.js` reads: flat arrays of `days × 24` (day-major,
@@ -212,6 +293,22 @@ pub(crate) fn to_json(t: &Terrain) -> String {
         "top": top,
         "top_n": top_n,
         "off": off,
+        // Sunrise and sunset per day, `null` where unknown; `null` altogether without a location.
+        "sun": if t.sun.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Array(
+                t.sun
+                    .iter()
+                    .map(|d| d.map_or(serde_json::Value::Null, |(r, s)| {
+                        serde_json::json!([round2(r), round2(s)])
+                    }))
+                    .collect(),
+            )
+        },
+        // What the picture found, as plain text the page sets under the title.
+        "take": sunrise_share(t, SUNRISE_HALF_WINDOW)
+            .and_then(|s| super::insight::sunrise_sentence(s.share, s.chance, SUNRISE_HALF_WINDOW)),
     })
     .to_string()
 }
@@ -243,6 +340,39 @@ fn collect_rows(conn: &rusqlite::Connection, days: u32) -> rusqlite::Result<Vec<
     rows.collect()
 }
 
+/// Sunrise and sunset on each of `dates` (`YYYY-MM-DD`), as fractional hours on the station's
+/// local clock; empty when the station has no location.
+///
+/// The offset is the one in force *on that date*, asked of SQLite's own time zone: a sunrise in
+/// March and one in October are an hour apart on the wall clock for the same sun, and a year of
+/// them on today's offset would put half the lines an hour out.
+fn sun_by_day(conn: &rusqlite::Connection, dates: &[String]) -> Vec<Option<(f32, f32)>> {
+    let Some(location) = super::station_location(conn) else {
+        return Vec::new();
+    };
+    let Ok(mut offset) = conn.prepare(
+        "SELECT CAST(ROUND((julianday(?1 || ' 12:00:00', 'localtime') \
+                          - julianday(?1 || ' 12:00:00')) * 86400.0) AS INTEGER)",
+    ) else {
+        return Vec::new();
+    };
+    dates
+        .iter()
+        .map(|date| {
+            let year: u32 = date.get(0..4)?.parse().ok()?;
+            let month: u32 = date.get(5..7)?.parse().ok()?;
+            let day: u32 = date.get(8..10)?.parse().ok()?;
+            let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
+            let secs: i64 = offset.query_row([date], |r| r.get(0)).ok()?;
+            #[allow(clippy::cast_precision_loss)]
+            let offset_h = secs as f64 / 3600.0;
+            #[allow(clippy::cast_possible_truncation)] // a time of day, under 24
+            let local = |m: u32| (f64::from(m) / 60.0 + offset_h).rem_euclid(24.0) as f32;
+            Some((local(solar.sunrise_utc_min?), local(solar.sunset_utc_min?)))
+        })
+        .collect()
+}
+
 /// The terrain for `days` days, from the database; `None` is a read that failed.
 fn compute_terrain(state: &AppState, days: u32) -> Option<Terrain> {
     let today = super::today_date_string();
@@ -257,14 +387,17 @@ fn compute_terrain(state: &AppState, days: u32) -> Option<Terrain> {
             let listened = super::listening::first_date(&today, days as usize)
                 .and_then(|from| super::listening::effort_by_date(conn, &from, &today).ok())
                 .and_then(|effort| super::listening::listened_days(&effort, &today, days as usize));
-            Ok(build(
+            let terrain = build(
                 &rows,
                 &today,
                 days as usize,
                 hour_now,
                 listened.as_deref(),
                 &|n| names.name_of_stored(n).to_owned(),
-            ))
+            );
+            let dates: Vec<String> = terrain.days.iter().map(|d| d.date.clone()).collect();
+            let sun = sun_by_day(conn, &dates);
+            Ok(terrain.with_sun(sun))
         })
         .ok()
 }
@@ -546,5 +679,176 @@ mod tests {
             render_table(&t).matches("<tr><th scope=\"row\">").count(),
             13
         );
+    }
+
+    /// A terrain of `days` days, every one with sunrise at `rise`, and `n` heard in each hour in
+    /// `busy` (and nothing elsewhere).
+    fn sunny(days: usize, rise: f32, busy: &[usize], n: u32) -> Terrain {
+        let day = |i: usize| {
+            let mut cells = DayCells {
+                date: format!("2026-04-{:02}", i + 1),
+                n: [0; 24],
+                top: [None; 24],
+                top_n: [0; 24],
+                off: false,
+            };
+            for &h in busy {
+                cells.n[h] = n;
+            }
+            cells
+        };
+        Terrain {
+            end: format!("2026-04-{days:02}"),
+            hour_now: 23,
+            species: Vec::new(),
+            days: (0..days).map(day).collect(),
+            sun: Vec::new(),
+        }
+        .with_sun(vec![Some((rise, rise + 12.0)); days])
+    }
+
+    /// Hours 4 to 7 are the window around a 06:00 sunrise: all of what was heard there is all of it.
+    #[test]
+    fn song_inside_the_sunrise_window_is_all_of_the_share() {
+        let t = sunny(10, 6.0, &[4, 5, 6, 7], 10);
+        let s = sunrise_share(&t, SUNRISE_HALF_WINDOW).unwrap();
+        assert!((s.share - 1.0).abs() < 1e-9, "{s:?}");
+        assert!((s.chance - 4.0 / 24.0).abs() < 1e-9);
+        assert_eq!(s.total, 400);
+        // The counterpart: the same counts at midday are none of it.
+        let noon = sunny(10, 6.0, &[11, 12, 13, 14], 10);
+        assert!(sunrise_share(&noon, SUNRISE_HALF_WINDOW).unwrap().share < 1e-9);
+    }
+
+    /// A cell counts for the part of it inside the window: a window from 04:40 takes two-thirds of
+    /// the 04:00 cell, not all of it and not none.
+    #[test]
+    fn a_cell_half_inside_the_window_counts_for_half() {
+        // Sunrise at 06:30: the window is 04:30 to 08:30, so hours 4 and 8 are half inside.
+        let t = sunny(10, 6.5, &[4, 8], 10);
+        let s = sunrise_share(&t, SUNRISE_HALF_WINDOW).unwrap();
+        assert!((s.share - 0.5).abs() < 1e-9, "{s:?}");
+    }
+
+    /// A day the station was not listening, and the hours of today that have not come, are not
+    /// evidence that nothing sang.
+    #[test]
+    fn days_off_and_hours_not_yet_come_are_not_counted() {
+        let mut t = sunny(10, 6.0, &[5, 12], 10);
+        t.days[0].off = true;
+        let all = sunny(10, 6.0, &[5, 12], 10);
+        assert_eq!(
+            sunrise_share(&t, SUNRISE_HALF_WINDOW).unwrap().total,
+            sunrise_share(&all, SUNRISE_HALF_WINDOW).unwrap().total - 20,
+            "the off day is left out"
+        );
+        let mut early = sunny(10, 6.0, &[5, 12], 10);
+        early.hour_now = 8; // it is nine in the morning on the last day: the 12:00 cell has not happened
+        assert_eq!(
+            sunrise_share(&early, SUNRISE_HALF_WINDOW).unwrap().total,
+            sunrise_share(&all, SUNRISE_HALF_WINDOW).unwrap().total - 10
+        );
+    }
+
+    #[test]
+    fn nothing_is_said_without_a_sun_a_week_or_enough_birds() {
+        let mut no_sun = sunny(10, 6.0, &[5], 10);
+        no_sun.sun.clear();
+        assert!(
+            sunrise_share(&no_sun, SUNRISE_HALF_WINDOW).is_none(),
+            "no location"
+        );
+        assert!(
+            sunrise_share(&sunny(6, 6.0, &[5], 10), SUNRISE_HALF_WINDOW).is_none(),
+            "six days is not a pattern"
+        );
+        assert!(
+            sunrise_share(&sunny(10, 6.0, &[5], 1), SUNRISE_HALF_WINDOW).is_none(),
+            "ten detections is not enough to say"
+        );
+    }
+
+    #[test]
+    fn the_json_carries_the_sun_and_the_finding_and_nulls_without_them() {
+        let t = sunny(10, 6.0, &[4, 5, 6, 7], 10);
+        let v: serde_json::Value = serde_json::from_str(&to_json(&t)).unwrap();
+        assert_eq!(v["sun"].as_array().unwrap().len(), 10);
+        assert_eq!(v["sun"][0], serde_json::json!([6.0, 18.0]));
+        assert!(
+            v["take"]
+                .as_str()
+                .unwrap()
+                .contains("100% of what was heard")
+        );
+        let mut bare = t;
+        bare.sun.clear();
+        let v: serde_json::Value = serde_json::from_str(&to_json(&bare)).unwrap();
+        assert!(v["sun"].is_null() && v["take"].is_null(), "{v}");
+    }
+
+    /// A sun list that does not match the days is dropped rather than drawn against the wrong
+    /// days.
+    #[test]
+    fn a_sun_list_of_the_wrong_length_is_dropped() {
+        let t = sunny(10, 6.0, &[5], 10).with_sun(vec![Some((6.0, 18.0)); 3]);
+        assert!(t.sun.is_empty());
+    }
+
+    fn station(lat_lon: Option<(&str, &str)>) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        if let Some((lat, lon)) = lat_lon {
+            birdnet_db::settings::set(
+                &conn,
+                "latitude",
+                lat,
+                birdnet_db::settings::SettingsCategory::Location,
+            )
+            .unwrap();
+            birdnet_db::settings::set(
+                &conn,
+                "longitude",
+                lon,
+                birdnet_db::settings::SettingsCategory::Location,
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// With a location every day gets a sunrise before its sunset, on the 24-hour clock, and the
+    /// sun is up longer in June than in December at 51 N. Without one nothing is claimed.
+    /// (What this does not hold is the offset: the test runner's own time zone is whatever it is,
+    /// and changing it for a test is not something this crate may do.)
+    #[test]
+    fn a_located_station_gets_a_sun_for_each_day_and_an_unlocated_one_none() {
+        let dates: Vec<String> = ["2026-06-21", "2026-12-21"].map(String::from).to_vec();
+        let sun = sun_by_day(&station(Some(("51.48", "-0.13"))), &dates);
+        assert_eq!(sun.len(), 2);
+        let (june, december) = (sun[0].unwrap(), sun[1].unwrap());
+        for (rise, set) in [june, december] {
+            assert!(
+                (0.0..24.0).contains(&rise) && (0.0..24.0).contains(&set),
+                "{rise} {set}"
+            );
+            assert!(rise < set);
+        }
+        assert!(
+            june.1 - june.0 > december.1 - december.0 + 6.0,
+            "{june:?} {december:?}"
+        );
+        assert!(sun_by_day(&station(None), &dates).is_empty());
+    }
+
+    #[test]
+    fn a_date_that_is_not_a_date_has_no_sun_and_does_not_shift_the_others() {
+        let dates = vec![
+            "2026-06-21".to_owned(),
+            "garbage".to_owned(),
+            "2026-06-23".to_owned(),
+        ];
+        let sun = sun_by_day(&station(Some(("51.48", "-0.13"))), &dates);
+        assert_eq!(sun.len(), 3);
+        assert!(sun[0].is_some() && sun[1].is_none() && sun[2].is_some());
     }
 }

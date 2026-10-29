@@ -90,8 +90,12 @@ fn the_search_request_carries_every_parameter_that_matters() {
         "the species name must be encoded: {url}"
     );
     assert!(
-        url.contains("license=4,5,6,7,8,9,10"),
+        url.contains("license=4,5,7,8,9,10"),
         "without the licence filter the station shows images it may not publish: {url}"
+    );
+    assert!(
+        !url.contains("license=4,5,6") && !url.contains(",6,"),
+        "licence 6 is CC BY-ND, which forbids the adaptation the kiosk's engraving is: {url}"
     );
     assert!(url.contains("sort=relevance"), "{url}");
     assert!(
@@ -187,7 +191,7 @@ fn the_chosen_size_is_the_smallest_one_big_enough() {
 #[test]
 fn a_photo_with_only_small_sizes_still_yields_the_largest() {
     let small = serde_json::json!({
-        "id": "1", "owner": "12345@N01", "ownername": "P",
+        "id": "1", "owner": "12345@N01", "ownername": "P", "license": "4",
         "url_s": "https://live.staticflickr.com/1/1_s.jpg",
         "url_m": "https://live.staticflickr.com/1/1_m.jpg",
     });
@@ -202,7 +206,7 @@ fn a_photo_with_only_small_sizes_still_yields_the_largest() {
 #[test]
 fn a_photo_with_no_photographer_to_credit_is_refused() {
     let anonymous = serde_json::json!({
-        "id": "1", "owner": "12345@N01",
+        "id": "1", "owner": "12345@N01", "license": "4",
         "url_m": "https://live.staticflickr.com/1/1_m.jpg",
     });
     let err = FlickrClient::parse_search(&search_json(&serde_json::json!([anonymous])), "X", 300)
@@ -224,9 +228,13 @@ fn the_image_carries_its_attribution() {
     let img = FlickrClient::parse_search(&search_json(&serde_json::json!([photo()])), "X", 300)
         .expect("parses");
     assert_eq!(
-        img.description.as_deref(),
-        Some("Photograph by A Photographer, via Flickr."),
-        "the credit line the species page renders"
+        img.credit.as_ref().map(ImageCredit::line).as_deref(),
+        Some("By A Photographer, Flickr, CC BY 2.0"),
+        "the credit line the species page and the credits page render"
+    );
+    assert!(
+        img.description.is_none(),
+        "the credit is not repeated as a description"
     );
     assert_eq!(
         img.wiki_url.as_deref(),
@@ -257,4 +265,78 @@ fn a_malformed_response_is_an_api_error() {
     let err = FlickrClient::parse_search(&serde_json::json!({"nonsense": 1}), "X", 300)
         .expect_err("a malformed body must not read as not-found");
     assert!(matches!(err, ImageError::Api(_)), "got {err:?}");
+}
+
+/// The structured credit: title, author, source, page and licence, from what the search
+/// returned. Pinned exactly, because it is what the species page, the credits page and the
+/// kiosk print.
+#[test]
+fn the_image_carries_a_structured_credit() {
+    let mut p = photo();
+    p["title"] = serde_json::json!("  Blackbird in the rain ");
+    let img = FlickrClient::parse_search(&search_json(&serde_json::json!([p])), "X", 300)
+        .expect("parses");
+    let credit = img.credit.expect("a credit");
+    assert_eq!(credit.title, "Blackbird in the rain");
+    assert_eq!(credit.author, "A Photographer");
+    assert_eq!(credit.source, "Flickr");
+    assert_eq!(
+        credit.source_url,
+        "https://www.flickr.com/photos/12345@N01/5432/"
+    );
+    assert_eq!(credit.licence, "CC BY 2.0");
+    assert_eq!(
+        credit.licence_url,
+        "https://creativecommons.org/licenses/by/2.0/"
+    );
+    assert!(credit.is_attributable() && !credit.licence_is_restricted());
+}
+
+/// Every licence the request asks for names itself, and none the request does not ask for does.
+/// A response that carries another licence (ND, NC, All Rights Reserved, an id nobody has
+/// heard of, none at all) is refused: the filter in the URL is a request, not a guarantee.
+#[test]
+fn only_the_licences_the_search_asks_for_are_accepted() {
+    for id in ALLOWED_LICENSES.split(',') {
+        let mut p = photo();
+        p["license"] = serde_json::json!(id);
+        assert!(
+            FlickrClient::parse_search(&search_json(&serde_json::json!([p])), "X", 300).is_ok(),
+            "licence {id} is requested, so it must be accepted"
+        );
+    }
+    for id in ["0", "1", "2", "3", "6", "11", "", "banana"] {
+        let mut p = photo();
+        p["license"] = serde_json::json!(id);
+        assert!(
+            matches!(
+                FlickrClient::parse_search(&search_json(&serde_json::json!([p])), "X", 300),
+                Err(ImageError::NotFound(_))
+            ),
+            "licence '{id}' must be refused"
+        );
+    }
+    let mut none = photo();
+    none.as_object_mut().unwrap().remove("license");
+    assert!(
+        FlickrClient::parse_search(&search_json(&serde_json::json!([none])), "X", 300).is_err(),
+        "no licence at all is refused"
+    );
+    // Flickr sends the id as a number in some formats.
+    let mut numeric = photo();
+    numeric["license"] = serde_json::json!(5);
+    assert!(
+        FlickrClient::parse_search(&search_json(&serde_json::json!([numeric])), "X", 300).is_ok()
+    );
+}
+
+/// A credit has to lead somewhere: a photo with no page to link to is refused.
+#[test]
+fn a_photo_with_no_page_to_credit_it_to_is_refused() {
+    let mut p = photo();
+    p.as_object_mut().unwrap().remove("owner");
+    assert!(
+        FlickrClient::parse_search(&search_json(&serde_json::json!([p])), "X", 300).is_err(),
+        "no owner id means no photo page"
+    );
 }

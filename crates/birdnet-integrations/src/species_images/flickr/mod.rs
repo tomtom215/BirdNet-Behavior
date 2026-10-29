@@ -12,7 +12,7 @@
 //!
 //! # Licensing
 //!
-//! Only the licences that permit commercial use are requested
+//! Only the licences that permit commercial use and adaptation are requested
 //! ([`ALLOWED_LICENSES`]). A station's web UI is usually not commercial, but
 //! "usually" is not a licence, and the station cannot know: a reserve, a
 //! visitor centre or a school may all publish the page. Requesting the
@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 
 use super::provider::ImageProvider;
-use super::types::{ImageError, SpeciesImage};
+use super::types::{ImageCredit, ImageError, SpeciesImage};
 use super::wikipedia::url_encode;
 
 /// Flickr REST endpoint.
@@ -41,23 +41,52 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Total attempts (initial + retries) before a fetch is abandoned.
 const MAX_ATTEMPTS: u32 = 2;
 
-/// Flickr licence IDs that permit commercial use, as the API's `license`
+/// Flickr licence IDs that permit commercial use *and* adaptation, as the API's `license`
 /// parameter wants them: comma-separated.
 ///
 /// | ID | Licence |
 /// |----|---------|
 /// | 4 | CC BY |
 /// | 5 | CC BY-SA |
-/// | 6 | CC BY-ND |
 /// | 7 | No known copyright restrictions (Flickr Commons) |
 /// | 8 | United States Government Work |
 /// | 9 | CC0 |
 /// | 10 | Public Domain Mark |
 ///
-/// The non-commercial licences (1, 2, 3) and All Rights Reserved (0) are
-/// excluded. That loses coverage, which is the point: an image the station
-/// cannot lawfully publish is not coverage.
-pub const ALLOWED_LICENSES: &str = "4,5,6,7,8,9,10";
+/// Excluded: the non-commercial licences (1, 2, 3), All Rights Reserved (0) and CC BY-**ND**
+/// (6). The no-derivatives licence was in this list until the kiosk began engraving the
+/// pictures it is given, which is an adaptation; a picture the station cannot lawfully adapt
+/// is not coverage, and nothing here can tell which pages will.
+pub const ALLOWED_LICENSES: &str = "4,5,7,8,9,10";
+
+/// The licence a Flickr licence id names: its short name and the page that states it. `None`
+/// for an id this provider does not accept (and so for one it does not know).
+pub(super) fn licence_of(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "4" => Some(("CC BY 2.0", "https://creativecommons.org/licenses/by/2.0/")),
+        "5" => Some((
+            "CC BY-SA 2.0",
+            "https://creativecommons.org/licenses/by-sa/2.0/",
+        )),
+        "7" => Some((
+            "No known copyright restrictions",
+            "https://www.flickr.com/commons/usage/",
+        )),
+        "8" => Some((
+            "United States Government Work",
+            "https://www.usa.gov/government-works",
+        )),
+        "9" => Some((
+            "CC0 1.0",
+            "https://creativecommons.org/publicdomain/zero/1.0/",
+        )),
+        "10" => Some((
+            "Public Domain Mark 1.0",
+            "https://creativecommons.org/publicdomain/mark/1.0/",
+        )),
+        _ => None,
+    }
+}
 
 /// Default thumbnail width, matching the Wikipedia provider so a station that
 /// switches provider keeps one cache-key space and one rendered size.
@@ -293,18 +322,49 @@ impl FlickrClient {
             })?;
 
         // The photo page, which is where the licence terms live and what an
-        // attribution has to link to.
+        // attribution has to link to. Without it the credit cannot be followed to its source.
         let page_url = match (str_field("id"), str_field("owner")) {
-            (Some(id), Some(nsid)) => Some(format!("https://www.flickr.com/photos/{nsid}/{id}/")),
-            _ => None,
+            (Some(id), Some(nsid)) => format!("https://www.flickr.com/photos/{nsid}/{id}/"),
+            _ => {
+                return Err(ImageError::Api(format!(
+                    "Flickr returned a photo for '{scientific_name}' with no page to credit it to"
+                )));
+            }
         };
+
+        // The licence it was published under. Flickr sends the id as a string, or as a number
+        // in some formats. An id this provider does not accept is refused even though the
+        // search asked only for accepted ones: a request that was altered, or a response that
+        // was not honoured, must not put an unlicensed picture on the page.
+        let licence_id = photo
+            .get("license")
+            .and_then(|l| {
+                l.as_str()
+                    .map(str::to_owned)
+                    .or_else(|| l.as_u64().map(|n| n.to_string()))
+            })
+            .unwrap_or_default();
+        let (licence, licence_url) = licence_of(&licence_id).ok_or_else(|| {
+            ImageError::NotFound(format!(
+                "{scientific_name}: Flickr licence '{licence_id}' is not one the station may show"
+            ))
+        })?;
 
         Ok(SpeciesImage {
             url,
             cached_path: None,
             width: thumb_width,
-            description: Some(format!("Photograph by {owner}, via Flickr.")),
-            wiki_url: page_url,
+            // The credit is `credit`; a description that repeated it would be printed twice.
+            description: None,
+            wiki_url: Some(page_url.clone()),
+            credit: Some(ImageCredit {
+                title: str_field("title").unwrap_or_default().trim().to_owned(),
+                author: owner.to_owned(),
+                source: "Flickr".to_owned(),
+                source_url: page_url,
+                licence: licence.to_owned(),
+                licence_url: licence_url.to_owned(),
+            }),
         })
     }
 }

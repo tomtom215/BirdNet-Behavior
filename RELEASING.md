@@ -161,23 +161,49 @@ A new or removed dependency needs only a regeneration.
 
 The `duckdb` pin in the root `Cargo.toml` decides which engine ships, and the
 `behavioral` and `icu` extensions embedded in the binary must be the builds made
-for it. The engine version `v1.5.6` is written out in four files — three fetch
+for it. The engine version `v2.0.0` is written out in four files — three fetch
 URLs in `ci.yml`, two in `upgrade.yml`, the two `ddb_ver` lines in `release.yml`
 and `BEHAVIORAL_EXTENSION_DUCKDB_VERSION` in the `Dockerfile` — and
 `crates/birdnet-behavioral/extension_pins.rs` pins the sha256 of each build
-(`build.rs` refuses to embed any other). Update them together:
+(`build.rs` refuses to embed any other). `third_party/duckdb-<version>/` and its
+README table follow the engine too (`scripts/gen-third-party-licenses.py` derives the
+version from the crate's middle component, `20000` being 2.0.0). Update them together:
 
 1. Change the version in those places.
-2. Download each build, load it into a stock DuckDB of the same version with
-   unsigned extensions disallowed (that is the signature check), and replace the
-   rows in `extension_pins.rs`; its header gives the steps and says which
-   platforms could and could not be checked that way.
-3. `cargo test -p birdnet-behavioral --all-features --lib extension_pins`, then
+2. Ask the engine its own name: `SELECT version()` must print the release (`v2.0.0`),
+   with no `-dev` suffix. `libduckdb-sys` 1.20000.0 compiles the 2.0.0 release commit
+   with DuckDB's in-source fallback macros, so it called itself `v2.0.0-dev88614`,
+   named its extension directory after the commit hash (`d54cbbe3df`), and refused the
+   published `icu`; `.cargo/config.toml` sets the two version macros through
+   `CXXFLAGS`, and `the_engine_names_itself_as_a_release` fails without it. Check the
+   crate's source commit against the release's (`duckdb.__git_revision__` in the
+   official Python wheel) before trusting a relabel.
+3. Download each build and check it is genuine, with unsigned extensions disallowed (the
+   default). `icu` and anything else core-signed: `LOAD '/path/icu.duckdb_extension'` in a
+   `duckdb` crate connection opened with `Config::default()`, then a copy with one bit
+   changed, which must be refused. A **community** extension (`behavioral`) cannot be checked
+   that way on 2.0.0: DuckDB trusts the community keys only for a build it installed from
+   the community repository, so a path `LOAD` is refused even for the genuine file (the
+   official 2.0.0 wheel does the same). Install it instead, with a private
+   `extension_directory` — `INSTALL behavioral FROM community; LOAD behavioral` — and
+   compare the sha256 of the installed file with the download's. Replace the rows in
+   `extension_pins.rs`; its header gives the steps and says which platforms could and
+   could not be checked.
+4. `cargo test -p birdnet-behavioral --all-features --lib extension_pins`, then
    a build with `BIRDNET_BUNDLED_EXTENSION_FILE` and `BIRDNET_BUNDLED_ICU_FILE`
-   set to the new files. A file the table does not name stops the build.
+   set to the new files and `BIRDNET_REQUIRE_LIVE_EXTENSION=1`. A file the table does
+   not name stops the build.
 
 Release and Docker builds fail when an extension cannot be fetched; the Docker
 build takes `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` to build without them.
+
+**`cargo install` and the version label.** `.cargo/config.toml` is read by cargo only
+inside this tree, so a `cargo install` of the published crates compiles the engine
+with the in-source label (`v2.0.0-dev88614`). That engine looks for `icu` under the
+commit hash, and neither registry serves a build there (both answered 404 for
+`d54cbbe3df`, 2026-10-28), so its first-use `INSTALL` cannot succeed and the dashboards
+that need today's date stay empty. Do not publish the crates until either the upstream
+`duckdb` crate carries the release label or the install notes say so.
 
 ## What each workflow emits
 

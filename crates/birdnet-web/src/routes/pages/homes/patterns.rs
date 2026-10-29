@@ -64,17 +64,10 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/patterns", get(patterns_page))
 }
 
-/// The "When active" tab: its own heading, then the soundscape terrain as the lead card, then
-/// the charts the tab always had. The terrain card goes in front of the first card the
-/// heatmap page draws, so the heading and its range control stay where they were.
+/// The "When active" tab: its own head and range control, then the soundscape terrain as the
+/// lead figure, then the three charts that zoom in. One range sets all four.
 fn when_content() -> String {
-    const FIRST_CARD: &str = r#"<div class="bnb-card pad">"#;
-    let page = crate::routes::pages::heatmap::content();
-    let terrain = crate::routes::pages::terrain::content();
-    page.find(FIRST_CARD).map_or_else(
-        || format!("{page}{terrain}"),
-        |at| format!("{}{terrain}{}", &page[..at], &page[at..]),
-    )
+    crate::routes::pages::heatmap::content(&crate::routes::pages::terrain::content())
 }
 
 /// `?tab=` selector for the Patterns home.
@@ -130,22 +123,42 @@ mod tests {
         );
     }
 
-    /// The terrain is the "When active" tab's lead card: once, after the heading and before
-    /// the charts the tab always had.
+    /// The terrain is the "When active" tab's lead figure: once, after the head and before the
+    /// three charts that zoom in.
     #[test]
     fn the_terrain_leads_the_when_tab_once() {
         let html = when_content();
         assert_eq!(html.matches(r#"id="terrain""#).count(), 1);
         let head = html
-            .find("When the yard is alive")
+            .find("When the yard is <em>alive</em>")
             .expect("the tab's heading");
         let terrain = html.find(r#"id="terrain""#).expect("the terrain card");
         let stream = html
             .find("Activity streamgraph")
             .expect("the streamgraph card");
+        let hours = html.find("Detections by hour").expect("the hours card");
+        let grid = html.find("Activity grid").expect("the grid card");
         assert!(
-            head < terrain && terrain < stream,
-            "heading, terrain, then the old charts"
+            head < terrain && terrain < stream && stream < hours && hours < grid,
+            "head, terrain, who, which hours, which weekdays"
         );
+    }
+
+    /// One range control, not two: the terrain follows the page's, and has none of its own.
+    #[test]
+    fn the_when_tab_has_one_range_control() {
+        let html = when_content();
+        assert_eq!(
+            html.matches(r#"role="group" aria-label="Time range"#)
+                .count(),
+            1
+        );
+        assert!(
+            !html.contains(r#"data-tr="range""#),
+            "the terrain's own range control is gone"
+        );
+        for days in [7, 14, 30, 90, 365] {
+            assert!(html.contains(&format!(r#"data-days="{days}""#)), "{days}");
+        }
     }
 }

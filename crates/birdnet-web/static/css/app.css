@@ -688,6 +688,13 @@ a:hover { text-decoration: underline; }
    title on a phone (`display: block` at <=520px); axe's link-in-text-block caught
    the link in it on the first mobile run after that rule landed. */
 .st-h3-note a,
+/* The species page's picture credit ("Photo: title by author, licence · All picture
+   credits") and the line crediting the Wikipedia text under it: sentences with links
+   inside them, rendered for a species whose picture has been fetched and credited.
+   axe's link-in-text-block caught both in CI, in the light theme, on the species
+   pages (desktop and phone). */
+.spp-credit a,
+.spp-source a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -3704,7 +3711,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
    Faithful extraction. The two co-occurrence data-bars keep their computed
    inline width:{pct}% (documented dynamic exception); the species lookup box
    is scoped `input.` so its width beats the global input[type=…] rule. */
-.co-h1           { font-size: var(--fs-h1); }
+
 .co-mt           { margin-top: var(--space-4); }
 .co-meta-gap     { margin: var(--space-4) 0 var(--space-12); }
 .co-lookup-row   { display: flex; gap: .75rem; margin-bottom: 1rem; }
@@ -3770,8 +3777,7 @@ a.spp-inherit    { color: inherit; }
    single-column breakpoint. species_detail keeps its own <style> block. */
 
 /* ── Today (/today) ─────────────────────────────────────────────────────── */
-.td-head      { align-items: flex-start; }
-.td-eyebrow   { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
+
 .td-phrase    { margin-top: var(--space-8); }
 .td-h1        { font-size: var(--fs-h1); line-height: 1.05; letter-spacing: var(--track-display); }
 .td-sub       { margin-top: var(--space-6); }
@@ -3782,10 +3788,7 @@ a.spp-inherit    { color: inherit; }
 /* ── Dawn chorus (/analytics/dawn-chorus) — shell only; dawn_chorus.rs owns
       the dc-row*/dc-strip/dc-polar-svg partial classes already. ──────────── */
 .dc-head       { align-items: flex-start; }
-.dc-eyebrow    { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
-.dc-h1         { font-size: var(--fs-h1); line-height: 1.05; letter-spacing: var(--track-display); text-wrap: balance; }
-.dc-h1 em      { color: var(--moss-ink); }
-.dc-lede       { margin-top: var(--space-6); max-width: 620px; }
+
 .dc-pills      { margin: 0; }
 .dc-cols       { grid-template-columns: 1.05fr 0.95fr; }
 .dc-polar-card { display: flex; align-items: center; justify-content: center; min-height: 560px; }
@@ -3933,19 +3936,17 @@ a.spp-inherit    { color: inherit; }
 /* ── Reports home (/reports) — v3 spine (Reports_home.html) ─────────────────
    The "Save as PDF" affordance; the editorial heroes/stat bands and the
    History calendar reuse the existing report renderers + print.css. */
-.rp-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); margin-bottom: var(--space-14); flex-wrap: wrap; }
-.rp-print { font-size: var(--fs-sm); color: var(--fg-3); }
+
 .rp-pdf { font-size: var(--fs-sm); flex: none; }
+/* What the week said, under the Reports head: the report's own headline, not the page's title. */
+.wk-headline { font-size: var(--fs-h1); line-height: 1.05; letter-spacing: var(--track-display); text-wrap: balance; margin: var(--space-4) 0 0; }
+.wk-headline em { color: var(--moss-ink); }
+.wk-lede { margin-top: var(--space-6); max-width: 620px; }
 
 /* Editorial hero + stat band (Weekly · Year in review). Ported verbatim from
    Reports_home.html minus the consolidated .rp-tab and the mock's sp-thumb
    (leaderboards reuse .bnb-avatar). */
-.rp-hero { margin-bottom: var(--space-4); }
-.rp-hero .eyebrow { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: var(--track-caps-sm); text-transform: uppercase; color: var(--fg-3); }
-.rp-hero h1 { font-family: var(--font-display); font-size: var(--fs-hero); line-height: 1.02; letter-spacing: var(--track-display); margin: var(--space-8) 0 0; text-wrap: balance; }
-.rp-hero h1 em { font-style: italic; color: var(--moss-ink); }
-.rp-hero .lead { font-size: var(--fs-lg); color: var(--fg-2); margin: var(--space-14) 0 0; max-width: 60ch; line-height: 1.55; }
-.rp-hero .lead b { color: var(--fg); font-weight: var(--fw-semibold); }
+
 .rp-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 0; border: var(--bw) solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); margin: 26px 0; }
 @media (max-width:640px) { .rp-stats { grid-template-columns: 1fr 1fr; } }
 .rp-stat { padding: var(--space-18) var(--space-20); border-right: var(--bw) solid var(--hairline); }
@@ -4010,9 +4011,7 @@ a.spp-inherit    { color: inherit; }
 .rp-legend span { width: 13px; height: 13px; border-radius: var(--r-2xs); }
 
 /* ── Analytics shell (/analytics) — legacy --text-muted/--pad-3 preserved. ─ */
-.an-head      { margin-bottom: var(--pad-3); }
-.an-h1        { font-size: var(--fs-h1); }
-.an-lede      { margin-top: var(--space-4); }
+
 /* The status card is a row of its own in both states. It used to be a 220px tile
    beside the intro until the fragment's hint sentence arrived, was too wide to
    stay there, and wrapped below it, taking every card under it down 96px. */
@@ -4026,10 +4025,7 @@ a.spp-inherit    { color: inherit; }
 
 /* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
       tsh- prefix avoids the timeseries_dash.rs tsd-* partial classes. ────── */
-.tsh-h1          { font-size: var(--fs-h1); margin-bottom: var(--space-4); }
-.tsh-h1 em       { color: var(--moss-ink); }
-.tsh-eyebrow     { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
-.tsh-lede        { color: var(--text-muted); margin-bottom: 1.5rem; font-size: var(--fs-base); }
+
 .tsh-row         { margin-bottom: 1rem; }
 .tsh-badge       { font-size: var(--fs-sm); color: var(--accent); margin-left: 0.5rem; }
 .tsh-card-lede   { color: var(--text-muted); font-size: var(--fs-md); margin-bottom: 0.75rem; }
@@ -4069,9 +4065,7 @@ a.spp-inherit    { color: inherit; }
 .cl-body .cl-sec-h3   { margin: var(--space-14) 0 var(--space-6); font-size: var(--fs-md); text-transform: uppercase; letter-spacing: var(--track-caps-sm); color: var(--fg-3); font-weight: var(--fw-medium); }
 
 /* ── Activity heatmap (/heatmap) ────────────────────────────────────────── */
-.hm-eyebrow   { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
-.hm-h1        { font-size: var(--fs-h1); }
-.hm-lede      { margin-top: var(--space-4); }
+
 .hm-empty     { color: var(--fg-4); text-align: center; padding: 2rem; }
 .hm-hourly-note { margin: var(--space-2) 0 var(--space-12); font-size: var(--fs-md); }
 .hm-scroll    { overflow-x: auto; overscroll-behavior-x: contain; }
@@ -4141,11 +4135,7 @@ a.spp-inherit    { color: inherit; }
 a.login-about    { color: var(--fg-3); }
 
 /* ── Migration / phenology (/migration) ─────────────────────────────────── */
-.mig-head        { align-items: flex-start; }
-.mig-eyebrow     { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
-.mig-h1          { font-size: var(--fs-h1); line-height: 1.05; letter-spacing: var(--track-display); text-wrap: balance; }
-.mig-h1 em       { color: var(--moss-ink); }
-.mig-lede        { margin-top: var(--space-6); max-width: 620px; }
+
 .mig-pills       { margin: 0; }
 .mig-legend      { display: flex; gap: var(--space-14); align-items: center; }
 .mig-legend-item { display: inline-flex; align-items: center; gap: var(--space-6); }
@@ -4868,7 +4858,7 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 .mig-band-spring { font-size: var(--fs-2xs); fill: var(--moss-ink); }
 .mig-band-fall   { font-size: var(--fs-2xs); fill: var(--dawn-ink); }
 .mig-name        { font-size: var(--fs-sm); fill: var(--fg); font-weight: var(--fw-medium); }
-.mig-sub         { font-size: var(--fs-2xs); fill: var(--fg-3); }
+
 .mig-today       { font-size: var(--fs-2xs); fill: var(--bg); }
 .mig-peak-val    { font-size: var(--fs-stat); }
 .mig-headline    { font-size: var(--fs-lead); margin-top: var(--space-8); }
@@ -4981,6 +4971,24 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) var(--space
    .st-lede in the mocks, identical). */
 .bnb-lede { font-size: var(--fs-base); color: var(--fg-2); max-width: 76ch; margin: 0 0 var(--space-18); line-height: 1.55; }
 .bnb-lede b { color: var(--fg); font-weight: var(--fw-semibold); }
+
+/* ── Page head and figure frame (shared) ─────────────────────────────────
+   One opening for every analytic page and tab (`pages/frame.rs::page_head`) and one
+   frame for every chart card (`figure`). They replace the per-page `*-eyebrow`/`*-h1`/
+   `*-lede` families, which differed by a few pixels of margin and a measure of 560 or
+   620 px, and the hand-built card headers. A figure numbers itself with a CSS counter
+   ("Fig. 3 ·") so the number follows the page; what a chart found is `.fig-take`, one
+   sentence written by the chart's own partial from the numbers it holds. */
+.pg-head { align-items: flex-end; margin-bottom: var(--space-18); }
+.pg-main { min-width: 0; }
+.pg-eyebrow { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
+.pg-h1 { font-size: var(--fs-h1); line-height: 1.05; letter-spacing: var(--track-display); text-wrap: balance; margin-top: var(--space-6); }
+.pg-h1 em { color: var(--moss-ink); }
+.pg-lede { margin-top: var(--space-6); max-width: 620px; }
+#main-content { counter-reset: bnb-fig; }
+.fig-no::before { counter-increment: bnb-fig; content: "Fig. " counter(bnb-fig) " · "; font-variant-numeric: tabular-nums; }
+.fig-note { margin: var(--space-12) 0 0; padding-top: var(--space-8); border-top: var(--edge-hair); max-width: 76ch; }
+.fig-take { font-family: var(--font-display); font-size: var(--fs-lead); line-height: 1.3; color: var(--fg); margin: 0 0 var(--space-12); max-width: 62ch; text-wrap: pretty; }
 
 /* ── Patterns home (/patterns?tab=…) — v3 spine (Patterns_home.html) ───────
    The analytics home's per-tab layout helpers: a centred picture (.pt-viz),
@@ -5200,10 +5208,7 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
    The clip row drops the mock's spectrogram-thumb and duration columns (no
    cheap honest server-side source for either — tracked under Wave D), so the
    grid is checkbox · time · who · confidence · actions. */
-.rc-head { align-items: flex-end; gap: var(--space-24); }
-.rc-head-main { max-width: 540px; min-width: 0; }
-.rc-h1 { font-size: var(--fs-h1); line-height: 1.04; margin-top: var(--space-6); }
-.rc-sub { margin-top: var(--space-8); font-size: var(--fs-md); }
+
 .rc-hp-slot { flex: 1; min-width: 280px; max-width: 400px; }
 .rc-hp-slot[hidden] { display: none; }
 
@@ -5430,7 +5435,6 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 /* A section subhead annotation (the "from doctor, re-run anytime" note). */
 .st-h3-note { font-family: var(--font-ui); font-weight: var(--fw-regular); font-size: var(--fs-sm); letter-spacing: 0; color: var(--fg-3); }
 
-
 /* ── Narrow phones: the clip row's controls ran off the edge ──────────
  *
  * Measured under the real phone layout: at 360px — a very common Android
@@ -5476,7 +5480,6 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
   .rc-who-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
-
 /* Very narrow phones (Galaxy Fold outer, older Androids): six equal tab-bar
  * columns leave ~53px each at 320px, which the word "Settings" overruns — the
  * last tab was clipped past the right edge. Tighten the type and let the label
@@ -5493,7 +5496,6 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
     text-overflow: ellipsis;
   }
 }
-
 
 /* The footer's rights line was the one element wide enough to overflow a 320px
  * page, and page overflow widens the layout viewport — which dragged the
@@ -5513,7 +5515,6 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
     overflow-wrap: anywhere;
   }
 }
-
 
 /* Provenance note — "some of these charts include another site's history".
    Rendered above the Patterns sub-tabs, and only when a genuinely different
@@ -5950,7 +5951,6 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
   .acct-reset input { flex: 1 1 100%; min-width: 0; }
 }
 
-
 /* ============================================================================
    SETUP SECTION (owner: the setup work — classifier panel, "when does this
    apply" badges, the waiting-for-restart banner, the setup wizard's
@@ -6197,6 +6197,9 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 /* The soundscape terrain (static/terrain.js, templates/terrain.html). */
 .tr-card .section-header { align-items: flex-start; flex-wrap: wrap; gap: var(--space-12); }
 .tr-lede { margin: var(--space-4) 0 var(--space-12); max-width: 80ch; }
+.tr-take { margin-top: var(--space-4); }
+.tr-sun-key[hidden] { display: none; }
+.tr-sun-swatch { flex: none; width: var(--space-24); margin-top: var(--space-10); border-top: var(--bw-strong) dashed var(--chart-annot); }
 .tr-controls { display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-20); margin-bottom: var(--space-12); }
 .tr-ctl { display: inline-flex; align-items: center; gap: var(--space-8); }
 .tr-stage { position: relative; height: 440px; overflow: hidden; border-radius: var(--r-md); background: var(--surface-sunken); }
@@ -6397,3 +6400,117 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 340px) {
   main .card { padding: var(--space-16); }
 }
+
+/* ── Picture credits (/system/credits) ───────────────────────────────────────────────────────────
+   Two tables of who made what, on what terms. They are not meant to be read whole on a phone (five
+   columns of names and licences), and sideways scrolling hides the licence, which is the point of
+   the page; so below 520px each row stacks, its cells printing their column's name (`data-label`)
+   before them. A row is not a link, so it does not look like one. */
+.pic-credits tbody tr { cursor: default; }
+.pic-credits tbody tr:hover { background: none; }
+.pic-held { margin: var(--space-16) 0 var(--space-4); }
+@media (max-width: 520px) {
+  table.pic-credits, .pic-credits tbody, .pic-credits tr, .pic-credits td { display: block; white-space: normal; }
+  .pic-credits thead { display: none; }
+  .pic-credits tr { padding: var(--space-10) 0; border-bottom: var(--bw) solid var(--hairline); }
+  .pic-credits td { padding: var(--space-2) 0; border: 0; overflow-wrap: anywhere; }
+  .pic-credits td::before {
+    content: attr(data-label) ": ";
+    font-size: var(--fs-2xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3);
+  }
+}
+
+/* ── Plate charts ──────────────────────────────────────────────────────────────────────────────
+   Display → Charts → Plate (`bnb-illustration`, `:root[data-illustration="plate"]`): the same charts and
+   the same numbers, drawn as a field guide draws them. Each figure sits on a ruled sheet of paper with
+   an italic serif title, and a categorical series is its own colour, at full strength, with straight
+   strokes cut across it. Colour stays the first thing that tells two series apart and the strokes
+   (orientation, weight) the second, so the style adds a cue and takes none away. The stroke is the
+   darker of the two page colours in each theme (the text colour on paper, the paper colour on the dark
+   ground), which keeps it at 3.19:1 or better against every series colour in light and 4.49:1 in dark
+   (WCAG 1.4.11 asks 3:1). A sequential scale is not hatched: the eye reads order from lightness, and a
+   hatched ramp measured weaker than the flat one (adjacent steps differed by 5.3 to 5.7 L* against 6.9
+   to 9.2). Only the look changes: no value, axis or label text. The patterns are
+   `templates/_partial_illustration_defs.html` (zero-size, in the page shell). The selectors say
+   `:root[...]` because the dark card rule above is `:root[data-theme="dark"] .bnb-card`, which a
+   `html[...] .fig` would lose to. */
+.ill-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.hx rect { fill: var(--hx); }
+.hx line { stroke: var(--hx-ink, var(--fg)); }
+:root[data-illustration="plate"] { --hx-ink: var(--fg); }
+:root[data-illustration="plate"][data-theme="dark"] { --hx-ink: var(--paper); }
+/* The grey "everything else" series is context (each day behind a line, the totals beside a grid) and
+   stays quiet: its strokes are the paper colour, 3.26:1 against it in light and 5.17:1 in dark. */
+.hx-other line { stroke: var(--paper); }
+.hx-1 { --hx: var(--chart-1); } .hx-2 { --hx: var(--chart-2); } .hx-3 { --hx: var(--chart-3); }
+.hx-4 { --hx: var(--chart-4); } .hx-5 { --hx: var(--chart-5); } .hx-6 { --hx: var(--chart-6); }
+.hx-7 { --hx: var(--chart-7); } .hx-8 { --hx: var(--chart-8); } .hx-other { --hx: var(--chart-other); }
+
+/* Bars and streams are painted from a per-chart gradient named in their `fill` attribute
+   (`url(#g-t-ck-c1)`); its last word says which series, so the pattern replaces it without any
+   renderer being told. */
+:root[data-illustration="plate"] [fill$="ck-c1)"] { fill: url(#bnb-hatch-1); }
+:root[data-illustration="plate"] [fill$="ck-c2)"] { fill: url(#bnb-hatch-2); }
+:root[data-illustration="plate"] [fill$="ck-c3)"] { fill: url(#bnb-hatch-3); }
+:root[data-illustration="plate"] [fill$="ck-c4)"] { fill: url(#bnb-hatch-4); }
+:root[data-illustration="plate"] [fill$="ck-c5)"] { fill: url(#bnb-hatch-5); }
+:root[data-illustration="plate"] [fill$="ck-c6)"] { fill: url(#bnb-hatch-6); }
+:root[data-illustration="plate"] [fill$="ck-c7)"] { fill: url(#bnb-hatch-7); }
+:root[data-illustration="plate"] [fill$="ck-c8)"] { fill: url(#bnb-hatch-8); }
+:root[data-illustration="plate"] [fill$="ck-cother)"] { fill: url(#bnb-hatch-other); }
+
+/* Marks that take their colour from `--c` take their pattern from `--hatch`, set by the same class. A
+   sequential class puts `--hatch` back to nothing, so such a mark inside a categorical group keeps
+   its flat colour. */
+:root[data-illustration="plate"] .ck-c1 { --hatch: url(#bnb-hatch-1); }
+:root[data-illustration="plate"] .ck-c2 { --hatch: url(#bnb-hatch-2); }
+:root[data-illustration="plate"] .ck-c3 { --hatch: url(#bnb-hatch-3); }
+:root[data-illustration="plate"] .ck-c4 { --hatch: url(#bnb-hatch-4); }
+:root[data-illustration="plate"] .ck-c5 { --hatch: url(#bnb-hatch-5); }
+:root[data-illustration="plate"] .ck-c6 { --hatch: url(#bnb-hatch-6); }
+:root[data-illustration="plate"] .ck-c7 { --hatch: url(#bnb-hatch-7); }
+:root[data-illustration="plate"] .ck-c8 { --hatch: url(#bnb-hatch-8); }
+:root[data-illustration="plate"] .ck-cother { --hatch: url(#bnb-hatch-other); }
+:root[data-illustration="plate"] .ck-q1, :root[data-illustration="plate"] .ck-q2,
+:root[data-illustration="plate"] .ck-q3, :root[data-illustration="plate"] .ck-q4,
+:root[data-illustration="plate"] .ck-q5, :root[data-illustration="plate"] .ck-q6,
+:root[data-illustration="plate"] .ck-q7, :root[data-illustration="plate"] .ck-m1,
+:root[data-illustration="plate"] .ck-m2, :root[data-illustration="plate"] .ck-m3,
+:root[data-illustration="plate"] .ck-m4, :root[data-illustration="plate"] .ck-m5,
+:root[data-illustration="plate"] .ck-m6, :root[data-illustration="plate"] .ck-m7 { --hatch: initial; }
+:root[data-illustration="plate"] .ck-fill,
+:root[data-illustration="plate"] .bt-bar,
+:root[data-illustration="plate"] .chord-arc,
+:root[data-illustration="plate"] .chord-ribbon,
+:root[data-illustration="plate"] .dc-bar,
+:root[data-illustration="plate"] .fl-flow { fill: var(--hatch, var(--c)); }
+
+/* A legend swatch is an HTML box and cannot hold an SVG pattern, so a categorical one repeats its
+   pattern's orientation and weight as a gradient (a gradient angle is the pattern's `rotate` plus
+   90deg). Sequential swatches are untouched. */
+:root[data-illustration="plate"] .ck-sw:is(.ck-c1, .ck-c2, .ck-c3, .ck-c4, .ck-c5, .ck-c6, .ck-c7, .ck-c8, .ck-cother) {
+  --ang: 135deg; --period: var(--space-4); --ink-w: var(--bw-strong);
+  background: repeating-linear-gradient(var(--ang), var(--hx-ink) 0 var(--ink-w), var(--c) var(--ink-w) var(--period));
+}
+:root[data-illustration="plate"] .ck-sw.ck-cother { --hx-ink: var(--paper); }
+:root[data-illustration="plate"] .ck-sw.ck-c2 { --ang: 45deg; }
+:root[data-illustration="plate"] .ck-sw.ck-c3 { --ang: 90deg; }
+:root[data-illustration="plate"] .ck-sw.ck-c4 { --ang: 0deg; }
+:root[data-illustration="plate"] .ck-sw:is(.ck-c5, .ck-c6, .ck-c7, .ck-c8) { --period: var(--space-6); --ink-w: calc(var(--space-6) / 4); }
+:root[data-illustration="plate"] .ck-sw.ck-c6 { --ang: 45deg; }
+:root[data-illustration="plate"] .ck-sw.ck-c7 { --ang: 90deg; }
+:root[data-illustration="plate"] .ck-sw.ck-c8 { --ang: 0deg; }
+
+/* Each figure is a sheet: paper, a double rule, the title in italic serif, the notes set like a
+   journal's. */
+:root[data-illustration="plate"] .fig {
+  background: var(--paper);
+  border: var(--bw-strong) solid var(--fg-3);
+  border-radius: var(--r-xs);
+  outline: var(--bw) solid var(--fg-3);
+  outline-offset: calc(-1 * var(--space-6));
+}
+:root[data-illustration="plate"] .fig .sh-h,
+:root[data-illustration="plate"] .fig-note { font-family: var(--font-display); font-style: italic; }
+:root[data-illustration="plate"] .fig-take { font-style: italic; }
+:root[data-illustration="plate"] .ck-annot { font-family: var(--font-display); font-style: italic; }

@@ -74,9 +74,14 @@ async fn last_years_birds_are_not_this_years() {
     rows.push((jan.as_str(), "Erithacus rubecula", "European Robin"));
     let html = year_page(&station(&rows)).await;
 
+    // The shared page head's eyebrow ("Reports · year in review · 2026"); it is small caps by CSS.
     assert!(
-        html.contains(&format!("Year in review · {y}")),
+        html.contains(&format!("year in review · {y}")),
         "the masthead names the year"
+    );
+    assert!(
+        !html.contains(&format!("year in review · {}", y - 1)),
+        "the masthead does not name last year"
     );
     assert!(
         html.contains("<b>3 detections</b> across <b>2 species</b>"),

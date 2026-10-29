@@ -98,6 +98,21 @@ const NOT_SECRET: &[(&str, &str, &str)] = &[
         "Addressed",
         "an object URL; SigV4 signs in a header, not the query",
     ),
+    (
+        "birdnet-integrations/src/species_images/plates.rs",
+        "Plate",
+        "the address of a public Wikimedia Commons file page and its licence page",
+    ),
+    (
+        "birdnet-integrations/src/species_images/types.rs",
+        "ImageCredit",
+        "the public page a picture came from and the page of its licence, shown to readers",
+    ),
+    (
+        "birdnet-integrations/src/species_images/wikipedia.rs",
+        "PageHit",
+        "the address of a public Wikipedia thumbnail and article, which the page links to",
+    ),
 ];
 
 /// Field-name segments that name a credential, or a URL that may carry one.

@@ -8,12 +8,14 @@
 //! |----------------|-------------------------------------------|
 //! | `stats`        | Stats bar partial                         |
 //! | `partials`     | Detections table, top species, charts     |
-//! | `kiosk`        | Kiosk mode page and content partial       |
+//! | `plate`        | Kiosk page and content: the plate, latest, or numbers |
+//! | `kiosk`        | The kiosk's numbers face                  |
 //! | `heatmap_widget` | Species × hour activity heatmap widget  |
 
 mod heatmap_widget;
 mod kiosk;
 mod partials;
+mod plate;
 mod stats;
 
 use axum::{Router, routing::get};
@@ -23,7 +25,7 @@ use crate::state::AppState;
 /// Mount the kiosk page and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/kiosk", get(kiosk::kiosk_page))
+        .route("/kiosk", get(plate::kiosk_page))
         .route("/pages/stats", get(stats::stats_partial))
         .route("/pages/hero-status", get(stats::hero_status_partial))
         .route("/pages/detections", get(partials::detections_partial))
@@ -39,7 +41,7 @@ pub fn router() -> Router<AppState> {
             "/pages/confidence-chart",
             get(partials::confidence_chart_partial),
         )
-        .route("/pages/kiosk-content", get(kiosk::kiosk_content_partial))
+        .route("/pages/kiosk-content", get(plate::kiosk_content))
         .route("/pages/most-recent", get(partials::most_recent_partial))
         .route(
             "/pages/activity-heatmap",

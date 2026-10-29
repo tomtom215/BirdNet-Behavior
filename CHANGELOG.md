@@ -7,22 +7,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- **A stalled apt mirror no longer spends a mutation shard's budget.** In `main`'s five latest
-  `Mutation testing` runs, 19 of 172 shard jobs spent 5 minutes or more in `Install ffmpeg`
-  (16 of them 15 or more, up to 35.7), all on 2026-10-25 and 10-26, against a median of 0.3;
-  the log of one shows `azure.archive.ubuntu.com` going quiet for 2.5 to 4 minutes mid-download.
-  Nine rows were then reported by the `CI config` job at 78% to 101% of their budget, six of them
-  cancelled at it, and each had such an install in the run it was measured on. The step now
-  gives up on a stalled connection after 20 s (three retries) and is limited to 15 minutes, so
-  a bad mirror fails that step by name. The check reads `main`'s last five runs, so those nine
-  findings clear as five runs without a stall replace the ones that had it.
-- **The a11y job's `# observed` annotation** is regenerated (`21m41s` → `37m21s`, the median of
-  its last five runs on `main`; the job has grown with the gates added since it was written).
+- **The kiosk is a plate.** `/kiosk` draws today's birds as a page from a field guide: one figure
+  per species, larger the more it was heard (area follows the square root of the count, with a
+  floor so a bird heard once is still drawn), the Latin name beneath, a numbered key at the foot
+  and the sheet numbered by the day of the year. It is redrawn only when the birds change (the
+  page polls with a digest and the server answers `204`), shows yesterday's birds in the small
+  hours and says so, and has a day and a night palette chosen from the station's sunrise and
+  sunset (`?night=1|0`, `?paper=0` for a small board). Each photograph is engraved in the browser
+  and shown whole; a picture in `CUSTOM_IMAGE_DIR` is drawn as it was made, and a `CREDITS.txt`
+  beside it is printed in the foot. The old display is `?mode=numbers`; `?mode=latest` shows the
+  bird heard last. The idea is fugleramme's (<https://github.com/arnegiacomo/fugleramme>, Arne
+  Giacomo Munthe-Kaas); no code or artwork is shared. New in `birdnet-db`:
+  `species_heard_on`, from `detections_analytic`, so a rejected bird is not on the wall.
+  The sheet is drawn on 1600 units and its smallest caption is 11.5, so the plate reads at the 8.5 px
+  the browser gates ask of a chart label only from about 1180 px of window up; at 390 px they were 2.8 px
+  (`legibility.mjs`, which found it). A window narrower than that now opens `/kiosk` on `?mode=numbers`
+  (the old display, readable at any width) unless the address names a mode, and `kioskOpensReadable`
+  in `interactions.mjs` holds the rule: the phone case failed before, the two cases that keep the plate
+  passed. The plate on a small screen is still small if it is asked for.
+- **Every picture is shown with its credit.** A photograph fetched from Wikipedia and Wikimedia Commons,
+  AviCommons or Flickr is kept with its title, author, source and licence (a `{key}.credit.json` beside the
+  file) and shown under the picture on the species page, in `/api/v2/species/image/{scientific_name}` as
+  `credit`, and on a new page, `/system/credits`, which every page's footer links to and which lists the
+  credited pictures the station holds for the birds it has heard. Until now the credit existed, for two of
+  the three sources, only in the `description` of a JSON answer no page read, and the licences those
+  pictures are under (CC BY, CC BY-SA) require it to be shown. A picture whose credit cannot be read, or
+  whose licence is not a free one, is not used; a picture cached before credits were kept is replaced by a
+  credited one the first time it is asked for (it is not given a guessed credit), and the credits page says
+  how many are waiting. A link in a credit is followed only if it is an `http` or `https` address.
+  The picture cache now refuses a key that is not a single file name or that holds `..` (`../victim`,
+  `a/b`, `a..b`, `.`, the empty name): the key is derived from the name in a request path, and with the
+  credit file added beside each picture, CodeQL's `rust/path-injection` flagged the removal of it. Before,
+  `remove("../victim")` on a cache beside `victim.jpg` deleted that file; three tests fail on the old code,
+  and `a_key_with_punctuation_in_it_is_still_a_file_name` holds that species names with dots, brackets and
+  `×` still cache. The alert stayed open through three forms of the check (a comparison with `Path::file_name`
+  inside a helper, a `contains("..")` written in place, and deleting a file found by listing the cache
+  directory). The last alert's argument is the configured cache directory, which CodeQL takes as a remote
+  source through axum's `State` (`tools/code-scanning/dismiss.sh` records the same for the cache's earlier
+  alert), so no check on the key can clear it. The credit lines on the species page are underlined like the other prose links (axe's
+  `link-in-text-block`, in the light theme).
+  On a phone each row stacks, its cells printing their column's name. The browser gates grade the page
+  (`/system/credits` is in their route list; the screenshot fixture seeds credited pictures, an uncredited one and a
+  plate), and `book.mjs` takes `ONLY=<image name>` to refresh one picture of the manual.
+- **Display → Charts → Plate.** A per-browser choice (`bnb-illustration`, `data-illustration="plate"`) that
+  draws each figure as a ruled sheet of paper with an italic title and draws each categorical series (the
+  species in the streamgraph, the dawn and dusk bars, the migration ridges) in its own colour with straight
+  strokes cut across it, in the manner of a field guide. The first version hatched everything and was
+  worse to read: measured with the lines averaged into the area, adjacent steps of the heat-grid legend
+  differed by 5.3 to 5.7 L\* against 6.9 to 9.2 flat. It now keeps colour as the first cue and the stroke as a
+  second, and draws sequential scales (the heat grid, co-occurrence ribbons, the terrain) flat. The stroke
+  is the darker of the page's two colours in each theme, 3.19:1 or better against every series colour in
+  light and 4.49:1 in dark, which `a_plate_stroke_can_be_seen_on_every_colour_it_crosses` holds (WCAG
+  1.4.11 asks 3:1). `the_plate_chart_style_keeps_its_promises.rs` holds that no sequential class is
+  hatched and that the stylesheet and the pattern file name the same patterns. `tools/visual-qa/axe.mjs`
+  and `layout.mjs` take `ILLUSTRATION=plate`; both are clean with it on (axe: 168 route, theme and
+  viewport states; layout: 336).
+- **The soundscape terrain says what it found and marks the sun.** Above the terrain, one sentence compares
+  the share of the window's detections heard within two hours either side of sunrise with an even spread
+  (four hours of twenty-four) and says which of three things is so: clearly more (at least 1.25 times the
+  even share), clearly less (at most 0.8 times), or about the same. It is left out for a window under
+  seven days or under 30 detections. A dashed line on each day marks sunrise and sunset on the station's
+  local clock, with the offset in force on that day, so a change of clocks bends the line where it should.
+  The text is in the JSON as `take`.
+- **The kiosk draws public-domain plates where there are any.** `/api/v2/species/plate/{scientific_name}/file`
+  serves the operator's own art (`X-Bnb-Image-Source: custom`), else the nineteenth-century plate a built-in index
+  names for the species (`plate`), else `204` (nothing to show; a `404` logged a failed request in the browser for
+  every species without a plate, which the strict visual sweep caught on the kiosk), and the kiosk then asks for the photograph as before, so a bird with
+  a plate never downloads a photograph it will not draw. The index (`crates/birdnet-integrations/data/plates/index.json`,
+  built by `tools/plate-index/`, report in `tools/plate-index/report.md`) names a file on Wikimedia Commons from
+  Gould's bird books, Naumann's *Naturgeschichte der Vögel Mitteleuropas* or the von Wrights' *Svenska fåglar*, only
+  when Commons' own metadata calls it public domain, CC0 or Public Domain Mark and it shows one species; scans their
+  uploader re-licensed (CC BY-SA) are left out. It covers **458 of BirdNET V2.4's 6,515 species (7.0%)**, mostly European and Asian
+  ones: 17 of a fixed sample of 40 common European and North American species, and 1 of the 15 species in the North
+  American screenshot fixture. A plate is fetched from Commons the first time the bird is heard, into `plates/`
+  inside the picture cache, under the same offline switch as the photographs. In the browser its page is cut away
+  (`pageBounds`), then cut again to its ink, so the birds fill the figure; its paper is levelled and, by day,
+  multiplied into the sheet, so only the plate's ink and colour remain, and by night it is a lit print on the dark
+  ground. A plate that is a picture to its edge is drawn as it is. The foot is rewritten from what was drawn: the
+  books, whether a photograph was engraved, and the address of `/system/credits`, which lists the books and the
+  plates held. A plate is credited to its work's author, not the file's free-text one, which on Commons is what the
+  uploader typed (for Naumann it holds a digitiser's name and an email address).
+- **Patterns pages share one frame.** `pages/frame.rs` gives every tab the same head (the help
+  link in the same place) and every chart a numbered figure with a how-to-read caption;
+  `pages/insight.rs` writes the one-sentence finding above a chart from numbers the chart already
+  holds, and says nothing on too little data.
 
 ### Changed
 
+- **Flickr's CC BY-ND is no longer fetched** (`ALLOWED_LICENSES` is now `4,5,7,8,9,10`, without 6). The kiosk
+  engraves a photograph, which is an adaptation, and an ND licence does not allow one. A Flickr photo whose
+  licence id is not in that list, or that has no page to credit, is refused.
+- **Recordings and the three Reports tabs open with the shared page head** (`frame::page_head`, one `<h1>`,
+  the help link in the eyebrow; the print button is in the head on Weekly and Year in Review), and the
+  CSS that styled the old openings, and other CSS no markup used any more, is gone. Today keeps its own hero, whose headline is written from the day's data and set at the larger hero size,
+  and is held to the two rules it can share by `today_has_one_h1_and_the_help_link_in_its_eyebrow`.
+- **Fourteen hand-written figure cards (on the Patterns tabs and the analytics dashboards) carry the `fig`
+  class** their "Fig. N" number implies; they were plain cards among sheets under the Plate style.
+  `every_card_that_numbers_itself_is_a_figure_sheet` reads the marker and demands the class.
+
+- **DuckDB 2.0.0** (`duckdb` 1.20000.0, from 1.5.6), with `behavioral` **v0.10.1** and `icu`
+  v2.0.0 embedded and pinned by sha256 (`extension_pins.rs`). Four things the move needed that a
+  version bump does not show:
+  - *The crate's engine called itself `v2.0.0-dev88614`.* `libduckdb-sys` 1.20000.0 compiles the
+    2.0.0 release commit (`d54cbbe3df`, the `git_revision` of the official wheel) with DuckDB's
+    fallback version macros. DuckDB names the extension directory after the version string only
+    when it is a release, and after the commit hash otherwise; no registry serves a build under
+    the hash, and the published `icu` was refused ("built specifically for DuckDB version
+    'v2.0.0'"), which would have emptied every date-ranged dashboard. `.cargo/config.toml` now
+    sets `DUCKDB_VERSION` and `DUCKDB_PATCH_VERSION` through `CXXFLAGS`, and
+    `the_engine_names_itself_as_a_release` fails without it. A build made outside this tree
+    (`cargo install`) does not get the define; `RELEASING.md` says what that costs.
+  - *DuckDB 2.0.0's stable C API is still v1.5.6.* The runtime check that decides whether an
+    embedded `C_STRUCT` extension fits the engine read the engine's release version as its C API
+    version, which would have reported `behavioral` (target `v1.2.0`) as unloadable on 2.0.0
+    although DuckDB loads it. It now reads the C API from a table
+    (`stable_c_api_of`); `a_correctly_built_binary_reports_no_mismatch` failed on the old rule.
+  - *GNU ld could not link the binary.* `libduckdb-sys` 1.20000.0 links a small archive whole-archive,
+    which asks for `duckdb_register_static_extensions`, and rustc puts it on the link line after the
+    rlib that carries libduckdb, so GNU ld has passed the defining object by then
+    ("undefined reference"). lld takes any order, and it is what rustc 1.99.1 links x86_64 Linux
+    with here, which is why the debug builds linked. The Docker image build for aarch64 (Rust 1.95, `/usr/bin/ld`) failed this way; the same
+    error comes from the x86_64 debug binary with `-C link-arg=-fuse-ld=bfd`. `build.rs` now passes
+    `-Wl,--undefined=duckdb_register_static_extensions` on Linux with `analytics`, and that link
+    succeeds. Only the root package's own targets get it: a test binary of another crate linked with
+    GNU ld was not tried.
+  - *The licence set follows the engine:* `third_party/duckdb-2.0.0/` (no `libpg_query`, which 2.0.0
+    no longer bundles; the ICU text is carried over from 1.5.6), and
+    `gen-third-party-licenses.py` now reads the engine's major from the crate version instead of
+    assuming 1.
+
+- **`rusqlite` 0.41 and the SQLite it bundles, 3.54.1 (from 3.53.2).** One test helper needed a change:
+  `Connection::trace_v2` takes `&mut self` and returns a `Result` now (the helper ignored what would have
+  been a silent failure to install the trace the test reads). The workspace library tests and every
+  `birdnet-db` integration test pass. Comments elsewhere that say "measured on SQLite 3.53.2" are dated
+  measurements and were not re-taken.
+
+- **A plain `cargo update`** (20 packages, all inside their declared ranges): `notify` 8.2.1, `realfft` 3.5.1,
+  `uuid` 1.29.0, `smallvec` 1.16.4, `rustix` 1.1.6, `xattr` 1.7.0, `unicode-width` 0.2.3, `openssl-probe` 0.2.2,
+  `ctutils` 0.4.6 and the `pest` family 2.9.5 for the manual's renderer, plus `backtrace`, `gimli`,
+  `object` and `addr2line`. Every new package is MIT, Apache-2.0 or Zlib, which `deny.toml` allows
+  (read from the package metadata; `cargo deny` itself is not installed here). The workspace library tests
+  pass with the same counts as before the update. Not checked: that `realfft` 3.5.1 leaves the mel
+  spectrogram bit-identical (the parity harness needs the model files, which this session did not have).
 - **OSV-Scanner waives GHSA-qwgh-2vcv-g2f7 until 2026-12-01** in a new `osv-scanner.toml`
   (`block_buffer` 0.10.4, reached through `sha1` 0.10.7 from axum and tungstenite; release builds
   abort on panic, which the advisory's precondition needs to be caught). The fixed 0.12.1 is
@@ -37,6 +165,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two commits deep). Push, schedule and dispatch runs still check every row, so an outgrown budget
   goes red on `main`; a pull request whose base cannot be found is checked on every row too.
   `scripts/check-ci-config.py` records the incident (12) and tests the rule in both directions.
+
+### Fixed
+
+- **The kiosk answered `400` to a blank `ar`.** The page sends the screen's width over height from a hidden
+  control; `?ar=` with the value empty (a script that failed, an address typed by hand) was rejected with "cannot
+  parse float from empty string", on a display that runs unattended. A blank `ar` now draws the default sheet; a
+  value that is not a number is still refused. (`a_blank_aspect_ratio_draws_the_default_sheet_but_a_garbled_one_is_refused`,
+  red against the old handler.)
+
+- **The weekly report called an unfinished week "quieter".** It held this week's detections so
+  far against the whole of last week's, so until Sunday every station was told its week was
+  quieter than the one before, and by how much. It now compares the days that are over with the
+  same days of last week, says "so far", and makes no comparison on a Monday morning.
+  `the_weekly_report_compares_like_with_like` fails on the old page.
+- **The When tab had two range controls that did not agree, and Trends drew three charts that
+  When already draws.** One control sets all four charts; Trends links to where the others live.
+- **`NOTICE` and `docs/book/about.md` said photographer attribution is "shown on each image".** No
+  page prints it; the credit for AviCommons and Flickr pictures is only in the image API's
+  `description`. Both now say so. The gap itself is not closed.
+- **A stalled apt mirror no longer spends a mutation shard's budget.** In `main`'s five latest
+  `Mutation testing` runs, 19 of 172 shard jobs spent 5 minutes or more in `Install ffmpeg`
+  (16 of them 15 or more, up to 35.7), all on 2026-10-25 and 10-26, against a median of 0.3;
+  the log of one shows `azure.archive.ubuntu.com` going quiet for 2.5 to 4 minutes mid-download.
+  Nine rows were then reported by the `CI config` job at 78% to 101% of their budget, six of them
+  cancelled at it, and each had such an install in the run it was measured on. The step now
+  gives up on a stalled connection after 20 s (three retries) and is limited to 15 minutes, so
+  a bad mirror fails that step by name. The check reads `main`'s last five runs, so those nine
+  findings clear as five runs without a stall replace the ones that had it.
+- **The a11y job's `# observed` annotation** is regenerated (`21m41s` → `37m21s`, the median of
+  its last five runs on `main`; the job has grown with the gates added since it was written).
+- **The kiosk's "Exit" link shows a readable focus ring on the day sheet.** The plate's own rule,
+  `.plate-ui a:focus-visible`, reaches the links inside the mode bar but not the exit link, which
+  carries the class itself, so it kept the app's green ring: 1.47:1 on the paper, readable only on
+  the dark ground. The focus gate passed at 20:15 UTC (lamplight) and failed at 06:50 on the same
+  code, because the kiosk picks its palette from the sun and the route list held one bare `/kiosk`.
+  The selector now covers it, and the browser gates list `/kiosk?night=0` and `/kiosk?night=1`, so
+  both palettes are graded on every run whatever the hour.
 
 ## [0.18.1] - 2026-10-26
 

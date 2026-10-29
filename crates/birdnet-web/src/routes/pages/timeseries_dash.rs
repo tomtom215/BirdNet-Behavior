@@ -44,10 +44,15 @@ pub fn router() -> Router<AppState> {
 /// The time-series surface, rendered for embedding by `homes::patterns`
 /// ("Trends" tab).
 pub(super) fn content() -> String {
-    TIMESERIES_PAGE_HTML.replace(
-        "{{help_link}}",
-        &super::help::help_link(super::help::Topic::Analytics),
-    )
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::Analytics),
+        title: "Is your yard getting <em>busier</em>?",
+        lead: "Busier, or quieter.",
+        lede: "Detections per day, and how many different species you've heard, over the last 30 days against the 30 before. A rising species count often matters more than raw detections: it means more kinds of birds are finding your patch.",
+        aside: "",
+    });
+    TIMESERIES_PAGE_HTML.replace("{{page_head}}", &head)
 }
 
 // ---------------------------------------------------------------------------
@@ -591,8 +596,12 @@ fn ts_unavailable(endpoint: &str) -> (StatusCode, [(header::HeaderName, &'static
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
 }
 
-/// Pre-compute and cache all six time-series dashboard fragments so the first
+/// Pre-compute and cache the time-series dashboard fragments the page asks for, so the first
 /// visit (and each background refresh) is instant. No-op without an analytics DB.
+///
+/// `ts-heatmap` is not among them: the page no longer shows it (the hour-of-day average is
+/// "When active"'s), so warming it every refresh cost a 90-day query for nobody. The route
+/// still answers.
 #[cfg(feature = "analytics")]
 pub fn prewarm(state: &AppState) {
     if !state.has_analytics() {
@@ -600,7 +609,6 @@ pub fn prewarm(state: &AppState) {
     }
     let cache = state.analytics_cache();
     let fragments = [
-        ("ts-heatmap", compute_ts_heatmap(state)),
         ("ts-daily", compute_ts_daily(state)),
         ("ts-diversity", compute_ts_diversity(state)),
         ("ts-sessions", compute_ts_sessions(state)),

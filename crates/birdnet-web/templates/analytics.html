@@ -1,24 +1,13 @@
-<div class="page-head an-head">
-    <div>
-        <div class="bnb-eyebrow">The deep dive</div>
-        <h1 class="display an-h1">Behavioral Analytics</h1>
-        {{help_link}}
-        <p class="bnb-lede an-lede"><b>The research tier — every term explained in plain English.</b> These come from the behavioural analytics engine; you never need them to enjoy your station, but they're here when you're curious.</p>
-    </div>
-    <div class="bnb-card pad an-status" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML">
-        <div class="value">--</div>
-        <div class="label">Analytics Status</div>
-    </div>
-</div>
+{{page_head}}
 
 <!-- One masonry of defined-in-place cards: every term explained where it lands -->
 <div class="pt-masonry bh-grid">
     <!-- Sessions -->
-    <div class="bnb-card pad bh-wide">
-        <div class="bnb-eyebrow">Activity sessions</div>
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Activity sessions</div>
         <h2 class="an-card-h3">Bursts of singing</h2>
         <p class="bnb-meta an-card-lede">
-            A <b>session</b> is a run of detections with no gap longer than ~20 quiet
+            A <b>session</b> is a run of detections with no gap longer than {{session_gap}} quiet
             minutes — one "visit" of activity.
         </p>
         <div hx-get="/pages/analytics-sessions" hx-trigger="load" hx-swap="innerHTML">
@@ -27,8 +16,8 @@
     </div>
 
     <!-- Retention -->
-    <div class="bnb-card pad">
-        <div class="bnb-eyebrow">Species retention</div>
+    <div class="bnb-card pad fig">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Species retention</div>
         <h2 class="an-card-h3">Who keeps coming back</h2>
         <p class="bnb-meta an-card-lede">
             Of the days a species appeared, how often it returned the <b>next</b> day.
@@ -40,8 +29,8 @@
     </div>
 
     <!-- Dawn sequence (v0.8.0: sequence_count + window_funnel_events) -->
-    <div class="bnb-card pad">
-        <div class="bnb-eyebrow">Dawn sequence</div>
+    <div class="bnb-card pad fig">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Dawn sequence</div>
         <h2 class="an-card-h3">The morning running order</h2>
         <p class="bnb-meta an-card-lede">
             The voices that open your dawn, how <b>often</b> they sing in that
@@ -53,8 +42,8 @@
     </div>
 
     <!-- Previous / next species -->
-    <div class="bnb-card pad bh-wide">
-        <div class="bnb-eyebrow">Before and after</div>
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Before and after</div>
         <h2 class="an-card-h3">Neighbouring species</h2>
         <p class="bnb-meta an-card-lede">
             Which species tends to be heard just <b>before</b> a bird first turns up in a
@@ -66,8 +55,8 @@
     </div>
 
     <!-- Engine configuration -->
-    <div class="bnb-card pad bh-wide">
-        <div class="bnb-eyebrow">Configuration</div>
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Configuration</div>
         <h2 class="an-card-h3">The analytics engine</h2>
         <p class="bnb-meta an-card-lede">
             Where these numbers come from, and the time windows used to compute them.

@@ -39,8 +39,8 @@
 //!
 //! Attribution is required by every licence in the set, so an image whose
 //! photographer the index does not name is not used, and each one is shown with
-//! the photographer, the licence and a link to AviCommons, through the same
-//! credit line the species page already renders for Flickr.
+//! the photographer, the licence and a link to AviCommons, as the structured
+//! [`ImageCredit`] every provider supplies.
 //!
 //! # Matching
 //!
@@ -59,7 +59,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use super::provider::ImageProvider;
-use super::types::{ImageError, SpeciesImage};
+use super::types::{ImageCredit, ImageError, SpeciesImage};
 
 /// The index's address, per the project's README ("Getting Started").
 pub const INDEX_URL: &str = "https://avicommons.org/latest.json";
@@ -99,6 +99,7 @@ struct Record {
 /// An image this provider may use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
+    sci_name: String,
     code: String,
     key: String,
     by: String,
@@ -148,6 +149,29 @@ fn licence_label(licence: &str) -> String {
     }
 }
 
+/// The page that states a licence, from its label, when the label names a version. Empty when it
+/// does not: a link to "CC BY" with no version would be a link to a licence nobody chose.
+fn licence_url(label: &str) -> String {
+    let lower = label.trim().to_ascii_lowercase();
+    let tokens: Vec<&str> = lower.split([' ', '-']).filter(|t| !t.is_empty()).collect();
+    let is_version = |t: &str| {
+        t.split_once('.').is_some_and(|(a, b)| {
+            !a.is_empty() && !b.is_empty() && t.chars().all(|c| c.is_ascii_digit() || c == '.')
+        })
+    };
+    match tokens.as_slice() {
+        ["cc0"] => "https://creativecommons.org/publicdomain/zero/1.0/".to_owned(),
+        ["cc0", v] if is_version(v) => {
+            format!("https://creativecommons.org/publicdomain/zero/{v}/")
+        }
+        ["cc", "by", v] if is_version(v) => format!("https://creativecommons.org/licenses/by/{v}/"),
+        ["cc", "by", "sa", v] if is_version(v) => {
+            format!("https://creativecommons.org/licenses/by-sa/{v}/")
+        }
+        _ => String::new(),
+    }
+}
+
 /// The usable images of an index, by lower-case scientific name.
 #[derive(Debug, Default)]
 struct Index {
@@ -179,6 +203,7 @@ impl Index {
             by_species
                 .entry(r.sci_name.trim().to_ascii_lowercase())
                 .or_insert_with(|| Entry {
+                    sci_name: r.sci_name.trim().to_owned(),
                     code: r.code,
                     key: r.key,
                     by: r.by.trim().to_owned(),
@@ -249,11 +274,17 @@ impl AviCommonsClient {
             url: self.image_url(entry),
             cached_path: None,
             width: self.thumb_width,
-            description: Some(format!(
-                "Photograph by {}, {}, via Avicommons.",
-                entry.by, entry.licence
-            )),
+            // The credit is `credit`; a description that repeated it would be printed twice.
+            description: None,
             wiki_url: Some(format!("https://avicommons.org/species/{}", entry.code)),
+            credit: Some(ImageCredit {
+                title: entry.sci_name.clone(),
+                author: entry.by.clone(),
+                source: "AviCommons".to_owned(),
+                source_url: format!("https://avicommons.org/species/{}", entry.code),
+                licence: entry.licence.clone(),
+                licence_url: licence_url(&entry.licence),
+            }),
         }
     }
 

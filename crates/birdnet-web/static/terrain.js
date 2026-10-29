@@ -206,6 +206,11 @@ export function cellsFromData(data) {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/** Whether the data carries a sunrise and a sunset for at least one day. */
+export function hasSun(data) {
+  return Array.isArray(data.sun) && data.sun.length === data.days && data.sun.some((s) => Array.isArray(s));
+}
+
 /** `Tue 14 Oct` for an ISO date. */
 export function dayName(iso) {
   const [y, m, d] = iso.split("-").map(Number);
@@ -319,10 +324,16 @@ function url(p) {
   return typeof window.bnbUrl === "function" ? window.bnbUrl(p) : p;
 }
 
+/** The ranges the server can draw, shortest first (`terrain::RANGES`). */
+const RANGES = [30, 90, 365];
+
 class Terrain {
   constructor(card) {
     this.card = card;
-    this.days = Number(card.dataset.trDays) || 90;
+    this.days = Number(card.dataset.trDays) || 30;
+    this.span = card.querySelector('[data-tr="span"]');
+    this.take = card.querySelector('[data-tr="take"]');
+    this.sunKey = card.querySelector('[data-tr="sun-key"]');
     this.view = "grid";
     this.colour = "activity";
     this.data = null;
@@ -342,8 +353,15 @@ class Terrain {
     this.readout = card.querySelector(".tr-readout");
     this.legend = card.querySelector(".tr-legend");
     this.idleText = this.readout ? this.readout.textContent : "";
+    this.say();
     this.bind();
     this.load();
+  }
+
+  /** Which range the card is showing, in words. */
+  say() {
+    if (!this.span) return;
+    this.span.textContent = this.days === 365 ? "Last year" : `Last ${this.days} days`;
   }
 
   // ── controls ──
@@ -362,8 +380,14 @@ class Terrain {
         fn(b);
       });
     };
-    seg("range", (b) => {
-      this.days = Number(b.dataset.days);
+    // The page owns the range (one control for every figure on the tab). The card follows it,
+    // showing the shortest range it can draw that is not shorter than the choice, and says which.
+    this.card.addEventListener("bnb:range", (e) => {
+      const want = Number((e.detail && e.detail.days) || this.days);
+      const days = RANGES.find((r) => r >= want) || RANGES[RANGES.length - 1];
+      if (days === this.days) return;
+      this.days = days;
+      this.say();
       this.load();
     });
     seg("view", (b) => this.setView(b.dataset.view));
@@ -434,10 +458,12 @@ class Terrain {
     if (!data || data.error || !data.n || data.n.length !== data.days * COLS) {
       this.say("The terrain is not available just now.");
       this.data = null;
+      this.showFinding(null, false);
       this.drawGrid();
       return;
     }
     this.data = data;
+    this.showFinding(data.take, hasSun(data));
     this.cells = cellsFromData(data);
     this.pal = palette(this.card);
     this.cursor = null;
@@ -455,10 +481,22 @@ class Terrain {
     if (this.msg) this.msg.textContent = text;
   }
 
+  /**
+   * What the picture found, as a sentence under the title (plain text: it came from the server's
+   * counts and carries no markup), and the legend line for the sun's lines when there are any.
+   */
+  showFinding(text, sun) {
+    if (this.take) {
+      this.take.textContent = text || "";
+      this.take.hidden = !text;
+    }
+    if (this.sunKey) this.sunKey.hidden = !sun;
+  }
+
   describe() {
     const d = this.data;
     const label = d
-      ? `Soundscape terrain: the last ${d.days} days by the 24 hours of the day. ${this.cells.max.toLocaleString()} detections in the busiest hour. Use the arrow keys to move through the hours and days; the reading under the picture says what is there.`
+      ? `Soundscape terrain: the last ${d.days} days by the 24 hours of the day. ${d.take ? d.take + " " : ""}${this.cells.max.toLocaleString()} detections in the busiest hour. Use the arrow keys to move through the hours and days; the reading under the picture says what is there.`
       : "Soundscape terrain (not available)";
     this.canvas.setAttribute("aria-label", label);
     if (this.glCanvas) this.glCanvas.setAttribute("aria-label", label.replace("Use the arrow keys to move through the hours and days;", "Arrow keys turn the view, plus and minus zoom, Home resets, Shift and the arrows move the cursor;"));
@@ -632,6 +670,8 @@ class Terrain {
       }
     }
     ctx.restore();
+    // Where the sun rose and set each day, so "when" can be read against the light.
+    if (hasSun(this.data)) this.drawSun(ctx, left, top, cw, rh, days);
     // Axes: hours along the top, days down the side.
     ctx.fillStyle = css(p.label);
     ctx.font = `10px ${font}`;
@@ -652,6 +692,40 @@ class Terrain {
       ctx.lineWidth = 2;
       ctx.strokeRect(Math.round(left + hour * cw) - 0.5, Math.round(top + day * rh) - 0.5, Math.max(cw, 4), Math.max(rh, 4));
     }
+  }
+
+  /**
+   * Sunrise and sunset as two dashed lines down the grid, one point per day, each with a halo of
+   * the card's own surface so it stays legible over the darkest and the lightest cells. A day
+   * with no sunrise (a polar one) breaks the line rather than being joined across.
+   */
+  drawSun(ctx, left, top, cw, rh, days) {
+    const sun = this.data.sun;
+    ctx.save();
+    ctx.lineJoin = "round";
+    for (const [stroke, width, dash] of [[css(this.pal.surface), 3.5, []], [css(this.pal.annot), 1.5, [4, 3]]]) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash);
+      for (const which of [0, 1]) {
+        ctx.beginPath();
+        let pen = false;
+        for (let r = 0; r < days; r++) {
+          const s = sun[r];
+          if (!s) {
+            pen = false;
+            continue;
+          }
+          const x = left + s[which] * cw;
+          const y = top + (r + 0.5) * rh;
+          if (pen) ctx.lineTo(x, y);
+          else ctx.moveTo(x, y);
+          pen = true;
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   // ── view ──

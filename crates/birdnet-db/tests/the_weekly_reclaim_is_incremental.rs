@@ -39,8 +39,9 @@ fn record(event: TraceEvent<'_>) {
     }
 }
 
-fn trace(conn: &Connection, on: bool) {
-    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, on.then_some(record));
+fn trace(conn: &mut Connection, on: bool) {
+    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, on.then_some(record))
+        .expect("install or remove the statement trace");
 }
 
 fn traced() -> MutexGuard<'static, ()> {
@@ -159,8 +160,8 @@ fn a_database_from_before_is_converted_once_beside_itself_and_then_left_alone() 
     // temp directory that is a memory-charged tmpfs under the unit. Traced on
     // the conversion itself, on a fresh legacy file.
     let path2 = tmp.path().join("other.db");
-    let conn2 = legacy_database(&path2);
-    trace(&conn2, true);
+    let mut conn2 = legacy_database(&path2);
+    trace(&mut conn2, true);
     resilience::convert_to_incremental(&conn2, tmp.path()).expect("convert traced");
     let dir = tmp.path().to_string_lossy().into_owned();
     let staged_beside = statements()
@@ -179,7 +180,7 @@ fn the_weekly_reclaim_returns_every_free_page_without_a_vacuum() {
     let _t = traced();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("birds.db");
-    let conn = Connection::open(&path).unwrap();
+    let mut conn = Connection::open(&path).unwrap();
     birdnet_db::migration::migrate(&conn).expect("migrate");
     fill_and_delete(&conn);
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -191,9 +192,9 @@ fn the_weekly_reclaim_returns_every_free_page_without_a_vacuum() {
     );
     let size_before = std::fs::metadata(&path).unwrap().len();
 
-    trace(&conn, true);
+    trace(&mut conn, true);
     let freed = resilience::reclaim_free_pages_on(&conn).expect("reclaim");
-    trace(&conn, false);
+    trace(&mut conn, false);
 
     assert_eq!(freelist(&conn), 0, "every free page must be returned");
     assert_eq!(

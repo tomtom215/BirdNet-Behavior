@@ -1,16 +1,19 @@
-//! Kiosk mode: simplified auto-refreshing display for dedicated screens.
+//! The kiosk's "numbers" face: today's counts and the latest detections, for dedicated screens.
+//!
+//! This was the whole kiosk until the plate (`plate`) became its default; it is still served at
+//! `/kiosk?mode=numbers`, and `plate::kiosk_content` hands `mode=numbers` requests to
+//! [`numbers_content`].
 
 use std::fmt::Write as _;
 
 use axum::extract::State;
 use axum::http::{StatusCode, header};
-use axum::response::Html;
 
 use crate::routes::pages::atoms::conf_pill;
 use crate::routes::pages::{escape_html, group_thousands, today_date_string};
 use crate::state::AppState;
 
-static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
+pub(super) static NUMBERS_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
     r#"<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -19,7 +22,7 @@ static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 <title>BirdNet-Behavior · Kiosk</title>
 <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
 <style>
-  body { padding:4vh 5vw; overflow:hidden; }
+  body { padding:max(4vh,44px) 5vw 4vh; overflow:hidden; }
   .kiosk-head { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:4vh; }
   .kiosk-head .title { font-family:var(--font-display); font-size:clamp(28px,4vw,52px); letter-spacing:-0.02em; margin:0; font-weight:400; }
   .stats { display:flex; gap:24px; justify-content:center; margin-bottom:4vh; flex-wrap:wrap; }
@@ -37,6 +40,14 @@ static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   .kiosk-exit { position:fixed; top:14px; right:18px; color:var(--fg-3);
                 font-size:13px; text-decoration:none; transition:opacity .2s; }
   .kiosk-exit:hover, .kiosk-exit:focus-visible { opacity:1; }
+  /* The way to the other faces, in the same quiet colour as the way out. Not dimmed with
+     `opacity`: that took its contrast under the floor on a phone, which this face now opens
+     on, and the body's top padding keeps the heading clear of it at 320 px. */
+  .kiosk-modes { position:fixed; top:14px; left:18px; display:flex; gap:12px; font-size:13px;
+                 color:var(--fg-3); }
+  .kiosk-modes a { color:inherit; text-decoration:none; }
+  .kiosk-modes a:hover, .kiosk-modes a:focus-visible { color:var(--fg); }
+  .kiosk-modes a[aria-current="true"] { text-decoration:underline; text-underline-offset:3px; }
 </style>
 </head>
 <body>
@@ -45,6 +56,11 @@ static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
      the <title> element. The heading is visually the existing wordmark. -->
 <header class="kiosk-head">
   <a class="kiosk-exit" href="/" aria-label="Exit kiosk mode">Exit&nbsp;✕</a>
+  <nav class="kiosk-modes" aria-label="What the display shows">
+    <a href="/kiosk?mode=plate">Plate</a>
+    <a href="/kiosk?mode=latest">Latest</a>
+    <a href="/kiosk?mode=numbers" aria-current="true">Numbers</a>
+  </nav>
   <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="ki-fg"></circle>
     <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="ki-fg">
@@ -56,7 +72,7 @@ static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
   <h1 class="title">BirdNet<span class="ki-fg3">Behavior</span></h1>
 </header>
 <main id="kiosk-content"
-     hx-get="/pages/kiosk-content"
+     hx-get="/pages/kiosk-content?mode=numbers"
      hx-trigger="load, every 30s"
      hx-swap="innerHTML">
   <p class="ki-loading">Loading…</p>
@@ -66,20 +82,14 @@ static KIOSK_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 <script>
   // ESC leaves kiosk mode — the keyboard counterpart of the corner link.
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { window.location.href = '/'; }
+    if (e.key === 'Escape') { window.location.href = (document.body.getAttribute('data-base-path') || '') + '/'; }
   });
 </script>
 </body>
 </html>"#,
 );
 
-pub(super) async fn kiosk_page() -> Html<String> {
-    Html(crate::routes::pages::with_asset_version(
-        KIOSK_HTML.as_str(),
-    ))
-}
-
-pub(super) async fn kiosk_content_partial(
+pub(super) async fn numbers_content(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let names = state.names_handle();

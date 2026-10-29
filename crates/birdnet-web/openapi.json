@@ -3759,6 +3759,52 @@
         }
       }
     },
+    "/species/plate/{scientific_name}/file": {
+      "get": {
+        "tags": [
+          "species"
+        ],
+        "summary": "Species plate bytes",
+        "description": "The picture the kiosk plate draws for a species: a picture in the configured custom image directory first (header `X-Bnb-Image-Source: custom`), else the public-domain plate the built-in index names for it (`X-Bnb-Image-Source: plate`), fetched from Wikimedia Commons on the first request and kept. 204 for a species with no plate, which is most species; the kiosk then asks the photograph endpoint. Only species the station has detected are fetched.",
+        "operationId": "speciesPlateFile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ScientificName"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No plate for this species, or the station keeps none: nothing to show, not an error."
+          },
+          "404": {
+            "description": "Not a species this station has detected."
+          }
+        }
+      }
+    },
     "/recordings": {
       "get": {
         "tags": [
@@ -8749,6 +8795,33 @@
               "integer",
               "null"
             ]
+          },
+          "credit": {
+            "description": "Who made the picture and on what terms; null for a picture cached before credits were kept (it is replaced by a credited one on its next fetch).",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "source_url": {
+                "type": "string"
+              },
+              "licence": {
+                "type": "string"
+              },
+              "licence_url": {
+                "type": "string"
+              }
+            }
           }
         }
       },

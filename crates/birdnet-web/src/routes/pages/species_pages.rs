@@ -181,17 +181,14 @@ async fn species_page(
     .await
     .unwrap_or_default();
 
-    let help = super::help::help_link(super::help::Topic::Species);
-    let head = format!(
-        r#"<div class="page-head" data-screen-label="Species head">
-  <div>
-    <div class="bnb-eyebrow"><span>Species</span>{help}</div>
-    <h1 class="display sp-h1">Who you've heard</h1>
-    <p class="bnb-meta sp-lede">Every bird your station has identified — browse the list, the photos, or your growing life list.</p>
-  </div>
-  <a class="bnb-btn" href="/species/occurrence">Why isn't a bird heard here?</a>
-</div>"#
-    );
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Species",
+        help: &super::help::help_link(super::help::Topic::Species),
+        title: "Who you've <em>heard</em>",
+        lead: "Every bird your station has identified.",
+        lede: "Browse the list, the photos, or your growing life list.",
+        aside: r#"<a class="bnb-btn" href="/species/occurrence">Why isn't a bird heard here?</a>"#,
+    });
     let content = format!(
         "{head}{controls}{body}",
         controls = controls(view, filter, search.as_deref(), taxon.as_ref())
@@ -969,10 +966,13 @@ async fn species_info_partial(
     };
 
     // The /file image route is cache-only, so warm this species' photo in the
-    // background (non-blocking) on first view — a later view then shows it.
+    // background (non-blocking) on first view — a later view then shows it. A picture cached
+    // before credits were kept is replaced the same way, by one that comes with its credit.
     if let Some(cache) = state.image_cache()
         && !img_key.is_empty()
-        && cache.get_cached(&img_key).is_none()
+        && cache
+            .get_cached(&img_key)
+            .is_none_or(|img| img.credit.is_none())
     {
         let key_bg = img_key.clone();
         tokio::spawn(async move {
@@ -991,15 +991,32 @@ async fn species_info_partial(
                 alt = escape_html(&shown),
             );
         }
-        if let Some(desc) = &image.description {
-            let _ = write!(html, r#"<p class="spp-desc">{}</p>"#, escape_html(desc));
-        }
-        if let Some(url) = &image.wiki_url {
+        // The picture's credit: who made it, where it is from and on what terms. A picture is
+        // not shown without one, so this is not optional decoration.
+        if image.cached_path.is_some()
+            && let Some(credit) = &image.credit
+        {
             let _ = write!(
                 html,
-                r#"<p><a href="{}" target="_blank" rel="noopener">View on Wikipedia</a></p>"#,
-                escape_html(url),
+                r#"<p class="bnb-meta spp-credit">Photo: {} · <a href="/system/credits">All picture credits</a></p>"#,
+                super::credits::credit_html(credit),
             );
+        }
+        // The description is the article's opening, which is Wikipedia's text: CC BY-SA, so it
+        // is said where it is from and linked to its source.
+        if let Some(desc) = &image.description {
+            let _ = write!(html, r#"<p class="spp-desc">{}</p>"#, escape_html(desc));
+            if let Some(url) = image
+                .wiki_url
+                .as_deref()
+                .and_then(super::credits::safe_href)
+            {
+                let _ = write!(
+                    html,
+                    r#"<p class="bnb-meta spp-source">Text from <a href="{}" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA 4.0).</p>"#,
+                    escape_html(url),
+                );
+            }
         }
     }
 

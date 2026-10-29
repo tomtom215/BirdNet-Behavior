@@ -101,15 +101,16 @@ async fn recordings_page(
     };
 
     let help = super::help::help_link(super::help::Topic::Recordings);
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Recordings",
+        help: &help,
+        title: "Listen <em>in</em>",
+        lead: "Hear what your station caught.",
+        lede: "Browse the clips, or open the live stream and listen along in real time.",
+        aside: r#"<div id="rc-headplayer" class="rc-hp-slot" hidden></div>"#,
+    });
     let content = format!(
-        r#"<div class="page-head rc-head" data-screen-label="Recordings head">
-  <div class="rc-head-main">
-    <div class="bnb-eyebrow"><span>Recordings</span>{help}</div>
-    <h1 class="display rc-h1">Listen in</h1>
-    <p class="bnb-meta rc-sub">Hear what your station caught — browse the clips, or open the live stream and listen along in real time.</p>
-  </div>
-  <div id="rc-headplayer" class="rc-hp-slot" hidden></div>
-</div>
+        r#"{head}
 {nav}
 <div id="rc-body" data-screen-label="Recordings body">{body}</div>"#
     );

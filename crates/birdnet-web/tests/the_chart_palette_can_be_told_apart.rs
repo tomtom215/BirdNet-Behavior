@@ -712,3 +712,87 @@ fn the_borrowing_scanner_finds_what_it_is_for() {
     // The same line in a file that is not excused is a finding.
     assert!(!borrowed_ui_colours("src/routes/pages/charts.rs", ok).is_empty());
 }
+
+// ── the plate chart style ───────────────────────────────────────────────────
+
+/// The token a rule paints with: `prop: var(--name)` inside the first `selector {` block of `css`.
+fn var_in_rule(css: &str, selector: &str, prop: &str) -> String {
+    let open = format!("{selector} {{");
+    let at = css
+        .find(&open)
+        .unwrap_or_else(|| panic!("app.css has no rule `{selector}`"));
+    let body = &css[at + open.len()..];
+    let body = &body[..body.find('}').expect("an unclosed rule")];
+    let value = body
+        .split(';')
+        .find_map(|d| d.trim().strip_prefix(&format!("{prop}:")))
+        .unwrap_or_else(|| panic!("`{selector}` does not set {prop}"));
+    value
+        .trim()
+        .strip_prefix("var(")
+        .and_then(|v| v.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("`{selector}` sets {prop} to {value}, not a token"))
+        .trim()
+        .to_owned()
+}
+
+/// Under Display → Charts → Plate a series is its own colour with strokes cut across it, and a stroke is
+/// a graphic a reader needs (it is what tells two neighbours apart when their colours are confused), so
+/// it has to be seen against every colour it crosses: WCAG 1.4.11, 3:1. The stroke colour is read from
+/// the stylesheet, so what is graded is what ships.
+#[test]
+fn a_plate_stroke_can_be_seen_on_every_colour_it_crosses() {
+    let css = strip_comments(&read("static/css/app.css"));
+    for (mode, selector) in [
+        (Mode::Light, r#":root[data-illustration="plate"]"#),
+        (
+            Mode::Dark,
+            r#":root[data-illustration="plate"][data-theme="dark"]"#,
+        ),
+    ] {
+        let map = theme(mode);
+        let ink = colour(&map, &var_in_rule(&css, selector, "--hx-ink"));
+        for n in 1..=8 {
+            let series = colour(&map, &format!("--chart-{n}"));
+            assert!(
+                contrast(ink, series) >= CONTRAST_MIN,
+                "{selector}: the stroke is {:.2}:1 on --chart-{n}, needs {CONTRAST_MIN}:1",
+                contrast(ink, series)
+            );
+        }
+        // The grey series draws its own, quieter stroke.
+        let other_ink = colour(&map, &var_in_rule(&css, ".hx-other line", "stroke"));
+        let other = colour(&map, "--chart-other");
+        assert!(
+            contrast(other_ink, other) >= CONTRAST_MIN,
+            "{selector}: the grey series' stroke is {:.2}:1 on --chart-other, needs {CONTRAST_MIN}:1",
+            contrast(other_ink, other)
+        );
+    }
+}
+
+/// The counterpart: the choices this one replaced do fail, so the check above can fail. A light stroke on
+/// the light theme (paper on `--chart-7`, a pale amber) and a light stroke on the dark theme (the text
+/// colour on the dark series) were the first two attempts and measured 2.09:1 and 2.89:1.
+#[test]
+fn the_strokes_that_were_tried_and_dropped_would_fail_the_same_check() {
+    let light = theme(Mode::Light);
+    let paper_on_amber = contrast(colour(&light, "--paper"), colour(&light, "--chart-7"));
+    assert!(
+        paper_on_amber < CONTRAST_MIN,
+        "paper on --chart-7 in light is {paper_on_amber:.2}:1"
+    );
+    let dark = theme(Mode::Dark);
+    let worst = (1..=8)
+        .map(|n| {
+            contrast(
+                colour(&dark, "--fg"),
+                colour(&dark, &format!("--chart-{n}")),
+            )
+        })
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        worst < CONTRAST_MIN,
+        "the text colour on the dark series is at best {worst:.2}:1 at its worst slot"
+    );
+}

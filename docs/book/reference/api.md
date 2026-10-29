@@ -189,7 +189,7 @@ The rest of the export family (`detections/export/raven`, the per-clip Raven and
 | `GET /api/v2/species/activity` | `date` | Hourly activity (all species) on a given day |
 | `GET /api/v2/species/occurrence` | `week` (1–48), `q`, `admitted` (`true`/`false`), `limit` (default 100, at most 1000), `offset` | What the station's range (occurrence) filter says about each species for its place and a week: the model's probability, the threshold, whether the station admits the species and why. See [Why isn't a bird heard here?](#why-isnt-a-bird-heard-here) |
 | `GET /api/v2/species/export` | `format` (`csv` or `json`), `limit` | Per-species totals as a download (`species.csv`) |
-| `GET /api/v2/species/image/{scientific_name}` | — | The image's metadata (URL, cache status, description) as JSON, or `404`; it does not download the picture. Only species the station has detected are looked up |
+| `GET /api/v2/species/image/{scientific_name}` | — | The image's metadata (URL, cache status, description and `credit`: `title`, `author`, `source`, `source_url`, `licence`, `licence_url`) as JSON, or `404`; it does not download the picture. `credit` is `null` for a picture cached before credits were kept; it is replaced by a credited one the next time it is fetched. Only species the station has detected are looked up |
 | `GET /api/v2/species/image/{scientific_name}/file` | — | The cached picture itself (a custom image first, then the provider's), with a five-minute `private` cache header on the picture and on the `404` |
 | `GET /api/v2/recordings` | `species` (matched against the file name), `limit` (default 50, at most 500), `offset` | List the files in the recordings directory: `filename`, `size_bytes`, `modified_secs`, `content_type` |
 | `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip, honouring `Range` requests (`206`); the type follows the extension (WAV, MP3, FLAC, Ogg, AAC) |
@@ -273,10 +273,10 @@ broken. The `store` object is the part that differs:
     "detections": 412903,
     "unplaceable_detections": 3,
     "detections_placeable": 412900,
-    "engine_duckdb_version": "v1.5.6",
+    "engine_duckdb_version": "v2.0.0",
     "engine_platform": "linux_arm64",
     "embedded_extension": {
-      "version": "v0.10.0",
+      "version": "v0.10.1",
       "duckdb_version": "v1.2.0",
       "abi": "C_STRUCT",
       "platform": "linux_arm64",
@@ -296,8 +296,9 @@ broken. The `store` object is the part that differs:
   both, and both fail the same way at `LOAD`. How `duckdb_version` is read
   depends on `abi`: for `CPP` and `C_STRUCT_UNSTABLE` it is a DuckDB version
   that must equal the engine's; for `C_STRUCT` (behavioral v0.10.0 and later)
-  it is a C API version, and any engine of the same major at or above it
-  accepts the extension — so `v1.2.0` against a `v1.5.6` engine is correct. Rebuild against
+  it is a C API version, and any engine whose stable C API has the same major and is
+  at or above it accepts the extension — so `v1.2.0` against a `v2.0.0` engine (whose
+  stable C API stays at v1.5.6) is correct. Rebuild against
   `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
 - `self_test` other than `"ok"` while `extension_loaded` is `true` — the
   extension loaded but one of its functions answered a fixed check differently

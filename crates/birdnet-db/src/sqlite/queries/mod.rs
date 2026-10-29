@@ -41,10 +41,10 @@ pub use detection_reviews::{
 };
 pub use detections::{
     CLIP_AVAILABLE, DateRange, DetectionFilter, DetectionKey, HourWindow, LockFilter,
-    RecordingsFilter, SearchTerm, SortOrder, TodayFilter, VerdictFilter, analytic_detection_count,
-    analytic_detection_count_for_date, analytic_detections, analytic_detections_above,
-    analytic_species_count_for_date, best_detections_for_date, com_name_for,
-    concurrent_detections_from_other_sources, delete_detection, delete_detection_at,
+    RecordingsFilter, SearchTerm, SortOrder, SpeciesHeard, TodayFilter, VerdictFilter,
+    analytic_detection_count, analytic_detection_count_for_date, analytic_detections,
+    analytic_detections_above, analytic_species_count_for_date, best_detections_for_date,
+    com_name_for, concurrent_detections_from_other_sources, delete_detection, delete_detection_at,
     detected_at_utc_for, detection_at, detection_count, detection_count_for_date,
     detection_count_for_species_date, detection_dates, detections_by_date, detections_by_species,
     detections_for_clip, detections_per_day, insert_detection, is_detection_locked,
@@ -52,8 +52,8 @@ pub use detections::{
     locked_file_names, parse_search_term, recent_clips, recent_clips_count, recent_detections,
     relabel_detection, relabel_detection_at, search_detection_count, search_detections,
     seconds_since_last_detection, set_birdweather_soundscape, species_detection_count_between,
-    species_for_date, todays_detection_count, todays_detections, todays_source_activity,
-    unlock_detection, unlock_detection_at, unstamped_detection_count,
+    species_for_date, species_heard_on, todays_detection_count, todays_detections,
+    todays_source_activity, unlock_detection, unlock_detection_at, unstamped_detection_count,
 };
 pub use effort::total_recording_seconds;
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};

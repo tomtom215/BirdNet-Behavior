@@ -47,7 +47,7 @@
 //!
 //! A DuckDB extension is locked to the engine it was built for, in one of two
 //! ways depending on its ABI type, and `allow_extensions_metadata_mismatch`
-//! bypasses neither (DuckDB 1.5.6 `src/main/extension.cpp`,
+//! bypasses neither (DuckDB 1.5.6 and 2.0.0 `src/main/extension.cpp`,
 //! `ParsedExtensionMetaData::GetInvalidMetadataError`):
 //!
 //! - **`CPP` and `C_STRUCT_UNSTABLE`** (ICU; `behavioral` up to v0.9.1): the
@@ -55,7 +55,8 @@
 //!   equals its own.
 //! - **`C_STRUCT`** (`behavioral` from v0.10.0, built on the stable C API): the
 //!   footer names a *C API* version, and the engine loads it when the major
-//!   matches and the version is no newer than the engine's own C API version.
+//!   matches and the version is no newer than the engine's own stable C API
+//!   version (the engine's release version up to 1.x; fixed at v1.5.6 in 2.0.0).
 //!
 //! Embedding is therefore only useful if the bytes satisfy the rule for their
 //! ABI against the engine `libduckdb-sys` links in.
@@ -72,17 +73,17 @@
 //! # Footer layout
 //!
 //! Measured against the published `behavioral` builds (v0.9.1 for DuckDB
-//! v1.5.5, v0.10.0 for v1.5.6, `community-extensions.duckdb.org`) and the
-//! published `icu` builds for v1.5.5 and v1.5.6 (`extensions.duckdb.org`), not
-//! taken from documentation:
+//! v1.5.5, v0.10.0 for v1.5.6, v0.10.1 for v2.0.0, `community-extensions.duckdb.org`)
+//! and the published `icu` builds for v1.5.5, v1.5.6 and v2.0.0
+//! (`extensions.duckdb.org`), not taken from documentation:
 //!
 //! ```text
 //! last 512 bytes:
 //!   [  0: 96]  reserved (zero)
 //!   [ 96:128]  ABI type              "C_STRUCT"  (v0.9.1: "C_STRUCT_UNSTABLE"; icu: "CPP")
-//!   [128:160]  extension version     "v0.10.0"   (icu: "v1.5.6")
+//!   [128:160]  extension version     "v0.10.1"   (icu: "v2.0.0")
 //!   [160:192]  version target        "v1.2.0"    (C API version for C_STRUCT;
-//!                                                 DuckDB version otherwise, e.g. "v1.5.6")
+//!                                                 DuckDB version otherwise, e.g. "v2.0.0")
 //!   [192:224]  platform              "linux_amd64"
 //!   [224:256]  metadata format ver.  "4"
 //!   [256:512]  signature block
@@ -123,7 +124,7 @@ const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 /// If DuckDB bumps this, the build fails loudly rather than embedding bytes
 /// whose layout we would be guessing at. Re-measure the layout, then bump.
 const SUPPORTED_METADATA_VERSION: &str = "4";
-/// The ABI types DuckDB 1.5.6 knows (`extension_load.cpp`); anything else is
+/// The ABI types DuckDB 1.5.6 and 2.0.0 know (`extension_load.cpp`); anything else is
 /// refused rather than embedded under a version rule we would be guessing.
 const KNOWN_ABI_TYPES: [&str; 3] = ["CPP", "C_STRUCT_UNSTABLE", "C_STRUCT"];
 

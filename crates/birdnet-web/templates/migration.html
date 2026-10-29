@@ -6,29 +6,7 @@
   Drop-in: register at /migration (see DIFF.md). Renames the existing
   /admin/migration → /admin/import to free the URL.
 -->
-<div class="page-head mig-head" data-screen-label="Migration" data-om-validate>
-  <div>
-    <div class="bnb-eyebrow mig-eyebrow">
-      <span>Behavioral analytics · phenology</span>
-      {{help_link}}
-    </div>
-    <h1 class="display mig-h1">
-      Arrivals and <em>departures</em>.
-    </h1>
-    <p class="bnb-lede mig-lede">
-      <b>Each ridge is one species' year</b>, week by week, scaled to its own busiest week
-      so a small-population migrant stays visible. Colour says when it peaks: green in the
-      spring migration window, amber in the fall one. A steady bird holds a low ribbon; a
-      migrant spikes and vanishes. Under the ridges: how many different species were heard
-      each week.
-    </p>
-  </div>
-  <div class="pill-row mig-pills">
-    <span class="bnb-pill">Calendar year {{year}}</span>
-    <span class="bnb-pill">Seasonal birds only</span>
-    <span class="bnb-pill">vs. last year</span>
-  </div>
-</div>
+{{page_head}}
 
 <!-- KPI tiles -->
 <div class="stat-row"
@@ -41,10 +19,10 @@
 </div>
 
 <!-- Ridgeline and the species-per-week lane under it — Rust renders the SVG inline -->
-<div class="bnb-card pad">
+<div class="bnb-card pad fig">
   <div class="section-header">
     <div>
-      <div class="bnb-eyebrow">Ridgeline · per-species weekly index</div>
+      <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Ridgeline · per-species weekly index</div>
       <h2 class="sh-h">Twelve months of migrants</h2>
     </div>
   </div>

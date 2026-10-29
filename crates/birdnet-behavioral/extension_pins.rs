@@ -35,22 +35,32 @@
 //!    (`build.rs` prints them as `embedding <name> <version> (<abi> ABI, version
 //!    target <target>, <platform>)`), and edit [`PINS`].
 //!
-//! # What was verified when these were pinned (2026-10-14, DuckDB v1.5.6)
+//! # What was verified when these were pinned (2026-10-28, DuckDB v2.0.0)
 //!
-//! * `linux_amd64` `icu` and `behavioral`: loaded by the DuckDB 1.5.6 this
-//!   workspace links, with unsigned extensions disallowed, which verifies the
-//!   signature; a copy of each with one bit changed was refused. (Run from a
-//!   throwaway test in this crate against freshly downloaded files whose digests
-//!   equal the rows below.)
+//! * `linux_amd64` `icu` (core-signed): loaded by the DuckDB 2.0.0 this workspace
+//!   links, with unsigned extensions disallowed, which verifies the signature; a
+//!   copy with one bit changed was refused. (Run from a throwaway test in this
+//!   crate against freshly downloaded files whose digests equal the rows below.)
+//! * `linux_amd64` `behavioral` v0.10.1 (community-signed): **not** checkable by a
+//!   path `LOAD` on 2.0.0 — this engine and the official 2.0.0 Python wheel both
+//!   refuse the genuine file as "signature … missing or invalid", because the
+//!   community keys are trusted only for a build installed from the community
+//!   repository. Checked instead by `INSTALL behavioral FROM community; LOAD
+//!   behavioral` in the official wheel (`duckdb` 2.0.0, git revision `d54cbbe3df`)
+//!   with a private extension directory: it loaded, and the installed file's
+//!   sha256 equals the digest below and the file downloaded from the CDN.
 //! * `linux_arm64` and `osx_arm64`: **not** loadable here (wrong platform), so
 //!   their digests are what the registry served that day — trust on first use.
 //!   They are still pinned, because a later change is then a visible failure.
+//!
+//! The engine this was checked against reports `v2.0.0` only because
+//! `.cargo/config.toml` sets its version macros; see `RELEASING.md`.
 
 /// One extension build the workspace may embed.
 pub struct Pin {
     /// DuckDB's name for it: `behavioral` or `icu`.
     pub name: &'static str,
-    /// The extension's own version from its footer, e.g. `v0.10.0`.
+    /// The extension's own version from its footer, e.g. `v0.10.1`.
     pub extension_version: &'static str,
     /// The version the engine checks: a DuckDB version for `CPP` extensions, a
     /// C API version for `C_STRUCT` ones (see `build.rs`).
@@ -62,43 +72,43 @@ pub struct Pin {
 }
 
 /// The builds this workspace will embed. Each is the file
-/// `https://<registry>/v1.5.6/<platform>/<name>.duckdb_extension.gz`
+/// `https://<registry>/v2.0.0/<platform>/<name>.duckdb_extension.gz`
 /// decompressed; see the module header for how to add or replace one.
 pub const PINS: &[Pin] = &[
     Pin {
         name: "behavioral",
-        extension_version: "v0.10.0",
+        extension_version: "v0.10.1",
         version_target: "v1.2.0",
         platform: "linux_amd64",
-        sha256: "da51b95086c8fe3ed3e3b2ce5c89f38d5eb5344e52538d87a8f934678d973591",
+        sha256: "7f13a1ac0b29dcd2a34eadb8fccaf242ce5561cd17204c84e6df95f4a69ff324",
     },
     Pin {
         name: "behavioral",
-        extension_version: "v0.10.0",
+        extension_version: "v0.10.1",
         version_target: "v1.2.0",
         platform: "linux_arm64",
-        sha256: "c13812ee7c3a58d58b0b70a7f382891685d09c7822a9436e59ca7c27cf07109f",
+        sha256: "0277f3b7a825e10fa567c8ecc081dd67735804c7ec93263ce3744eeb386fc3e1",
     },
     Pin {
         name: "icu",
-        extension_version: "v1.5.6",
-        version_target: "v1.5.6",
+        extension_version: "v2.0.0",
+        version_target: "v2.0.0",
         platform: "linux_amd64",
-        sha256: "f7bdb7b30da48406cc58429b8b5d901a1aea5f8b9c0bd1928642f0ab262d5d85",
+        sha256: "00bde3e0fd038af57d2ba9edd9bb8c3fb5fa2fccba664c8c6c85d940789accdb",
     },
     Pin {
         name: "icu",
-        extension_version: "v1.5.6",
-        version_target: "v1.5.6",
+        extension_version: "v2.0.0",
+        version_target: "v2.0.0",
         platform: "linux_arm64",
-        sha256: "414bd5f36d5efd15cf92d008a7e9369ada3031d584e8a992bff73f9d3b444749",
+        sha256: "0a6833d762561cf8a1c731a1bd6a6ec0c0593ce302804d1fab37b939d6f94450",
     },
     Pin {
         name: "icu",
-        extension_version: "v1.5.6",
-        version_target: "v1.5.6",
+        extension_version: "v2.0.0",
+        version_target: "v2.0.0",
         platform: "osx_arm64",
-        sha256: "3578a29bb3e05024eaf75c849d502089d25ed2b629823ed97508a86e62acbba7",
+        sha256: "e58b1efa73481d2bfedc757de01b3ae47defe3c79cbe079f7471af7db212e718",
     },
 ];
 
