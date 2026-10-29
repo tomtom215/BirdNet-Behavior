@@ -301,7 +301,7 @@ RUN set -eu; \
 #                      model (BirdNET V2.4 is installed by the binary itself).
 #   tini             — PID 1 init, reaps zombies and forwards signals.
 # -----------------------------------------------------------------------------
-FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runtime
 
 # Re-declare the global ARG so it is in scope for the ENV / LABEL
 # instructions below.  ARGs declared before the first FROM are only
