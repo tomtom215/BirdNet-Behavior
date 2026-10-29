@@ -103,10 +103,27 @@ they get their own gate.
      and `npm ci` would have refused to run. A lockfile a workflow names has to
      be a file git tracks, not a file that happens to exist.
 
+ 12. A pull request red for a history it cannot change. Checks 4 and 5 read
+     `main`'s last five runs, so when the apt mirror stalled for two days
+     (2026-10-25 and 10-26: 19 of 172 shard jobs spent 5 to 35.7 minutes in
+     `Install ffmpeg`) nine mutation rows went over the line, and every pull
+     request that ran the check afterwards was red on them, including one that
+     edited no budget at all. The sample is `main`'s, so it never contains the pull
+     request's own runs: all a pull request can answer for is the numbers it
+     writes. On a `pull_request` event checks 4 and 5 therefore apply to the
+     job rows whose budget, and the `timeout-minutes:` lines whose budget or
+     `# observed`, differ from the pull request's base. Push, schedule and
+     dispatch runs check every row, so a budget that has been outgrown still
+     goes red on `main`, where it gets fixed. Anything that stops the scope
+     being worked out (not a merge commit, no base in the checkout) checks
+     every row, the direction that over-reports.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
-CI they say loudly that they are skipping rather than passing silently.
+CI they say loudly that they are skipping rather than passing silently. The
+scope in 12 needs the pull request's base commit, so the workflow checks out
+two commits.
 """
 
 from __future__ import annotations
@@ -316,10 +333,20 @@ def configured_jobs() -> tuple[list[tuple[str, str, str, int]], list[str]]:
     cannot be rendered without a matrix value are returned separately rather
     than silently dropped.
     """
+    return jobs_in_specs({path: yaml.safe_load(open(path))
+                          for path in sorted(glob.glob(".github/workflows/*.yml"))})
+
+
+def jobs_in_specs(specs: dict[str, dict]) -> tuple[list[tuple[str, str, str, int]], list[str]]:
+    """[`configured_jobs`] over workflows already parsed, keyed by path.
+
+    Split out so that the same expansion can be run over a pull request's base
+    as well as over the checkout (incident 12).
+    """
     jobs: list[tuple[str, str, str, int]] = []
     unresolved: list[str] = []
-    for path in sorted(glob.glob(".github/workflows/*.yml")):
-        spec = yaml.safe_load(open(path))
+    for path in sorted(specs):
+        spec = specs[path]
         for key, job in (spec.get("jobs") or {}).items():
             raw_budget = job.get("timeout-minutes")
             if raw_budget is None:
@@ -613,9 +640,14 @@ def annotation_verdict(claimed: str | None, actual_seconds: float) -> str:
 
 def annotation_lines(path: str) -> list[tuple[int, str, int, str | None]]:
     """`(line index, job key, budget, annotation)` for each job-level timeout."""
+    return annotation_lines_in(open(path).read())
+
+
+def annotation_lines_in(text: str) -> list[tuple[int, str, int, str | None]]:
+    """[`annotation_lines`] over text already read (a file, or its base version)."""
     found = []
     job = ""
-    for i, line in enumerate(open(path).read().split("\n")):
+    for i, line in enumerate(text.split("\n")):
         job_match = JOB_LINE.match(line)
         if job_match:
             job = job_match.group("key")
@@ -641,6 +673,105 @@ def median_seconds(path: str, key: str, jobs: list[tuple[str, str, str, int]],
         if samples
     ]
     return max(medians) if medians else None
+
+
+# ---------------------------------------------------------------------------
+# Incident 12: a pull request answers for the numbers it writes
+# ---------------------------------------------------------------------------
+
+# What a pull request edits, for checks 4 and 5: the job rows whose resolved
+# budget differs from its base, as `(workflow, rendered name)`, and the
+# `timeout-minutes:` lines whose budget or `# observed` differs, as
+# `(workflow, job key)`.
+Scope = tuple[set[tuple[str, str]], set[tuple[str, str]]]
+
+
+def edited_scope(base: dict[str, str | None], head: dict[str, str]) -> Scope:
+    """The budgets and annotations `head` writes that `base` did not have.
+
+    Both map a workflow path to its text; a path missing from the base maps to
+    None, which puts everything in it in scope. A job row is compared by its
+    resolved budget, so a matrix row whose `timeout_minutes` changes is in scope
+    though no `timeout-minutes:` line moved; a timeout line is compared by budget
+    and annotation, so regenerating one `# observed` is in scope too. Editing
+    anything else about a job (a step, a trigger, another row) is not.
+    """
+    head_jobs, _ = jobs_in_specs({p: yaml.safe_load(t) or {} for p, t in head.items()})
+    base_jobs, _ = jobs_in_specs({p: yaml.safe_load(t) or {}
+                                  for p, t in base.items() if t is not None})
+    was = {(p, name): budget for p, _key, name, budget in base_jobs}
+    rows = {(p, name) for p, _key, name, budget in head_jobs if was.get((p, name)) != budget}
+    had = {(p, key): (budget, claimed)
+           for p, text in base.items() if text is not None
+           for _i, key, budget, claimed in annotation_lines_in(text)}
+    lines = {(p, key)
+             for p, text in head.items()
+             for _i, key, budget, claimed in annotation_lines_in(text)
+             if had.get((p, key)) != (budget, claimed)}
+    return rows, lines
+
+
+def first_parent_of_merge(rev_list_line: str) -> str | None:
+    """The first parent in `git rev-list --parents -n 1` output, for a two-parent merge.
+
+    GitHub checks a `pull_request` event out as a merge of the pull request's
+    head into the tip of its base, the base being the first parent. Any other
+    shape (one parent, when the merge is not possible; three or more) has no
+    base to compare against.
+    """
+    parts = rev_list_line.split()
+    return parts[1] if len(parts) == 3 else None
+
+
+def _git(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], capture_output=True, text=True,
+                          encoding="utf-8", check=False)
+
+
+def pull_request_scope(
+    workflows_glob: str = ".github/workflows/*.yml",
+) -> tuple[Scope | None, str]:
+    """`(scope, note)`: what this pull request edits, or None to check every row.
+
+    None, with no note, for any event but `pull_request`: nothing changes there.
+    None with the reason when the base cannot be found, because the safe failure
+    of a rule that narrows a check is to narrow nothing.
+    """
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        return None, ""
+    rev = _git("rev-list", "--parents", "-n", "1", "HEAD")
+    base = first_parent_of_merge(rev.stdout) if rev.returncode == 0 else None
+    if base is None:
+        return None, ("pull request: HEAD is not a two-parent merge, so what it edits "
+                      "cannot be told; every row is checked")
+    if _git("cat-file", "-e", f"{base}^{{commit}}").returncode != 0:
+        return None, (f"pull request: base commit {base[:7]} is not in this checkout (it "
+                      f"needs fetch-depth: 2); every row is checked")
+    head: dict[str, str] = {}
+    before: dict[str, str | None] = {}
+    for path in sorted(glob.glob(workflows_glob)):
+        with open(path, encoding="utf-8") as fh:
+            head[path] = fh.read()
+        shown = _git("show", f"{base}:{path}")
+        before[path] = shown.stdout if shown.returncode == 0 else None
+    scope = edited_scope(before, head)
+    rows, lines = scope
+    listed = ([f"edited row:  {p}::{n}" for p, n in sorted(rows)]
+              + [f"edited line: {p}::{k}" for p, k in sorted(lines)])
+    note = ("pull request: run history is held against the budgets and `# observed` lines "
+            "this change edits; push, schedule and dispatch runs check every row\n"
+            + "\n".join(f"  ..    {s}" for s in listed[:20])
+            + (f"\n  ..    and {len(listed) - 20} more" if len(listed) > 20 else "")
+            + ("" if listed else "  ..    none: no budget or annotation is edited"))
+    return scope, note
+
+
+def scoped_jobs(jobs: list[tuple[str, str, str, int]],
+                scope: Scope | None) -> list[tuple[str, str, str, int]]:
+    """The job rows check 4 applies to: all of them, or the ones a pull request edits."""
+    if scope is None:
+        return jobs
+    return [job for job in jobs if (job[0], job[2]) in scope[0]]
 
 
 def check_embed_precedes_tests() -> None:
@@ -1428,11 +1559,109 @@ def check_observed_rule() -> None:
           "the two annotations that rotted in incident 5 are still caught")
 
 
+def check_history_scope() -> None:
+    """Which budgets a pull request answers for, over fixtures in both directions (incident 12).
+
+    The cases that decided the rule: a pull request that changed a step and
+    regenerated one `# observed` line was red on nine mutation rows it had not
+    touched, because a stalled mirror had put them over the line on `main`.
+    What it edits stays in scope; what it does not edit stays out.
+
+    Both groups are asserted. A rule that put every row in scope (the check as it
+    was) fails the cases that must stay out, and one that put none in scope
+    fails the cases that must stay in, so neither a blanket alarm nor a blanket
+    pass satisfies this.
+    """
+    print("\nA pull request answers for the budgets it edits (incident 12)")
+    path = ".github/workflows/fixture.yml"
+    base = (
+        "name: fixture\n"
+        "jobs:\n"
+        "  build:\n"
+        "    name: Build\n"
+        "    timeout-minutes: 30  # observed 20m00s\n"
+        "    steps:\n"
+        "      - run: make\n"
+        "  shard:\n"
+        "    name: shard ${{ matrix.label }}\n"
+        "    timeout-minutes: ${{ matrix.timeout_minutes || 45 }}\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        include:\n"
+        "          - { label: a, timeout_minutes: 60 }\n"
+        "          - { label: b }\n"
+    )
+
+    def scope_of(head: str, before: str | None = base) -> Scope:
+        return edited_scope({path: before}, {path: head})
+
+    rows_a, row_b, row_build = (path, "shard a"), (path, "shard b"), (path, "Build")
+    line_build = (path, "build")
+
+    # Out of scope: nothing the pull request wrote is a number the check reads.
+    check(scope_of(base) == (set(), set()), "an unchanged workflow edits nothing")
+    check(scope_of(base.replace("run: make", "run: make all\n      - run: make test"))
+          == (set(), set()), "a step edited and a step added edit no budget")
+    check(scope_of(base.replace("label: b }", "label: b, other: x }")) == (set(), set()),
+          "a matrix key the budget does not read edits no budget")
+
+    # In scope: the numbers it did write.
+    check(scope_of(base.replace("timeout_minutes: 60", "timeout_minutes: 75"))
+          == ({rows_a}, set()),
+          "a matrix row's budget changing is that row alone (no timeout line moved)")
+    check(scope_of(base.replace("# observed 20m00s", "# observed 25m00s"))
+          == (set(), {line_build}),
+          "a regenerated `# observed` is that line alone (its budget did not change)")
+    check(scope_of(base.replace("timeout-minutes: 30", "timeout-minutes: 40"))
+          == ({row_build}, {line_build}),
+          "a job's budget changing is its row and its line")
+    check(scope_of(base.replace("- { label: b }", "- { label: b }\n          - { label: c }"))
+          == ({(path, "shard c")}, set()), "a new matrix row is in scope, the others are not")
+    check(scope_of(base.replace("label: a,", "label: a2,"))[0] == {(path, "shard a2")},
+          "a renamed row is a new row; the old name is simply gone")
+    check(scope_of(base, before=None) == ({row_build, rows_a, row_b}, {line_build}),
+          "a workflow the base did not have is in scope entirely")
+
+    # The base of a pull request is the first parent of GitHub's merge checkout.
+    check(first_parent_of_merge("m1 b2 h3\n") == "b2", "a two-parent merge has its base")
+    check(first_parent_of_merge("m1 b2") is None and first_parent_of_merge("m1") is None
+          and first_parent_of_merge("") is None and first_parent_of_merge("m1 a b c") is None,
+          "a commit that is not a two-parent merge has no base, so nothing is scoped out")
+
+    # Applying the scope.
+    jobs = [(path, "build", "Build", 30), (path, "shard", "shard a", 60),
+            (path, "shard", "shard b", 45)]
+    check(scoped_jobs(jobs, None) == jobs, "no scope checks every row")
+    check(scoped_jobs(jobs, ({rows_a}, set())) == [jobs[1]],
+          "a scope keeps only the rows it names")
+    check(scoped_jobs(jobs, (set(), set())) == [], "an empty scope keeps none")
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = os.path.join(tmp, "fixture.yml")
+        with open(fixture, "w", encoding="utf-8") as fh:
+            fh.write("jobs:\n  build:\n    name: Build\n    timeout-minutes: 30  # observed 1m00s\n"
+                     "  other:\n    name: Other\n    timeout-minutes: 30  # observed 1m00s\n")
+        listed = [(fixture, "build", "Build", 30), (fixture, "other", "Other", 30)]
+        runs = {fixture: {"Build": [20.0], "Other": [20.0]}}
+        everyone = {key for _p, key, _c, _a, _v in annotation_findings(listed, runs)}
+        only = {key for _p, key, _c, _a, _v
+                in annotation_findings(listed, runs, {(fixture, "build")})}
+        check(everyone == {"build", "other"} and only == {"build"},
+              f"both annotations have drifted, but a scope reports only its own line: {only}")
+
+
 def check_duration_headroom(jobs: list[tuple[str, str, str, int]],
-                            runtimes: dict[str, dict[str, list[float]]]) -> None:
-    """Compare what each job actually took against the budget it declares."""
+                            runtimes: dict[str, dict[str, list[float]]],
+                            scope: Scope | None = None) -> None:
+    """Compare what each job actually took against the budget it declares.
+
+    With a `scope` (a pull request), only the rows it edits: the sample is
+    `main`'s, so for any other row the answer is the same with or without the
+    pull request (incident 12).
+    """
     print("\nNo job is growing into its own timeout (incident 4)")
-    print(f"  ..    {len(jobs)} job(s) with a resolved budget, "
+    jobs = scoped_jobs(jobs, scope)
+    print(f"  ..    {len(jobs)} job(s) with a resolved budget"
+          f"{'' if scope is None else ' that this change edits'}, "
           f"worst of the last {RUNS_SAMPLED} run(s) per workflow")
     unseen = 0
     for path, _key, name, budget in sorted(jobs):
@@ -1453,16 +1682,20 @@ def check_duration_headroom(jobs: list[tuple[str, str, str, int]],
 def annotation_findings(
     jobs: list[tuple[str, str, str, int]],
     runtimes: dict[str, dict[str, list[float]]],
+    only: set[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str, str | None, float | None, str | None]]:
     """`(path, job key, claimed, measured seconds, verdict)` per job-level timeout.
 
     The verdict is [`annotation_verdict`]'s, or None where there is no run
     history to judge by. Pure apart from reading the workflow files, so the
-    self-test can run the whole rule over fixture files.
+    self-test can run the whole rule over fixture files. `only` limits it to
+    the `(workflow, job key)` lines a pull request edits (incident 12).
     """
     found = []
     for path in sorted({p for p, _, _, _ in jobs}):
         for _i, key, _budget, claimed in annotation_lines(path):
+            if only is not None and (path, key) not in only:
+                continue
             actual = median_seconds(path, key, jobs, runtimes)
             found.append((path, key, claimed, actual,
                           None if actual is None else annotation_verdict(claimed, actual)))
@@ -1470,13 +1703,20 @@ def annotation_findings(
 
 
 def check_observed_annotations(jobs: list[tuple[str, str, str, int]],
-                               runtimes: dict[str, dict[str, list[float]]]) -> None:
-    """Every `# observed` annotation still describes the job it annotates."""
+                               runtimes: dict[str, dict[str, list[float]]],
+                               scope: Scope | None = None) -> None:
+    """Every `# observed` annotation still describes the job it annotates.
+
+    With a `scope` (a pull request), only the lines it edits (incident 12).
+    """
     print("\nEvery `# observed` annotation is still true (incident 5)")
     print(f"  ..    jobs measured at or under {DRIFT_FLOOR_SECONDS}s are neither "
           f"required to carry one nor compared")
+    if scope is not None:
+        print(f"  ..    {len(scope[1])} timeout line(s) edited by this change")
     stale = 0
-    for path, key, claimed, actual, verdict in annotation_findings(jobs, runtimes):
+    for path, key, claimed, actual, verdict in annotation_findings(
+            jobs, runtimes, None if scope is None else scope[1]):
         if actual is None or verdict is None:
             # Nothing to compare against, and nothing to claim either: an
             # annotation is only owed where there is run history.
@@ -1584,6 +1824,7 @@ def main(argv: list[str] | None = None) -> int:
     check_and_or_never_selects_a_falsy_value()
     check_headroom_arithmetic()
     check_observed_rule()
+    check_history_scope()
 
     for job in unresolved:
         skip(f"{job}: name or timeout does not render without a matrix value")
@@ -1597,8 +1838,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             skip(msg)
     else:
-        check_duration_headroom(jobs, runtimes)
-        check_observed_annotations(jobs, runtimes)
+        scope, note = pull_request_scope()
+        if note:
+            print(f"\n{note}")
+        check_duration_headroom(jobs, runtimes, scope)
+        check_observed_annotations(jobs, runtimes, scope)
 
     print()
     if skips:
