@@ -233,13 +233,26 @@ async function waitChart(page, sel) {
   await page.locator(G).focus();
   await page.waitForTimeout(250);
   const g0 = await tipState(page, G);
-  await page.keyboard.press('ArrowDown');
-  await page.waitForTimeout(250);
-  const g1 = await tipState(page, G);
+  // Down moves a whole weekday, except from the last row (Saturday), where there is no row under it:
+  // the keyboard starts on the busiest cell, and on a station whose busiest weekday is Saturday that is
+  // where it lands. Then Up is the move, and the other arrow brings it back, so both are exercised
+  // wherever the busiest cell is.
   const day = (s) => (s.match(/\b(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\b/) || [])[1];
   const hr = (s) => (s.match(/(\d\d):00/) || [])[1];
+  const lastRow = day(g0.text) === 'Sat';
+  await page.keyboard.press(lastRow ? 'ArrowUp' : 'ArrowDown');
+  await page.waitForTimeout(250);
+  const g1 = await tipState(page, G);
   check('grid: keyboard focus lands on the busiest cell and reads it', g0.on && !!day(g0.text), JSON.stringify(g0));
-  check('grid: Down moves to another weekday at the same hour', day(g0.text) !== day(g1.text) && hr(g0.text) === hr(g1.text), `${g0.text} -> ${g1.text}`);
+  check(
+    `grid: ${lastRow ? 'Up' : 'Down'} moves to another weekday at the same hour`,
+    day(g0.text) !== day(g1.text) && hr(g0.text) === hr(g1.text),
+    `${g0.text} -> ${g1.text}`,
+  );
+  await page.keyboard.press(lastRow ? 'ArrowDown' : 'ArrowUp');
+  await page.waitForTimeout(250);
+  const gb = await tipState(page, G);
+  check('grid: the opposite arrow returns to the cell it left', gb.text === g0.text, `${g1.text} -> ${gb.text}`);
   const gp = await page.locator(`${G} rect[data-ck-i="30"]`).boundingBox();
   await page.mouse.move(gp.x + gp.width / 2, gp.y + gp.height / 2);
   await page.waitForTimeout(300);
