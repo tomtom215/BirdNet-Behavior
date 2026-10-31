@@ -153,6 +153,44 @@ pub fn weekly_top_species(
     Ok(rows)
 }
 
+/// How often each species was heard in each calendar month of `[from, to]`.
+///
+/// Returns `(sci_name, com_name, month, count)` with `month` as 1 to 12, one row for every
+/// species and month that had at least one detection (a month with none has no row: the caller
+/// reads a missing month as "none heard", and decides what a month that has not happened is).
+/// The span is meant to be inside one calendar year; a longer one folds the same month of
+/// different years together. Rows come ordered by species, then month, so the result is the
+/// same on every load.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn monthly_species_counts(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+) -> Result<Vec<(String, String, u32, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Sci_Name, Com_Name, CAST(SUBSTR(Date, 6, 2) AS INTEGER) AS month, COUNT(*) AS cnt
+         FROM detections_analytic
+         WHERE Date >= ?1 AND Date <= ?2
+         GROUP BY Sci_Name, Com_Name, month
+         ORDER BY Com_Name ASC, Sci_Name ASC, month ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![from, to], |row| {
+            let month: i64 = row.get(2)?;
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                u32::try_from(month.clamp(1, 12)).unwrap_or(1),
+                row.get(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Species detected for the first time within `[week_start, week_end]`.
 ///
 /// Returns `(sci_name, com_name, first_date)` tuples ordered by first detection date.
@@ -756,6 +794,45 @@ mod tests {
         let top = weekly_top_species(&conn, "2026-01-01", "2026-12-31", 10).unwrap();
         let names: Vec<&str> = top.iter().map(|(_, com, _)| com.as_str()).collect();
         assert_eq!(names, ["Apple Warbler", "Zebra Finch"]);
+    }
+
+    /// A species and a month meet in one row with the right count; a month with none has no row; a
+    /// detection outside the span, or one a reviewer rejected, is not counted.
+    #[test]
+    fn monthly_species_counts_counts_each_species_in_each_month_of_the_span() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (date, com) in [
+            ("2026-01-05", "Blue Jay"),
+            ("2026-01-20", "Blue Jay"),
+            ("2026-03-02", "Blue Jay"),
+            ("2026-03-02", "Robin"),
+            ("2025-12-31", "Blue Jay"),
+            ("2027-01-01", "Blue Jay"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, '06:00:00', ?2, ?3, 0.9)",
+                params![date, format!("Sci {com}"), com],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, review_verdict)
+             VALUES ('2026-03-03', '06:00:00', 'Sci Blue Jay', 'Blue Jay', 0.9, 'rejected')",
+            [],
+        )
+        .unwrap();
+        let rows = monthly_species_counts(&conn, "2026-01-01", "2026-12-31").unwrap();
+        let got: Vec<(&str, u32, i64)> = rows
+            .iter()
+            .map(|(_, com, m, n)| (com.as_str(), *m, *n))
+            .collect();
+        assert_eq!(
+            got,
+            [("Blue Jay", 1, 2), ("Blue Jay", 3, 1), ("Robin", 3, 1)],
+            "January 2, March 1 (the rejected one is not heard), no row for February"
+        );
     }
 
     /// Return the ISO-8601 date `n` days before `now`, computed by `SQLite`

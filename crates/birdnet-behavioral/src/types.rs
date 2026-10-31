@@ -156,6 +156,26 @@ pub struct PatternCount {
     pub species_sequence: Vec<String>,
 }
 
+/// Who is heard shortly after whom (output of `sequence_count` with a time constraint).
+///
+/// `exchanges[i][j]` is how many times `species[i]` was heard and then `species[j]` within
+/// `within_secs` seconds, on the same day, counted without overlap: one bird singing three times
+/// before one reply is one exchange, not three. The same instant is not a reply (birds heard in
+/// one audio chunk share an instant), and a bird is not its own reply, so the diagonal is zero.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Answers {
+    /// The species compared, most heard first (stored common names).
+    pub species: Vec<String>,
+    /// How many times each was heard in the window.
+    pub heard: Vec<i64>,
+    /// `exchanges[row][column]`: the row species, then the column species within the window.
+    pub exchanges: Vec<Vec<i64>>,
+    /// Days of the window on which at least one of these species was heard.
+    pub days_heard: i64,
+    /// The time allowed for a reply, in seconds.
+    pub within_secs: u32,
+}
+
 /// Sequence pattern *match timings* (output of `sequence_match_events`, v0.8.0).
 ///
 /// Like [`PatternMatch`] but reports *when* each step of the ordered sequence

@@ -536,6 +536,77 @@ impl AnalyticsDb {
         Ok(())
     }
 
+    /// Who is heard within `within_minutes` of whom, among the `top` species heard most since
+    /// `from` (an ISO date). See [`types::Answers`] for what a cell counts.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidData` for a `from` that is not `YYYY-MM-DD`, a `top` outside `2..=12` or a zero
+    /// window; `ExtensionLoad` when the extension is not loaded; a database error otherwise.
+    pub fn answers(
+        &self,
+        from: &str,
+        within_minutes: u32,
+        top: usize,
+    ) -> Result<types::Answers, AnalyticsError> {
+        let iso = from.len() == 10
+            && from.bytes().enumerate().all(|(i, b)| match i {
+                4 | 7 => b == b'-',
+                _ => b.is_ascii_digit(),
+            });
+        if !iso {
+            return Err(AnalyticsError::InvalidData(format!(
+                "answers needs a YYYY-MM-DD date, got {from:?}"
+            )));
+        }
+        if !(2..=queries::ANSWERS_MAX_SPECIES).contains(&top) || within_minutes == 0 {
+            return Err(AnalyticsError::InvalidData(format!(
+                "answers needs 2..={} species and a window of at least a minute, got {top} and {within_minutes}",
+                queries::ANSWERS_MAX_SPECIES
+            )));
+        }
+        self.require_extension()?;
+        let mut stmt = self
+            .conn
+            .prepare(&queries::answers_species_sql(from, top))?;
+        let ranked: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let n = ranked.len();
+        let species: Vec<String> = ranked.iter().map(|r| r.0.clone()).collect();
+        let heard: Vec<i64> = ranked.iter().map(|r| r.1).collect();
+        let mut exchanges = vec![vec![0_i64; n]; n];
+        if n >= 2 {
+            let sql = queries::answers_sql(&species, from, within_minutes);
+            let flat: Vec<i64> = self.conn.query_row(&sql, [], |row| {
+                (0..n * (n - 1)).map(|k| row.get::<_, i64>(k)).collect()
+            })?;
+            let mut it = flat.into_iter();
+            for (i, row) in exchanges.iter_mut().enumerate() {
+                for (j, cell) in row.iter_mut().enumerate() {
+                    if i != j {
+                        *cell = it.next().unwrap_or(0);
+                    }
+                }
+            }
+        }
+        let days_heard: i64 = if n == 0 {
+            0
+        } else {
+            self.conn
+                .query_row(&queries::answers_days_sql(&species, from), [], |row| {
+                    row.get(0)
+                })?
+        };
+        Ok(types::Answers {
+            species,
+            heard,
+            exchanges,
+            days_heard,
+            within_secs: within_minutes.saturating_mul(60),
+        })
+    }
+
     fn require_extension(&self) -> Result<(), AnalyticsError> {
         if self.extension_loaded {
             Ok(())

@@ -231,6 +231,84 @@ fn live_sequence_count() {
     assert_eq!(count("2024-05-03"), 1, "day3 R->B->W once");
 }
 
+/// Who answers whom, against the real extension. The fixture is built so each rule gives its own
+/// count: a reply 30 s later counts (R then B, on two days), one 120 s later does not (B then R on
+/// day 1), a reply at the same instant is not a reply (R and W at 05:20:00), a bird repeating
+/// itself is not an exchange (R at 05:40:00 and 05:40:20), and direction matters (W then R once,
+/// R then W never).
+#[test]
+fn live_answers() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    let (r, b, w) = (
+        ("Erithacus rubecula", "European Robin"),
+        ("Turdus merula", "Eurasian Blackbird"),
+        ("Troglodytes troglodytes", "Eurasian Wren"),
+    );
+    let rows = [
+        ("2024-05-01", "05:00:00", r),
+        ("2024-05-01", "05:00:30", b),
+        ("2024-05-01", "05:10:00", b),
+        ("2024-05-01", "05:12:00", r),
+        ("2024-05-01", "05:20:00", r),
+        ("2024-05-01", "05:20:00", w),
+        ("2024-05-01", "05:30:00", w),
+        ("2024-05-01", "05:30:50", r),
+        ("2024-05-01", "05:40:00", r),
+        ("2024-05-01", "05:40:20", r),
+        ("2024-05-02", "06:00:00", r),
+        ("2024-05-02", "06:00:10", b),
+        ("2024-05-02", "06:00:40", r),
+    ];
+    let values: Vec<String> = rows
+        .iter()
+        .map(|(d, t, (s, c))| {
+            format!("('{d}', '{t}', '{s}', '{c}', 0.9, epoch(TIMESTAMP '{d} {t}'))")
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed insert");
+    let a = db.answers("2024-01-01", 1, 3).unwrap();
+    eprintln!("[live] answers: {a:?}");
+    assert_eq!(
+        a.species,
+        ["European Robin", "Eurasian Blackbird", "Eurasian Wren"],
+        "most heard first"
+    );
+    assert_eq!(a.heard, [8, 3, 2]);
+    assert_eq!(a.days_heard, 2);
+    assert_eq!(a.within_secs, 60);
+    let x = &a.exchanges;
+    assert_eq!(
+        x[0][1], 2,
+        "Robin then Blackbird within a minute: both days"
+    );
+    assert_eq!(
+        x[1][0], 1,
+        "Blackbird then Robin: day 2 only; day 1's reply took 120 s"
+    );
+    assert_eq!(x[2][0], 1, "Wren then Robin: 05:30:00 then 05:30:50");
+    assert_eq!(
+        x[0][2], 0,
+        "Robin then Wren: the one near-miss is the same instant, which is no reply"
+    );
+    assert_eq!(
+        (x[0][0], x[1][1], x[2][2]),
+        (0, 0, 0),
+        "a bird is not its own reply"
+    );
+    assert_eq!((x[1][2], x[2][1]), (0, 0));
+    // A window that starts after the data finds nothing, and a later date cuts the days.
+    let none = db.answers("2024-05-02", 1, 3).unwrap();
+    assert_eq!(none.days_heard, 1);
+    assert_eq!(none.exchanges[0][1], 1, "only day 2's exchange is in range");
+}
+
 #[test]
 fn live_funnel_events() {
     let Some((db, _tmp)) = loaded_db() else {

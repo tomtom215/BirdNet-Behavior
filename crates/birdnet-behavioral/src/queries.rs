@@ -664,6 +664,86 @@ fn species_conditions(species: &[String]) -> String {
         .join(",\n                ")
 }
 
+/// The most species [`answers_sql`] compares: `n` species are `n * (n - 1)` ordered pairs, each an
+/// aggregate over the same events.
+pub const ANSWERS_MAX_SPECIES: usize = 12;
+
+/// SQL for which species are heard most since `from` (an ISO date): `Com_Name` and a count, most
+/// heard first, ties by name. `from` must already be a validated `YYYY-MM-DD`.
+pub fn answers_species_sql(from: &str, top: usize) -> String {
+    format!(
+        "SELECT Com_Name, COUNT(*) AS heard
+         FROM detections_ts
+         WHERE {ORDERABLE} AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
+         GROUP BY Com_Name
+         ORDER BY heard DESC, Com_Name ASC
+         LIMIT {top}"
+    )
+}
+
+/// SQL for how many days since `from` any of `species` was heard.
+pub fn answers_days_sql(species: &[String], from: &str) -> String {
+    let list = species
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "SELECT COUNT(DISTINCT CAST(detection_timestamp AS DATE)) FROM detections_ts
+         WHERE {ORDERABLE} AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
+           AND Com_Name IN ({list})"
+    )
+}
+
+/// SQL for who answers whom among `species`: one row holding, for every ordered pair `(a, b)`
+/// with `a != b`, the number of times `a` was heard and then `b` within `within_minutes`, summed
+/// over the days since `from`. The columns are the pairs in row-major order, skipping the diagonal.
+///
+/// The pattern is the one every ordered query here uses ([`ordered_pattern`]): `(?t>0)` keeps two
+/// birds heard in one audio chunk from answering each other in both directions, and the gap is
+/// measured from the first bird's event. A day is a group, so a reply never spans midnight.
+pub fn answers_sql(species: &[String], from: &str, within_minutes: u32) -> String {
+    let pattern = ordered_pattern(2, Some(within_minutes));
+    let cond = |s: &str| format!("Com_Name = '{}'", s.replace('\'', "''"));
+    let mut pairs = Vec::new();
+    for (i, a) in species.iter().enumerate() {
+        for (j, b) in species.iter().enumerate() {
+            if i != j {
+                pairs.push((i, j, cond(a), cond(b)));
+            }
+        }
+    }
+    let per_day = pairs
+        .iter()
+        .map(|(i, j, a, b)| {
+            format!("sequence_count('{pattern}', detection_instant, {a}, {b}) AS p_{i}_{j}")
+        })
+        .collect::<Vec<_>>()
+        .join(",\n               ");
+    let sums = pairs
+        .iter()
+        .map(|(i, j, _, _)| format!("COALESCE(SUM(p_{i}_{j}), 0)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let list = species
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "SELECT {sums}
+         FROM (
+            SELECT CAST(detection_timestamp AS DATE) AS day,
+               {per_day}
+            FROM detections_ts
+            WHERE {ORDERABLE}
+              AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
+              AND Com_Name IN ({list})
+            GROUP BY CAST(detection_timestamp AS DATE)
+         )"
+    )
+}
+
 /// Build the NFA pattern string for an ordered sequence of `steps` conditions.
 ///
 /// `(?1).*(?t>0)(?2).*(?t>0)…(?N)` matches the conditions in order with any
@@ -693,6 +773,31 @@ fn ordered_pattern(steps: usize, max_gap_minutes: Option<u32>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One column for every ordered pair and none for a species with itself; a quote in a name is
+    /// doubled; the pattern is the shared ordered one with the window in seconds.
+    #[test]
+    fn the_answers_query_has_a_column_per_ordered_pair_and_escapes_names() {
+        let species: Vec<String> = ["Robin", "O'Brien's Wren", "Jay"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let sql = answers_sql(&species, "2026-10-01", 1);
+        assert_eq!(
+            sql.matches("sequence_count(").count(),
+            6,
+            "3 x 2 ordered pairs: {sql}"
+        );
+        assert!(
+            !sql.contains("AS p_0_0") && !sql.contains("AS p_1_1"),
+            "{sql}"
+        );
+        assert!(sql.contains("'(?1).*(?t>0)(?t<=60)(?2)'"), "{sql}");
+        assert!(sql.contains("O''Brien''s Wren"), "{sql}");
+        assert!(sql.contains("DATE '2026-10-01'"), "{sql}");
+        assert!(answers_species_sql("2026-10-01", 8).contains("LIMIT 8"));
+        assert!(answers_days_sql(&species, "2026-10-01").contains("O''Brien''s Wren"));
+    }
 
     #[test]
     fn sessionize_sql_all_species() {
