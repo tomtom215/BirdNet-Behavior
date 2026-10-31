@@ -193,6 +193,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until 2026-12-01), matched nothing: the advisory's record, last modified 2026-10-30, lists block_buffer 0.11.0
   up to 0.12.1 as affected and the lockfile holds 0.10.4 and 0.12.1. `scripts/osv-check.py` reports no advisory for
   any of the 649 locked packages.
+- **The release workflow builds macOS on `macos-15`, not `macos-14`.** GitHub retires the macOS 14 runner image
+  on 2026-11-02 and failed every job on it in scheduled brownouts before that, which is how the release dry run
+  for this version lost its `aarch64-apple-darwin` leg (and, with it, the `package` and `Upgrade from v…` jobs,
+  which wait for the whole build matrix). Two steps were added to that leg: one refuses any runner whose
+  `uname -m` is not `arm64`, so a label that resolved to an Intel image cannot cross-compile unnoticed, and one
+  prints the binary's `minos` (the oldest macOS that will load it) into the run's summary. No deployment target
+  is pinned anywhere, so that number is whatever the runner image's toolchain defaults to; nothing promises a
+  floor while macOS is a preview.
 
 - **Chart axes are a little darker in the light theme** (`--chart-axis` is now `oklch(61% 0.010 70)`), because
   an axis label drawn on the new sky is graded against the sky and the old value read 2.75:1 there

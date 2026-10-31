@@ -7,10 +7,11 @@ section 6 says where to start. The header and sections 5 and 6 were corrected fo
 2026-10-31. Facts about GitHub were read on the dates given, with the commands named; read them again before
 relying on them. Anything not attributed to a command is marked as reported, read or unknown.
 
-**State on 2026-10-31.** `main` is `49a8173`, the merge of #274. The latest release is **v0.18.1**,
-published 2026-10-26: its Release, Docker and Docs runs on the tag all ended `success` (Docs and Release on a
-second attempt). The pull request that carries this file prepares **0.19.0**. It is the first release since
-v0.18.1, so its changelog section holds three pull requests' work:
+**State on 2026-10-31.** `main` is `b731204`, the merge of #275, and all eleven push-triggered workflow runs on it
+ended `success` (read with `actions_list`). The latest published release is **v0.18.1**, published 2026-10-26: its
+Release, Docker and Docs runs on the tag all ended `success` (Docs and Release on a second attempt). **0.19.0 is
+prepared and not tagged.** It is the first release since v0.18.1, so its changelog section holds three pull
+requests' work:
 
 - #271 (merged 2026-10-29): the engine moved to DuckDB 2.0.0; the Patterns, Species and Weekly pages got one
   frame; the kiosk is a plate, with a public-domain plate tier behind it; every picture carries a credit; the
@@ -21,10 +22,14 @@ v0.18.1, so its changelog section holds three pull requests' work:
   `window_funnel`), the Patterns bar grouped When / Who / How with Behavior split into Visits and Sequences, the
   Method and export panel and the four layers on those six cards, `scripts/preflight.sh`, and
   `docs/design/insights-and-organisation.md`.
-- This pull request: the version bump and changelog roll, the four items #274 left open (the fixture's pictures
-  no longer depend on the network, the species page's landmark, the running order's labels, the stale OSV
-  waiver), a flaky webhook test that turned `main`'s CI red after #274's merge, and this file's own corrections.
-  Section 4's last subsection says what ran.
+- #275 (merged 2026-10-31): the version bump and changelog roll, the four items #274 left open (the fixture's
+  pictures no longer depend on the network, the species page's landmark, the running order's labels, the stale OSV
+  waiver), a flaky webhook test that turned `main`'s CI red after #274's merge, and this file's corrections.
+
+**The release dry run on `main` after #275 (run 41239225909) lost its `aarch64-apple-darwin` leg to a scheduled
+macOS 14 brownout**, and `package` and the upgrade rows, which wait for every build, never ran. The pull request that
+carries this file moves that leg to `macos-15` (item 37); a dry run on its branch (run 41246486494) ended `success`
+end to end. Section 4's last subsection says what ran.
 
 ## 1. Repository settings only the maintainer can change
 
@@ -45,26 +50,32 @@ not files, so no commit can make them true.
 Not readable from the session, so **unknown**: Actions permissions (the proxy answers
 "not permitted"), code-scanning alerts (403), secret scanning, who has write access.
 
-**Open pull requests, read on 2026-10-31** (`list_pull_requests`, state open, before this branch's own was opened): two,
-both Dependabot's from 2026-10-26: #268 (the GitHub Actions group, six updates) and #267 (the `debian` base image
-digest). Neither is reviewed here; the pins they touch are the ones `.github/workflows/` and `docker/` name.
+**Open pull requests, read on 2026-10-31** (`list_pull_requests`, state open, before #275 was opened; #275 has merged
+since and the pull request that carries this file was not yet open): two, both Dependabot's from 2026-10-26: #268 (the
+GitHub Actions group, six updates) and #267 (the `debian` base image digest). Neither is reviewed here; the pins they
+touch are the ones `.github/workflows/` and `docker/` name.
 
 **CI on `main` at `49a8173`, read on 2026-10-31** (`actions_list`, the runs for that SHA): eleven workflow runs, ten
 `success` (A11y & Visual QA, CodeQL, Coverage, Docker, Docs, Install smoke test, OSV-Scanner, Scorecard, Supply chain,
 Upgrade test) and **one `failure`: CI, job "Tests (x86_64)"**, step "Run integration tests". The test was
 `webhook::tests::a_redirect_within_one_origin_still_carries_the_credential` ("error sending request"), a race in the
-test's own stub server and not in the product; it failed 6 of 600 runs here and is fixed in this pull request (item 35).
+test's own stub server and not in the product; it failed 6 of 600 runs here and was fixed in #275 (item 35).
 The steps behind it in that job (doc tests, the full suite with analytics, the embedded-extension proof) were skipped
-on that run, so they have not been seen green on `49a8173` itself; they were green on #274's branch.
+on that run. **At `b731204`, the merge of #275, all eleven push-triggered runs ended `success`** (read the same way,
+2026-10-31): CI (with "Tests (x86_64)"), A11y & Visual QA, CodeQL, Coverage, Docker, Docs, Install smoke test,
+OSV-Scanner, Scorecard, Supply chain and Upgrade test. The Release run dispatched on `b731204` is the one in the header.
 
 **Mutation testing on `ec59953`** (the merge of #271, 2026-10-29, the last run that exists: the workflow's push filter
-does not match #274's files, and this pull request touches none of them either): `failure`, in the job "CI config
+does not match the files of #274 or #275): `failure`, in the job "CI config
 (paths, shards, timeouts)" only. Every one of the 29 `cargo-mutants` shard jobs succeeded. The config job's check 4
 reported six shards past 75 % of their `timeout-minutes` (`inference/model.rs [3/3]` 60 of 60 minutes, 101 %;
 `sqlite/queries/detections/*.rs` shards 1, 3, 4 and 5 at 97 to 101 % of 45; `validate.rs [1/2]` 43 of 50, 86 %).
 That is the budget gate doing its job, and it will be red again on the Monday 09:00 UTC schedule until the budgets are
-raised or the rows split; editing `mutation.yml` here would start the full matrix (hours) on this pull request, so
-it is left for its own change (item 36).
+raised or the rows split; editing `mutation.yml` would start the full matrix (hours) on the pull request that makes
+the edit, so it is left for its own change (item 36). The pull request that carries this file edits `release.yml`,
+which the filter matches (`.github/workflows/**`), so it starts the matrix anyway; the config job's checks 4 and 5
+hold a pull request only to the budgets it edits, and this one edits no `timeout-minutes`, so that job may be green
+there (not observed when this was written).
 
 ## 2. Decisions that are the maintainer's
 
@@ -271,6 +282,11 @@ the commits to read first (hashes valid on this branch).
     workflow's budget gate (item 36), left open on purpose.
   - *This file:* the header, section 1's two stale paragraphs (now read on 2026-10-31), items 29 to 36, and section 6.
 
+- *2026-10-31, later, the same branch name restarted from `b731204` (`git log b731204..`):* the macOS leg of `release.yml` on
+  `macos-15`, with `Prove this runner is Apple Silicon` and `Report the minimum macOS the binary asks for`; and the five other
+  places that named `macos-14` (`RELEASING.md`, `docs/architecture/03-coding-standards.md`, `docs/book/field/macos.md`,
+  `packaging/macos/verify-macos.sh`, the 0.19.0 changelog). Item 37.
+
 ## 4. What was verified, and by what command
 
 The test suite and the lint gates (the first five rows) were run again on 2026-10-23 on the tree
@@ -427,6 +443,18 @@ The tree was `49a8173` plus 17 uncommitted files, the work of the commit that fo
 | after the commit `06a066e`, on the clean tree: `cargo package --workspace --locked --no-verify`; `scripts/check-crate-licences.py --self-test` and on `target/package`; the 8 MiB loop from `supply-chain.yml` | exit 0 ("Packaged 105 files, 3.2MiB (964.0KiB compressed)" for the root crate); nine tarballs at 0.19.0 (the nine left from 0.18.1 were deleted first); "self-test: 0 failure(s)"; "all crate tarballs carry the licence files"; the largest, `birdnet-web-0.19.0.crate`, is 3,081,956 bytes against the 8,388,608 limit |
 
 **Not run:** CodeQL (the only JavaScript touched is one default in `tools/visual-qa/axe.mjs`; the rest is Rust, HTML and CSS), the container image, the install and upgrade smoke tests, the aarch64 cross-check, the full root-crate batches after the rename, the workspace tests through `preflight.sh --tests`, and `release.yml`'s dry run (an outward action; item 2 in section 6). The browser gates ran before the three refactors above, not after; the digest row is the evidence that they did not matter.
+
+### 2026-10-31, the macOS runner (`claude/amazing-bardeen-317rgu` restarted from `b731204`)
+
+The tree was `b731204` plus the commit `ed6473e`. A macOS runner is not available in the container, so the first row is stubs and the second is the real thing.
+
+| Command | Printed |
+|---|---|
+| the two new `run:` blocks extracted from `release.yml` and run under `bash -eo pipefail` with stub `uname`, `sw_vers` and `otool` | arch step: exit 1 with `::error::the macOS runner is x86_64, not arm64` for `x86_64`, exit 0 for `arm64`. minos step: prints and writes the summary when `LC_BUILD_VERSION` is present; warns and exits 0 when it is absent and when `otool` fails. (Stubs: the real `otool -l` format was not seen until the next row.) |
+| `scripts/preflight.sh --msrv`; `python3 scripts/check-ci-config.py` with `cargo-mutants` 27.1.0; `installer/test/release-tag-gate.sh` | 18 gates `ok`, exit 0; "all CI-config checks passed" (its run-duration checks 4 and 5 need `GITHUB_TOKEN` and were not read); the gate's cases all `PASS` |
+| `release.yml` dispatched on the branch, version blank (run 41246486494, head `ed6473e`) | run `success`, 17 jobs. `Validate release tag`, the five CI gates, `Choose the releases to upgrade from`, `Build x86_64-unknown-linux-gnu`, `Build aarch64-unknown-linux-gnu`, `Build aarch64-apple-darwin`, `Package and attest` (attestation skipped, as in a dry run), the four `Upgrade from vA.B.C` rows: `success`. `Publish GitHub Release` and `Verify the published Release`: skipped, as in a dry run. The macOS job: label `macos-15`, `uname -m: arm64; macOS 15.8.2`, `Finished release profile [optimized] target(s) in 19m 30s`, `minos 11.0` and `sdk 15.5` from `otool -l`, job time 20 m 38 s |
+
+**Not run:** the macOS binary on any Mac (CI builds it and never executes it); a tag push (the real `github-release` and `verify-release` jobs); the dry run on `main` after this branch merges (not needed unless `main` differs from the branch by more than documentation).
 
 ## 5. Open items, with severity
 
@@ -606,6 +634,24 @@ it says otherwise.
     out of any pull request that is meant to be small. Check 4 needs `GITHUB_TOKEN` to read run history, so it cannot be
     reproduced from this container.
 
+37. **The release workflow's macOS leg was on an image GitHub retires on 2026-11-02.** High for the release; handled in the pull
+    request that carries this file. The `aarch64-apple-darwin` row of `build` ran on `macos-14`. GitHub fails every job on that
+    image in scheduled brownouts (ten windows from 2026-10-05, each 14:00 to 00:00 UTC; the last two are 10-31 and 11-01) and
+    retires it on 2026-11-02 ([actions/runner-images#13518](https://github.com/actions/runner-images/issues/13518), read
+    2026-10-31). The dry run on `main` (run 41239225909, attempt 2) lost that leg to one, and `package` and `upgrade` need the
+    whole matrix. **Now `macos-15`.** From the README of `actions/runner-images`: `macos-15` is macOS 15 Arm64 and
+    `macos-15-intel` the x64 image; no retirement date is announced for macOS 15 or 26; the policy is at most two GA images at
+    once, the oldest beginning deprecation when a newer one is GA (macOS 14: announced 2026-01-11, brownouts from 2026-10-05,
+    retired 2026-11-02). Not `macos-latest`: `check-ci-config.py` refuses a `-latest` runner, and it would move on GitHub's
+    schedule. Two steps were added: one fails the job unless `uname -m` is `arm64`, one prints the binary's `minos`.
+    **Seen on the branch's dry run (run 41246486494: 15 of its 17 jobs `success`, the two publish jobs skipped as a dry run skips them):** the runner printed `uname -m: arm64; macOS
+    15.8.2`; the release build took 19 m 30 s; `otool -l` gave `minos 11.0`, `sdk 15.5`; the archive, checksum and upload
+    steps passed; `Package and attest` and the four `Upgrade from v0.17.0 / v0.17.1 / v0.18.0 / v0.18.1` rows passed (the
+    upgrade rows run the x86_64 build, not the macOS one). **Not verified:** that the macOS binary *runs*: CI builds it and
+    never executes it, and nothing here is a Mac. `minos 11.0` is the header's claim (the Rust default for the target; nothing
+    pins `MACOSX_DEPLOYMENT_TARGET`), not a test on macOS 11 to 14, and `README.md` and `docs/book/field/macos.md` still call
+    macOS a preview that is "not yet confirmed on real hardware". Whether to promise a floor, and to pin one, is the
+    maintainer's; the number is printed in every release run's summary from now on, so a change of it is seen.
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
   cross-site check (403; behind a reverse proxy whose `Origin` differs from `Host`, every
@@ -625,26 +671,26 @@ it says otherwise.
 
 ## 6. Where to start
 
-**Releasing 0.19.0** (the pull request that carries this file; `RELEASING.md` is the procedure and its
-pre-release checklist is the list to tick). The bump is done in it: `Cargo.toml` (the workspace version and the
-eight `birdnet-*` dependency entries), `CITATION.cff`, `crates/birdnet-web/openapi.json` (both places),
-`docs/book/reference/api.md`'s sample, `Cargo.lock` (`cargo update --workspace`: the nine member lines only, a
-plain `cargo update` was **not** run, so no third-party dependency moved) and `CHANGELOG.md` (rolled, dated
-2026-10-31, a fresh `[Unreleased]` above it, links updated). The checks `release.yml`'s `validate` job makes were
-replicated by hand on the tree: the three versions agree, the heading matches the date form, `cargo update
---workspace --locked` locks 0 packages, the licence notices are current. `cargo package --workspace --locked
---no-verify` and the licence check on `target/package` need a clean tree, so they ran after the commit: the last
-row of section 4's final subsection says what they printed.
+**Releasing 0.19.0** (`RELEASING.md` is the procedure and its pre-release checklist is the list to tick). The bump is
+merged (#275): `Cargo.toml` (the workspace version and the eight `birdnet-*` dependency entries), `CITATION.cff`,
+`crates/birdnet-web/openapi.json` (both places), `docs/book/reference/api.md`'s sample, `Cargo.lock` (`cargo update
+--workspace`: the nine member lines only, a plain `cargo update` was **not** run, so no third-party dependency moved) and
+`CHANGELOG.md` (rolled, dated 2026-10-31, a fresh `[Unreleased]` above it, links updated). The checks `release.yml`'s
+`validate` job makes passed in both dry runs (`Validate release tag`: `success`); `cargo package` and the licence check
+passed on the clean tree (section 4).
 
-1. Merge it when every check on its last head is green.
-2. Run the **dry run** (`release.yml`, `workflow_dispatch`, version blank) on `main` after the merge, with `Build
-   aarch64-apple-darwin` and every `Upgrade from vA.B.C` row green. It is the only workflow that builds the macOS
-   target and it **skips** the attestation, the GitHub Release and `verify-release`, so nothing is published. (A
-   dispatch can name any branch, so it can also be run on the pull request before the merge.)
+1. **Merge the pull request that moves the macOS leg to `macos-15` first, and before 2026-11-02**, when every check on
+   its last head is green. Do not tag before it: a tag pushed with `macos-14` in `release.yml` fails the build matrix,
+   publishes nothing, and leaves a tag at a commit whose workflow file cannot be changed by re-running (a run uses the file
+   at the tag's commit), so the fix would need a new tag.
+2. The **dry run** (`release.yml`, `workflow_dispatch`, version blank) already ran on that pull request's branch and ended
+   `success` end to end (section 4). Run it again on `main` after the merge only if `main` differs from the branch by more
+   than documentation. It **skips** the attestation, the GitHub Release and `verify-release`, so nothing is published.
 3. `git tag -a v0.19.0 -m "Release v0.19.0" && git push origin v0.19.0`. The date in `CHANGELOG.md` and
    `CITATION.cff` is 2026-10-31; change both if the tag lands on another day, because `validate` checks the heading's
    form and the CITATION version, not that the date is today's. Read the Docker and Docs runs as well as Release's:
-   all three start on a tag push (section 5, item 1 for what to look for in Docs).
+   all three start on a tag push (section 5, item 1 for what to look for in Docs). Read the `minos` line in the macOS job's
+   summary (item 37).
 4. **After the tag**, in a small follow-up pull request: `README.md` line 32 names `v0.17.1` as the latest release
    and several features carry an *(unreleased)* mark that 0.18.0 or 0.18.1 already shipped (line 131 says `v0.17.1`
    installs the V3.0 preview). They are true or false only once the tag exists, which is why they are not in the

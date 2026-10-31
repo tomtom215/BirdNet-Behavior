@@ -5,7 +5,7 @@
 > ONNX Runtime prebuilt, so BirdNet-Behavior is expected to build and run on
 > Apple Silicon (M-series) Macs. The macOS-specific paths below (the
 > avfoundation microphone source, the launchd service, the release build) have
-> not yet been confirmed on real hardware or a `macos-14` CI run. Treat this as
+> not yet been confirmed on real hardware or a `macos-15` CI run. Treat this as
 > a setup guide to validate, not a support guarantee.
 
 ## Quick install

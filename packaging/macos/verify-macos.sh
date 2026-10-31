@@ -200,7 +200,7 @@ cat <<'EOF'
       systemd service controls on /admin/system are disabled; the tmpfs transient-audio
       mount is not used; some /proc host metrics on the System page are blank.
 
-  [ ] macos-14 release dry run: trigger .github/workflows/release.yml (or run the
+  [ ] macos-15 release dry run: trigger .github/workflows/release.yml (or run the
       aarch64-apple-darwin build locally) and confirm the tarball + .sha256 are produced.
       Then fill packaging/macos/birdnet-behavior.rb's sha256 and publish the tap.
 EOF

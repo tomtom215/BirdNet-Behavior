@@ -448,12 +448,16 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             cross: false
-          # macOS on Apple Silicon (M-series). The macos-14 runner is arm64, so
-          # ort-sys downloads the aarch64-apple-darwin ONNX Runtime prebuilt and
-          # audio capture works through ffmpeg's avfoundation input. This target
-          # must be verified on a real macos-14 run before it is relied upon.
+          # macOS on Apple Silicon (M-series). The macos-15 runner is arm64
+          # (`macos-15-intel` is the x64 one), so ort-sys downloads the
+          # aarch64-apple-darwin ONNX Runtime prebuilt and audio capture works
+          # through ffmpeg's avfoundation input. The step below proves the
+          # architecture on every run. Not macos-14: GitHub retired that image on
+          # 2026-11-02 and failed every job on it in scheduled brownouts before
+          # (actions/runner-images#13518). Not `macos-latest`, which moves to a
+          # newer macOS on GitHub's schedule and changes the toolchain with it.
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             cross: false
           # Note: armv7-unknown-linux-gnueabihf is intentionally omitted.
           # `ort-sys` does not ship prebuilt ONNX Runtime binaries for armv7
@@ -492,10 +496,24 @@ jobs:
 
       - name: Install native build dependencies (macOS)
         if: runner.os == 'macOS'
-        # macos-14 ships clang (via Xcode) and usually cmake, but install cmake
+        # macos-15 ships clang (via Xcode) and usually cmake, but install cmake
         # explicitly so the bundled libduckdb build doesn't depend on the runner
         # image's default package set.
         run: brew install cmake || brew upgrade cmake || true
+
+      - name: Prove this runner is Apple Silicon
+        if: runner.os == 'macOS'
+        # This target is built natively (RELEASING.md). A label that resolved to an
+        # Intel image would cross-compile without a word and ship a binary nobody
+        # had run, so say what the host is and refuse anything but arm64.
+        shell: bash
+        run: |
+          arch="$(uname -m)"
+          echo "uname -m: $arch; $(sw_vers -productName) $(sw_vers -productVersion)"
+          if [ "$arch" != "arm64" ]; then
+            echo "::error::the macOS runner is $arch, not arm64; ${{ matrix.os }} is not an Apple Silicon image"
+            exit 1
+          fi
 
       - name: Install aarch64 cross toolchain
         if: matrix.cross
@@ -603,6 +621,25 @@ jobs:
             --target ${{ matrix.target }} \
             --features analytics \
             --bin birdnet-behavior
+
+      - name: Report the minimum macOS the binary asks for
+        if: runner.os == 'macOS'
+        # `minos` in LC_BUILD_VERSION is the oldest macOS that will load the binary.
+        # Nothing in the repository pins it (no MACOSX_DEPLOYMENT_TARGET), so it is
+        # whatever this runner image's toolchain defaults to, and it can move when
+        # the label does. Informational: no floor is promised while macOS is a
+        # preview (README), but a change of floor should be seen in a run, not by a
+        # user whose Mac is too old. The summary keeps it beside the run.
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/birdnet-behavior"
+          found="$(otool -l "$BIN" | grep -A4 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX' || true)"
+          if [ -z "$found" ]; then
+            echo "::warning::$BIN has no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX load command; its minimum macOS is unknown"
+          else
+            echo "$found"
+            { echo "### Minimum macOS for ${{ matrix.target }} (built on ${{ matrix.os }})"; echo '```'; echo "$found"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Strip debug symbols
         shell: bash
