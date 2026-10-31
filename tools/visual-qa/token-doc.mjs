@@ -60,6 +60,10 @@ export const GROUPS = {
     ['--chart-tip-bg', 'A chart tooltip: a dark card on the light theme, a lifted one on dark.'],
     ['--chart-tip-fg', 'Tooltip text, 13:1 or better on the tooltip.'],
     ['--chart-tip-border', 'Tooltip edge, so it never merges with the card behind it.'],
+    ['--sky-night', 'The sky behind a 24-hour axis before first light and after last light.'],
+    ['--sky-dawn', 'The dawn wash, at sunrise.'],
+    ['--sky-day', 'The sky between the washes.'],
+    ['--sky-dusk', 'The dusk wash, at sunset.'],
   ],
   'chart-ink-shared': [
     ['--chart-label', 'An axis label or a mark label: text, 4.5:1.'],

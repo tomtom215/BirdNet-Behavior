@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Charts with a vocabulary of their own.** The 24-hour charts sit on the day's real sky (night, a dawn
+  wash, day, a dusk wash, placed by the station's own sunrise and sunset, and absent when the station has no
+  location); columns are notched so a column can be counted (a seam at every 1, 2 or 5 times a power of ten,
+  at most twelve of them, and the chart says what a notch is); heat grids are discs whose area and colour are
+  the same number; a note in the display italic names the busiest bar, falling back to the bare number when
+  there is no room; the sun and moon ride a rail under the hours. Today's hour columns are now stacked by who
+  was heard (the day's eight most heard each in their own colour, everyone else as one band, the column still
+  exactly the hour's count) and the strip is drawn twice, for a card and for a phone, where it used to be
+  scaled to a third of its size. `docs/design/charts.md` ("The vocabulary beyond the bar") lists each mark and
+  what a test holds it to. New tokens: `--sky-night`, `--sky-dawn`, `--sky-day`, `--sky-dusk`.
+- **Who answers whom** (Patterns, Behavior). After one bird is heard, which others are heard within a minute?
+  A grid whose rows are the bird heard first and whose columns are the birds heard after it, from the
+  extension's `sequence_count` with a time constraint: not symmetric, which is the point. A pair seen fewer than
+  three times is a small ring and never a finding; a best pair at the floor is "nothing stands out yet", not a
+  headline. New in `birdnet-behavioral`: `AnalyticsDb::answers`, `queries::answers_sql`, `types::Answers`; the
+  live test seeds a day in which each rule (a reply in time, a reply too late, the same instant, a bird
+  answering itself, direction) has its own count, and was watched failing against a pattern without `(?t>0)`.
+- **A plan for organisation and insight** (`docs/design/insights-and-organisation.md`): which of the extension's
+  nine functions the product uses (measured, not assumed: two are drawn by no page and the modes, bases and
+  pattern operators are mostly unused), options for regrouping the pages, and a ladder of insights from the
+  casual birder to the researcher. New in `birdnet-db`: `monthly_species_counts`.
+
 - **The kiosk is a plate.** `/kiosk` draws today's birds as a page from a field guide: one figure
   per species, larger the more it was heard (area follows the square root of the count, with a
   floor so a bird heard once is still drawn), the Latin name beneath, a numbered key at the foot

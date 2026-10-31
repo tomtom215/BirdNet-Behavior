@@ -54,6 +54,19 @@
         </div>
     </div>
 
+    <!-- Who answers whom -->
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Calls and replies</div>
+        <h2 class="an-card-h3">Who answers whom</h2>
+        <p class="bnb-meta an-card-lede">
+            After one bird is heard, which others are heard <b>within a minute</b>? Read across a row:
+            the bird on the left sang first. It is not the same both ways, and that is the interesting part.
+        </p>
+        <div hx-get="/pages/analytics-answers" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Listening for replies...</p>
+        </div>
+    </div>
+
     <!-- Engine configuration -->
     <div class="bnb-card pad fig bh-wide">
         <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Configuration</div>

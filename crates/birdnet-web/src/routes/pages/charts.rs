@@ -34,8 +34,11 @@ pub(crate) fn render_hourly_chart(id: &str, hours: &[birdnet_db::sqlite::HourlyC
         solar: None,
         now_h: None,
         top: None,
+        stack: None,
         temps: &[],
         table: false,
+        class: "",
+        compact: false,
     })
 }
 
@@ -482,7 +485,7 @@ mod tests {
             let (_, vy, _, vh) = view_box(&svg);
             let label = svg
                 .split("<text ")
-                .find(|t| t.contains("ck-annot ck-halo"))
+                .find(|t| t.contains("ck-annot ck-halo") || t.contains(r#"class="ck-note""#))
                 .unwrap_or_else(|| panic!("{name}: the busiest is labelled"));
             let y: f64 = label
                 .split("y=\"")

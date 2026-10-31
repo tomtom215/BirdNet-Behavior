@@ -52,7 +52,7 @@ pub enum Ramp {
 /// whatever else the chart wants to say beside it (`extra` is escaped here).
 fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listening: bool) -> String {
     let mut s = String::from(
-        r#"<div class="ck-scale"><span class="bnb-meta">Fewer</span><span class="ck-steps" aria-hidden="true">"#,
+        r#"<div class="ck-scale ck-scale--discs"><span class="bnb-meta">Fewer</span><span class="ck-steps" aria-hidden="true">"#,
     );
     for k in 1..=7_usize {
         let _ = write!(s, r#"<i class="ck-sw {}"></i>"#, step_class(ramp, k));
@@ -75,6 +75,30 @@ fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listenin
     }
     s.push_str("</div>");
     s
+}
+
+/// One disc of a heat grid at `centre`, radius `r`, in colour `class`: its halo goes to `halos` and
+/// the disc itself to `discs`, so the caller can lay every halo under every disc. Both belong to
+/// mark `idx`, so they dim and light together.
+fn disc(
+    halos: &mut String,
+    discs: &mut String,
+    g: &str,
+    class: &str,
+    centre: (f64, f64),
+    r: f64,
+    idx: usize,
+) {
+    let (cx, cy) = centre;
+    let _ = write!(
+        halos,
+        r#"<circle class="ck-halo-d" cx="{cx:.1}" cy="{cy:.1}" r="{hr:.1}" fill="url(#{g}-hg-{class})" data-ck-i="{idx}"/>"#,
+        hr = r + 5.0,
+    );
+    let _ = write!(
+        discs,
+        r#"<circle class="ck-disc {class}" cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" data-ck-i="{idx}"/>"#
+    );
 }
 
 // ── hour × weekday ──────────────────────────────────────────────────────────────
@@ -138,7 +162,7 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     let row_max = row_tot.iter().copied().max().unwrap_or(1).max(1);
     let col_max = col_tot.iter().copied().max().unwrap_or(1).max(1);
 
-    let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 24.0_f64);
+    let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 28.0_f64);
     let marg_x = label_w + 24.0 * cw + 10.0;
     let w = marg_x + 74.0;
     let top = 20.0;
@@ -162,6 +186,12 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     if o.occurrences.contains(&0) {
         let _ = write!(svg, "<defs>{}</defs>", kit::nodata_pattern(&g));
     }
+    let steps: Vec<String> = (1..=7).map(|k| step_class(Ramp::Sun, k)).collect();
+    let _ = write!(
+        svg,
+        "<defs>{}</defs>",
+        kit::halo_gradients(&format!("{g}-hg"), &steps)
+    );
 
     for hh in (0..24).step_by(3) {
         let _ = write!(
@@ -170,17 +200,28 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             x = label_w + f64::from(hh) * cw + cw / 2.0,
         );
     }
+    // A cell is a disc: its area is the average a day in that slot and so is its colour step, both
+    // the square root of the count (a slot with one detection is drawn, not lost beside one with two
+    // hundred). Drawn in layers so a halo never covers a neighbour: halos, then the other marks, then
+    // discs, then the invisible boxes the pointer and the keyboard land on.
+    let (mut halos, mut marks, mut discs, mut hits) =
+        (String::new(), String::new(), String::new(), String::new());
+    let r_max = ch / 2.0 - 1.5;
     for d in 0..7_usize {
         let y0 = top + d as f64 * ch;
+        let cy = y0 + ch / 2.0;
         let _ = write!(
             svg,
-            r#"<text class="ck-lbl" x="{x:.1}" y="{y:.1}" text-anchor="end" font-size="10">{day}</text>"#,
+            r#"<text class="ck-lbl" x="{x:.1}" y="{y:.1}" text-anchor="end" font-size="10">{day}</text><line class="ck-grid" x1="{gx0:.1}" y1="{cy:.1}" x2="{gx1:.1}" y2="{cy:.1}"/>"#,
             x = label_w - 6.0,
-            y = y0 + ch / 2.0 + 3.5,
+            y = cy + 3.5,
             day = kit::WEEKDAYS[d],
+            gx0 = label_w + cw / 2.0,
+            gx1 = label_w + 23.5 * cw,
         );
         for hh in 0..24_usize {
             let x0 = label_w + hh as f64 * cw;
+            let cx = x0 + cw / 2.0;
             let n = o.counts[d][hh];
             let a = avg(d, hh);
             let heading = format!(
@@ -192,33 +233,40 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             let idx = d * 24 + hh;
             let occ = occ_of(d, hh);
             let count_s = kit::thousands(n);
-            let (cls_attr, fill_attr, tip) = if not_yet(d, hh) {
-                (
-                    r#" class="ck-future""#.to_string(),
-                    String::new(),
-                    kit::tip(&heading, &[], Some("Not yet")),
-                )
+            let tip = if not_yet(d, hh) {
+                let _ = write!(
+                    marks,
+                    r#"<circle class="ck-future" cx="{cx:.1}" cy="{cy:.1}" r="3.5" data-ck-i="{idx}"/>"#
+                );
+                kit::tip(&heading, &[], Some("Not yet"))
             } else if o.occurrences[d] == 0 && o.coverage_known {
-                (
-                    String::new(),
-                    format!(r#" fill="url(#{g}-nd)""#),
-                    kit::tip(
-                        &heading,
-                        &[],
-                        Some(&format!(
-                            "The station was not listening on any {} in this period",
-                            kit::WEEKDAYS[d]
-                        )),
-                    ),
+                let _ = write!(
+                    marks,
+                    r#"<rect fill="url(#{g}-nd)" x="{x:.1}" y="{y:.1}" width="{cwid:.1}" height="{chei:.1}" rx="6" data-ck-i="{idx}"/>"#,
+                    x = x0 + 4.0,
+                    y = y0 + 4.0,
+                    cwid = cw - 8.0,
+                    chei = ch - 8.0,
+                );
+                kit::tip(
+                    &heading,
+                    &[],
+                    Some(&format!(
+                        "The station was not listening on any {} in this period",
+                        kit::WEEKDAYS[d]
+                    )),
                 )
             } else if n == 0 {
-                (
-                    r#" class="ck-track""#.to_string(),
-                    String::new(),
-                    kit::tip(&heading, &[], Some("None heard")),
-                )
+                let _ = write!(
+                    marks,
+                    r#"<circle class="ck-none" cx="{cx:.1}" cy="{cy:.1}" r="1.7" data-ck-i="{idx}"/>"#
+                );
+                kit::tip(&heading, &[], Some("None heard"))
             } else {
-                let step = kit::seq_step(a / max_avg);
+                let t = a / max_avg;
+                let class = step_class(Ramp::Sun, kit::seq_step(t));
+                let r = (r_max * t.sqrt()).max(2.4);
+                disc(&mut halos, &mut discs, &g, &class, (cx, cy), r, idx);
                 let per = format!("{a:.1}");
                 let rows: Vec<(&str, &str, Option<&str>)> = if occ > 1 {
                     vec![("Average a day", &per, None), ("In all", &count_s, None)]
@@ -226,19 +274,13 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
                     vec![("Detections", &count_s, None)]
                 };
                 let over = format!("over {occ} {}s", kit::WEEKDAYS[d]);
-                (
-                    format!(r#" class="ck-fill {}""#, step_class(Ramp::Sun, step)),
-                    String::new(),
-                    kit::tip(&heading, &rows, (occ > 1).then_some(over.as_str())),
-                )
+                kit::tip(&heading, &rows, (occ > 1).then_some(over.as_str()))
             };
             let _ = write!(
-                svg,
-                r#"<rect{cls_attr}{fill_attr} x="{x:.1}" y="{y:.1}" width="{cwid:.1}" height="{chei:.1}" rx="4" data-ck-i="{idx}" data-tip="{tip}"/>"#,
-                x = x0 + 1.0,
-                y = y0 + 1.0,
-                cwid = cw - 2.0,
-                chei = ch - 2.0,
+                hits,
+                r#"<rect class="ck-hit" x="{x:.1}" y="{y:.1}" width="{cw:.1}" height="{ch:.1}" data-ck-i="{idx}" data-tip="{tip}"/>"#,
+                x = x0,
+                y = y0,
             );
         }
         // The weekday's total, as a bar and a number.
@@ -247,7 +289,7 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             let _ = write!(
                 svg,
                 r#"<path class="ck-fill ck-cother" d="{p}"/>"#,
-                p = kit::hbar_path(marg_x, y0 + 5.0, bw.max(1.5), ch - 10.0, 3.0),
+                p = kit::hbar_path(marg_x, y0 + 7.0, bw.max(1.5), ch - 14.0, 3.0),
             );
         }
         let _ = write!(
@@ -262,15 +304,18 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             },
         );
     }
-    // The peak.
+    svg.push_str(&halos);
+    svg.push_str(&marks);
+    svg.push_str(&discs);
+    // The peak: its disc ringed.
     let _ = write!(
         svg,
-        r#"<rect class="ck-peak" x="{x:.1}" y="{y:.1}" width="{cwid:.1}" height="{chei:.1}" rx="4"/>"#,
-        x = label_w + peak_h as f64 * cw + 0.5,
-        y = top + peak_d as f64 * ch + 0.5,
-        cwid = cw - 1.0,
-        chei = ch - 1.0,
+        r#"<circle class="ck-peak" cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}"/>"#,
+        cx = label_w + peak_h as f64 * cw + cw / 2.0,
+        cy = top + peak_d as f64 * ch + ch / 2.0,
+        r = r_max + 3.0,
     );
+    svg.push_str(&hits);
     // The hour totals.
     let _ = write!(
         svg,
@@ -414,12 +459,13 @@ pub fn calendar(o: &Calendar<'_>) -> String {
             svg,
             r#"<text class="ck-lbl" x="{x:.1}" y="{y:.1}" text-anchor="end" font-size="10">{name}</text>"#,
             x = label_w - 6.0,
-            y = top + r as f64 * pitch + cell - 1.5,
+            y = top + r as f64 * pitch + cell / 2.0 + 3.5,
         );
     }
     // Month labels where the month begins, never closer than a label's width.
     let mut last_label_x = f64::NEG_INFINITY;
     let mut peak_cell: Option<(f64, f64)> = None;
+    let (mut discs, mut hits) = (String::new(), String::new());
     for day in start..=end {
         let col = ((day - first_col_day) / 7) as usize;
         let row = dow(day);
@@ -442,51 +488,60 @@ pub fn calendar(o: &Calendar<'_>) -> String {
             .map_or_else(|| date.clone(), |(_, l)| format!("{l} {}", &date[..4]));
         let idx = col * 7 + row;
         let count_s = kit::thousands(n);
-        let (cls, fill, tip) = if n > 0 {
-            let step = kit::seq_step(n as f64 / max);
-            (
-                format!(r#" class="ck-fill {}""#, step_class(Ramp::Moss, step)),
-                String::new(),
-                kit::tip(&long, &[(&capitalise(o.unit), &count_s, None)], None),
-            )
+        let (cx, cy) = (x + cell / 2.0, y + cell / 2.0);
+        let tip = if n > 0 {
+            // A disc whose area and colour step are the square root of the day's count.
+            let t = n as f64 / max;
+            let class = step_class(Ramp::Moss, kit::seq_step(t));
+            let r = (cell / 2.0 * t.sqrt()).max(2.2);
+            let _ = write!(
+                discs,
+                r#"<circle class="ck-disc {class}" cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" data-ck-i="{idx}"/>"#
+            );
+            kit::tip(&long, &[(&capitalise(o.unit), &count_s, None)], None)
         } else if off_known && !listened(&date) {
-            (
-                String::new(),
-                format!(r#" fill="url(#{g}-nd)""#),
-                kit::tip(&long, &[], Some("The station was not listening")),
-            )
+            let _ = write!(
+                discs,
+                r#"<rect fill="url(#{g}-nd)" x="{a:.1}" y="{b:.1}" width="{s}" height="{s}" rx="3" data-ck-i="{idx}"/>"#,
+                a = x + 1.0,
+                b = y + 1.0,
+                s = cell - 2.0,
+            );
+            kit::tip(&long, &[], Some("The station was not listening"))
         } else {
-            (
-                r#" class="ck-track""#.to_string(),
-                String::new(),
-                kit::tip(
-                    &long,
-                    &[],
-                    Some(if off_known {
-                        "Listened all day and heard none"
-                    } else {
-                        "None heard"
-                    }),
-                ),
+            let _ = write!(
+                discs,
+                r#"<circle class="ck-none" cx="{cx:.1}" cy="{cy:.1}" r="1.3" data-ck-i="{idx}"/>"#
+            );
+            kit::tip(
+                &long,
+                &[],
+                Some(if off_known {
+                    "Listened all day and heard none"
+                } else {
+                    "None heard"
+                }),
             )
         };
         let _ = write!(
-            svg,
-            r#"<rect{cls}{fill} x="{x:.1}" y="{y:.1}" width="{cell}" height="{cell}" rx="3" data-ck-i="{idx}" data-tip="{tip}"/>"#
+            hits,
+            r#"<rect class="ck-hit" x="{x:.1}" y="{y:.1}" width="{pitch}" height="{pitch}" data-ck-i="{idx}" data-tip="{tip}"/>"#,
+            x = x - gap / 2.0,
+            y = y - gap / 2.0,
         );
         if date == peak_date {
-            peak_cell = Some((x, y));
+            peak_cell = Some((cx, cy));
         }
     }
-    if let Some((x, y)) = peak_cell {
+    svg.push_str(&discs);
+    if let Some((cx, cy)) = peak_cell {
         let _ = write!(
             svg,
-            r#"<rect class="ck-peak" x="{a:.1}" y="{b:.1}" width="{s}" height="{s}" rx="4"/>"#,
-            a = x - 1.0,
-            b = y - 1.0,
-            s = cell + 2.0,
+            r#"<circle class="ck-peak" cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}"/>"#,
+            r = cell / 2.0 + 2.5,
         );
     }
+    svg.push_str(&hits);
     let busiest = kit::civil_label(&peak_date, 0).map_or_else(|| peak_date.clone(), |(_, l)| l);
     let words = format!(
         "Busiest day: {busiest}, {} (ringed)",
@@ -574,10 +629,13 @@ mod tests {
         g.occurrences[2] = 0; // Tuesday: not listening
         let svg = hour_by_weekday(&g);
         assert!(
-            svg.contains(r#"class="ck-fill ck-q7""#),
+            svg.contains(r#"class="ck-disc ck-q7""#),
             "the peak is the top step: {svg}"
         );
-        assert!(svg.contains(r#"class="ck-track""#), "{svg}");
+        assert!(
+            svg.contains(r#"class="ck-none""#),
+            "a quiet hour is a small empty mark, not a disc: {svg}"
+        );
         assert_eq!(
             svg.matches("-nd)").count(),
             24,

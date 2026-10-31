@@ -24,6 +24,7 @@ pub fn router() -> Router<AppState> {
             get(analytics_retention_partial),
         )
         .route("/pages/analytics-next", get(analytics_next_partial))
+        .route("/pages/analytics-answers", get(analytics_answers_partial))
         .route(
             "/pages/analytics-dawn-sequence",
             get(analytics_dawn_sequence_partial),
@@ -625,6 +626,64 @@ pub(super) async fn analytics_next_partial(
     State(_): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     analytics_unavailable_html("Next species predictions")
+}
+
+/// How far back "who answers whom" looks, in days, and how many birds it compares.
+#[cfg(feature = "analytics")]
+const ANSWERS_DAYS: i64 = 30;
+#[cfg(feature = "analytics")]
+const ANSWERS_SPECIES: usize = 8;
+
+/// HTMX partial: who is heard within a minute of whom, among the birds heard most lately.
+#[cfg(feature = "analytics")]
+pub(super) async fn analytics_answers_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return analytics_unavailable_html("Who answers whom");
+    }
+    let today = super::today_date_string();
+    let Some((y, m, d)) = super::viz::kit::shift_date(&today, -ANSWERS_DAYS) else {
+        return super::error_states::failed_partial("who answers whom");
+    };
+    let from = format!("{y:04}-{m:02}-{d:02}");
+    let names = state.names_handle();
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics_read(|adb| adb.answers(&from, 1, ANSWERS_SPECIES))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+    match result {
+        Ok(Ok(a)) => {
+            let shown: Vec<String> = a
+                .species
+                .iter()
+                .map(|s| names.name_of_stored(s).to_owned())
+                .collect();
+            let window = u32::try_from(ANSWERS_DAYS).unwrap_or(30);
+            let html = super::behavioral_answers::render(&a, &shown, window);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        Ok(Err(e)) => analytics_error_html("who answers whom", &e),
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics answers: task failed");
+            super::error_states::failed_partial("who answers whom")
+        }
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+pub(super) async fn analytics_answers_partial(
+    State(_): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    analytics_unavailable_html("Who answers whom")
 }
 
 /// Dawn window the sequence card analyses (hours of day, inclusive).

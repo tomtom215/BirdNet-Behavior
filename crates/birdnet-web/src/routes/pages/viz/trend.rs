@@ -343,7 +343,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
                 kit::compact(v),
                 label_of(&points[i].date).0
             );
-            let tw = kit::text_width(&text, 10.0);
+            let tw = kit::note_width(&text);
             let x = x_at(i);
             let (anchor, x0, x1) = if x + tw / 2.0 > pad_l + plot_w {
                 ("end", x - tw, x)
@@ -363,7 +363,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             placed.push((x0, x1));
             let _ = write!(
                 svg,
-                r#"<circle class="ck-ring-annot ck-fadein" cx="{x:.1}" cy="{cy:.1}" r="3"/><text class="mono ck-annot ck-halo ck-fadein" x="{x:.1}" y="{yy:.1}" text-anchor="{anchor}" font-size="10">{t}</text>"#,
+                r#"<circle class="ck-ring-annot ck-fadein" cx="{x:.1}" cy="{cy:.1}" r="3"/><text class="ck-note ck-halo ck-fadein" x="{x:.1}" y="{yy:.1}" text-anchor="{anchor}">{t}</text>"#,
                 cy = y.at(v),
                 t = escape_html(&text),
             );

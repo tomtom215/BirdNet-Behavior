@@ -190,6 +190,41 @@ the theme changes) and falls back to the system text colour, never to one of our
 the exemption widens beyond `static/vendor/` or covers a library without a README that records its
 hash.
 
+## Views built for one question each
+
+Four pictures that are not a count over time and are not the terrain, each the form that suits its question
+(a 3D landscape was tried in the plan for each and rejected where it would add occlusion without helping
+anyone read the data). Each is complete without script where it can be (a table behind a disclosure, and for
+the first three a sentence), each has a phone drawing of its own, and each is held by the node tests that sit
+beside its script in `tools/visual-qa/` and by the Rust tests beside its server side.
+
+| View | Where | Question | Form | Script | Server side |
+|---|---|---|---|---|---|
+| Every song | Today, "When you heard them" (view toggle) | When was each bird heard today, and how sure was the station? | a scatter on the day's real sky: time across, how sure up, the sun's arc between sunrise and sunset, the station's cut-off drawn, "now" marked | `static/skysong.js` | `pages/today_songs.rs`: `GET /pages/today-songs`, JSON |
+| Who led, and when it changed | Reports, Year in review | Which birds led which months? | a rank-over-time chart (the line is a rank, which hides the size of a gap) beside a leaderboard of true counts for the chosen month on one zero-based scale, with a scrubber and a Play button | `static/seasons.js` | `year_in_review::seasons_card`, `birdnet_db::monthly_species_counts` |
+| When each bird joined your list | Species, Life list | When did each bird join my list, and who is newest? | portraits standing on the day each was first heard, stems landing on the rising list curve; on a phone a month-by-month vertical list | `static/discovery.js` | `pages/life_timeline.rs` |
+| Who answers whom | Patterns, Behavior | After one bird is heard, which others are heard within a minute? | a grid of discs (row first, column after), not symmetric | none (server SVG) | `pages/behavioral_answers.rs`, `AnalyticsDb::answers` |
+
+What each promises, and what a test holds it to:
+
+* **Every song** puts each song at the time it was heard and the height of how sure the station was; the only
+  nudge is sideways within the same minute and height, never changing the time the reading gives. Nothing below
+  the station's cut-off is ever in the list. The sky is the station's own sunrise and sunset, or neutral with no
+  location; there is never an invented sun. When the day holds more songs than one answer carries the feed says
+  how many it holds and the summary says the picture shows part of them. A refresh keeps what is on screen if it
+  fails, and says so.
+* **Who led** ranks only birds that were heard that month: a zero is a gap in the line, not a plunge to last. A
+  month that has not happened is not a month with none. Bars share one scale across the year, so lengths compare
+  between months. Play stops at the end, pauses on any touch, and is not offered under reduced motion.
+* **When each bird joined** takes every URL it is given through the base-path helper, falls back to initials for a
+  picture that 404s, never requests a picture for a marker that is off screen, and is complete (every species
+  reachable by pointer and keyboard) at 2,000 species by turning portraits into a density picture.
+* **Who answers whom** counts, per ordered pair, how many times the first was heard and then the second within a
+  minute on the same day, without overlap. The same instant is not a reply (without `(?t>0)` a Robin and a
+  Blackbird heard in one audio chunk answer each other both ways: `live_answers` was watched failing against that
+  pattern), a bird repeating itself is not an exchange, and a pair seen fewer than three times is a small ring and
+  never a finding. A best pair at the floor is "nothing stands out yet". The grid prints its own sample size.
+
 ## Gates
 
 `tools/visual-qa/relational.mjs` (chord, rings, ridgeline, the Behavior tab: what a pointer, a

@@ -50,15 +50,17 @@ pub(super) async fn content(state: AppState) -> String {
             // 1000 is more species than any station has heard.
             let top = birdnet_db::sqlite::weekly_top_species(conn, &start, &today, 1000)?;
             let new = birdnet_db::sqlite::weekly_new_species(conn, &start, &today)?;
+            // Month by month, for the "who led" picture; the same rows the leaderboard is made of.
+            let monthly = birdnet_db::sqlite::monthly_species_counts(conn, &start, &today)?;
             // When the station was listening, so a day it was off is not a quiet one in the
             // calendar. Unreadable means unknown, which draws nothing.
             let effort = super::listening::effort_by_date(conn, &start, &today).ok();
-            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new, effort))
+            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new, effort, monthly))
         })
     })
     .await;
 
-    let (today, daily, top, new, effort) = match result {
+    let (today, daily, top, new, effort, monthly) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "year in review: query failed");
@@ -70,7 +72,15 @@ pub(super) async fn content(state: AppState) -> String {
         }
     };
 
-    render_content(&today, &daily, &top, &new, effort.as_ref(), &names)
+    render_content(
+        &today,
+        &daily,
+        &top,
+        &new,
+        effort.as_ref(),
+        &monthly,
+        &names,
+    )
 }
 
 /// `YYYY-01-01` for the year `today` falls in.
@@ -90,6 +100,7 @@ fn render_content(
     top: &[(String, String, i64)],
     new: &[(String, String, String)],
     effort: Option<&std::collections::BTreeMap<String, f64>>,
+    monthly: &[(String, String, u32, i64)],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     let year = today.get(0..4).unwrap_or("----");
@@ -178,6 +189,9 @@ fn render_content(
         name: "Your year in activity",
     }));
     html.push_str("</div>");
+
+    // ── Month by month: who led, and when that changed ───────────────────
+    html.push_str(&seasons_card(today, top, monthly, names));
 
     // ── Leaderboard + milestones (two columns) ───────────────────────────
     html.push_str(r#"<div class="yir-cols">"#);
@@ -284,6 +298,161 @@ fn render_content(
     html
 }
 
+/// Species the month-by-month picture follows: the busiest of the year, each in its own colour.
+const SEASON_SPECIES: usize = 8;
+
+/// What the "who led each month" picture is made of.
+#[derive(Debug, PartialEq)]
+struct Seasons {
+    /// `(name, counts)` for each followed species, most heard first. `counts[m]` is the count in
+    /// month `m` (0 is January): `None` for a month that has not happened, a real `Some(0)` for a
+    /// month that has and had none.
+    species: Vec<(String, [Option<i64>; 12])>,
+    /// The month now running, 0-based: it is "so far".
+    this_month: usize,
+}
+
+/// The busiest `SEASON_SPECIES` of the year by month, from the leaderboard and the monthly counts.
+///
+/// `None` unless there is something to follow over time: two species and two months in which
+/// either was heard. One species, or one month, is a number and not a trend.
+fn seasons_data(
+    today: &str,
+    top: &[(String, String, i64)],
+    monthly: &[(String, String, u32, i64)],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> Option<Seasons> {
+    let now: usize = today
+        .get(5..7)?
+        .parse()
+        .ok()
+        .filter(|m| (1..=12).contains(m))?;
+    let species: Vec<(String, [Option<i64>; 12])> = top
+        .iter()
+        .filter(|(_, _, total)| *total > 0)
+        .take(SEASON_SPECIES)
+        .map(|(sci, com, _)| {
+            let mut counts = [None; 12];
+            for (m, slot) in counts.iter_mut().enumerate().take(now) {
+                let n = monthly
+                    .iter()
+                    .find(|(s, c, month, _)| s == sci && c == com && *month as usize == m + 1)
+                    .map_or(0, |r| r.3);
+                *slot = Some(n);
+            }
+            (names.name(sci, com).to_owned(), counts)
+        })
+        .collect();
+    let months_heard = (0..now)
+        .filter(|&m| species.iter().any(|(_, c)| c[m].is_some_and(|n| n > 0)))
+        .count();
+    (species.len() >= 2 && months_heard >= 2).then_some(Seasons {
+        species,
+        this_month: now - 1,
+    })
+}
+
+impl Seasons {
+    /// The species that led each month so far (`None` where none was heard). A tie goes to the
+    /// species heard more over the year, which is the one listed first.
+    fn leaders(&self) -> Vec<Option<usize>> {
+        (0..=self.this_month)
+            .map(|m| {
+                let mut best: Option<(usize, i64)> = None;
+                for (i, (_, c)) in self.species.iter().enumerate() {
+                    let n = c[m].unwrap_or(0);
+                    if n > 0 && best.is_none_or(|(_, b)| n > b) {
+                        best = Some((i, n));
+                    }
+                }
+                best.map(|(i, _)| i)
+            })
+            .collect()
+    }
+
+    /// One plain sentence for what the picture shows, printed under it (so it is there with no script).
+    fn sentence(&self) -> String {
+        let led = self.leaders();
+        let heard: Vec<usize> = led.iter().flatten().copied().collect();
+        let mut wins = vec![0_usize; self.species.len()];
+        for &i in &heard {
+            wins[i] += 1;
+        }
+        let top = wins
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(&a.0)))
+            .map_or(0, |(i, _)| i);
+        let changes = heard.windows(2).filter(|w| w[0] != w[1]).count();
+        let name = &self.species[top].0;
+        let months = heard.len();
+        if wins[top] == months {
+            format!("{name} led every month so far.")
+        } else {
+            format!(
+                "{name} led {} of the {months} months so far; the lead changed hands {changes} time{}.",
+                wins[top],
+                if changes == 1 { "" } else { "s" },
+            )
+        }
+    }
+
+    /// The JSON `static/seasons.js` reads.
+    fn json(&self, year: i32) -> serde_json::Value {
+        serde_json::json!({
+            "year": year,
+            "thisMonth": self.this_month,
+            "species": self.species.iter().enumerate().map(|(i, (name, counts))| {
+                serde_json::json!({ "name": name, "slot": i + 1, "counts": counts })
+            }).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// The "who led each month" card, or nothing when there is nothing yet to follow.
+fn seasons_card(
+    today: &str,
+    top: &[(String, String, i64)],
+    monthly: &[(String, String, u32, i64)],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> String {
+    let Some(data) = seasons_data(today, top, monthly, names) else {
+        return String::new();
+    };
+    let year: i32 = today.get(0..4).and_then(|y| y.parse().ok()).unwrap_or(1970);
+    let mut html = String::with_capacity(4096);
+    let _ = write!(
+        html,
+        r#"<div class="bnb-card pad" id="seasons"><div class="section-header"><div><div class="bnb-eyebrow">Month by month</div><h2 class="sh-h">Who led, and when it changed</h2></div></div><p class="fig-take">{sentence}</p><div class="ssn" data-ssn data-ssn-json="{json}"></div>"#,
+        sentence = escape_html(&data.sentence()),
+        json = escape_html(&data.json(year).to_string()),
+    );
+    html.push_str(r#"<details class="pt-disc"><summary>See the numbers — detections by month</summary><div class="viz-table-scroll"><table class="pt-tbl"><caption class="sr-only">Detections for each of the year's busiest species in each month</caption><thead><tr><th scope="col">Species</th>"#);
+    for m in super::viz::kit::MONTHS {
+        let _ = write!(html, r#"<th scope="col" class="num">{m}</th>"#);
+    }
+    html.push_str("</tr></thead><tbody>");
+    for (name, counts) in &data.species {
+        let _ = write!(html, r#"<tr><th scope="row">{}</th>"#, escape_html(name));
+        for c in counts {
+            match c {
+                Some(n) => {
+                    let _ = write!(html, r#"<td class="num">{}</td>"#, group_thousands(*n));
+                }
+                None => html.push_str(r#"<td class="num">not yet</td>"#),
+            }
+        }
+        html.push_str("</tr>");
+    }
+    html.push_str("</tbody></table></div></details></div>");
+    // The one authored tag on this card, sealed so it gets the page's nonce (see `crate::seal`).
+    html.push_str(&crate::seal::seal(&format!(
+        r#"<script type="module" src="/static/seasons.js?v={}"></script>"#,
+        env!("CARGO_PKG_VERSION")
+    )));
+    html
+}
+
 /// A milestone row (glyph · title · detail) inside the milestones card.
 fn milestone(html: &mut String, glyph: &str, title: &str, detail: &str) {
     let _ = write!(
@@ -298,6 +467,98 @@ fn milestone(html: &mut String, glyph: &str, title: &str, detail: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn m(sci: &str, com: &str, month: u32, n: i64) -> (String, String, u32, i64) {
+        (sci.to_string(), com.to_string(), month, n)
+    }
+
+    fn top_of(rows: &[(&str, &str, i64)]) -> Vec<(String, String, i64)> {
+        rows.iter()
+            .map(|(s, c, n)| ((*s).to_string(), (*c).to_string(), *n))
+            .collect()
+    }
+
+    /// A month that has not happened is `None` and one that had none is a real zero; the picture is
+    /// only offered where there is a trend to follow (two species, two months heard).
+    #[test]
+    fn a_month_not_yet_lived_is_not_a_month_with_none() {
+        let top = top_of(&[("Aa a", "Alpha", 30), ("Bb b", "Beta", 12)]);
+        let monthly = vec![
+            m("Aa a", "Alpha", 1, 10),
+            m("Aa a", "Alpha", 3, 20),
+            m("Bb b", "Beta", 3, 12),
+        ];
+        let en = birdnet_core::i18n::NameLocalizer::english();
+        let d = seasons_data("2026-04-10", &top, &monthly, &en).expect("two species, two months");
+        assert_eq!(d.this_month, 3);
+        let alpha = &d.species[0].1;
+        assert_eq!(
+            &alpha[..5],
+            &[Some(10), Some(0), Some(20), Some(0), None],
+            "February was lived and quiet; May has not come"
+        );
+        // One month heard only: not a trend.
+        assert!(seasons_data("2026-04-10", &top, &monthly[2..], &en).is_none());
+        // One species only: not a comparison.
+        assert!(seasons_data("2026-04-10", &top[..1], &monthly, &en).is_none());
+    }
+
+    /// The sentence counts the months each species led and the times the lead changed hands, and a
+    /// tie in a month goes to the species heard more over the year.
+    #[test]
+    fn the_sentence_says_who_led_and_how_often_it_changed() {
+        let top = top_of(&[("Aa a", "Alpha", 60), ("Bb b", "Beta", 50)]);
+        let en = birdnet_core::i18n::NameLocalizer::english();
+        // Alpha leads Jan, Feb; Beta leads Mar; Apr is a tie (Alpha wins it: heard more over the year).
+        let monthly = vec![
+            m("Aa a", "Alpha", 1, 9),
+            m("Bb b", "Beta", 1, 3),
+            m("Aa a", "Alpha", 2, 9),
+            m("Bb b", "Beta", 2, 3),
+            m("Aa a", "Alpha", 3, 2),
+            m("Bb b", "Beta", 3, 8),
+            m("Aa a", "Alpha", 4, 5),
+            m("Bb b", "Beta", 4, 5),
+        ];
+        let d = seasons_data("2026-04-30", &top, &monthly, &en).expect("data");
+        assert_eq!(d.leaders(), vec![Some(0), Some(0), Some(1), Some(0)]);
+        assert_eq!(
+            d.sentence(),
+            "Alpha led 3 of the 4 months so far; the lead changed hands 2 times."
+        );
+        // A species that led every month says so, with no count of changes.
+        let monthly = vec![
+            m("Aa a", "Alpha", 1, 9),
+            m("Bb b", "Beta", 1, 3),
+            m("Aa a", "Alpha", 2, 9),
+            m("Bb b", "Beta", 2, 3),
+        ];
+        let d = seasons_data("2026-02-20", &top, &monthly, &en).expect("data");
+        assert_eq!(d.sentence(), "Alpha led every month so far.");
+    }
+
+    /// The card carries the data as escaped JSON in one attribute (untrusted names cannot break out),
+    /// a table of the same numbers, and says nothing when there is nothing to follow.
+    #[test]
+    fn the_seasons_card_carries_escaped_data_and_a_table_or_nothing() {
+        let top = top_of(&[("Aa a", "Alpha <b>", 30), ("Bb b", "Beta", 12)]);
+        let monthly = vec![m("Aa a", "Alpha <b>", 1, 10), m("Bb b", "Beta", 2, 12)];
+        let en = birdnet_core::i18n::NameLocalizer::english();
+        let html = seasons_card("2026-03-05", &top, &monthly, &en);
+        assert!(
+            html.contains(r#"data-ssn-json=""#) && html.contains("&quot;thisMonth&quot;:2"),
+            "{html}"
+        );
+        assert!(
+            !html.contains("<b>"),
+            "a species name is data, never markup: {html}"
+        );
+        assert!(
+            html.contains("Alpha &lt;b&gt;") && html.contains("not yet"),
+            "{html}"
+        );
+        assert_eq!(seasons_card("2026-03-05", &top[..1], &monthly, &en), "");
+    }
 
     #[test]
     fn render_content_smoke() {
@@ -316,6 +577,7 @@ mod tests {
             &top,
             &[],
             None,
+            &[],
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("Your year in"));
@@ -353,6 +615,7 @@ mod tests {
             &[],
             &[],
             Some(&effort),
+            &[],
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(
@@ -379,6 +642,7 @@ mod tests {
             &[],
             &[],
             None,
+            &[],
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("2026-03-01 · 5 · the loudest"), "{html}");

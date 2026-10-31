@@ -24,6 +24,14 @@ coordinates. If the station cannot read its list of audio sources, the
 recording pill says the state is **unknown** rather than claiming there is no
 microphone.
 
+**The day's picture has two views**, chosen above it and remembered on this device. *By the hour* is the
+hour-by-hour columns: each column is stacked by who was heard (the day's eight most heard in their own colours,
+everyone else as one grey band), a notch marks each detection (or each 2, 5, 10 and so on, and the chart says
+which), and the day's real sky lies behind the hours, with the sun and the moon on a rail beneath. *Every song*
+shows every detection of the day as a glowing note: across is the time it was heard, up is how sure the station
+was, and the line near the bottom is your station's cut-off. Point at a note, or use the arrow keys, to read it;
+press Enter to open the recording. Without a location set, the sky is plain rather than guessed.
+
 **2 · The nudge (only when it matters).** A calm strip appears under the hero
 **only** when something needs your eye: rare detections waiting in the
 [review queue](./reviews.md), or an **outage** warning when capture has gone

@@ -67,6 +67,17 @@ runs on boot). Warm species photos with
 | `montage.mjs` | Build a contact sheet from a shots dir for quick eyeballing. |
 | `probe.mjs` / `onboarding.mjs` | Font/console probe; onboarding step capture. |
 
+## Unit tests of the view modules
+
+`unit/skysong.test.mjs`, `unit/seasons.test.mjs` and `unit/discovery.test.mjs` run the pure parts of
+`static/skysong.js`, `seasons.js` and `discovery.js` under plain `node` (no browser, no fixture, no
+network): scales and layout, ranking with ties and zeros, hit testing, the sentences each view prints, and a
+lint of the source for colour literals and CSP sinks. Run each with `node unit/<name>.test.mjs`; each prints
+how many checks passed and exits non-zero on the first that fails. Their authors report mutation runs
+against each module (12, 9 and 16 deliberate breakages, each caught); those runs were not repeated by the
+maintainer who merged them. They are **not wired into CI**:
+`a11y.yml` is held to a step budget by `scripts/check-ci-config.py`, which could not run where they were added.
+
 ## The fixture's clock
 
 The fixture seeds today only up to the time of day, and never fewer than 24 detections (the Today page pages its feed, and `interactions.mjs` needs more than one page of it): when fewer have happened by the clock, the first of the rest are spread over the hours that have, over at least three. `BNB_FIXTURE_NOW=<unix seconds>` replaces the clock the **seeding** reads, so a gate can be run as if it were 02:00 or 23:00 without waiting (`BNB_FIXTURE_NOW=$(( $(date -u -d 'today 02:00' +%s) )) cargo run -p birdnet-web --example screenshot_server`); the server itself still reads the real clock, so choose a time on the real UTC date.

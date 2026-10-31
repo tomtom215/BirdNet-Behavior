@@ -77,14 +77,25 @@
            when the station has weather samples. Written flat here, the caption told
            every station without a weather source to look for a line that was
            never on the chart. -->
-      <div class="bnb-meta x-daymeta">Bars are detections per hour<span id="td-tempkey"> · temperature runs along the bottom</span> <span class="mono x-moon">· {{moon_inline}}</span></div>
+      <div class="bnb-meta x-daymeta" id="today-daymeta-bars">Bars are detections per hour<span id="td-tempkey"> · temperature runs along the bottom</span> <span class="mono x-moon">· {{moon_inline}}</span></div>
     </div>
     <div class="x-daystats" id="td-daystats"></div>
+  </div>
+  <!-- Two pictures of the same day: how many an hour (the columns), and every song, one by one, on the
+       day's sky. The choice is outside the region the strip refreshes, so a refresh never undoes it. -->
+  <div class="seg td-view" data-vs="today-view" role="group" aria-label="Picture of the day" hidden>
+    <button type="button" class="btn active" aria-pressed="true" data-vs-show="#today-daystrip, #today-daymeta-bars">By the hour</button>
+    <button type="button" class="btn" aria-pressed="false" data-vs-show="#today-sky, #today-daymeta-sky">Every song</button>
   </div>
   <div id="today-daystrip" hx-get="/pages/today-daystrip" hx-trigger="load, every 30s" hx-swap="innerHTML">
     {{skel_daystrip}}
   </div>
+  <div id="today-sky" hidden>
+    <p class="bnb-meta x-daymeta" id="today-daymeta-sky" hidden>Every song of the day, placed by when it was heard and how sure the station was, on the day's own sky.</p>
+    <div class="ss" data-ss data-ss-feed="/pages/today-songs"></div>
+  </div>
 </div>
+<script type="module" src="/static/skysong.js?v={{version}}"></script>
 <!--/block:daystrip--><!--block:picture-->{{picture_block}}<!--/block:picture--><!--/top-->
 
 <div class="work2{{work2_solo}}">

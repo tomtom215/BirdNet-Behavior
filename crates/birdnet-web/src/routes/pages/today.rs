@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(today_home))
         .route("/pages/today-list", get(today_partial))
         .route("/pages/today-daystrip", get(today_daystrip_partial))
+        .route("/pages/today-songs", get(super::today_songs::today_songs))
         .route("/pages/today-count", get(today_count_partial))
         .route("/pages/today-pills", get(today_pills_partial))
         .route("/pages/today-nudge", get(today_nudge_partial))
@@ -1117,6 +1118,13 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         slot.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         slot.truncate(3);
     }
+    // The day's eight busiest species, each its own colour in the columns, and whatever else was
+    // heard is one more band: the column stays as tall as the hour's count.
+    let (stack_names, stack_counts) = day_stack(&by_hour, &names);
+    let stack = (!stack_names.is_empty()).then_some(super::viz::bars::Stack {
+        names: &stack_names,
+        counts: &stack_counts,
+    });
 
     let temps: Vec<(f64, f64)> = samples
         .iter()
@@ -1153,12 +1161,49 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         r#"<span id="td-tempkey" hx-swap-oob="true"> · temperature runs along the bottom</span>"#
             .to_string()
     };
-    let strip = super::viz::day_strip(&hourly, &top, &temps, solar, super::now_hour_local());
+    let strip = super::viz::day_strip(
+        &hourly,
+        &top,
+        stack.as_ref(),
+        &temps,
+        solar,
+        super::now_hour_local(),
+    );
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
         format!("{stats_oob}{tempkey_oob}{strip}"),
     )
+}
+
+/// The species the day strip's columns are made of: the eight with the most detections today,
+/// most heard first (ties by name), as the station names them, with how many of each were heard
+/// in every hour. `rows` is `(stored name, hour, count)`, as the heat-map query returns it.
+fn day_stack(
+    rows: &[(String, u8, i64)],
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> (Vec<String>, Vec<[i64; 24]>) {
+    let mut per: std::collections::BTreeMap<&str, [i64; 24]> = std::collections::BTreeMap::new();
+    for (name, hour, count) in rows {
+        if let Some(slot) = per
+            .entry(name.as_str())
+            .or_insert([0; 24])
+            .get_mut(usize::from(*hour))
+        {
+            *slot += count;
+        }
+    }
+    let mut ranked: Vec<(&str, [i64; 24])> = per.into_iter().collect();
+    ranked.sort_by(|a, b| {
+        let (ta, tb): (i64, i64) = (a.1.iter().sum(), b.1.iter().sum());
+        tb.cmp(&ta).then_with(|| a.0.cmp(b.0))
+    });
+    ranked.truncate(8);
+    let list = ranked
+        .iter()
+        .map(|(name, _)| names.name_of_stored(name).to_owned())
+        .collect();
+    (list, ranked.into_iter().map(|(_, c)| c).collect())
 }
 
 /// Render a single detection row into the HTML buffer.
