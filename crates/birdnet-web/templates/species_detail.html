@@ -56,12 +56,16 @@
         <div class="bnb-meta mono">peak 4.2 kHz · clip 3.0 s</div>
       Until the partial exists, this slot self-heals with a placeholder.
     -->
-    <aside class="bnb-card pad species-hero__media"
-           hx-get="/pages/species-hero?name={{species_encoded}}"
-           hx-trigger="load"
-           hx-swap="innerHTML">
+    <!-- A div, not an aside: axe's landmark-complementary-is-top-level reported the aside that
+         was here on all three species-detail states, in both themes and sizes (its data said
+         the aside's role was null), and a div carries no landmark role. A recording card is not
+         content complementary to the page, so no landmark is lost. -->
+    <div class="bnb-card pad species-hero__media"
+         hx-get="/pages/species-hero?name={{species_encoded}}"
+         hx-trigger="load"
+         hx-swap="innerHTML">
       {{skel_hero}}
-    </aside>
+    </div>
   </section>
 
   <!-- ── Summary stats ──────────────────────────────────────────────── -->

@@ -505,13 +505,20 @@ mod tests {
     async fn a_redirect_within_one_origin_still_carries_the_credential() {
         // Counterpart: refusing every redirect would be a different fix. The
         // second request goes to the same host and port.
+        //
+        // The stub closes each connection after its reply, so it says so
+        // (`Connection: close` on the 302). Without it the client keeps the
+        // connection for the redirected request, and when the stub's close
+        // wins the race the second request meets "Connection reset by peer"
+        // and the test fails with "error sending request": 6 of 600 runs of
+        // this test alone, and it failed `main` once on CI.
         let (addr, seen) = {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
             let addr = listener.local_addr().expect("addr").to_string();
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
                 for reply in [
-                    "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n",
+                    "HTTP/1.1 302 Found\r\nLocation: /next\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
                     "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
                 ] {
                     let Ok((mut sock, _)) = listener.accept() else {

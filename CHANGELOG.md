@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-31
+
 ### Added
 
 - **Charts with a vocabulary of their own.** The 24-hour charts sit on the day's real sky (night, a dawn
@@ -175,6 +177,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The browser gates' fixture serves its own pictures.** `screenshot_server`, which the accessibility, layout,
+  legibility and visual sweeps run against, used to ask Wikipedia for each species' picture, as the shipped binary
+  does. A run behind a proxy or a rate limit then drew initials where a run in CI drew photographs, so the strict
+  sweep failed on one and passed on the other with the same code (the life list's six newest birds all 404ed),
+  and an edit to an article could have moved CI's layout. Every species the fixture knows now has a credited
+  picture and a line of prose from the fixture's own source (`FixturePictures`, served by the fixture at
+  `/__fixture/picture.jpg` through the provider, download, disk and credit path the binary uses); a species it does
+  not know has none, and the one picture seeded without a credit keeps its legacy state. With outbound HTTPS
+  pointed at a dead proxy all 15 of the fixture's species answer `200`, and so do they under a base path.
+- **`axe.mjs` fails on any finding, not only serious and critical ones** (`AXE_FAIL_ON` now defaults to
+  `minor,moderate,serious,critical`). The species page had carried 12 moderate findings, one rule, through every
+  sweep because nothing read them; a station's own gate should not have a tier that is printed and not read.
+- **`osv-scanner.toml` carries no waiver.** The one it held, `GHSA-qwgh-2vcv-g2f7` for block_buffer 0.10.4 (waived
+  until 2026-12-01), matched nothing: the advisory's record, last modified 2026-10-30, lists block_buffer 0.11.0
+  up to 0.12.1 as affected and the lockfile holds 0.10.4 and 0.12.1. `scripts/osv-check.py` reports no advisory for
+  any of the 649 locked packages.
+
 - **Chart axes are a little darker in the light theme** (`--chart-axis` is now `oklch(61% 0.010 70)`), because
   an axis label drawn on the new sky is graded against the sky and the old value read 2.75:1 there
   (`chart-ramps.mjs` grades it; it reports 146 checks, 0 failures). The sun on the daylight rail is
@@ -251,6 +270,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The morning running order drew its lines through its own words.** The newest morning's heavy line cut through
+  the right-hand count of the lanes below it ("167 mornings · 82%"), and the time written beside a large dot sat
+  where that line left the dot whenever the morning moved steeply or doubled back, which is the case the figure
+  is for. The words were drawn last with a halo, which hides a thin line and not a heavy one. The lines are now
+  drawn in pieces that leave out the band each lane's words are written in (a header strip: the slant on either
+  side still says which way the morning went), and each time is put on a side of its dot that its own line, the
+  lane's words, the edge of the picture and (where the lane has room) every other morning's dot leave free: the
+  first render of the book's figure had "08:22" with a dot under its first digit. Tests read the markup back as
+  geometry: no line meets a name, a count or a typical time, no time is struck, and no time is written over a dot,
+  for a late shallow morning, a steep one, one that doubles back and one at the edge of the clock; red against the
+  old drawing, and twelve single-site mutants of the new code are each caught.
+- **The species page had a landmark axe objected to.** An `<aside>` holding the best-recording card was reported
+  by `landmark-complementary-is-top-level` on all three species-detail states in both themes and sizes (12
+  findings); it is a `<div>` now, and a recording card is not content complementary to the page.
+- **A webhook test failed about one run in a hundred.** `a_redirect_within_one_origin_still_carries_the_credential`
+  answers a `302` and closes the connection without saying so, so the client sometimes sent the redirected request
+  down the closed connection and met "Connection reset by peer" (6 failures in 600 runs of the test alone; it
+  failed `main`'s CI once, after the merge of #274). The stub now sends `Connection: close` (0 in 1,500). The
+  product code is unchanged: a closed connection reused is an ordinary HTTP/1.1 race, and the error is logged.
 - **"Neighbouring species" said a share of sessions that it is not.** The probability is the share of the
   sessions that had a bird on that side at all (a session the bird opens has no bird before it, one it closes
   none after): measured, a bird followed by Jay on 2 of its 7 sessions reports Jay at 100%, and the flow's
@@ -11386,7 +11424,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.0...v0.17.1

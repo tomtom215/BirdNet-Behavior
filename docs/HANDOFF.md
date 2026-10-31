@@ -1,47 +1,30 @@
 # Handoff
 
-What only the maintainer can do, what the last working session did and did not
-verify, and where the next one should start. This file was **rewritten**, not
-appended to, on 2026-10-21 and its sections 3 to 6 were brought up to date on 2026-10-22 for
-the tree at the commit named in section 4; the header, section 5 item 1 and section 6 were
-corrected on 2026-10-26 after the first release attempt failed. Facts about GitHub were read on 2026-10-21 with
-read-only `gh api` calls, each named in section 1; read them again before relying on them.
-Anything not attributed to a command is marked as reported, read or unknown.
+What only the maintainer can do, what the last working sessions did and did not verify, and where the
+next one should start. This file was **rewritten**, not appended to, on 2026-10-21. Sections 3 and 4 are
+dated logs: each entry names the tree it describes and what ran on it. Section 5 holds the open items and
+section 6 says where to start. The header and sections 5 and 6 were corrected for the state below on
+2026-10-31. Facts about GitHub were read on the dates given, with the commands named; read them again before
+relying on them. Anything not attributed to a command is marked as reported, read or unknown.
 
-The working branch is `claude/amazing-babbage-nxiuuc`, pushed to `origin`.
-[#265](https://github.com/tomtom215/BirdNet-Behavior/pull/265) (opened as a draft on 2026-10-22) was
-**merged on 2026-10-25 as `71539e5`**; `git log -1 origin/main` is the source for where `main` is
-now. The verification in section 4 predates #265's CI. The CI on #265's last head was read while it
-ran: the CodeQL results check passed after the maintainer's dismissals, and `Tests (x86_64)`, the
-accessibility sweep and five mutation shards were still running when last read, so their end state
-is not recorded here. **0.18.0 has not been released**; section 5, item 1 says why.
+**State on 2026-10-31.** `main` is `49a8173`, the merge of #274. The latest release is **v0.18.1**,
+published 2026-10-26: its Release, Docker and Docs runs on the tag all ended `success` (Docs and Release on a
+second attempt). The pull request that carries this file prepares **0.19.0**. It is the first release since
+v0.18.1, so its changelog section holds three pull requests' work:
 
-**2026-10-28 additions.** A later session worked on `claude/serene-hamilton-6wlll0`, branched from
-`d0fcfdb` (the merge of #270, which is `origin/main` in this checkout; GitHub was not re-read),
-and pushed it; it is pull request #271 (section 6 says what its CI found). It moved the engine to DuckDB 2.0.0, gave the
-Patterns, Species and Weekly pages one frame, added the kiosk plate and the public-domain plate tier behind
-it, put a credit on every picture, added the Plate chart style and the terrain's sunrise finding, and wrote
-`docs/design/ux-audit-2026-10.md`. Section 3 (last bullets), section 4 (its last subsection), section 5 (items 15
-to 22) and the DuckDB paragraph of section 6 were updated for it; **everything else in this file is as it was on
-2026-10-26 and was not re-read.**
-
-**2026-10-31 additions.** A later session worked on `claude/amazing-bardeen-317rgu`, branched from `ec59953`
-(the merge of #271; GitHub was not re-read) and pushed it. **No pull request was opened** (the session was told not to open one
-unasked), so nothing on GitHub has looked at it; `CLAUDE.md` advises a draft pull request early for exactly that reason. It
-put every 24-hour chart on the day's real sky, notched the columns, turned the heat grids into discs and gave the busiest bar a
-margin note; added three views each built for one question (Today's *Every song*, Year in review's *Who led, and when it
-changed*, the life list's *When each bird joined*); added one new use of the extension, *Who answers whom*
-(`sequence_count`); and wrote `docs/design/insights-and-organisation.md`, which is a plan and not a build. Section 2 (last
-bullet), section 3 (last bullet), section 4 (last subsection), section 5 (items 23 to 29) and section 6 (last paragraph but
-one) were updated for it; **everything else is as it was on 2026-10-28 and was not re-read.**
-
-**Later the same day, same branch.** The maintainer chose option A (section 2) and asked for *the chorus assembling*. Both are built:
-the Patterns bar is grouped When / Who / How, *Behavior* is split into *Visits* and *Sequences*, the six cards of those two tabs
-have the same four layers (a sentence, the picture, the table, Method and export), and the chorus is drawn from `window_funnel`
-and **not** from `window_funnel_events`, which a probe showed cannot measure a lag (section 6). The five other Patterns tabs
-are regrouped but have **not** been given the four layers (section 5, item 31). A measurement also corrected a claim the
-product had made: the neighbour card said "share of sessions" for a number that is a share of the sessions *with a neighbour*
-(section 5, item 32). Sections 2, 3, 4, 5 (items 23, 28, 30 to 32) and 6 were updated for it.
+- #271 (merged 2026-10-29): the engine moved to DuckDB 2.0.0; the Patterns, Species and Weekly pages got one
+  frame; the kiosk is a plate, with a public-domain plate tier behind it; every picture carries a credit; the
+  Plate chart style and the terrain's sunrise finding; `docs/design/ux-audit-2026-10.md`.
+- #274 (merged 2026-10-31): the charts' vocabulary (the day's sky, notches, discs, margin notes, stacked hour
+  columns), three views each built for one question (*Every song*, *Who led, and when it changed*, *When each bird
+  joined*), *Who answers whom* and *the chorus assembling* (the extension's `sequence_count` and
+  `window_funnel`), the Patterns bar grouped When / Who / How with Behavior split into Visits and Sequences, the
+  Method and export panel and the four layers on those six cards, `scripts/preflight.sh`, and
+  `docs/design/insights-and-organisation.md`.
+- This pull request: the version bump and changelog roll, the four items #274 left open (the fixture's pictures
+  no longer depend on the network, the species page's landmark, the running order's labels, the stale OSV
+  waiver), a flaky webhook test that turned `main`'s CI red after #274's merge, and this file's own corrections.
+  Section 4's last subsection says what ran.
 
 ## 1. Repository settings only the maintainer can change
 
@@ -62,15 +45,26 @@ not files, so no commit can make them true.
 Not readable from the session, so **unknown**: Actions permissions (the proxy answers
 "not permitted"), code-scanning alerts (403), secret scanning, who has write access.
 
-**Open pull requests:** none (`…/pulls?state=open`, 0). The four Dependabot pull requests
-the previous hand-off listed are gone.
+**Open pull requests, read on 2026-10-31** (`list_pull_requests`, state open, before this branch's own was opened): two,
+both Dependabot's from 2026-10-26: #268 (the GitHub Actions group, six updates) and #267 (the `debian` base image
+digest). Neither is reviewed here; the pins they touch are the ones `.github/workflows/` and `docker/` name.
 
-**CI on `main` (`ea2d439`):** 17 workflow runs, none with a conclusion other than
-`success` (`…/actions/runs?branch=main`, filtered to that SHA): A11y & Visual QA, CI,
-CodeQL, Coverage, Docker, Docs, Fuzz, Install smoke test, Mutation testing, OSV-Scanner
-(push and schedule), Publish model release (twice), Scorecard, Supply chain, Upgrade test,
-and one Dependabot run. That is the merged state of the *previous* branch; nothing says
-what this branch will do.
+**CI on `main` at `49a8173`, read on 2026-10-31** (`actions_list`, the runs for that SHA): eleven workflow runs, ten
+`success` (A11y & Visual QA, CodeQL, Coverage, Docker, Docs, Install smoke test, OSV-Scanner, Scorecard, Supply chain,
+Upgrade test) and **one `failure`: CI, job "Tests (x86_64)"**, step "Run integration tests". The test was
+`webhook::tests::a_redirect_within_one_origin_still_carries_the_credential` ("error sending request"), a race in the
+test's own stub server and not in the product; it failed 6 of 600 runs here and is fixed in this pull request (item 35).
+The steps behind it in that job (doc tests, the full suite with analytics, the embedded-extension proof) were skipped
+on that run, so they have not been seen green on `49a8173` itself; they were green on #274's branch.
+
+**Mutation testing on `ec59953`** (the merge of #271, 2026-10-29, the last run that exists: the workflow's push filter
+does not match #274's files, and this pull request touches none of them either): `failure`, in the job "CI config
+(paths, shards, timeouts)" only. Every one of the 29 `cargo-mutants` shard jobs succeeded. The config job's check 4
+reported six shards past 75 % of their `timeout-minutes` (`inference/model.rs [3/3]` 60 of 60 minutes, 101 %;
+`sqlite/queries/detections/*.rs` shards 1, 3, 4 and 5 at 97 to 101 % of 45; `validate.rs [1/2]` 43 of 50, 86 %).
+That is the budget gate doing its job, and it will be red again on the Monday 09:00 UTC schedule until the budgets are
+raised or the rows split; editing `mutation.yml` here would start the full matrix (hours) on this pull request, so
+it is left for its own change (item 36).
 
 ## 2. Decisions that are the maintainer's
 
@@ -265,6 +259,18 @@ the commits to read first (hashes valid on this branch).
     ledger and the neighbours). The neighbour flow's tooltip, its doc comment, the guide and the card's Method note were corrected
     (item 32).
 
+- *2026-10-31, the same branch name restarted from `49a8173` for 0.19.0 (`git log 49a8173..`):*
+  - *The release* : the version in `Cargo.toml` (the workspace and the eight `birdnet-*` dependency lines), `Cargo.lock`, `CITATION.cff` (with
+    `date-released`), `openapi.json` (`info.version` and its example) and the book's `/health` sample; the changelog's *Unreleased* rolled
+    into `## [0.19.0] - 2026-10-31`, with a new empty *Unreleased* and the two compare links.
+  - *The four items #274 left open:* the fixture's pictures (`screenshot_server.rs`: `FixturePictures`, `FIXTURE_PICTURE_PATH`, served through
+    `ImageCache::new`), the species page's `<aside>` (now a `<div>`) and the default of `AXE_FAIL_ON` in `axe.mjs` (every impact level), the
+    running order (`viz/funnel.rs`: `outside_bands`, `time_label_spot`, nine new tests, 17 in the file, that read its markup back), and `osv-scanner.toml` (no
+    waivers). Items 29, 30, 33 and 34 below say what each did and did not settle.
+  - *One more found on the way:* `main`'s CI at `49a8173` was red on a flaky webhook test (item 35), fixed in its stub; and the mutation
+    workflow's budget gate (item 36), left open on purpose.
+  - *This file:* the header, section 1's two stale paragraphs (now read on 2026-10-31), items 29 to 36, and section 6.
+
 ## 4. What was verified, and by what command
 
 The test suite and the lint gates (the first five rows) were run again on 2026-10-23 on the tree
@@ -399,44 +405,46 @@ check of the built site (mdBook is not installed; the in-app render of the same 
 whether the CLS result below is a regression (an earlier comparison against a baseline checkout said it was not, and its
 numbers were not kept).
 
+### 2026-10-31, the 0.19.0 branch (`claude/amazing-bardeen-317rgu` restarted from `49a8173`, `~/.duckdb` absent)
+
+The tree was `49a8173` plus 17 uncommitted files, the work of the commit that follows it. Each row names what ran on which state of the tree.
+
+| Command | Printed |
+|---|---|
+| `scripts/preflight.sh --msrv`, first run | 16 `ok`, **2 FAILED**: clippy at default and at all features, `this function has too many lines (201/200)` on `morning_order` (the dot-avoidance had added to it). Fixed by moving the sentence under the picture into `note()` and the dot position into one closure, `centre`. |
+| `scripts/preflight.sh --msrv`, on the final tree | exit 0; 18 gates `ok`: fmt, typos, machete, installer drift, deny, audit, OSV, clippy at default, all and no default features over the workspace, rustdoc, build at default and all features, CLI help, manual links, third-party notices, doc tests, MSRV (Rust 1.95). "Not run": workspace tests through the script (run by hand, below), CodeQL, the image, install and upgrade smoke, the aarch64 cross-check. |
+| `cargo test -p birdnet-web --features analytics` over every file of `crates/birdnet-web/tests/` (six at a time) | 26 of 26 batches exit 0, 151 `test result:` lines, 670 passed, 0 failed (before the three refactors named below) |
+| `--lib`: `birdnet-web` (analytics), `birdnet-behavioral` (analytics), `birdnet-db`, `birdnet-integrations` | 1,490 (1,491 on the final tree), 132, 501 and 445 passed, 0 failed |
+| `cargo test -p birdnet-behavior` (root crate), 13 batches | 1,564 passed, **1 failed**: `no_async_function_blocks_on_the_database_or_the_filesystem` named `morning_order` as blocking. The sweep resolves a bare call by name, and a closure in `meets_box` called `inside` was read as `birdnet-migrate`'s `inside`, which reads the filesystem. Found by printing the sweep's blocking keys and intersecting them with the identifiers I had added; green on `HEAD`'s `funnel.rs`, red on mine, green after renaming the closure (`holds`, with a comment saying why). That target alone was re-run after each later edit (6 passed); the 13 batches were not run again. |
+| `funnel.rs` unit tests | 18 pass (9 new). Single-site mutants, each applied and restored with `touch`: F1 to F8 (the words' band, no cut, pieces that never join, first spot always, the edge costing nothing, words never in the way, towards the outside, no candidates above) and D1 to D4 (dots not passed, a line weighing one dot, a dot not counted, a dot's radius 1 instead of 3): **12 of 12 red** (run before the three refactors below). D2 and D4 first survived; the crowd in `a_time_gives_way_to_a_dot_but_gives_a_dot_up_before_a_line` and the radius assertion in `a_time_is_not_written_over_another_mornings_dot` killed them. F6's text no longer matched after the weighting changed and was rewritten. |
+| digest of `morning_order`'s output over four data sets at two clock ranges, before and after the closure rename, `centre` and `note` | `243f9659cba732e2` both times: those three refactors change nothing it draws (VALIDATED for those inputs, not proven) |
+| `a_redirect_within_one_origin_still_carries_the_credential`, one process per run | before: 3 failures in 300 idle, 3 in 300 with four busy loops. A scratch probe of the same server shape with the full error chain: 2 of 1,500 `Connection reset by peer`, and 0 of 1,500 with `Connection: close` on the `302`. After the fix: 0 of 1,500 (item 35). |
+| `python3 scripts/osv-check.py` | 649 packages, 0 advisories match, no waivers (item 34) |
+| browser gates against a fixture rebuilt from the tree (Chromium 1243, axe-core 4.11.4), tree before the three refactors | every gate exit 0: `axe.mjs` **0 total violation(s)** with `AXE_FAIL_ON` at every impact level (12 on the species page before the `<aside>` became a `<div>`), `interactions` 80 passed 0 failed, `legibility` 973 labels on 46 routes at two widths (the count varies run to run: 913 to 973 over six runs here), `layout` 360 page states, `tokens` 91, `chart-ramps` 146, `surface-layers` 30, `focus` 2,684 stops with no missing or weak ring, `figures` 2,231 figures, `motion`, `dom-sinks` 50, `relational`, `charts`, `cls`, `qa-selftest`, `layout-selftest`, `token-doc`. |
+| `STRICT=1 node qa.mjs`, same tree | **0 pages with issues**, 184 screenshots |
+| `STRICT=1 node qa.mjs` against a fixture started with `HTTPS_PROXY`, `ALL_PROXY` pointed at a closed port | **0 pages with issues**, 184 screenshots; all 15 fixture species answer `200` for their picture, and 15 of 15 under `BIRDNET_BASE_PATH=/bn` (`base-path.mjs` PASS). The old fixture failed this (item 29). |
+| the regenerated `docs/book/images/sequences.png`, looked at | the first render, at full size and magnified: "08:22" over a dot (what the new tests assert against). After the dot-avoidance, a 1140 by 620 crop of the figure at full size: no time struck by a line or over a dot, the lines broken at each lane's header row (item 33). One reading of one figure; the tests are the mechanical check. |
+
+**Not run:** CodeQL (the only JavaScript touched is one default in `tools/visual-qa/axe.mjs`; the rest is Rust, HTML and CSS), the container image, the install and upgrade smoke tests, the aarch64 cross-check, the full root-crate batches after the rename, the workspace tests through `preflight.sh --tests`, and `release.yml`'s dry run (an outward action; item 2 in section 6). The browser gates ran before the three refactors above, not after; the digest row is the evidence that they did not matter.
+
 ## 5. Open items, with severity
 
 Severity is a judgement. Everything here was found or confirmed in the last session unless
 it says otherwise.
 
-1. **0.18.0 is not released: the macOS build did not link.** High, until it is. After #265
-   merged, the maintainer pushed `v0.18.0`. `release.yml` run 40237669090 built both Linux targets,
-   but `Build aarch64-apple-darwin` failed at the link step with `Undefined symbols for
-   architecture arm64: "___isPlatformVersionAtLeast"`, from the CoreML objects in the ONNX Runtime
-   library `ort-sys` 2.0.0-rc.15 downloads. Every job after the builds was skipped, so no GitHub
-   Release exists and nothing reached crates.io; the maintainer deleted the tag. v0.17.1 had linked
-   the same target (`ort` rc.13). Probe run 40257984945 (macos-14, rustc 1.99.1): the unchanged tree
-   failed the same way; the same tree with Xcode's `libclang_rt.osx.a` added to the link line linked;
-   `ort` rc.13 does not compile with this code (it uses the rc.14 `Session::builder(&Environment)`
-   API), and rc.14 also failed at Build, for a reason nobody read. Rust 1.99.1's `std` defines the
-   symbol too, weakly, and the link did not take it from there; why was not established.
-   The fix is in `build.rs` (`link_clang_runtime`, `cargo:rustc-link-arg-bins`, on macOS targets
-   only). Probe run 40259852343 built the tree with that and no `RUSTFLAGS` in 18m14s with 0
-   undefined symbols, and the binary ran `--version` and `--help`. **Not covered:** nothing builds
-   the macOS target on a pull request, so the next break of this kind shows only at tag time (a
-   path-filtered macOS job in `ci.yml` would catch it; none exists); `cargo test` for
-   `birdnet-core` on macOS is untested and probably hits the same symbol; the release job's
-   `--features analytics` build on macOS is not what the probe built.
-   Two more workflows failed on both tag pushes (`71539e5` on 2026-10-25, `f7ff337` on 2026-10-26)
-   and were not read after the first: **Docker** failed its tag gate in 9 s with "cannot find
-   origin/main" because `fetch-depth: ${{ startsWith(github.ref, 'refs/tags/') && 0 || 1 }}` is
-   always 1 (0 is falsy); the checkout log shows `--depth=1`. It is `fetch-depth: 0` now, and
-   `scripts/check-ci-config.py` refuses the `cond && <falsy> || x` shape. A tag's workflows run
-   from the tagged commit, so those two tags' image runs cannot be repaired by re-running them.
-   **Docs**' `build` job passed but its `deploy` job failed in 1 s with no steps and no log
-   (HTTP 404). The cause was not read; PLAUSIBLE: the `github-pages` environment allows only
-   `main`, not tags (Settings → Environments → github-pages → Deployment branches and tags; the
-   failed job's page names the rule if so). Nothing in the repo documents that setting.
-   Also found while reading `main` after #265, and fixed in #270: the full mutation run missed
-   `DuplicateGate::is_enabled -> bool with false` (every test of it read `false`; a pull request's
-   `--in-diff` run cannot see a line it did not change), and `CI config` found four mutation
-   shards over its 75% line on `main`'s latest runs (`civil.rs [2/3]` 71m of 85, `model.rs [2/3]` and
-   `[3/3]` 36m and 38m of 45, `validate.rs [2/2]` 35m of 45), now 100, 60 and 50.
+1. **0.18.0 was never released; 0.18.1 was (2026-10-26). Resolved, with three things left.** After #265 merged the
+   maintainer pushed `v0.18.0`; its macOS build did not link (`___isPlatformVersionAtLeast`, from the CoreML objects in
+   the ONNX Runtime library `ort-sys` 2.0.0-rc.15 downloads), so no Release was published and the tag was deleted. The
+   fix is in `build.rs` (`link_clang_runtime`, #266). `v0.18.1` (#270) then published, and its Release, Docker and Docs
+   runs on the tag all ended `success`, Docs and Release on a second attempt (read with `actions_list`, 2026-10-31; why
+   the first attempts failed was not read). The Docker gate had refused both earlier tags in 9 s because
+   `fetch-depth: ${{ startsWith(github.ref, 'refs/tags/') && 0 || 1 }}` is always 1 (0 is falsy); it is `fetch-depth: 0`
+   and `scripts/check-ci-config.py` refuses that shape. #270 also closed a mutation-test gap
+   (`DuplicateGate::is_enabled`) and raised three mutation-shard budgets. **Still open:** nothing builds the macOS target
+   on a pull request, so the next break of that kind shows only at tag time or in the release dry run (a path-filtered
+   macOS job in `ci.yml` would catch it); `cargo test` for `birdnet-core` on macOS is untested and probably hits the same
+   symbol; and why Docs' `deploy` failed on a tag's first attempt is not established (PLAUSIBLE: the `github-pages`
+   environment allows only `main`, not tags; Settings → Environments → github-pages → Deployment branches and tags).
 2. **The imported `apprise.txt` is outside the full backup (A-24).** Medium. A restore onto
    another machine stops notifications until the file is copied in again.
 3. **The interface text is English only (A-5).** Medium, large. Species names come in 35
@@ -536,28 +544,21 @@ it says otherwise.
     is still drawn by no page as a lag, and should not be (section 6). Not known: whether a station with under
     about 200 detections a day gives the answers grid enough pairs to be more than noise.
 
-29. **The strict visual sweep fails on the life list in this container, some of the time.** Medium until it is explained on a runner
-    with a network. (Updated: of three strict runs on this branch two failed and one had 0 issues on the same code, and CI's a11y job
-    passed the step on every run I could read, so it is the network-backed pictures and not the diff; a hermetic fixture, seeding a
-    credited picture for every species it heard, would end the dependence and was not done here because it changes what every gate
-    sees on those pages.) `qa.mjs` counts the `<img>` elements that point at `/api/v2/species/image/…` and fails a page on which the number of
-    distinct broken URLs equals the number of such elements. On `/species?view=lifelist` there are exactly six, the avatars of "New to the list", and the
-    fixture answers `404 image not available` for all six: it holds a picture for some species only (six other species
-    answered `200` on that page), none of the six newest firsts is among them, and the Wikipedia-backed fallback answered
-    `429` to a probe here. What I checked: the six are the
-    avatars (a live count, none from the new timeline), and `git diff ec59953..HEAD` is empty for the fixture
-    (`examples/`), `routes/images.rs`, `birdnet-integrations`, `atoms.rs` and `qa.mjs`. What I did not do: run the sweep on the
-    base commit, so "this fails there too" is not shown, only that nothing this branch changed can reach it. The floor also has
-    a flaw: `speciesImgTotal` counts elements and `speciesImgBroken` counts distinct URLs, so a page that repeats species
-    (the dashboard: 31 elements, 5 URLs) can never reach equality, and a page with one avatar per species and no pictures
-    always does.
-30. **axe reports `landmark-complementary-is-top-level` (moderate) on the species-detail page.** Low. 12 findings in the
-    sweep on the final build (`axe.mjs` printed "12 total violation(s); 0 at/above [serious, critical]"): the three states
-    `species-detail`, `species-detail-held-back` and `species-detail-unheard`, each in both themes and both sizes, one node
-    each ("Aside should not be contained in another landmark"). The gate blocks on serious and critical only, so it passes.
-    `templates/species_detail.html` has an `<aside class="bnb-card pad species-hero__media">`; `git diff ec59953..HEAD` does
-    not touch that file, and `layout.html` gained only script tags, so nothing this branch changed can reach it. **Not run at
-    the base commit**, so "also there before" is not shown.
+29. ~~The strict visual sweep failed on the life list in some environments.~~ **Fixed in 0.19.0.** The fixture's species pictures
+    came from Wikipedia, so a run behind a proxy or a rate limit drew initials where CI drew photographs: two of three
+    strict runs of #274's branch failed `allSpeciesPhotosFailed(6/6)` and one had 0 issues, on the same code. The fixture
+    (`examples/screenshot_server.rs`, `FixturePictures`) now serves a credited picture and a line of prose for every
+    species it knows from its own address, through the provider, download, disk and credit path the binary uses, so the
+    gates grade the same pages everywhere. With outbound HTTPS pointed at a dead proxy all 15 fixture species answer `200`
+    (and under a base path); a strict sweep (`STRICT=1 node qa.mjs`) against that fixture: **0 pages with issues, 184 screenshots**. **Not covered:** the sweep no longer grades what
+    a real Wikipedia answer looks like (a long description, an odd thumbnail ratio); that is now the product's tests'
+    job, not the fixture's.
+30. ~~axe reports `landmark-complementary-is-top-level` on the species page.~~ **Fixed in 0.19.0.** The `<aside>` that held the
+    best-recording card (`templates/species_detail.html`) is a `<div>`; `axe.mjs` printed 12 findings before (three states, two
+    themes, two sizes, one node each) and **0 total** after, over every route. Its default for `AXE_FAIL_ON` is every impact
+    level now (it was `serious,critical`, so these moderate findings were printed and read by no one). Why axe objected to this
+    aside and not to the ones on Today, which sit in the same place in the same layout, was not established: its own data
+    said the aside's role was null.
 31. **The four layers are on six cards, not on every analytic page.** Medium. The Visits and Sequences tabs have them; When
     active, Dawn chorus, Trends, Who sings together and Migration are regrouped under When / Who and are otherwise as they were
     (some already have a sentence from `pages/insight.rs`; none has a Method and export panel). The Method panel's JSON link
@@ -570,24 +571,39 @@ it says otherwise.
     tooltip (`the_reading_says_what_the_share_is_of`), the guide, `docs/design/charts-relational.md`, the Method note and
     `NextSpeciesPrediction::probability`; the card's new sentence states the basis and a test runs a real engine over a station
     whose answer is worked out by hand. Not searched for: other pages that print a share without its denominator.
-33. **The morning running order's labels cross its own lines and dots.** Low to medium. In `docs/book/images/sequences.png` (and
-    live, at any width) the heavy line for the newest morning runs through "167 mornings · 82%" and the time labels (08:00,
-    08:13, 08:22) sit on dots. The figure (`viz/funnel.rs`) predates this branch and was not changed, and the committed
-    `behavior.png` from before it shows the same thing at half size; making its card full width (so it does not sit alone in half
-    a tab) made it larger. Found by looking at the rendered page; no gate flagged it, and I did not check whether any gate can
-    see SVG text against SVG marks.
-34. **`osv-scanner.toml`'s only waiver matches nothing now.** Low. `GHSA-qwgh-2vcv-g2f7` is waived for block-buffer 0.10.4 until
-    2026-12-01 (#272). Read from the database on 2026-10-31 (`scripts/osv-check.py`), the record was last modified 2026-10-30 and lists
-    `block_buffer` 0.11.0 up to 0.12.1 as affected; the lockfile holds 0.10.4 and 0.12.1, so nothing matches and all 649 locked packages
-    across the six lockfiles match no advisory. Whether to drop the waiver is the maintainer's call (it expires on its own). The
-    general point: an OSV finding depends on the database of the day and not on the branch, so a red `OSV-Scanner` job on a branch that
-    does not touch a lockfile is `main`'s state.
-35. **I could not find what "signoffs" failed on recent pull requests.** Open question for the maintainer. The user reported "issues with
-    signoffs and OSV" on the last few pull requests. For OSV, #271's comments say it (a new advisory on `main`, then #272's waiver). For
-    "signoffs" I found nothing: no DCO or sign-off rule in `.github/`, `CONTRIBUTING.md`, `scripts/` or any workflow; 2 of the 717 commits
-    on `main` carry a `Signed-off-by` trailer, and 284 of the last 300 are unsigned and were merged; all 73 checks on #271's last head
-    were `success` and its status list was empty. If it is a repository ruleset (required review, signed commits, a status from an
-    app), it is a setting only the maintainer can read (section 1) and `scripts/preflight.sh` does not cover it.
+33. ~~The morning running order's labels cross its own lines and dots.~~ **Fixed in 0.19.0** (`viz/funnel.rs`). The lines are drawn in
+    pieces that leave out the band each lane's words are written in, and the time beside each large dot is put on a side its own
+    line, the lane's words, the picture's edge and the other mornings' dots leave free (a line or a word weighs ten dots, so a
+    crowded lane gives up a dot's face before a name). Tests read the markup back as geometry and were red on the old drawing (the
+    heavy line through the right-hand count of the lanes below it; a steep morning's time struck by its own line; "08:22" over a
+    dot); twelve single-site mutants of the new code are each caught. **Two limits:** each line is now visibly broken at every
+    lane's header row, so "a line that slants steadily to the right" is read from pieces, not one stroke (the band is 34 of a
+    lane's 84 units; narrowing it to the name and count rows would keep more line and let a typical-time label be crossed, which
+    the test forbids), and a lane so crowded that no spot is free still puts a time over a dot (the least-bad spot, not none).
+34. ~~`osv-scanner.toml`'s only waiver matched nothing.~~ **Removed in 0.19.0.** `GHSA-qwgh-2vcv-g2f7` was waived for block-buffer 0.10.4
+    until 2026-12-01 (#272). Read from the database on 2026-10-31 (`scripts/osv-check.py`), the record was last modified 2026-10-30
+    and lists `block_buffer` 0.11.0 up to 0.12.1 as affected; the lockfile holds 0.10.4 and 0.12.1, so nothing matched, and all 649
+    locked packages across the six lockfiles match no advisory. If the record changes back and the job goes red, add a waiver
+    then, with that day's evidence. The general point stands: an OSV finding depends on the database of the day and not on the
+    branch, so a red `OSV-Scanner` job on a branch that does not touch a lockfile is `main`'s state.
+35. ~~A webhook test failed `main`'s CI.~~ **Fixed in 0.19.0.** `a_redirect_within_one_origin_still_carries_the_credential`
+    (`crates/birdnet-integrations/src/webhook.rs`) has a stub that answers a `302` and closes the connection without
+    `Connection: close`, so the client sometimes reused the closed connection for the redirected request and met
+    "Connection reset by peer". Measured on this machine, one process per run: 6 failures in 600 (3 of 300 idle, 3 of 300 with
+    four busy loops). A scratch probe with the same server shape printed the error chain (`client error (SendRequest) <-
+    connection error <- Connection reset by peer (os error 104)`, 2 of 1,500) and, with the header on the `302`, 0 of
+    1,500; the real test with the header ran 1,500 times in separate processes with 0 failures (at 1 % the chance of
+    that by luck is under one in a million). The test was added in `3301e4b` and passed on CI many times before, which is
+    what an intermittent failure looks like. The other stubs that answer a redirect send the client to another origin, so
+    they never reuse a connection. **Not changed:** the product's reaction to a reset (it logs it), because reusing a
+    connection the peer has closed is an ordinary HTTP/1.1 race and a retry would be a feature, not a fix.
+36. **The mutation workflow's budget gate is red on its schedule.** Medium (it makes `Mutation testing` red on `main`
+    without any mutant surviving). See the paragraph under section 1: six shards use 86 to 101 % of their `timeout-minutes`.
+    Either raise the budgets in `.github/workflows/mutation.yml` (and run `python3 scripts/check-ci-config.py
+    --update-observed`) or split `inference/model.rs`, the detections glob and `validate.rs` into more shards. The
+    change touches `.github/workflows/**`, so its pull request runs the whole matrix: budget a few hours, and keep it
+    out of any pull request that is meant to be small. Check 4 needs `GITHUB_TOKEN` to read run history, so it cannot be
+    reproduced from this container.
 
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
@@ -608,77 +624,50 @@ it says otherwise.
 
 ## 6. Where to start
 
-The 0.18.0 preparation (a plain `cargo update`, `4e6bdd1`; the bump and changelog roll, `14ae57d`)
-merged with #265, and the macOS link fix with #266. The maintainer then pushed `v0.18.0` a second
-time (2026-10-26, on `f7ff337`, the merge of #266); **that tag exists**, its Release run 40306761292
-was still running when last read (the Docker image and the Docs deploy had already failed, section 5
-item 1), and the maintainer chose to release **0.18.1** next. Pull request #270 carries 0.18.1: the
-Docker fix, a mutation test, four mutation-shard budgets, and the bump to 0.18.1 with its changelog
-section dated 2026-10-26.
+**Releasing 0.19.0** (the pull request that carries this file; `RELEASING.md` is the procedure and its
+pre-release checklist is the list to tick). The bump is done in it: `Cargo.toml` (the workspace version and the
+eight `birdnet-*` dependency entries), `CITATION.cff`, `crates/birdnet-web/openapi.json` (both places),
+`docs/book/reference/api.md`'s sample, `Cargo.lock` (`cargo update --workspace`: the nine member lines only, a
+plain `cargo update` was **not** run, so no third-party dependency moved) and `CHANGELOG.md` (rolled, dated
+2026-10-31, a fresh `[Unreleased]` above it, links updated). The checks `release.yml`'s `validate` job makes were
+replicated by hand on the tree: the three versions agree, the heading matches the date form, `cargo update
+--workspace --locked` locks 0 packages, the licence notices are current. `cargo package --workspace --locked
+--no-verify` and the licence check on `target/package` need a clean tree, so they ran after the commit: the last
+row of section 4's final subsection says what they printed.
 
-1. Merge #270 when its CI is green.
-2. Run the **dry run** (`release.yml`, `workflow_dispatch`, version blank) on `main` after the
-   merge, with `Build aarch64-apple-darwin` and every `Upgrade from vA.B.C` row green; it is the
-   only workflow that builds the macOS target. Then
-   `git tag -a v0.18.1 -m "Release v0.18.1" && git push origin v0.18.1`. The release date
-   (`CHANGELOG.md` heading, `CITATION.cff` `date-released`) is 2026-10-26; change both if the
-   tag lands on another day, because `validate` checks the heading's form and the CITATION
-   version, not that the date is today's. Read the Docker and Docs runs as well as Release's: all
-   three start on a tag push, and both of the others failed on v0.18.0 without anyone reading them.
-   Before the tag, let `github-pages` accept tags (section 5, item 1) or Docs' `deploy` will fail again.
-3. **After the tag**: the README says "unreleased" 11 times (and the installation chapter once)
-   about things 0.18.x ships, and names `v0.17.1` as what installs the V3.0 preview
-   (line 131). Make those true in a small follow-up pull request; also run
-   `scripts/gen-cli-help.sh` and confirm `docs/book/_generated/cli-help.txt` is unchanged.
-4. Done 2026-10-25: the maintainer ran `APPLY=1 tools/code-scanning/dismiss.sh` (16 dismissals)
-   and the CodeQL results check on #265 went from 12 alerts to "No new alerts". What the script
-   prints for the Scorecard items only a maintainer can settle (#1, #8, #9, #165) is still open.
-5. Make the settings in section 1 (private vulnerability reporting, the five labels,
-   topics, `protect-main`), then publish to crates.io by hand in two batches
-   (`RELEASING.md`, "Publishing to crates.io").
-6. Decide, in this order: the V3.0 privacy default; whether to wire the model mirror; the
-   three missing controls (A-16 to A-18); the cast-lint policy.
-7. Close A-24 (section 5, item 2): a migrated station's notifications stop on restore until
-   `apprise.txt` is copied in again.
+1. Merge it when every check on its last head is green.
+2. Run the **dry run** (`release.yml`, `workflow_dispatch`, version blank) on `main` after the merge, with `Build
+   aarch64-apple-darwin` and every `Upgrade from vA.B.C` row green. It is the only workflow that builds the macOS
+   target and it **skips** the attestation, the GitHub Release and `verify-release`, so nothing is published. (A
+   dispatch can name any branch, so it can also be run on the pull request before the merge.)
+3. `git tag -a v0.19.0 -m "Release v0.19.0" && git push origin v0.19.0`. The date in `CHANGELOG.md` and
+   `CITATION.cff` is 2026-10-31; change both if the tag lands on another day, because `validate` checks the heading's
+   form and the CITATION version, not that the date is today's. Read the Docker and Docs runs as well as Release's:
+   all three start on a tag push (section 5, item 1 for what to look for in Docs).
+4. **After the tag**, in a small follow-up pull request: `README.md` line 32 names `v0.17.1` as the latest release
+   and several features carry an *(unreleased)* mark that 0.18.0 or 0.18.1 already shipped (line 131 says `v0.17.1`
+   installs the V3.0 preview). They are true or false only once the tag exists, which is why they are not in the
+   release pull request. Also confirm `scripts/gen-cli-help.sh` leaves `docs/book/_generated/cli-help.txt`
+   unchanged (CI's `build` job checks it).
 
-Done 2026-10-28, on `claude/serene-hamilton-6wlll0`: the bundled DuckDB is 2.0.0 (`duckdb` 1.20000.0), with `behavioral`
-v0.10.1 and `icu` v2.0.0 embedded and loaded; `the_engine_names_itself_as_a_release` and
-`a_correctly_built_binary_reports_no_mismatch` are the gates that failed without the first two fixes the bump needed; the
-third, `keep_duckdb_extension_registrar` in `build.rs`, is guarded by the aarch64 Docker image build (changelog, *Changed*).
-**First, next session:** read pull request #271's current checks; this is a snapshot taken while it was open.
-These findings were this branch's and were fixed: the typos check on the two generated plate-index files
-(`.typos.toml`), a docs link to `/system/credits`, two rustdoc lints, the GNU ld link of the DuckDB archive (which only
-the aarch64 Docker image build showed, and which passed there on `2b2a4c1`), CodeQL's `rust/path-injection` on the
-picture cache's new credit files (the traversal was real and is closed and tested; three forms of check on the key left
-the alert open, and the last alert's argument is `&self.cache_dir`, the configured directory that
-`tools/code-scanning/dismiss.sh` says CodeQL takes as a remote source through axum's `State`, as it did for the cache's
-dismissed alert 23. That is a false positive for a maintainer's token to dismiss, not one more check; the five in-place
-`..` checks in `cache.rs` repeat `is_plain_name` and the tests pass without them), and axe's `link-in-text-block` on the species page's credit lines. The axe job stops at its
-first failing step, so I ran the thirteen gates behind it locally against a **fresh** fixture started the way the
-workflow starts it (a long-lived one is not the same: it hid the axe finding); they found, all in the kiosk work, that
-the plate is 2.8 px on a phone (it now opens on Numbers under 1180 px; item 22), two defects of the Numbers face's
-mode links, a console 404 per species without a plate (the endpoint answers 204 now), the operator's reduced motion
-not reaching the plate's drift, and a gate left behind for the polar clock I had removed. Those passed locally, and CI then
-found one more that a local run after dusk could not: the kiosk's exit link had the app's green focus ring, 1.47:1 on
-the day sheet, because the kiosk picks its palette from the sun and the gates graded whichever the clock gave (fixed;
-the route list now holds `/kiosk?night=0` and `/kiosk?night=1`). Two checks were red on `main` too and are not this
-branch's: OSV-Scanner, now waived by #272 (merged), and the CI-config check, whose `a11y.yml` annotation #272 fixed and
-whose nine mutation rows read `main`'s last five runs, so they clear as runs without an apt stall replace those with
-one. #273 (merged) now holds a pull request to the budgets it edits, so they should no longer redden this one; the
-first `CI config` run after the merge of `main` (3bc8865) is where to confirm it. Then the two decisions in section 5,
-items 15 and 16, and CodeQL alert 175 on the picture cache, which is a maintainer's dismissal.
+**Maintainer decisions and settings still open** (this release changes none): the settings in section 1
+(private vulnerability reporting, the five labels, topics, `protect-main`); publishing to crates.io by hand in two
+batches (`RELEASING.md`, "Publishing to crates.io"); the V3.0 privacy default, whether to wire the model mirror, the
+three missing controls (A-16 to A-18) and the cast-lint policy; closing A-24 (section 5, item 2); what the script
+`tools/code-scanning/dismiss.sh` prints for the Scorecard items only a maintainer can settle (#1, #8, #9, #165);
+CodeQL alert 175 on the picture cache (a maintainer's dismissal; its state was not read since #271); and section 5,
+items 15 and 16.
 
-**Before every push: `scripts/preflight.sh` (add `--msrv`; `--tests` when the disk allows).** It is the workflows' own commands at the
-workflows' scope, and it fails on a tool it cannot find. Install the tools it names first (`cargo install --locked typos-cli --version
-1.51.1`, `cargo-machete`, `cargo-deny`, `cargo-audit --version 0.22.2`; crates.io and PyPI are reachable from the container, GitHub
-release downloads are not). The pull requests before this one lost CI cycles to checks that were not run locally (section 5, item 35
-and `CLAUDE.md`, *Testing Conventions*).
+**Next work on the line #274 opened:** the four layers on the five other Patterns tabs (section 5, item 31), then
+cohort retention of new arrivals and gap sensitivity (item 28).
 
-Done 2026-10-31, on `claude/amazing-bardeen-317rgu` (pushed; no pull request; section 4 says what ran). **First, next session:**
-decide with the maintainer whether to open a draft pull request, because nothing on GitHub has seen this branch and the jobs most
-likely to find what a container could not are `a11y.yml` (locked axe-core and Playwright, not the versions I ran) and the aarch64
-build. The organisation decision (section 2) is made (A) and the chorus is built; what is left of it is item 31, the four layers on
-the other five Patterns tabs, which is the next piece of work on this line, then cohort retention and gap sensitivity (item 28).
+**Before every push: `scripts/preflight.sh`** (add `--msrv`; `--tests` when the disk allows). It is the workflows'
+own commands at the workflows' scope, and it fails on a tool it cannot find. Install the tools it names first
+(`cargo install --locked typos-cli --version 1.51.1`, `cargo-machete`, `cargo-deny`, `cargo-audit --version
+0.22.2`; crates.io and PyPI are reachable from the container, GitHub release downloads are not). The pull requests
+before #274 lost CI cycles to checks that were not run locally; `CLAUDE.md`, *Testing Conventions*, has the list and
+the reasons. What earlier sessions learned from CI (CodeQL's path-injection class, the kiosk's focus ring, the GNU ld
+link of the DuckDB archive) is there too, and section 3 is the log of what each session changed.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 

@@ -6256,7 +6256,7 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .mo-count { font-size: var(--fs-xs); }
 .mo-name, .mo-count { pointer-events: none; }
 .dc-strips { max-width: 820px; }
-.mo-line { fill: none; stroke: var(--chart-axis); stroke-width: 1px; vector-effect: non-scaling-stroke; opacity: .45; stroke-linejoin: round; }
+.mo-line { fill: none; stroke: var(--chart-axis); stroke-width: 1px; vector-effect: non-scaling-stroke; opacity: .45; stroke-linejoin: round; stroke-linecap: round; }
 .mo-line.is-now { stroke: var(--chart-annot); stroke-width: 2px; opacity: 1; }
 .mo-dot { fill: var(--c); fill-opacity: .55; }
 .mo-dot.is-now { fill-opacity: 1; stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }

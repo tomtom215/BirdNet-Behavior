@@ -130,10 +130,11 @@ lives in `tools/visual-qa/` and pairs with the fixture server
 - `tools/visual-qa/axe.mjs` — runs axe-core (`@axe-core/playwright`) over
   every route in the shared `ROUTES` table from `qa.mjs`, in light **and**
   dark themes (`THEMES`, default `light,dark`), and fails on any violation
-  at or above `AXE_FAIL_ON` (default `serious,critical`). Two rules are
-  deferred to a design-reviewed pass and excluded by default
-  (`AXE_DISABLE`, default `color-contrast,link-in-text-block`); run with
-  `AXE_DISABLE=""` to see the full picture.
+  at or above `AXE_FAIL_ON` (default `minor,moderate,serious,critical`: any
+  finding fails; it was `serious,critical` until a moderate finding on the
+  species page went unread). No rule is excluded by default (`AXE_DISABLE` is
+  empty; set it to a comma-separated list of rule ids to skip some while
+  working through a batch).
 - `scripts/visual_qa.mjs [base_url] [output_dir]` — Playwright screenshots
   of every page at two viewports, `1440×900` (desktop) and `375×812`
   (mobile, with `hasTouch`/`isMobile` set because the phone layout sits

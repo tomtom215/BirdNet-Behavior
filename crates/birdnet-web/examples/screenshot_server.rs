@@ -1197,6 +1197,92 @@ const TINY_JPEG: &[u8] = &[
     0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0x2b, 0xff, 0xd9,
 ];
 
+/// Where the fixture serves the one picture every species is given.
+const FIXTURE_PICTURE_PATH: &str = "/__fixture/picture.jpg";
+
+/// A species-picture source with no network: every species the fixture knows has a credited
+/// picture and a one-line description, delivered from this server itself (`FIXTURE_PICTURE_PATH`),
+/// through the same provider, download, disk and credit path the shipped binary takes.
+///
+/// The fixture used to call Wikipedia, like the binary. Then a page's pictures were whatever the
+/// network answered: a run on a machine behind a proxy or a rate limit rendered initials where a
+/// run in CI rendered photographs, so the strict visual sweep failed on one and passed on the
+/// other with the same code, and a change to a Wikipedia article could change CI's layout. A
+/// source that answers the same everywhere makes the gates grade the same pages everywhere.
+///
+/// `Zenaida macroura` is the deliberate exception: its picture is seeded on disk without a credit
+/// (the state of a picture cached before credits were kept), and this answers it with a network
+/// failure, which keeps that picture and keeps the state in the sweep. Any other name, such as
+/// the sixty species of the `stress` profile, is "no picture", so the placeholder path is graded.
+struct FixturePictures {
+    /// The address this fixture listens on, for the picture's URL.
+    addr: String,
+    /// `(scientific name, common name)` of every species the fixture seeds.
+    known: Vec<(&'static str, &'static str)>,
+}
+
+impl birdnet_integrations::species_images::ImageProvider for FixturePictures {
+    fn fetch<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        scientific_name: &'life1 str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        birdnet_integrations::species_images::SpeciesImage,
+                        birdnet_integrations::species_images::ImageError,
+                    >,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        use birdnet_integrations::species_images::{ImageCredit, ImageError, SpeciesImage};
+        let name = scientific_name.to_owned();
+        let found = self
+            .known
+            .iter()
+            .find(|(sci, _)| sci.eq_ignore_ascii_case(scientific_name))
+            .copied();
+        let url = format!("http://{}{FIXTURE_PICTURE_PATH}", self.addr);
+        Box::pin(async move {
+            let Some((sci, com)) = found else {
+                return Err(ImageError::NotFound(name));
+            };
+            if sci == "Zenaida macroura" {
+                return Err(ImageError::Http(
+                    "fixture: this one is always offline".into(),
+                ));
+            }
+            Ok(SpeciesImage {
+                url,
+                cached_path: None,
+                width: birdnet_integrations::species_images::wikipedia::DEFAULT_THUMB_WIDTH,
+                description: Some(format!(
+                    "The {com} ({sci}) is a bird of the fixture station, here so that a species \
+                     page has a line of prose from its source to set beside the picture."
+                )),
+                wiki_url: Some(format!(
+                    "https://en.wikipedia.org/wiki/{}",
+                    sci.replace(' ', "_")
+                )),
+                credit: Some(ImageCredit {
+                    title: format!("{com}, a fixture picture"),
+                    author: "Fixture Photographer".to_owned(),
+                    source: "Wikimedia Commons".to_owned(),
+                    source_url: "https://commons.wikimedia.org/wiki/File:Fixture.jpg".to_owned(),
+                    licence: "CC BY-SA 4.0".to_owned(),
+                    licence_url: "https://creativecommons.org/licenses/by-sa/4.0/".to_owned(),
+                }),
+            })
+        })
+    }
+}
+
 /// Fills the fixture's picture cache with what the Picture credits page lists: three credited
 /// photographs (one with a long author's name, one with none), one picture cached before credits
 /// were kept (no `.credit.json`, counted but not listed), and one credited public-domain plate.
@@ -1373,15 +1459,20 @@ async fn main() {
     let state =
         AppState::from_connection(conn, path).with_site_name("BirdNet-Behavior".to_string());
 
-    // Wire a Wikipedia-backed species image cache, like the shipped binary, so
-    // the gallery and species photos actually populate (without it the
-    // `/species/image/<sci>/file` endpoint returns "image cache not configured"
-    // and the gallery only ever shows the coloured code placeholders). Fetches
-    // are cached under a temp dir; if construction fails the server still runs,
-    // just with placeholder thumbnails.
+    // Wire a species image cache, as the shipped binary does, so the gallery and species photos
+    // actually populate (without it the `/species/image/<sci>/file` endpoint returns "image
+    // cache not configured" and the gallery only ever shows the coloured code placeholders). Its
+    // source is the fixture's own (`FixturePictures`), never the network; fetches are cached under
+    // a temp dir; if construction fails the server still runs, just with placeholder thumbnails.
     seed_credited_pictures(&dir.join("bnb_screenshots_images"));
-    let state = match birdnet_integrations::species_images::ImageCache::with_wikipedia(
+    let pictures = FixturePictures {
+        addr: addr.clone(),
+        known: species_table().iter().map(|s| (s.sci, s.com)).collect(),
+    };
+    let state = match birdnet_integrations::species_images::ImageCache::new(
         &dir.join("bnb_screenshots_images"),
+        std::sync::Arc::new(pictures),
+        birdnet_integrations::species_images::wikipedia::DEFAULT_THUMB_WIDTH,
     ) {
         Ok(cache) => state.with_image_cache(cache),
         Err(e) => {
@@ -1524,6 +1615,17 @@ async fn main() {
             burst_capacity: 100_000,
             trusted_proxies: birdnet_web::client_ip::TrustedProxies::default(),
         },
+    );
+
+    // The one picture every species is given (see `FixturePictures`), served by this server itself.
+    let app = app.route(
+        FIXTURE_PICTURE_PATH,
+        axum::routing::get(|| async {
+            (
+                [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
+                TINY_JPEG,
+            )
+        }),
     );
 
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");

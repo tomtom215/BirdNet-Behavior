@@ -548,7 +548,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "birdnet-behavior"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "axum",
  "birdnet-behavioral",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-behavioral"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "duckdb",
  "rusqlite",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-core"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "audioadapter-buffers",
  "criterion",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-db"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "argon2",
  "criterion",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-integrations"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "argon2",
  "birdnet-core",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-migrate"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "birdnet-db",
  "rusqlite",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-scheduler"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-timeseries"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "birdnet-behavioral",
  "birdnet-core",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "birdnet-web"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
