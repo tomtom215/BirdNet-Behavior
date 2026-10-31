@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly the hour's count) and the strip is drawn twice, for a card and for a phone, where it used to be
   scaled to a third of its size. `docs/design/charts.md` ("The vocabulary beyond the bar") lists each mark and
   what a test holds it to. New tokens: `--sky-night`, `--sky-dawn`, `--sky-day`, `--sky-dusk`.
+- **Three views, each the form its question needs.** *Every song* (Today, beside "By the hour"; the choice is
+  remembered on the device): every detection of the day as a glowing note, time across and the station's
+  confidence up, the station's own cut-off drawn as a line, on the day's real sky; it is fed by a new JSON
+  route, `/pages/today-songs`, which carries at most 2,000 songs and says how many the day holds when it is
+  cut. *Who led, and when it changed* (Year in review): the year's eight most-heard birds as ranks over the
+  months with a month scrubber, the true counts as bars from zero, a gap for a month with none and "not yet"
+  for a month that has not come. *When each bird joined your list* (the life list): a timeline of firsts with
+  each bird's portrait and a month-by-month list on a phone. The last two carry a table of the same numbers
+  behind the picture (and the first of them says its finding in a sentence), so a browser with no script
+  still has them; *Every song* is drawn by its
+  script alone (`skysong.js`), and with none the page keeps "By the hour", which is the default view. The
+  scripts are sealed modules, and `/pages/today-songs` answers a real 500 on a failed read, because its
+  reader is `fetch()` and not htmx; the source scan that forbids a 5xx from a page handler names it as the
+  one exemption, and a test holds the reason.
 - **Who answers whom** (Patterns, Behavior). After one bird is heard, which others are heard within a minute?
   A grid whose rows are the bird heard first and whose columns are the birds heard after it, from the
   extension's `sequence_count` with a time constraint: not symmetric, which is the point. A pair seen fewer than
@@ -118,6 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Chart axes are a little darker in the light theme** (`--chart-axis` is now `oklch(61% 0.010 70)`), because
+  an axis label drawn on the new sky is graded against the sky and the old value read 2.75:1 there
+  (`chart-ramps.mjs` grades it; it reports 146 checks, 0 failures). The sun on the daylight rail is
+  `--warning` and not `--dawn`, which is 2.85:1 on the page.
 - **Flickr's CC BY-ND is no longer fetched** (`ALLOWED_LICENSES` is now `4,5,7,8,9,10`, without 6). The kiosk
   engraves a photograph, which is an adaptation, and an ND licence does not allow one. A Flickr photo whose
   licence id is not in that list, or that has no page to credit, is refused.

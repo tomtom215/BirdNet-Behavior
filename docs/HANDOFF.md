@@ -25,6 +25,16 @@ it, put a credit on every picture, added the Plate chart style and the terrain's
 to 22) and the DuckDB paragraph of section 6 were updated for it; **everything else in this file is as it was on
 2026-10-26 and was not re-read.**
 
+**2026-10-31 additions.** A later session worked on `claude/amazing-bardeen-317rgu`, branched from `ec59953`
+(the merge of #271; GitHub was not re-read) and pushed it. **No pull request was opened** (the session was told not to open one
+unasked), so nothing on GitHub has looked at it; `CLAUDE.md` advises a draft pull request early for exactly that reason. It
+put every 24-hour chart on the day's real sky, notched the columns, turned the heat grids into discs and gave the busiest bar a
+margin note; added three views each built for one question (Today's *Every song*, Year in review's *Who led, and when it
+changed*, the life list's *When each bird joined*); added one new use of the extension, *Who answers whom*
+(`sequence_count`); and wrote `docs/design/insights-and-organisation.md`, which is a plan and not a build. Section 2 (last
+bullet), section 3 (last bullet), section 4 (last subsection), section 5 (items 23 to 28) and section 6 (last paragraph but
+one) were updated for it; **everything else is as it was on 2026-10-28 and was not re-read.**
+
 ## 1. Repository settings only the maintainer can change
 
 Read on 2026-10-21 (`gh api repos/tomtom215/BirdNet-Behavior/…`). These are settings,
@@ -108,7 +118,8 @@ what this branch will do.
   (78 %). A regex (the script at the end of this file) over the tracked `.rs` files of `crates`,
   `src`, `tests` and `tools` at the tip when this was written (`042973f`) finds 459 attributes, 440 without a reason, 796
   entries and 599 cast-lint entries (75 %); the two methods differ and the tree moved, so
-  the proportion is the stable number. Not measured: how many casts in code that has no allow
+  the proportion is the stable number. The same script at `91812fc` (2026-10-31) gives 475 attributes,
+  454 without a reason, 818 entries and 615 cast-lint entries (75 %). Not measured: how many casts in code that has no allow
   today the workspace allow would silence.
 - **Mirroring the model files.** `publish-model.yml` was run (run 39469063446, from the
   previous branch): the release `models-v2.4` holds `birdnet-v24.onnx` (54,068,648 bytes),
@@ -167,6 +178,13 @@ what this branch will do.
   recording only in the recordings directory; Opus and AAC clip export is declined (the
   decoder cannot read them); the 3D terrain loads a 134 kB script only when asked for.
 
+- **How the analytic pages are organised: A, B or C** (`docs/design/insights-and-organisation.md`, section 3). **A**: keep the
+  six homes and give every analytic page the same four layers (At a glance, The picture, Look closer, Method and export), with
+  the Patterns tabs grouped as When / Who / How; no URL or tab key changes; the plan's recommendation. **B**: a Depth switch
+  (Glance, Explore, Research) per page; not recommended, because a reader never finds what a switch hides. **C**: a seventh
+  home, "Insights"; better as a strip at the top of Today and of each Patterns tab. Nothing is built for any of them; the
+  Method-and-export panel and the Patterns regrouping wait on this.
+
 ## 3. What the last session changed
 
 The changelog's *Unreleased* section has an entry for each; this is the map, by theme, with
@@ -215,6 +233,16 @@ the commits to read first (hashes valid on this branch).
     `tools/plate-index/`.
   - *Display → Charts → Plate* (`bnb-illustration`, `app.css` "Plate charts"): colour first, strokes second, sequential
     scales flat; the terrain says whether song gathers at sunrise and marks sunrise and sunset.
+
+- *2026-10-31, branch `claude/amazing-bardeen-317rgu` (`git log ec59953..`):*
+  - *Engine* (`afe58a8`): `AnalyticsDb::answers` with `queries::answers_sql` and `types::Answers` (a `sequence_count` per ordered
+    pair, pattern `(?1).*(?t>0)(?t<=N)(?2)`), and `monthly_species_counts` in `birdnet-db`.
+  - *Chart vocabulary and four views* (`47baf36`): `viz/kit.rs` (sky, notches, notes, halos), `viz/bars.rs`, `heat.rs`,
+    `timeline.rs`; `pages/{today_songs,life_timeline,behavioral_answers}.rs` and the seasons card in `year_in_review.rs`;
+    `static/{view-switch,skysong,seasons,discovery}.js` (the last three written by builder agents against one brief, then
+    re-read and re-run here; their own mutation reports are theirs and were not repeated); the `--sky-*` tokens in `app.css`.
+  - *Fixes the full run found* (`79c1010`, `91812fc`): four gates red on this branch's own work, 23 clippy errors, and three
+    tests too weak to fail against their own mutant (section 4).
 
 ## 4. What was verified, and by what command
 
@@ -293,6 +321,37 @@ CI (the aarch64 Docker image build passed on `2b2a4c1`, which is what ran the `b
 else was run on arm64 by hand);
 `scripts/check-ci-config.py` (needs `cargo-mutants`); whether the backup includes the new `plates/` folder in the picture cache; the plate tier on more than twelve
 real plates and the engraving on more than four real photographs.
+
+### 2026-10-31 (branch `claude/amazing-bardeen-317rgu`, `~/.duckdb` absent)
+
+| Command | Printed |
+|---|---|
+| `cargo test -p birdnet-web --features analytics --no-fail-fast`, the 148 files of `tests/` six at a time, on the tree before `91812fc` | 148 `test result:` lines; **4 files red, all on this branch's own work**: `no_page_handler_answers_a_5xx_with_a_body_htmx_will_discard` (`today_songs.rs` answers 500), `amber_is_never_used_as_a_text_colour` (`.ck-sun` was `--dawn`, 2.85:1), `every_variable_the_stylesheet_uses_is_defined_or_declared_runtime` (`--p`), `print_css_overrides_every_token_that_differs_between_themes` (four `--sky-*`) |
+| the four files again, after the fixes | 5, 2, 4 and 1 passed |
+| the same 148 files, second run, on `91812fc` | still running when this was committed (batches 1 to 18 of 25 had exited 0, none red); the next commit records the end |
+| the root crate's `tests/` (`birdnet-behavior`), six at a time | not yet run when this was committed; the next commit records it |
+| `cargo test --lib` for `-p birdnet-web --features analytics`; `-p birdnet-behavioral --features analytics`; `-p birdnet-db` | 1434, 128 (including `live_answers` against the embedded extension) and 501 passed; 0 failed in each |
+| `cargo clippy -p birdnet-web -p birdnet-behavioral -p birdnet-db --all-targets --features birdnet-web/analytics -- -D warnings` | exit 0 (it had reported 2 errors in this branch's code, then, once those were fixed, 20 in `birdnet-web` and 1 in a `birdnet-behavioral` test) |
+| `node tools/visual-qa/unit/{skysong,seasons,discovery}.test.mjs` | "47 tests passed", "38 checks passed", "38 tests passed" |
+| browser gates against a fixture built from the tree before `91812fc`'s CSS change (Playwright's Chromium build 1243, `axe-core` 4.11.4): `tokens`, `charts`, `relational`, `interactions`, `legibility`, `focus`, `motion`, `layout`, `axe`, `figures`, `dom-sinks`, `cls`, `charts-edge` on `empty`, `one` and `stress`, `base-path` | exit 0 each. tokens 91 checks; charts "all checks passed"; relational "all passed"; interactions 80 passed, 0 failed; legibility 913 chart labels on 45 routes; focus 2613 stops, none with a missing or weak ring; layout 352 page states; axe "no blocking accessibility violations"; charts-edge 2, 42 and 48 charts graded; base-path every same-origin request under `/bn` |
+| after the one rendered change (`.ck-sun`, `print.css`): `chart-ramps`, `tokens`, `surface-layers`, `token-doc --check`, and a render of the daylight rail in both themes | 146 checks, 0 failures; 91 checks; 30 checks, 0 failures; "generated regions are current"; read by eye: a deep amber dot on the light theme, a bright one on the dark |
+| a probe injecting `axe.min.js` 4.11.4, 4.13.0 and 4.14.0 and running `label-content-name-mismatch` alone on `/` | 0, 0 and 1 nodes (`.topnav-brand`): item 25 |
+
+Gates seen failing, each against a mutant or the old code. The four red files above, at the previous head. Then, for the Rust
+tests this branch added, one mutant per claim (the full list is in the message of `91812fc`): 15 in `birdnet-web` and 9 in the
+engine crates. **Three survived on the first pass and the tests were too weak, not the code**: a balanced pair given the
+"other way round" sentence passed because the test looked only for the word "one-sided" (it asserts the whole headline now); a
+heat-grid halo on a different index than its disc went unnoticed (`every_disc_has_a_halo_on_the_same_index`); and the pair
+conditions' name escaping was hidden by the escaped `IN` list (the test now checks the condition and that no bare quote
+survives). One engine mutant was invalid (it removed a bound parameter, so it failed on the parameter count and not on the
+claim) and was replaced.
+
+**Not verified (2026-10-31):** that CI as locked passes (`package-lock.json` pins `axe-core` 4.13.0 and Playwright 1.64.1; I ran
+4.11.4 and 1.63.0); `qa.mjs` with `STRICT=1`, `qa-selftest`, `layout-selftest`, `terrain` and the other `a11y.yml` steps not
+listed above; the `ILLUSTRATION=plate` variants; Firefox and WebKit; a Raspberry Pi; clippy under `--no-default-features` and
+`--all-features` and over the rest of the workspace; the run time of `sequence_count` over 56 ordered pairs on a Pi; and
+whether the CLS result below is a regression (an earlier comparison against a baseline checkout said it was not, and its
+numbers were not kept).
 
 ## 5. Open items, with severity
 
@@ -409,6 +468,29 @@ it says otherwise.
     800 × 480 display therefore opens on Numbers; its owner can ask for `?mode=plate` and gets small captions.
     Making the plate itself legible there needs a layout drawn for the screen, not scaled to it.
 
+23. **"Who answers whom" has no REST route.** Low. The page reads `AnalyticsDb::answers` directly. A route needs an entry in
+    `openapi.json` (`every_route_the_api_serves_is_in_the_openapi_document` fails without one), a handler and a test; until
+    then the numbers leave only through the table on the page.
+24. **The view modules' unit tests run in no workflow.** Low to medium. `tools/visual-qa/unit/*.test.mjs` (`node
+    unit/<name>.test.mjs`, `tools/visual-qa/README.md`) are run by hand; `a11y.yml` does not call them, and its time budget was
+    not measured with them.
+25. **axe-core 4.14.0 will flag the top bar's home link when the lockfile moves.** Low until then. `.topnav-brand` has
+    `aria-label="BirdNet-Behavior home"` and visible text "BirdNet Behavior": 4.14.0 reports `label-content-name-mismatch`
+    (84 nodes across `axe.mjs`); 4.11.4 and 4.13.0, which the lockfile pins, report none (the probe in section 4). The markup
+    is not this branch's and was not changed; making the accessible name begin with the visible words would clear it.
+26. **`cls.mjs` lists three routes over 0.1** (it fails only with `--fail`, which no workflow passes): 90 page loads, total 0.752;
+    dashboard 0.197 (`div.bnb-skel-bars` 0.155), species-detail-unheard 0.195, species-detail 0.135. Low. Whether this branch
+    moved them is section 4's last unverified item.
+27. **The daylight rail's day line is `--dawn` as a stroke** (`.ck-rail-day`), 2.85:1 on the page in the light theme, and
+    `amber_is_never_a_text_colour` reads `fill:` and `color:` only. Low: it is decoration, and the same fact is printed beside
+    it ("9 h 47 min of daylight").
+28. **What the plan owes** (`docs/design/insights-and-organisation.md`, sections 4 to 6): *the chorus assembling*
+    (`window_funnel_events` is in the REST API and no page draws it), cohort retention of new arrivals, gap sensitivity, the
+    Method-and-export panel and the Patterns regrouping (both wait on the decision in section 2), the bursts timeline on a
+    per-day sky, a margin note on the streamgraph, and a probe per funnel mode before any page names one (the extension's two
+    documentation pages disagree about `allow_reentry`, `strict_order` and `strict`). Not known: whether a station with under
+    about 200 detections a day gives the answers grid enough pairs to be more than noise.
+
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
   cross-site check (403; behind a reverse proxy whose `Origin` differs from `Host`, every
@@ -487,6 +569,12 @@ whose nine mutation rows read `main`'s last five runs, so they clear as runs wit
 one. #273 (merged) now holds a pull request to the budgets it edits, so they should no longer redden this one; the
 first `CI config` run after the merge of `main` (3bc8865) is where to confirm it. Then the two decisions in section 5,
 items 15 and 16, and CodeQL alert 175 on the picture cache, which is a maintainer's dismissal.
+
+Done 2026-10-31, on `claude/amazing-bardeen-317rgu` (pushed; no pull request; section 4 says what ran). **First, next session:**
+decide with the maintainer whether to open a draft pull request, because nothing on GitHub has seen this branch and the jobs most
+likely to find what a container could not are `a11y.yml` (locked axe-core and Playwright, not the versions I ran) and the aarch64
+build. Then the organisation decision in section 2, which gates the Patterns regrouping and the Method-and-export panel, and then
+*the chorus assembling*, which is one query and one picture.
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 
