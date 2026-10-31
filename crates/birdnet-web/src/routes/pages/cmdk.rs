@@ -142,15 +142,90 @@ fn filter_entries(all: &[Entry], qlc: &str, limit: usize) -> Vec<Entry> {
 // Index — Pages
 // ---------------------------------------------------------------------------
 
-fn all_pages() -> Vec<Entry> {
-    let make = |glyph, label: &str, sub: &str, href: &str, syn: &'static [&'static str]| Entry {
+/// The tabs of the Patterns home.
+fn pattern_tabs() -> Vec<Entry> {
+    let make = entry;
+    vec![
+        make(
+            "▦",
+            "When active",
+            "hour × day",
+            "/patterns",
+            &["heatmap", "when", "grid"],
+        ),
+        make(
+            "◐",
+            "Dawn chorus",
+            "polar plot",
+            "/patterns?tab=dawn",
+            &["chorus", "polar", "circadian"],
+        ),
+        make(
+            "∿",
+            "Migration",
+            "phenology",
+            "/patterns?tab=migration",
+            &["arrivals", "ridgeline", "departures"],
+        ),
+        make(
+            "☰",
+            "Who sings together",
+            "co-occurrence",
+            "/patterns?tab=together",
+            &["correlation", "matrix", "pairs"],
+        ),
+        make(
+            "∷",
+            "Trends",
+            "busier or quieter?",
+            "/patterns?tab=trends",
+            &["time series", "trend", "compare"],
+        ),
+        make(
+            "⊕",
+            "Visits",
+            "how long, how often?",
+            "/patterns?tab=behavior",
+            &["behavioral", "behavior", "sessions", "bursts", "retention"],
+        ),
+        make(
+            "⇢",
+            "Sequences",
+            "who follows whom?",
+            "/patterns?tab=sequences",
+            &[
+                "behavioral",
+                "funnel",
+                "sequence",
+                "chorus",
+                "order",
+                "answers",
+                "reply",
+            ],
+        ),
+    ]
+}
+
+/// One palette entry for a page.
+fn entry(
+    glyph: &'static str,
+    label: &str,
+    sub: &str,
+    href: &str,
+    syn: &'static [&'static str],
+) -> Entry {
+    Entry {
         glyph,
         label: label.to_string(),
         sub: sub.to_string(),
         href: href.to_string(),
         synonyms: syn,
-    };
-    vec![
+    }
+}
+
+fn all_pages() -> Vec<Entry> {
+    let make = entry;
+    let mut pages = vec![
         // The six homes of the v3 spine, in nav order. Old vocabulary stays
         // findable as synonyms so a veteran typing "heatmap" still lands.
         make(
@@ -210,50 +285,11 @@ fn all_pages() -> Vec<Entry> {
                 "tools",
             ],
         ),
-        // The long tail: views inside the homes + utility pages, reachable
-        // here and through contextual links (no top-level tab).
-        make(
-            "▦",
-            "When active",
-            "hour × day",
-            "/patterns",
-            &["heatmap", "when", "grid"],
-        ),
-        make(
-            "◐",
-            "Dawn chorus",
-            "polar plot",
-            "/patterns?tab=dawn",
-            &["chorus", "polar", "circadian"],
-        ),
-        make(
-            "∿",
-            "Migration",
-            "phenology",
-            "/patterns?tab=migration",
-            &["arrivals", "ridgeline", "departures"],
-        ),
-        make(
-            "☰",
-            "Who sings together",
-            "co-occurrence",
-            "/patterns?tab=together",
-            &["correlation", "matrix", "pairs"],
-        ),
-        make(
-            "∷",
-            "Trends",
-            "busier or quieter?",
-            "/patterns?tab=trends",
-            &["time series", "trend", "compare"],
-        ),
-        make(
-            "⊕",
-            "Behavior",
-            "the deep tier",
-            "/patterns?tab=behavior",
-            &["behavioral", "sessions", "funnel", "retention", "sequence"],
-        ),
+    ];
+    // The long tail: views inside the homes + utility pages, reachable here and through contextual
+    // links (no top-level tab). The Patterns tabs come first.
+    pages.extend(pattern_tabs());
+    pages.extend([
         make(
             "◷",
             "History",
@@ -349,7 +385,8 @@ fn all_pages() -> Vec<Entry> {
             "/onboarding",
             &["onboarding", "wizard", "setup", "first run", "location"],
         ),
-    ]
+    ]);
+    pages
 }
 
 fn default_pages() -> Vec<Entry> {

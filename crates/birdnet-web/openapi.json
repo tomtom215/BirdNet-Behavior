@@ -4279,6 +4279,107 @@
         }
       }
     },
+    "/analytics/assembly": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "How fast the chorus comes together",
+        "description": "For each morning since `since`, how many of the leading voices of `species`, in order, were heard within each of `windows` minutes of each other (`window_funnel`, one aggregate per window, mode `strict_increase`, boundary inclusive). A depth never falls as the window grows. `0` means none of the voices was heard in the hours looked at, `1` only the first (or the others out of order). The rows are newest first.",
+        "operationId": "analyticsAssembly",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpeciesList"
+          },
+          {
+            "name": "windows",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated windows in minutes, strictly increasing, each 1 to 1440, at most 24. Defaults to 1,2,3,5,8,12,20,30,45,60,90,120,180,300.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "First morning to count, `YYYY-MM-DD`. Defaults to 90 days before today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/HourStart"
+          },
+          {
+            "$ref": "#/components/parameters/HourEnd"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/analytics/answers": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Who answers whom",
+        "description": "For the `top` most-heard species since `from`, how many times each was heard and then each other within `within` minutes on the same day (`sequence_count` with a time constraint, counted without overlap). `exchanges[i][j]` is the count for `species[i]` then `species[j]`; the diagonal is zero. Not symmetric.",
+        "operationId": "analyticsAnswers",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day to count, `YYYY-MM-DD`. Defaults to 30 days before today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "within",
+            "in": "query",
+            "required": false,
+            "description": "How soon after, in minutes.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "description": "How many species to compare.",
+            "schema": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 12,
+              "default": 8
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
     "/analytics/patterns": {
       "get": {
         "tags": [

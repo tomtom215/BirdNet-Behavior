@@ -1,0 +1,69 @@
+{{page_head}}
+
+<!-- Sequences: the order things happen in. -->
+<div class="pt-masonry bh-grid">
+    <!-- Dawn sequence (v0.8.0: sequence_count + window_funnel_events) -->
+    <div class="bnb-card pad fig">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Dawn sequence</div>
+        <h2 class="an-card-h3">The morning running order</h2>
+        <p class="bnb-meta an-card-lede">
+            The voices that open your dawn, how <b>often</b> they sing in that
+            same order — and the <b>times</b> they checked in on a recent morning.
+        </p>
+        <div hx-get="/pages/analytics-dawn-sequence" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading dawn sequence...</p>
+        </div>
+    </div>
+
+    <!-- The chorus assembling (window_funnel at a ladder of windows) -->
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Dawn chorus</div>
+        <h2 class="an-card-h3">How fast the chorus comes together</h2>
+        <p class="bnb-meta an-card-lede">
+            Each column is a time allowed, from the first voice to the last; each row is how many of your
+            usual dawn voices have joined, in their usual order, within it. A bigger disc means more of
+            your mornings. The bold line is the typical morning.
+        </p>
+        <div hx-get="/pages/analytics-assembly" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Listening for the chorus...</p>
+        </div>
+    </div>
+
+    <!-- Previous / next species -->
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Before and after</div>
+        <h2 class="an-card-h3">Neighbouring species</h2>
+        <p class="bnb-meta an-card-lede">
+            Which species tends to be heard just <b>before</b> a bird first turns up in a
+            session, and which just <b>after</b>. Birds heard at the same moment are not counted.
+        </p>
+        <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading predictions...</p>
+        </div>
+    </div>
+
+    <!-- Who answers whom -->
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Calls and replies</div>
+        <h2 class="an-card-h3">Who answers whom</h2>
+        <p class="bnb-meta an-card-lede">
+            After one bird is heard, which others are heard <b>within a minute</b>? Read across a row:
+            the bird on the left sang first. It is not the same both ways, and that is the interesting part.
+        </p>
+        <div hx-get="/pages/analytics-answers" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Listening for replies...</p>
+        </div>
+    </div>
+
+    <!-- Engine configuration -->
+    <div class="bnb-card pad fig bh-wide">
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Configuration</div>
+        <h2 class="an-card-h3">The analytics engine</h2>
+        <p class="bnb-meta an-card-lede">
+            Where these numbers come from, and the time windows used to compute them.
+        </p>
+        <div hx-get="/pages/analytics-config" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading config...</p>
+        </div>
+    </div>
+</div>

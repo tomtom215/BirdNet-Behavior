@@ -80,7 +80,7 @@ fn scale_legend(ramp: Ramp, max: f64, what: &str, extra: &[String], not_listenin
 /// One disc of a heat grid at `centre`, radius `r`, in colour `class`: its halo goes to `halos` and
 /// the disc itself to `discs`, so the caller can lay every halo under every disc. Both belong to
 /// mark `idx`, so they dim and light together.
-fn disc(
+pub(super) fn disc(
     halos: &mut String,
     discs: &mut String,
     g: &str,

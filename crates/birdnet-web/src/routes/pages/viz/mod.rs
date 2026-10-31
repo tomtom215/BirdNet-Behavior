@@ -11,6 +11,7 @@
 //!   curve, migration ridgeline, the 24-hour day strip).
 //! - `radial` — the acoustic co-occurrence chord diagram and its geometry.
 //! - `ridge` — the migration ridgeline and the species-per-week lane under it.
+//! - `assembly` — the dawn chorus coming together, a staircase per morning.
 //!
 //! Colours come from `super::atoms::species_color` so a species keeps the same
 //! hue across every screen.
@@ -18,6 +19,8 @@
 // The funnel is the one viz used only by the analytics-gated dawn card, so it
 // is gated to match — keeping the slim `--no-default-features` build free of an
 // unused renderer.
+#[cfg(feature = "analytics")]
+pub(crate) mod assembly;
 pub(crate) mod bars;
 #[cfg(feature = "analytics")]
 pub(crate) mod bursts;
@@ -35,6 +38,8 @@ pub(crate) mod timeline;
 #[cfg(feature = "analytics")]
 pub(crate) mod trend;
 
+#[cfg(feature = "analytics")]
+pub(crate) use assembly::chorus_figure;
 pub(crate) use cograph::CoGraph;
 #[cfg(feature = "analytics")]
 pub(crate) use funnel::{Morning, Voice, morning_order};

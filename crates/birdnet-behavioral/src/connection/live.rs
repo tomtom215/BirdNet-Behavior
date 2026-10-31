@@ -950,3 +950,121 @@ fn live_the_functional_self_test_passes_on_the_bundled_extension() {
     db.verify_behavioral_functions()
         .expect("every behavioural function answers as v0.10.0 does");
 }
+
+/// How fast the chorus comes together, against the real extension. Each morning is built so one
+/// rule gives its own answer, and the windows are chosen to sit either side of each boundary:
+///
+/// * 05-01: Robin, Blackbird 10 min later, Wren 30 min after the Robin. The boundary is inclusive:
+///   two voices within 10 min and not within 9, three within 30 and not within 29.
+/// * 05-02: a lone Robin at 04:10, then the real chorus 05:30:00, 05:31:00, 05:32:00. An early
+///   straggler does not hide the chorus: three voices within 2 min.
+/// * 05-03: Robin and Blackbird together, the Wren 21 min on. Two voices at once, three only
+///   from 21 min.
+/// * 05-04: the Robin alone, twice. One voice at every window, never two.
+/// * 05-05: Wren, Blackbird, Robin, the wrong way round. One voice: only the Robin can start.
+/// * 05-06: none of the voices (a Great Tit). Zero, which is not one.
+/// * 04-01: an earlier morning than `since`: not in the answer.
+/// * 05-07: a Robin, a Blackbird and a Wren at 09:30, outside the hours looked at: not three.
+/// * 05-08: a Robin and a Blackbird at the same instant (one audio chunk), the Wren 10 min on. A
+///   voice at the same instant has not joined the one before it: one voice, never two.
+#[test]
+fn live_assembly() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    let r = ("Erithacus rubecula", "Robin");
+    let b = ("Turdus merula", "Blackbird");
+    let w = ("Troglodytes troglodytes", "Wren");
+    let t = ("Parus major", "Great Tit");
+    let rows = [
+        ("2024-05-01", "05:00:00", r),
+        ("2024-05-01", "05:10:00", b),
+        ("2024-05-01", "05:30:00", w),
+        ("2024-05-02", "04:10:00", r),
+        ("2024-05-02", "05:30:00", r),
+        ("2024-05-02", "05:31:00", b),
+        ("2024-05-02", "05:32:00", w),
+        ("2024-05-03", "05:00:00", r),
+        ("2024-05-03", "05:00:30", b),
+        ("2024-05-03", "05:20:00", r),
+        ("2024-05-03", "05:21:00", w),
+        ("2024-05-04", "05:00:00", r),
+        ("2024-05-04", "05:30:00", r),
+        ("2024-05-05", "05:00:00", w),
+        ("2024-05-05", "05:01:00", b),
+        ("2024-05-05", "05:02:00", r),
+        ("2024-05-06", "05:00:00", t),
+        ("2024-04-01", "05:00:00", r),
+        ("2024-04-01", "05:01:00", b),
+        ("2024-05-07", "09:30:00", r),
+        ("2024-05-07", "09:31:00", b),
+        ("2024-05-07", "09:32:00", w),
+        ("2024-05-07", "05:00:00", t),
+        ("2024-05-08", "05:00:00", r),
+        ("2024-05-08", "05:00:00", b),
+        ("2024-05-08", "05:10:00", w),
+    ];
+    let values: Vec<String> = rows
+        .iter()
+        .map(|(d, tm, (s, c))| {
+            format!("('{d}', '{tm}', '{s}', '{c}', 0.9, epoch(TIMESTAMP '{d} {tm}'))")
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed insert");
+    let got = db
+        .assembly(&types::AssemblyParams {
+            species_sequence: vec!["Robin".into(), "Blackbird".into(), "Wren".into()],
+            windows_minutes: vec![1, 2, 9, 10, 20, 21, 29, 30],
+            hour_start: 4,
+            hour_end: 8,
+            since: "2024-05-01".into(),
+        })
+        .expect("assembly");
+    eprintln!("[live] assembly: {got:?}");
+    let by_date: std::collections::BTreeMap<&str, &Vec<u32>> =
+        got.iter().map(|a| (a.date.as_str(), &a.depths)).collect();
+    assert_eq!(
+        by_date["2024-05-01"],
+        &vec![1, 1, 1, 2, 2, 2, 2, 3],
+        "inclusive boundary"
+    );
+    assert_eq!(
+        by_date["2024-05-02"],
+        &vec![2, 3, 3, 3, 3, 3, 3, 3],
+        "a straggler hides nothing"
+    );
+    assert_eq!(
+        by_date["2024-05-03"],
+        &vec![2, 2, 2, 2, 2, 3, 3, 3],
+        "the third voice joins late"
+    );
+    assert_eq!(by_date["2024-05-04"], &vec![1; 8], "only the opener");
+    assert_eq!(by_date["2024-05-05"], &vec![1; 8], "the wrong way round");
+    assert_eq!(
+        by_date["2024-05-06"],
+        &vec![0; 8],
+        "none of the voices is not one"
+    );
+    assert_eq!(
+        by_date["2024-05-07"],
+        &vec![0; 8],
+        "09:30 is outside the hours looked at"
+    );
+    assert_eq!(
+        by_date["2024-05-08"],
+        &vec![1; 8],
+        "the same instant is not joining"
+    );
+    assert!(!by_date.contains_key("2024-04-01"), "before `since`");
+    // Newest first, and one row per morning.
+    let dates: Vec<&str> = got.iter().map(|a| a.date.as_str()).collect();
+    let mut sorted = dates.clone();
+    sorted.sort_unstable_by(|a, b| b.cmp(a));
+    assert_eq!(dates, sorted);
+    assert_eq!(got.len(), 8);
+}

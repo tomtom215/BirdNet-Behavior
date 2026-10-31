@@ -12,7 +12,7 @@ use axum::{Router, routing::get};
 #[cfg(feature = "analytics")]
 use rusqlite::OptionalExtension as _;
 
-use super::{ANALYTICS_PAGE_HTML, escape_html};
+use super::{ANALYTICS_PAGE_HTML, ANALYTICS_SEQUENCES_HTML, escape_html};
 use crate::state::AppState;
 
 /// Mount the behavioral analytics page and HTMX partial routes.
@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/pages/analytics-next", get(analytics_next_partial))
         .route("/pages/analytics-answers", get(analytics_answers_partial))
+        .route("/pages/analytics-assembly", get(analytics_assembly_partial))
         .route(
             "/pages/analytics-dawn-sequence",
             get(analytics_dawn_sequence_partial),
@@ -32,17 +33,20 @@ pub fn router() -> Router<AppState> {
         .route("/pages/analytics-config", get(analytics_config_partial))
 }
 
-/// The behavioral-analytics surface, rendered for embedding by
-/// `homes::patterns` ("Behavior" tab).
+/// The analytics status pill both How tabs carry at the right of their heading.
+const STATUS_PILL: &str = r#"<div class="bnb-card pad an-status" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML"><div class="value">--</div><div class="label">Analytics Status</div></div>"#;
+
+/// The "Visits" tab (`?tab=behavior`): how long the birds sing in one go and who keeps coming
+/// back, rendered for embedding by `homes::patterns`. The engine's ordered questions are on the
+/// "Sequences" tab beside it.
 pub(super) fn content() -> String {
-    let status = r#"<div class="bnb-card pad an-status" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML"><div class="value">--</div><div class="label">Analytics Status</div></div>"#;
     let head = super::frame::page_head(&super::frame::Head {
         eyebrow: "Patterns",
         help: &super::help::help_link(super::help::Topic::Analytics),
         title: "How your birds <em>behave</em>",
         lead: "The research tier: every term explained in plain English.",
-        lede: "These come from the behavioural analytics engine; you never need them to enjoy your station, but they're here when you're curious.",
-        aside: status,
+        lede: "These come from the behavioural analytics engine; you never need them to enjoy your station, but they're here when you're curious. This tab is about visits: how long the birds sing in one go, and who keeps coming back. Who follows whom is on <a href=\"/patterns?tab=sequences\">Sequences</a>.",
+        aside: STATUS_PILL,
     });
     let gap = birdnet_behavioral::types::SessionizeParams::default()
         .gap_minutes
@@ -50,6 +54,67 @@ pub(super) fn content() -> String {
     ANALYTICS_PAGE_HTML
         .replace("{{page_head}}", &head)
         .replace("{{session_gap}}", &gap)
+}
+
+/// The "Sequences" tab (`?tab=sequences`): the order things happen in: who opens the dawn and how
+/// fast the chorus builds, who is heard next, who answers whom. Rendered for embedding by
+/// `homes::patterns`.
+pub(super) fn sequences_content() -> String {
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Patterns",
+        help: &super::help::help_link(super::help::Topic::Analytics),
+        title: "Who follows <em>whom</em>",
+        lead: "The order things happen in.",
+        lede: "Who opens your dawn and how fast the chorus builds, which bird is heard next, and who answers whom. These come from the behavioural analytics engine; you never need them to enjoy your station. How long the birds sing in one go is on <a href=\"/patterns?tab=behavior\">Visits</a>.",
+        aside: STATUS_PILL,
+    });
+    ANALYTICS_SEQUENCES_HTML.replace("{{page_head}}", &head)
+}
+
+/// The Method panel of a Behavior card whose numbers come from the engine's functions.
+///
+/// `computed` names them (a comma-separated list for a card that uses several), `version` is the
+/// extension's, as the engine reported it while it answered. Every statement a caller puts in
+/// `asked` and `note` is one the query behind the card makes true.
+#[cfg(feature = "analytics")]
+fn method_panel(
+    computed: &str,
+    version: Option<&str>,
+    asked: &[(&str, String)],
+    note: &str,
+    json: &[(&str, String)],
+    csv: &[(&str, &str, &str)],
+) -> String {
+    let computed = super::frame::behavioral(computed, version);
+    super::frame::method(&super::frame::Method {
+        computed: &computed,
+        asked,
+        note,
+        json,
+        csv,
+    })
+}
+
+/// The REST address of `route` with `query` (already URL-encoded), under the API's base.
+#[cfg(feature = "analytics")]
+fn api(route: &str, query: &str) -> String {
+    format!("/api/v2/analytics/{route}?{query}")
+}
+
+/// A comma-separated, URL-encoded species list for the REST routes, or `None` when a name has a
+/// comma in it: the routes read a list split at commas, so such a name cannot be said.
+#[cfg(feature = "analytics")]
+fn species_param(stored: &[String]) -> Option<String> {
+    if stored.iter().any(|s| s.contains(',')) {
+        return None;
+    }
+    Some(
+        stored
+            .iter()
+            .map(|s| super::simple_url_encode(s))
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 /// HTMX partial: activity sessions table.
@@ -65,7 +130,10 @@ pub(super) async fn analytics_sessions_partial(
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.sessionize(&params))
+            .with_analytics_read(|adb| {
+                adb.sessionize(&params)
+                    .map(|rows| (rows, adb.extension_version()))
+            })
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -77,11 +145,22 @@ pub(super) async fn analytics_sessions_partial(
     .await;
 
     match result {
-        Ok(Ok(sessions)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_bursts(&sessions, gap_minutes, limit, &names),
-        ),
+        Ok(Ok((sessions, version))) => {
+            let mut html = render_bursts(&sessions, gap_minutes, limit, &names);
+            html.push_str(&method_panel(
+                "sessionize",
+                version.as_deref(),
+                &[
+                    ("Quiet gap that ends a burst", format!("{gap_minutes} minutes")),
+                    ("Grouped by", "species".to_owned()),
+                    ("Sessions asked for", format!("the {limit} newest")),
+                ],
+                "A session is a run of detections of one species with no gap longer than the quiet gap. A burst is a session of at least two detections; a session of one is not drawn. The table lists the newest twenty bursts.",
+                &[("The numbers as JSON", api("sessions", &format!("gap={gap_minutes}&limit={limit}")))],
+                &[("Download the table as CSV", "bt-table", "bursts-of-singing")],
+            ));
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
         Ok(Err(e)) => analytics_error_html("activity sessions", &e),
         // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
         Err(e) => {
@@ -191,7 +270,7 @@ fn render_bursts(
     let mut html = String::new();
     html.push_str(&burst_timeline(&drawn, &legend, DAYS));
     html.push_str(
-        r#"<details class="pt-disc"><summary>See the numbers — the bursts</summary><div class="viz-table-scroll"><table><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>"#,
+        r#"<details class="pt-disc"><summary>See the numbers — the bursts</summary><div class="viz-table-scroll"><table id="bt-table"><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>"#,
     );
     for s in bursts.iter().take(SHOWN) {
         let duration = format_duration(s.duration_secs);
@@ -237,10 +316,14 @@ pub(super) async fn analytics_retention_partial(
         return analytics_unavailable_html("Species retention");
     }
     let params = birdnet_behavioral::types::RetentionParams::default();
+    let (intervals, min_detections) = (params.intervals.clone(), params.min_detections);
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.retention(&params))
+            .with_analytics_read(|adb| {
+                adb.retention(&params)
+                    .map(|rows| (rows, adb.extension_version()))
+            })
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -252,7 +335,7 @@ pub(super) async fn analytics_retention_partial(
     .await;
 
     match result {
-        Ok(Ok(retention)) => {
+        Ok(Ok((retention, version))) => {
             if retention.is_empty() {
                 return (
                     StatusCode::OK,
@@ -260,7 +343,23 @@ pub(super) async fn analytics_retention_partial(
                     r#"<p class="bh-muted">No retention data yet.</p>"#.to_string(),
                 );
             }
-            let html = render_retention(&retention, &names);
+            let mut html = render_retention(&retention, &names);
+            let days = intervals
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            html.push_str(&method_panel(
+                "retention",
+                version.as_deref(),
+                &[
+                    ("Days after a day heard", days),
+                    ("Species listed", format!("those with at least {min_detections} detections")),
+                ],
+                "For every day a species was heard, whether it was heard again within each number of days; a cell is the share of its days for which it was. The weeks and the kind of visitor (resident, regular, migrant, rarity) are counted from the weeks the species was heard in, not from these rates.",
+                &[("The numbers as JSON", api("retention", &format!("min_detections={min_detections}")))],
+                &[("Download the table as CSV", "rt-data", "who-keeps-coming-back")],
+            ));
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("return visits", &e),
@@ -334,7 +433,7 @@ fn render_retention(
         ),
     ];
     let mut html = String::from(
-        r#"<div class="viz-table-scroll rt-scroll"><table class="rt-table"><thead><tr><th scope="col">Species</th><th scope="col">Weeks heard</th>"#,
+        r#"<div class="viz-table-scroll rt-scroll"><table id="rt-data" class="rt-table"><thead><tr><th scope="col">Species</th><th scope="col">Weeks heard</th>"#,
     );
     for (_, label) in RETURN_AFTER {
         let _ = write!(html, r#"<th scope="col" class="rt-h">{label}</th>"#);
@@ -458,7 +557,7 @@ pub(super) async fn analytics_next_partial(
             .with_analytics_read(|adb| {
                 let before = adb.previous_species(&trigger, 60, 5)?;
                 let after = adb.next_species(&trigger, 60, 5)?;
-                Ok((before, after))
+                Ok((before, after, adb.extension_version()))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -471,7 +570,7 @@ pub(super) async fn analytics_next_partial(
     .await;
 
     match result {
-        Ok(Ok((before, after))) => {
+        Ok(Ok((before, after, version))) => {
             if before.is_empty() && after.is_empty() {
                 return (
                     StatusCode::OK,
@@ -490,7 +589,27 @@ pub(super) async fn analytics_next_partial(
                 .iter()
                 .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
                 .collect();
-            let html = render_neighbour_figure(&display, &before, &after, &names);
+            let mut html = render_neighbour_figure(&display, &before, &after, &names);
+            let who = super::simple_url_encode(&display);
+            html.push_str(&method_panel(
+                "sequence_next_node",
+                version.as_deref(),
+                &[
+                    ("Bird looked at", names.name_of_stored(&display).to_owned()),
+                    ("What that is", "the species of the most recent detection".to_owned()),
+                    ("Sessions", "runs of detections with no gap longer than 60 minutes".to_owned()),
+                    ("Neighbours listed", "up to 5 on each side".to_owned()),
+                ],
+                "For each session in which the bird was heard, the species heard just before its first detection and just after it. The probability is the share of those sessions; birds heard in the same recording as the bird are not counted as before or after it.",
+                &[
+                    ("After, as JSON", api("next-species", &format!("after={who}&window=60&limit=5"))),
+                    ("Before, as JSON", api("previous-species", &format!("before={who}&window=60&limit=5"))),
+                ],
+                &[
+                    ("Download “before” as CSV", "nb-before", "heard-before"),
+                    ("Download “after” as CSV", "nb-after", "heard-after"),
+                ],
+            ));
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("what sings next", &e),
@@ -591,8 +710,10 @@ fn render_neighbours(
         html.push_str(r#"<p class="bh-muted">Nothing yet.</p>"#);
         return;
     }
+    html.push_str("<table class=\"bh-neighbours\" data-fits-phone id=\"nb-");
+    html.push_str(&side.to_lowercase());
     html.push_str(
-        "<table class=\"bh-neighbours\" data-fits-phone><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>",
+        "\"><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>",
     );
     for &(species, probability, frequency) in rows {
         // The trigger appears among its own follow-ons — the same bird calling
@@ -642,15 +763,17 @@ pub(super) async fn analytics_answers_partial(
     if !state.has_analytics() {
         return analytics_unavailable_html("Who answers whom");
     }
-    let today = super::today_date_string();
-    let Some((y, m, d)) = super::viz::kit::shift_date(&today, -ANSWERS_DAYS) else {
+    let Some(from) = super::date_days_ago(ANSWERS_DAYS) else {
         return super::error_states::failed_partial("who answers whom");
     };
-    let from = format!("{y:04}-{m:02}-{d:02}");
+    let from_date = from.clone();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.answers(&from, 1, ANSWERS_SPECIES))
+            .with_analytics_read(|adb| {
+                adb.answers(&from, 1, ANSWERS_SPECIES)
+                    .map(|a| (a, adb.extension_version()))
+            })
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -661,14 +784,28 @@ pub(super) async fn analytics_answers_partial(
     })
     .await;
     match result {
-        Ok(Ok(a)) => {
+        Ok(Ok((a, version))) => {
             let shown: Vec<String> = a
                 .species
                 .iter()
                 .map(|s| names.name_of_stored(s).to_owned())
                 .collect();
             let window = u32::try_from(ANSWERS_DAYS).unwrap_or(30);
-            let html = super::behavioral_answers::render(&a, &shown, window);
+            let mut html = super::behavioral_answers::render(&a, &shown, window);
+            if a.species.len() >= 2 {
+                html.push_str(&method_panel(
+                    "sequence_count",
+                    version.as_deref(),
+                    &[
+                        ("Birds compared", format!("the {} heard most in the last {ANSWERS_DAYS} days", a.species.len())),
+                        ("Counted since", from_date.clone()),
+                        ("Replies", "heard within a minute after, on the same day".to_owned()),
+                    ],
+                    "A cell counts how many times the row bird was heard and then the column bird within a minute, without overlap: one bird singing three times before one reply is one exchange. Two birds in the same recording are not a reply, and the grid is not symmetric.",
+                    &[("The numbers as JSON", api("answers", &format!("from={from_date}&within=1&top={ANSWERS_SPECIES}")))],
+                    &[("Download the table as CSV", "aw-table", "who-answers-whom")],
+                ));
+            }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("who answers whom", &e),
@@ -684,6 +821,99 @@ pub(super) async fn analytics_answers_partial(
     State(_): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     analytics_unavailable_html("Who answers whom")
+}
+
+/// HTMX partial: how fast the dawn chorus comes together (`window_funnel` at a ladder of windows).
+///
+/// The voices are the station's own: its six regular dawn voices of the last season, in the order
+/// they typically open (see [`derive_dawn_voices`]), so the card means something wherever the
+/// station is. With fewer than three there is no chorus to watch, and the card says so.
+#[cfg(feature = "analytics")]
+pub(super) async fn analytics_assembly_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    use super::behavioral_assembly as asm;
+    if !state.has_analytics() {
+        return analytics_unavailable_html("The chorus assembling");
+    }
+    let Some(since) = super::date_days_ago(asm::DAYS) else {
+        return super::error_states::failed_partial("the chorus assembling");
+    };
+    let names = state.names_handle();
+    let result = tokio::task::spawn_blocking(move || {
+        // A failed read is an error on the card, not "no chorus yet": that sentence is a claim
+        // about the station's data.
+        let voices = state
+            .with_read_db(|conn| derive_dawn_voices(conn, Some(&since), asm::VOICES, asm::VOICES))
+            .map_err(|e| {
+                birdnet_behavioral::connection::AnalyticsError::InvalidData(format!(
+                    "reading the dawn detections: {e}"
+                ))
+            })?;
+        if voices.len() < asm::MIN_VOICES {
+            return Ok(None);
+        }
+        let params = birdnet_behavioral::types::AssemblyParams {
+            species_sequence: voices.clone(),
+            windows_minutes: birdnet_behavioral::types::ASSEMBLY_WINDOWS.to_vec(),
+            hour_start: DAWN_HOUR_START,
+            hour_end: DAWN_HOUR_END,
+            since: since.clone(),
+        };
+        state
+            .with_analytics_read(|adb| {
+                let rows = adb.assembly(&params)?;
+                Ok((voices, params, rows, adb.extension_version()))
+            })
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+            .map(Some)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some((voices, params, rows, version)))) => {
+            let shown: Vec<String> = voices
+                .iter()
+                .map(|s| names.name_of_stored(s).to_owned())
+                .collect();
+            let html = asm::render(&asm::Card {
+                stored: &voices,
+                shown: &shown,
+                rows: &rows,
+                windows: &params.windows_minutes,
+                hours: (DAWN_HOUR_START, DAWN_HOUR_END),
+                since: &params.since,
+                version: version.as_deref(),
+            });
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        Ok(Ok(None)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            format!(
+                r#"<p class="bh-muted">Fewer than {} voices sing often enough at dawn here to hear a chorus assemble: give the mornings a little longer.</p>"#,
+                asm::MIN_VOICES
+            ),
+        ),
+        Ok(Err(e)) => analytics_error_html("the chorus assembling", &e),
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics assembly: task failed");
+            super::error_states::failed_partial("how fast the chorus comes together")
+        }
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+pub(super) async fn analytics_assembly_partial(
+    State(_): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    analytics_unavailable_html("The chorus assembling")
 }
 
 /// Dawn window the sequence card analyses (hours of day, inclusive).
@@ -751,7 +981,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
                 // window_funnel over the same sequence: how far each morning got
                 // down the chain, aggregated into the funnel picture.
                 let funnel = adb.funnel(&funnel_params)?;
-                Ok((sequence, counts, events, funnel))
+                Ok((sequence, counts, events, funnel, adb.extension_version()))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -765,11 +995,44 @@ pub(super) async fn analytics_dawn_sequence_partial(
     .await;
 
     match result {
-        Ok(Ok(Some((sequence, counts, events, funnel)))) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_dawn_sequence(&sequence, &counts, &events, &funnel, &names),
-        ),
+        Ok(Ok(Some((sequence, counts, events, funnel, version)))) => {
+            let mut html = render_dawn_sequence(&sequence, &counts, &events, &funnel, &names);
+            let shown = sequence
+                .iter()
+                .map(|s| names.name_of_stored(s).to_owned())
+                .collect::<Vec<_>>()
+                .join(" \u{2192} ");
+            let query = species_param(&sequence).map(|sp| {
+                format!("species={sp}&hour_start={DAWN_HOUR_START}&hour_end={DAWN_HOUR_END}")
+            });
+            let json: Vec<(&str, String)> = query
+                .iter()
+                .flat_map(|q| {
+                    [
+                        ("Runs per morning, as JSON", api("sequence-count", q)),
+                        ("When each voice joined, as JSON", api("sequence-match-events", q)),
+                        (
+                            "How far each morning got, as JSON",
+                            api("funnel", &format!("{q}&window={DAWN_FUNNEL_WINDOW_MINUTES}")),
+                        ),
+                    ]
+                })
+                .collect();
+            html.push_str(&method_panel(
+                "sequence_count, sequence_match_events, window_funnel",
+                version.as_deref(),
+                &[
+                    ("Voices, in order", shown),
+                    ("Hours of the morning", format!("hour {DAWN_HOUR_START} to hour {DAWN_HOUR_END}, inclusive")),
+                    ("Time allowed for the funnel", format!("{DAWN_FUNNEL_WINDOW_MINUTES} minutes")),
+                    ("Gap between voices in a run", "none".to_owned()),
+                ],
+                "The voices are the station's most heard at dawn, in the order they typically open. A run is the voices heard in that order on one morning, each strictly later than the one before; the times are those of the first run of the morning, and the dots are those first-heard times. The funnel counts how far down the order each morning got within the time allowed. The table lists the newest seven mornings.",
+                &json,
+                &[("Download the table as CSV", "ds-mornings", "morning-running-order")],
+            ));
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
         Ok(Ok(None)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
@@ -803,8 +1066,24 @@ pub(super) async fn analytics_dawn_sequence_partial(
 /// that sang only from five to twenty past.
 #[cfg(feature = "analytics")]
 fn derive_dawn_sequence(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<String>> {
-    // Top five dawn voices by volume, then ordered by typical first-song time
-    // so the sequence reads as the order the morning chorus opens in.
+    derive_dawn_voices(conn, None, 5, 3)
+}
+
+/// The dawn's regular voices, in the order they typically open: the `pool` most heard in the dawn
+/// hours (4 to 8) with at least ten songs there, since `since` (a `YYYY-MM-DD`, or all history for
+/// `None`), then the first `keep` of those by the mean time of their first song of a morning,
+/// earliest first.
+///
+/// The running order asks for the three earliest of the five most heard; the chorus card for all
+/// six of the six most heard, over the last season, so that it follows the voices that are singing
+/// now and not the ones of a different time of year.
+#[cfg(feature = "analytics")]
+fn derive_dawn_voices(
+    conn: &rusqlite::Connection,
+    since: Option<&str>,
+    pool: usize,
+    keep: usize,
+) -> rusqlite::Result<Vec<String>> {
     const SQL: &str = "WITH dawn_rows AS (
             SELECT Date, Com_Name,
                    CAST(substr(Time, 1, 2) AS REAL) * 3600
@@ -813,6 +1092,7 @@ fn derive_dawn_sequence(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Str
             FROM detections_analytic
             WHERE length(Time) >= 8
               AND CAST(substr(Time, 1, 2) AS INTEGER) BETWEEN 4 AND 8
+              AND (?1 IS NULL OR Date >= ?1)
         ),
         mornings AS (
             SELECT Com_Name, Date, COUNT(*) AS n, MIN(secs) AS first_secs
@@ -826,10 +1106,17 @@ fn derive_dawn_sequence(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Str
             HAVING c >= 10
         )
         SELECT Com_Name FROM (
-            SELECT Com_Name, opens_secs FROM dawn ORDER BY c DESC LIMIT 5
-        ) ORDER BY opens_secs ASC LIMIT 3";
+            SELECT Com_Name, opens_secs FROM dawn ORDER BY c DESC, Com_Name ASC LIMIT ?2
+        ) ORDER BY opens_secs ASC, Com_Name ASC LIMIT ?3";
     let mut stmt = conn.prepare(SQL)?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            since,
+            i64::try_from(pool).unwrap_or(i64::MAX),
+            i64::try_from(keep).unwrap_or(i64::MAX)
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
     rows.collect()
 }
 
@@ -991,7 +1278,7 @@ fn render_dawn_sequence(
     // The most recent mornings, tucked under a disclosure (the Patterns
     // "see the numbers" idiom) so the card leads with the headline.
     html.push_str(
-        r#"<details class="pt-disc"><summary>Recent mornings</summary><div><table class="pt-tbl"><thead><tr><th>Morning</th><th>In-order runs</th></tr></thead><tbody>"#,
+        r#"<details class="pt-disc"><summary>Recent mornings</summary><div><table class="pt-tbl" id="ds-mornings"><thead><tr><th>Morning</th><th>In-order runs</th></tr></thead><tbody>"#,
     );
     for c in counts.iter().take(7) {
         let _ = write!(

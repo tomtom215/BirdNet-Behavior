@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
         .route("/analytics/retention", get(retention))
         .route("/analytics/funnel", get(funnel))
         .route("/analytics/funnel-events", get(funnel_events))
+        .route("/analytics/assembly", get(assembly))
+        .route("/analytics/answers", get(answers))
         .route("/analytics/patterns", get(patterns))
         .route("/analytics/sequence-count", get(sequence_count))
         .route(
@@ -77,6 +79,24 @@ struct FunnelQuery {
     window: Option<u32>,
     hour_start: Option<u32>,
     hour_end: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AssemblyQuery {
+    species: Option<String>,
+    windows: Option<String>,
+    since: Option<String>,
+    hour_start: Option<u32>,
+    hour_end: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AnswersQuery {
+    from: Option<String>,
+    within: Option<u32>,
+    top: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -389,6 +409,188 @@ async fn funnel_events(
     Query(_query): Query<FunnelQuery>,
 ) -> (StatusCode, Json<Value>) {
     unavailable("window_funnel_events")
+}
+
+/// How many days back `/analytics/assembly` looks when `since` is not given: the same span the
+/// Sequences tab draws.
+#[cfg(feature = "analytics")]
+const ASSEMBLY_DEFAULT_DAYS: i64 = 90;
+
+/// How many days back `/analytics/answers` looks when `from` is not given, and how many birds and
+/// what window it compares: what the Sequences tab draws.
+#[cfg(feature = "analytics")]
+const ANSWERS_DEFAULT_DAYS: i64 = 30;
+
+#[cfg(feature = "analytics")]
+async fn assembly(
+    State(state): State<AppState>,
+    Query(query): Query<AssemblyQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("window_funnel");
+    }
+
+    let default = birdnet_behavioral::types::FunnelParams::default();
+    let species_sequence = parse_species_sequence(query.species, default.species_sequence);
+    let windows = match query.windows {
+        None => birdnet_behavioral::types::ASSEMBLY_WINDOWS.to_vec(),
+        Some(raw) => {
+            let parsed: Result<Vec<u32>, _> = raw
+                .split(',')
+                .take(25)
+                .map(|w| w.trim().parse::<u32>())
+                .collect();
+            match parsed {
+                Ok(w) => w,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "status": "invalid_request",
+                            "function": "window_funnel",
+                            "error": "windows must be a comma-separated list of minutes",
+                        })),
+                    );
+                }
+            }
+        }
+    };
+    let Some(since) = query
+        .since
+        .or_else(|| crate::routes::pages::date_days_ago(ASSEMBLY_DEFAULT_DAYS))
+    else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "could not work out today's date" })),
+        );
+    };
+
+    let params = birdnet_behavioral::types::AssemblyParams {
+        species_sequence,
+        windows_minutes: windows,
+        hour_start: query.hour_start.unwrap_or(default.hour_start),
+        hour_end: query.hour_end.unwrap_or(default.hour_end),
+        since,
+    };
+    let echo = params.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics_read(|adb| adb.assembly(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(mornings)) => {
+            let total = mornings.len();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "assembly": mornings,
+                    "windows_minutes": echo.windows_minutes,
+                    "species_sequence": echo.species_sequence,
+                    "since": echo.since,
+                    "total": total,
+                })),
+            )
+        }
+        Ok(Err(birdnet_behavioral::connection::AnalyticsError::InvalidData(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "invalid_request",
+                "function": "window_funnel",
+                "error": msg,
+            })),
+        ),
+        Ok(Err(e)) => extension_error("window_funnel", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn assembly(
+    State(_state): State<AppState>,
+    Query(_query): Query<AssemblyQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("window_funnel")
+}
+
+#[cfg(feature = "analytics")]
+async fn answers(
+    State(state): State<AppState>,
+    Query(query): Query<AnswersQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("sequence_count");
+    }
+    let Some(from) = query
+        .from
+        .or_else(|| crate::routes::pages::date_days_ago(ANSWERS_DEFAULT_DAYS))
+    else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "could not work out today's date" })),
+        );
+    };
+    let within = query.within.unwrap_or(1);
+    let top = query.top.unwrap_or(8);
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics_read(|adb| adb.answers(&from, within, top))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(answers)) => {
+            let total = answers.species.len();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "answers": answers,
+                    "total": total,
+                })),
+            )
+        }
+        Ok(Err(birdnet_behavioral::connection::AnalyticsError::InvalidData(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "invalid_request",
+                "function": "sequence_count",
+                "error": msg,
+            })),
+        ),
+        Ok(Err(e)) => extension_error("sequence_count", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn answers(
+    State(_state): State<AppState>,
+    Query(_query): Query<AnswersQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_count")
 }
 
 #[cfg(feature = "analytics")]

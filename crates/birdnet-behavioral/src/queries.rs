@@ -20,7 +20,9 @@
 
 use std::fmt::Write as _;
 
-use crate::types::{FunnelParams, PatternParams, RetentionParams, SessionizeParams};
+use crate::types::{
+    AssemblyParams, FunnelParams, PatternParams, RetentionParams, SessionizeParams,
+};
 
 /// SQL to create the timestamp view for behavioral queries.
 ///
@@ -440,6 +442,49 @@ fn wall_clock_steps(per_day: &str) -> String {
     )
 }
 
+/// Build SQL for how fast the dawn chorus comes together: one `window_funnel` per window, per
+/// day, in one pass over the same rows.
+///
+/// Each column `w{i}` is the depth the funnel reaches within `windows_minutes[i]`, which is the
+/// extension's own documented behaviour (the longest in-order chain whose first and last steps
+/// are at most that far apart, inclusive, wherever in the morning it falls). It is asked for at
+/// several windows, and the step *times* are not used: `window_funnel_events` reports each step
+/// as the latest occurrence of that voice before the next one, so a lag between two of its steps
+/// depends on a tie-break and not on the birds (`connection::live`, `assembly`, records what the
+/// function returned on a fixture with known answers).
+///
+/// Callers must pass 2..=32 species and 1..=24 ascending windows, and `since` as a validated
+/// `YYYY-MM-DD`; [`crate::connection`] enforces this.
+pub fn assembly_sql(params: &AssemblyParams) -> String {
+    let conditions = species_conditions(&params.species_sequence);
+    let mut columns = String::new();
+    for (i, w) in params.windows_minutes.iter().enumerate() {
+        let _ = write!(
+            columns,
+            ",
+                window_funnel(
+                    INTERVAL '{w} MINUTE',
+                    {FUNNEL_MODE},
+                    detection_instant,
+                    {conditions}
+                ) AS w{i}"
+        );
+    }
+    format!(
+        "SELECT
+                CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date{columns}
+            FROM detections_ts
+            WHERE {ORDERABLE}
+              AND CAST(detection_timestamp AS DATE) >= DATE '{since}'
+              AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            GROUP BY CAST(detection_timestamp AS DATE)
+            ORDER BY date DESC",
+        since = params.since,
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
 /// Build SQL for dawn-chorus funnel *step timings* (`window_funnel_events`,
 /// v0.8.0).
 ///
@@ -806,6 +851,35 @@ mod tests {
         assert!(sql.contains("DATE '2026-10-01'"), "{sql}");
         assert!(answers_species_sql("2026-10-01", 8).contains("LIMIT 8"));
         assert!(answers_days_sql(&species, "2026-10-01").contains("O''Brien''s Wren"));
+    }
+
+    #[test]
+    fn the_assembly_query_has_a_funnel_per_window_and_escapes_names() {
+        let species: Vec<String> = ["Robin", "O'Brien's Wren", "Jay"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let sql = assembly_sql(&AssemblyParams {
+            species_sequence: species,
+            windows_minutes: vec![1, 10, 60],
+            hour_start: 4,
+            hour_end: 8,
+            since: "2026-08-01".into(),
+        });
+        assert_eq!(sql.matches("window_funnel(").count(), 3, "{sql}");
+        for (i, w) in [1, 10, 60].iter().enumerate() {
+            assert!(sql.contains(&format!("INTERVAL '{w} MINUTE'")), "{sql}");
+            assert!(sql.contains(&format!("AS w{i}")), "{sql}");
+        }
+        assert_eq!(sql.matches("'strict_increase'").count(), 3, "{sql}");
+        assert!(sql.contains("Com_Name = 'O''Brien''s Wren'"), "{sql}");
+        assert!(!sql.contains("O'Brien"), "a bare quote survives: {sql}");
+        assert!(sql.contains("DATE '2026-08-01'"), "{sql}");
+        assert!(sql.contains("BETWEEN 4 AND 8"), "{sql}");
+        assert!(
+            !sql.contains("window_funnel_events"),
+            "the step times are not used: {sql}"
+        );
     }
 
     #[test]

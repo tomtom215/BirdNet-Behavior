@@ -283,7 +283,7 @@ pub(super) fn render(a: &Answers, shown: &[String], window_days: u32) -> String 
 /// The same numbers as a table: every ordered pair, the one that was heard first as the row.
 fn table(a: &Answers, shown: &[String]) -> String {
     let mut t = String::from(
-        r#"<details class="pt-disc"><summary>See the numbers — who was heard within a minute after whom</summary><div class="viz-table-scroll"><table class="pt-tbl"><caption class="sr-only">Times the column bird was heard within a minute after the row bird</caption><thead><tr><th scope="col">First heard</th><th scope="col" class="num">Songs</th>"#,
+        r#"<details class="pt-disc"><summary>See the numbers — who was heard within a minute after whom</summary><div class="viz-table-scroll"><table class="pt-tbl" id="aw-table"><caption class="sr-only">Times the column bird was heard within a minute after the row bird</caption><thead><tr><th scope="col">First heard</th><th scope="col" class="num">Songs</th>"#,
     );
     for s in shown {
         let _ = write!(

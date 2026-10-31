@@ -5026,6 +5026,12 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) var(--space
 .bnb-subtab:hover { color: var(--fg); background: color-mix(in oklab, var(--fg) 4%, transparent); }
 .bnb-subtab.active { color: var(--fg); border-bottom-color: var(--moss); }
 .bnb-subtab.active .q { color: var(--fg-3); }
+/* Grouped (Patterns): a small-caps label and a rule over each cluster of tabs, in the same one
+   scrolling strip, so a reader chooses a kind of question before a page. */
+.bnb-subtabs--grouped { gap: var(--space-24); align-items: flex-end; }
+.bnb-subgroup { display: flex; flex-direction: column; flex: none; }
+.bnb-subgroup-l { font-size: var(--fs-2xs); font-weight: var(--fw-semibold); letter-spacing: .09em; text-transform: uppercase; color: var(--fg-3); padding: 0 var(--space-4) var(--space-4); margin-bottom: var(--space-2); border-bottom: var(--bw) solid var(--border-2); }
+.bnb-subgroup-tabs { display: flex; gap: var(--space-2); }
 
 /* ── Home lede (shared) ──────────────────────────────────────────────────
    The plain-English opening line under a home's tab row (.pt-lede/.rc-lede/
@@ -5077,6 +5083,9 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) var(--space
 .pt-disc > summary::before { content: "\25be"; font-size: var(--fs-2xs); color: var(--fg-3); transition: transform var(--dur-base); }
 .pt-disc[open] > summary::before { transform: rotate(180deg); }
 .pt-disc > div { margin-top: var(--space-12); }
+/* The fourth layer of an analytic card: how the numbers were made, and how to take them away. */
+.bh-method-links { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-12); }
+.bh-method code { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .pt-def { display: grid; grid-template-columns: minmax(140px,auto) 1fr; gap: 9px var(--space-16); font-size: var(--fs-md); margin-top: var(--space-6); }
 .pt-def dt { font-weight: var(--fw-semibold); }
 .pt-def dd { margin: 0; color: var(--fg-2); line-height: 1.5; }
@@ -6254,6 +6263,19 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .mo-typical { stroke: var(--chart-annot); stroke-width: 2px; vector-effect: non-scaling-stroke; pointer-events: none; }
 .mo-typ-t, .mo-now-t { font-size: var(--fs-2xs); }
 .mo-note { margin: var(--space-6) 0 0; }
+
+/* The chorus assembling (viz/assembly.rs): a field of discs, one column per time allowed and one row
+   per number of voices, a disc's area the share of mornings that had that many. The bold line is the
+   typical morning and the pale band the middle half; a row takes the colour of the voice that
+   completes it. */
+.as-svg { display: block; width: 100%; max-width: 760px; height: auto; margin-inline: auto; }
+.as-svg .ck-lbl { font-size: var(--fs-xs); }
+.as-band { fill: var(--chart-annot); fill-opacity: .09; stroke: none; pointer-events: none; }
+.as-med { fill: none; stroke: var(--chart-annot); stroke-width: 3px; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; filter: drop-shadow(0 1px 3px color-mix(in oklab, var(--chart-annot) 30%, transparent)); }
+.as-order { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-6) var(--space-16); font-size: var(--fs-md); color: var(--fg-2); }
+.as-order li { display: inline-flex; align-items: center; gap: var(--space-6); }
+.as-n { color: var(--chart-label); font-size: var(--fs-xs); }
+.as-chip { display: inline-block; width: var(--space-10); height: var(--space-10); border-radius: var(--r-3xs); background: var(--c); }
 
 /* The soundscape terrain (static/terrain.js, templates/terrain.html). */
 .tr-card .section-header { align-items: flex-start; flex-wrap: wrap; gap: var(--space-12); }

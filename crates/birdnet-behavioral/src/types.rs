@@ -156,6 +156,45 @@ pub struct PatternCount {
     pub species_sequence: Vec<String>,
 }
 
+/// The windows, in minutes, the chorus is looked at through.
+///
+/// For each, how many voices have come together in order within it. They run roughly a doubling
+/// apart, from "heard together" to the whole dawn, and end at the five hours 04:00 to 08:59 holds.
+pub const ASSEMBLY_WINDOWS: [u32; 14] = [1, 2, 3, 5, 8, 12, 20, 30, 45, 60, 90, 120, 180, 300];
+
+/// What [`crate::connection::AnalyticsDb::assembly`] asks: an ordered list of voices, the windows
+/// to try, the hours of the morning to look in and the first day to count.
+#[derive(Debug, Clone)]
+pub struct AssemblyParams {
+    /// The voices in the order the chorus is expected to build, first to join first (2..=32).
+    pub species_sequence: Vec<String>,
+    /// The windows in minutes, strictly increasing, each 1 to 1440, at most 24 of them.
+    pub windows_minutes: Vec<u32>,
+    /// First hour of the day to look in (inclusive).
+    pub hour_start: u32,
+    /// Last hour of the day to look in (inclusive).
+    pub hour_end: u32,
+    /// The first date to count, `YYYY-MM-DD`.
+    pub since: String,
+}
+
+/// How far the chorus got on one morning, through each window (output of `window_funnel`).
+///
+/// `depths[i]` is how many of the leading voices, in order, were heard within
+/// `windows_minutes[i]` of each other at some point that morning: the longest in-order chain
+/// that fits the window, wherever in the morning it falls. It never falls as the window grows
+/// (a longer window can only allow more), and the boundary is inclusive: a chain exactly ten
+/// minutes from first to last is found by a ten-minute window and not by a nine-minute one. `0`
+/// means none of the voices was heard in the hours looked at; `1` means only the first was, or
+/// the others were heard out of order.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Assembly {
+    /// The morning, `YYYY-MM-DD`.
+    pub date: String,
+    /// The depth reached within each window, in the order of the windows asked for.
+    pub depths: Vec<u32>,
+}
+
 /// Who is heard shortly after whom (output of `sequence_count` with a time constraint).
 ///
 /// `exchanges[i][j]` is how many times `species[i]` was heard and then `species[j]` within
