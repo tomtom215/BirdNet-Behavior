@@ -57,6 +57,13 @@ const SET_AT_RUNTIME: &[(&str, &str)] = &[
          it every mark simply enters at once",
     ),
     (
+        "--p",
+        "a fraction of its track (0 to 1) that `seasons.js` sets on each bar, \
+         value label and gridline with `style.setProperty` (CSSOM, so the \
+         inline-style CSP allows it); every use is `var(--p, 0)`, so a bar the \
+         script has not placed yet sits at the start of its track",
+    ),
+    (
         "--bnb-more-x",
         "the right edge of the More button, measured by the menu script",
     ),

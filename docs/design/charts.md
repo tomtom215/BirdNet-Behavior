@@ -48,6 +48,43 @@ These are the reason the charts are not simply "prettier". Each one is held by a
    in `--chart-label` or `--chart-annot`. (A label set on a band uses `--fg` with a
    `--chart-gap` halo.)
 
+## The vocabulary beyond the bar
+
+Five marks the kit draws besides bars and lines. Each is drawn from the chart tokens only, and each has
+a promise a test holds.
+
+* **The sky** (`kit::sky_gradient`, `--sky-night/-dawn/-day/-dusk`). Behind a 24-hour axis, a left-to-right
+  wash placed by the station's *own* sunrise and sunset: night, a dawn wash, day, a dusk wash, night. It
+  replaces the old grey night rectangles. It is drawn only where the station has a location and the sun
+  rises before it sets; with no location the plot has no sky, never an invented one
+  (`night_is_shaded_only_when_the_sun_is_known`). The stops' offsets never go backwards, so a short winter
+  day squeezes the day wash out and does not invert it.
+* **Notches** (`kit::notch_unit`, `kit::notch_pattern`). A seam in the card's colour across a column at every
+  whole step of the count, so a column is something to count. The step is 1, 2 or 5 times a power of ten,
+  the smallest that leaves at most twelve seams, and the chart says it ("Each notch is 20 detections"). The
+  column's height is the true value; the seams only mark the steps. A day chart draws them only on bars at
+  least 8 units wide: across ninety thin bars they would be a texture, not a tally.
+* **Who a column is made of** (`bars::Stack`). Today's hour columns are stacked by species: the day's eight
+  most heard each in their own chart colour from the baseline up in a fixed order, and everyone else as one
+  "Other species" band whose height is the hour's total minus the named species. A column is exactly as tall
+  as the hour's count (honesty rule 4); the bands add up to it. The key names each colour and says what a
+  notch is.
+* **Discs** (`heat::disc`, `ck-disc`). A heat grid cell is a disc whose area and colour step are the same
+  number, both the square root of the value, so one detection beside two hundred is drawn. A cell with
+  something has at least a 2.2 to 2.4 unit disc. A cell with none is a small empty mark, a day the station was
+  not listening is hatched, an hour that has not happened is an outline: four states, four marks. Halos
+  (a radial gradient in the disc's own colour, laid under every disc so no halo covers a neighbour) are only on
+  the weekday grid; on a year of days they would be a smear.
+* **Notes and the rail** (`ck-note`, `ck-lead`, `ck-rail`). Where the old chart wrote a bare number over its
+  peak, it writes one note in the display face's italic beside the bar ("busiest hour, 9 heard") with a leader
+  to it, standing on whichever side has room and clear of the "now" marker. If neither side has room the bare
+  number says it instead: the peak is never unlabelled and never written twice
+  (`a_peak_with_no_room_for_its_note_is_labelled_with_its_number`). Under the hours, the sun's rail: the day as
+  a line, bright between sunrise and sunset, the sun and the moon at its ends, each captioned with its time, and
+  the day's length written between them when the captions leave room. The strip on Today is drawn twice, 960
+  units for a card and 360 for a phone (the same pair the daily chart uses), and the phone's rail carries bare
+  times.
+
 ## Choosing the form
 
 * *Totals by hour of the day* are a comparison of magnitudes: columns on a common
@@ -128,6 +165,7 @@ overlap). `charts.mjs` supports `MUTATE=notip|nodim|motion|noreplay` to watch ea
 go red.
 
 The relational, radial and behavioural charts (the chord diagram and its phone ladder, the dawn
-rings, the migration ridgeline, the Behavior tab and the soundscape terrain) are described in
+rings, the migration ridgeline, the Visits and Sequences tabs with their four-layer cards and the chorus
+disc field, and the soundscape terrain) are described in
 [charts-relational.md](charts-relational.md), with their own gates (`relational.mjs`,
 `terrain.mjs`).

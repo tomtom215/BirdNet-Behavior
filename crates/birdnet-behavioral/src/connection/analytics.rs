@@ -291,6 +291,57 @@ impl AnalyticsDb {
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
     }
 
+    /// How fast the dawn chorus comes together: for every morning since `params.since`, how many
+    /// of the voices, in order, were heard within each of `params.windows_minutes`
+    /// (`window_funnel`, one aggregate per window).
+    ///
+    /// See [`types::Assembly`] for what a depth is. A morning on which none of the voices was
+    /// heard in the hours looked at is returned with depths of zero, so the caller decides
+    /// whether such a morning counts.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidData` for a `since` that is not `YYYY-MM-DD`, a sequence outside `2..=32`, or
+    /// windows that are empty, more than 24, not strictly increasing, or outside `1..=1440`;
+    /// `ExtensionLoad` when the extension is not loaded; a database error otherwise.
+    pub fn assembly(
+        &self,
+        params: &types::AssemblyParams,
+    ) -> Result<Vec<types::Assembly>, AnalyticsError> {
+        if !is_iso_date(&params.since) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "assembly needs a YYYY-MM-DD date, got {:?}",
+                params.since
+            )));
+        }
+        let n = params.species_sequence.len();
+        if !(2..=32).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "assembly requires 2..=32 species, got {n}"
+            )));
+        }
+        let w = &params.windows_minutes;
+        if w.is_empty()
+            || w.len() > 24
+            || w.iter().any(|m| !(1..=1440).contains(m))
+            || w.windows(2).any(|p| p[0] >= p[1])
+        {
+            return Err(AnalyticsError::InvalidData(format!(
+                "assembly needs 1..=24 windows of 1..=1440 minutes, strictly increasing, got {w:?}"
+            )));
+        }
+        self.require_extension()?;
+        let mut stmt = self.conn.prepare(&queries::assembly_sql(params))?;
+        let rows = stmt.query_map([], |row| {
+            let date: String = row.get(0)?;
+            let depths = (0..w.len())
+                .map(|i| row.get::<_, u32>(i + 1))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(types::Assembly { date, depths })
+        })?;
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
+    }
+
     /// Execute an ordered sequence-pattern match query.
     ///
     /// For each day, reports whether the configured species were detected in
@@ -536,6 +587,72 @@ impl AnalyticsDb {
         Ok(())
     }
 
+    /// Who is heard within `within_minutes` of whom, among the `top` species heard most since
+    /// `from` (an ISO date). See [`types::Answers`] for what a cell counts.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidData` for a `from` that is not `YYYY-MM-DD`, a `top` outside `2..=12` or a zero
+    /// window; `ExtensionLoad` when the extension is not loaded; a database error otherwise.
+    pub fn answers(
+        &self,
+        from: &str,
+        within_minutes: u32,
+        top: usize,
+    ) -> Result<types::Answers, AnalyticsError> {
+        if !is_iso_date(from) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "answers needs a YYYY-MM-DD date, got {from:?}"
+            )));
+        }
+        if !(2..=queries::ANSWERS_MAX_SPECIES).contains(&top) || within_minutes == 0 {
+            return Err(AnalyticsError::InvalidData(format!(
+                "answers needs 2..={} species and a window of at least a minute, got {top} and {within_minutes}",
+                queries::ANSWERS_MAX_SPECIES
+            )));
+        }
+        self.require_extension()?;
+        let mut stmt = self
+            .conn
+            .prepare(&queries::answers_species_sql(from, top))?;
+        let ranked: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let n = ranked.len();
+        let species: Vec<String> = ranked.iter().map(|r| r.0.clone()).collect();
+        let heard: Vec<i64> = ranked.iter().map(|r| r.1).collect();
+        let mut exchanges = vec![vec![0_i64; n]; n];
+        if n >= 2 {
+            let sql = queries::answers_sql(&species, from, within_minutes);
+            let flat: Vec<i64> = self.conn.query_row(&sql, [], |row| {
+                (0..n * (n - 1)).map(|k| row.get::<_, i64>(k)).collect()
+            })?;
+            let mut it = flat.into_iter();
+            for (i, row) in exchanges.iter_mut().enumerate() {
+                for (j, cell) in row.iter_mut().enumerate() {
+                    if i != j {
+                        *cell = it.next().unwrap_or(0);
+                    }
+                }
+            }
+        }
+        let days_heard: i64 = if n == 0 {
+            0
+        } else {
+            self.conn
+                .query_row(&queries::answers_days_sql(&species, from), [], |row| {
+                    row.get(0)
+                })?
+        };
+        Ok(types::Answers {
+            species,
+            heard,
+            exchanges,
+            days_heard,
+            within_secs: within_minutes.saturating_mul(60),
+        })
+    }
+
     fn require_extension(&self) -> Result<(), AnalyticsError> {
         if self.extension_loaded {
             Ok(())
@@ -545,6 +662,16 @@ impl AnalyticsDb {
             ))
         }
     }
+}
+
+/// Whether `s` is shaped `YYYY-MM-DD` (digits and two dashes; not whether it is a real date). The
+/// queries put such a date into SQL as a literal, so nothing else may reach them.
+fn is_iso_date(s: &str) -> bool {
+    s.len() == 10
+        && s.bytes().enumerate().all(|(i, b)| match i {
+            4 | 7 => b == b'-',
+            _ => b.is_ascii_digit(),
+        })
 }
 
 #[cfg(test)]
@@ -670,6 +797,55 @@ mod tests {
         };
         let err = db.funnel_events(&params).unwrap_err();
         assert!(err.to_string().contains("requires 2..=32"));
+    }
+
+    fn assembly_params() -> types::AssemblyParams {
+        types::AssemblyParams {
+            species_sequence: vec!["Robin".into(), "Blackbird".into(), "Wren".into()],
+            windows_minutes: vec![1, 5, 30],
+            hour_start: 4,
+            hour_end: 8,
+            since: "2026-01-01".into(),
+        }
+    }
+
+    #[test]
+    fn assembly_requires_the_extension() {
+        let (db, _tmp) = make_db();
+        let err = db.assembly(&assembly_params()).unwrap_err();
+        assert!(err.to_string().contains("extension not loaded"), "{err}");
+    }
+
+    /// Everything that reaches the SQL text is checked first, and before the extension is: a
+    /// date that is not a date, a sequence of the wrong length, and windows that are empty,
+    /// too many, out of range or not strictly increasing each get their own refusal.
+    #[test]
+    fn assembly_refuses_what_it_cannot_ask() {
+        let (db, _tmp) = make_db();
+        let refused = |edit: &dyn Fn(&mut types::AssemblyParams)| {
+            let mut p = assembly_params();
+            edit(&mut p);
+            db.assembly(&p).unwrap_err().to_string()
+        };
+        assert!(refused(&|p| p.since = "2026-01-01' OR 1=1 --".into()).contains("YYYY-MM-DD"));
+        assert!(refused(&|p| p.since = "2026/01/01".into()).contains("YYYY-MM-DD"));
+        assert!(refused(&|p| p.species_sequence.truncate(1)).contains("requires 2..=32"));
+        assert!(
+            refused(&|p| p.species_sequence = vec!["x".into(); 33]).contains("requires 2..=32")
+        );
+        for bad in [
+            vec![],
+            vec![0, 5],
+            vec![1, 1441],
+            vec![5, 5],
+            vec![10, 5],
+            (1..=25).collect(),
+        ] {
+            assert!(
+                refused(&|p| p.windows_minutes = bad.clone()).contains("windows"),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

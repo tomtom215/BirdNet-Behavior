@@ -10,10 +10,17 @@
 //! | migration | arriving & leaving      | phenology (`/migration`)          |
 //! | together  | who co-occurs?          | co-occurrence (`/correlation`)    |
 //! | trends    | busier or quieter?      | time series (`/timeseries`)       |
-//! | behavior  | the deep tier           | behavioral analytics (`/analytics`) |
+//! | behavior  | how long, how often?    | behavioral analytics (`/analytics`): visits |
+//! | sequences | who follows whom?       | the same engine's ordered questions |
 //!
 //! The old routes 308 here (see `routes::redirects`); the tab bodies are the
 //! same renderers and HTMX partials those pages always used.
+//!
+//! The bar groups the tabs under three labels, so a reader chooses a kind of question before a
+//! page: **When** (when active, the dawn chorus, trends), **Who** (who sings together, migration)
+//! and **How** (visits, sequences). The groups change what the bar looks like and nothing about
+//! an address: every `?tab=` key is the one it always was, and `behavior` keeps meaning the
+//! bursts-and-returns page it opened before the engine's ordered questions got a tab of their own.
 
 use axum::extract::Query;
 use axum::http::HeaderMap;
@@ -21,7 +28,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{SubTab, resolve_tab, subtabs};
+use super::{Group, SubTab, grouped_subtabs, resolve_tab};
 use crate::state::AppState;
 
 /// The Patterns tab table, in display order. Keys are the `?tab=` values the
@@ -38,9 +45,9 @@ pub const TABS: &[SubTab] = &[
         question: "who sings, and when?",
     },
     SubTab {
-        key: "migration",
-        label: "Migration",
-        question: "arriving & leaving",
+        key: "trends",
+        label: "Trends",
+        question: "busier or quieter?",
     },
     SubTab {
         key: "together",
@@ -48,14 +55,38 @@ pub const TABS: &[SubTab] = &[
         question: "who co-occurs?",
     },
     SubTab {
-        key: "trends",
-        label: "Trends",
-        question: "busier or quieter?",
+        key: "migration",
+        label: "Migration",
+        question: "arriving & leaving",
     },
     SubTab {
         key: "behavior",
-        label: "Behavior",
-        question: "the deep tier",
+        label: "Visits",
+        question: "how long, how often?",
+    },
+    SubTab {
+        key: "sequences",
+        label: "Sequences",
+        question: "who follows whom?",
+    },
+];
+
+/// The bar's clusters, in the order they are drawn.
+///
+/// Every key of [`TABS`] is in exactly one (`every_tab_is_in_exactly_one_group` holds it), so a
+/// tab added to the table and forgotten here fails a test instead of vanishing from the bar.
+pub const GROUPS: &[Group] = &[
+    Group {
+        label: "When",
+        keys: &["when", "dawn", "trends"],
+    },
+    Group {
+        label: "Who",
+        keys: &["together", "migration"],
+    },
+    Group {
+        label: "How",
+        keys: &["behavior", "sequences"],
     },
 ];
 
@@ -84,6 +115,7 @@ async fn patterns_page(Query(q): Query<TabParam>, headers: HeaderMap) -> Html<St
         "together" => crate::routes::pages::correlation::content(),
         "trends" => crate::routes::pages::timeseries_dash::content(),
         "behavior" => crate::routes::pages::behavioral::content(),
+        "sequences" => crate::routes::pages::behavioral::sequences_content(),
         // "when" and the unknown-key clamp.
         _ => when_content(),
     };
@@ -94,7 +126,7 @@ async fn patterns_page(Query(q): Query<TabParam>, headers: HeaderMap) -> Html<St
     let content = format!(
         "{}{}{body}",
         crate::routes::pages::provenance::slot(),
-        subtabs("/patterns", "tab", TABS, tab.key)
+        grouped_subtabs("/patterns", "tab", TABS, GROUPS, tab.key)
     );
     let title = format!("Patterns · {}", tab.label);
     crate::routes::pages::render_page_for_request(&title, &content, "patterns", &headers)
@@ -108,19 +140,60 @@ mod tests {
     fn tab_keys_match_the_redirect_targets() {
         // The redirect table in `routes::redirects` points old analytics
         // bookmarks at these exact keys; renaming one silently strands the
-        // redirect on the clamped first tab.
+        // redirect on the clamped first tab. Adding one is not a link-breaking
+        // change, and the order is the table's, which the bar's groups arrange.
         let keys: Vec<&str> = TABS.iter().map(|t| t.key).collect();
         assert_eq!(
             keys,
             vec![
                 "when",
                 "dawn",
-                "migration",
-                "together",
                 "trends",
-                "behavior"
+                "together",
+                "migration",
+                "behavior",
+                "sequences"
             ]
         );
+    }
+
+    /// The groups are the bar: a tab in none of them would not be drawn, and one in two would be
+    /// drawn twice.
+    #[test]
+    fn every_tab_is_in_exactly_one_group() {
+        for t in TABS {
+            let n = GROUPS.iter().filter(|g| g.keys.contains(&t.key)).count();
+            assert_eq!(n, 1, "{} is in {n} groups", t.key);
+        }
+        for g in GROUPS {
+            for k in g.keys {
+                assert!(TABS.iter().any(|t| t.key == *k), "{k} is not a tab");
+            }
+        }
+        let labels: Vec<&str> = GROUPS.iter().map(|g| g.label).collect();
+        assert_eq!(labels, ["When", "Who", "How"]);
+    }
+
+    /// An old link, an unknown key and a bare `/patterns` all still land somewhere, and the bar
+    /// marks the page you are on once, whichever group it is in.
+    #[test]
+    fn the_grouped_bar_keeps_every_address_and_marks_the_page() {
+        let bar = grouped_subtabs("/patterns", "tab", TABS, GROUPS, "sequences");
+        assert_eq!(bar.matches("bnb-subtab active").count(), 1, "{bar}");
+        assert!(
+            bar.contains(r#"href="/patterns""#),
+            "the bare address is the first tab"
+        );
+        for t in &TABS[1..] {
+            assert!(
+                bar.contains(&format!(r#"href="/patterns?tab={}""#, t.key)),
+                "{} keeps its address",
+                t.key
+            );
+        }
+        assert_eq!(resolve_tab(TABS, Some("behavior")).key, "behavior");
+        assert_eq!(resolve_tab(TABS, Some("sequences")).key, "sequences");
+        assert_eq!(resolve_tab(TABS, Some("nonsense")).key, "when");
     }
 
     /// The terrain is the "When active" tab's lead figure: once, after the head and before the

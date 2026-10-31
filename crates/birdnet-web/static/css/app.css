@@ -202,7 +202,7 @@
      zero is); the label and the annotation clear 4.5:1 as text. */
   --chart-grid:         oklch(93% 0.005 80);
   --chart-grid-strong:  oklch(87% 0.006 80);
-  --chart-axis:         oklch(64% 0.010 70);
+  --chart-axis:         oklch(61% 0.010 70);
   --chart-label:        var(--fg-3);
   --chart-annot:        var(--fg-2);
   --chart-track:        var(--bg-2);
@@ -220,6 +220,15 @@
   --chart-gap-w:        2px;
   --chart-bar-r:        4px;
   --chart-dim:          .35;
+  /* The sky behind a 24-hour axis, painted from the station's own sunrise and sunset:
+     night, first light, day, last light. Four washes, each quiet enough that every
+     chart colour and every label still clears its contrast on all four
+     (tools/visual-qa/chart-ramps.mjs grades that). Drawn only where the station knows
+     where it is: a chart with no location has no sky, never an invented one. */
+  --sky-night:          oklch(94.5% 0.014 268);
+  --sky-dawn:           oklch(95% 0.028 66);
+  --sky-day:            oklch(98.2% 0.014 92);
+  --sky-dusk:           oklch(95% 0.02 28);
 
   /* Two icons, drawn once as masks so they take the ink of whatever holds them. */
   --icon-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z'/%3E%3C/svg%3E");
@@ -553,6 +562,10 @@
   --chart-tip-bg:       oklch(30% 0.014 250);
   --chart-tip-fg:       oklch(97% 0.004 240);
   --chart-tip-border:   oklch(42% 0.016 250);
+  --sky-night:          oklch(19.5% 0.04 268);
+  --sky-dawn:           oklch(26.5% 0.07 10);
+  --sky-day:            oklch(25% 0.03 238);
+  --sky-dusk:           oklch(26% 0.065 335);
 
   --card-top:    oklch(20% 0.010 250);
   --card-bottom: oklch(17% 0.010 250);
@@ -4735,7 +4748,7 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-track       { fill: var(--chart-track); }
 .ck-seam        { stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .ck-halo        { paint-order: stroke; stroke: var(--chart-gap); stroke-width: 3px; stroke-linejoin: round; }
-.ck-line        { fill: none; stroke: var(--c, var(--chart-1)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.ck-line        { fill: none; stroke: var(--c, var(--chart-1)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 1px 3px color-mix(in oklab, var(--c, var(--chart-1)) 38%, transparent)); }
 .ck-ghost       { fill: none; stroke: var(--chart-axis); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
 .ck-area        { stroke: none; }
 .ck-ring        { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
@@ -4748,13 +4761,50 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-cursor      { stroke: var(--chart-crosshair); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
 .ck-dot         { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
 
+/* The chart vocabulary beyond the bar: a painted sky, notched columns, discs, notes in the margin and a
+   rail for the sun. Each is drawn from the chart tokens only, so the theme chooses every value. */
+/* The sky: a gradient across 24 hours whose stops are named for the four washes. */
+.ck-sky .n  { stop-color: var(--sky-night); }
+.ck-sky .dw { stop-color: var(--sky-dawn); }
+.ck-sky .dy { stop-color: var(--sky-day); }
+.ck-sky .dk { stop-color: var(--sky-dusk); }
+/* Where the sky meets the ground: the lower part of the panel clears toward the card, like a horizon. */
+.ck-haze .a { stop-color: var(--chart-gap); stop-opacity: 0; }
+.ck-haze .b { stop-color: var(--chart-gap); stop-opacity: .5; }
+/* Notches: a seam in the card's colour across a column at every whole step of the count, so a column
+   is something to count. Its height is the true value; the seams only mark the steps. */
+.ck-notch { fill: var(--chart-gap); }
+/* A column made of who was heard: bands that take their colour from the slot class, a layer of notches
+   over them, and an outline (drawn last, outside the clip) for the reading ring. */
+.ck-seg     { fill: var(--c, var(--chart-other)); }
+.ck-ov      { pointer-events: none; }
+.ck-outline { fill: none; pointer-events: none; }
+/* A disc is a cell of a heat grid: its area and its colour are the same number. */
+.ck-disc  { fill: var(--c, var(--chart-1)); }
+.ck-hg .a { stop-color: var(--c); stop-opacity: .22; }
+:root[data-theme="dark"] .ck-hg .a { stop-opacity: .4; }
+.ck-hg .b { stop-color: var(--c); stop-opacity: 0; }
+.ck-none  { fill: var(--chart-axis); opacity: .55; }
+/* A pair seen too few times to read as a pattern: an outline, never a finding. */
+.ck-sparse { fill: none; stroke: var(--chart-axis); stroke-width: 1px; opacity: .6; }
+.ck-ringmark { fill: none; stroke: var(--chart-annot); stroke-width: 1.5px; pointer-events: none; }
+/* A note written in the margin of a chart, in the display face's italic, and the leader to what it is about. */
+.ck-note { font-family: var(--font-display); font-style: italic; font-size: var(--fs-md); fill: var(--chart-annot); pointer-events: none; }
+.ck-lead { fill: none; stroke: var(--chart-annot); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.ck-now  { stroke: var(--chart-annot); stroke-width: 1.25px; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* The rail under a 24-hour axis: the day's own length, with the sun at one end and the moon at the other. */
+.ck-rail     { stroke: var(--chart-grid-strong); stroke-width: 2px; stroke-linecap: round; fill: none; }
+.ck-rail-day { stroke: var(--dawn); stroke-width: 2.5px; stroke-linecap: round; fill: none; }
+.ck-sun      { fill: var(--warning); }
+.ck-moon     { fill: var(--chart-axis); }
+
 /* One thing in the foreground, the rest at --chart-dim. */
 [data-ck-s], svg [data-ck-i] { transition: opacity var(--dur-base) var(--ease-out); }
 svg.ck-focus [data-ck-s] { opacity: var(--chart-dim); }
 svg.ck-focus [data-ck-s].ck-sel { opacity: 1; }
 svg.ck-focus-i [data-ck-i]:not(.ck-sel):not(.ck-hit) { opacity: var(--chart-dim); }
 /* The mark under the pointer or the key: a neutral ring, so it works on any fill. */
-svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+svg [data-ck-i].ck-on:not(.ck-hit):not(.ck-seg):not(.ck-ov):not(.ck-halo-d) { stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
 
 /* Tooltip: a dark card on the light theme, a lifted one on dark; it takes no room. */
 .ck-tip {
@@ -4802,6 +4852,16 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 .ck-scale { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-12); margin-top: var(--space-10); }
 .ck-steps { display: inline-flex; gap: var(--space-2); }
 .ck-steps .ck-sw { display: block; width: 14px; height: 10px; border-radius: var(--r-2xs); }
+/* The key of a grid of discs: seven discs, growing the way the cells do. */
+.ck-scale--discs .ck-steps { align-items: center; gap: var(--space-4); }
+.ck-scale--discs .ck-steps .ck-sw { height: auto; border-radius: 50%; background: var(--c); }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(1) { width: 5px;  aspect-ratio: 1; }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(2) { width: 7px;  aspect-ratio: 1; }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(3) { width: 9px;  aspect-ratio: 1; }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(4) { width: 11px; aspect-ratio: 1; }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(5) { width: 13px; aspect-ratio: 1; }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(6) { width: 15px; aspect-ratio: 1; }
+.ck-scale--discs .ck-steps .ck-sw:nth-child(7) { width: 17px; aspect-ratio: 1; }
 .ck-off { display: inline-block; width: 14px; height: 10px; border-radius: var(--r-2xs); vertical-align: -1px; background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); }
 .ck-scale-note { color: var(--chart-annot); }
 .ck-ring-annot { fill: var(--chart-annot); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
@@ -4813,10 +4873,11 @@ svg [data-ck-i].ck-on:not(.ck-hit) { stroke: var(--chart-annot); stroke-width: 1
 .cal-slot { min-height: 150px; }
 /* A kit chart fills its container even where that container is a flex row. */
 .viz-chart.ck { width: 100%; box-sizing: border-box; }
-/* The placeholder for Today's hour strip is as tall as the strip (960 by 236 units, the room a day with
+/* The placeholder for Today's hour strip is as tall as the strip (960 by 272 units, the room a day with
    a sun and a temperature takes), so the cards below it do not jump when the chart arrives. */
-.bnb-skel-strip { aspect-ratio: 960 / 236; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--space-8); }
+.bnb-skel-strip { aspect-ratio: 960 / 272; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--space-8); }
 /* The Trends cards hold the room their chart and its key take while it loads. */
+@media (max-width: 640px) { .bnb-skel-strip { aspect-ratio: 360 / 282; } }
 .ts-slot { min-height: 15rem; }
 @media (max-width: 600px) { .ts-slot { min-height: 11rem; } }
 /* /charts */
@@ -4965,6 +5026,12 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) var(--space
 .bnb-subtab:hover { color: var(--fg); background: color-mix(in oklab, var(--fg) 4%, transparent); }
 .bnb-subtab.active { color: var(--fg); border-bottom-color: var(--moss); }
 .bnb-subtab.active .q { color: var(--fg-3); }
+/* Grouped (Patterns): a small-caps label and a rule over each cluster of tabs, in the same one
+   scrolling strip, so a reader chooses a kind of question before a page. */
+.bnb-subtabs--grouped { gap: var(--space-24); align-items: flex-end; }
+.bnb-subgroup { display: flex; flex-direction: column; flex: none; }
+.bnb-subgroup-l { font-size: var(--fs-2xs); font-weight: var(--fw-semibold); letter-spacing: .09em; text-transform: uppercase; color: var(--fg-3); padding: 0 var(--space-4) var(--space-4); margin-bottom: var(--space-2); border-bottom: var(--bw) solid var(--border-2); }
+.bnb-subgroup-tabs { display: flex; gap: var(--space-2); }
 
 /* ── Home lede (shared) ──────────────────────────────────────────────────
    The plain-English opening line under a home's tab row (.pt-lede/.rc-lede/
@@ -5016,6 +5083,9 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) var(--space
 .pt-disc > summary::before { content: "\25be"; font-size: var(--fs-2xs); color: var(--fg-3); transition: transform var(--dur-base); }
 .pt-disc[open] > summary::before { transform: rotate(180deg); }
 .pt-disc > div { margin-top: var(--space-12); }
+/* The fourth layer of an analytic card: how the numbers were made, and how to take them away. */
+.bh-method-links { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-12); }
+.bh-method code { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .pt-def { display: grid; grid-template-columns: minmax(140px,auto) 1fr; gap: 9px var(--space-16); font-size: var(--fs-md); margin-top: var(--space-6); }
 .pt-def dt { font-weight: var(--fw-semibold); }
 .pt-def dd { margin: 0; color: var(--fg-2); line-height: 1.5; }
@@ -6194,6 +6264,19 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .mo-typ-t, .mo-now-t { font-size: var(--fs-2xs); }
 .mo-note { margin: var(--space-6) 0 0; }
 
+/* The chorus assembling (viz/assembly.rs): a field of discs, one column per time allowed and one row
+   per number of voices, a disc's area the share of mornings that had that many. The bold line is the
+   typical morning and the pale band the middle half; a row takes the colour of the voice that
+   completes it. */
+.as-svg { display: block; width: 100%; max-width: 760px; height: auto; margin-inline: auto; }
+.as-svg .ck-lbl { font-size: var(--fs-xs); }
+.as-band { fill: var(--chart-annot); fill-opacity: .09; stroke: none; pointer-events: none; }
+.as-med { fill: none; stroke: var(--chart-annot); stroke-width: 3px; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; filter: drop-shadow(0 1px 3px color-mix(in oklab, var(--chart-annot) 30%, transparent)); }
+.as-order { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-6) var(--space-16); font-size: var(--fs-md); color: var(--fg-2); }
+.as-order li { display: inline-flex; align-items: center; gap: var(--space-6); }
+.as-n { color: var(--chart-label); font-size: var(--fs-xs); }
+.as-chip { display: inline-block; width: var(--space-10); height: var(--space-10); border-radius: var(--r-3xs); background: var(--c); }
+
 /* The soundscape terrain (static/terrain.js, templates/terrain.html). */
 .tr-card .section-header { align-items: flex-start; flex-wrap: wrap; gap: var(--space-12); }
 .tr-lede { margin: var(--space-4) 0 var(--space-12); max-width: 80ch; }
@@ -6514,3 +6597,379 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 :root[data-illustration="plate"] .fig-note { font-family: var(--font-display); font-style: italic; }
 :root[data-illustration="plate"] .fig-take { font-style: italic; }
 :root[data-illustration="plate"] .ck-annot { font-family: var(--font-display); font-style: italic; }
+
+/* discovery ─────────────────────────────────────────────────────────────────────
+   The life list's timeline of firsts (static/discovery.js, pages/life_timeline.rs). Tokens only. */
+/* The discovery timeline (static/discovery.js). Only the app's tokens: no colour literals.
+   Wide: a canvas stage; narrow (the script sets data-mode="list"): a vertical timeline of rows. */
+
+.dsc { display: block; position: relative; min-width: 0; }
+.dsc-empty { margin: 0; }
+/* The host is empty until the script has run: hold the room the figure will take, so what is under it does not jump. */
+.dsc:empty { min-height: 360px; }
+
+/* ── the bar: the sentence, the range ── */
+.dsc-bar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-8) var(--space-16); margin-bottom: var(--space-12); }
+.dsc-lede { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; min-width: 0; max-width: 62ch; }
+.dsc-lede-h { font-family: var(--font-display); font-size: var(--fs-title); line-height: 1.1; color: var(--fg); }
+.dsc-lede-s { max-width: 56ch; text-wrap: pretty; }
+.dsc-ctl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
+.dsc-pan[hidden] { display: none; }
+.dsc-pan { display: inline-flex; gap: var(--space-4); }
+.dsc-pan-b { min-width: var(--control-h); padding-inline: var(--space-8); }
+.dsc-pan-b:disabled { opacity: .45; cursor: default; }
+
+/* ── the stage (wide) ── */
+.dsc-stage { position: relative; min-height: 300px; overflow: hidden; border-radius: var(--r-md); background: var(--surface-sunken); }
+.dsc-stage[hidden] { display: none; }
+.dsc-canvas { display: block; width: 100%; height: 100%; border-radius: var(--r-md); touch-action: pan-y; }
+.dsc-canvas.is-hot { cursor: pointer; }
+.dsc-canvas.is-pannable { cursor: grab; }
+.dsc-canvas.is-pannable.is-hot { cursor: pointer; }
+.dsc-canvas.is-drag { cursor: grabbing; }
+.dsc-canvas:focus-visible { outline-offset: -3px; }
+
+/* The card: its own pill, inside the stage, never clipped (the script places it). */
+.dsc-card {
+  position: absolute; z-index: var(--z-raised); display: flex; gap: var(--space-12); align-items: flex-start;
+  width: min(312px, calc(100% - 12px)); box-sizing: border-box; padding: var(--space-12);
+  background: var(--surface-overlay); color: var(--fg); text-decoration: none;
+  border: var(--bw-strong) solid var(--border-2); border-radius: var(--r-popover); box-shadow: var(--shadow-lg);
+}
+.dsc-card[hidden] { display: none; }
+.dsc-card:hover { text-decoration: none; border-color: var(--fg-3); }
+.dsc-card-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.dsc-card-name { font-family: var(--font-display); font-size: var(--fs-title); line-height: 1.1; overflow-wrap: anywhere; }
+.dsc-card-sci { font-style: italic; font-size: var(--fs-sm); color: var(--fg-3); overflow-wrap: anywhere; }
+.dsc-card-line { font-size: var(--fs-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.dsc-card-line:first-of-type { margin-top: var(--space-6); }
+.dsc-ago { white-space: nowrap; }
+.dsc-card-no { color: var(--fg-3); }
+.dsc-card-go { margin-top: var(--space-6); font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--moss-ink); }
+.dsc-card:hover .dsc-card-go { text-decoration: underline; }
+
+/* A portrait: initials always underneath, the photo fades over them once it has loaded. */
+.dsc-pic { position: relative; flex: none; display: grid; place-items: center; overflow: hidden; width: 44px; height: 44px; border-radius: 50%; background: var(--border); box-shadow: 0 0 0 var(--bw-strong) var(--border-2) inset; }
+.dsc-pic-lg { width: 72px; height: 72px; }
+.dsc-ini { font-size: var(--fs-xs); font-weight: var(--fw-semibold, 600); letter-spacing: .02em; color: var(--fg-2); }
+.dsc-pic-lg .dsc-ini { font-size: var(--fs-md); }
+.dsc-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; border-radius: 50%; }
+.dsc-pic.has-img .dsc-img { opacity: 1; transition: opacity var(--dur-base) var(--ease-out); }
+.dsc-pic.has-img .dsc-ini { visibility: hidden; }
+
+/* The "+N" panel. */
+.dsc-panel {
+  position: absolute; z-index: var(--z-raised); width: min(300px, calc(100% - 12px)); max-height: calc(100% - 12px); overflow: auto; box-sizing: border-box; padding: var(--space-10) var(--space-4) var(--space-6);
+  background: var(--surface-overlay); border: var(--bw-strong) solid var(--border-2); border-radius: var(--r-popover); box-shadow: var(--shadow-lg);
+}
+.dsc-panel[hidden] { display: none; }
+.dsc-panel-h { margin: 0 var(--space-10) var(--space-6); font-size: var(--fs-sm); color: var(--fg-3); }
+.dsc-panel-l { list-style: none; margin: 0; padding: 0; }
+.dsc-panel-a { display: flex; justify-content: space-between; gap: var(--space-12); align-items: baseline; padding: var(--space-6) var(--space-10); border-radius: var(--r-sm); color: var(--fg); text-decoration: none; font-size: var(--fs-md); min-height: 32px; box-sizing: border-box; }
+.dsc-panel-a:hover { background: var(--surface-2); text-decoration: none; }
+.dsc-panel-n { overflow-wrap: anywhere; }
+.dsc-panel-c { flex: none; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; }
+
+.dsc-readout { min-height: 2.8em; margin: var(--space-10) 0 var(--space-4); font-variant-numeric: tabular-nums; max-width: 80ch; }
+.dsc-readout[hidden] { display: none; }
+.dsc-help { margin: var(--space-4) 0 0; max-width: 80ch; }
+
+/* ── the list (narrow) ── */
+.dsc-list[hidden] { display: none; }
+.dsc-months { position: relative; --spine: 44px; }
+/* The spine: one line down the left, under the month dots and the numbers. */
+.dsc-months::before { content: ""; position: absolute; top: calc(var(--space-16) + 8px); bottom: var(--space-8); left: calc(var(--spine) / 2 - 1px); width: 2px; border-radius: var(--r-3xs); background: var(--border-2); }
+.dsc-mo { position: relative; }
+.dsc-mh { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-16) 0 var(--space-6) var(--spine); font-weight: var(--fw-regular, 400); }
+.dsc-mh::before { content: ""; position: absolute; left: calc(var(--spine) / 2 - 7px); top: calc(var(--space-16) + 6px); width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; background: var(--seq-moss-5); outline: var(--space-4) solid var(--surface); }
+.dsc-mh-t { font-family: var(--font-display); font-size: var(--fs-h3); line-height: 1.1; color: var(--fg); }
+.dsc-mh-m { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.dsc-mh-note { font-family: var(--font-display); font-style: italic; font-size: var(--fs-lg); line-height: 1.2; color: var(--fg-2); }
+.dsc-rows { list-style: none; margin: 0; padding: 0; }
+.dsc-row {
+  position: relative; display: grid; grid-template-columns: var(--spine) 44px minmax(0, 1fr); column-gap: var(--space-12); align-items: center;
+  min-height: 60px; padding: var(--space-6) var(--space-8) var(--space-6) 0; box-sizing: border-box; color: var(--fg); text-decoration: none; border-radius: var(--r-md);
+}
+.dsc-row:hover { text-decoration: none; background: color-mix(in oklab, var(--moss) 6%, transparent); }
+.dsc-row:focus-visible { outline-offset: -2px; }
+.dsc-no { justify-self: center; display: inline-grid; place-items: center; min-width: 28px; height: 20px; padding: 0 var(--space-4); box-sizing: border-box; border-radius: var(--r-pill); background: var(--surface); border: var(--bw-strong) solid var(--border-2); font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.dsc-pic.is-newest { outline: var(--space-4) solid var(--moss); outline-offset: var(--space-2); }
+.dsc-txt { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; padding-left: var(--space-2); }
+.dsc-nm { font-size: var(--fs-lg); font-weight: var(--fw-medium); line-height: 1.2; overflow-wrap: anywhere; }
+.dsc-dt, .dsc-ct { font-size: var(--fs-sm); color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.dsc-note { font-family: var(--font-display); font-style: italic; font-size: var(--fs-lg); line-height: 1.2; color: var(--fg-2); }
+.dsc-more { margin: var(--space-12) 0 0 var(--space-12); }
+.dsc-none { margin: var(--space-12) 0 0; }
+
+/* A phone: the list is the whole figure, so it sets its own room. */
+@media (max-width: 719px) {
+  .dsc-bar { align-items: flex-start; }
+  .dsc-ctl { width: 100%; }
+  .dsc-ctl .seg { width: 100%; }
+  .dsc-ctl .seg .btn { flex: 1 1 auto; min-height: 36px; }
+}
+/* /discovery */
+
+/* seasons ───────────────────────────────────────────────────────────────────────
+   Who led each month (static/seasons.js, pages/year_in_review.rs). Tokens only. */
+/* Who led each month: the rank chart and its leaderboard (static/seasons.js).
+   Only the app's custom properties; no colour is written here. Merge into app.css (charts region). */
+
+.ssn { display: block; position: relative; color: var(--fg); --ssn-ord: 2.6em; --ssn-row: 46px; --ssn-ct-ch: 6; }
+.ssn-msg { margin: 0; }
+
+/* Species slots: one colour a bird, the same in the line, the chip and the bar. */
+.ssn-s, .ssn-chip, .ssn-row, .ssn-lead { --c: var(--chart-other); }
+.ssn-c1 { --c: var(--chart-1); } .ssn-c2 { --c: var(--chart-2); } .ssn-c3 { --c: var(--chart-3); }
+.ssn-c4 { --c: var(--chart-4); } .ssn-c5 { --c: var(--chart-5); } .ssn-c6 { --c: var(--chart-6); }
+.ssn-c7 { --c: var(--chart-7); } .ssn-c8 { --c: var(--chart-8); }
+
+/* Layout: the chart and the leaderboard side by side when there is room, stacked on a phone. */
+.ssn-grid { display: grid; gap: var(--space-20); }
+.ssn.is-wide .ssn-grid { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--space-32); align-items: start; }
+.ssn-chart, .ssn-board { min-width: 0; }
+
+/* The two headings say what each half is: lines are ranks, bars are counts. */
+.ssn-ph { display: flex; align-items: center; gap: var(--space-8); }
+.ssn-tag {
+  display: inline-flex; align-items: center; gap: var(--space-6);
+  font-size: var(--fs-xs); font-weight: var(--fw-medium); letter-spacing: var(--track-caps); text-transform: uppercase;
+  color: var(--chart-annot);
+}
+.ssn-ico { flex: none; fill: currentColor; stroke: none; }
+.ssn-ico .ssn-ico-s { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ssn-ph-s { margin: var(--space-4) 0 var(--space-12); font-size: var(--fs-sm); line-height: 1.45; color: var(--chart-label); max-width: 58ch; text-wrap: pretty; }
+
+/* ── the chart ─────────────────────────────────────────────────────────── */
+.ssn-plot { position: relative; }
+.ssn-svg {
+  display: block; width: 100%; height: auto; max-width: 100%;
+  touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+  cursor: ew-resize; border-radius: var(--r-md);
+}
+.ssn-svg.is-over { cursor: pointer; }
+.ssn-hatch { stroke: var(--chart-grid-strong); stroke-width: 1; }
+.ssn-fut-edge { stroke: var(--chart-grid-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.ssn-nyt {
+  font-family: var(--font-ui); font-size: var(--fs-sm); font-weight: var(--fw-medium); letter-spacing: .02em;
+  fill: var(--chart-annot); paint-order: stroke; stroke: var(--chart-gap); stroke-width: 6px; stroke-linejoin: round;
+}
+.ssn-band { fill: color-mix(in oklab, var(--fg) 6.5%, transparent); }
+.ssn-ghost { fill: color-mix(in oklab, var(--fg) 3.5%, transparent); opacity: 0; }
+.ssn-ghost.is-on { opacity: 1; }
+.ssn-gl { stroke: var(--chart-grid); stroke-width: 1; shape-rendering: crispEdges; }
+.ssn-rk { font-family: var(--font-mono); font-size: var(--fs-xs); fill: var(--chart-label); }
+.ssn-svg.is-narrow .ssn-rk { font-size: var(--fs-2xs); }
+
+.ssn-chip { fill: var(--c); }
+.ssn-case { fill: none; stroke: var(--chart-gap); stroke-width: 7px; stroke-linecap: round; stroke-linejoin: round; }
+.ssn-line { fill: none; stroke: var(--c); stroke-width: 3px; stroke-linecap: round; stroke-linejoin: round; }
+.ssn-line.is-live { stroke-dasharray: 1 6.5; stroke-width: 3.2px; }
+.ssn-dot { fill: var(--c); stroke: var(--chart-gap); stroke-width: 2px; transform-box: fill-box; transform-origin: center; }
+.ssn-dot.is-live { fill: var(--chart-gap); stroke: var(--c); stroke-width: 2.4px; }
+.ssn-dot.is-sel { transform: scale(1.45); }
+.ssn-s.is-focus .ssn-line { stroke-width: 4.2px; }
+.ssn-s.is-focus .ssn-line.is-live { stroke-width: 4.2px; }
+
+.ssn-svg.has-focus .ssn-s:not(.is-focus),
+.ssn-svg.has-focus .ssn-chip:not(.is-focus) { opacity: var(--chart-dim); }
+/* Text is never faded (a faded name fails 4.5:1): the others' names step down to the quieter ink instead. */
+.ssn-svg.has-focus .ssn-lab:not(.is-focus) { fill: var(--chart-label); }
+
+/* Names are ink, never a series colour: the line and its dot carry who it is. */
+.ssn-lab {
+  font-family: var(--font-ui); font-size: var(--fs-sm); font-weight: var(--fw-medium); fill: var(--chart-annot);
+  paint-order: stroke; stroke: var(--chart-gap); stroke-width: 4.5px; stroke-linejoin: round; pointer-events: none;
+}
+.ssn-svg.is-narrow .ssn-lab { font-size: var(--fs-xs); }
+.ssn-lab.is-focus { fill: var(--fg); font-weight: var(--fw-semibold); }
+
+.ssn-mo { font-family: var(--font-ui); font-size: var(--fs-sm); font-weight: var(--fw-medium); fill: var(--chart-label); }
+.ssn-svg.is-narrow .ssn-mo { font-size: var(--fs-xs); }
+.ssn-mo.is-sel { visibility: hidden; }
+.ssn-thumb { fill: var(--fg); }
+.ssn-thumb-t { font-family: var(--font-ui); font-size: var(--fs-sm); font-weight: var(--fw-semibold); fill: var(--bg); }
+.ssn-sf { font-family: var(--font-ui); font-size: var(--fs-2xs); font-weight: var(--fw-medium); letter-spacing: .04em; fill: var(--chart-annot); }
+
+.ssn-year { margin: var(--space-12) 0 0; font-size: var(--fs-base); font-weight: var(--fw-medium); color: var(--fg); }
+.ssn-leads { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-6) var(--space-16); }
+.ssn-lead { display: inline-flex; align-items: center; gap: var(--space-6); font-size: var(--fs-sm); color: var(--chart-annot); min-width: 0; }
+.ssn-sw { flex: none; width: 16px; height: 8px; border-radius: var(--r-pill); background: var(--c); }
+.ssn-lead-r { color: var(--chart-label); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ssn-readout { margin: var(--space-12) 0 0; min-height: 3em; line-height: 1.5; color: var(--chart-annot); text-wrap: pretty; }
+.ssn-clear { margin-top: var(--space-4); min-height: 32px; font-size: var(--fs-sm); }
+.ssn-clear[hidden] { display: none; }
+.ssn-help { margin: var(--space-16) 0 0; max-width: 84ch; }
+.ssn-svg:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); }
+
+/* ── the leaderboard ───────────────────────────────────────────────────── */
+.ssn-board { background: var(--surface-sunken); border-radius: var(--r-lg); padding: var(--space-16) var(--space-16) var(--space-14); font-size: var(--fs-md); }
+.ssn.is-wide .ssn-board { padding: var(--space-18) var(--space-20) var(--space-16); }
+.ssn-mrow { display: flex; align-items: center; gap: var(--space-8); margin: var(--space-10) 0 var(--space-2); }
+.ssn-mmid { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }
+.ssn-month { margin: 0; font-family: var(--font-display); font-size: var(--fs-stat); font-weight: var(--fw-regular); line-height: 1.1; letter-spacing: -.01em; color: var(--fg); }
+.ssn.is-narrow .ssn-month { font-size: var(--fs-h3); }
+.ssn-sofar {
+  font-size: var(--fs-xs); font-weight: var(--fw-medium); line-height: 1.5; padding: var(--space-2) var(--space-8);
+  border-radius: var(--r-pill); background: var(--dawn-soft); color: var(--dawn-ink); white-space: nowrap;
+}
+.ssn-sofar[hidden] { display: none; }
+.ssn-step {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
+  border-radius: var(--r-pill); border: var(--bw-strong) solid var(--border-2); background: var(--surface); color: var(--fg); cursor: pointer;
+}
+.ssn-step:hover:not(:disabled) { background: var(--surface-2); }
+.ssn-step:disabled { opacity: .4; cursor: default; }
+.ssn.is-narrow .ssn-step { width: 40px; height: 40px; }
+.ssn-play { flex: none; min-height: 36px; gap: var(--space-6); padding-inline: var(--space-12); }
+.ssn-play[hidden] { display: none; }
+.ssn-play-i { display: inline-flex; }
+.ssn.is-narrow .ssn-play { min-width: 40px; width: 40px; height: 40px; padding: 0; border-radius: var(--r-pill); }
+.ssn.is-narrow .ssn-play-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+
+.ssn-note {
+  margin: 0; font-family: var(--font-display); font-style: italic;
+  font-size: var(--fs-lead); line-height: 1.3; color: var(--fg); text-wrap: pretty;
+}
+.ssn-sum { margin-top: var(--space-6); }
+.ssn-sub { margin: var(--space-6) 0 0; }
+
+.ssn-body { position: relative; margin-top: var(--space-14); }
+.ssn-rows { position: relative; list-style: none; margin: 0; padding: 0; }
+.ssn-gridlines { position: absolute; inset: 0; pointer-events: none; }
+.ssn-gzone { position: absolute; top: 0; bottom: 0; left: var(--ssn-ord); right: calc(var(--ssn-ct-ch) * 1ch); }
+.ssn-gl-line { position: absolute; top: 0; bottom: 0; left: calc(var(--p, 0) * 100%); width: 1px; background: var(--chart-grid-strong); }
+.ssn-gl-line.is-zero { background: var(--chart-axis); }
+
+.ssn-row {
+  position: absolute; top: 0; left: 0; right: 0; height: var(--ssn-row);
+  display: grid; grid-template-columns: var(--ssn-ord) minmax(0, 1fr); grid-template-rows: auto auto; align-content: center; row-gap: var(--space-4);
+  cursor: pointer;
+}
+.ssn-ord { grid-row: 1 / span 2; align-self: center; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--chart-label); font-variant-numeric: tabular-nums; }
+.ssn-nm { grid-column: 2; font-weight: var(--fw-medium); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25; }
+.ssn-trk { grid-column: 2; position: relative; height: 12px; }
+.ssn-zone { position: absolute; top: 0; bottom: 0; left: 0; right: calc(var(--ssn-ct-ch) * 1ch); }
+.ssn-bar {
+  position: absolute; left: 0; top: 1px; bottom: 1px; width: calc(var(--p, 0) * 100%); min-width: 3px;
+  background: var(--c); border-radius: 0 var(--r-xs) var(--r-xs) 0;
+}
+.ssn-ct {
+  position: absolute; left: calc(var(--p, 0) * 100%); top: 50%; margin-left: var(--space-6); transform: translateY(-50%);
+  font-size: var(--fs-sm); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; color: var(--fg); white-space: nowrap;
+}
+.ssn-row.is-quiet .ssn-bar { display: none; }
+.ssn-row.is-quiet .ssn-nm { color: var(--chart-label); font-weight: var(--fw-regular); }
+.ssn-row.is-quiet .ssn-ct { left: 0; margin-left: 0; font-style: italic; font-weight: var(--fw-regular); color: var(--chart-label); }
+.ssn-row.is-focus .ssn-nm { font-weight: var(--fw-semibold); }
+.ssn-row.is-dim .ssn-bar { opacity: var(--chart-dim); }
+.ssn-row.is-dim .ssn-nm, .ssn-row.is-dim .ssn-ct { color: var(--chart-label); }
+
+.ssn-baxis { position: relative; height: 18px; margin-left: var(--ssn-ord); margin-top: var(--space-4); }
+.ssn-azone { position: absolute; top: 0; bottom: 0; left: 0; right: calc(var(--ssn-ct-ch) * 1ch); }
+.ssn-tk { position: absolute; top: 0; left: calc(var(--p, 0) * 100%); transform: translateX(-50%); font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--chart-label); white-space: nowrap; }
+.ssn-tk.is-first { transform: translateX(-30%); }
+.ssn-cap { margin: var(--space-8) 0 0; line-height: 1.45; text-wrap: pretty; }
+
+/* ── motion: only where it is allowed ──────────────────────────────────── */
+@keyframes ssn-wipe { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes ssn-fade { from { opacity: 0; } to { opacity: 1; } }
+.ssn-wipe { transform-box: view-box; transform-origin: 0 0; }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduced"]) .ssn-band,
+  :root:not([data-motion="reduced"]) .ssn-ghost { transition: transform var(--dur-base) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-handle { transition: transform var(--dur-base) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-dot { transition: transform var(--dur-base) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-s,
+  :root:not([data-motion="reduced"]) .ssn-chip,
+  :root:not([data-motion="reduced"]) .ssn-lab { transition: fill var(--dur-base) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-line { transition: stroke-width var(--dur-base) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-row { transition: transform var(--dur-slower) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-bar { transition: width var(--dur-slower) var(--ease-out), opacity var(--dur-base) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn-ct { transition: left var(--dur-slower) var(--ease-out); }
+  :root:not([data-motion="reduced"]) .ssn.ssn-pre .ssn-wipe { transform: scaleX(0); }
+  :root:not([data-motion="reduced"]) .ssn.ssn-pre .ssn-labels,
+  :root:not([data-motion="reduced"]) .ssn.ssn-pre .ssn-ribbon { opacity: 0; }
+  :root:not([data-motion="reduced"]) .ssn.ssn-in .ssn-wipe { animation: ssn-wipe 1s var(--ease-out) both; }
+  :root:not([data-motion="reduced"]) .ssn.ssn-in .ssn-labels { animation: ssn-fade var(--dur-slower) var(--ease-out) 700ms both; }
+  :root:not([data-motion="reduced"]) .ssn.ssn-in .ssn-ribbon { animation: ssn-fade var(--dur-slower) var(--ease-out) 200ms both; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ssn-play { display: none; }
+}
+:root[data-motion="reduced"] .ssn-play { display: none; }
+/* /seasons */
+
+/* skysong ──────────────────────────────────────────────────────────────────────
+   Every song of the day on the day's own sky (static/skysong.js, pages/today_songs.rs). Tokens only. */
+/* Sky song (static/skysong.js): every song heard today, as a note on the day's own sky.
+   The host is `<div class="ss" data-ss data-ss-feed="/pages/today-songs">`; the module builds the
+   rest. Tokens only: no colour is written here. */
+.ss { min-width: 0; }
+.ss-lede { margin: 0 0 var(--space-12); max-width: 96ch; }
+.ss-stage { position: relative; height: 380px; overflow: hidden; border-radius: var(--r-md); background: var(--surface-sunken); }
+.ss[data-ss-size="narrow"] .ss-stage { height: 460px; }
+.ss-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: pan-y; cursor: default; -webkit-tap-highlight-color: transparent; }
+.ss-canvas.is-hit { cursor: pointer; }
+.ss-canvas:focus-visible { outline: 2px solid var(--moss); outline-offset: -2px; border-radius: var(--r-md); }
+
+/* The card over a note: its own background, so its contrast does not depend on the sky behind it. */
+.ss-card {
+  position: absolute; left: 0; top: 0; z-index: var(--z-tooltip);
+  display: inline-flex; align-items: center; gap: var(--space-6);
+  width: max-content; max-width: calc(100% - 8px); padding: var(--space-4) var(--space-12) var(--space-4) var(--space-10);
+  border: var(--bw-strong) solid var(--chart-tip-border); border-radius: var(--r-pill);
+  background: var(--chart-tip-bg); color: var(--chart-tip-fg); box-shadow: var(--shadow-md);
+  font-size: var(--fs-sm); line-height: 1.45; white-space: nowrap; text-decoration: none;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.ss-card[hidden] { display: none; }
+/* A finger has no hover: the second tap, on the card itself, opens the recording. */
+@media (hover: none) { .ss-card[href] { pointer-events: auto; } }
+.ss-card-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--chart-other)); outline: var(--bw-strong) solid var(--chart-tip-fg); }
+.ss-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: var(--fw-semibold); }
+.ss-card-rest { flex: none; }
+
+/* A message that stands in for the picture's content (no data, or not reachable). */
+.ss-msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(100% - var(--space-32)); margin: 0; padding: var(--space-6) var(--space-14); border: var(--bw-strong) solid var(--border); border-radius: var(--r-pill); background: var(--surface); color: var(--fg-2); text-align: center; pointer-events: none; }
+.ss-msg:empty { display: none; }
+
+/* Under the picture: what it found (a sentence), then the live line (the song being read, or how to read one). */
+.ss-sum { margin: var(--space-10) 0 0; color: var(--fg-2); font-size: var(--fs-base); line-height: 1.45; max-width: 100ch; }
+.ss-sum:empty { display: none; }
+.ss-read { margin: var(--space-4) 0 var(--space-10); min-height: 1.45em; color: var(--fg-2); font-size: var(--fs-base); line-height: 1.45; font-variant-numeric: tabular-nums; max-width: 80ch; }
+.ss-sentence { color: var(--fg); }
+.ss-hint { color: var(--fg-3); }
+.ss[data-ss-size="narrow"] .ss-read { min-height: 2.9em; }
+
+/* The key: one button per species, with its count. */
+.ss-key { display: flex; flex-wrap: wrap; gap: var(--space-6); margin-top: var(--space-4); }
+.ss-chip {
+  display: inline-flex; align-items: center; gap: var(--space-6); max-width: 100%; min-height: 30px;
+  padding: var(--space-2) var(--space-10) var(--space-2) var(--space-8);
+  border: var(--bw-strong) solid var(--border); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--fg-2); font: inherit; font-size: var(--fs-sm); line-height: 1.3; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.ss-chip:hover { background: var(--surface-2); }
+.ss-chip[aria-pressed="true"] { background: var(--surface-2); border-color: var(--chart-axis); color: var(--fg); box-shadow: inset 0 0 0 var(--bw-strong) var(--chart-axis); }
+.ss-chip:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+.ss-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-chip-n { flex: none; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.ss-chip[aria-pressed="true"] .ss-chip-n { color: var(--fg-2); }
+.ss-all { padding-inline: var(--space-12); color: var(--fg); font-weight: var(--fw-medium); }
+.ss-all[hidden] { display: none; }
+/* The swatch is the identity; the species it stands for glows in the picture, so it does here. */
+.ss-sw { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--chart-other)); outline: var(--bw-strong) solid var(--surface); filter: drop-shadow(0 0 var(--space-8) color-mix(in oklab, var(--c, var(--chart-other)) 60%, transparent)); transition: opacity var(--dur-base) var(--ease-out); }
+.ss-chip.is-dim .ss-sw { opacity: var(--chart-dim); box-shadow: none; }
+.ss-help { margin: var(--space-10) 0 0; max-width: 80ch; }
+
+/* A phone: a taller stage (above), bigger things to press, and room for the sentence. */
+.ss[data-ss-size="narrow"] .ss-chip { min-height: 34px; padding-inline: var(--space-10) var(--space-12); font-size: var(--fs-md); }
+.ss[data-ss-size="narrow"] .ss-sw { width: 12px; height: 12px; }
+.ss[data-ss-size="narrow"] .ss-card { font-size: var(--fs-md); padding-block: var(--space-6); }
+.ss[data-ss-size="narrow"] .ss-key { gap: var(--space-6); }
+
+@media (prefers-reduced-motion: reduce) { .ss-chip, .ss-sw { transition: none; } }
+:root[data-motion="reduced"] .ss-chip, :root[data-motion="reduced"] .ss-sw { transition: none; }
+/* /skysong */

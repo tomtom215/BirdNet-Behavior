@@ -491,8 +491,11 @@ fn render_hourly_bars(
         solar,
         now_h: None,
         top: None,
+        stack: None,
         temps: &[],
         table: true,
+        class: "",
+        compact: false,
     })
 }
 

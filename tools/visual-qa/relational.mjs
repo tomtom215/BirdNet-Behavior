@@ -22,10 +22,13 @@
 //                a season, three kinds at most
 //   migration    the Earliest-vs-last-year tile does not claim a number the station cannot know (the
 //                fixture's station began on 26 October of last year)
-//   behavior     the bursts timeline draws bars and its legend pins a species; the retention ledger
-//                groups species by class; the neighbour flow is drawn at desktop width and ranked
-//                lists at a phone's; the running order draws a dot per morning and one morning
-//                comes forward from the pointer
+//   behavior     (the Visits tab) the bursts timeline draws bars and its legend pins a species;
+//                the retention ledger groups species by class
+//   sequences    the neighbour flow is drawn at desktop width and ranked lists at a phone's; the
+//                running order draws a dot per morning and one morning comes forward from the
+//                pointer; the chorus is a field of discs, one reading per cell, walked by the arrow
+//                keys (right moves along the times allowed, up to more voices); the Method panel's
+//                CSV button, clicked, saves exactly the table beside it
 //
 // Run against the fixture server:
 //   BASE=http://127.0.0.1:8502 CHROMIUM_PATH=... node relational.mjs
@@ -34,6 +37,12 @@
 //   MUTATE=nofocus   chart-kit.js never applies a mark's data-ck-f focus
 //   MUTATE=allthere  the stylesheet shows the ring on a phone as well as the ladder
 //   MUTATE=nodim     the stylesheet stops dimming
+//   MUTATE=nogrid    the chorus loses data-ck-grid, so Up and Down no longer move between rows
+//   MUTATE=notipcell the chorus's cells lose their readings
+//   MUTATE=wrongcsv  the CSV button names a table that is not there
+//   MUTATE=nocsv     figure-export.js never saves anything
+//   MUTATE=notabreveal  tab-strip.js never scrolls the strip
+//   MUTATE=widephone    the stylesheet shows the card's chorus drawing on a phone instead of the phone's
 import { chromium } from 'playwright';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
@@ -65,12 +74,37 @@ async function open(route, { width = 1440, theme = 'light', touch = false } = {}
       await r.fulfill({ response: res, body });
     });
   }
+  if (['nogrid', 'notipcell', 'wrongcsv'].includes(MUTATE)) {
+    await context.route('**/pages/analytics-assembly*', async (r) => {
+      const res = await r.fetch();
+      let body = await res.text();
+      if (MUTATE === 'nogrid') body = body.replace(/ data-ck-grid="\d+"/, '');
+      if (MUTATE === 'notipcell') body = body.replaceAll(' data-tip="', ' data-x="');
+      if (MUTATE === 'wrongcsv') body = body.replace('data-csv-table="#as-table"', 'data-csv-table="#no-such-table"');
+      await r.fulfill({ response: res, body });
+    });
+  }
+  if (MUTATE === 'notabreveal') {
+    await context.route('**/static/tab-strip.js*', async (r) => {
+      const res = await r.fetch();
+      const body = (await res.text()).replace('function reveal() {', 'function reveal() { return;');
+      await r.fulfill({ response: res, body });
+    });
+  }
+  if (MUTATE === 'nocsv') {
+    await context.route('**/static/figure-export.js*', async (r) => {
+      const res = await r.fetch();
+      const body = (await res.text()).replace('function save(button) {', 'function save(button) { return;');
+      await r.fulfill({ response: res, body });
+    });
+  }
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
   if (MUTATE === 'allthere') await page.evaluate(() => document.styleSheets[0].insertRule('.co-chord { display: block !important; }', document.styleSheets[0].cssRules.length));
+  if (MUTATE === 'widephone') await page.evaluate(() => { const sh = document.styleSheets[0]; sh.insertRule('.viz-chart--wide { display: block !important; }', sh.cssRules.length); sh.insertRule('.viz-chart--narrow { display: none !important; }', sh.cssRules.length); });
   if (MUTATE === 'nodim') await page.evaluate(() => document.styleSheets[0].insertRule('svg.ck-focus [data-ck-s] { opacity: 1 !important; }', document.styleSheets[0].cssRules.length));
   return { context, page, errors };
 }
@@ -305,6 +339,35 @@ console.log('\nbehavior');
   check('retention is grouped by class (resident, regular, migrant)', groups.length >= 2 && groups.some((g) => /Resident/.test(g)), groups.join(' | '));
   const cells = await page.$$eval('.rt-cell', (e) => e.length);
   check('and each species has its six return rates', cells >= 6 * 5, `${cells}`);
+  // A rate is one token: "100%" broken over two lines reads as "100" and "%". A table squeezed into a
+  // half-width card did exactly that for the rows whose rate was a hundred.
+  const brokenRates = (pg) => pg.evaluate(() => {
+    const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el); return new Set([...r.getClientRects()].map((q) => Math.round(q.top))).size; };
+    return [...document.querySelectorAll('.rt-cell')].filter((c) => lines(c) > 1).map((c) => c.textContent.trim());
+  });
+  const broken = await brokenRates(page);
+  check('no return rate is broken over two lines', broken.length === 0, `${broken.length} of ${cells} broken, e.g. ${broken.slice(0, 3).join(', ')}`);
+  check('no script error', errors.length === 0, errors.join(' | '));
+  await context.close();
+  {
+    // The same card at 1000 px, where the ledger has least room and the layout is still the wide one.
+    const tight = await open('/patterns?tab=behavior', { width: 1000 });
+    await tight.page.waitForSelector('.rt-table', { timeout: 20000 }).catch(() => {});
+    await tight.page.waitForTimeout(800);
+    const b = await brokenRates(tight.page);
+    const over = await tight.page.$eval('.rt-scroll', (e) => e.scrollWidth - e.clientWidth);
+    check('nor at 1000 px, and the ledger does not need to scroll sideways', b.length === 0 && over <= 0, `${b.length} broken, ${over}px over`);
+    await tight.context.close();
+  }
+}
+
+console.log('\nsequences');
+{
+  const { context, page, errors } = await open('/patterns?tab=sequences');
+  await page.waitForSelector('.mo-svg, .fl-fig, .as-svg', { timeout: 20000 }).catch(() => {});
+  await page.waitForSelector('.as-svg', { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  const d = await dim(page);
   const flow = await page.evaluate(() => ({ sankey: getComputedStyle(document.querySelector('.fl-sankey')).display, lists: getComputedStyle(document.querySelector('.fl-lists')).display, flows: document.querySelectorAll('.fl-flow').length }));
   check('the neighbour flow is drawn at desktop width, with the lists hidden', flow.sankey !== 'none' && flow.lists === 'none' && flow.flows >= 2, JSON.stringify(flow));
   const dots = await page.$$eval('.mo-dot', (e) => e.length);
@@ -320,23 +383,104 @@ console.log('\nbehavior');
     const tip = await page.locator('.mo-fig .ck-tip.on').textContent().catch(() => '');
     check('and reads the time', /First heard/.test(tip) && /\d\d:\d\d/.test(tip), tip);
   }
+
+  // The chorus: a field of discs, a reading in every cell.
+  const hits = await page.$$eval('.as-fig.viz-chart--wide .ck-hit', (e) => e.length);
+  const discs = await page.$$eval('.as-fig.viz-chart--wide .ck-disc', (e) => e.length);
+  check('the chorus is a field of discs with a reading in every cell', hits >= 14 * 3 && discs >= 14 && hits % 14 === 0, `${hits} readings, ${discs} discs`);
+  if (hits) {
+    const svg = page.locator('.as-fig.viz-chart--wide .as-svg');
+    await svg.scrollIntoViewIfNeeded();
+    const cell = (await page.$$('.as-fig.viz-chart--wide .ck-hit'))[hits - 1];
+    const cb = await cell.boundingBox();
+    await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
+    await page.waitForTimeout(150);
+    const tip = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
+    check('pointing at a cell reads how many mornings and what the typical one is', /voice/.test(tip) && /of \d+ \(\d+%\)/.test(tip) && /Typical morning/.test(tip), tip);
+    // The keyboard: one tab stop. Home is the top-left cell (every voice, the shortest time); the right
+    // arrow moves along to a longer time allowed with the same voices, and down to one voice fewer in
+    // the same time. (Up from the top row has nowhere to go, so this walks down.)
+    await page.mouse.move(0, 0);
+    await svg.focus();
+    await page.keyboard.press('Home');
+    await page.waitForTimeout(120);
+    const first = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(120);
+    const right = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(120);
+    const down = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
+    const parse = (t) => {
+      const m = t.match(/(\d+) voices? within (\d+ (?:h|min)(?: \d+ min)?)/);
+      return m ? { k: Number(m[1]), w: m[2] } : null;
+    };
+    const [p1, p2, p3] = [parse(first), parse(right), parse(down)];
+    check('the arrow keys walk the cells: right to a longer time with the same voices, down to one voice fewer in the same time', !!(p1 && p2 && p3) && p2.k === p1.k && p2.w !== p1.w && p3.k === p2.k - 1 && p3.w === p2.w, JSON.stringify([p1, p2, p3]));
+  }
+  // The Method panel: closed until asked, and its CSV button saves the table beside it.
+  const open0 = await page.$$eval('details.bh-method', (e) => e.filter((x) => x.open).length);
+  check('every Method and export panel is closed until asked', open0 === 0, `${open0} open`);
+  const csvCard = page.locator('.bnb-card', { has: page.locator('.as-svg') });
+  await csvCard.locator('details.bh-method > summary').click();
+  const button = csvCard.locator('button[data-csv-table="#as-table"]');
+  check('the CSV button is shown once the script has run', await button.isVisible(), 'hidden');
+  const downloaded = await Promise.all([page.waitForEvent('download', { timeout: 6000 }), button.click()]).then((r) => r[0], () => null);
+  check('clicking it saves a file', !!downloaded, 'no download within 6 s');
+  const { readFileSync } = await import('node:fs');
+  const download = downloaded;
+  const text = download ? readFileSync(await download.path(), 'utf8') : '';
+  const lines = text.replace(/^\uFEFF/, '').trim().split('\r\n');
+  const rows = await page.$$eval('#as-table tr', (trs) => trs.map((tr) => [...tr.children].map((c) => c.getAttribute('data-csv') ?? c.textContent.trim())));
+  check('the saved file is named for the figure and the day', !!download && /^chorus-assembling-\d{4}-\d\d-\d\d\.csv$/.test(download.suggestedFilename()), download ? download.suggestedFilename() : 'none');
+  check('it begins with a byte order mark and has the table\'s rows', text.charCodeAt(0) === 0xfeff && lines.length === rows.length && lines.length >= 15, `${lines.length} lines, ${rows.length} rows`);
+  check('and the header and first row are the table\'s own', lines.length > 1 && lines[0].split(',')[0] === rows[0][0] && lines[1].split(',')[0] === rows[1][0] && lines[1].split(',').length === rows[1].length, `${lines[0]} || ${lines[1]}`);
   check('no script error', errors.length === 0, errors.join(' | '));
   await context.close();
 }
 
-console.log('\nbehavior on a phone');
-{
-  const { context, page, errors } = await open('/patterns?tab=behavior', { width: 390, touch: true });
-  await page.waitForSelector('.fl-lists, .bt-svg', { timeout: 20000 }).catch(() => {});
+console.log('\nbehavior and sequences on a phone');
+for (const [route, wait] of [['/patterns?tab=behavior', '.bt-svg, .rt-table'], ['/patterns?tab=sequences', '.fl-lists, .as-svg']]) {
+  const { context, page, errors } = await open(route, { width: 390, touch: true });
+  await page.waitForSelector(wait, { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(1200);
   const r = await page.evaluate(() => ({
-    sankey: getComputedStyle(document.querySelector('.fl-sankey')).display,
-    lists: getComputedStyle(document.querySelector('.fl-lists')).display,
+    sankey: document.querySelector('.fl-sankey') ? getComputedStyle(document.querySelector('.fl-sankey')).display : null,
+    lists: document.querySelector('.fl-lists') ? getComputedStyle(document.querySelector('.fl-lists')).display : null,
     over: document.documentElement.scrollWidth - window.innerWidth,
   }));
-  check('a phone gets ranked lists in place of the flow', r.sankey === 'none' && r.lists !== 'none', JSON.stringify(r));
-  check('with no sideways scroll', r.over <= 0, `${r.over}px`);
-  check('no script error', errors.length === 0, errors.join(' | '));
+  if (route.endsWith('sequences')) check('a phone gets ranked lists in place of the flow', r.sankey === 'none' && r.lists !== 'none', JSON.stringify(r));
+  if (route.endsWith('sequences')) {
+    const tab = await page.evaluate(() => {
+      const strip = document.querySelector('.bnb-subtabs');
+      const a = document.querySelector('.bnb-subtab.active');
+      const sr = strip.getBoundingClientRect();
+      const ar = a.getBoundingClientRect();
+      return { left: ar.left, right: ar.right, stripLeft: sr.left, stripRight: sr.right, scrolled: strip.scrollLeft, label: a.textContent.trim() };
+    });
+    check('the tab you are on is in view in the strip', tab.left >= tab.stripLeft - 1 && tab.right <= tab.stripRight + 1 && tab.scrolled > 0, JSON.stringify(tab));
+    const chorus = await page.evaluate(() => {
+      const wide = document.querySelector('.as-fig.viz-chart--wide');
+      const narrow = document.querySelector('.as-fig.viz-chart--narrow');
+      const svg = narrow && narrow.querySelector('svg');
+      const vb = svg ? Number(svg.getAttribute('viewBox').split(' ')[2]) : 0;
+      const scale = svg ? svg.getBoundingClientRect().width / vb : 0;
+      const sizes = svg ? [...svg.querySelectorAll('.ck-lbl')].map((t) => parseFloat(getComputedStyle(t).fontSize) * scale) : [];
+      const rows = svg ? [...svg.querySelectorAll('.as-row')].map((t) => t.textContent.trim()) : [];
+      return {
+        wideShown: !!wide && getComputedStyle(wide).display !== 'none',
+        narrowShown: !!narrow && getComputedStyle(narrow).display !== 'none',
+        smallest: sizes.length ? Math.min(...sizes) : 0,
+        rows,
+        cut: svg ? [...svg.querySelectorAll('text')].filter((t) => t.textContent.includes('\u2026')).length : -1,
+      };
+    });
+    check('a phone gets the chorus drawn for a phone, and not the card\'s', chorus.narrowShown && !chorus.wideShown, JSON.stringify(chorus));
+    check('its smallest label is a readable size and none is cut short', chorus.smallest >= 9 && chorus.cut === 0, `${chorus.smallest.toFixed(1)}px, ${chorus.cut} cut`);
+    check('and its rows are numbered, not worded', chorus.rows.length >= 3 && chorus.rows.every((t) => /^\d$/.test(t)), JSON.stringify(chorus.rows));
+  }
+  check(`${route}: no sideways scroll`, r.over <= 0, `${r.over}px`);
+  check(`${route}: no script error`, errors.length === 0, errors.join(' | '));
   await context.close();
 }
 

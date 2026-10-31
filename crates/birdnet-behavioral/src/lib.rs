@@ -4,7 +4,7 @@
 //! extension functions to bird activity data:
 //! - `sessionize`: Group continuous activity into sessions
 //! - `retention`: Track species return patterns
-//! - `window_funnel`: Analyze dawn chorus sequences
+//! - `window_funnel`: Analyze dawn chorus sequences, and (at a ladder of windows) how fast the chorus comes together
 //! - `window_funnel_events`: Timestamp each completed dawn-chorus step (v0.8.0)
 //! - `sequence_match`: Find specific activity patterns
 //! - `sequence_count`: Count how often an ordered pattern occurs (v0.8.0)

@@ -192,6 +192,39 @@ async fn a_count_that_failed_stays_inside_its_sentence() {
     );
 }
 
+/// `/pages/today-songs` is the one page-module route that answers a 5xx on purpose.
+///
+/// It is not an htmx partial: `skysong.js` fetches it and checks `res.ok`, so the
+/// status is the signal and the body is JSON, never markup. That is the claim the
+/// exemption in the source scan below rests on; if the body ever became HTML, or
+/// the status became 200 with no error, this fails and the exemption should go.
+/// The counterpart is a healthy station, which must get the feed and no `error`.
+#[tokio::test]
+async fn a_json_feed_that_failed_says_so_in_json_with_a_status() {
+    let json_of = |body: &str| -> serde_json::Value {
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("not JSON ({e}): {body:?}"))
+    };
+
+    let (status, body) = get(&station(true), "/pages/today-songs").await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a script reading the feed tests `res.ok`; a 200 would draw a failure as a quiet day"
+    );
+    let v = json_of(&body);
+    assert!(v["error"].is_string(), "the failure is named: {body:?}");
+    assert!(v.get("songs").is_none(), "no songs are invented: {body:?}");
+
+    let (status, body) = get(&station(false), "/pages/today-songs").await;
+    assert_eq!(status, StatusCode::OK, "a healthy station gets its feed");
+    let v = json_of(&body);
+    assert!(v.get("error").is_none(), "{body:?}");
+    assert!(
+        v["songs"].as_array().is_some_and(|s| s.len() == 6),
+        "the six seeded detections are the feed: {body:?}"
+    );
+}
+
 /// No handler under `routes/pages/` may pair a 5xx with an HTML body again.
 ///
 /// The behavioural tests above cover the partials reachable from `detections`;
@@ -207,7 +240,12 @@ fn no_page_handler_answers_a_5xx_with_a_body_htmx_will_discard() {
     // `detection_detail.rs` renders a whole page rather than a partial: a 5xx
     // there is not swallowed by htmx, it is the browser's own error page, and
     // it fires only when the blocking task panics.
-    const EXEMPT: &[&str] = &["detection_detail.rs"];
+    //
+    // `today_songs.rs` is a JSON feed read with `fetch()` by `skysong.js`, which
+    // tests `res.ok` and says "Could not refresh." itself — htmx never sees it, so
+    // there is no discarded HTML body, and a real status is what a script wants.
+    // `a_json_feed_that_failed_says_so_in_json_with_a_status` holds that claim.
+    const EXEMPT: &[&str] = &["detection_detail.rs", "today_songs.rs"];
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routes/pages");
     let mut offenders = Vec::new();

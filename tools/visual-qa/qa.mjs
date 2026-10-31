@@ -123,6 +123,7 @@ export const ROUTES = [
   ['patterns-together', '/patterns?tab=together'],
   ['patterns-trends', '/patterns?tab=trends'],
   ['patterns-behavior', '/patterns?tab=behavior'],
+  ['patterns-sequences', '/patterns?tab=sequences'],
   ['recordings', '/recordings'],
   ['recordings-live', '/recordings?view=live'],
   ['reports', '/reports'],

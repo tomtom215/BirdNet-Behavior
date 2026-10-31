@@ -27,8 +27,8 @@ Two principles govern them:
 ## At a glance
 
 The stylesheet's light block declares
-<!--count-light-->241<!--/count--> tokens, and the dark block overrides
-<!--count-dark-->90<!--/count--> of them. Those two numbers are checked against
+<!--count-light-->245<!--/count--> tokens, and the dark block overrides
+<!--count-dark-->94<!--/count--> of them. Those two numbers are checked against
 `app.css` by the test below, so they cannot go stale; every other number on this
 page that describes the present is read from the stylesheet the same way.
 
@@ -501,10 +501,14 @@ the more it stands out from the card.
 |---|---|---|---|
 | `--chart-grid` | `oklch(93% 0.005 80)` | `oklch(26% 0.012 250)` | A gridline: 1.2:1 against the card on purpose, a guide and not information. |
 | `--chart-grid-strong` | `oklch(87% 0.006 80)` | `oklch(32% 0.014 250)` | The gridline that marks a boundary (midnight, the zero line of a diverging chart). |
-| `--chart-axis` | `oklch(64% 0.010 70)` | `oklch(58% 0.014 250)` | An axis line and its ticks: 3:1 against the card. |
+| `--chart-axis` | `oklch(61% 0.010 70)` | `oklch(58% 0.014 250)` | An axis line and its ticks: 3:1 against the card. |
 | `--chart-tip-bg` | `oklch(24% 0.010 70)` | `oklch(30% 0.014 250)` | A chart tooltip: a dark card on the light theme, a lifted one on dark. |
 | `--chart-tip-fg` | `oklch(98% 0.004 80)` | `oklch(97% 0.004 240)` | Tooltip text, 13:1 or better on the tooltip. |
 | `--chart-tip-border` | `oklch(34% 0.010 70)` | `oklch(42% 0.016 250)` | Tooltip edge, so it never merges with the card behind it. |
+| `--sky-night` | `oklch(94.5% 0.014 268)` | `oklch(19.5% 0.04 268)` | The sky behind a 24-hour axis before first light and after last light. |
+| `--sky-dawn` | `oklch(95% 0.028 66)` | `oklch(26.5% 0.07 10)` | The dawn wash, at sunrise. |
+| `--sky-day` | `oklch(98.2% 0.014 92)` | `oklch(25% 0.03 238)` | The sky between the washes. |
+| `--sky-dusk` | `oklch(95% 0.02 28)` | `oklch(26% 0.065 335)` | The dusk wash, at sunset. |
 <!--tokens:end-->
 
 The rest of the ink is the same in both themes, or reads a token that already flips:

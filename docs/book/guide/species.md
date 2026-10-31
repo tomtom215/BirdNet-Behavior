@@ -44,4 +44,6 @@ The **Life List** (`/species?view=lifelist` — the old `/life-list` still redir
 
 ![The life list with its accumulation curve](../images/life-list.png)
 
+Under it, **When each bird joined your list** is a timeline of firsts: each species stands as a portrait on the day it was first heard, and its stem lands where the list grew. Point at a portrait for the day, how long ago that was and how many times the bird has been heard since; the newest bird and the very first are named. Zoom with the buttons, the plus and minus keys, or (after clicking the picture) the scroll wheel. On a phone it is a month-by-month list, newest first. A bird with no photograph shows its four-letter code.
+
 > Confidence pills and bars use one colour rule everywhere in the app: green at 90 % and up, amber for a detection within ten points of the station's own cut-off (*borderline*), neutral in between. Because the edge follows your cut-off, a station that keeps 80 % and up has two tiers only: everything under 90 % reads as borderline. A key above each list says which applies, and none of the colours is the alert red.

@@ -249,6 +249,7 @@ handled	crates/birdnet-web/src/routes/weather.rs	hourly_day	match-err	match day_
 handled	crates/birdnet-web/src/routes/weather.rs	hourly_hour	match-err	match hour_row(state, &date, hour) { Err .. }
 not-a-read	crates/birdnet-web/src/routes/admin/https.rs	download_ca	match-err	match state.run_blocking(move |_| std::fs::read(&path)).await { Err .. }
 omitted	crates/birdnet-web/src/routes/pages/dawn_chorus.rs	sky_over	unwrap_or	super::civil_twilight_local(conn).unwrap_or((None, None))
+omitted	crates/birdnet-web/src/routes/pages/today_songs.rs	today_songs	unwrap_or	super::civil_twilight_local(conn).unwrap_or((None, None))
 handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	state .with_read_db(|conn| { let ridges = collect_ridges(conn, year, MAX_RIDGES)?; let diversity = weekly_dive
 task-panic	crates/birdnet-web/src/routes/dashboard_image.rs	serve_image	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || open_picture(&path)).await
 task-panic	crates/birdnet-web/src/routes/dashboard_image.rs	serve_image	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || stat(&for_stat)).await

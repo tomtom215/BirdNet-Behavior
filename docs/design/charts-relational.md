@@ -127,17 +127,43 @@ Kept: the radial form, solid rings in the chart colours, the moon dial and the s
   "Forecast model pending", is the list of birds that arrived around now last year and have not been
   heard yet.
 
-## The Behavior tab
+## The Visits and Sequences tabs
+
+The engine's cards are on two tabs of the Patterns home, both under the bar's **How** label: *Visits*
+(`?tab=behavior`, the key it always had: bursts, who keeps coming back, neighbouring species) and *Sequences*
+(`?tab=sequences`: the morning running order, the chorus assembling, who answers whom).
 
 Each picture is made from the behavioural engine's own output; none invents data, and each keeps its
-numbers as a table.
+numbers as a table. Each card has the same four layers, in this order: one **sentence** of what the figure
+found (a pure function of the numbers that says its basis and is silent when there is too little to say:
+`pages/behavioral_glance.rs` for bursts, the ledger and the neighbours, `pages/behavioral_assembly.rs` for the
+chorus), the **picture**, the **table** of the same numbers behind a disclosure, and a **Method and export**
+panel (the function and its version, what was asked, what a number counts, the REST route that returns the
+same numbers where there is one, and a button that saves the table as a CSV: `frame::Method`,
+`static/figure-export.js`). The other Patterns tabs are regrouped under When / Who / How but do not yet have the
+four layers.
 
 | Card | Picture | From |
 |---|---|---|
 | Bursts of singing | A lane per day, the hours along it, a bar for each burst from where it began to where it ended, packed into sub-lanes so none overlaps; the legend brings one species forward | `sessionize` |
 | Who keeps coming back | A ledger: species grouped as resident / regular / migrant / rarity, a bar of weeks heard, and six return rates on the moss ramp, each printing its number | `retention` |
-| Neighbouring species | A flow with the species in the middle (wide screens) or ranked bars (narrow ones), ribbon width the share of sessions | `sequence_next_node`, both directions |
+| Neighbouring species | A flow with the species in the middle (wide screens) or ranked bars (narrow ones), ribbon width the share of the sessions that had a bird on that side (a session the bird opens has no bird before it, one it closes none after: the engine's denominator) | `sequence_next_node`, both directions |
 | The morning running order | A lane per voice, the clock 04:00–09:00 along it, a dot per morning, a thin line joining one morning's dots, a tick for the typical time, the newest complete morning large | `window_funnel`, `sequence_match_events` |
+| The chorus assembling | A field of discs: a column is a time allowed (1 minute to 5 hours, evenly spaced rungs), a row is how many of the station's usual dawn voices have joined, in their usual order, and a disc's *area* is the share of mornings with at least that many together within that time; a bold line round the cells is the typical morning (the most voices half of the mornings had), a pale band the middle half. A phone gets its own drawing | `window_funnel`, once per rung, `strict_increase` |
+
+### The chorus assembling
+
+*How long after the first bird do the others join?* The plan named `window_funnel_events` for this and the
+probe (against `behavioral` 0.10.1, on DuckDB 2.0) showed it cannot answer it: it reports each step as the
+**latest** occurrence of that voice before the next, so the gap between two steps depends on that tie-break and
+not on the birds. `window_funnel` is a depth that is monotone in its window, so asking it at a ladder of
+windows (`types::ASSEMBLY_WINDOWS`, 14 rungs from 1 to 300 minutes) gives the whole distribution with nothing
+fitted or smoothed. Mode `strict_increase` is needed: two voices heard in one audio chunk share an instant and
+would otherwise join in either order. The depth is unanchored (a chain may begin at any occurrence of the first
+voice) and the boundary is inclusive. The voices are the station's own: those with at least ten dawn songs in
+the season, most heard first, then in the order they typically open. The card is silent with fewer than three
+voices or seven mornings. The disc's area, not its colour, carries the share, so the picture is readable in
+greyscale; the colour only says which voice completes the row.
 
 ## The soundscape terrain
 
@@ -189,6 +215,41 @@ is scanned, reads every colour from the page's tokens at run time (`getComputedS
 the theme changes) and falls back to the system text colour, never to one of ours. A test fails if
 the exemption widens beyond `static/vendor/` or covers a library without a README that records its
 hash.
+
+## Views built for one question each
+
+Four pictures that are not a count over time and are not the terrain, each the form that suits its question
+(a 3D landscape was tried in the plan for each and rejected where it would add occlusion without helping
+anyone read the data). Each is complete without script where it can be (a table behind a disclosure, and for
+the first three a sentence), each has a phone drawing of its own, and each is held by the node tests that sit
+beside its script in `tools/visual-qa/` and by the Rust tests beside its server side.
+
+| View | Where | Question | Form | Script | Server side |
+|---|---|---|---|---|---|
+| Every song | Today, "When you heard them" (view toggle) | When was each bird heard today, and how sure was the station? | a scatter on the day's real sky: time across, how sure up, the sun's arc between sunrise and sunset, the station's cut-off drawn, "now" marked | `static/skysong.js` | `pages/today_songs.rs`: `GET /pages/today-songs`, JSON |
+| Who led, and when it changed | Reports, Year in review | Which birds led which months? | a rank-over-time chart (the line is a rank, which hides the size of a gap) beside a leaderboard of true counts for the chosen month on one zero-based scale, with a scrubber and a Play button | `static/seasons.js` | `year_in_review::seasons_card`, `birdnet_db::monthly_species_counts` |
+| When each bird joined your list | Species, Life list | When did each bird join my list, and who is newest? | portraits standing on the day each was first heard, stems landing on the rising list curve; on a phone a month-by-month vertical list | `static/discovery.js` | `pages/life_timeline.rs` |
+| Who answers whom | Patterns, Behavior | After one bird is heard, which others are heard within a minute? | a grid of discs (row first, column after), not symmetric | none (server SVG) | `pages/behavioral_answers.rs`, `AnalyticsDb::answers` |
+
+What each promises, and what a test holds it to:
+
+* **Every song** puts each song at the time it was heard and the height of how sure the station was; the only
+  nudge is sideways within the same minute and height, never changing the time the reading gives. Nothing below
+  the station's cut-off is ever in the list. The sky is the station's own sunrise and sunset, or neutral with no
+  location; there is never an invented sun. When the day holds more songs than one answer carries the feed says
+  how many it holds and the summary says the picture shows part of them. A refresh keeps what is on screen if it
+  fails, and says so.
+* **Who led** ranks only birds that were heard that month: a zero is a gap in the line, not a plunge to last. A
+  month that has not happened is not a month with none. Bars share one scale across the year, so lengths compare
+  between months. Play stops at the end, pauses on any touch, and is not offered under reduced motion.
+* **When each bird joined** takes every URL it is given through the base-path helper, falls back to initials for a
+  picture that 404s, never requests a picture for a marker that is off screen, and is complete (every species
+  reachable by pointer and keyboard) at 2,000 species by turning portraits into a density picture.
+* **Who answers whom** counts, per ordered pair, how many times the first was heard and then the second within a
+  minute on the same day, without overlap. The same instant is not a reply (without `(?t>0)` a Robin and a
+  Blackbird heard in one audio chunk answer each other both ways: `live_answers` was watched failing against that
+  pattern), a bird repeating itself is not an exchange, and a pair seen fewer than three times is a small ring and
+  never a finding. A best pair at the floor is "nothing stands out yet". The grid prints its own sample size.
 
 ## Gates
 

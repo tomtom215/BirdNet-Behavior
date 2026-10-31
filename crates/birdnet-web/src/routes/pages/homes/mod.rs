@@ -43,6 +43,74 @@ pub struct SubTab {
     pub question: &'static str,
 }
 
+/// A labelled cluster of a home's tabs, named by key.
+///
+/// The label says what kind of question they answer: the bar says "When", "Who", "How" over the
+/// tabs under it, so a reader choosing among seven tabs chooses a question first.
+#[derive(Debug)]
+pub struct Group {
+    /// The cluster's name, one short word.
+    pub label: &'static str,
+    /// The keys of its tabs, in display order; each is a [`SubTab::key`] of the home.
+    pub keys: &'static [&'static str],
+}
+
+/// Render one tab link.
+fn tab_link(out: &mut String, base: &str, param: &str, i: usize, t: &SubTab, active: &str) {
+    let href = if i == 0 {
+        base.to_string()
+    } else {
+        format!("{base}?{param}={}", t.key)
+    };
+    let (cls, cur) = if t.key == active {
+        (" active", r#" aria-current="page""#)
+    } else {
+        ("", "")
+    };
+    let _ = write!(
+        out,
+        r#"<a class="bnb-subtab{cls}" href="{href}"{cur}><span class="l">{}</span><span class="q">{}</span></a>"#,
+        t.label, t.question
+    );
+}
+
+/// Render a home's sub-tab row, its tabs clustered under [`Group`] labels.
+///
+/// The same links as [`subtabs`] (the first tab in `tabs`, which need not be the first in its
+/// group, is the one with the bare canonical URL), in one scrolling strip, each cluster a
+/// `role="group"` named by its label.
+///
+/// A tab no group names is left out, which is why the home's own tests hold that every key is in
+/// exactly one group.
+pub fn grouped_subtabs(
+    base: &str,
+    param: &str,
+    tabs: &[SubTab],
+    groups: &[Group],
+    active: &str,
+) -> String {
+    let mut out = String::with_capacity(1536);
+    let _ = write!(
+        out,
+        r#"<nav class="bnb-subtabs bnb-subtabs--grouped" aria-label="Views" data-screen-label="Sub-tabs">"#
+    );
+    for g in groups {
+        let _ = write!(
+            out,
+            r#"<div class="bnb-subgroup" role="group" aria-label="{label}"><span class="bnb-subgroup-l" aria-hidden="true">{label}</span><div class="bnb-subgroup-tabs">"#,
+            label = g.label
+        );
+        for key in g.keys {
+            if let Some((i, t)) = tabs.iter().enumerate().find(|(_, t)| t.key == *key) {
+                tab_link(&mut out, base, param, i, t, active);
+            }
+        }
+        out.push_str("</div></div>");
+    }
+    out.push_str("</nav>");
+    out
+}
+
 /// Render a home's sub-tab row. The active tab is marked both visually and
 /// with `aria-current`; the first tab links to the bare `base` path (its
 /// canonical URL), the rest carry `?{param}={key}`.
@@ -56,21 +124,7 @@ pub fn subtabs(base: &str, param: &str, tabs: &[SubTab], active: &str) -> String
         r#"<nav class="bnb-subtabs" aria-label="Views" data-screen-label="Sub-tabs">"#
     );
     for (i, t) in tabs.iter().enumerate() {
-        let href = if i == 0 {
-            base.to_string()
-        } else {
-            format!("{base}?{param}={}", t.key)
-        };
-        let (cls, cur) = if t.key == active {
-            (" active", r#" aria-current="page""#)
-        } else {
-            ("", "")
-        };
-        let _ = write!(
-            out,
-            r#"<a class="bnb-subtab{cls}" href="{href}"{cur}><span class="l">{}</span><span class="q">{}</span></a>"#,
-            t.label, t.question
-        );
+        tab_link(&mut out, base, param, i, t, active);
     }
     out.push_str("</nav>");
     out
@@ -118,6 +172,56 @@ mod tests {
         // First tab links to the canonical bare path; later tabs carry the param.
         assert!(html.contains(r#"href="/x""#));
         assert!(html.contains(r#"href="/x?tab=two""#));
+    }
+
+    const GROUPS: &[Group] = &[
+        Group {
+            label: "First",
+            keys: &["two"],
+        },
+        Group {
+            label: "Second",
+            keys: &["one"],
+        },
+    ];
+
+    /// The same links as the flat bar, under their labels, with the bare URL still on the first
+    /// tab of the *table* (so a stale bookmark and the canonical address agree) and the active tab
+    /// marked once.
+    #[test]
+    fn grouped_subtabs_cluster_the_same_links_under_labels() {
+        let html = grouped_subtabs("/x", "tab", TABS, GROUPS, "two");
+        assert_eq!(html.matches(r#"role="group""#).count(), 2, "{html}");
+        assert!(html.contains(r#"aria-label="First""#) && html.contains(r#"aria-label="Second""#));
+        assert_eq!(html.matches("bnb-subtab active").count(), 1, "{html}");
+        assert!(
+            html.contains(r#"href="/x""#),
+            "the first tab of the table is the bare URL"
+        );
+        assert!(html.contains(r#"href="/x?tab=two""#));
+        // Display order is the groups' order, not the table's: "two" comes before "one".
+        assert!(
+            html.find("?tab=two").unwrap_or(usize::MAX) < html.find(r#"href="/x""#).unwrap_or(0),
+            "{html}"
+        );
+        // The label is for the eye; the group carries the name for a screen reader.
+        assert_eq!(html.matches(r#"aria-hidden="true">First<"#).count(), 1);
+    }
+
+    /// A tab that no group names is not drawn: the bar never shows a link the groups do not mean.
+    #[test]
+    fn a_tab_no_group_names_is_not_drawn() {
+        let html = grouped_subtabs(
+            "/x",
+            "tab",
+            TABS,
+            &[Group {
+                label: "Only",
+                keys: &["two"],
+            }],
+            "two",
+        );
+        assert_eq!(html.matches("<a ").count(), 1, "{html}");
     }
 
     #[test]

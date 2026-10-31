@@ -15,6 +15,8 @@
 //   poles       the two diverging poles are >= 15 dE apart for a reader with
 //               protanopia and for one with deuteranopia
 //   mid         the diverging middle is neutral (chroma < 0.012)
+//   sky         the four washes behind a 24-hour axis: label and annotation ink >= 4.5:1 and the
+//               axis >= 3:1 on every one, so no chart text is ever drawn on a wash it cannot be read on
 //   ink         grid 1.1-1.6:1, axis >= 3:1, label and annotation >= 4.5:1,
 //               tooltip text >= 7:1 on its tooltip, tooltip edge >= 1.5:1 on the card
 //
@@ -99,6 +101,13 @@ for (const theme of ['light', 'dark']) {
   check('ink', r('--chart-label') >= 4.5, `${theme} label is ${r('--chart-label').toFixed(2)}:1`);
   check('ink', r('--chart-annot') >= 4.5, `${theme} annotation is ${r('--chart-annot').toFixed(2)}:1`);
   check('ink', contrast(c('--chart-tip-fg'), c('--chart-tip-bg')) >= 7, `${theme} tooltip text is ${contrast(c('--chart-tip-fg'), c('--chart-tip-bg')).toFixed(2)}:1`);
+  for (const wash of ['--sky-night', '--sky-dawn', '--sky-day', '--sky-dusk']) {
+    const on = (n) => contrast(c(n), c(wash));
+    check('sky', on('--chart-label') >= 4.5, `${theme} label is ${on('--chart-label').toFixed(2)}:1 on ${wash}`);
+    check('sky', on('--chart-annot') >= 4.5, `${theme} annotation is ${on('--chart-annot').toFixed(2)}:1 on ${wash}`);
+    check('sky', on('--chart-axis') >= 3, `${theme} axis is ${on('--chart-axis').toFixed(2)}:1 on ${wash}`);
+    check('gamut', inGamut(c(wash)), `${theme} ${wash} is outside sRGB`);
+  }
   check('ink', r('--chart-tip-border') >= 1.5, `${theme} tooltip edge is ${r('--chart-tip-border').toFixed(2)}:1 on the card`);
 }
 

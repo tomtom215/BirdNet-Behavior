@@ -46,6 +46,17 @@ pub enum Fill {
     Slot(usize),
 }
 
+/// Who was heard, hour by hour: what a column is made of when the chart says "who" and not only "how many".
+pub struct Stack<'a> {
+    /// The species named in the key, most heard first, at most eight: each is drawn in its own
+    /// chart colour, in this order, from the baseline up.
+    pub names: &'a [String],
+    /// `counts[k][hour]`: how many of `names[k]` were heard in that hour. Whatever else was heard
+    /// that hour is the rest of the column's true height, drawn as one more band ("Other species"),
+    /// so a column is exactly as tall as the hour's count and never as tall as the named species' sum.
+    pub counts: &'a [[i64; 24]],
+}
+
 /// Everything an hour-of-day chart needs.
 pub struct Hourly<'a> {
     /// `data-ck-id`: a refresh under the same id does not replay the entrance.
@@ -70,14 +81,36 @@ pub struct Hourly<'a> {
     pub now_h: Option<f64>,
     /// For each hour, the species heard most then and how many.
     pub top: Option<&'a [Vec<(String, i64)>; 24]>,
+    /// The species each column is made of; with it the colour means who, without it how busy
+    /// (`fill`).
+    pub stack: Option<&'a Stack<'a>>,
     /// `(hour, °C)` samples drawn as a second, separately scaled strip below.
     pub temps: &'a [(f64, f64)],
     /// A "Show as a table" disclosure with all 24 rows.
     pub table: bool,
+    /// Further classes for the chart's outer `div`, each with a leading space (` viz-chart--wide`), or
+    /// empty. A chart drawn twice, once for a card and once for a phone, says which is which.
+    pub class: &'a str,
+    /// The drawing for a phone: the sun's rail is captioned with bare times and says nothing of the
+    /// day's length, because the words would not fit a drawing this narrow at a size anyone can read.
+    pub compact: bool,
 }
+
+/// Room above an hour chart's plot, in viewBox units.
+pub const HOURLY_HEAD: f64 = 30.0;
+/// Room under it when the station has a location: the hour labels, the sun's rail, its captions.
+pub const HOURLY_AXIS_SOLAR: f64 = 64.0;
+/// The temperature strip under the axis, when there is weather.
+pub const HOURLY_TEMP: f64 = 58.0;
 
 fn clock(h: usize) -> String {
     format!("{h:02}:00")
+}
+
+/// `10.4` hours as `10 h 24 min`.
+fn daylight_text(hours: f64) -> String {
+    let total = (hours * 60.0).round().max(0.0) as u32;
+    format!("{} h {:02} min of daylight", total / 60, total % 60)
 }
 
 /// `19.5` → `19:30`.
@@ -121,10 +154,19 @@ pub fn hourly(o: &Hourly<'_>) -> String {
     let y = Linear::new((0.0, top), (plot_h, 0.0));
     let x_of = |hour: f64| pad_l + hour / 24.0 * plot_w;
 
-    let head = 22.0;
-    let axis_rows = if o.solar.is_some() { 36.0 } else { 20.0 };
-    let temp_h = if o.temps.len() >= 2 { 58.0 } else { 0.0 };
+    // Room above the plot for the "now" pill and a note beside the busiest bar; under it, the hour
+    // labels and (with a location) the rail the sun travels along and its two captions.
+    let head = HOURLY_HEAD;
+    let axis_rows = if o.solar.is_some() {
+        HOURLY_AXIS_SOLAR
+    } else {
+        20.0
+    };
+    let temp_h = if o.temps.len() >= 2 { HOURLY_TEMP } else { 0.0 };
     let h_total = head + plot_h + axis_rows + temp_h;
+    // One notch is the same number of detections in every column; the seams stand at its multiples.
+    let unit = kit::notch_unit(top);
+    let unit_px = plot_h * unit / top;
 
     // Colour class per bar.
     let class_of = |h: usize, c: i64| -> String {
@@ -153,24 +195,41 @@ pub fn hourly(o: &Hourly<'_>) -> String {
     let mut svg = String::with_capacity(12 * 1024);
     let _ = write!(
         svg,
-        r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{peak}" data-ck-label="Left and right move from hour to hour.">"#,
+        r#"<div class="viz-chart ck{class}"><div class="viz-scroll"><svg width="100%" viewBox="0 -{head:.0} {w:.0} {h_total:.0}" role="img" class="viz-svg-block ck-in" data-ck="marks" data-ck-id="{id}" data-ck-dim="index" data-ck-start="{peak}" data-ck-label="Left and right move from hour to hour.">"#,
+        class = escape_html(o.class),
         id = escape_html(o.id),
     );
     svg.push_str(&svg_a11y(o.name, o.desc));
     let g = kit::id_safe(&format!("g-{}", o.id));
     svg.push_str(&kit::gradient_defs(&g, &classes));
+    // Where the sun is known to rise and set (and sets after it rises), the plot sits on the day's sky.
+    let sky = o.solar.filter(|&(rise, set)| set > rise);
+    let _ = write!(
+        svg,
+        "<defs>{notch}",
+        notch = kit::notch_pattern(&format!("{g}-notch"), plot_h, unit_px),
+    );
+    if let Some((rise, set)) = sky {
+        let _ = write!(
+            svg,
+            r#"{sky}{haze}<clipPath id="{g}-panel"><path d="{panel}"/></clipPath>"#,
+            sky = kit::sky_gradient(&format!("{g}-sky"), rise, set),
+            haze = kit::haze_gradient(&format!("{g}-haze")),
+            panel = kit::bar_path(pad_l, 0.0, plot_w, plot_h, 10.0),
+        );
+    }
+    svg.push_str("</defs>");
 
-    // Night, behind everything: the hours between sunset and sunrise are one night.
-    if let Some((rise, set)) = o.solar {
-        let (a, b) = (x_of(rise.clamp(0.0, 24.0)), x_of(set.clamp(0.0, 24.0)));
-        if b > a {
-            let _ = write!(
-                svg,
-                r#"<rect class="ck-track" x="{pad_l:.1}" y="0" width="{wa:.1}" height="{plot_h:.1}"/><rect class="ck-track" x="{b:.1}" y="0" width="{wb:.1}" height="{plot_h:.1}"/>"#,
-                wa = a - pad_l,
-                wb = pad_l + plot_w - b,
-            );
-        }
+    // The sky, behind everything: night until first light, the dawn wash, day, the dusk wash, night
+    // again. It says "these hours are one night" with no rectangle to say it, and is the same
+    // sky behind every 24-hour axis in the product.
+    if sky.is_some() {
+        let _ = write!(
+            svg,
+            r#"<g clip-path="url(#{g}-panel)"><rect x="{pad_l:.1}" y="0" width="{plot_w:.1}" height="{plot_h:.1}" fill="url(#{g}-sky)"/><rect x="{pad_l:.1}" y="{hy:.1}" width="{plot_w:.1}" height="{hh:.1}" fill="url(#{g}-haze)"/></g>"#,
+            hy = plot_h * 0.55,
+            hh = plot_h * 0.45,
+        );
     }
 
     // Rules and their labels.
@@ -201,12 +260,45 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         }
         let bh = plot_h - y.at(c as f64);
         let x = pad_l + h as f64 * slot + (slot - bar_w) / 2.0;
-        let cls = class_of(h, c);
         let d = kit::bar_path(x, y.at(c as f64), bar_w, bh, 4.0);
-        let _ = write!(
-            svg,
-            r#"<path class="ck-grow" d="{d}" fill="url(#{g}-{cls})" data-ck-i="{h}" data-style="--i:{h}"/>"#,
-        );
+        if let Some(st) = o.stack {
+            // The column is made of who was heard: each species a band from the baseline up in the
+            // key's order, then everyone else as one more band, so the column is as tall as the
+            // hour's count and the bands add up to it. Clipped to the column's own rounded shape.
+            let _ = write!(
+                svg,
+                r#"<clipPath id="{g}-c{h}"><path d="{d}"/></clipPath><g class="ck-grow" clip-path="url(#{g}-c{h})" data-style="--i:{h}">"#,
+            );
+            let mut acc = 0_i64;
+            let band = |svg: &mut String, class: &str, n: i64, acc: i64| {
+                let (y1, y0) = (y.at((acc + n) as f64), y.at(acc as f64));
+                let _ = write!(
+                    svg,
+                    r#"<rect class="ck-seg {class}" x="{x:.1}" y="{y1:.1}" width="{bar_w:.1}" height="{hh:.1}" data-ck-i="{h}"/>"#,
+                    hh = y0 - y1,
+                );
+            };
+            for (k, per_hour) in st.counts.iter().enumerate() {
+                let n = per_hour[h].clamp(0, c - acc);
+                if n > 0 {
+                    band(&mut svg, &kit::slot_class(k), n, acc);
+                    acc += n;
+                }
+            }
+            if acc < c {
+                band(&mut svg, "ck-cother", c - acc, acc);
+            }
+            let _ = write!(
+                svg,
+                r#"<path class="ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{h}"/></g><path class="ck-outline" d="{d}" data-ck-i="{h}"/>"#,
+            );
+        } else {
+            let cls = class_of(h, c);
+            let _ = write!(
+                svg,
+                r#"<path class="ck-grow" d="{d}" fill="url(#{g}-{cls})" data-ck-i="{h}" data-style="--i:{h}"/><path class="ck-grow ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{h}" data-style="--i:{h}"/>"#,
+            );
+        }
     }
     svg.push_str("</g>");
     let _ = write!(
@@ -215,17 +307,49 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         x2 = pad_l + plot_w,
     );
 
-    // The peak, and only the peak, is written on the chart.
+    // The peak, and only the peak, is written on the chart: a note beside its tip when there is room,
+    // otherwise the bare number over it. The peak is the tallest bar, so a note standing above its
+    // tip is clear of every other bar; only the plot's edges and the "now" marker can be in the way.
     let now_x = o.now_h.map(x_of);
     let peak_x = pad_l + peak as f64 * slot + slot / 2.0;
-    let pill_clash = now_x.is_some_and(|n| (n - peak_x).abs() < 40.0);
-    if before_now(peak) && !pill_clash {
-        let _ = write!(
-            svg,
-            r#"<text class="mono ck-annot ck-halo" x="{peak_x:.1}" y="{ty:.1}" text-anchor="middle" font-size="10">{v}</text>"#,
-            ty = y.at(o.counts[peak] as f64) - 5.0,
-            v = kit::compact(o.counts[peak] as f64),
+    if before_now(peak) {
+        let tip_y = y.at(o.counts[peak] as f64);
+        let note = format!(
+            "busiest hour, {} heard",
+            kit::compact(o.counts[peak] as f64)
         );
+        let nw = kit::note_width(&note);
+        let ny = tip_y - 12.0;
+        let fits = |from: f64, to: f64| {
+            from >= pad_l
+                && to <= pad_l + plot_w
+                && now_x.is_none_or(|n| n + 20.0 < from || n - 20.0 > to)
+        };
+        let side = if fits(peak_x - 10.0 - nw, peak_x - 10.0) {
+            Some(("end", -1.0))
+        } else if fits(peak_x + 10.0, peak_x + 10.0 + nw) {
+            Some(("start", 1.0))
+        } else {
+            None
+        };
+        if let Some((anchor, dir)) = side {
+            let _ = write!(
+                svg,
+                r#"<path class="ck-lead" d="M{peak_x:.1},{ly0:.1} V{ly1:.1} H{lx:.1}"/><text class="ck-note" x="{tx:.1}" y="{ny:.1}" text-anchor="{anchor}">{t}</text>"#,
+                ly0 = tip_y - 5.0,
+                ly1 = ny - 4.0,
+                lx = peak_x + dir * 6.0,
+                tx = peak_x + dir * 10.0,
+                t = escape_html(&note),
+            );
+        } else if now_x.is_none_or(|n| (n - peak_x).abs() >= 40.0) {
+            let _ = write!(
+                svg,
+                r#"<text class="mono ck-annot ck-halo" x="{peak_x:.1}" y="{ty:.1}" text-anchor="middle" font-size="10">{v}</text>"#,
+                ty = tip_y - 5.0,
+                v = kit::compact(o.counts[peak] as f64),
+            );
+        }
     }
 
     // Hours on the axis, every third, and the sun under them.
@@ -237,31 +361,50 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             ty = plot_h + 15.0,
         );
     }
-    if let Some((rise, set)) = o.solar {
-        let items = [
-            ("\u{2600}", "sunrise", rise, "start"),
-            ("\u{263e}", "sunset", set, "end"),
-        ];
+    if let Some((rise, set)) = sky {
+        // The day as a rail under the hours: bright from sunrise to sunset, the sun at one end and
+        // the moon at the other, each captioned with its time. Where the two captions would touch
+        // (a day at a high latitude) the first one says it and the second is left out.
+        let ry = plot_h + 40.0;
+        let (xr, xs) = (x_of(rise.clamp(0.0, 24.0)), x_of(set.clamp(0.0, 24.0)));
+        let _ = write!(
+            svg,
+            r#"<line class="ck-rail" x1="{pad_l:.1}" y1="{ry:.1}" x2="{x2:.1}" y2="{ry:.1}"/><line class="ck-rail-day" x1="{xr:.1}" y1="{ry:.1}" x2="{xs:.1}" y2="{ry:.1}"/><circle class="ck-sun" cx="{xr:.1}" cy="{ry:.1}" r="5.5"/><circle class="ck-moon" cx="{xs:.1}" cy="{ry:.1}" r="5.5"/>"#,
+            x2 = pad_l + plot_w,
+        );
         let mut last_end = f64::NEG_INFINITY;
-        for (glyph, word, at, anchor) in items {
-            let label = format!("{glyph} {word} {}", fmt_clock(at));
-            let tw = kit::text_width(&label, 10.0);
-            let x = x_of(at.clamp(0.0, 24.0));
-            let (l, r) = if anchor == "start" {
-                (x, x + tw)
+        for (word, at, x) in [("sunrise", rise, xr), ("sunset", set, xs)] {
+            let label = if o.compact {
+                fmt_clock(at)
             } else {
-                (x - tw, x)
+                format!("{word} {}", fmt_clock(at))
             };
-            if l < last_end + 6.0 {
-                continue; // the two sit too close at this latitude: the first one says it
+            let tw = kit::text_width(&label, 10.0);
+            // Centred under its disc, kept inside the plot's edges.
+            let l = (x - tw / 2.0).clamp(pad_l, pad_l + plot_w - tw);
+            if l < last_end + 8.0 {
+                continue;
             }
-            last_end = r;
+            last_end = l + tw;
             let _ = write!(
                 svg,
-                r#"<line class="ck-axis" x1="{x:.1}" y1="{t0:.1}" x2="{x:.1}" y2="{t1:.1}"/><text class="mono ck-annot" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="10">{label}</text>"#,
-                t0 = plot_h + 19.0,
-                t1 = plot_h + 23.0,
-                ty = plot_h + 33.0,
+                r#"<text class="mono ck-annot" x="{l:.1}" y="{ty:.1}" font-size="10">{label}</text>"#,
+                ty = ry + 19.0,
+            );
+        }
+        // How long the day was, between the two captions, when they leave room for it.
+        let text = daylight_text(set - rise);
+        let (mid, nw) = (f64::midpoint(xr, xs), kit::note_width(&text));
+        let (cap_r, cap_s) = (
+            xr + kit::text_width("sunrise 00:00", 10.0) / 2.0,
+            xs - kit::text_width("sunset 00:00", 10.0) / 2.0,
+        );
+        if !o.compact && mid - nw / 2.0 > cap_r + 12.0 && mid + nw / 2.0 < cap_s - 12.0 {
+            let _ = write!(
+                svg,
+                r#"<text class="ck-note" x="{mid:.1}" y="{ty:.1}" text-anchor="middle">{t}</text>"#,
+                ty = ry + 19.0,
+                t = escape_html(&text),
             );
         }
     }
@@ -324,7 +467,7 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         let nx = x_of(n);
         let _ = write!(
             svg,
-            r#"<line class="ck-axis" x1="{nx:.1}" y1="-4" x2="{nx:.1}" y2="{plot_h:.1}" stroke-width="1.5"/><rect class="ck-pill" x="{px:.1}" y="-20" width="32" height="15" rx="7.5"/><text class="mono ck-pill-t" x="{tx:.1}" y="-9.5" text-anchor="middle" font-size="9">now</text>"#,
+            r#"<line class="ck-now" x1="{nx:.1}" y1="-4" x2="{nx:.1}" y2="{plot_h:.1}"/><rect class="ck-pill" x="{px:.1}" y="-20" width="32" height="15" rx="7.5"/><text class="mono ck-pill-t" x="{tx:.1}" y="-9.5" text-anchor="middle" font-size="9">now</text>"#,
             px = (nx - 16.0).clamp(pad_l, pad_l + plot_w - 32.0),
             tx = nx.clamp(pad_l + 16.0, pad_l + plot_w - 16.0),
         );
@@ -350,7 +493,28 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             if c > 0 {
                 rows.push(("Share of the day".to_string(), share, None));
             }
-            if let Some(top) = o.top {
+            if let Some(st) = o.stack {
+                // Everyone in the column, in the column's order, each with the colour it is drawn in.
+                let mut named = 0_i64;
+                for (k, name) in st.names.iter().enumerate() {
+                    let n = st.counts.get(k).map_or(0, |per_hour| per_hour[h]);
+                    if n > 0 {
+                        named += n;
+                        rows.push((
+                            name.clone(),
+                            kit::thousands(n),
+                            Some(format!("var(--chart-{})", k + 1)),
+                        ));
+                    }
+                }
+                if named < c {
+                    rows.push((
+                        "Other species".to_string(),
+                        kit::thousands(c - named),
+                        Some("var(--chart-other)".to_string()),
+                    ));
+                }
+            } else if let Some(top) = o.top {
                 for (name, n) in top[h].iter().take(3) {
                     rows.push((name.clone(), kit::thousands(*n), None));
                 }
@@ -397,6 +561,35 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             kit::thousands(o.counts[peak])
         )),
     );
+
+    // The key: what a notch is, and who each colour is.
+    let one = o.unit.strip_suffix('s').unwrap_or(o.unit);
+    let _ = write!(
+        svg,
+        r#"<div class="ck-scale"><span class="bnb-meta ck-scale-note">Each notch is {n} {what}.</span>"#,
+        n = kit::compact(unit),
+        what = if unit <= 1.0 { one } else { o.unit },
+    );
+    if let Some(st) = o.stack {
+        let named: Vec<usize> = (0..st.names.len())
+            .filter(|&k| st.counts.get(k).is_some_and(|c| c.iter().any(|&n| n > 0)))
+            .collect();
+        for k in named {
+            let _ = write!(
+                svg,
+                r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch ck-sw {cls}"></span>{name}</span>"#,
+                cls = kit::slot_class(k),
+                name = escape_html(&st.names[k]),
+            );
+        }
+        let named_total: i64 = st.counts.iter().flat_map(|c| c.iter()).sum();
+        if named_total < total {
+            svg.push_str(
+                r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch ck-sw ck-cother"></span>Other species</span>"#,
+            );
+        }
+    }
+    svg.push_str("</div>");
 
     if o.table {
         svg.push_str(
@@ -528,6 +721,17 @@ pub fn daily(o: &Daily<'_>) -> String {
     );
     svg.push_str(&svg_a11y(o.name, o.desc));
     svg.push_str(&kit::gradient_defs(&g, std::slice::from_ref(&cls)));
+    // Notches (one seam per whole step of the count) only where a bar is wide enough to hold them:
+    // across ninety thin bars they would be a texture and not a tally.
+    let notched = bar_w >= 8.0;
+    let notch = kit::notch_unit(top);
+    if notched {
+        let _ = write!(
+            svg,
+            "<defs>{}</defs>",
+            kit::notch_pattern(&format!("{g}-notch"), plot_h, plot_h * notch / top),
+        );
+    }
     if (0..n).any(off) {
         let _ = write!(svg, "<defs>{}</defs>", kit::nodata_pattern(&g));
     }
@@ -566,6 +770,12 @@ pub fn daily(o: &Daily<'_>) -> String {
             svg,
             r#"<path class="ck-grow" d="{d}" fill="url(#{g}-{cls})" data-ck-i="{i}" data-style="--i:{i}"/>"#
         );
+        if notched {
+            let _ = write!(
+                svg,
+                r#"<path class="ck-grow ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{i}" data-style="--i:{i}"/>"#
+            );
+        }
     }
     svg.push_str("</g>");
     let _ = write!(
@@ -699,6 +909,15 @@ pub fn daily(o: &Daily<'_>) -> String {
             label_of(&o.days[peak].0).1
         )),
     );
+    if notched {
+        let one = o.unit.strip_suffix('s').unwrap_or(o.unit);
+        let _ = write!(
+            svg,
+            r#"<div class="ck-scale"><span class="bnb-meta ck-scale-note">Each notch is {n} {what}.</span></div>"#,
+            n = kit::compact(notch),
+            what = if notch <= 1.0 { one } else { o.unit },
+        );
+    }
     if o.table {
         svg.push_str(r#"<details class="viz-table"><summary>Show as a table</summary><div class="viz-table-scroll"><table class="pt-tbl"><caption class="sr-only">Count for each day</caption><thead><tr><th scope="col">Day</th><th scope="col" class="num">Count</th></tr></thead><tbody>"#);
         for (i, (iso, c)) in o.days.iter().enumerate() {
@@ -832,8 +1051,11 @@ mod tests {
             solar: None,
             now_h: None,
             top: None,
+            stack: None,
             temps: &[],
             table: true,
+            class: "",
+            compact: false,
         }
     }
 
@@ -929,8 +1151,34 @@ mod tests {
         // 122 tops out at 150? count_ceiling gives 150? no: 1,2,3,4,5,6,8 x 10^k -> 200.
         assert!(svg.contains(">200<") || svg.contains(">150<"), "{svg}");
         assert!(svg.contains(">0<"), "{svg}");
-        let labels = svg.matches(r#"class="mono ck-annot ck-halo""#).count();
-        assert_eq!(labels, 1, "one peak label: {svg}");
+        // One note, beside the busiest bar, and no bare number besides.
+        let notes = svg.matches(r#"class="ck-note""#).count();
+        assert_eq!(notes, 1, "one peak note: {svg}");
+        assert!(svg.contains(">busiest hour, 122 heard<"), "{svg}");
+        assert_eq!(
+            svg.matches(r#"class="mono ck-annot ck-halo""#).count(),
+            0,
+            "the note is the label; a number as well would write the peak twice: {svg}"
+        );
+    }
+
+    /// Where the note has no room on either side (the busiest hour is at the left edge, the
+    /// "now" marker stands where the right-hand side would be) the bare number over the bar says it
+    /// instead: the peak is never left unlabelled, and never written twice.
+    #[test]
+    fn a_peak_with_no_room_for_its_note_is_labelled_with_its_number() {
+        let mut c = [0_i64; 24];
+        c[1] = 122;
+        c[3] = 30;
+        let mut o = opts(c);
+        o.now_h = Some(5.5);
+        let svg = hourly(&o);
+        assert_eq!(svg.matches(r#"class="ck-note""#).count(), 0, "{svg}");
+        assert_eq!(
+            svg.matches(r#"class="mono ck-annot ck-halo""#).count(),
+            1,
+            "{svg}"
+        );
         assert!(svg.contains(">122<"), "{svg}");
     }
 
@@ -991,7 +1239,19 @@ mod tests {
             svg.contains("sunrise 6:42") && svg.contains("sunset 18:00"),
             "{svg}"
         );
-        assert_eq!(svg.matches(r#"<rect class="ck-track""#).count(), 2, "{svg}");
+        // The night is the sky: a gradient across the plot, dark until first light, bright by day.
+        assert!(
+            svg.contains(r#"class="ck-sky""#) && svg.contains(r#"fill="url(#g-t-sky)""#),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(">11 h 18 min of daylight<"),
+            "the rail says how long the day was: {svg}"
+        );
+        assert!(
+            !hourly(&opts(sample())).contains("ck-sky"),
+            "no location, no sky"
+        );
         assert!(
             svg.contains("Sunrise 6:42"),
             "the hour it happens says so: {svg}"
@@ -1030,7 +1290,10 @@ mod tests {
         let mut c = sample();
         c[6] = 1_600_000;
         let svg = hourly(&opts(c));
-        assert!(svg.contains(">1.6M<") && svg.contains(">2M<"), "{svg}");
+        assert!(
+            svg.contains("busiest hour, 1.6M heard") && svg.contains(">2M<"),
+            "{svg}"
+        );
         assert!(
             svg.contains("1,600,000"),
             "the tooltip carries the exact number: {svg}"

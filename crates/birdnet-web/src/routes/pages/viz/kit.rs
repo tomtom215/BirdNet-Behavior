@@ -175,6 +175,13 @@ pub fn text_width(s: &str, font: f64) -> f64 {
     s.chars().count() as f64 * font * 0.58
 }
 
+/// Rough width of a note written in the display face's italic (13 units): that face is
+/// narrower than the UI face `text_width` measures, so this is that measure scaled down, and
+/// still on the wide side.
+pub fn note_width(s: &str) -> f64 {
+    text_width(s, 13.0) * 0.78
+}
+
 // ── scales ──────────────────────────────────────────────────────────────────────
 
 /// A linear map from a data range to a screen range.
@@ -482,6 +489,85 @@ pub fn nodata_pattern(prefix: &str) -> String {
     format!(
         r#"<pattern id="{prefix}-nd" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><line class="ck-grid-strong" x1="0" y1="0" x2="0" y2="6" stroke-width="2"/></pattern>"#
     )
+}
+
+/// The sky behind a 24-hour axis as a left-to-right gradient `id`, from the station's own
+/// sunrise and sunset (fractional hours): night until first light, a dawn wash at sunrise,
+/// day, a dusk wash at sunset, night again. The stops are named for the four washes and the
+/// stylesheet gives them their colours (`.ck-sky`), so the theme chooses every value.
+///
+/// Fill it into a rectangle exactly as wide as the plot: the gradient is measured on that
+/// rectangle (0 is midnight, 1 the next midnight). Stop offsets never go backwards, so a
+/// short winter day at a high latitude squeezes the day wash out instead of inverting it.
+pub fn sky_gradient(id: &str, rise: f64, set: f64) -> String {
+    let at = |hours: f64| (hours / 24.0).clamp(0.0, 1.0);
+    let stops = [
+        ("n", 0.0),
+        ("n", at(rise - 1.7)),
+        ("dw", at(rise - 0.1)),
+        ("dy", at(rise + 2.0)),
+        ("dy", at(set - 2.0)),
+        ("dk", at(set + 0.1)),
+        ("n", at(set + 1.7)),
+        ("n", 1.0),
+    ];
+    let mut s = format!(r#"<linearGradient id="{id}" class="ck-sky" x1="0" y1="0" x2="1" y2="0">"#);
+    let mut floor = 0.0_f64;
+    for (class, offset) in stops {
+        floor = floor.max(offset);
+        let _ = write!(s, r#"<stop class="{class}" offset="{floor:.4}"/>"#);
+    }
+    s.push_str("</linearGradient>");
+    s
+}
+
+/// A vertical gradient `id` that clears the foot of a panel toward the card, so a sky meets
+/// the ground at a horizon instead of ending in a hard edge.
+pub fn haze_gradient(id: &str) -> String {
+    format!(
+        r#"<linearGradient id="{id}" class="ck-haze" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0"/><stop class="b" offset="1"/></linearGradient>"#
+    )
+}
+
+/// The step, in counts, between two seams across a column: 1, 2 or 5 times a power of ten,
+/// the smallest that leaves no more than twelve of them from zero to `top`. A column of eight
+/// detections is eight notches; one of eight hundred is eight, each a hundred.
+pub fn notch_unit(top: f64) -> f64 {
+    let mut magnitude = 1.0_f64;
+    loop {
+        for m in [1.0, 2.0, 5.0] {
+            let unit = m * magnitude;
+            if top / unit <= 12.0 {
+                return unit;
+            }
+        }
+        magnitude *= 10.0;
+    }
+}
+
+/// A pattern `id` of horizontal seams, one at every whole `unit_px` up from the baseline at
+/// `plot_h`, centred on the value boundary it marks. Fill a column's own shape with
+/// `url(#id)` over its colour: the column keeps its true height and gains its steps.
+pub fn notch_pattern(id: &str, plot_h: f64, unit_px: f64) -> String {
+    let seam = 1.5_f64;
+    let y0 = (plot_h - seam / 2.0).rem_euclid(unit_px);
+    format!(
+        r#"<pattern id="{id}" patternUnits="userSpaceOnUse" x="0" y="{y0:.2}" width="40" height="{unit_px:.3}"><rect class="ck-notch" x="0" y="0" width="40" height="{seam}"/></pattern>"#
+    )
+}
+
+/// Radial gradients that put a soft halo behind a disc of each colour class in `classes`
+/// (`ck-q3`, `ck-c2`, …), named `{prefix}-{class}`: the halo is the disc's own colour
+/// fading to nothing, so a heat grid glows where it is busy.
+pub fn halo_gradients(prefix: &str, classes: &[String]) -> String {
+    let mut s = String::new();
+    for c in classes {
+        let _ = write!(
+            s,
+            r#"<radialGradient id="{prefix}-{c}" class="ck-hg {c}"><stop class="a" offset=".5"/><stop class="b" offset="1"/></radialGradient>"#
+        );
+    }
+    s
 }
 
 /// `s` reduced to what is safe in an element id and in a `url(#…)` reference: ASCII

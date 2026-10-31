@@ -651,7 +651,8 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
 /// heard most). Temperature, when there is weather, is its own labelled strip under
 /// the axis, never a second scale on the bars' plot.
 ///
-/// `hourly` is the per-hour detection count; `top` the species heard most each hour;
+/// `hourly` is the per-hour detection count; `top` the species heard most each hour; `stack`,
+/// when the day's species are known, makes each column the species it is made of;
 /// `temps` is `(hour 0–24, °C)` samples (empty means no strip); `solar` is
 /// `(sunrise, sunset)` hours when the station has a location; `now_h` is the current
 /// hour-of-day. All hours share one clock axis. The geometry is in [`super::bars`].
@@ -659,6 +660,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
 pub fn day_strip(
     hourly: &[i64; 24],
     top: &[Vec<(String, i64)>; 24],
+    stack: Option<&super::bars::Stack<'_>>,
     temps: &[(f64, f64)],
     solar: Option<(f64, f64)>,
     now_h: f64,
@@ -669,21 +671,40 @@ pub fn day_strip(
     } else {
         "Detections for each hour of today, with a now marker. Each hour's count and its busiest species are in its tooltip."
     };
-    super::bars::hourly(&super::bars::Hourly {
-        id: "today-hourly",
-        name: "Activity across the day",
-        desc,
-        unit: "detections",
-        counts: *hourly,
-        fill: super::bars::Fill::Seq,
-        width: 960.0,
-        plot_h: 120.0,
-        solar,
-        now_h: (0.0..24.0).contains(&now_h).then_some(now_h),
-        top: Some(top),
-        temps,
-        table: false,
-    })
+    // Drawn twice: 960 units across for a card, and 360 for a phone, where the first would be a third
+    // of a pixel a unit and every caption would be enlarged onto its neighbour. CSS shows one.
+    let draw = |id: &str, width: f64, plot_h: f64, class: &str, compact: bool| {
+        super::bars::hourly(&super::bars::Hourly {
+            id,
+            name: "Activity across the day",
+            desc,
+            unit: "detections",
+            counts: *hourly,
+            fill: super::bars::Fill::Seq,
+            width,
+            plot_h,
+            solar,
+            now_h: (0.0..24.0).contains(&now_h).then_some(now_h),
+            top: Some(top),
+            stack,
+            temps,
+            table: false,
+            class,
+            compact,
+        })
+    };
+    let wide = draw("today-hourly", 960.0, 120.0, " viz-chart--wide", false);
+    if wide == super::EMPTY {
+        return wide;
+    }
+    let narrow = draw(
+        "today-hourly-narrow",
+        360.0,
+        130.0,
+        " viz-chart--narrow",
+        true,
+    );
+    format!("{wide}{narrow}")
 }
 
 #[cfg(test)]
@@ -1066,7 +1087,7 @@ mod tests {
     fn day_strip_empty_and_basic() {
         let zero = [0i64; 24];
         let none = no_species();
-        assert!(day_strip(&zero, &none, &[], Some((6.0, 19.0)), 12.0).contains("Not enough"));
+        assert!(day_strip(&zero, &none, None, &[], Some((6.0, 19.0)), 12.0).contains("Not enough"));
         let mut hourly = [0i64; 24];
         hourly[6] = 4;
         hourly[7] = 7;
@@ -1075,7 +1096,7 @@ mod tests {
         let temps: Vec<(f64, f64)> = (0..24)
             .map(|h| (f64::from(h) + 0.5, 12.0 + f64::from(h) / 4.0))
             .collect();
-        let svg = day_strip(&hourly, &top, &temps, Some((6.0, 19.5)), 13.0);
+        let svg = day_strip(&hourly, &top, None, &temps, Some((6.0, 19.5)), 13.0);
         assert!(svg.contains("<svg"));
         // The labelled solar markers carry real clock times.
         assert!(svg.contains("sunrise 6:00"), "{svg}");
@@ -1102,11 +1123,68 @@ mod tests {
         assert!(svg.contains(r#"data-ck-id="today-hourly""#), "{svg}");
     }
 
+    /// The strip is two whole drawings with their own names: the narrow one is narrower and taller,
+    /// shares no id with the wide one (a duplicated id is a defect), and says the sun's times as bare
+    /// clocks, which is what fits it.
+    #[test]
+    fn the_strip_is_drawn_for_a_card_and_for_a_phone() {
+        let mut hourly = [0i64; 24];
+        hourly[6] = 4;
+        hourly[7] = 7;
+        let svg = day_strip(&hourly, &no_species(), None, &[], Some((6.0, 19.5)), 13.0);
+        let (wide, narrow) = svg
+            .split_once(r#"<div class="viz-chart ck viz-chart--narrow">"#)
+            .expect("a narrow drawing after the wide one");
+        assert!(
+            wide.starts_with(r#"<div class="viz-chart ck viz-chart--wide">"#),
+            "{wide}"
+        );
+        assert!(wide.contains(r#"data-ck-id="today-hourly""#));
+        assert!(narrow.contains(r#"data-ck-id="today-hourly-narrow""#));
+        for part in wide.split(r#" id=""#).skip(1) {
+            let id = part.split('"').next().unwrap_or_default();
+            assert!(
+                !narrow.contains(&format!(r#" id="{id}""#)),
+                "id {id:?} is defined twice"
+            );
+        }
+        assert!(
+            wide.contains("sunrise 6:00") && wide.contains("of daylight"),
+            "{wide}"
+        );
+        assert!(
+            !narrow.contains("sunrise")
+                && !narrow.contains("of daylight")
+                && narrow.contains(">6:00<"),
+            "the phone's rail is bare times: {narrow}"
+        );
+        let vb = |s: &str| -> (f64, f64) {
+            let v: Vec<f64> = s
+                .split_once("viewBox=\"")
+                .and_then(|(_, r)| r.split_once('"'))
+                .map(|(v, _)| {
+                    v.split_whitespace()
+                        .filter_map(|t| t.parse().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            (v[2], v[3])
+        };
+        let ((ww, wh), (nw, nh)) = (vb(wide), vb(narrow));
+        assert!(
+            nw < ww && nh > wh,
+            "narrow {nw}x{nh} against wide {ww}x{wh}"
+        );
+        // Nothing to draw is one sentence, not two.
+        let none = day_strip(&[0; 24], &no_species(), None, &[], None, 12.0);
+        assert_eq!(none.matches("Not enough").count(), 1, "{none}");
+    }
+
     #[test]
     fn day_strip_without_location_or_weather_still_renders() {
         let mut hourly = [0i64; 24];
         hourly[9] = 3;
-        let svg = day_strip(&hourly, &no_species(), &[], None, 10.0);
+        let svg = day_strip(&hourly, &no_species(), None, &[], None, 10.0);
         assert!(svg.contains("<svg"));
         // No solar facts → no sun lines and no night bands (never fake them).
         assert!(!svg.contains("sunrise"));

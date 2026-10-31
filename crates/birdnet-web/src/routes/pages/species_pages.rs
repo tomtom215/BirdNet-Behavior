@@ -482,15 +482,29 @@ fn lifelist_view(state: &AppState) -> String {
         let new_count = new_this_year(&first_seen);
         // Most-recent firsts: scientific-name keyed first-seen, joined to common
         // names via the top-species list (which carries both).
-        let mut named: Vec<(String, String, String)> =
-            birdnet_db::sqlite::top_species(conn, 10_000)?
-                .into_iter()
-                .filter_map(|s| {
-                    first_seen
-                        .get(&s.sci_name)
-                        .map(|d| (s.com_name, s.sci_name, d.clone()))
-                })
-                .collect();
+        let all = birdnet_db::sqlite::top_species(conn, 10_000)?;
+        // Every species with the day it was first heard: the timeline of firsts is made of these.
+        let firsts: Vec<super::life_timeline::First> = all
+            .iter()
+            .filter_map(|s| {
+                first_seen
+                    .get(&s.sci_name)
+                    .map(|d| super::life_timeline::First {
+                        com: s.com_name.clone(),
+                        sci: s.sci_name.clone(),
+                        date: d.clone(),
+                        count: s.count,
+                    })
+            })
+            .collect();
+        let mut named: Vec<(String, String, String)> = all
+            .into_iter()
+            .filter_map(|s| {
+                first_seen
+                    .get(&s.sci_name)
+                    .map(|d| (s.com_name, s.sci_name, d.clone()))
+            })
+            .collect();
         named.sort_by(|a, b| b.2.cmp(&a.2));
         named.truncate(6);
         Ok::<_, birdnet_db::sqlite::DbError>((
@@ -498,7 +512,7 @@ fn lifelist_view(state: &AppState) -> String {
             det_total,
             active_days,
             points,
-            (new_count, named),
+            (new_count, named, firsts),
         ))
     });
     let (species_total, det_total, active_days, points, firsts) = match loaded {
@@ -508,7 +522,9 @@ fn lifelist_view(state: &AppState) -> String {
             return super::error_states::could_not_load("your life list");
         }
     };
-    let (new_count, named) = firsts;
+    let (new_count, named, firsts) = firsts;
+    let timeline =
+        super::life_timeline::timeline_card(&super::today_date_string(), &firsts, state.names());
 
     let curve = super::viz::accumulation_curve(&points);
     let mut firsts_html = String::new();
@@ -537,6 +553,7 @@ fn lifelist_view(state: &AppState) -> String {
   </div>
   <div class="bnb-card pad"><div class="bnb-eyebrow">Your growing list</div><div class="sd-viz">{curve}</div></div>
 </div>
+{timeline}
 <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h2 class="sh-h">New to the list</h2></div></div><div class="sp-firsts">{firsts_html}</div></div>"#,
         det = super::group_thousands(det_total),
     )

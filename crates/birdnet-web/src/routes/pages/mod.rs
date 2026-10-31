@@ -20,6 +20,12 @@
 pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
+#[cfg(feature = "analytics")]
+pub(crate) mod behavioral_answers;
+#[cfg(feature = "analytics")]
+pub(crate) mod behavioral_assembly;
+#[cfg(feature = "analytics")]
+pub(crate) mod behavioral_glance;
 pub(crate) mod changelog;
 pub mod charts;
 pub(crate) mod cmdk;
@@ -42,6 +48,7 @@ pub mod history;
 pub mod homes;
 pub(crate) mod insight;
 pub mod life_list;
+pub(crate) mod life_timeline;
 pub(crate) mod listen;
 pub(crate) mod listening;
 pub mod migration;
@@ -65,6 +72,7 @@ pub(crate) mod toast;
 pub mod today;
 pub mod today_layout;
 pub(crate) mod today_phrase;
+pub(crate) mod today_songs;
 pub mod viz;
 pub mod weekly_report;
 pub mod year_in_review;
@@ -80,6 +88,8 @@ pub(crate) static LAYOUT_HTML: crate::seal::Sealed =
     crate::seal::Sealed::new(include_str!("../../../templates/layout.html"));
 pub(crate) static ANALYTICS_PAGE_HTML: crate::seal::Sealed =
     crate::seal::Sealed::new(include_str!("../../../templates/analytics.html"));
+pub(crate) static ANALYTICS_SEQUENCES_HTML: crate::seal::Sealed =
+    crate::seal::Sealed::new(include_str!("../../../templates/analytics_sequences.html"));
 pub(crate) static SPECIES_DETAIL_HTML: crate::seal::Sealed =
     crate::seal::Sealed::new(include_str!("../../../templates/species_detail.html"));
 pub(crate) static TIMESERIES_PAGE_HTML: crate::seal::Sealed =
@@ -504,6 +514,14 @@ pub(crate) fn today_date_string() -> String {
     #[allow(clippy::cast_sign_loss)]
     let (y, m, d) = days_to_date(secs as u64 / 86400);
     format!("{y}-{m:02}-{d:02}")
+}
+
+/// The local date `days` before today, `YYYY-MM-DD`, or `None` if it falls outside what the
+/// calendar code handles. What "the last 30 days" and "the last 90 days" start from.
+#[cfg(feature = "analytics")]
+pub(crate) fn date_days_ago(days: i64) -> Option<String> {
+    let (y, m, d) = viz::kit::shift_date(&today_date_string(), -days)?;
+    Some(format!("{y:04}-{m:02}-{d:02}"))
 }
 
 /// Convert days since Unix epoch to (year, month, day).

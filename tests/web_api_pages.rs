@@ -423,9 +423,58 @@ async fn analytics_page_returns_html() {
     assert!(html.contains("Bursts of singing"));
     assert!(html.contains("Species retention"));
     assert!(html.contains("Who keeps coming back"));
-    // The v0.8.0 dawn-sequence card (sequence_count + window_funnel_events).
-    assert!(html.contains("Dawn sequence"));
-    assert!(html.contains("The morning running order"));
+    // The ordered questions moved to the Sequences tab beside it: this tab says so, and does not
+    // carry their cards.
+    assert!(html.contains(r#"href="/patterns?tab=sequences""#));
+    assert!(!html.contains("The morning running order"));
+    assert!(!html.contains("Who answers whom"));
+}
+
+/// The Sequences tab (`/patterns?tab=sequences`) holds the engine's ordered questions: who opens
+/// the dawn, how fast the chorus builds, who is heard next, who answers whom. Each card loads its
+/// own partial, and the tab does not carry the visit cards.
+#[tokio::test]
+async fn the_sequences_tab_holds_the_ordered_questions() {
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .uri("/patterns?tab=sequences")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 131_072)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Who follows <em>whom</em>"), "{html}");
+    for (card, partial) in [
+        (
+            "The morning running order",
+            "/pages/analytics-dawn-sequence",
+        ),
+        (
+            "How fast the chorus comes together",
+            "/pages/analytics-assembly",
+        ),
+        ("Neighbouring species", "/pages/analytics-next"),
+        ("Who answers whom", "/pages/analytics-answers"),
+        ("The analytics engine", "/pages/analytics-config"),
+    ] {
+        assert!(html.contains(card), "{card}");
+        assert!(
+            html.contains(&format!(r#"hx-get="{partial}""#)),
+            "{partial}"
+        );
+    }
+    // The visit cards are on the other tab, once each; and the bar marks this one.
+    assert!(!html.contains("Bursts of singing"));
+    assert!(!html.contains("Who keeps coming back"));
+    assert_eq!(html.matches("bnb-subtab active").count(), 1);
+    assert!(html.contains(r#"href="/patterns?tab=behavior""#));
 }
 
 #[tokio::test]
@@ -699,6 +748,7 @@ async fn all_redesigned_pages_render_ok() {
         "/patterns?tab=together",
         "/patterns?tab=trends",
         "/patterns?tab=behavior",
+        "/patterns?tab=sequences",
         "/reports",
         "/reports?tab=year",
         "/reports?tab=history",

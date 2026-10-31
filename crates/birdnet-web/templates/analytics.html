@@ -1,6 +1,6 @@
 {{page_head}}
 
-<!-- One masonry of defined-in-place cards: every term explained where it lands -->
+<!-- Visits: how long and how often the birds are heard. One masonry of defined-in-place cards: every term explained where it lands -->
 <div class="pt-masonry bh-grid">
     <!-- Sessions -->
     <div class="bnb-card pad fig bh-wide">
@@ -15,8 +15,9 @@
         </div>
     </div>
 
-    <!-- Retention -->
-    <div class="bnb-card pad fig">
+    <!-- Retention: full width, because a half-width card on a tab of its own leaves the other half empty
+         and squeezes the ledger until a hundred per cent breaks over two lines. -->
+    <div class="bnb-card pad fig bh-wide">
         <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Species retention</div>
         <h2 class="an-card-h3">Who keeps coming back</h2>
         <p class="bnb-meta an-card-lede">
@@ -25,32 +26,6 @@
         </p>
         <div hx-get="/pages/analytics-retention" hx-trigger="load" hx-swap="innerHTML">
             <p class="an-loading">Loading retention data...</p>
-        </div>
-    </div>
-
-    <!-- Dawn sequence (v0.8.0: sequence_count + window_funnel_events) -->
-    <div class="bnb-card pad fig">
-        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Dawn sequence</div>
-        <h2 class="an-card-h3">The morning running order</h2>
-        <p class="bnb-meta an-card-lede">
-            The voices that open your dawn, how <b>often</b> they sing in that
-            same order — and the <b>times</b> they checked in on a recent morning.
-        </p>
-        <div hx-get="/pages/analytics-dawn-sequence" hx-trigger="load" hx-swap="innerHTML">
-            <p class="an-loading">Loading dawn sequence...</p>
-        </div>
-    </div>
-
-    <!-- Previous / next species -->
-    <div class="bnb-card pad fig bh-wide">
-        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Before and after</div>
-        <h2 class="an-card-h3">Neighbouring species</h2>
-        <p class="bnb-meta an-card-lede">
-            Which species tends to be heard just <b>before</b> a bird first turns up in a
-            session, and which just <b>after</b>. Birds heard at the same moment are not counted.
-        </p>
-        <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
-            <p class="an-loading">Loading predictions...</p>
         </div>
     </div>
 

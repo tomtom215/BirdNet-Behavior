@@ -60,6 +60,18 @@ const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
 const CHART_KIT_JS: &[u8] = include_bytes!("../../static/chart-kit.js");
 /// The soundscape terrain (Patterns, "When active"): the grid, and the 3D view's controls.
 const TERRAIN_JS: &[u8] = include_bytes!("../../static/terrain.js");
+/// Swaps which picture of the same data a card shows (`.seg[data-vs]`).
+const VIEW_SWITCH_JS: &[u8] = include_bytes!("../../static/view-switch.js");
+/// The life list's timeline of firsts (Species, "Life list").
+const DISCOVERY_JS: &[u8] = include_bytes!("../../static/discovery.js");
+/// Scrolls a home's tab strip to its active tab on a phone.
+const TAB_STRIP_JS: &[u8] = include_bytes!("../../static/tab-strip.js");
+/// Saves a figure's table as a CSV file (the Method and export panel's button).
+const FIGURE_EXPORT_JS: &[u8] = include_bytes!("../../static/figure-export.js");
+/// Who led each month (Reports, "Year in review").
+const SEASONS_JS: &[u8] = include_bytes!("../../static/seasons.js");
+/// Today's every-song view on the day's sky.
+const SKYSONG_JS: &[u8] = include_bytes!("../../static/skysong.js");
 /// The kiosk plate's picture engraver (`/kiosk`): fetches each species' picture and draws it
 /// into its oval as line-work. The plate is complete without it.
 const PLATE_JS: &[u8] = include_bytes!("../../static/plate.js");
@@ -186,6 +198,12 @@ pub fn router() -> Router<AppState> {
         .route("/static/chart-text.js", get(chart_text_js))
         .route("/static/chart-kit.js", get(chart_kit_js))
         .route("/static/terrain.js", get(terrain_js))
+        .route("/static/view-switch.js", get(view_switch_js))
+        .route("/static/discovery.js", get(discovery_js))
+        .route("/static/tab-strip.js", get(tab_strip_js))
+        .route("/static/figure-export.js", get(figure_export_js))
+        .route("/static/seasons.js", get(seasons_js))
+        .route("/static/skysong.js", get(skysong_js))
         .route("/static/plate.js", get(plate_js))
         .route("/static/vendor/three/three.module.min.js", get(three_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
@@ -335,6 +353,72 @@ async fn terrain_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         TERRAIN_JS,
+    )
+}
+
+async fn skysong_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        SKYSONG_JS,
+    )
+}
+
+async fn seasons_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        SEASONS_JS,
+    )
+}
+
+async fn discovery_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        DISCOVERY_JS,
+    )
+}
+
+async fn tab_strip_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        TAB_STRIP_JS,
+    )
+}
+
+async fn figure_export_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        FIGURE_EXPORT_JS,
+    )
+}
+
+async fn view_switch_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        VIEW_SWITCH_JS,
     )
 }
 
