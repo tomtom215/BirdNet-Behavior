@@ -290,13 +290,13 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             }
             let _ = write!(
                 svg,
-                r##"<path class="ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{h}"/></g><path class="ck-outline" d="{d}" data-ck-i="{h}"/>"##,
+                r#"<path class="ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{h}"/></g><path class="ck-outline" d="{d}" data-ck-i="{h}"/>"#,
             );
         } else {
             let cls = class_of(h, c);
             let _ = write!(
                 svg,
-                r##"<path class="ck-grow" d="{d}" fill="url(#{g}-{cls})" data-ck-i="{h}" data-style="--i:{h}"/><path class="ck-grow ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{h}" data-style="--i:{h}"/>"##,
+                r#"<path class="ck-grow" d="{d}" fill="url(#{g}-{cls})" data-ck-i="{h}" data-style="--i:{h}"/><path class="ck-grow ck-ov" d="{d}" fill="url(#{g}-notch)" data-ck-i="{h}" data-style="--i:{h}"/>"#,
             );
         }
     }
@@ -394,7 +394,7 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         }
         // How long the day was, between the two captions, when they leave room for it.
         let text = daylight_text(set - rise);
-        let (mid, nw) = ((xr + xs) / 2.0, kit::note_width(&text));
+        let (mid, nw) = (f64::midpoint(xr, xs), kit::note_width(&text));
         let (cap_r, cap_s) = (
             xr + kit::text_width("sunrise 00:00", 10.0) / 2.0,
             xs - kit::text_width("sunset 00:00", 10.0) / 2.0,

@@ -695,9 +695,11 @@ pub fn answers_days_sql(species: &[String], from: &str) -> String {
     )
 }
 
-/// SQL for who answers whom among `species`: one row holding, for every ordered pair `(a, b)`
-/// with `a != b`, the number of times `a` was heard and then `b` within `within_minutes`, summed
-/// over the days since `from`. The columns are the pairs in row-major order, skipping the diagonal.
+/// SQL for who answers whom among `species`.
+///
+/// One row holds, for every ordered pair `(a, b)` with `a != b`, the number of times `a` was heard
+/// and then `b` within `within_minutes`, summed over the days since `from`. The columns are the
+/// pairs in row-major order, skipping the diagonal.
 ///
 /// The pattern is the one every ordered query here uses ([`ordered_pattern`]): `(?t>0)` keeps two
 /// birds heard in one audio chunk from answering each other in both directions, and the gap is
@@ -793,7 +795,14 @@ mod tests {
             "{sql}"
         );
         assert!(sql.contains("'(?1).*(?t>0)(?t<=60)(?2)'"), "{sql}");
-        assert!(sql.contains("O''Brien''s Wren"), "{sql}");
+        // The name is in two places (each pair's condition, and the list the query is limited to),
+        // and a quote left bare in either breaks the statement; so check the condition itself and
+        // that no bare quote survives anywhere.
+        assert!(
+            sql.contains("Com_Name = 'O''Brien''s Wren'"),
+            "a pair's condition escapes the name: {sql}"
+        );
+        assert!(!sql.contains("O'Brien"), "a bare quote survives: {sql}");
         assert!(sql.contains("DATE '2026-10-01'"), "{sql}");
         assert!(answers_species_sql("2026-10-01", 8).contains("LIMIT 8"));
         assert!(answers_days_sql(&species, "2026-10-01").contains("O''Brien''s Wren"));

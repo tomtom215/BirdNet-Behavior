@@ -12,6 +12,9 @@
 //! A cell with fewer than [`MIN_EXCHANGES`] exchanges is drawn as an outline and says it is too few
 //! to read: a pair seen twice is an anecdote, and a grid that coloured it would invite a conclusion.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+// Cell positions and sizes from counts and a dozen rows: nothing near 2^52, and `i`/`j`/`n` are the
+// grid's indices.
+#![allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
 
 use std::fmt::Write as _;
 
@@ -398,7 +401,12 @@ mod tests {
         );
         let (a, names) = answers(vec![vec![0, 30, 0], vec![25, 0, 0], vec![0, 0, 0]]);
         let lead = headline(&a, &names).expect("a headline");
-        assert!(!lead.contains("one-sided"), "{lead}");
+        // 30 against 25 is a balanced pair: the plain sentence and nothing about the way back. (A
+        // check for "one-sided" alone passes when the other-way sentence is added by mistake.)
+        assert_eq!(
+            lead,
+            "Eurasian Blackbird is most often heard within a minute after European Robin: 30 times."
+        );
     }
 
     /// Nothing at the floor says so in words, and fewer than two birds is no grid at all.

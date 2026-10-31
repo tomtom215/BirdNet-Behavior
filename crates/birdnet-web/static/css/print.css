@@ -143,6 +143,10 @@
     --chart-grid: oklch(93% 0.005 80);
     --chart-grid-strong: oklch(87% 0.006 80);
     --chart-axis: oklch(64% 0.010 70);
+    --sky-night:   oklch(94.5% 0.014 268);
+    --sky-dawn:    oklch(95% 0.028 66);
+    --sky-day:     oklch(98.2% 0.014 92);
+    --sky-dusk:    oklch(95% 0.02 28);
     --chart-tip-bg: oklch(24% 0.010 70);
     --chart-tip-fg: oklch(98% 0.004 80);
     --chart-tip-border: oklch(34% 0.010 70);

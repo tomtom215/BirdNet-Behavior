@@ -278,9 +278,7 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             };
             let _ = write!(
                 hits,
-                r#"<rect class="ck-hit" x="{x:.1}" y="{y:.1}" width="{cw:.1}" height="{ch:.1}" data-ck-i="{idx}" data-tip="{tip}"/>"#,
-                x = x0,
-                y = y0,
+                r#"<rect class="ck-hit" x="{x0:.1}" y="{y0:.1}" width="{cw:.1}" height="{ch:.1}" data-ck-i="{idx}" data-tip="{tip}"/>"#,
             );
         }
         // The weekday's total, as a bar and a number.
@@ -619,6 +617,27 @@ mod tests {
             svg.contains("Mon 06:00\u{2013}07:00&#10;Detections&#9;23"),
             "{svg}"
         );
+    }
+
+    /// A disc and its halo are one mark: they carry the same index, so the kit dims and lights them
+    /// together. A halo left on another index would stay lit round a dimmed disc.
+    #[test]
+    fn every_disc_has_a_halo_on_the_same_index() {
+        let svg = hour_by_weekday(&grid());
+        let indices = |open: &str| -> Vec<usize> {
+            svg.split(open)
+                .skip(1)
+                .filter_map(|c| c.split_once(r#"data-ck-i=""#))
+                .filter_map(|(_, r)| r.split('"').next()?.parse().ok())
+                .collect()
+        };
+        let discs = indices(r#"<circle class="ck-disc "#);
+        let halos = indices(r#"<circle class="ck-halo-d""#);
+        assert!(
+            discs.contains(&(24 + 6)),
+            "the peak (Mon 06:00) is a disc: {svg}"
+        );
+        assert_eq!(halos, discs, "every disc is under its own halo");
     }
 
     /// Three states stay three: a count is a ramp step, a quiet hour is an empty cell, and a weekday

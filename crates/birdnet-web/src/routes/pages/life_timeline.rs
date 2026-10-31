@@ -23,7 +23,7 @@ pub(super) struct First {
     /// The scientific name.
     pub sci: String,
     /// The first day it was heard, `YYYY-MM-DD`.
-    pub first: String,
+    pub date: String,
     /// How many times it has been heard since.
     pub count: i64,
 }
@@ -44,21 +44,21 @@ pub(super) fn timeline_card(
                 })
             })
     };
-    let mut rows: Vec<&First> = firsts.iter().filter(|f| is_date(&f.first)).collect();
+    let mut rows: Vec<&First> = firsts.iter().filter(|f| is_date(&f.date)).collect();
     if rows.len() < 2 {
         return String::new();
     }
     // Oldest first, ties by name; when there are more than the limit, the newest are kept.
     rows.sort_by(|a, b| {
-        a.first
+        a.date
             .get(..10)
-            .cmp(&b.first.get(..10))
+            .cmp(&b.date.get(..10))
             .then_with(|| a.com.cmp(&b.com))
     });
     if rows.len() > MAX_SPECIES {
         rows.drain(..rows.len() - MAX_SPECIES);
     }
-    let from = rows[0].first.get(..10).unwrap_or(&rows[0].first);
+    let from = rows[0].date.get(..10).unwrap_or(&rows[0].date);
     let data = json!({
         "from": from,
         "to": today,
@@ -66,7 +66,7 @@ pub(super) fn timeline_card(
             "name": names.name(&f.sci, &f.com),
             "key": f.com,
             "sci": f.sci,
-            "first": f.first.get(..10).unwrap_or(&f.first),
+            "first": f.date.get(..10).unwrap_or(&f.date),
             "count": f.count,
             "code": super::atoms::species_code(&f.com),
             "img": format!("/api/v2/species/image/{}/file", simple_url_encode(&f.sci)),
@@ -85,7 +85,7 @@ pub(super) fn timeline_card(
             r#"<tr><th scope="row"><a href="/species/detail?name={enc}">{name}</a></th><td>{first}</td><td class="num">{count}</td></tr>"#,
             enc = simple_url_encode(&f.com),
             name = escape_html(names.name(&f.sci, &f.com)),
-            first = escape_html(f.first.get(..10).unwrap_or(&f.first)),
+            first = escape_html(f.date.get(..10).unwrap_or(&f.date)),
             count = group_thousands(f.count),
         );
     }
@@ -107,7 +107,7 @@ mod tests {
         First {
             com: com.into(),
             sci: format!("Sci {com}"),
-            first: date.into(),
+            date: date.into(),
             count,
         }
     }

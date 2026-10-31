@@ -162,7 +162,7 @@ pub struct PatternCount {
 /// `within_secs` seconds, on the same day, counted without overlap: one bird singing three times
 /// before one reply is one exchange, not three. The same instant is not a reply (birds heard in
 /// one audio chunk share an instant), and a bird is not its own reply, so the diagonal is zero.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Answers {
     /// The species compared, most heard first (stored common names).
     pub species: Vec<String>,

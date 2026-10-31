@@ -4795,7 +4795,7 @@ svg[data-ck="marks"] { cursor: default; }
 /* The rail under a 24-hour axis: the day's own length, with the sun at one end and the moon at the other. */
 .ck-rail     { stroke: var(--chart-grid-strong); stroke-width: 2px; stroke-linecap: round; fill: none; }
 .ck-rail-day { stroke: var(--dawn); stroke-width: 2.5px; stroke-linecap: round; fill: none; }
-.ck-sun      { fill: var(--dawn); }
+.ck-sun      { fill: var(--warning); }
 .ck-moon     { fill: var(--chart-axis); }
 
 /* One thing in the foreground, the rest at --chart-dim. */

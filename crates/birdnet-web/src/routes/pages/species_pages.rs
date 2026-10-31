@@ -492,7 +492,7 @@ fn lifelist_view(state: &AppState) -> String {
                     .map(|d| super::life_timeline::First {
                         com: s.com_name.clone(),
                         sci: s.sci_name.clone(),
-                        first: d.clone(),
+                        date: d.clone(),
                         count: s.count,
                     })
             })
