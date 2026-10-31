@@ -1690,6 +1690,145 @@ mod tests {
         );
     }
 
+    /// A station's dawn: seven regular voices (the seventh with exactly ten songs, the floor), one
+    /// with nine, one that sang only in April, and one that sings at noon. `Bird A` to `Bird G`
+    /// are heard 40, 35, 30, 25, 20, 15 and 10 times (a few a morning over five mornings in May)
+    /// and open at 06:00, 05:00, 05:30, 04:30, 04:10, 06:30 and 05:15. The fifth most heard (Bird E) opens
+    /// earliest of all, so it is in the three earliest whenever the pool is wide enough to hold it.
+    fn a_dawn_with_seven_voices() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE detections_analytic (Date TEXT, Time TEXT, Com_Name TEXT);",
+        )
+        .expect("table");
+        let sing = |date: &str, name: &str, (h, m): (u32, u32), n: u32| {
+            for i in 0..n {
+                let (hh, mm) = (h + (m + i) / 60, (m + i) % 60);
+                conn.execute(
+                    "INSERT INTO detections_analytic VALUES (?1, ?2, ?3)",
+                    rusqlite::params![date, format!("{hh:02}:{mm:02}:00"), name],
+                )
+                .expect("row");
+            }
+        };
+        let voices = [
+            ("Bird A", (6, 0), 8),
+            ("Bird B", (5, 0), 7),
+            ("Bird C", (5, 30), 6),
+            ("Bird D", (4, 30), 5),
+            ("Bird E", (4, 10), 4),
+            ("Bird F", (6, 30), 3),
+            ("Bird G", (5, 15), 2),
+        ];
+        for day in 1..=5 {
+            for (name, at, per_day) in voices {
+                sing(&format!("2026-05-{day:02}"), name, at, per_day);
+            }
+        }
+        sing("2026-05-01", "Bird H", (5, 10), 9);
+        sing("2026-04-01", "Old Bird", (5, 0), 50);
+        sing("2026-05-01", "Noon Bird", (12, 0), 60);
+        conn
+    }
+
+    /// The six regular voices of the season, the most heard, in the order they open: the seventh
+    /// (ten songs) is the one left out of a pool of six and in a pool of seven, the voice with nine
+    /// songs is never a regular, the April bird is not in May's season and the noon bird is not a
+    /// dawn voice at all.
+    #[test]
+    fn the_regular_voices_are_the_most_heard_in_the_order_they_open() {
+        let conn = a_dawn_with_seven_voices();
+        let season = Some("2026-05-01");
+        assert_eq!(
+            super::derive_dawn_voices(&conn, season, 6, 6).expect("read"),
+            ["Bird E", "Bird D", "Bird B", "Bird C", "Bird A", "Bird F"],
+            "the six most heard, by who opens first"
+        );
+        assert_eq!(
+            super::derive_dawn_voices(&conn, season, 7, 7).expect("read"),
+            [
+                "Bird E", "Bird D", "Bird B", "Bird G", "Bird C", "Bird A", "Bird F"
+            ],
+            "ten songs is a regular voice; nine (Bird H) is not"
+        );
+        // A bigger pool than there are regulars is not padded.
+        assert_eq!(
+            super::derive_dawn_voices(&conn, season, 20, 20)
+                .expect("read")
+                .len(),
+            7
+        );
+    }
+
+    /// What the season is: from `since` on, and everything for `None`, where the April bird heard
+    /// fifty times is the most heard of all.
+    #[test]
+    fn the_season_is_from_the_date_given_and_none_is_all_history() {
+        let conn = a_dawn_with_seven_voices();
+        let all = super::derive_dawn_voices(&conn, None, 6, 6).expect("read");
+        assert!(all.contains(&"Old Bird".to_owned()), "{all:?}");
+        assert!(
+            !all.contains(&"Bird F".to_owned()),
+            "pushed out of the six: {all:?}"
+        );
+        let may = super::derive_dawn_voices(&conn, Some("2026-05-01"), 6, 6).expect("read");
+        assert!(!may.contains(&"Old Bird".to_owned()), "{may:?}");
+        // The boundary day is in: `since` is inclusive.
+        let from_april = super::derive_dawn_voices(&conn, Some("2026-04-01"), 6, 6).expect("read");
+        assert!(
+            from_april.contains(&"Old Bird".to_owned()),
+            "{from_april:?}"
+        );
+        let after_april = super::derive_dawn_voices(&conn, Some("2026-04-02"), 6, 6).expect("read");
+        assert!(
+            !after_april.contains(&"Old Bird".to_owned()),
+            "{after_april:?}"
+        );
+        // Never the noon bird, whatever the season.
+        assert!(!all.iter().chain(&may).any(|n| n == "Noon Bird"));
+    }
+
+    /// The running order's answer did not move when the derivation was shared: the three earliest
+    /// of the five most heard, over all history. Ties in opening time go by name.
+    #[test]
+    fn the_running_order_still_takes_the_three_earliest_of_the_five_most_heard() {
+        let conn = a_dawn_with_seven_voices();
+        // Most heard over all history: Old Bird 50, A 40, B 35, C 30, D 25. By opening: D 04:30,
+        // then B and Old Bird together at 05:00 (B first by name), then C, then A.
+        assert_eq!(
+            super::derive_dawn_sequence(&conn).expect("read"),
+            ["Bird D", "Bird B", "Old Bird"]
+        );
+    }
+
+    /// Two voices heard equally often: the one first by name makes the pool.
+    ///
+    /// The query asks for that explicitly (`ORDER BY c DESC, Com_Name ASC`), so it holds by contract
+    /// and not by the accident of an order. This test pins the answer; it cannot tell the explicit
+    /// tie-break from its absence, because on the bundled SQLite the grouping already yields names in
+    /// order (the mutant without it passed, and was judged equivalent, not a gap).
+    #[test]
+    fn equal_volumes_are_ranked_by_name() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE detections_analytic (Date TEXT, Time TEXT, Com_Name TEXT);",
+        )
+        .expect("table");
+        for name in ["Zebra Finch", "Aardvark Lark"] {
+            for i in 0..12 {
+                conn.execute(
+                    "INSERT INTO detections_analytic VALUES ('2026-05-01', ?1, ?2)",
+                    rusqlite::params![format!("05:{i:02}:00"), name],
+                )
+                .expect("row");
+            }
+        }
+        assert_eq!(
+            super::derive_dawn_voices(&conn, None, 1, 1).expect("read"),
+            ["Aardvark Lark"]
+        );
+    }
+
     /// A read that fails is an error, not an empty order: the card read
     /// "Not enough dawn activity yet" for a station whose detections could
     /// not be read at all. Observed failing with the old

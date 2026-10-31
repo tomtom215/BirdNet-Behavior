@@ -23,6 +23,7 @@
 //!
 //! The one definition of dawn the pages share is here too.
 
+#[cfg(feature = "analytics")]
 use std::fmt::Write as _;
 
 use super::escape_html;
@@ -140,6 +141,9 @@ pub fn takeaway(html: &str) -> String {
     format!(r#"<p class="fig-take">{html}</p>"#)
 }
 
+// The Method panel is used only by the cards of the analytics tabs today, so it is built with that
+// feature; lift the gate when a figure that does not need the engine gets a Method panel too.
+#[cfg(feature = "analytics")]
 /// What was done to get a figure's numbers, and how to take them away: the fourth layer of an
 /// analytic card (at a glance, the picture, a closer look, then this).
 pub struct Method<'a> {
@@ -158,6 +162,7 @@ pub struct Method<'a> {
     pub csv: &'a [(&'a str, &'a str, &'a str)],
 }
 
+#[cfg(feature = "analytics")]
 /// How a figure says it was computed by one of `duckdb-behavioral`'s functions: the function
 /// in code, and the extension's version when the engine reported one (and that it did not, when
 /// it did not, because a method with its version missing is not the same method).
@@ -173,6 +178,7 @@ pub fn behavioral(function: &str, version: Option<&str>) -> String {
     )
 }
 
+#[cfg(feature = "analytics")]
 /// Render a [`Method`]: a disclosure closed by default, so a figure reads as its picture first.
 ///
 /// The CSV button is `hidden` until `static/figure-export.js` shows it, so a page with no script
@@ -226,6 +232,7 @@ mod tests {
 
     /// The panel says what computed the numbers and with which version, then what was asked, and
     /// it offers only the exports it has: a missing route is no link, not a dead one.
+    #[cfg(feature = "analytics")]
     #[test]
     fn the_method_panel_names_the_function_the_version_and_what_was_asked() {
         let computed = behavioral("window_funnel", Some("0.10.1"));
@@ -262,6 +269,7 @@ mod tests {
         assert!(!html.contains("open"), "{html}");
     }
 
+    #[cfg(feature = "analytics")]
     #[test]
     fn a_missing_version_is_said_and_a_missing_export_is_not_offered() {
         let computed = behavioral("sessionize", None);
@@ -281,6 +289,7 @@ mod tests {
         assert!(!html.contains("bnb-meta"), "no note, no paragraph: {html}");
     }
 
+    #[cfg(feature = "analytics")]
     #[test]
     fn what_was_asked_and_the_version_are_text_not_markup() {
         let computed = behavioral("<b>f</b>", Some("<i>1</i>"));

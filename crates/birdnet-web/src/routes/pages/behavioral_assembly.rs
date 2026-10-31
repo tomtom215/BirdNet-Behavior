@@ -432,6 +432,74 @@ mod tests {
         assert!(card_html(&[]).contains("has not been heard"));
     }
 
+    /// Two voices are one pair: the sentence says "both" once and does not say "two of them" as well.
+    #[test]
+    fn a_chorus_of_two_says_both_once() {
+        let two =
+            Chorus::from_depths(&windows(), 2, &vec![vec![1, 2, 2, 2, 2, 2]; 8]).expect("rows");
+        assert_eq!(
+            headline(&two),
+            "On half of your 8 mornings both voices were together, in order, within 2 min."
+        );
+    }
+
+    /// Seven mornings is the least that draws a picture; six says how many there are instead.
+    #[test]
+    fn seven_mornings_draw_and_six_do_not() {
+        let morning: &[u32] = &[1, 2, 3, 3, 3, 3];
+        let seven = card_html(&vec![morning; 7]);
+        assert!(
+            seven.contains("<svg") && seven.contains("fig-take"),
+            "{seven}"
+        );
+        let six = card_html(&vec![morning; 6]);
+        assert!(!six.contains("<svg"), "{six}");
+        assert!(six.contains("on 6 of the last 90 days"), "{six}");
+    }
+
+    /// A row of the table says what the picture says: here 10 minutes, where four of eight
+    /// mornings have all three voices.
+    #[test]
+    fn a_row_of_the_table_says_what_the_picture_does() {
+        let html = card_html(&BRISK);
+        let row = html
+            .split(r#"<th scope="row" data-csv="10">"#)
+            .nth(1)
+            .and_then(|r| r.split("</tr>").next())
+            .expect("the 10 minute row");
+        let cells: Vec<&str> = row
+            .split(r#"<td class="num">"#)
+            .skip(1)
+            .map(|c| c.trim_end_matches("</td>"))
+            .collect();
+        // Typical morning 3; middle half from 1 to 3; two or more 4 (50%); all three 4 (50%).
+        assert_eq!(cells, ["3", "1", "3", "4", "50", "4", "50"], "{row}");
+        assert!(row.starts_with("10 min</th>"), "{row}");
+    }
+
+    /// The key names the voices in the order they join, each with the colour of its row.
+    #[test]
+    fn the_key_names_the_voices_in_order_with_their_colours() {
+        let html = card_html(&BRISK);
+        let key = html
+            .split(r#"<ol class="as-order""#)
+            .nth(1)
+            .and_then(|r| r.split("</ol>").next())
+            .expect("a key");
+        let at = |s: &str| key.find(s).unwrap_or_else(|| panic!("{s} in {key}"));
+        assert!(
+            at("Robin") < at("Blackbird") && at("Blackbird") < at("Wren"),
+            "{key}"
+        );
+        for (k, name) in [(1, "Robin"), (2, "Blackbird"), (3, "Wren")] {
+            let item = key.split("<li>").nth(k).expect("an item");
+            assert!(
+                item.contains(&format!("as-chip ck-c{k}")) && item.contains(name),
+                "{item}"
+            );
+        }
+    }
+
     #[test]
     fn names_are_escaped_everywhere_they_are_printed() {
         let stored = vec!["<i>A</i>".to_owned(), "B".to_owned(), "C".to_owned()];

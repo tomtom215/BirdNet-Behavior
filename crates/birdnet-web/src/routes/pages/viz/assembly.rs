@@ -531,6 +531,23 @@ mod tests {
         );
         assert_eq!(c.half_by(2), Some(2), "within 5 min: 2 of 4");
         assert_eq!(c.half_by(3), Some(3));
+        // Half is not a third: six mornings with 3, 3, 2, 2, 1 and 1 voices at the second window.
+        // Half of them (three) have two or more, a third of them (two) have three, so the typical
+        // morning is two voices, the middle half runs from one to three.
+        let six = Chorus::from_depths(
+            &[1, 2],
+            3,
+            &[
+                vec![1, 3],
+                vec![1, 3],
+                vec![1, 2],
+                vec![1, 2],
+                vec![1, 1],
+                vec![1, 1],
+            ],
+        )
+        .expect("rows");
+        assert_eq!((six.lower(1), six.median(1), six.upper(1)), (1, 2, 3));
         // One morning in four is not half.
         let few = Chorus::from_depths(
             &windows(),

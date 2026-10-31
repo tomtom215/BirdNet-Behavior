@@ -20,6 +20,7 @@
 pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
+#[cfg(feature = "analytics")]
 pub(crate) mod behavioral_answers;
 #[cfg(feature = "analytics")]
 pub(crate) mod behavioral_assembly;
@@ -515,6 +516,7 @@ pub(crate) fn today_date_string() -> String {
 
 /// The local date `days` before today, `YYYY-MM-DD`, or `None` if it falls outside what the
 /// calendar code handles. What "the last 30 days" and "the last 90 days" start from.
+#[cfg(feature = "analytics")]
 pub(crate) fn date_days_ago(days: i64) -> Option<String> {
     let (y, m, d) = viz::kit::shift_date(&today_date_string(), -days)?;
     Some(format!("{y:04}-{m:02}-{d:02}"))
