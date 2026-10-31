@@ -11,7 +11,7 @@
 // Env:
 //   BASE         base url                       (default http://127.0.0.1:8502)
 //   THEMES       csv of light,dark              (default light,dark)
-//   AXE_FAIL_ON  csv impact levels that fail    (default serious,critical)
+//   AXE_FAIL_ON  csv impact levels that fail    (default minor,moderate,serious,critical: any finding)
 //   AXE_DISABLE  csv rules to skip              (default: none)
 //   AXE_ADVISORY_BLOCKS  "0" demotes the WCAG 2.2 / best-practice tier
 //   VPS          csv of desktop,mobile          (default desktop,mobile)
@@ -34,7 +34,7 @@ const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
 // Display → Charts: 'plate' runs every route with the plate chart style on (default: standard).
 const ILLUSTRATION = process.env.ILLUSTRATION || '';
 const FAIL_ON = new Set(
-  (process.env.AXE_FAIL_ON || 'serious,critical').split(',').filter(Boolean),
+  (process.env.AXE_FAIL_ON || 'minor,moderate,serious,critical').split(',').filter(Boolean),
 );
 const ONLY = process.env.ONLY || '';
 

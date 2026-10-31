@@ -101,9 +101,11 @@ skipping it. Three more rules it encodes: run the **whole workspace** at **every
 feature set CI builds** (clippy on `-p birdnet-web` is not clippy on the
 workspace); the **advisory checks (OSV, RustSec) answer for the database of the
 day**, so one that names a package this change did not touch is `main`'s state
-(`osv-scanner.toml`'s waiver for GHSA-qwgh-2vcv-g2f7 matches nothing now: the
-record, last modified 2026-10-30, lists block_buffer 0.11.0 up to 0.12.1, and
-the lockfile holds 0.10.4 and 0.12.1), not yours to fix on the branch;
+(`osv-scanner.toml` held a waiver for GHSA-qwgh-2vcv-g2f7 until 0.19.0: the
+record, last modified 2026-10-30, came to list block_buffer 0.11.0 up to 0.12.1
+while the lockfile holds 0.10.4 and 0.12.1, so the waiver matched nothing and
+was removed; a record can change under a branch that touched nothing), not
+yours to fix on the branch;
 and a green preflight is "these gates passed on this commit", never "CI will
 pass" (CodeQL, the image, the install and upgrade smoke tests and the aarch64
 cross-check run only there).
