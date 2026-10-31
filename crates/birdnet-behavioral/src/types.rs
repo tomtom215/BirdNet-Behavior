@@ -244,7 +244,8 @@ pub struct NextSpeciesPrediction {
     pub predicted_species: String,
     /// Number of times this sequence was observed.
     pub frequency: u64,
-    /// Proportion of times this species followed (0.0 - 1.0).
+    /// Share of the sessions with any successor in which it was the one (0.0 - 1.0): not of
+    /// every session the trigger was heard in, since one the trigger closes has no successor.
     pub probability: f64,
 }
 

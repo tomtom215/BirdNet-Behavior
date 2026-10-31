@@ -31,7 +31,8 @@ use crate::routes::pages::escape_html;
 pub struct Neighbour {
     /// The species as the station displays it.
     pub name: String,
-    /// The share of sessions in which it was the neighbour, `0..=1`.
+    /// The share, `0..=1`, of the sessions that had a bird on this side at all in which it was
+    /// the neighbour; not of every session the middle species was heard in.
     pub probability: f64,
     /// Sessions in which it was.
     pub frequency: u64,
@@ -215,9 +216,9 @@ fn neighbour_tip(trigger: &str, n: &Neighbour, side: &str) -> String {
         &[
             (
                 if side == "before" {
-                    "Share of sessions it came just before"
+                    "Of sessions with a bird before"
                 } else {
-                    "Share of sessions it came just after"
+                    "Of sessions with a bird after"
                 },
                 &format!("{:.0}%", n.probability * 100.0),
                 None,
@@ -322,6 +323,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The reading says what the percentage is a share of: the sessions that had a bird on that
+    /// side, which is the engine's denominator, and not every session the middle bird was in.
+    #[test]
+    fn the_reading_says_what_the_share_is_of() {
+        let svg = neighbours_flow("Blue Jay", &[n("A", 0.6, 3)], &[n("D", 1.0, 2)]);
+        assert!(svg.contains("Of sessions with a bird before"), "{svg}");
+        assert!(svg.contains("Of sessions with a bird after"), "{svg}");
+        assert!(!svg.contains("it came just"), "the old wording is gone");
     }
 
     /// One side alone is drawn, with its ribbons; the empty side is just empty.

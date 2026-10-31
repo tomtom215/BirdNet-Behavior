@@ -24,6 +24,8 @@ pub mod behavioral;
 pub(crate) mod behavioral_answers;
 #[cfg(feature = "analytics")]
 pub(crate) mod behavioral_assembly;
+#[cfg(feature = "analytics")]
+pub(crate) mod behavioral_glance;
 pub(crate) mod changelog;
 pub mod charts;
 pub(crate) mod cmdk;

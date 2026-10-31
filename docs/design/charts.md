@@ -165,6 +165,7 @@ overlap). `charts.mjs` supports `MUTATE=notip|nodim|motion|noreplay` to watch ea
 go red.
 
 The relational, radial and behavioural charts (the chord diagram and its phone ladder, the dawn
-rings, the migration ridgeline, the Behavior tab and the soundscape terrain) are described in
+rings, the migration ridgeline, the Visits and Sequences tabs with their four-layer cards and the chorus
+disc field, and the soundscape terrain) are described in
 [charts-relational.md](charts-relational.md), with their own gates (`relational.mjs`,
 `terrain.mjs`).

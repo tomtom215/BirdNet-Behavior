@@ -12,6 +12,8 @@ use axum::{Router, routing::get};
 #[cfg(feature = "analytics")]
 use rusqlite::OptionalExtension as _;
 
+#[cfg(feature = "analytics")]
+use super::behavioral_glance as glance;
 use super::{ANALYTICS_PAGE_HTML, ANALYTICS_SEQUENCES_HTML, escape_html};
 use crate::state::AppState;
 
@@ -267,7 +269,31 @@ fn render_bursts(
         })
         .collect();
 
+    // The first layer: what the figure found, in the station's names and of what is shown.
+    let shown_names: Vec<String> = bursts
+        .iter()
+        .map(|s| names.name_of_stored(&s.species).to_owned())
+        .collect();
+    let found: Vec<glance::Burst<'_>> = bursts
+        .iter()
+        .zip(&shown_names)
+        .map(|(s, species)| glance::Burst {
+            species,
+            secs: s.duration_secs,
+        })
+        .collect();
+    // Only the newest `limit` sessions are fetched, so a full fetch means older ones were left
+    // out and the counts below are of the newest, not of all.
+    let capped = u32::try_from(sessions.len()).is_ok_and(|n| n >= limit);
+    let scope = if capped {
+        format!("the {limit} newest sessions")
+    } else {
+        format!("all {} sessions", sessions.len())
+    };
     let mut html = String::new();
+    if let Some(sentence) = glance::bursts_sentence(&found, &scope, format_duration) {
+        html.push_str(&super::frame::takeaway(&sentence));
+    }
     html.push_str(&burst_timeline(&drawn, &legend, DAYS));
     html.push_str(
         r#"<details class="pt-disc"><summary>See the numbers — the bursts</summary><div class="viz-table-scroll"><table id="bt-table"><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>"#,
@@ -285,7 +311,7 @@ fn render_bursts(
     }
     html.push_str("</tbody></table></div>");
     if bursts.len() > SHOWN {
-        let scope = if u32::try_from(sessions.len()).is_ok_and(|n| n >= limit) {
+        let scope = if capped {
             format!(" found among the latest {limit} sessions")
         } else {
             String::new()
@@ -343,7 +369,13 @@ pub(super) async fn analytics_retention_partial(
                     r#"<p class="bh-muted">No retention data yet.</p>"#.to_string(),
                 );
             }
-            let mut html = render_retention(&retention, &names);
+            let mut html = String::new();
+            if let Some(sentence) =
+                glance::retention_sentence(glance::kind_counts(&retention), min_detections)
+            {
+                html.push_str(&super::frame::takeaway(&sentence));
+            }
+            html.push_str(&render_retention(&retention, &names));
             let days = intervals
                 .iter()
                 .map(u32::to_string)
@@ -600,7 +632,7 @@ pub(super) async fn analytics_next_partial(
                     ("Sessions", "runs of detections with no gap longer than 60 minutes".to_owned()),
                     ("Neighbours listed", "up to 5 on each side".to_owned()),
                 ],
-                "For each session in which the bird was heard, the species heard just before its first detection and just after it. The probability is the share of those sessions; birds heard in the same recording as the bird are not counted as before or after it.",
+                "For each session in which the bird was heard, the species heard just before its first detection and just after it. The probability is the share of the sessions that had a bird on that side, not of every session the bird was heard in: a session the bird opens has no bird before it, and one it closes has none after. Birds heard in the same recording as the bird are not counted as before or after it.",
                 &[
                     ("After, as JSON", api("next-species", &format!("after={who}&window=60&limit=5"))),
                     ("Before, as JSON", api("previous-species", &format!("before={who}&window=60&limit=5"))),
@@ -646,7 +678,11 @@ fn render_neighbour_figure(
     };
     let (b, a) = (to_neighbours(before), to_neighbours(after));
     let shown = names.name_of_stored(trigger);
-    let mut html = String::from(r#"<div class="fl-fig">"#);
+    let mut html = String::new();
+    if let Some(sentence) = glance::neighbour_sentence(shown, &b, &a) {
+        html.push_str(&super::frame::takeaway(&sentence));
+    }
+    html.push_str(r#"<div class="fl-fig">"#);
     html.push_str(&neighbours_flow(shown, &b, &a));
     html.push_str(r#"<div class="fl-lists">"#);
     for (side, rows) in [("Before", &b), ("After", &a)] {
@@ -1616,6 +1652,13 @@ mod tests {
             ),
             "{html}"
         );
+        // The sentence above the figure names the same scope: the fetch limit was reached.
+        assert!(
+            html.contains(
+                "25 bursts among the 100 newest sessions, all Great Tit; the longest ran 10m 0s."
+            ),
+            "{html}"
+        );
         // Counterpart: under the limit, no claim about a cut.
         let html = super::render_bursts(
             &sessions[..30],
@@ -1624,6 +1667,11 @@ mod tests {
             &birdnet_core::i18n::NameLocalizer::english(),
         );
         assert!(html.contains("of 25 bursts.</p>"), "{html}");
+        // Under the limit it is every session that was fetched, and says so.
+        assert!(
+            html.contains("25 bursts among all 30 sessions, all Great Tit;"),
+            "{html}"
+        );
     }
 
     /// The empty state names the gap the grouping actually used.

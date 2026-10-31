@@ -147,41 +147,75 @@ fn rung_label(minutes: u32) -> String {
     }
 }
 
-const W: f64 = 560.0;
-const PAD_L: f64 = 66.0;
-const PAD_R: f64 = 54.0;
-const PAD_T: f64 = 42.0;
-const PAD_B: f64 = 50.0;
-const ROW: f64 = 38.0;
+/// The proportions of one drawing. The figure is drawn twice, 560 units across for a card and 360
+/// for a phone, where the first would be about 0.6 of a pixel a unit and every caption would be
+/// enlarged onto its neighbour (or cut: "6 voices" became "6. voi…"); CSS shows one.
+#[derive(Debug, Clone, Copy)]
+pub struct Layout {
+    w: f64,
+    pad_l: f64,
+    pad_r: f64,
+    pad_t: f64,
+    pad_b: f64,
+    row: f64,
+    narrow: bool,
+}
+
+/// The drawing for a card.
+const WIDE: Layout = Layout {
+    w: 560.0,
+    pad_l: 66.0,
+    pad_r: 54.0,
+    pad_t: 42.0,
+    pad_b: 50.0,
+    row: 38.0,
+    narrow: false,
+};
+
+/// The drawing for a phone: row numbers alone, a label under only some of the columns, and the
+/// shorter words.
+const NARROW: Layout = Layout {
+    w: 360.0,
+    pad_l: 24.0,
+    pad_r: 42.0,
+    pad_t: 46.0,
+    pad_b: 42.0,
+    row: 34.0,
+    narrow: true,
+};
+
+/// The rungs that carry a label on the phone's drawing (the others are still columns, and still read).
+const NARROW_LABELS: [u32; 7] = [1, 5, 12, 30, 60, 120, 300];
 
 /// The geometry of one drawing, so a test can ask where a window or a depth falls.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame {
     cols: usize,
     rows: usize,
+    lay: Layout,
 }
 
 impl Frame {
-    const fn new(cols: usize, rows: usize) -> Self {
-        Self { cols, rows }
+    const fn new(cols: usize, rows: usize, lay: Layout) -> Self {
+        Self { cols, rows, lay }
     }
 
     fn height(self) -> f64 {
-        PAD_T + self.rows as f64 * ROW + PAD_B
+        self.lay.pad_t + self.rows as f64 * self.lay.row + self.lay.pad_b
     }
 
     fn base(self) -> f64 {
-        self.height() - PAD_B
+        self.height() - self.lay.pad_b
     }
 
     fn col_w(self) -> f64 {
-        (W - PAD_L - PAD_R) / self.cols as f64
+        (self.lay.w - self.lay.pad_l - self.lay.pad_r) / self.cols as f64
     }
 
     /// The left edge of column `i`.
     #[must_use]
     pub fn left(self, i: usize) -> f64 {
-        PAD_L + i as f64 * self.col_w()
+        self.lay.pad_l + i as f64 * self.col_w()
     }
 
     /// The middle of column `i`.
@@ -193,19 +227,19 @@ impl Frame {
     /// The top edge of row `k` (1 is the row on the baseline; zero is the baseline itself).
     #[must_use]
     pub fn top(self, k: usize) -> f64 {
-        self.base() - k.min(self.rows) as f64 * ROW
+        self.base() - k.min(self.rows) as f64 * self.lay.row
     }
 
     /// The middle of row `k`.
     #[must_use]
     pub fn y(self, k: usize) -> f64 {
-        self.top(k) + ROW / 2.0
+        self.top(k) + self.lay.row / 2.0
     }
 
     /// The largest disc: it leaves a margin inside its cell, so neighbours never touch.
     #[must_use]
     pub fn r_max(self) -> f64 {
-        self.col_w().min(ROW) / 2.0 - 2.5
+        self.col_w().min(self.lay.row) / 2.0 - 2.5
     }
 }
 
@@ -237,18 +271,37 @@ fn line(pts: &[(f64, f64)]) -> String {
     d
 }
 
-/// The figure: a field of discs, the typical morning in bold, the middle half as a band, the
-/// share of mornings that ever got to each level at the right. `names` are the voices in the
-/// order they join, for the readings and the description.
+/// The figure, drawn for a card and for a phone: a field of discs, the typical morning in bold,
+/// the middle half as a band, the share of mornings that ever got to each level at the right.
+/// `names` are the voices in the order they join, for the readings and the description.
 #[must_use]
 pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
-    if c.windows.len() < 2 || c.voices < 2 || c.mornings == 0 || c.reached.len() != c.voices {
+    if !drawable(c) {
         return EMPTY.to_string();
     }
+    let wide = draw(c, names, WIDE, "chorus-assembling", " viz-chart--wide");
+    let narrow = draw(
+        c,
+        names,
+        NARROW,
+        "chorus-assembling-narrow",
+        " viz-chart--narrow",
+    );
+    format!("{wide}{narrow}")
+}
+
+const fn drawable(c: &Chorus) -> bool {
+    c.windows.len() >= 2 && c.voices >= 2 && c.mornings > 0 && c.reached.len() == c.voices
+}
+
+/// One drawing of the figure at `lay`'s proportions; `id` names it for the chart kit and prefixes
+/// its gradient ids (two drawings on one page must not share an id), `class` is what CSS switches on.
+fn draw(c: &Chorus, names: &[String], lay: Layout, id: &str, class: &str) -> String {
     let n = c.windows.len();
-    let frame = Frame::new(n, c.voices);
-    let (h, base, right) = (frame.height(), frame.base(), W - PAD_R);
-    let g = kit::id_safe("chorus-assembling");
+    let frame = Frame::new(n, c.voices, lay);
+    let (h, base, right) = (frame.height(), frame.base(), lay.w - lay.pad_r);
+    let (w, pad_l, pad_t) = (lay.w, lay.pad_l, lay.pad_t);
+    let g = kit::id_safe(id);
 
     // The first cell the keyboard lands on: where the typical morning first reaches its top.
     let top = c.median(n - 1);
@@ -256,7 +309,7 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
     let start = (c.voices - top.max(1)) * n + landing;
 
     let mut s = format!(
-        r#"<div class="ck as-fig"><svg viewBox="0 0 {W} {h:.0}" width="100%" role="img" class="as-svg ck-in" data-ck="marks" data-ck-id="{g}" data-ck-grid="{n}" data-ck-start="{start}" data-ck-label="Left and right move between times allowed, up and down between numbers of voices.">"#,
+        r#"<div class="ck as-fig{class}"><svg viewBox="0 0 {w} {h:.0}" width="100%" role="img" class="as-svg ck-in" data-ck="marks" data-ck-id="{g}" data-ck-grid="{n}" data-ck-start="{start}" data-ck-label="Left and right move between times allowed, up and down between numbers of voices.">"#,
     );
     s.push_str(&svg_a11y(
         "How fast the chorus comes together",
@@ -277,35 +330,47 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
 
     // Row labels, and a rule between rows: the rows are the thing the eye follows.
     for k in 1..=c.voices {
+        let label = if lay.narrow {
+            k.to_string()
+        } else {
+            format!("{k} {}", if k == 1 { "voice" } else { "voices" })
+        };
         let _ = write!(
             s,
-            r#"<line class="ck-grid" x1="{PAD_L}" y1="{y:.1}" x2="{right:.1}" y2="{y:.1}"/><text class="ck-lbl as-row" x="{lx:.1}" y="{ty:.1}" text-anchor="end">{k} {noun}</text>"#,
+            r#"<line class="ck-grid" x1="{pad_l}" y1="{y:.1}" x2="{right:.1}" y2="{y:.1}"/><text class="ck-lbl as-row" x="{lx:.1}" y="{ty:.1}" text-anchor="end">{label}</text>"#,
             y = frame.top(k),
-            lx = PAD_L - 8.0,
+            lx = pad_l - if lay.narrow { 6.0 } else { 8.0 },
             ty = frame.y(k) + 4.0,
-            noun = if k == 1 { "voice" } else { "voices" },
         );
     }
     let _ = write!(
         s,
-        r#"<line class="ck-axis" x1="{PAD_L}" y1="{base:.1}" x2="{right:.1}" y2="{base:.1}"/>"#
+        r#"<line class="ck-axis" x1="{pad_l}" y1="{base:.1}" x2="{right:.1}" y2="{base:.1}"/>"#
     );
-    for (i, &w) in c.windows.iter().enumerate() {
+    for (i, &win) in c.windows.iter().enumerate() {
+        if lay.narrow && !NARROW_LABELS.contains(&win) {
+            continue;
+        }
         let _ = write!(
             s,
             r#"<text class="ck-lbl mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle">{label}</text>"#,
             x = frame.x(i),
             ty = base + 16.0,
-            label = rung_label(w),
+            label = rung_label(win),
         );
     }
     let _ = write!(
         s,
-        r#"<text class="ck-lbl as-axis" x="{mid:.1}" y="{ty:.1}" text-anchor="middle">time allowed from the first voice to the last</text><text class="ck-lbl as-axis" x="{gx:.1}" y="{ay:.1}">by {last}</text>"#,
-        mid = f64::midpoint(PAD_L, right),
+        r#"<text class="ck-lbl as-axis" x="{mid:.1}" y="{ty:.1}" text-anchor="middle">{title}</text><text class="ck-lbl as-axis" x="{gx:.1}" y="{ay:.1}">by {last}</text>"#,
+        mid = f64::midpoint(pad_l, right),
         ty = h - 8.0,
-        gx = right + 8.0,
-        ay = PAD_T - 8.0,
+        title = if lay.narrow {
+            "time allowed, first voice to last"
+        } else {
+            "time allowed from the first voice to the last"
+        },
+        gx = right + 6.0,
+        ay = pad_t - 8.0,
         last = window_label(c.windows[n - 1]),
     );
 
@@ -377,10 +442,11 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
             );
             let _ = write!(
                 hits,
-                r#"<rect class="ck-hit" x="{x:.1}" y="{y:.1}" width="{cw:.1}" height="{ROW}" data-tip="{reading}" data-ck-i="{idx}"/>"#,
+                r#"<rect class="ck-hit" x="{x:.1}" y="{y:.1}" width="{cw:.1}" height="{row}" data-tip="{reading}" data-ck-i="{idx}"/>"#,
                 x = frame.left(i),
                 y = frame.top(k),
                 cw = frame.col_w(),
+                row = lay.row,
             );
         }
     }
@@ -399,7 +465,7 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
         let _ = write!(
             s,
             r#"<text class="ck-lbl mono as-share" x="{x:.1}" y="{y:.1}">{pct:.0}%</text>"#,
-            x = right + 8.0,
+            x = right + 6.0,
             y = frame.y(k) + 4.0,
             pct = c.percent(k, n - 1),
         );
@@ -408,7 +474,12 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
     // One note, in the margin, for the typical morning's last climb, only where it fits.
     if top >= 2 {
         let text = format!(
-            "typical morning: {top} voices in {}",
+            "{} {top} voices in {}",
+            if lay.narrow {
+                "typical:"
+            } else {
+                "typical morning:"
+            },
             window_label(c.windows[landing])
         );
         let (px, py) = (frame.left(landing), frame.top(top));
@@ -416,8 +487,8 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
         // In the margin above the grid, with a leader down the edge of the column where the line
         // climbs: a disc never reaches a column's edge, so the leader crosses none of them, and the
         // words are never written over a mark.
-        let ny = PAD_T - 16.0;
-        if px - 10.0 - nw >= PAD_L {
+        let ny = pad_t - 16.0;
+        if px - 10.0 - nw >= pad_l {
             let _ = write!(
                 s,
                 r#"<path class="ck-lead" d="M{px:.1},{y0:.1} V{y1:.1} H{lx:.1}"/><text class="ck-note" x="{tx:.1}" y="{ny:.1}" text-anchor="end">{t}</text>"#,
@@ -438,6 +509,22 @@ pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The drawing for a card, as the figure draws it.
+    fn wide(c: &Chorus, names: &[String]) -> String {
+        draw(c, names, WIDE, "chorus-assembling", " viz-chart--wide")
+    }
+
+    /// The drawing for a phone.
+    fn narrow(c: &Chorus, names: &[String]) -> String {
+        draw(
+            c,
+            names,
+            NARROW,
+            "chorus-assembling-narrow",
+            " viz-chart--narrow",
+        )
+    }
 
     fn windows() -> Vec<u32> {
         vec![1, 2, 5, 10, 30, 60]
@@ -603,32 +690,32 @@ mod tests {
     /// step higher; and nothing is wider than its cell.
     #[test]
     fn the_cells_tile_the_plot() {
-        let f = Frame::new(14, 6);
-        assert!((f.left(0) - PAD_L).abs() < 1e-9);
-        assert!((f.left(14) - (W - PAD_R)).abs() < 1e-9);
+        let f = Frame::new(14, 6, WIDE);
+        assert!((f.left(0) - WIDE.pad_l).abs() < 1e-9);
+        assert!((f.left(14) - (WIDE.w - WIDE.pad_r)).abs() < 1e-9);
         assert!((f.left(5) - f.left(4) - f.col_w()).abs() < 1e-9);
         assert!(
             (f.top(0) - f.base()).abs() < 1e-9,
             "zero voices is the baseline"
         );
-        assert!((f.top(1) - f.base() + ROW).abs() < 1e-9);
+        assert!((f.top(1) - f.base() + WIDE.row).abs() < 1e-9);
         assert!(f.top(6) < f.top(5), "more voices are higher");
         assert!(
             (f.top(9) - f.top(6)).abs() < 1e-9,
             "never above the top row"
         );
         assert!(
-            f.r_max() * 2.0 < f.col_w().min(ROW),
+            f.r_max() * 2.0 < f.col_w().min(WIDE.row),
             "a disc leaves room round it"
         );
-        assert!((f.height() - (PAD_T + 6.0 * ROW + PAD_B)).abs() < 1e-9);
+        assert!((f.height() - (WIDE.pad_t + 6.0 * WIDE.row + WIDE.pad_b)).abs() < 1e-9);
     }
 
     /// Area is the share: a quarter of the mornings is half the radius of all of them, none is
     /// no disc, and a few are still a disc you can see.
     #[test]
     fn a_discs_area_is_the_share_of_mornings() {
-        let f = Frame::new(6, 3);
+        let f = Frame::new(6, 3, WIDE);
         let full = radius(f, 1.0).expect("a disc");
         assert!((full - f.r_max()).abs() < 1e-9);
         assert!((radius(f, 0.25).expect("a disc") - full / 2.0).abs() < 1e-9);
@@ -637,7 +724,7 @@ mod tests {
             (radius(f, 0.0001).expect("a disc") - 2.4).abs() < 1e-9,
             "a few are still visible"
         );
-        let svg = chorus_figure(&four(), &names());
+        let svg = wide(&four(), &names());
         let r = radii(&svg);
         // Row 1 is every morning at every window: six full discs.
         assert_eq!(
@@ -658,7 +745,7 @@ mod tests {
     }
 
     fn f_of(c: &Chorus) -> Frame {
-        Frame::new(c.windows.len(), c.voices)
+        Frame::new(c.windows.len(), c.voices, WIDE)
     }
 
     /// The bold line sits at the top of the highest row that at least half the mornings reached,
@@ -667,7 +754,7 @@ mod tests {
     fn the_typical_contour_is_where_half_the_mornings_stop() {
         let c = four();
         let f = f_of(&c);
-        let svg = chorus_figure(&c, &names());
+        let svg = wide(&c, &names());
         let d = svg
             .split(r#"<path class="as-med" d=""#)
             .nth(1)
@@ -698,13 +785,13 @@ mod tests {
     #[test]
     fn everything_drawn_is_inside_the_picture() {
         let c = four();
-        let svg = chorus_figure(&c, &names());
+        let svg = wide(&c, &names());
         let h = f_of(&c).height();
         for (attr, hi) in [
-            ("x", W),
-            ("x1", W),
-            ("x2", W),
-            ("cx", W),
+            ("x", WIDE.w),
+            ("x1", WIDE.w),
+            ("x2", WIDE.w),
+            ("cx", WIDE.w),
             ("y", h),
             ("y1", h),
             ("y2", h),
@@ -729,7 +816,7 @@ mod tests {
                 .filter(|t| !t.is_empty())
             {
                 let v: f64 = tok.parse().expect("number");
-                assert!((0.0..=W.max(h)).contains(&v), "path value {v} in {d}");
+                assert!((0.0..=WIDE.w.max(h)).contains(&v), "path value {v} in {d}");
             }
         }
     }
@@ -738,7 +825,7 @@ mod tests {
     /// morning is at that time; every index once, top row first, so the arrows walk it.
     #[test]
     fn every_cell_has_a_reading_and_an_index_the_arrows_can_walk() {
-        let svg = chorus_figure(&four(), &names());
+        let svg = wide(&four(), &names());
         assert_eq!(
             svg.matches(r#"class="ck-hit""#).count(),
             18,
@@ -780,7 +867,7 @@ mod tests {
     /// belongs to it.
     #[test]
     fn a_row_is_the_colour_of_the_voice_that_completes_it() {
-        let svg = chorus_figure(&four(), &names());
+        let svg = wide(&four(), &names());
         for k in 1..=3 {
             assert!(
                 svg.contains(&format!(r#"class="ck-disc ck-c{k}""#)),
@@ -809,7 +896,7 @@ mod tests {
             })
             .collect();
         let c = Chorus::from_depths(&ladder, 3, &late).expect("rows");
-        let svg = chorus_figure(&c, &names());
+        let svg = wide(&c, &names());
         assert!(svg.contains("typical morning: 3 voices in 1 h"), "{svg}");
         // In the margin above the grid, never over a mark: its baseline is above the first row.
         let note_y: f64 = svg
@@ -822,10 +909,10 @@ mod tests {
         assert!(note_y < f_of(&c).top(c.voices), "{note_y}");
         // Only the opener, ever: nothing to say in the margin.
         let flat = Chorus::from_depths(&windows(), 3, &[vec![1; 6], vec![1; 6]]).expect("rows");
-        assert!(!chorus_figure(&flat, &names()).contains("ck-note"));
+        assert!(!wide(&flat, &names()).contains("ck-note"));
         // The typical morning has them all from the first column: no room to its left.
         let brisk = Chorus::from_depths(&windows(), 3, &[vec![3; 6], vec![3; 6]]).expect("rows");
-        assert!(!chorus_figure(&brisk, &names()).contains("ck-note"));
+        assert!(!wide(&brisk, &names()).contains("ck-note"));
         // A rise too early to leave room for the words is not squeezed in.
         let early = Chorus::from_depths(
             &windows(),
@@ -833,7 +920,7 @@ mod tests {
             &[vec![1, 3, 3, 3, 3, 3], vec![1, 3, 3, 3, 3, 3]],
         )
         .expect("rows");
-        assert!(!chorus_figure(&early, &names()).contains("ck-note"));
+        assert!(!wide(&early, &names()).contains("ck-note"));
     }
 
     #[test]
@@ -845,7 +932,7 @@ mod tests {
             reached: vec![],
         };
         assert_eq!(chorus_figure(&empty, &[]), EMPTY);
-        let svg = chorus_figure(&four(), &["<b>x</b>".into(), "B".into(), "C".into()]);
+        let svg = wide(&four(), &["<b>x</b>".into(), "B".into(), "C".into()]);
         assert!(!svg.contains("<b>x"), "{svg}");
         assert!(svg.contains("&lt;b&gt;x&lt;/b&gt;"));
     }
@@ -864,16 +951,139 @@ mod tests {
             })
             .collect();
         let c = Chorus::from_depths(&ladder, 6, &rows).expect("rows");
-        let svg = chorus_figure(
+        let svg = wide(
             &c,
             &(1..=6).map(|k| format!("Voice {k}")).collect::<Vec<_>>(),
         );
         assert_eq!(svg.matches(r#"class="ck-hit""#).count(), 6 * 14);
         let h = f_of(&c).height();
         assert!(
-            svg.contains(&format!("viewBox=\"0 0 {W} {h:.0}\"")),
+            svg.contains(&format!("viewBox=\"0 0 {} {h:.0}\"", WIDE.w)),
             "{svg}"
         );
         assert!(svg.contains("ck-c6"));
+    }
+
+    /// A card and a phone each get a drawing of their own, with names of their own: two drawings
+    /// that shared an id would be a defect on the page, and each carries the class CSS switches on.
+    #[test]
+    fn the_figure_is_drawn_for_a_card_and_for_a_phone() {
+        let both = chorus_figure(&four(), &names());
+        assert_eq!(both.matches("<svg").count(), 2, "{both}");
+        assert_eq!(
+            both.matches(r#"class="ck as-fig viz-chart--wide""#).count(),
+            1
+        );
+        assert_eq!(
+            both.matches(r#"class="ck as-fig viz-chart--narrow""#)
+                .count(),
+            1
+        );
+        assert!(both.contains(r#"data-ck-id="chorus-assembling""#));
+        assert!(both.contains(r#"data-ck-id="chorus-assembling-narrow""#));
+        let ids: Vec<&str> = both
+            .split(" id=\"")
+            .skip(1)
+            .filter_map(|r| r.split('"').next())
+            .collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(ids.len(), unique.len(), "an id is defined twice: {ids:?}");
+        let (wide_svg, narrow_svg) = both
+            .split_once(r#"<div class="ck as-fig viz-chart--narrow">"#)
+            .expect("two drawings");
+        assert!(
+            wide_svg.contains("viewBox=\"0 0 560 ") && narrow_svg.contains("viewBox=\"0 0 360 ")
+        );
+    }
+
+    /// The phone's drawing says the same with fewer words: row numbers without "voices", a label
+    /// under only some of the columns, a shorter axis title. The readings are the same cells.
+    #[test]
+    fn the_phones_drawing_has_short_labels_and_the_same_readings() {
+        let ladder = [1, 2, 3, 5, 8, 12, 20, 30, 45, 60, 90, 120, 180, 300];
+        let rows: Vec<Vec<u32>> = (0..10)
+            .map(|_| (0..14).map(|i| 1 + (i / 5).min(2)).collect())
+            .collect();
+        let c = Chorus::from_depths(&ladder, 3, &rows).expect("rows");
+        let (w, n) = (wide(&c, &names()), narrow(&c, &names()));
+        let col_labels = |svg: &str| svg.matches(r#"class="ck-lbl mono" x="#).count();
+        assert_eq!(col_labels(&w), 14);
+        assert_eq!(
+            col_labels(&n),
+            NARROW_LABELS.len(),
+            "only the named rungs are labelled on a phone"
+        );
+        for label in ["1m", "5m", "12m", "30m", "1h", "2h", "5h"] {
+            assert!(n.contains(&format!(">{label}<")), "{label}");
+        }
+        assert!(!n.contains(">45m<") && w.contains(">45m<"));
+        assert!(w.contains(">3 voices<") && !n.contains(">3 voices<") && n.contains(">3</text>"));
+        assert!(
+            n.contains("time allowed, first voice to last")
+                && !n.contains("from the first voice to the last")
+        );
+        assert_eq!(
+            w.matches(r#"class="ck-hit""#).count(),
+            n.matches(r#"class="ck-hit""#).count()
+        );
+        // The same cells say the same things.
+        assert!(w.contains("3 voices within 10 min") || n.contains("3 voices within 20 min"));
+        let reading = |svg: &str, k: usize, i: usize| {
+            let idx = (3 - k) * 14 + i;
+            svg.split("data-tip=\"").skip(1).find_map(|c| {
+                let (tip, rest) = c.split_once("\" data-ck-i=\"")?;
+                rest.starts_with(&format!("{idx}\""))
+                    .then(|| tip.to_owned())
+            })
+        };
+        assert!(reading(&w, 2, 7).is_some_and(|t| t.contains("2 voices within 30 min")));
+        assert_eq!(reading(&w, 2, 7), reading(&n, 2, 7));
+    }
+
+    /// Every mark of the phone's drawing is inside its picture, as the card's is, and no label's
+    /// text is longer than the room its row or column gives it.
+    #[test]
+    fn the_phones_drawing_is_inside_its_picture_too() {
+        let ladder = [1, 2, 3, 5, 8, 12, 20, 30, 45, 60, 90, 120, 180, 300];
+        let rows: Vec<Vec<u32>> = (0..12)
+            .map(|m| (0..14).map(|i| 1 + ((i + m) / 4).min(5)).collect())
+            .collect();
+        let c = Chorus::from_depths(&ladder, 6, &rows).expect("rows");
+        let names: Vec<String> = (1..=6).map(|k| format!("Voice {k}")).collect();
+        for (svg, lay) in [(wide(&c, &names), WIDE), (narrow(&c, &names), NARROW)] {
+            let h = Frame::new(14, 6, lay).height();
+            for (attr, hi) in [
+                ("x", lay.w),
+                ("x1", lay.w),
+                ("x2", lay.w),
+                ("cx", lay.w),
+                ("y", h),
+                ("y1", h),
+                ("y2", h),
+                ("cy", h),
+            ] {
+                for r in svg.split(&format!(" {attr}=\"")).skip(1) {
+                    let v: f64 = r
+                        .split('"')
+                        .next()
+                        .and_then(|t| t.parse().ok())
+                        .expect("number");
+                    assert!(
+                        (0.0..=hi).contains(&v),
+                        "{attr}={v} in a drawing {} wide",
+                        lay.w
+                    );
+                }
+            }
+            // Right-hand figures leave the picture's edge room: "100%" at 11 units is under 30 wide.
+            let gutter = lay.pad_r - 6.0;
+            assert!(
+                kit::text_width("100%", 11.0) < gutter,
+                "{} < {gutter}",
+                kit::text_width("100%", 11.0)
+            );
+        }
     }
 }

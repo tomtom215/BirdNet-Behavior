@@ -41,6 +41,8 @@
 //   MUTATE=notipcell the chorus's cells lose their readings
 //   MUTATE=wrongcsv  the CSV button names a table that is not there
 //   MUTATE=nocsv     figure-export.js never saves anything
+//   MUTATE=notabreveal  tab-strip.js never scrolls the strip
+//   MUTATE=widephone    the stylesheet shows the card's chorus drawing on a phone instead of the phone's
 import { chromium } from 'playwright';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
@@ -82,6 +84,13 @@ async function open(route, { width = 1440, theme = 'light', touch = false } = {}
       await r.fulfill({ response: res, body });
     });
   }
+  if (MUTATE === 'notabreveal') {
+    await context.route('**/static/tab-strip.js*', async (r) => {
+      const res = await r.fetch();
+      const body = (await res.text()).replace('function reveal() {', 'function reveal() { return;');
+      await r.fulfill({ response: res, body });
+    });
+  }
   if (MUTATE === 'nocsv') {
     await context.route('**/static/figure-export.js*', async (r) => {
       const res = await r.fetch();
@@ -95,6 +104,7 @@ async function open(route, { width = 1440, theme = 'light', touch = false } = {}
   await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
   if (MUTATE === 'allthere') await page.evaluate(() => document.styleSheets[0].insertRule('.co-chord { display: block !important; }', document.styleSheets[0].cssRules.length));
+  if (MUTATE === 'widephone') await page.evaluate(() => { const sh = document.styleSheets[0]; sh.insertRule('.viz-chart--wide { display: block !important; }', sh.cssRules.length); sh.insertRule('.viz-chart--narrow { display: none !important; }', sh.cssRules.length); });
   if (MUTATE === 'nodim') await page.evaluate(() => document.styleSheets[0].insertRule('svg.ck-focus [data-ck-s] { opacity: 1 !important; }', document.styleSheets[0].cssRules.length));
   return { context, page, errors };
 }
@@ -329,8 +339,26 @@ console.log('\nbehavior');
   check('retention is grouped by class (resident, regular, migrant)', groups.length >= 2 && groups.some((g) => /Resident/.test(g)), groups.join(' | '));
   const cells = await page.$$eval('.rt-cell', (e) => e.length);
   check('and each species has its six return rates', cells >= 6 * 5, `${cells}`);
+  // A rate is one token: "100%" broken over two lines reads as "100" and "%". A table squeezed into a
+  // half-width card did exactly that for the rows whose rate was a hundred.
+  const brokenRates = (pg) => pg.evaluate(() => {
+    const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el); return new Set([...r.getClientRects()].map((q) => Math.round(q.top))).size; };
+    return [...document.querySelectorAll('.rt-cell')].filter((c) => lines(c) > 1).map((c) => c.textContent.trim());
+  });
+  const broken = await brokenRates(page);
+  check('no return rate is broken over two lines', broken.length === 0, `${broken.length} of ${cells} broken, e.g. ${broken.slice(0, 3).join(', ')}`);
   check('no script error', errors.length === 0, errors.join(' | '));
   await context.close();
+  {
+    // The same card at 1000 px, where the ledger has least room and the layout is still the wide one.
+    const tight = await open('/patterns?tab=behavior', { width: 1000 });
+    await tight.page.waitForSelector('.rt-table', { timeout: 20000 }).catch(() => {});
+    await tight.page.waitForTimeout(800);
+    const b = await brokenRates(tight.page);
+    const over = await tight.page.$eval('.rt-scroll', (e) => e.scrollWidth - e.clientWidth);
+    check('nor at 1000 px, and the ledger does not need to scroll sideways', b.length === 0 && over <= 0, `${b.length} broken, ${over}px over`);
+    await tight.context.close();
+  }
 }
 
 console.log('\nsequences');
@@ -357,17 +385,17 @@ console.log('\nsequences');
   }
 
   // The chorus: a field of discs, a reading in every cell.
-  const hits = await page.$$eval('.as-svg .ck-hit', (e) => e.length);
-  const discs = await page.$$eval('.as-svg .ck-disc', (e) => e.length);
+  const hits = await page.$$eval('.as-fig.viz-chart--wide .ck-hit', (e) => e.length);
+  const discs = await page.$$eval('.as-fig.viz-chart--wide .ck-disc', (e) => e.length);
   check('the chorus is a field of discs with a reading in every cell', hits >= 14 * 3 && discs >= 14 && hits % 14 === 0, `${hits} readings, ${discs} discs`);
   if (hits) {
-    const svg = page.locator('.as-svg').first();
+    const svg = page.locator('.as-fig.viz-chart--wide .as-svg');
     await svg.scrollIntoViewIfNeeded();
-    const cell = (await page.$$('.as-svg .ck-hit'))[hits - 1];
+    const cell = (await page.$$('.as-fig.viz-chart--wide .ck-hit'))[hits - 1];
     const cb = await cell.boundingBox();
     await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
     await page.waitForTimeout(150);
-    const tip = await page.locator('.as-fig .ck-tip.on').textContent().catch(() => '');
+    const tip = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
     check('pointing at a cell reads how many mornings and what the typical one is', /voice/.test(tip) && /of \d+ \(\d+%\)/.test(tip) && /Typical morning/.test(tip), tip);
     // The keyboard: one tab stop. Home is the top-left cell (every voice, the shortest time); the right
     // arrow moves along to a longer time allowed with the same voices, and down to one voice fewer in
@@ -376,13 +404,13 @@ console.log('\nsequences');
     await svg.focus();
     await page.keyboard.press('Home');
     await page.waitForTimeout(120);
-    const first = await page.locator('.as-fig .ck-tip.on').textContent().catch(() => '');
+    const first = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
     await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(120);
-    const right = await page.locator('.as-fig .ck-tip.on').textContent().catch(() => '');
+    const right = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
     await page.keyboard.press('ArrowDown');
     await page.waitForTimeout(120);
-    const down = await page.locator('.as-fig .ck-tip.on').textContent().catch(() => '');
+    const down = await page.locator('.as-fig.viz-chart--wide .ck-tip.on').textContent().catch(() => '');
     const parse = (t) => {
       const m = t.match(/(\d+) voices? within (\d+ (?:h|min)(?: \d+ min)?)/);
       return m ? { k: Number(m[1]), w: m[2] } : null;
@@ -422,6 +450,35 @@ for (const [route, wait] of [['/patterns?tab=behavior', '.bt-svg, .rt-table'], [
     over: document.documentElement.scrollWidth - window.innerWidth,
   }));
   if (route.endsWith('sequences')) check('a phone gets ranked lists in place of the flow', r.sankey === 'none' && r.lists !== 'none', JSON.stringify(r));
+  if (route.endsWith('sequences')) {
+    const tab = await page.evaluate(() => {
+      const strip = document.querySelector('.bnb-subtabs');
+      const a = document.querySelector('.bnb-subtab.active');
+      const sr = strip.getBoundingClientRect();
+      const ar = a.getBoundingClientRect();
+      return { left: ar.left, right: ar.right, stripLeft: sr.left, stripRight: sr.right, scrolled: strip.scrollLeft, label: a.textContent.trim() };
+    });
+    check('the tab you are on is in view in the strip', tab.left >= tab.stripLeft - 1 && tab.right <= tab.stripRight + 1 && tab.scrolled > 0, JSON.stringify(tab));
+    const chorus = await page.evaluate(() => {
+      const wide = document.querySelector('.as-fig.viz-chart--wide');
+      const narrow = document.querySelector('.as-fig.viz-chart--narrow');
+      const svg = narrow && narrow.querySelector('svg');
+      const vb = svg ? Number(svg.getAttribute('viewBox').split(' ')[2]) : 0;
+      const scale = svg ? svg.getBoundingClientRect().width / vb : 0;
+      const sizes = svg ? [...svg.querySelectorAll('.ck-lbl')].map((t) => parseFloat(getComputedStyle(t).fontSize) * scale) : [];
+      const rows = svg ? [...svg.querySelectorAll('.as-row')].map((t) => t.textContent.trim()) : [];
+      return {
+        wideShown: !!wide && getComputedStyle(wide).display !== 'none',
+        narrowShown: !!narrow && getComputedStyle(narrow).display !== 'none',
+        smallest: sizes.length ? Math.min(...sizes) : 0,
+        rows,
+        cut: svg ? [...svg.querySelectorAll('text')].filter((t) => t.textContent.includes('\u2026')).length : -1,
+      };
+    });
+    check('a phone gets the chorus drawn for a phone, and not the card\'s', chorus.narrowShown && !chorus.wideShown, JSON.stringify(chorus));
+    check('its smallest label is a readable size and none is cut short', chorus.smallest >= 9 && chorus.cut === 0, `${chorus.smallest.toFixed(1)}px, ${chorus.cut} cut`);
+    check('and its rows are numbered, not worded', chorus.rows.length >= 3 && chorus.rows.every((t) => /^\d$/.test(t)), JSON.stringify(chorus.rows));
+  }
   check(`${route}: no sideways scroll`, r.over <= 0, `${r.over}px`);
   check(`${route}: no script error`, errors.length === 0, errors.join(' | '));
   await context.close();

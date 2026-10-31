@@ -35,6 +35,14 @@ changed*, the life list's *When each bird joined*); added one new use of the ext
 bullet), section 3 (last bullet), section 4 (last subsection), section 5 (items 23 to 29) and section 6 (last paragraph but
 one) were updated for it; **everything else is as it was on 2026-10-28 and was not re-read.**
 
+**Later the same day, same branch.** The maintainer chose option A (section 2) and asked for *the chorus assembling*. Both are built:
+the Patterns bar is grouped When / Who / How, *Behavior* is split into *Visits* and *Sequences*, the six cards of those two tabs
+have the same four layers (a sentence, the picture, the table, Method and export), and the chorus is drawn from `window_funnel`
+and **not** from `window_funnel_events`, which a probe showed cannot measure a lag (section 6). The five other Patterns tabs
+are regrouped but have **not** been given the four layers (section 5, item 31). A measurement also corrected a claim the
+product had made: the neighbour card said "share of sessions" for a number that is a share of the sessions *with a neighbour*
+(section 5, item 32). Sections 2, 3, 4, 5 (items 23, 28, 30 to 32) and 6 were updated for it.
+
 ## 1. Repository settings only the maintainer can change
 
 Read on 2026-10-21 (`gh api repos/tomtom215/BirdNet-Behavior/…`). These are settings,
@@ -182,8 +190,9 @@ what this branch will do.
   six homes and give every analytic page the same four layers (At a glance, The picture, Look closer, Method and export), with
   the Patterns tabs grouped as When / Who / How; no URL or tab key changes; the plan's recommendation. **B**: a Depth switch
   (Glance, Explore, Research) per page; not recommended, because a reader never finds what a switch hides. **C**: a seventh
-  home, "Insights"; better as a strip at the top of Today and of each Patterns tab. Nothing is built for any of them; the
-  Method-and-export panel and the Patterns regrouping wait on this.
+  home, "Insights"; better as a strip at the top of Today and of each Patterns tab. **Decided 2026-10-31: A** (the maintainer's
+  words were "Go with option A and build the chorus assembling"). Built for the Visits and Sequences tabs only; the other
+  Patterns tabs have the grouping and not the layers (item 31).
 
 ## 3. What the last session changed
 
@@ -243,6 +252,18 @@ the commits to read first (hashes valid on this branch).
     re-read and re-run here; their own mutation reports are theirs and were not repeated); the `--sky-*` tokens in `app.css`.
   - *Fixes the full run found* (`79c1010`, `91812fc`): four gates red in the web crate and one in the root crate's sweep, all on this branch's own work, 23 clippy errors, and three
     tests too weak to fail against their own mutant (section 4).
+  - *CI parity* (the commit after those): `scripts/preflight.sh` and `scripts/osv-check.py` (every locally-runnable CI gate in one
+    command, a missing tool a failure), the rule in `CLAUDE.md` and `CONTRIBUTING.md`, and what the first runs found: a rustdoc
+    `private-intra-doc-links` error in `queries.rs`, five `typos` hits (a three-letter variable in `skysong.js`, two fixture
+    codes in `tools/visual-qa/unit/discovery.*`), and the root crate's `no_query_field_with_a_rendered_control_reads_a_blank_strictly` failing on
+    `AssemblyQuery.hour_start`/`hour_end` (a blank hour was a 400).
+  - *Option A and the chorus* (`1807fdf`, `c4d048b`, and the commit after them): `AnalyticsDb::assembly`, `queries::assembly_sql`,
+    `types::{Assembly, AssemblyParams, ASSEMBLY_WINDOWS}`; `GET /api/v2/analytics/{assembly,answers}`; `viz/assembly.rs` (the disc field,
+    drawn for a card and for a phone) and `pages/behavioral_assembly.rs` (the card); `frame::Method` and `static/figure-export.js`
+    (Method and export, with a CSV built in the browser); `homes::{Group, grouped_subtabs}` and `static/tab-strip.js`; the
+    `sequences` tab and `templates/analytics_sequences.html`; `pages/behavioral_glance.rs` (the sentences for bursts, the return-rate
+    ledger and the neighbours). The neighbour flow's tooltip, its doc comment, the guide and the card's Method note were corrected
+    (item 32).
 
 ## 4. What was verified, and by what command
 
@@ -346,6 +367,31 @@ heat-grid halo on a different index than its disc went unnoticed (`every_disc_ha
 conditions' name escaping was hidden by the escaped `IN` list (the test now checks the condition and that no bare quote
 survives). One engine mutant was invalid (it removed a bound parameter, so it failed on the parameter count and not on the
 claim) and was replaced.
+
+### 2026-10-31, later the same day (option A, the chorus, and a CI-parity pass)
+
+The tree was `c4d048b` plus 37 uncommitted files, the day's work before the commit that follows it; `~/.duckdb` absent. The gate list was
+built from `.github/workflows/*.yml` with the CI-parity preflight skill, then turned into `scripts/preflight.sh`.
+
+| Command | Printed |
+|---|---|
+| `scripts/preflight.sh --msrv` (tools: typos 1.51.1, cargo-machete, cargo-deny 0.20.2, cargo-audit 0.22.2) | exit 0; 18 gates `ok`: fmt, typos, machete, installer drift, deny, audit, OSV, clippy at default, all and no default features over the **workspace**, rustdoc `-D warnings`, build, CLI help current, build all features, manual links, licence notices, doc tests, **`cargo check` on rustc 1.95.0** (`--workspace --all-features --all-targets --locked`) |
+| the same gates, first run, before fixes | **rustdoc failed** (`answers_sql`'s public doc linked the private `ordered_pattern`); `typos` 1.51.1, the version CI pins, found **5 hits** (`skysong.js`, two fixture codes in `tools/visual-qa/unit/discovery.*`); both fixed. The three clippy runs passed |
+| `cargo test -p birdnet-behavior` (root crate), 13 batches | first run: 1564 passed, **1 failed**: `no_query_field_with_a_rendered_control_reads_a_blank_strictly` (`AssemblyQuery.hour_start`/`hour_end`). Fixed with `routes::form::blank_is_none`; `a_blank_hour_is_not_given_rather_than_refused` returned 400 against the old handler and passes now. Final run on the finished tree: 13 of 13 batches exit 0, 78 `test result:` lines, **1565 passed, 0 failed** |
+| `cargo test -p birdnet-web --features analytics` over every file of `crates/birdnet-web/tests/` (six at a time) and `--lib`; `-p birdnet-behavioral --features analytics --lib`; `-p birdnet-db --lib` | 26 of 26 batches exit 0, 151 `test result:` lines, **670 passed, 0 failed**; lib 1481, 132 and 501 passed |
+| `python3 scripts/osv-check.py` (the database `osv.yml`'s scanner reads, the same six lockfiles, `osv-scanner.toml` applied) | 649 packages, 0 advisories match; the waiver matches nothing (item 34). Counterparts on a planted `smallvec 0.6.9`: 9 advisories, exit 1; waived to 2099, exit 0; waived to 2020, exit 1 |
+| `cargo deny --all-features check`; `cargo audit --deny warnings` | "advisories ok, bans ok, licenses ok, sources ok"; 1395 advisories loaded, 544 crates scanned, exit 0 |
+| browser gates against a fixture rebuilt from the tree each time (Chromium 1243, axe-core 4.11.4) | every gate exit 0 on its last run. On the **final tree**: `relational`, `interactions`, `dom-sinks`, `figures --fail`, `legibility`. After the full-width layout change but **before** the `skysong.js` rename and the route fix: `layout`, `axe`, `cls`, `focus`. On earlier builds only: `motion`, `charts`, `base-path`, `tokens`, `chart-ramps`, `surface-layers`, `token-doc`, the two self-tests (no CSS changed since, but they were not re-run). `axe` prints 12 moderate findings, one rule on the species page (item 30). `legibility` graded 940, 925, 925 and 941 labels in four runs of this branch; the fixture is seeded from the clock and nothing that draws SVG text changed between them, so I did not chase it |
+| `STRICT=1 node qa.mjs`, three runs on this branch | 4 states with `allSpeciesPhotosFailed(6/6)` (before the session's work), **0 pages with issues** (184 screenshots, 10:30 UTC), 4 states again (12:42 UTC) on the same code. Item 29: the six avatars' pictures come from Wikipedia through this container's shared egress, which answered 429; CI's a11y job passed this step on every run I could read (15 successes in the last 30, the other 15 being 12 cancelled and 3 failures; I read the failing step of one of them, the Focus gate, a real finding, and not the other two) |
+| mutants, one site each, applied and restored with `touch`: the three sentences and the kind counting (8, then 6, with the two that shared a test run singly), the phone drawing of the chorus (8, singly), the figure's tooltip wording; `relational.mjs MUTATE=notabreveal` and `widephone` | each mutant failed at least one test it was meant to; the first round's 8 each had a failing test no other mutant in it could cause; `notabreveal` fails "the tab you are on is in view", `widephone` the two phone-drawing checks. The new `relational.mjs` check "no return rate is broken over two lines" failed on the half-width card (3 cells at 1100 to 1440 px, 33 at 1000) and passes on the full-width one |
+| `node tools/visual-qa/unit/{skysong,seasons,discovery,figure-export}.test.mjs` | 47, 38, 38 and 7 passed |
+| after the commit, on the clean tree: `cargo package --workspace --locked --no-verify`; `scripts/check-crate-licences.py --self-test` and on `target/package`; the 8 MiB size loop from `supply-chain.yml` | packaged; "self-test: 0 failure(s)"; "all crate tarballs carry the licence files"; no tarball over 8 MiB |
+
+**Not run (2026-10-31, later):** CodeQL (a pull request with new JavaScript, `figure-export.js` and `tab-strip.js`, is graded by it; I read the new scripts for
+the sinks its queries look at and found none that a gate had not already covered, which is not a CodeQL result); the container image, the install and upgrade
+smoke tests and the aarch64 cross-check and native tests (Docker, systemd and a cross toolchain are not here); `docs.yml`'s versioned build and its browser
+check of the built site (mdBook is not installed; the in-app render of the same sources was link-checked); the coverage and inference-model jobs;
+`mutation.yml` (the diff touches none of its paths, so it will not run); the core, integrations, migrate, scheduler and timeseries crates' own tests (nothing in them changed).
 
 **Not verified (2026-10-31):** that CI as locked passes (`package-lock.json` pins `axe-core` 4.13.0 and Playwright 1.64.1; I ran
 4.11.4 and 1.63.0); `terrain` and the other `a11y.yml` steps not listed above; the `ILLUSTRATION=plate` variants; Firefox and WebKit; a Raspberry Pi; clippy under `--no-default-features` and
@@ -468,9 +514,8 @@ it says otherwise.
     800 × 480 display therefore opens on Numbers; its owner can ask for `?mode=plate` and gets small captions.
     Making the plate itself legible there needs a layout drawn for the screen, not scaled to it.
 
-23. **"Who answers whom" has no REST route.** Low. The page reads `AnalyticsDb::answers` directly. A route needs an entry in
-    `openapi.json` (`every_route_the_api_serves_is_in_the_openapi_document` fails without one), a handler and a test; until
-    then the numbers leave only through the table on the page.
+23. ~~"Who answers whom" has no REST route.~~ **Done 2026-10-31**: `GET /api/v2/analytics/answers` (and `/assembly`), in
+    `openapi.json`, with `the_assembly_and_answers_endpoints_answer`.
 24. **The view modules' unit tests run in no workflow.** Low to medium. `tools/visual-qa/unit/*.test.mjs` (`node
     unit/<name>.test.mjs`, `tools/visual-qa/README.md`) are run by hand; `a11y.yml` does not call them, and its time budget was
     not measured with them.
@@ -484,15 +529,18 @@ it says otherwise.
 27. **The daylight rail's day line is `--dawn` as a stroke** (`.ck-rail-day`), 2.85:1 on the page in the light theme, and
     `amber_is_never_a_text_colour` reads `fill:` and `color:` only. Low: it is decoration, and the same fact is printed beside
     it ("9 h 47 min of daylight").
-28. **What the plan owes** (`docs/design/insights-and-organisation.md`, sections 4 to 6): *the chorus assembling*
-    (`window_funnel_events` is in the REST API and no page draws it), cohort retention of new arrivals, gap sensitivity, the
-    Method-and-export panel and the Patterns regrouping (both wait on the decision in section 2), the bursts timeline on a
-    per-day sky, a margin note on the streamgraph, and a probe per funnel mode before any page names one (the extension's two
-    documentation pages disagree about `allow_reentry`, `strict_order` and `strict`). Not known: whether a station with under
+28. **What the plan owes** (`docs/design/insights-and-organisation.md`, sections 4 to 6): cohort retention of new arrivals, gap
+    sensitivity, the four layers on the other Patterns tabs (item 31), the bursts timeline on a per-day sky, a margin note on the
+    streamgraph, and a probe per funnel mode before any page names one (the extension's two documentation pages disagree about
+    `allow_reentry`, `strict_order` and `strict`; the chorus uses `strict_increase`, whose behaviour was probed). `window_funnel_events`
+    is still drawn by no page as a lag, and should not be (section 6). Not known: whether a station with under
     about 200 detections a day gives the answers grid enough pairs to be more than noise.
 
-29. **The strict visual sweep fails on the life list in this container.** Medium until it is explained on a runner with a
-    network. `qa.mjs` counts the `<img>` elements that point at `/api/v2/species/image/…` and fails a page on which the number of
+29. **The strict visual sweep fails on the life list in this container, some of the time.** Medium until it is explained on a runner
+    with a network. (Updated: of three strict runs on this branch two failed and one had 0 issues on the same code, and CI's a11y job
+    passed the step on every run I could read, so it is the network-backed pictures and not the diff; a hermetic fixture, seeding a
+    credited picture for every species it heard, would end the dependence and was not done here because it changes what every gate
+    sees on those pages.) `qa.mjs` counts the `<img>` elements that point at `/api/v2/species/image/…` and fails a page on which the number of
     distinct broken URLs equals the number of such elements. On `/species?view=lifelist` there are exactly six, the avatars of "New to the list", and the
     fixture answers `404 image not available` for all six: it holds a picture for some species only (six other species
     answered `200` on that page), none of the six newest firsts is among them, and the Wikipedia-backed fallback answered
@@ -503,6 +551,43 @@ it says otherwise.
     a flaw: `speciesImgTotal` counts elements and `speciesImgBroken` counts distinct URLs, so a page that repeats species
     (the dashboard: 31 elements, 5 URLs) can never reach equality, and a page with one avatar per species and no pictures
     always does.
+30. **axe reports `landmark-complementary-is-top-level` (moderate) on the species-detail page.** Low. 12 findings in the
+    sweep on the final build (`axe.mjs` printed "12 total violation(s); 0 at/above [serious, critical]"): the three states
+    `species-detail`, `species-detail-held-back` and `species-detail-unheard`, each in both themes and both sizes, one node
+    each ("Aside should not be contained in another landmark"). The gate blocks on serious and critical only, so it passes.
+    `templates/species_detail.html` has an `<aside class="bnb-card pad species-hero__media">`; `git diff ec59953..HEAD` does
+    not touch that file, and `layout.html` gained only script tags, so nothing this branch changed can reach it. **Not run at
+    the base commit**, so "also there before" is not shown.
+31. **The four layers are on six cards, not on every analytic page.** Medium. The Visits and Sequences tabs have them; When
+    active, Dawn chorus, Trends, Who sings together and Migration are regrouped under When / Who and are otherwise as they were
+    (some already have a sentence from `pages/insight.rs`; none has a Method and export panel). The Method panel's JSON link
+    exists only where a REST route does (`sessions`, `retention`, `next-species`, `previous-species`, `assembly`, `answers`;
+    the running order has none), and its CSV button saves the table on the page, not detection-level rows.
+32. **A number on the neighbour card was described as something it is not.** Fixed 2026-10-31; kept here because the same
+    sentence may exist elsewhere. The engine's probability is the share of the sessions that *had a bird on that side*
+    (`adjacent_species_sql` says so; a probe confirmed it: a Blackbird followed by a Jay on 2 of its 7 sessions reported the Jay at
+    100%). The flow's tooltip, the guide, the card's Method note and a doc comment said "share of sessions". Corrected in the
+    tooltip (`the_reading_says_what_the_share_is_of`), the guide, `docs/design/charts-relational.md`, the Method note and
+    `NextSpeciesPrediction::probability`; the card's new sentence states the basis and a test runs a real engine over a station
+    whose answer is worked out by hand. Not searched for: other pages that print a share without its denominator.
+33. **The morning running order's labels cross its own lines and dots.** Low to medium. In `docs/book/images/sequences.png` (and
+    live, at any width) the heavy line for the newest morning runs through "167 mornings · 82%" and the time labels (08:00,
+    08:13, 08:22) sit on dots. The figure (`viz/funnel.rs`) predates this branch and was not changed, and the committed
+    `behavior.png` from before it shows the same thing at half size; making its card full width (so it does not sit alone in half
+    a tab) made it larger. Found by looking at the rendered page; no gate flagged it, and I did not check whether any gate can
+    see SVG text against SVG marks.
+34. **`osv-scanner.toml`'s only waiver matches nothing now.** Low. `GHSA-qwgh-2vcv-g2f7` is waived for block-buffer 0.10.4 until
+    2026-12-01 (#272). Read from the database on 2026-10-31 (`scripts/osv-check.py`), the record was last modified 2026-10-30 and lists
+    `block_buffer` 0.11.0 up to 0.12.1 as affected; the lockfile holds 0.10.4 and 0.12.1, so nothing matches and all 649 locked packages
+    across the six lockfiles match no advisory. Whether to drop the waiver is the maintainer's call (it expires on its own). The
+    general point: an OSV finding depends on the database of the day and not on the branch, so a red `OSV-Scanner` job on a branch that
+    does not touch a lockfile is `main`'s state.
+35. **I could not find what "signoffs" failed on recent pull requests.** Open question for the maintainer. The user reported "issues with
+    signoffs and OSV" on the last few pull requests. For OSV, #271's comments say it (a new advisory on `main`, then #272's waiver). For
+    "signoffs" I found nothing: no DCO or sign-off rule in `.github/`, `CONTRIBUTING.md`, `scripts/` or any workflow; 2 of the 717 commits
+    on `main` carry a `Signed-off-by` trailer, and 284 of the last 300 are unsigned and were merged; all 73 checks on #271's last head
+    were `success` and its status list was empty. If it is a repository ruleset (required review, signed commits, a status from an
+    app), it is a setting only the maintainer can read (section 1) and `scripts/preflight.sh` does not cover it.
 
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
@@ -583,11 +668,17 @@ one. #273 (merged) now holds a pull request to the budgets it edits, so they sho
 first `CI config` run after the merge of `main` (3bc8865) is where to confirm it. Then the two decisions in section 5,
 items 15 and 16, and CodeQL alert 175 on the picture cache, which is a maintainer's dismissal.
 
+**Before every push: `scripts/preflight.sh` (add `--msrv`; `--tests` when the disk allows).** It is the workflows' own commands at the
+workflows' scope, and it fails on a tool it cannot find. Install the tools it names first (`cargo install --locked typos-cli --version
+1.51.1`, `cargo-machete`, `cargo-deny`, `cargo-audit --version 0.22.2`; crates.io and PyPI are reachable from the container, GitHub
+release downloads are not). The pull requests before this one lost CI cycles to checks that were not run locally (section 5, item 35
+and `CLAUDE.md`, *Testing Conventions*).
+
 Done 2026-10-31, on `claude/amazing-bardeen-317rgu` (pushed; no pull request; section 4 says what ran). **First, next session:**
 decide with the maintainer whether to open a draft pull request, because nothing on GitHub has seen this branch and the jobs most
 likely to find what a container could not are `a11y.yml` (locked axe-core and Playwright, not the versions I ran) and the aarch64
-build. Then the organisation decision in section 2, which gates the Patterns regrouping and the Method-and-export panel, and then
-*the chorus assembling*, which is one query and one picture.
+build. The organisation decision (section 2) is made (A) and the chorus is built; what is left of it is item 31, the four layers on
+the other five Patterns tabs, which is the next piece of work on this line, then cohort retention and gap sensitivity (item 28).
 
 The lint-allow count in section 2 came from this script, run from the repository root:
 

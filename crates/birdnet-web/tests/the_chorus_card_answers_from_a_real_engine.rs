@@ -27,7 +27,7 @@ fn station(dir: &std::path::Path, with_wren: bool) -> AppState {
     let sqlite = dir.join("birds.db");
     {
         let conn = birdnet_db::sqlite::open_or_create(&sqlite).expect("sqlite");
-        let mut add = |ago: u32, time: &str, sci: &str, com: &str| {
+        let add = |ago: u32, time: &str, sci: &str, com: &str| {
             conn.execute(
                 "INSERT INTO detections
                      (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, detected_at_utc)

@@ -64,6 +64,8 @@ const TERRAIN_JS: &[u8] = include_bytes!("../../static/terrain.js");
 const VIEW_SWITCH_JS: &[u8] = include_bytes!("../../static/view-switch.js");
 /// The life list's timeline of firsts (Species, "Life list").
 const DISCOVERY_JS: &[u8] = include_bytes!("../../static/discovery.js");
+/// Scrolls a home's tab strip to its active tab on a phone.
+const TAB_STRIP_JS: &[u8] = include_bytes!("../../static/tab-strip.js");
 /// Saves a figure's table as a CSV file (the Method and export panel's button).
 const FIGURE_EXPORT_JS: &[u8] = include_bytes!("../../static/figure-export.js");
 /// Who led each month (Reports, "Year in review").
@@ -198,6 +200,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/terrain.js", get(terrain_js))
         .route("/static/view-switch.js", get(view_switch_js))
         .route("/static/discovery.js", get(discovery_js))
+        .route("/static/tab-strip.js", get(tab_strip_js))
         .route("/static/figure-export.js", get(figure_export_js))
         .route("/static/seasons.js", get(seasons_js))
         .route("/static/skysong.js", get(skysong_js))
@@ -383,6 +386,17 @@ async fn discovery_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         DISCOVERY_JS,
+    )
+}
+
+async fn tab_strip_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        TAB_STRIP_JS,
     )
 }
 

@@ -40,6 +40,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   headline. New in `birdnet-behavioral`: `AnalyticsDb::answers`, `queries::answers_sql`, `types::Answers`; the
   live test seeds a day in which each rule (a reply in time, a reply too late, the same instant, a bird
   answering itself, direction) has its own count, and was watched failing against a pattern without `(?t>0)`.
+- **The chorus assembling** (Patterns, Sequences). Once the dawn starts, how long before it is a chorus? A field
+  of discs: a column is a time allowed (1 minute to 5 hours), a row is how many of the station's usual dawn
+  voices have joined in their usual order, and a disc's area is the share of mornings with at least that many
+  together within that time; a bold line is the typical morning and a pale band the middle half. It is drawn from
+  `window_funnel` asked at a ladder of 14 windows, not from `window_funnel_events`, which the plan named: a probe
+  against `behavioral` 0.10.1 showed that function reports the *latest* occurrence of each voice before the next,
+  so the gap between two of its steps depends on a tie-break and not on the birds (recorded in
+  `docs/design/insights-and-organisation.md`, section 6). Mode `strict_increase`, so voices heard in one audio
+  chunk do not join in either order. A sentence leads the card and is silent below three voices or seven
+  mornings; a phone gets a drawing of its own. New: `AnalyticsDb::assembly`, `queries::assembly_sql`,
+  `types::{Assembly, AssemblyParams, ASSEMBLY_WINDOWS}`, `GET /api/v2/analytics/assembly`, and, for the grid
+  above, `GET /api/v2/analytics/answers`. The live test seeds eight mornings whose depths at every window are
+  worked out by hand (including one morning of voices that share an instant); the figure's mutants and the
+  handler's, run against a real engine, are listed in the handoff.
+- **The Patterns bar says what kind of question each tab answers.** The seven tabs are grouped under **When**
+  (When active, Dawn chorus, Trends), **Who** (Who sings together, Migration) and **How** (Visits, Sequences).
+  No address changes: every `?tab=` key is the one it had, and `behavior` keeps meaning the bursts-and-returns
+  page; the running order, the chorus and who-answers-whom moved to the new `?tab=sequences`. On a phone the
+  strip scrolls to the tab you are on. The return-rate ledger and the running order are full width: each shared
+  a row with the other on the one Behavior tab, and alone in half of a tab of its own they left the other half
+  empty and squeezed three of the ledger's "100%" cells onto two lines at 1100 to 1440 px (33 at 1000).
+  `relational.mjs` now fails on a rate broken over two lines, at 1440 and at 1000 px (red on the half-width
+  card, green on the full-width one).
+- **Every card on Visits and Sequences has the same four layers**: one sentence of what the figure found (a
+  function of the numbers that says its basis and is silent when there is too little to say), the picture, the
+  table behind a disclosure, and a **Method and export** panel naming the extension function and its version,
+  what was asked, what a number counts, the REST route that returns the same numbers where one exists, and a
+  button that saves the table as a CSV. The other Patterns tabs are regrouped but do not have the four layers
+  yet. New: `frame::Method`, `static/figure-export.js`, `static/tab-strip.js`, `pages/behavioral_glance.rs`.
+- **`scripts/preflight.sh`: every check CI runs on a pull request that a developer's machine can run, in one
+  command.** Format; clippy on the whole workspace at each of the three feature sets CI builds; rustdoc with
+  `-D warnings`; spelling (`typos` at the version CI pins); unused dependencies; `cargo deny`; `cargo audit`;
+  OSV (`scripts/osv-check.py`, which asks the database CI's scanner reads about every locked package and applies
+  the waivers in `osv-scanner.toml`, expiry included); the generated installer and CLI help; the manual's links;
+  the licence notices; doc tests; with `--msrv` the check on the declared minimum Rust, and with `--tests` the
+  workspace tests. A tool it needs and cannot find fails the run with the install line, and the closing list
+  names what only CI can run (CodeQL, the container image, the install and upgrade smoke tests, the aarch64
+  cross-check). Added because three kinds of failure had each cost a CI cycle on recent pull requests, all of
+  them a check the workflows run and the author had not: the spell check, the manual's link check, and rustdoc.
+  Its first run found a rustdoc error (a public doc comment linking a private function) and five spell-check
+  hits in earlier commits of this branch; the root crate's tests then found that the new
+  `/analytics/assembly` route answered `400` to a blank `hour_start`, which a page's control can send (it reads
+  as "not given" now: `a_blank_hour_is_not_given_rather_than_refused`, red against the old handler).
 - **A plan for organisation and insight** (`docs/design/insights-and-organisation.md`): which of the extension's
   nine functions the product uses (measured, not assumed: two are drawn by no page and the modes, bases and
   pattern operators are mostly unused), options for regrouping the pages, and a ladder of insights from the
@@ -208,6 +251,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"Neighbouring species" said a share of sessions that it is not.** The probability is the share of the
+  sessions that had a bird on that side at all (a session the bird opens has no bird before it, one it closes
+  none after): measured, a bird followed by Jay on 2 of its 7 sessions reports Jay at 100%, and the flow's
+  tooltip ("Share of sessions it came just after"), the guide and the card's Method note all read as if it were
+  2 of 7. They now say what it is a share of (`the_reading_says_what_the_share_is_of`, red against the old
+  tooltip; `the_neighbour_card_says_what_its_share_is_of`, which runs a real engine).
 - **The kiosk answered `400` to a blank `ar`.** The page sends the screen's width over height from a hidden
   control; `?ar=` with the value empty (a script that failed, an address typed by hand) was rejected with "cannot
   parse float from empty string", on a display that runs unattended. A blank `ar` now draws the default sheet; a

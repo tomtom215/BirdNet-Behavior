@@ -352,7 +352,7 @@ mod tests {
         };
         let (take, fig, table, method) = (
             at(r#"class="fig-take""#),
-            at(r#"class="ck as-fig""#),
+            at(r#"class="ck as-fig viz-chart--wide""#),
             at(r#"id="as-table""#),
             at(r#"class="pt-disc bh-method""#),
         );
@@ -447,12 +447,12 @@ mod tests {
     #[test]
     fn seven_mornings_draw_and_six_do_not() {
         let morning: &[u32] = &[1, 2, 3, 3, 3, 3];
-        let seven = card_html(&vec![morning; 7]);
+        let seven = card_html(&[morning; 7]);
         assert!(
             seven.contains("<svg") && seven.contains("fig-take"),
             "{seven}"
         );
-        let six = card_html(&vec![morning; 6]);
+        let six = card_html(&[morning; 6]);
         assert!(!six.contains("<svg"), "{six}");
         assert!(six.contains("on 6 of the last 90 days"), "{six}");
     }
