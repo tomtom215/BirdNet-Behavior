@@ -2,6 +2,8 @@
 // Plain `assert` of the pure functions exported by static/seasons.js. Each check asserts a property,
 // not a shape, and the ones that discriminate have a counterpart that asserts the other side.
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -516,6 +518,44 @@ t("scale: the 1.6-million case's axis is a whole-number ceiling and its ticks ar
   const top = M.niceCeil(M.busiest(m));
   assert.equal(top, 2000000);
   assert.deepEqual(M.niceTicks(top).map(M.formatCompact), ["0", "500k", "1M", "1.5M", "2M"]);
+});
+
+// ── the harness page: what it mounts from the address, and how ──────────────
+// seasons.data.js also mounts cards when a page loads it (?case=year,two or ?case=all). Under node it has no
+// document, so this gives it a recording one: a card is mounted only for a name that is one of the harness's own
+// cases, and its heading is built from nodes, never written as HTML (the address is the reader's, and CodeQL
+// reports a value from it reaching `innerHTML`).
+const mountHarness = (search) => {
+  const htmlWrites = [];
+  const el = (tag) => ({
+    tag, children: [], attrs: {}, className: "", id: "", textContent: "",
+    appendChild(c) { this.children.push(c); return c; },
+    setAttribute(k, v) { this.attrs[k] = v; },
+    set innerHTML(v) { htmlWrites.push(v); },
+  });
+  const mount = el("div");
+  const document = { documentElement: el("html"), createElement: el, getElementById: (id) => (id === "mount" ? mount : null) };
+  const code = fs.readFileSync(path.join(here, "seasons.data.js"), "utf8");
+  vm.runInNewContext(code, { document, location: { search }, URLSearchParams, JSON, Object });
+  return { mount, htmlWrites };
+};
+
+t("the harness mounts the case named in the address, labelled with its name, and writes no HTML", () => {
+  const { mount, htmlWrites } = mountHarness("?case=year");
+  assert.deepEqual(htmlWrites, [], "the heading is written as HTML");
+  assert.deepEqual(mount.children.map((c) => c.id), ["card-year"]);
+  assert.equal(mount.children[0].children[0].children[1].textContent, "year");
+});
+
+t("a name that is not one of its own cases is not mounted, the inherited ones included", () => {
+  const { mount, htmlWrites } = mountHarness("?case=constructor,__proto__,toString,year,%3Cimg%20src%3Dx%3E");
+  assert.deepEqual(mount.children.map((c) => c.id), ["card-year"]);
+  assert.deepEqual(htmlWrites, []);
+});
+
+t("?case=all mounts every case once", () => {
+  const { mount } = mountHarness("?case=all");
+  assert.deepEqual(mount.children.map((c) => c.id), Object.keys(C).map((k) => "card-" + k));
 });
 
 console.log(`\n${n} checks passed`);

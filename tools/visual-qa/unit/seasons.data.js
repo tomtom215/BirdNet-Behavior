@@ -151,14 +151,29 @@
       const which = (q.get("case") || "year").split(",");
       const list = which[0] === "all" ? Object.keys(cases) : which;
       for (const key of list) {
+        // Only the harness's own cases: `cases[key]` alone also accepts "constructor" and "__proto__".
+        if (!Object.hasOwn(cases, key)) continue;
         const d = cases[key];
-        if (!d) continue;
         const card = document.createElement("div");
         card.className = "bnb-card pad ssn-card";
         card.id = "card-" + key;
+        // The heading is built from nodes: `key` comes from the address, and is text, not markup.
         const head = document.createElement("div");
         head.className = "section-header";
-        head.innerHTML = '<div><div class="bnb-eyebrow">Year in review</div><h2 class="sh-h">Who led each month</h2></div><span class="bnb-meta">' + key + "</span>";
+        const titles = document.createElement("div");
+        const eyebrow = document.createElement("div");
+        eyebrow.className = "bnb-eyebrow";
+        eyebrow.textContent = "Year in review";
+        const title = document.createElement("h2");
+        title.className = "sh-h";
+        title.textContent = "Who led each month";
+        titles.appendChild(eyebrow);
+        titles.appendChild(title);
+        const label = document.createElement("span");
+        label.className = "bnb-meta";
+        label.textContent = key;
+        head.appendChild(titles);
+        head.appendChild(label);
         card.appendChild(head);
         const host = document.createElement("div");
         host.className = "ssn";
