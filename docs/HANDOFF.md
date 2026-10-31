@@ -32,7 +32,7 @@ put every 24-hour chart on the day's real sky, notched the columns, turned the h
 margin note; added three views each built for one question (Today's *Every song*, Year in review's *Who led, and when it
 changed*, the life list's *When each bird joined*); added one new use of the extension, *Who answers whom*
 (`sequence_count`); and wrote `docs/design/insights-and-organisation.md`, which is a plan and not a build. Section 2 (last
-bullet), section 3 (last bullet), section 4 (last subsection), section 5 (items 23 to 28) and section 6 (last paragraph but
+bullet), section 3 (last bullet), section 4 (last subsection), section 5 (items 23 to 29) and section 6 (last paragraph but
 one) were updated for it; **everything else is as it was on 2026-10-28 and was not re-read.**
 
 ## 1. Repository settings only the maintainer can change
@@ -241,7 +241,7 @@ the commits to read first (hashes valid on this branch).
     `timeline.rs`; `pages/{today_songs,life_timeline,behavioral_answers}.rs` and the seasons card in `year_in_review.rs`;
     `static/{view-switch,skysong,seasons,discovery}.js` (the last three written by builder agents against one brief, then
     re-read and re-run here; their own mutation reports are theirs and were not repeated); the `--sky-*` tokens in `app.css`.
-  - *Fixes the full run found* (`79c1010`, `91812fc`): four gates red on this branch's own work, 23 clippy errors, and three
+  - *Fixes the full run found* (`79c1010`, `91812fc`): four gates red in the web crate and one in the root crate's sweep, all on this branch's own work, 23 clippy errors, and three
     tests too weak to fail against their own mutant (section 4).
 
 ## 4. What was verified, and by what command
@@ -329,7 +329,8 @@ real plates and the engraving on more than four real photographs.
 | `cargo test -p birdnet-web --features analytics --no-fail-fast`, the 148 files of `tests/` six at a time, on the tree before `91812fc` | 148 `test result:` lines; **4 files red, all on this branch's own work**: `no_page_handler_answers_a_5xx_with_a_body_htmx_will_discard` (`today_songs.rs` answers 500), `amber_is_never_used_as_a_text_colour` (`.ck-sun` was `--dawn`, 2.85:1), `every_variable_the_stylesheet_uses_is_defined_or_declared_runtime` (`--p`), `print_css_overrides_every_token_that_differs_between_themes` (four `--sky-*`) |
 | the four files again, after the fixes | 5, 2, 4 and 1 passed |
 | the same 148 files, second run, on `91812fc` | 25 of 25 batches exit 0; 148 `test result:` lines, 660 passed, 0 failed, 0 ignored (the first run's 659 and the one test added since). `print.css`'s axis colour was changed after that run (64% to 61%, to follow `app.css`), and the 13 files that read a stylesheet were run again: 72 passed, 0 failed |
-| the root crate's `tests/` (`birdnet-behavior`), six at a time | not yet run when this was committed; the next commit records it |
+| the root crate's `tests/` (`birdnet-behavior`), six at a time | 13 batches (the 70 files of `tests/` six at a time, then `--bins`): 78 `test result:` lines, 1563 passed, 1 failed, 0 ignored. The one failure, `every_read_that_is_defaulted_has_been_looked_at`, was this branch's: the twilight default in `today_songs.rs` had no row in `tests/data/read_default_sweep.tsv`; it is classified `omitted`, as the same call in `dawn_chorus.rs` is, and the file passed on a rerun (3 passed). The binary's own tests were 1140 of the passed |
+| `qa-selftest.mjs`; `layout-selftest.mjs`; `STRICT=1 node qa.mjs` against a fixture rebuilt from `a7797c9` | "all pass"; "all pass"; **exit 1**: 180 states, 4 with issues, all `species-lifelist` (light and dark, desktop and mobile): `allSpeciesPhotosFailed(6/6)`. Item 29 |
 | `cargo test --lib` for `-p birdnet-web --features analytics`; `-p birdnet-behavioral --features analytics`; `-p birdnet-db` | 1434, 128 (including `live_answers` against the embedded extension) and 501 passed; 0 failed in each |
 | `cargo clippy -p birdnet-web -p birdnet-behavioral -p birdnet-db --all-targets --features birdnet-web/analytics -- -D warnings` | exit 0 (it had reported 2 errors in this branch's code, then, once those were fixed, 20 in `birdnet-web` and 1 in a `birdnet-behavioral` test) |
 | `node tools/visual-qa/unit/{skysong,seasons,discovery}.test.mjs` | "47 tests passed", "38 checks passed", "38 tests passed" |
@@ -337,7 +338,7 @@ real plates and the engraving on more than four real photographs.
 | after the one rendered change (`.ck-sun`, `print.css`): `chart-ramps`, `tokens`, `surface-layers`, `token-doc --check`, and a render of the daylight rail in both themes | 146 checks, 0 failures; 91 checks; 30 checks, 0 failures; "generated regions are current"; read by eye: a deep amber dot on the light theme, a bright one on the dark |
 | a probe injecting `axe.min.js` 4.11.4, 4.13.0 and 4.14.0 and running `label-content-name-mismatch` alone on `/` | 0, 0 and 1 nodes (`.topnav-brand`): item 25 |
 
-Gates seen failing, each against a mutant or the old code. The four red files above, at the previous head. Then, for the Rust
+Gates seen failing, each against a mutant or the old code. The four red files above, and the root crate's defaulted-read sweep, at the previous head. Then, for the Rust
 tests this branch added, one mutant per claim (the full list is in the message of `91812fc`): 15 in `birdnet-web` and 9 in the
 engine crates. **Three survived on the first pass and the tests were too weak, not the code**: a balanced pair given the
 "other way round" sentence passed because the test looked only for the word "one-sided" (it asserts the whole headline now); a
@@ -347,8 +348,7 @@ survives). One engine mutant was invalid (it removed a bound parameter, so it fa
 claim) and was replaced.
 
 **Not verified (2026-10-31):** that CI as locked passes (`package-lock.json` pins `axe-core` 4.13.0 and Playwright 1.64.1; I ran
-4.11.4 and 1.63.0); `qa.mjs` with `STRICT=1`, `qa-selftest`, `layout-selftest`, `terrain` and the other `a11y.yml` steps not
-listed above; the `ILLUSTRATION=plate` variants; Firefox and WebKit; a Raspberry Pi; clippy under `--no-default-features` and
+4.11.4 and 1.63.0); `terrain` and the other `a11y.yml` steps not listed above; the `ILLUSTRATION=plate` variants; Firefox and WebKit; a Raspberry Pi; clippy under `--no-default-features` and
 `--all-features` and over the rest of the workspace; the run time of `sequence_count` over 56 ordered pairs on a Pi; and
 whether the CLS result below is a regression (an earlier comparison against a baseline checkout said it was not, and its
 numbers were not kept).
@@ -490,6 +490,19 @@ it says otherwise.
     per-day sky, a margin note on the streamgraph, and a probe per funnel mode before any page names one (the extension's two
     documentation pages disagree about `allow_reentry`, `strict_order` and `strict`). Not known: whether a station with under
     about 200 detections a day gives the answers grid enough pairs to be more than noise.
+
+29. **The strict visual sweep fails on the life list in this container.** Medium until it is explained on a runner with a
+    network. `qa.mjs` counts the `<img>` elements that point at `/api/v2/species/image/…` and fails a page on which the number of
+    distinct broken URLs equals the number of such elements. On `/species?view=lifelist` there are exactly six, the avatars of "New to the list", and the
+    fixture answers `404 image not available` for all six: it holds a picture for some species only (six other species
+    answered `200` on that page), none of the six newest firsts is among them, and the Wikipedia-backed fallback answered
+    `429` to a probe here. What I checked: the six are the
+    avatars (a live count, none from the new timeline), and `git diff ec59953..HEAD` is empty for the fixture
+    (`examples/`), `routes/images.rs`, `birdnet-integrations`, `atoms.rs` and `qa.mjs`. What I did not do: run the sweep on the
+    base commit, so "this fails there too" is not shown, only that nothing this branch changed can reach it. The floor also has
+    a flaw: `speciesImgTotal` counts elements and `speciesImgBroken` counts distinct URLs, so a page that repeats species
+    (the dashboard: 31 elements, 5 URLs) can never reach equality, and a page with one avatar per species and no pictures
+    always does.
 
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
