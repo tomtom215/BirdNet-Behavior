@@ -21,7 +21,7 @@ const isoOf = (d) => new Date(d * DAY).toISOString().slice(0, 10);
 // Real-ish birds: [name, scientific, 4-letter code]
 const BIRDS = [
   ["Northern Cardinal", "Cardinalis cardinalis", "NOCA"],
-  ["Carolina Chickadee", "Poecile carolinensis", "CACH"],
+  ["Carolina Chickadee", "Poecile carolinensis", "CCHI"],
   ["Tufted Titmouse", "Baeolophus bicolor", "TUTI"],
   ["Blue Jay", "Cyanocitta cristata", "BLJA"],
   ["Mourning Dove", "Zenaida macroura", "MODO"],

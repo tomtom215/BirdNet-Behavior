@@ -56,7 +56,7 @@ t("prepare sorts by day then name, ranks from 1, drops bad rows, keeps the store
     to: "2026-03-01",
     species: [
       { name: "Zed", first: "2026-02-01", count: 3 },
-      { name: "alpha", first: "2026-02-01", count: 1, key: "Alpha (stored)", code: "alph", img: "/x.png" },
+      { name: "alpha", first: "2026-02-01", count: 1, key: "Alpha (stored)", code: "alpx", img: "/x.png" },
       { name: "Mid", first: "2026-01-10", count: 0 },
       { name: "", first: "2026-01-10" },
       { name: "BadDate", first: "2026-13-40" },
@@ -67,7 +67,7 @@ t("prepare sorts by day then name, ranks from 1, drops bad rows, keeps the store
   assert.deepEqual(m.species.map((s) => s.rank), [1, 2, 3]);
   assert.equal(m.species[1].key, "Alpha (stored)");
   assert.equal(m.species[0].key, "Mid");
-  assert.equal(m.species[1].code, "ALPH");
+  assert.equal(m.species[1].code, "ALPX");
   assert.equal(m.total, 3);
   assert.equal(m.bunches.length, 2);
   assert.deepEqual([m.bunches[1].i0, m.bunches[1].i1, m.bunches[1].n], [1, 2, 2]);

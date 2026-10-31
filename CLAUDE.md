@@ -86,6 +86,28 @@ cross build --release --target aarch64-unknown-linux-gnu
 
 ### Testing Conventions
 
+**Run `scripts/preflight.sh` before every push, and do not push on a gate you
+have not run.** A red CI run costs about an hour, and the ones this repository
+has paid for were each a check the workflows run and the author had not: the
+spell check ("not run locally: typos could not be run in this container"), the
+manual's link check, rustdoc's `private-intra-doc-links` (`answers_sql`'s doc
+linked a private function; clippy passes over it, and the first run of the
+workflow's rustdoc command on that branch found it), and five tokens `typos` flagged in files from earlier
+commits on the same branch. Everything the script needs installs here
+(`cargo install --locked typos-cli --version 1.51.1`; crates.io and PyPI are
+reachable, GitHub release downloads are not), so "could not run it in this
+container" is not a reason, and the script fails on a missing tool instead of
+skipping it. Three more rules it encodes: run the **whole workspace** at **every
+feature set CI builds** (clippy on `-p birdnet-web` is not clippy on the
+workspace); the **advisory checks (OSV, RustSec) answer for the database of the
+day**, so one that names a package this change did not touch is `main`'s state
+(`osv-scanner.toml`'s waiver for GHSA-qwgh-2vcv-g2f7 matches nothing now: the
+record, last modified 2026-10-30, lists block_buffer 0.11.0 up to 0.12.1, and
+the lockfile holds 0.10.4 and 0.12.1), not yours to fix on the branch;
+and a green preflight is "these gates passed on this commit", never "CI will
+pass" (CodeQL, the image, the install and upgrade smoke tests and the aarch64
+cross-check run only there).
+
 **A new gate must be observed failing against the code it was written for, and
 the commit message must say how.**
 

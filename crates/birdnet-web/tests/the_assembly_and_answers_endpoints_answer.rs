@@ -157,6 +157,26 @@ async fn assembly_refuses_what_it_cannot_ask_and_answers_a_bare_request() {
     assert!(body["assembly"].is_array(), "{body}");
 }
 
+/// A browser submits a control it renders as `hour_start=`, blank, and a blank number is "not
+/// given", as it is on every other route that shares a name with a control (the repo's
+/// `no_query_field_with_a_rendered_control_reads_a_blank_strictly` holds the rule); a refusal
+/// here would turn a form that had been left alone into a 400.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_blank_hour_is_not_given_rather_than_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = build_router(station(dir.path()));
+    let (status, blank) = get(&app, "/api/v2/analytics/assembly?hour_start=&hour_end=").await;
+    assert_eq!(status, StatusCode::OK, "{blank}");
+    let (_, bare) = get(&app, "/api/v2/analytics/assembly").await;
+    assert_eq!(blank, bare, "blank hours read as the defaults");
+    // The counterpart: a number is still read, and what is not a number is still refused, so
+    // reading a blank leniently has not made the field lenient about anything else.
+    let (status, _) = get(&app, "/api/v2/analytics/assembly?hour_start=5&hour_end=8").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = get(&app, "/api/v2/analytics/assembly?hour_start=dawn").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn answers_counts_each_pair_within_the_window_and_is_not_symmetric() {
     let dir = tempfile::tempdir().expect("tempdir");

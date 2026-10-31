@@ -17,8 +17,14 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
 ## Submitting a pull request
 
 1. **Fork and branch** — work on a branch named `feature/…` or `fix/…`
-2. **Build and test** before opening the PR — the local quality gates
-   mirror what CI enforces:
+2. **Run `scripts/preflight.sh`** before every push. It runs the workflows' own
+   commands in their own scope (format, clippy on all three feature sets,
+   rustdoc with `-D warnings`, spelling, unused dependencies, `cargo deny`,
+   `cargo audit`, OSV, the manual's links, the licence notices) and prints
+   what it cannot cover (`--msrv` and `--tests` add the slow ones). A tool it
+   needs and cannot find fails the run; the script prints the install line.
+   The commands below are a subset of it.
+3. **Build and test** — the local quality gates mirror what CI enforces:
    ```bash
    cargo build --workspace
    cargo test --workspace --all-features
@@ -28,25 +34,25 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
    CI splits the test job into five runs (`--lib --bins`, `--tests`,
    `--doc`, `--all-features`, and the bundled-DuckDB extension check), so
    a green `--all-features` run locally is the closest single command.
-3. **Supply-chain & licence checks** (when you've touched `Cargo.toml`):
+4. **Supply-chain & licence checks** (when you've touched `Cargo.toml`):
    ```bash
    cargo install --locked cargo-deny    # one-time
    cargo deny check                     # licences, advisories, bans, sources
    cargo install --locked cargo-audit   # one-time
    cargo audit --deny warnings          # advisory database
    ```
-4. **Diagnostic smoke test** — if you've touched anything that affects
+5. **Diagnostic smoke test** — if you've touched anything that affects
    startup, config parsing, or the audio/model surface, run the doctor
    against a known-good config and a deliberately broken one:
    ```bash
    birdnet-behavior --doctor --config /etc/birdnet/birdnet.conf
    ```
-5. **Keep PRs focused** — one fix or feature per PR makes review faster
-6. **Update the README, `.env.example`, and `CHANGELOG.md`** if you're
+6. **Keep PRs focused** — one fix or feature per PR makes review faster
+7. **Update the README, `.env.example`, and `CHANGELOG.md`** if you're
    adding or changing user-visible behaviour
-7. **Add or update an ADR** under `docs/architecture/` for non-trivial
+8. **Add or update an ADR** under `docs/architecture/` for non-trivial
    design decisions (use the format of the existing `14-diagnostics.md`)
-8. **Editing the installer?** `install.sh` is **generated** — never edit it by
+9. **Editing the installer?** `install.sh` is **generated** — never edit it by
    hand. Edit the single-responsibility modules under `installer/lib/*.sh` and
    regenerate it:
    ```bash

@@ -87,7 +87,11 @@ struct AssemblyQuery {
     species: Option<String>,
     windows: Option<String>,
     since: Option<String>,
+    // A page renders controls with these names, so a browser can send them blank: that is
+    // "not given", as on every other route that shares a name with a control.
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
     hour_start: Option<u32>,
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
     hour_end: Option<u32>,
 }
 

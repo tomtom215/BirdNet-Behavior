@@ -175,7 +175,7 @@ export function skyStops(sun) {
 /** sRGB (0..1 each) mixed `t` of the way from `a` to `b` in OKLab, so a gradient keeps its hue and its lightness steps evenly. */
 export function mixOklab(a, b, t) {
   const lin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-  const gam = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+  const encodeSrgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
   const toLab = (c) => {
     const r = lin(c[0]);
     const g = lin(c[1]);
@@ -194,7 +194,7 @@ export function mixOklab(a, b, t) {
   const m = Math.pow(L - 0.1055613458 * u - 0.0638541728 * v, 3);
   const s = Math.pow(L - 0.0894841775 * u - 1.291485548 * v, 3);
   const out = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s];
-  return out.map((c) => clamp(gam(clamp(c, 0, 1)), 0, 1));
+  return out.map((c) => clamp(encodeSrgb(clamp(c, 0, 1)), 0, 1));
 }
 
 /** How high the sun is, 0 (not up) to 1 (the top of its arc), at local hour `h`: a half sine. */

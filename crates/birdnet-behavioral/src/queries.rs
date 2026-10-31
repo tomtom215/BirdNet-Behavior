@@ -746,7 +746,7 @@ pub fn answers_days_sql(species: &[String], from: &str) -> String {
 /// and then `b` within `within_minutes`, summed over the days since `from`. The columns are the
 /// pairs in row-major order, skipping the diagonal.
 ///
-/// The pattern is the one every ordered query here uses ([`ordered_pattern`]): `(?t>0)` keeps two
+/// The pattern is the one every ordered query here uses (`ordered_pattern`, a private helper): `(?t>0)` keeps two
 /// birds heard in one audio chunk from answering each other in both directions, and the gap is
 /// measured from the first bird's event. A day is a group, so a reply never spans midnight.
 pub fn answers_sql(species: &[String], from: &str, within_minutes: u32) -> String {
