@@ -245,7 +245,7 @@ push and pull request:
 Release builds for `aarch64`, `x86_64` and `aarch64-apple-darwin` are
 produced by `.github/workflows/release.yml`; the two Linux targets use
 Ubuntu 24.04's native GCC 13 cross toolchain and macOS builds natively on
-`macos-14`, and multi-arch Docker images are assembled by
+`macos-15`, and multi-arch Docker images are assembled by
 `.github/workflows/docker.yml` on native runners to avoid QEMU
 emulation.
 
