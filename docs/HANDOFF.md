@@ -4,14 +4,22 @@ What only the maintainer can do, what the last working sessions did and did not 
 next one should start. This file was **rewritten**, not appended to, on 2026-10-21. Sections 3 and 4 are
 dated logs: each entry names the tree it describes and what ran on it. Section 5 holds the open items and
 section 6 says where to start. The header and sections 5 and 6 were corrected for the state below on
-2026-10-31. Facts about GitHub were read on the dates given, with the commands named; read them again before
+2026-11-01. Facts about GitHub were read on the dates given, with the commands named; read them again before
 relying on them. Anything not attributed to a command is marked as reported, read or unknown.
 
-**State on 2026-10-31.** `main` is `b731204`, the merge of #275, and all eleven push-triggered workflow runs on it
-ended `success` (read with `actions_list`). The latest published release is **v0.18.1**, published 2026-10-26: its
-Release, Docker and Docs runs on the tag all ended `success` (Docs and Release on a second attempt). **0.19.0 is
-prepared and not tagged.** It is the first release since v0.18.1, so its changelog section holds three pull
-requests' work:
+**State on 2026-11-01.** The latest *published* release is **v0.18.1** (2026-10-26). **`v0.19.0` is tagged and not
+released**, and `main` has been red since #276 merged (`f54e8ab`, 2026-10-31 23:54 UTC):
+
+- CI on `main` at `f54e8ab` (run 41254446443): "Tests (x86_64)" failed in "Run integration tests", which began at
+  00:04 UTC on 2026-11-01, on `a_value_in_the_url_is_never_put_back_as_markup`. The steps behind it were skipped.
+- `v0.19.0` was pushed at 09:24 UTC on 2026-11-01, at `f54e8ab`. Its Release run (41292972060) failed at "CI gate: test"
+  on the same test, so there is no GitHub Release, no binary and no attestation. Its Docker run (41292972083) succeeded and
+  pushed and signed the multi-arch manifest, which by `docker.yml`'s tag rules carries `:0.19.0` and `:latest` (the job's
+  steps were read; GHCR was not queried). Its Docs run (41292972099) succeeded.
+- The cause is item 38; the pull request that carries this file fixes it. **After it merges, `v0.19.0` is moved to its
+  merge commit** (section 6): the maintainer chose that over cutting `v0.19.1`.
+
+0.19.0 is the first release since v0.18.1, so its changelog section holds the work of four merged pull requests:
 
 - #271 (merged 2026-10-29): the engine moved to DuckDB 2.0.0; the Patterns, Species and Weekly pages got one
   frame; the kiosk is a plate, with a public-domain plate tier behind it; every picture carries a credit; the
@@ -25,11 +33,11 @@ requests' work:
 - #275 (merged 2026-10-31): the version bump and changelog roll, the four items #274 left open (the fixture's
   pictures no longer depend on the network, the species page's landmark, the running order's labels, the stale OSV
   waiver), a flaky webhook test that turned `main`'s CI red after #274's merge, and this file's corrections.
+- #276 (merged 2026-10-31): the release workflow's macOS leg moved from `macos-14` (retired 2026-11-02) to `macos-15`,
+  with a step that proves the runner is `arm64` and one that prints the binary's `minos` (item 37).
 
-**The release dry run on `main` after #275 (run 41239225909) lost its `aarch64-apple-darwin` leg to a scheduled
-macOS 14 brownout**, and `package` and the upgrade rows, which wait for every build, never ran. The pull request that
-carries this file moves that leg to `macos-15` (item 37); a dry run on its branch (run 41246486494) ended `success`
-end to end. Section 4's last subsection says what ran.
+This pull request adds the `sel` fix, a seed for its sweep that spans two months on every day, and this file's corrections.
+Section 4's last subsection says what ran.
 
 ## 1. Repository settings only the maintainer can change
 
@@ -63,7 +71,9 @@ test's own stub server and not in the product; it failed 6 of 600 runs here and 
 The steps behind it in that job (doc tests, the full suite with analytics, the embedded-extension proof) were skipped
 on that run. **At `b731204`, the merge of #275, all eleven push-triggered runs ended `success`** (read the same way,
 2026-10-31): CI (with "Tests (x86_64)"), A11y & Visual QA, CodeQL, Coverage, Docker, Docs, Install smoke test,
-OSV-Scanner, Scorecard, Supply chain and Upgrade test. The Release run dispatched on `b731204` is the one in the header.
+OSV-Scanner, Scorecard, Supply chain and Upgrade test. (The dry run dispatched on `b731204`, run 41239225909, lost its macOS leg
+to a brownout: item 37.) **At `f54e8ab`, the merge of #276, CI failed**: the header and item 38. The other workflows' push runs at that
+SHA were not read.
 
 **Mutation testing on `ec59953`** (the merge of #271, 2026-10-29, the last run that exists: the workflow's push filter
 does not match the files of #274 or #275): `failure`, in the job "CI config
@@ -72,10 +82,10 @@ reported six shards past 75 % of their `timeout-minutes` (`inference/model.rs [3
 `sqlite/queries/detections/*.rs` shards 1, 3, 4 and 5 at 97 to 101 % of 45; `validate.rs [1/2]` 43 of 50, 86 %).
 That is the budget gate doing its job, and it will be red again on the Monday 09:00 UTC schedule until the budgets are
 raised or the rows split; editing `mutation.yml` would start the full matrix (hours) on the pull request that makes
-the edit, so it is left for its own change (item 36). The pull request that carries this file edits `release.yml`,
-which the filter matches (`.github/workflows/**`), so it starts the matrix anyway; the config job's checks 4 and 5
-hold a pull request only to the budgets it edits, and this one edits no `timeout-minutes`, so that job may be green
-there (not observed when this was written).
+the edit, so it is left for its own change (item 36). #276 edited `release.yml`, which the filter matches
+(`.github/workflows/**`), so it ran (run 41249887562, 37 jobs): "CI config" was green, because that pull request edited no
+`timeout-minutes`, and two shards timed out at "Install ffmpeg" (15 minutes, before any mutation ran) and passed on one
+re-run. On a pull request each shard mutates only the changed lines, so the matrix took 18 minutes and not hours.
 
 ## 2. Decisions that are the maintainer's
 
@@ -287,6 +297,9 @@ the commits to read first (hashes valid on this branch).
   places that named `macos-14` (`RELEASING.md`, `docs/architecture/03-coding-standards.md`, `docs/book/field/macos.md`,
   `packaging/macos/verify-macos.sh`, the 0.19.0 changelog). Item 37.
 
+- *2026-11-01, the same branch name restarted from `f54e8ab` (`git log f54e8ab..`):* the `sel` fix in `pages/history.rs` (the
+  boundary, the sink, four tests), the sweep's `seed_sql`, the changelog entry, the lesson in `CLAUDE.md`. Item 38.
+
 ## 4. What was verified, and by what command
 
 The test suite and the lint gates (the first five rows) were run again on 2026-10-23 on the tree
@@ -455,6 +468,24 @@ The tree was `b731204` plus the commit `ed6473e`. A macOS runner is not availabl
 | `release.yml` dispatched on the branch, version blank (run 41246486494, head `ed6473e`) | run `success`, 17 jobs. `Validate release tag`, the five CI gates, `Choose the releases to upgrade from`, `Build x86_64-unknown-linux-gnu`, `Build aarch64-unknown-linux-gnu`, `Build aarch64-apple-darwin`, `Package and attest` (attestation skipped, as in a dry run), the four `Upgrade from vA.B.C` rows: `success`. `Publish GitHub Release` and `Verify the published Release`: skipped, as in a dry run. The macOS job: label `macos-15`, `uname -m: arm64; macOS 15.8.2`, `Finished release profile [optimized] target(s) in 19m 30s`, `minos 11.0` and `sdk 15.5` from `otool -l`, job time 20 m 38 s |
 
 **Not run:** the macOS binary on any Mac (CI builds it and never executes it); a tag push (the real `github-release` and `verify-release` jobs); the dry run on `main` after this branch merges (not needed unless `main` differs from the branch by more than documentation).
+
+### 2026-11-01, the `sel` fix (`claude/amazing-bardeen-317rgu` restarted from `f54e8ab`)
+
+The tree was `f54e8ab` plus 5 uncommitted files (`history.rs`, the sweep's test file, the changelog, `CLAUDE.md`, this file). The container's clock read
+2026-11-01 UTC throughout, which is the point: these ran on the day the gate was red.
+
+| Command | Printed |
+|---|---|
+| `cargo test -p birdnet-web --test a_query_value_is_never_echoed_as_markup` on `f54e8ab` | **failed**: "1 response(s) put a URL value back as markup: `/pages/history-calendar` (all parameters = `"><zq-p>12`)": the same text as the Release run's log |
+| a scratch unit test in `history.rs` (deleted): `render_calendar` with a ten-character probe as `sel` | days in two months (10-31, 11-01): raw `<zq-p>` present; days in one month (10-30, 10-31): absent |
+| `cargo test -p birdnet-web --lib routes::pages::history` on the fix | 14 passed. Mutants, one site each, restored with `touch`: the sink writes `sel` raw (**red**: `a_selected_day_is_never_put_into_the_month_buttons_as_markup`), the boundary asks only for ten characters (**red**: `the_calendar_handler_drops_a_selected_day_that_is_not_a_date`), both (**red**, two tests: the shipped bug) |
+| the sweep file on the fix | 4 passed, including `the_seed_spans_two_months_whatever_day_the_sweep_runs` |
+| the sweep with today pinned to 2026-11-10 (scratch edit of `station()`, restored) and the shipped bug put back | old two-row seed: **passed** (the blind spot); new three-row seed: **failed** on `/pages/history-calendar` |
+| the whole suite on the fixed tree: `birdnet-web` integration tests (26 batches), `--lib` for `birdnet-web` (analytics), `birdnet-behavioral` (analytics), `birdnet-db`, `birdnet-integrations`; the root crate (13 batches); `--tests` for `birdnet-db`, `-core`, `-timeseries`, `-scheduler`, `-migrate`, `-integrations`, `-behavioral` (analytics) | every batch exit 0, 0 failed: web integration 671 passed; libs 1,495, 132, 501 and 445; root crate 1,565; `--tests`: 575, 1,043, 31, 31, 168, 560 and 157 |
+| `scripts/preflight.sh --msrv` | exit 0; 18 gates `ok` (fmt, typos, machete, installer drift, deny, audit, OSV, clippy at default, all and no default features, rustdoc, build at default and all features, CLI help, manual links, third-party notices, doc tests, MSRV 1.95) |
+| `release.yml` dispatched on this branch, version blank (run 41300853479, head `fc9cfde`, 2026-11-01 11:12 to 12:15 UTC) | run `success`; 15 of 17 jobs `success`, `Publish GitHub Release` and `Verify the published Release` skipped, as in any dry run. **`CI gate: test` succeeded** (11:14 to 11:41 UTC, the gate that was red that morning), with the other four gates, `Validate release tag`, the three builds, `Package and attest` (attestation skipped, as in a dry run) and the four `Upgrade from v0.17.0 / v0.17.1 / v0.18.0 / v0.18.1` rows. The macOS job on `macos-15`: `uname -m: arm64; macOS 15.8.2`, the release build 21 minutes, `minos 11.0` and `sdk 15.5`, the same as on 10-31 |
+
+**Not run:** a real tag push (the maintainer's step, section 6), the browser gates (for a real `sel` the calendar's output is what it was), the `--all-features` workspace test command as one command (the same tests ran by crate), CodeQL, the image, the install and upgrade smoke tests and the aarch64 cross-check.
 
 ## 5. Open items, with severity
 
@@ -634,8 +665,8 @@ it says otherwise.
     out of any pull request that is meant to be small. Check 4 needs `GITHUB_TOKEN` to read run history, so it cannot be
     reproduced from this container.
 
-37. **The release workflow's macOS leg was on an image GitHub retires on 2026-11-02.** High for the release; handled in the pull
-    request that carries this file. The `aarch64-apple-darwin` row of `build` ran on `macos-14`. GitHub fails every job on that
+37. **The release workflow's macOS leg was on an image GitHub retires on 2026-11-02.** High for the release; handled in #276
+    (merged 2026-10-31 23:54 UTC). The `aarch64-apple-darwin` row of `build` ran on `macos-14`. GitHub fails every job on that
     image in scheduled brownouts (ten windows from 2026-10-05, each 14:00 to 00:00 UTC; the last two are 10-31 and 11-01) and
     retires it on 2026-11-02 ([actions/runner-images#13518](https://github.com/actions/runner-images/issues/13518), read
     2026-10-31). The dry run on `main` (run 41239225909, attempt 2) lost that leg to one, and `package` and `upgrade` need the
@@ -652,6 +683,28 @@ it says otherwise.
     pins `MACOSX_DEPLOYMENT_TARGET`), not a test on macOS 11 to 14, and `README.md` and `docs/book/field/macos.md` still call
     macOS a preview that is "not yet confirmed on real hardware". Whether to promise a floor, and to pin one, is the
     maintainer's; the number is printed in every release run's summary from now on, so a change of it is seen.
+38. **A fixture seeded from the clock hid a markup injection, then failed `main` and the release.** High: it blocked 0.19.0; the
+    bug itself is low severity. `/pages/history-calendar` wrote its `sel` query value into the previous- and next-month
+    buttons' `hx-get` after checking only that it was ten characters long (`"><zq-p>12` is ten); the buttons are drawn when the
+    data spans two months, which is every station past its first month. The code is at least as old as `3301e4b5` (2026-10-22),
+    which v0.18.0 and v0.18.1 contain (`git log -S`; those tags were not rebuilt). The strict CSP stops a script, so this is
+    reflected markup injection of at most ten characters; whether it warrants an advisory is the maintainer's.
+    `a_query_value_is_never_echoed_as_markup`, the sweep that grades every page for exactly this, seeded today and yesterday,
+    which are in two months on the 1st only, so it was green on every other day. It failed `main`'s CI at 00:04 UTC on
+    2026-11-01 and the `v0.19.0` Release run (it ended at 09:49 UTC); the dry runs of 10-31 could not see it. **Fixed (the pull request that
+    carries this file):** `sel` must be a `YYYY-MM-DD` (`crate::routes::is_valid_date`) and is percent-encoded where it is
+    written (`simple_url_encode`). Four tests on fixed dates, each seen failing against the shipped code: the sink alone
+    reverted, the boundary alone reverted, and both reverted (the shipped bug). The sweep's seed is `seed_sql(today)`, with a
+    third row on the last day of the month before, and `the_seed_spans_two_months_whatever_day_the_sweep_runs` holds it to
+    that on eight fixed days. **Checked that the seed discriminates:** with the shipped bug and "today" pinned to
+    2026-11-10, the old two-row seed's sweep passed (the blind spot) and the new one failed. **Swept:** the
+    `len() == N` validity filters in `routes/`. Read: the four in `history.rs` (`history_chart` and the day page escape or
+    encode the date at every sink; `month` is clamped to the data's own months), `is_ymd`, `is_valid_date` and the command
+    palette's two uses of it. **Not read:** `species.rs`'s `is_iso_date` and the two in `api_write.rs`, a JSON write API.
+    **Not done:** 30 other Rust test files seed from the clock and pass today (section 4), but nothing holds them to a month,
+    year or leap-day boundary.
+    A failing test binary stops `cargo test`, so on 2026-11-01 neither CI on `main` nor the release gate ran the binaries
+    after the sweep; that is why the whole suite was run by hand on the day.
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
   cross-site check (403; behind a reverse proxy whose `Origin` differs from `Host`, every
@@ -672,26 +725,22 @@ it says otherwise.
 ## 6. Where to start
 
 **Releasing 0.19.0** (`RELEASING.md` is the procedure and its pre-release checklist is the list to tick). The bump is
-merged (#275): `Cargo.toml` (the workspace version and the eight `birdnet-*` dependency entries), `CITATION.cff`,
-`crates/birdnet-web/openapi.json` (both places), `docs/book/reference/api.md`'s sample, `Cargo.lock` (`cargo update
---workspace`: the nine member lines only, a plain `cargo update` was **not** run, so no third-party dependency moved) and
-`CHANGELOG.md` (rolled, dated 2026-10-31, a fresh `[Unreleased]` above it, links updated). The checks `release.yml`'s
-`validate` job makes passed in both dry runs (`Validate release tag`: `success`); `cargo package` and the licence check
-passed on the clean tree (section 4).
+merged (#275, #276). `v0.19.0` exists on GitHub at `f54e8ab` and is to be **moved**; no GitHub Release exists for it.
 
-1. **Merge the pull request that moves the macOS leg to `macos-15` first, and before 2026-11-02**, when every check on
-   its last head is green. Do not tag before it: a tag pushed with `macos-14` in `release.yml` fails the build matrix,
-   publishes nothing, and leaves a tag at a commit whose workflow file cannot be changed by re-running (a run uses the file
-   at the tag's commit), so the fix would need a new tag.
-2. The **dry run** (`release.yml`, `workflow_dispatch`, version blank) already ran on that pull request's branch and ended
-   `success` end to end (section 4). Run it again on `main` after the merge only if `main` differs from the branch by more
-   than documentation. It **skips** the attestation, the GitHub Release and `verify-release`, so nothing is published.
-3. `git tag -a v0.19.0 -m "Release v0.19.0" && git push origin v0.19.0`. The date in `CHANGELOG.md` and
-   `CITATION.cff` is 2026-10-31; change both if the tag lands on another day, because `validate` checks the heading's
-   form and the CITATION version, not that the date is today's. Read the Docker and Docs runs as well as Release's:
-   all three start on a tag push (section 5, item 1 for what to look for in Docs). Read the `minos` line in the macOS job's
-   summary (item 37).
-4. **After the tag**, in a small follow-up pull request: `README.md` line 32 names `v0.17.1` as the latest release
+1. **Merge the pull request that carries this file** when every check on its last head is green.
+2. **Move the tag** (the maintainer's choice over `v0.19.1`; nothing was published under it except the container image):
+   `git push origin --delete v0.19.0`, then `git tag -d v0.19.0`, then `git fetch origin`, then `git tag -a v0.19.0 -m
+   "Release v0.19.0" <the merge commit of that pull request>` and `git push origin v0.19.0`. Name the commit: `git tag -a`
+   with none tags whatever is checked out. Check the result with `git ls-remote --tags origin 'v0.19.0*'`: the peeled line
+   (`^{}`) must be that commit. Consequences: Release, Docker and Docs run again; Docker pushes `:0.19.0`, `:0.19`, `:0` and `:latest`
+   over the first push and signs them again, and whoever pulled `:0.19.0` or `:latest` since 2026-11-01 09:50 UTC has the build
+   with the `sel` bug; there is no first GitHub Release to delete.
+3. Read the Release run: this time `Package and attest` attests, `Publish GitHub Release` and `Verify the published Release`
+   run, and the macOS job's summary has the `minos` line (item 37). Read the Docker and Docs runs as well (section 5, item 1
+   for what to look for in Docs).
+4. The date in `CHANGELOG.md` and `CITATION.cff` is 2026-10-31 and the tag lands later; `validate` checks the heading's form and
+   the CITATION version, not that the date is today's, so leaving it costs nothing but a day's accuracy.
+5. **After the tag**, in a small follow-up pull request: `README.md` line 32 names `v0.17.1` as the latest release
    and several features carry an *(unreleased)* mark that 0.18.0 or 0.18.1 already shipped (line 131 says `v0.17.1`
    installs the V3.0 preview). They are true or false only once the tag exists, which is why they are not in the
    release pull request. Also confirm `scripts/gen-cli-help.sh` leaves `docs/book/_generated/cli-help.txt`

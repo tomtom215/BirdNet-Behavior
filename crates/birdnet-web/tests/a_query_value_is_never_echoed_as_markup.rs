@@ -171,15 +171,29 @@ fn partials_in(html: &str) -> BTreeSet<String> {
     out
 }
 
+/// The rows the sweep seeds, with `today` as an SQL date expression: `date('now','localtime')` for
+/// the station, a literal in the test that holds the seed to what it is for.
+///
+/// The seed must reach every branch a page draws from its data, whatever day the sweep runs.
+/// It used to be today and yesterday, which are in two calendar months on the 1st only. The
+/// history calendar draws its month buttons, and writes `sel` into them, only when its data
+/// spans two months, so on 28 to 31 days of every month this sweep never saw that code, and on the
+/// 1st it failed a release (`/pages/history-calendar`, v0.19.0). The third row, on the last day
+/// of the month before, makes the seed span two months on every day.
+fn seed_sql(today: &str) -> String {
+    format!(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) VALUES
+           ({today}, '06:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.91, 'b.wav'),
+           (date({today},'-1 day'), '07:20:00', 'Erithacus rubecula', 'European Robin', 0.88, 'r.wav'),
+           (date({today},'start of month','-1 day'), '08:30:00', 'Erithacus rubecula', 'European Robin', 0.80, 'r2.wav');"
+    )
+}
+
 fn station() -> axum::Router {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
-    conn.execute_batch(
-        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) VALUES
-           (date('now','localtime'), '06:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.91, 'b.wav'),
-           (date('now','localtime','-1 day'), '07:20:00', 'Erithacus rubecula', 'European Robin', 0.88, 'r.wav');",
-    )
-    .expect("seed");
+    conn.execute_batch(&seed_sql("date('now','localtime')"))
+        .expect("seed");
     build_router_with_rate_limit(
         AppState::from_connection(conn, std::path::PathBuf::from(":memory:")),
         RateLimitConfig {
@@ -331,6 +345,41 @@ async fn a_value_in_the_url_is_never_put_back_as_markup() {
         found.len(),
         found.join("\n  ")
     );
+}
+
+/// The seed spans two calendar months whatever the day is, and today is always in the later one.
+/// Fixed days, not the clock: the 1st, the 28th to the 31st, a leap day, the turn of a year. The
+/// property that failed was "the seed reaches the month buttons", and it held on one day in thirty.
+#[test]
+fn the_seed_spans_two_months_whatever_day_the_sweep_runs() {
+    for today in [
+        "2026-11-01",
+        "2026-11-10",
+        "2026-11-30",
+        "2026-12-31",
+        "2027-01-01",
+        "2028-02-29",
+        "2028-03-01",
+        "2026-03-31",
+    ] {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute_batch(&seed_sql(&format!("date('{today}')")))
+            .expect("seed");
+        let months: Vec<String> = conn
+            .prepare("SELECT DISTINCT substr(Date, 1, 7) FROM detections ORDER BY 1")
+            .expect("prepare")
+            .query_map([], |r| r.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert_eq!(months.len(), 2, "{today}: {months:?}");
+        assert_eq!(
+            months[1],
+            today[..7],
+            "{today}: today is in the later month"
+        );
+    }
 }
 
 #[test]

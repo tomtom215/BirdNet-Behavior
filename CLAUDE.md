@@ -218,6 +218,19 @@ Corollaries, each learned the same way:
   holds `/kiosk?night=0` and `/kiosk?night=1`, so every shared gate grades both.
   Anything the server decides from the clock, the sun or the calendar needs each
   of its states in the route list, not one of them by luck.
+- **A fixture seeded from `now` reaches a different branch on the 1st of the month.**
+  `a_query_value_is_never_echoed_as_markup` seeded today and yesterday. The
+  history calendar draws its month buttons, and writes `sel` into them, only when
+  its data spans two months, which "today and yesterday" do on one day in thirty.
+  `sel` was checked only for being ten characters long, so the sweep stayed green
+  from the day the code landed until 2026-11-01, when it failed `main`'s CI at
+  00:04 UTC and then the `v0.19.0` release run, after the dry runs of 10-31 had
+  passed. A scratch run with the old seed pinned to the 10th and the shipped
+  handler stayed green; the same day with a third row, in the month before,
+  failed. Seed the days that make every branch of the page draw (a month
+  boundary, a year boundary, a leap day) and hold the seed to that with a test on
+  fixed dates. 31 Rust test files in the tree seed from the clock; a test run today is
+  not the run the tag will get.
 - **A value validated at startup is not a value validated.** `validate()` ran
   on the config file at boot and `overlay_db_settings` laid the settings table
   over the result afterwards, so nothing ever checked a number typed into

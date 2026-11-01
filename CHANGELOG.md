@@ -278,6 +278,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`/pages/history-calendar` wrote its `sel` value into the month buttons unescaped.** The handler took any ten
+  characters as the selected day, and `"><zq-p>12` is ten, so a link carrying such a string put up to ten
+  characters of markup into the buttons' `hx-get` attributes. The buttons are drawn when the history spans two
+  months, which is every station past its first month; the strict CSP stops a script, so this was markup
+  injection and not script execution. The `sel_param` code is in the source of v0.18.0 and v0.18.1 (from
+  `git log`; those tags were not rebuilt). Now only a `YYYY-MM-DD` is accepted at the handler, and the value is
+  percent-encoded where it is written. It surfaced because the release gate failed: the sweep that grades every
+  page for this (`a_query_value_is_never_echoed_as_markup`) seeded today and yesterday, which fall in two months
+  on the 1st only, so on every other day of the month the buttons were never drawn and the sweep was green. On
+  2026-11-01 it was red for `main`'s own CI and for the `v0.19.0` release run. The seed now spans two months
+  whatever the day (`the_seed_spans_two_months_whatever_day_the_sweep_runs`), and the handler and the renderer have
+  tests on fixed dates, each seen failing against the shipped code. `v0.19.0` was first tagged one commit before
+  this fix; its release run stopped at that gate and published no GitHub Release, and the tag was moved to the fix.
+  Its container image was pushed from the first commit and is replaced by the one built from the moved tag.
 - **The morning running order drew its lines through its own words.** The newest morning's heavy line cut through
   the right-hand count of the lanes below it ("167 mornings · 82%"), and the time written beside a large dot sat
   where that line left the dot whenever the morning moved steeply or doubled back, which is the case the figure
