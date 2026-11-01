@@ -174,7 +174,13 @@ async fn history_calendar_partial(
         // did not, and said only that something had failed.
         return axum::response::Html(super::error_states::inline("this month's calendar"));
     };
-    let sel = params.sel.as_deref().filter(|s| s.len() == 10);
+    // `sel` is written back into the month buttons' links. "Ten characters long" is not a date:
+    // `"><zq-p>12` is ten characters, and a station whose history spans two months renders those
+    // buttons. Only a `YYYY-MM-DD` gets through.
+    let sel = params
+        .sel
+        .as_deref()
+        .filter(|s| crate::routes::is_valid_date(s));
     axum::response::Html(render_calendar(&days, params.month.as_deref(), sel))
 }
 
@@ -217,7 +223,9 @@ fn render_calendar(
         .unwrap_or(1)
         .max(1);
 
-    let sel_param = sel.unwrap_or("");
+    // Encoded where it is written, not only checked where it arrives: this is a function other
+    // callers and the tests reach without the handler's check.
+    let sel_param = simple_url_encode(sel.unwrap_or(""));
     let mut html = String::new();
 
     // Header with month navigation.
@@ -691,6 +699,119 @@ mod tests {
         // The selected day carries the sel class and the busiest day its count.
         assert!(html.contains("rp-day sel"));
         assert!(html.contains("250"));
+    }
+
+    /// Two months of history, so the calendar draws the month buttons that carry `sel`. Fixed
+    /// dates, not the clock: the sweep in `tests/a_query_value_is_never_echoed_as_markup.rs` seeded
+    /// today and yesterday, which are in two months on the 1st only, so it was blind to this on
+    /// every other day of the month.
+    fn two_months() -> Vec<birdnet_db::sqlite::DayCount> {
+        ["2026-10-31", "2026-11-01"]
+            .iter()
+            .map(|d| birdnet_db::sqlite::DayCount {
+                date: (*d).into(),
+                count: 3,
+                species: 2,
+            })
+            .collect()
+    }
+
+    /// The probe the sweep uses is ten characters long, which is all the handler used to ask of
+    /// `sel`. In the newest month the previous-month button carries it; in the oldest, the next.
+    #[test]
+    fn a_selected_day_is_never_put_into_the_month_buttons_as_markup() {
+        let probe = "\"><zq-p>12";
+        for month in ["2026-11", "2026-10"] {
+            let html = render_calendar(&two_months(), Some(month), Some(probe));
+            assert!(
+                html.contains("hx-get=\"/pages/history-calendar?month="),
+                "{month}: the page has a month button, or this tests nothing: {html}"
+            );
+            assert!(!html.contains("<zq-p>"), "{month}: a tag came back: {html}");
+            assert!(
+                !html.contains(probe),
+                "{month}: the probe came back raw: {html}"
+            );
+            assert!(html.contains("sel=%22%3E%3Czq-p%3E12"), "{month}: {html}");
+        }
+    }
+
+    /// The counterpart: a real date still goes into the buttons, unchanged, and the cell it names
+    /// still carries `sel`; and a month with no buttons has nothing to carry it.
+    #[test]
+    fn a_real_selected_day_still_travels_in_the_month_buttons() {
+        let html = render_calendar(&two_months(), Some("2026-11"), Some("2026-10-31"));
+        assert!(html.contains("month=2026-10&amp;sel=2026-10-31"), "{html}");
+        let html = render_calendar(&two_months(), Some("2026-10"), Some("2026-10-31"));
+        assert!(html.contains("month=2026-11&amp;sel=2026-10-31"), "{html}");
+        assert!(html.contains("rp-day sel"), "{html}");
+        let one_month: Vec<_> = two_months().into_iter().take(1).collect();
+        let html = render_calendar(&one_month, None, Some("2026-10-31"));
+        assert!(
+            !html.contains("sel=2026"),
+            "one month has no month buttons: {html}"
+        );
+    }
+
+    /// What the handler lets through as `sel`: a date's shape and nothing else.
+    #[test]
+    fn only_a_date_shaped_value_is_a_selected_day() {
+        let kept = |s: &str| crate::routes::is_valid_date(s);
+        assert!(kept("2026-11-01"));
+        for bad in [
+            "\"><zq-p>12",
+            "2026-11-0\"",
+            "2026/11/01",
+            "2026-11-011",
+            "",
+            "<script>1",
+        ] {
+            assert!(!kept(bad), "{bad:?}");
+        }
+    }
+
+    /// The handler end to end, on a database whose days are fixed: a `sel` that is not a date is
+    /// dropped before the page is drawn (nothing of it appears, raw or encoded), and a real one
+    /// still travels. The unit tests above pin the encoding at the sink; this pins that the
+    /// handler asks for a date at all.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_calendar_handler_drops_a_selected_day_that_is_not_a_date() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) VALUES
+               ('2026-10-31', '06:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.91, 'b.wav'),
+               ('2026-11-01', '07:20:00', 'Erithacus rubecula', 'European Robin', 0.88, 'r.wav');",
+        )
+        .expect("seed");
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let ask = |sel: &str| {
+            let state = state.clone();
+            let sel = sel.to_owned();
+            async move {
+                let response = history_calendar_partial(
+                    State(state),
+                    Query(CalendarParams {
+                        month: None,
+                        sel: Some(sel),
+                    }),
+                )
+                .await
+                .into_response();
+                let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+                    .await
+                    .expect("body");
+                String::from_utf8(body.to_vec()).expect("utf-8")
+            }
+        };
+        let html = ask("\"><zq-p>12").await;
+        assert!(
+            html.contains("month=2026-10"),
+            "a month button, or no test: {html}"
+        );
+        assert!(!html.contains("zq-p") && !html.contains("%3Czq"), "{html}");
+        let html = ask("2026-10-31").await;
+        assert!(html.contains("month=2026-10&amp;sel=2026-10-31"), "{html}");
     }
 
     #[test]
