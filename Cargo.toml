@@ -147,7 +147,7 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 # `Components::refresh(bool)`, `Component::temperature() -> Option<f32>` — is
 # stable across the 0.38/0.39 boundary, so only the version bump is needed.
 # `network` adds only Windows dependencies; on Linux it reads `/proc/net/dev`.
-sysinfo = { version = "0.39", default-features = false, features = ["system", "component", "network"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system", "component", "network"] }
 
 # `application/x-www-form-urlencoded` parsing for the one form axum's own
 # `Form` extractor cannot take: a checkbox group posts `selected=a&selected=b`,
