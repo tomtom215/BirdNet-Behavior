@@ -278,6 +278,12 @@ impl ThresholdCache {
 /// map one to one. Nothing is computed here: in particular nothing is averaged,
 /// and a classifier without a class for the species stays a row without a score
 /// instead of becoming a zero.
+/// An `f32` as the shortest decimal that reads back as it, widened to `f64`:
+/// the `0.7` somebody typed, not the `0.699999988…` that `f64::from` makes of it.
+fn as_typed(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or_else(|_| f64::from(v))
+}
+
 pub(super) fn db_model_scores(
     answers: &[birdnet_core::detection::types::ModelAnswer],
 ) -> Vec<birdnet_db::sqlite::ModelScore> {
@@ -293,8 +299,12 @@ pub(super) fn db_model_scores(
                 AnswerState::NoLabel => ModelScoreState::NoLabel,
                 AnswerState::Failed => ModelScoreState::Failed,
             },
+            // The score is widened exactly as `Confidence` is, so the winning
+            // classifier's answer equals the row's confidence to the bit. The
+            // bar is a threshold somebody typed: widening 0.7_f32 gives
+            // 0.699999988…, which the JSON API would print.
             score: a.score.map(f64::from),
-            bar: a.bar.map(f64::from),
+            bar: a.bar.map(as_typed),
             window_start_secs: Some(f64::from(a.window_start_secs)),
             window_end_secs: Some(f64::from(a.window_end_secs)),
         })
@@ -1060,18 +1070,24 @@ pub(super) fn event_processor(
         let Some(insert_result) = state.with_ingest_db(|conn| {
             let inserted = birdnet_db::sqlite::insert_detection(conn, &record);
             // What each classifier said, kept beside the row so a page can show
-            // it (migration 57). Only for a row that was stored: an answer set
-            // for a detection the station has no record of would be evidence
-            // for nothing. A failure here costs the detail, not the detection:
-            // the row keeps `model_id` and `model_agreement`, and the card says
-            // what those alone can say.
+            // it (migrations 57 and 58). Only for a row that was stored: an
+            // answer set for a detection the station has no record of would be
+            // evidence for nothing. Keyed by the detection's own identity, the
+            // `File_Name` just written included, so a second source hearing the
+            // same bird in the same second keeps its own answers instead of
+            // overwriting this one's. A failure here costs the detail, not the
+            // detection: the row keeps `model_id` and `model_agreement`, and the
+            // card says what those alone can say.
             if inserted.is_ok()
                 && !model_scores.is_empty()
                 && let Err(e) = birdnet_db::sqlite::insert_model_scores(
                     conn,
-                    record.date,
-                    record.time,
-                    record.sci_name,
+                    &birdnet_db::sqlite::DetectionKey {
+                        date: record.date,
+                        time: record.time,
+                        sci_name: record.sci_name,
+                        file_name: Some(record.file_name),
+                    },
                     &model_scores,
                 )
             {
@@ -1079,8 +1095,8 @@ pub(super) fn event_processor(
                     correlation_id,
                     error = %e,
                     species = %detection.scientific_name,
-                    "the classifiers' own scores for this detection could not be stored; \
-                     the detection itself was"
+                    "the classifiers' own scores for this detection could not be stored \
+                     (or were already); the detection itself was"
                 );
             }
             inserted
@@ -1784,8 +1800,16 @@ mod tests {
                 ModelScoreState::Failed
             ]
         );
-        assert_eq!(rows[0].score, Some(f64::from(0.87_f32)));
-        assert_eq!(rows[0].bar, Some(f64::from(0.70_f32)));
+        assert_eq!(
+            rows[0].score,
+            Some(f64::from(0.87_f32)),
+            "the score is widened exactly, so it equals the row's confidence"
+        );
+        assert_eq!(
+            rows[0].bar,
+            Some(0.7),
+            "the bar is the decimal that was typed, not 0.699999988…"
+        );
         assert_eq!(
             (rows[2].score, rows[2].bar),
             (None, None),
@@ -1795,6 +1819,40 @@ mod tests {
         assert_eq!(rows[1].window_start_secs, Some(3.0));
         assert_eq!(rows[1].window_end_secs, Some(7.5));
         assert!(db_model_scores(&[]).is_empty());
+    }
+
+    /// A threshold is a number somebody typed; `f64::from` of the `f32` it was
+    /// parsed into is not that number, and the JSON API would print the
+    /// difference. A score is not typed, and must stay bit-for-bit what the
+    /// classifier produced.
+    #[test]
+    fn a_bar_is_stored_as_typed_and_a_score_as_produced() {
+        // (0.5 is left out: it is exactly representable, so widening it changes nothing
+        // and it could not tell the two conversions apart.)
+        for typed in [0.7_f64, 0.3, 0.95, 0.1] {
+            #[allow(clippy::cast_possible_truncation)]
+            let as_f32 = typed as f32;
+            assert_eq!(as_typed(as_f32), typed, "{typed}");
+            assert!(
+                (f64::from(as_f32) - typed).abs() > 0.0,
+                "the widened value really does differ, so this test discriminates: {typed}"
+            );
+        }
+        let answers = [birdnet_core::detection::types::ModelAnswer {
+            model_id: "m".into(),
+            state: birdnet_core::detection::types::AnswerState::Heard,
+            score: Some(0.7_f32),
+            bar: Some(0.7_f32),
+            window_start_secs: 0.0,
+            window_end_secs: 3.0,
+        }];
+        let rows = db_model_scores(&answers);
+        assert_eq!(rows[0].bar, Some(0.7));
+        assert_eq!(
+            rows[0].score,
+            Some(f64::from(0.7_f32)),
+            "the score is not retyped"
+        );
     }
 
     use super::*;
@@ -3384,17 +3442,35 @@ mod tests {
         state: &birdnet_web::state::AppState,
         detections: Vec<birdnet_core::detection::types::Detection>,
     ) {
+        drive_from(
+            state,
+            detections
+                .into_iter()
+                .map(|d| (d, "nonexistent.wav"))
+                .collect(),
+        )
+        .await;
+    }
+
+    /// [`drive`], with each detection coming from its own source file. Nothing
+    /// extracts a clip from a file that is not there, so the file name the row
+    /// is stored under is the source's: two names, two detections that differ
+    /// only in where they were heard.
+    async fn drive_from(
+        state: &birdnet_web::state::AppState,
+        detections: Vec<(birdnet_core::detection::types::Detection, &'static str)>,
+    ) {
         use birdnet_core::audio::extraction::ExtractionConfig;
         use birdnet_core::detection::daemon::DetectionEvent;
 
         let tmp = tempfile::tempdir().unwrap();
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel::<DetectionEvent>();
-        for detection in detections {
+        for (detection, source) in detections {
             event_tx
                 .send(DetectionEvent {
                     detection,
-                    source_file: tmp.path().join("nonexistent.wav"),
+                    source_file: tmp.path().join(source),
                     latency_ms: 100,
                     correlation_id: "model-scores".into(),
                     lease: None,
@@ -3474,6 +3550,35 @@ mod tests {
         }
     }
 
+    /// The answers stored for the detection of `Pica pica` that was recorded from
+    /// `source` (its `File_Name` is whatever the processor stored: the source's
+    /// path, because these tests have no audio to cut a clip from).
+    fn answers_from(
+        state: &birdnet_web::state::AppState,
+        source: &str,
+    ) -> Vec<birdnet_db::sqlite::ModelScore> {
+        state.with_db(|c| {
+            let file: String = c
+                .query_row(
+                    "SELECT File_Name FROM detections
+                      WHERE Sci_Name = 'Pica pica' AND File_Name LIKE ?1",
+                    [format!("%{source}")],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            birdnet_db::sqlite::model_scores_for_detection(
+                c,
+                &birdnet_db::sqlite::DetectionKey {
+                    date: "2026-05-19",
+                    time: "09:00:00",
+                    sci_name: "Pica pica",
+                    file_name: Some(&file),
+                },
+            )
+            .unwrap()
+        })
+    }
+
     /// The whole write path end to end: what the classifiers said about a species
     /// reaches the table beside the row, where the page reads it back.
     #[tokio::test(flavor = "current_thread")]
@@ -3490,10 +3595,7 @@ mod tests {
             ])],
         )
         .await;
-        let rows = state.with_db(|c| {
-            birdnet_db::sqlite::model_scores_for_detection(c, "2026-05-19", "09:00:00", "Pica pica")
-                .unwrap()
-        });
+        let rows = answers_from(&state, "nonexistent.wav");
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert_eq!(
             (rows[0].model_id.as_str(), rows[0].state),
@@ -3506,9 +3608,20 @@ mod tests {
         );
         assert_eq!(rows[1].bar, Some(f64::from(0.50_f32)));
         let summary = state.with_db(|c| {
-            birdnet_db::sqlite::detection_model_summary(c, "2026-05-19", "09:00:00", "Pica pica")
-                .unwrap()
-                .unwrap()
+            let file: String = c
+                .query_row("SELECT File_Name FROM detections", [], |r| r.get(0))
+                .unwrap();
+            birdnet_db::sqlite::detection_model_summary(
+                c,
+                &birdnet_db::sqlite::DetectionKey {
+                    date: "2026-05-19",
+                    time: "09:00:00",
+                    sci_name: "Pica pica",
+                    file_name: Some(&file),
+                },
+            )
+            .unwrap()
+            .unwrap()
         });
         assert_eq!(summary.model_id.as_deref(), Some("v3"));
     }
@@ -3549,12 +3662,67 @@ mod tests {
             1,
             "precondition: the duplicate was refused"
         );
-        let rows = state.with_db(|c| {
-            birdnet_db::sqlite::model_scores_for_detection(c, "2026-05-19", "09:00:00", "Pica pica")
-                .unwrap()
-        });
+        let rows = answers_from(&state, "nonexistent.wav");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].state, birdnet_db::sqlite::ModelScoreState::Heard);
+    }
+
+    /// Two sources hearing one bird in one second are two detections that share
+    /// a date, a time and a species. Each must keep the answers its own
+    /// classifiers gave: before the key included the file, the second one's
+    /// answers replaced the first's and the first detection carried a score its
+    /// classifier never gave it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn two_sources_hearing_one_bird_in_the_same_second_keep_their_own_answers() {
+        use birdnet_core::detection::types::AnswerState::{BelowBar, Heard};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        drive_from(
+            &state,
+            vec![
+                (
+                    magpie(vec![
+                        answer("v3", Heard, Some(0.91), Some(0.70)),
+                        answer("perch", Heard, Some(0.99), Some(0.50)),
+                    ]),
+                    "pond.wav",
+                ),
+                (
+                    magpie(vec![
+                        answer("v3", BelowBar, Some(0.42), Some(0.70)),
+                        answer("perch", Heard, Some(0.88), Some(0.50)),
+                    ]),
+                    "lake.wav",
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap()),
+            2,
+            "precondition: both were recorded"
+        );
+        let pond = answers_from(&state, "pond.wav");
+        let lake = answers_from(&state, "lake.wav");
+        let scores = |rows: &[birdnet_db::sqlite::ModelScore]| -> Vec<(String, Option<f64>)> {
+            rows.iter().map(|r| (r.model_id.clone(), r.score)).collect()
+        };
+        assert_eq!(
+            scores(&pond),
+            [
+                ("perch".to_owned(), Some(f64::from(0.99_f32))),
+                ("v3".to_owned(), Some(f64::from(0.91_f32)))
+            ],
+            "the pond detection keeps the pond's answers"
+        );
+        assert_eq!(
+            scores(&lake),
+            [
+                ("perch".to_owned(), Some(f64::from(0.88_f32))),
+                ("v3".to_owned(), Some(f64::from(0.42_f32)))
+            ],
+            "and the lake detection keeps the lake's"
+        );
     }
 
     /// Drive one detection through the real `event_processor` and report what

@@ -240,12 +240,19 @@ fn infer_chunk(
 type Lookup<'a> = Box<dyn Fn(&str) -> crate::detection::answers::ClassScore + 'a>;
 
 /// Give each merged detection what every classifier that listened to the chunk
-/// said about its species (migration 57).
+/// said about its species (migrations 57 and 58).
 ///
 /// The merge keeps one detection per species and the winner's confidence; this
 /// is the rest. `windows` is `(route index, answered)` for each classifier that
 /// ran: a classifier that failed the chunk is recorded as failed and its kept
 /// scores, which are the previous window's, are never read.
+///
+/// **Only when two or more classifiers listened.** The answers exist so that
+/// classifiers can be compared. With one, the detection row is already the whole
+/// record (its `Confidence` is that classifier's score, its `Cutoff` the bar),
+/// and a row per detection would be a write per detection on every station, for
+/// a card that has nothing to compare. A source routed to the primary alone on a
+/// station that runs several classifiers is in the same position.
 fn attach_answers(
     registry: &ClassifierRegistry,
     windows: &[(usize, bool)],
@@ -260,6 +267,9 @@ fn attach_answers(
         .iter()
         .filter_map(|&(idx, answered)| Some((registry.model(idx)?, answered)))
         .collect();
+    if listening.len() < 2 {
+        return;
+    }
     let lookups: Vec<Option<Lookup<'_>>> = listening
         .iter()
         .map(|&(registered, answered)| {
@@ -907,16 +917,35 @@ mod tests {
     }
 
     /// A classifier the source is not routed to was not asked, so it is absent
-    /// from the answers; that is different from one that was asked and could not
-    /// judge, which is listed as such.
+    /// from the answers. With only one left listening there is nothing to
+    /// compare, and the detection row alone is the record: no answers at all.
     #[test]
-    fn a_classifier_that_was_not_routed_is_not_listed() {
+    fn a_chunk_only_one_classifier_listened_to_leaves_no_answers() {
         let tmp = tempfile::tempdir().unwrap();
         let mut registry = two_classifiers_with(tmp.path(), (None, None), 11);
         let out = infer_chunk(&mut registry, &[1], &chunk_scoring(&[0.9]), 20).unwrap();
+        assert!(
+            !out.detections.is_empty(),
+            "the classifier still detects; only the comparison is skipped"
+        );
         for d in &out.detections {
-            assert_eq!(d.model_scores.len(), 1, "{:?}", d.model_scores);
-            assert_eq!(d.model_scores[0].model_id, "v3");
+            assert!(d.model_scores.is_empty(), "{:?}", d.model_scores);
+        }
+    }
+
+    /// The counterpart: routed to both, the same chunk carries an answer from
+    /// each. Without it the test above would pass for a writer that never
+    /// wrote anything.
+    #[test]
+    fn a_chunk_two_classifiers_listened_to_carries_an_answer_from_each() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (None, None), 11);
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        assert!(!out.detections.is_empty());
+        for d in &out.detections {
+            let mut ids: Vec<_> = d.model_scores.iter().map(|a| a.model_id.as_str()).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, ["birdnet", "v3"], "{:?}", d.model_scores);
         }
     }
 

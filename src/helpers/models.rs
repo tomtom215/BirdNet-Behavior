@@ -452,9 +452,13 @@ fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) 
     let model = installed.model_path.display();
     match installed.usage {
         Use::Classifier => {
+            let labels = installed.labels_path.as_ref().map_or_else(
+                || "<your labels file>".to_owned(),
+                |p| p.display().to_string(),
+            );
             println!("\nTo run it as a second classifier, set:");
             println!("  BIRDNET_MODEL_2_PATH={model}");
-            println!("  BIRDNET_MODEL_2_LABELS=<your labels file>");
+            println!("  BIRDNET_MODEL_2_LABELS={labels}");
             println!("  BIRDNET_MODEL_2_ID={}", installed.id);
             println!("  BIRDNET_MODEL_2_SAMPLE_RATE={}", installed.sample_rate);
         }

@@ -9,7 +9,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use birdnet_db::sqlite::{ModelScore, ModelScoreState, insert_model_score};
+use birdnet_db::sqlite::{DetectionKey, ModelScore, ModelScoreState, insert_model_score};
 use birdnet_web::state::AppState;
 use serde_json::Value;
 use tower::ServiceExt as _;
@@ -24,6 +24,7 @@ fn station() -> (tempfile::TempDir, AppState) {
     (dir, state)
 }
 
+/// A detection whose clip is `<sci>.wav`.
 fn add_detection(
     state: &AppState,
     date: &str,
@@ -32,18 +33,39 @@ fn add_detection(
     model: Option<&str>,
     agreement: Option<i64>,
 ) {
+    add_detection_from(
+        state,
+        date,
+        time,
+        sci,
+        &format!("{sci}.wav"),
+        model,
+        agreement,
+    );
+}
+
+fn add_detection_from(
+    state: &AppState,
+    date: &str,
+    time: &str,
+    sci: &str,
+    clip: &str,
+    model: Option<&str>,
+    agreement: Option<i64>,
+) {
     state.with_db(|conn| {
         conn.execute(
             "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
                   File_Name, chunk_offset_secs, model_id, model_agreement)
-             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.9, 0.7, 18, 1.25, 0.0, ?3 || '.wav', 0, ?4, ?5)",
-            rusqlite::params![date, time, sci, model, agreement],
+             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.9, 0.7, 18, 1.25, 0.0, ?6, 0, ?4, ?5)",
+            rusqlite::params![date, time, sci, model, agreement, clip],
         )
         .expect("insert detection");
     });
 }
 
+/// An answer for the detection whose clip is `<sci>.wav`.
 fn store(
     state: &AppState,
     date: &str,
@@ -54,12 +76,34 @@ fn store(
     score: Option<f64>,
     own_bar: Option<f64>,
 ) {
+    store_for(
+        state,
+        (date, time, sci, &format!("{sci}.wav")),
+        model,
+        st,
+        score,
+        own_bar,
+    );
+}
+
+/// An answer for the detection `(date, time, species, clip)`.
+fn store_for(
+    state: &AppState,
+    (date, time, sci, clip): (&str, &str, &str, &str),
+    model: &str,
+    st: ModelScoreState,
+    score: Option<f64>,
+    own_bar: Option<f64>,
+) {
     state.with_db(|conn| {
         insert_model_score(
             conn,
-            date,
-            time,
-            sci,
+            &DetectionKey {
+                date,
+                time,
+                sci_name: sci,
+                file_name: Some(clip),
+            },
             &ModelScore {
                 model_id: model.to_owned(),
                 state: st,
@@ -139,6 +183,10 @@ async fn the_models_endpoint_lists_each_classifiers_own_answer_against_its_own_b
     assert_eq!(status, StatusCode::OK, "{v}");
     assert_eq!(v["model_id"], "birdnet-v3");
     assert_eq!(v["model_agreement"], 1);
+    assert_eq!(
+        v["file_name"], "Dryobates villosus.wav",
+        "the response names the detection it answers for"
+    );
     let models = v["models"].as_array().expect("a list");
     let seen: Vec<(&str, &str)> = models
         .iter()
@@ -244,12 +292,12 @@ async fn the_model_scores_export_has_one_row_per_classifier_and_empty_cells_for_
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(
         lines[0],
-        "Date,Time,Sci_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs"
+        "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs"
     );
     assert_eq!(lines.len(), 4, "{csv}");
     assert!(
-        lines[1].contains(",birdnet-v3,heard,0.9100,0.7000,"),
-        "{}",
+        lines[1].contains(",Dryobates villosus.wav,birdnet-v3,heard,0.9100,0.7000,"),
+        "each row names its detection's clip: {}",
         lines[1]
     );
     assert!(
@@ -333,4 +381,100 @@ async fn the_model_scores_export_honours_dates_leaves_out_rejected_detections_an
 
     let (status, _) = get(&state, "/api/v2/detections/export/model-scores?from=June").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Two sources hearing one bird in one second are two detections sharing a date,
+/// a time and a species. A request that names only those cannot say which it
+/// means, and must not answer for whichever came first.
+#[tokio::test]
+async fn a_request_that_does_not_say_which_of_two_detections_is_refused_with_the_choices() {
+    let (_dir, state) = station();
+    for (clip, v3, perch) in [("pond.wav", 0.91, 0.99), ("lake.wav", 0.42, 0.88)] {
+        add_detection_from(&state, DATE, TIME, SCI, clip, Some("perch-v2"), Some(1));
+        store_for(
+            &state,
+            (DATE, TIME, SCI, clip),
+            "birdnet-v3",
+            ModelScoreState::Heard,
+            Some(v3),
+            Some(0.30),
+        );
+        store_for(
+            &state,
+            (DATE, TIME, SCI, clip),
+            "perch-v2",
+            ModelScoreState::Heard,
+            Some(perch),
+            Some(0.50),
+        );
+    }
+    let (status, v) = json(&state, &models_uri()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["file_names"],
+        serde_json::json!(["lake.wav", "pond.wav"]),
+        "{v}"
+    );
+    assert!(
+        v.get("models").is_none(),
+        "no answers for a detection it could not pick: {v}"
+    );
+
+    // Naming the clip says which, and each gets its own answers.
+    for (clip, v3, perch) in [("pond.wav", 0.91, 0.99), ("lake.wav", 0.42, 0.88)] {
+        let uri = format!("{}&file_name={clip}", models_uri());
+        let (status, v) = json(&state, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["file_name"], clip);
+        let by_model = |id: &str| {
+            v["models"]
+                .as_array()
+                .expect("list")
+                .iter()
+                .find(|m| m["model_id"] == id)
+                .and_then(|m| m["score"].as_f64())
+                .expect("answer")
+        };
+        assert!((by_model("birdnet-v3") - v3).abs() < 1e-9, "{clip}: {v}");
+        assert!((by_model("perch-v2") - perch).abs() < 1e-9, "{clip}: {v}");
+    }
+    // A clip that is not one of them is not found, not answered for its neighbour.
+    let (status, _) = json(&state, &format!("{}&file_name=elsewhere.wav", models_uri())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_scores_export_names_each_answers_clip_so_it_joins_the_detections_export() {
+    let (_dir, state) = station();
+    for (clip, score) in [("pond.wav", 0.91), ("lake.wav", 0.42)] {
+        add_detection_from(&state, DATE, TIME, SCI, clip, Some("v3"), Some(1));
+        store_for(
+            &state,
+            (DATE, TIME, SCI, clip),
+            "v3",
+            ModelScoreState::Heard,
+            Some(score),
+            Some(0.30),
+        );
+    }
+    let (_, csv) = get(&state, "/api/v2/detections/export/model-scores").await;
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines.len(), 3, "{csv}");
+    assert!(
+        lines[1].contains(",lake.wav,v3,heard,0.4200,"),
+        "{}",
+        lines[1]
+    );
+    assert!(
+        lines[2].contains(",pond.wav,v3,heard,0.9100,"),
+        "{}",
+        lines[2]
+    );
+    let (_, v) = json(&state, "/api/v2/detections/export/model-scores?format=json").await;
+    let rows = v["model_scores"].as_array().expect("rows");
+    let clips: Vec<_> = rows
+        .iter()
+        .map(|r| r["file_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(clips, ["lake.wav", "pond.wav"], "{v}");
 }

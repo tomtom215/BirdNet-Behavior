@@ -2383,9 +2383,10 @@ pub const MIGRATIONS: &[Migration] = &[
         //
         // ## Status
         //
-        // The table and its reader land before the writer: the detection daemon
-        // does not fill it yet, so rows exist only on a database something else
-        // wrote. Pages built on it stay silent when there are none.
+        // This migration created the table keyed on (Date, Time, Sci_Name,
+        // model_id), which cannot tell apart two detections of one species in
+        // one second from two recordings. Migration 58 re-keys it, and the
+        // detection daemon writes it from the same release.
         up_sql: "CREATE TABLE IF NOT EXISTS detection_model_scores (
             Date TEXT NOT NULL,
             Time TEXT NOT NULL,
@@ -2400,6 +2401,87 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (Date, Time, Sci_Name, model_id),
             CHECK ((state IN ('heard', 'below_bar')) = (score IS NOT NULL))
         );",
+    },
+    Migration {
+        version: 58,
+        description: "Key each classifier's answers by the detection's file, and drop them with the detection",
+        // ## Why
+        //
+        // Migration 57 keyed the answers on (Date, Time, Sci_Name, model_id).
+        // That is not one detection: `detections` tells two rows of one species
+        // in one second apart by `File_Name` (`idx_detections_unique`, and
+        // `DetectionKey` in the db crate, which delete, lock, relabel and review
+        // all address a row by). Two sources hearing one bird in the same second
+        // are two detections, and the second one's answers overwrote the first's:
+        // the first detection then carried a score its own classifier never gave
+        // it. Found by running two sources through real models, not by a test.
+        //
+        // The key now includes `File_Name` (`''` for a row with no clip, which is
+        // what `COALESCE(File_Name, '')` means everywhere else).
+        //
+        // Nothing removed a detection's answers either, so deleting a detection,
+        // deleting a species, removing an import batch or relabelling left rows
+        // that belonged to nothing, and a later detection at the same key would
+        // have inherited them. Two triggers close that for every path at once,
+        // including the ones that do not exist yet:
+        //   - AFTER DELETE on `detections` removes that detection's answers;
+        //   - AFTER UPDATE OF Sci_Name removes the answers keyed to the old name:
+        //     they are what the classifiers said about the *old* species, and
+        //     keeping them under the new one would be wrong. The row keeps its
+        //     own `model_id`, `model_agreement` and `Confidence`.
+        // (`INSERT OR REPLACE` on `detections` would skip them, because
+        // recursive triggers are off; nothing writes `detections` that way.)
+        //
+        // ## What is carried over
+        //
+        // Only answers that belong to exactly one stored detection can be given
+        // its `File_Name`. Any other row — its detection gone, or the key shared
+        // by several, which is the very case that overwrote them — cannot be
+        // attributed and is dropped. The writer that produced them had not
+        // shipped in a release.
+        up_sql: "CREATE TABLE detection_model_scores_v58 (
+            Date TEXT NOT NULL,
+            Time TEXT NOT NULL,
+            Sci_Name TEXT NOT NULL,
+            File_Name TEXT NOT NULL DEFAULT '',
+            model_id TEXT NOT NULL,
+            state TEXT NOT NULL
+                CHECK (state IN ('heard', 'below_bar', 'no_label', 'failed')),
+            score REAL CHECK (score IS NULL OR (score >= 0.0 AND score <= 1.0)),
+            bar REAL CHECK (bar IS NULL OR (bar >= 0.0 AND bar <= 1.0)),
+            window_start_secs REAL,
+            window_end_secs REAL,
+            PRIMARY KEY (Date, Time, Sci_Name, File_Name, model_id),
+            CHECK ((state IN ('heard', 'below_bar')) = (score IS NOT NULL))
+        );
+        INSERT INTO detection_model_scores_v58
+            (Date, Time, Sci_Name, File_Name, model_id, state, score, bar,
+             window_start_secs, window_end_secs)
+        SELECT s.Date, s.Time, s.Sci_Name, COALESCE(d.File_Name, ''), s.model_id,
+               s.state, s.score, s.bar, s.window_start_secs, s.window_end_secs
+          FROM detection_model_scores s
+          JOIN detections d
+            ON d.Date = s.Date AND d.Time = s.Time AND d.Sci_Name = s.Sci_Name
+         WHERE (SELECT COUNT(*) FROM detections d2
+                 WHERE d2.Date = s.Date AND d2.Time = s.Time
+                   AND d2.Sci_Name = s.Sci_Name) = 1;
+        DROP TABLE detection_model_scores;
+        ALTER TABLE detection_model_scores_v58 RENAME TO detection_model_scores;
+        CREATE TRIGGER detections_delete_model_scores
+        AFTER DELETE ON detections
+        BEGIN
+            DELETE FROM detection_model_scores
+             WHERE Date = OLD.Date AND Time = OLD.Time AND Sci_Name = OLD.Sci_Name
+               AND File_Name = COALESCE(OLD.File_Name, '');
+        END;
+        CREATE TRIGGER detections_relabel_model_scores
+        AFTER UPDATE OF Sci_Name ON detections
+        WHEN OLD.Sci_Name IS NOT NEW.Sci_Name
+        BEGIN
+            DELETE FROM detection_model_scores
+             WHERE Date = OLD.Date AND Time = OLD.Time AND Sci_Name = OLD.Sci_Name
+               AND File_Name = COALESCE(OLD.File_Name, '');
+        END;",
     },
 ];
 
@@ -3049,6 +3131,74 @@ mod tests {
         let applied = migrate(&conn).expect("downgrade must not error");
         assert_eq!(applied, 0, "no migrations should apply on a newer DB");
         assert_eq!(current_version(&conn).unwrap(), known_max + 5);
+    }
+
+    /// Migration 58 re-keys the answers table. A database that already holds
+    /// answers from migration 57's shape keeps the ones that belong to exactly
+    /// one stored detection, now with that detection's clip, and loses the rest:
+    /// an answer whose detection is gone, or whose key is shared by several
+    /// detections (the very case that overwrote them), cannot be attributed.
+    #[test]
+    fn migration_58_keeps_only_the_answers_that_belong_to_exactly_one_detection() {
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+        // Put the database back as migration 57 left it.
+        conn.execute_batch(
+            "DROP TRIGGER detections_delete_model_scores;
+             DROP TRIGGER detections_relabel_model_scores;
+             DROP TABLE detection_model_scores;",
+        )
+        .unwrap();
+        let m57 = MIGRATIONS.iter().find(|m| m.version == 57).unwrap();
+        conn.execute_batch(m57.up_sql).unwrap();
+        conn.execute("DELETE FROM schema_version WHERE version = 58", [])
+            .unwrap();
+
+        for (sci, file) in [("Solo", "solo.wav"), ("Twin", "a.wav"), ("Twin", "b.wav")] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-11-01', '06:30:00', ?1, ?1, 0.9, ?2)",
+                rusqlite::params![sci, file],
+            )
+            .unwrap();
+        }
+        for (sci, score) in [("Solo", 0.9), ("Twin", 0.8), ("Gone", 0.7)] {
+            conn.execute(
+                "INSERT INTO detection_model_scores
+                     (Date, Time, Sci_Name, model_id, state, score, bar)
+                 VALUES ('2026-11-01', '06:30:00', ?1, 'm', 'heard', ?2, 0.7)",
+                rusqlite::params![sci, score],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(migrate(&conn).unwrap(), 1, "only migration 58 is pending");
+
+        let kept: Vec<(String, String, String, f64)> = conn
+            .prepare(
+                "SELECT Sci_Name, File_Name, model_id, score
+                   FROM detection_model_scores ORDER BY Sci_Name",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            kept,
+            [("Solo".into(), "solo.wav".into(), "m".into(), 0.9)],
+            "the one that is unambiguous, with its clip; not the shared key, not the orphan"
+        );
+        let triggers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'
+                    AND name IN ('detections_delete_model_scores',
+                                 'detections_relabel_model_scores')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(triggers, 2, "both cleanup triggers exist after the rebuild");
     }
 
     #[test]

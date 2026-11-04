@@ -193,13 +193,20 @@ fn card(c: &ModelCard, several: bool) -> String {
 
 /// What the classifier is, in one line: window, rate, classes and bar.
 fn facts_line(info: &ModelInfo) -> String {
-    format!(
-        "<p class=\"ws-facts mono\">{window} window · {rate} · {labels} classes · bar {bar}</p>",
-        window = fmt_seconds(info.window_secs),
-        rate = fmt_khz(info.sample_rate),
-        labels = super::group_thousands(i64::try_from(info.labels).unwrap_or(i64::MAX)),
-        bar = fmt_percent(info.bar),
-    )
+    // The line may break between facts and never inside one: on a phone it wraps,
+    // and "bar" on one line over "70%" on the next reads as two separate things.
+    // A no-break space joins the words of each fact.
+    let facts = [
+        format!("{} window", fmt_seconds(info.window_secs)),
+        fmt_khz(info.sample_rate),
+        format!(
+            "{} classes",
+            super::group_thousands(i64::try_from(info.labels).unwrap_or(i64::MAX))
+        ),
+        format!("bar {}", fmt_percent(info.bar)),
+    ]
+    .map(|fact| fact.replace(' ', "\u{a0}"));
+    format!("<p class=\"ws-facts mono\">{}</p>", facts.join(" · "))
 }
 
 /// `4.5 s`, `3 s`: one decimal unless it is a whole number of seconds.
@@ -437,9 +444,22 @@ mod tests {
             10,
         ));
         assert!(
-            with.contains("4.5 s window · 32 kHz · 11,560 classes · bar 70%"),
+            with.contains(
+                "4.5\u{a0}s\u{a0}window · 32\u{a0}kHz · 11,560\u{a0}classes · bar\u{a0}70%"
+            ),
             "{with}"
         );
+        // Breaks fall between facts: no fact holds an ordinary space a phone could
+        // wrap at, so "bar" is never left on one line and "70%" on the next.
+        let line = with
+            .split("<p class=\"ws-facts mono\">")
+            .nth(1)
+            .and_then(|r| r.split("</p>").next())
+            .expect("the facts line");
+        for fact in line.split(" · ") {
+            assert!(!fact.contains(' '), "{fact:?} can break inside itself");
+        }
+        assert_eq!(line.split(" · ").count(), 4, "{line}");
     }
 
     #[test]

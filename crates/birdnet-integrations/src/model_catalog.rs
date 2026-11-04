@@ -196,20 +196,26 @@ pub const CATALOG: &[CatalogEntry] = &[
                     da88bf8c37c0b3068fc706fe509f633b9fbd28c1/perch_v2.onnx",
         model_sha256: "bf0c8467a924cb074663970ca4a0ab1e143602121930209657d0dff5d5cefa1f",
         model_bytes: 409_148_616,
-        // No labels file accompanies the ONNX conversion; an operator supplies
-        // one. Saying so here is better than shipping a URL that 404s in the
-        // field.
+        // No labels file accompanies the ONNX conversion. Google's list of the
+        // 14 795 classes is compiled into the binary in the form the station
+        // reads (`scripts/build-perch-labels.py`, `data/labels/README.md`), so
+        // nobody has to find it and reshape it by hand: the classes are
+        // positional, and a hand-made file that is wrong is not an error but a
+        // station naming birds as other birds.
         labels_url: None,
-        labels_embedded: None,
-        labels_sha256: None,
+        labels_embedded: Some(birdnet_core::inference::labels::PERCH_V2_LABELS),
+        labels_sha256: Some(birdnet_core::inference::labels::PERCH_V2_LABELS_SHA256),
         sample_rate: 32_000,
         usage: Use::Classifier,
         notes: "Materially better than BirdNET in the tropics. Wants 5 s windows \
                 at 32 kHz where BirdNET wants 4.5 s; the two run together, the chunk \
                 cut to the longer window and stepped by the shorter. Set \
-                MODEL_n_SAMPLE_RATE=32000 — its tensor shape alone cannot say. No \
-                labels file ships with the ONNX conversion; supply one with 14 795 \
-                rows.",
+                MODEL_n_SAMPLE_RATE=32000 — its tensor shape alone cannot say. Its \
+                14 795 classes are not all species: 200 name a kind \
+                of sound (Engine, Vehicle, Animal). Its scores are shares of one \
+                softmax over those classes, so they sum to 1 in a window and two \
+                species singing at once split them; judge them against a bar of \
+                their own (MODEL_n_THRESHOLD), not the station's.",
     },
     CatalogEntry {
         id: "birdnet-v24",
@@ -746,9 +752,17 @@ fn labels_file_name(entry: &CatalogEntry) -> Option<String> {
             .unwrap_or("csv");
         return Some(format!("{}_labels.{ext}", entry.id));
     }
-    entry
-        .labels_embedded
-        .map(|_| format!("{}_labels.txt", entry.id))
+    // The extension follows the content: a file whose first line is the CSV
+    // header `sci_name,...` is a CSV (Perch), anything else is the one-line-
+    // per-class text format (V2.4).
+    entry.labels_embedded.map(|text| {
+        let ext = if text.starts_with("sci_name") {
+            "csv"
+        } else {
+            "txt"
+        };
+        format!("{}_labels.{ext}", entry.id)
+    })
 }
 
 /// Where [`install`] puts an entry's model and (if it ships one) its labels.
@@ -1336,9 +1350,13 @@ mod tests {
         assert_eq!(perch.model_bytes, 409_148_616);
         assert_eq!(perch.sample_rate, 32_000);
         assert!(
-            perch.labels_url.is_none(),
-            "no labels ship with the ONNX conversion, and the catalogue says so \
+            perch.labels_url.is_none() && perch.labels_embedded.is_some(),
+            "no labels ship with the ONNX conversion, so the catalogue carries them \
              rather than shipping a URL that 404s in the field"
+        );
+        assert_eq!(
+            perch.labels_sha256,
+            Some(birdnet_core::inference::labels::PERCH_V2_LABELS_SHA256)
         );
         assert!(perch.notes.contains("14 795"), "{}", perch.notes);
 
@@ -1469,6 +1487,37 @@ mod tests {
             super::installed_paths(v3, dir).1.as_deref(),
             Some(std::path::Path::new("/m/birdnet-v3_labels.csv")),
             "a downloaded labels file keeps its extension"
+        );
+        // An embedded file's extension follows its content: Perch's is a CSV
+        // with a header, V2.4's is one class per line.
+        let perch = find("perch-v2").expect("entry");
+        assert_eq!(
+            super::installed_paths(perch, dir).1.as_deref(),
+            Some(std::path::Path::new("/m/perch-v2_labels.csv")),
+            "a CSV is not installed under a .txt name"
+        );
+    }
+
+    /// What the installer writes for Perch is the embedded file, and it
+    /// verifies: the catalogue pins a digest the bytes it carries really have,
+    /// so `--install-model perch-v2` cannot refuse its own labels.
+    #[test]
+    fn the_perch_labels_the_installer_writes_verify_against_the_pinned_digest() {
+        const WRONG_DIGEST: &str =
+            "0000000000000000000000000000000000000000000000000000000000000000";
+        let perch = find("perch-v2").expect("entry");
+        let text = perch.labels_embedded.expect("Perch's labels are embedded");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("perch-v2_labels.csv");
+        super::write_verified(text.as_bytes(), perch.labels_sha256.expect("digest"), &path)
+            .expect("the embedded bytes have the pinned digest");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
+        // And a digest that does not match is refused, not written.
+        let other = dir.path().join("other.csv");
+        assert!(super::write_verified(text.as_bytes(), WRONG_DIGEST, &other).is_err());
+        assert!(
+            !other.exists(),
+            "nothing lands under a name that did not verify"
         );
     }
 

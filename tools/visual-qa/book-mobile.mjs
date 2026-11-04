@@ -25,8 +25,30 @@ const DETAIL_NAME = process.env.DETAIL_NAME || 'Northern Cardinal';
 const DETAIL_DATE = process.env.DETAIL_DATE || TODAY;
 const DETAIL_TIME = process.env.DETAIL_TIME || '06:00:00';
 
+const ONLY = process.env.ONLY || '';
+
+// A detection whose classifiers disagreed, found through the API the page itself documents (see
+// the same function in book.mjs). `null` when the station stores no per-classifier answers.
+async function splitDetection() {
+  try {
+    const list = (await (await fetch(`${BASE}/api/v2/detections?limit=30`)).json()).detections || [];
+    let fallback = null;
+    for (const d of list) {
+      const m = await (await fetch(`${BASE}/api/v2/detections/models?date=${d.date}&time=${enc(d.time)}&sci_name=${enc(d.sci_name)}`)).json();
+      const states = (m.models || []).map((x) => x.state);
+      if (states.includes('heard') && states.includes('below_bar')) return d;
+      if (!fallback && states.length > 1) fallback = d;
+    }
+    return fallback;
+  } catch (e) {
+    return null;
+  }
+}
+const SPLIT = await splitDetection();
+
 // Mirrors book.mjs PAGES (the desktop set), minus desktop-only chrome that has
-// no phone layout. [outputName, route, theme]
+// no phone layout. [outputName, route, theme, selector?]: with a selector the image is that
+// element alone (a section below the first screen), at the phone's own width and density.
 const PAGES = [
   ['dashboard.png', '/', 'light'],
   ['dashboard-dark.png', '/', 'dark'],
@@ -52,11 +74,24 @@ const PAGES = [
   ['onboarding.png', '/onboarding', 'light'],
   ['admin-audio.png', '/station/capture', 'light'],
   ['admin-backups.png', '/station/data', 'light'],
+  // Below the first screen of the pages above, so cropped to the element.
+  ['system-health-models.png', '/station', 'light', '.ws-models'],
+  [
+    'detection-who-heard-it.png',
+    SPLIT && `/detections/detail?date=${SPLIT.date}&time=${enc(SPLIT.time)}&name=${enc(SPLIT.com_name)}`,
+    'light',
+    '.ws-card',
+  ],
 ];
 
 // Same knob as qa.mjs / axe.mjs: sandboxes ship their own Chromium rather than the build this playwright pins.
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-for (const [name, route, theme] of PAGES) {
+for (const [name, route, theme, selector] of PAGES) {
+  if (ONLY && !name.includes(ONLY)) continue;
+  if (!route) {
+    console.log(`- mobile/${name}: skipped, nothing to draw on this station`);
+    continue;
+  }
   const ctx = await browser.newContext({
     viewport: { width: W, height: H },
     deviceScaleFactor: DPR,
@@ -73,8 +108,15 @@ for (const [name, route, theme] of PAGES) {
     await page.waitForLoadState('networkidle', { timeout: 9000 }).catch(() => {});
     await page.waitForFunction(() => [...document.images].every((i) => i.complete), { timeout: 8000 }).catch(() => {});
     await sleep(1400);
-    await page.screenshot({ path: path.join(OUT, name) }); // viewport-sized: 1170x1992
-    console.log(`. mobile/${name}`);
+    if (selector) {
+      const box = page.locator(selector).first();
+      await box.waitFor({ state: 'visible', timeout: 8000 });
+      await box.screenshot({ path: path.join(OUT, name) });
+      console.log(`. mobile/${name} (${selector})`);
+    } else {
+      await page.screenshot({ path: path.join(OUT, name) }); // viewport-sized: 1170x1992
+      console.log(`. mobile/${name}`);
+    }
   } catch (e) {
     console.log(`x ${name}: ${e.message}`);
   }

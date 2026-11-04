@@ -22,15 +22,26 @@
 //!
 //! # When it is silent
 //!
-//! With nothing stored for the detection and no sign in the row itself that
-//! more than one classifier agreed, the card renders nothing, like the
-//! "Also heard by" card beside it: a one-classifier station never sees it.
+//! A card compares, so it needs at least two answers. With fewer stored for the
+//! detection, and no sign in the row itself that more than one classifier
+//! agreed, it renders nothing, like the "Also heard by" card beside it: a
+//! one-classifier station never sees it. (The daemon does not write answers for
+//! a chunk only one classifier listened to; this holds the same line for a row
+//! a database already carries.)
+//!
+//! # Two bars
+//!
+//! Each answer is judged against *its classifier's* own bar. The station then
+//! applies its own cutoff to the detection (a per-species setting, a dynamic
+//! threshold), recorded on the row as `Cutoff`. Usually they agree. When a
+//! classifier's answer met its own bar but not the station's, the card says so,
+//! rather than let "heard it" read as "the station accepted it".
 
 use std::fmt::Write as _;
 
 use birdnet_db::sqlite::{
-    DbError, DetectionModelSummary, ModelScore, ModelScoreState, detection_model_summary,
-    model_scores_for_detection,
+    DbError, DetectionKey, DetectionModelSummary, ModelScore, ModelScoreState,
+    detection_model_summary, model_scores_for_detection,
 };
 
 use super::escape_html;
@@ -50,25 +61,23 @@ pub struct ModelEvidence {
 ///
 /// Returns `DbError` when either read fails; the caller decides what a failed
 /// read looks like, and it must not look like an empty result.
-pub fn read(
-    conn: &rusqlite::Connection,
-    date: &str,
-    time: &str,
-    sci_name: &str,
-) -> Result<ModelEvidence, DbError> {
+pub fn read(conn: &rusqlite::Connection, key: &DetectionKey<'_>) -> Result<ModelEvidence, DbError> {
     Ok(ModelEvidence {
-        scores: model_scores_for_detection(conn, date, time, sci_name)?,
-        summary: detection_model_summary(conn, date, time, sci_name)?,
+        scores: model_scores_for_detection(conn, key)?,
+        summary: detection_model_summary(conn, key)?,
     })
 }
 
-/// The card for one detection. `None` means the read failed.
-pub fn card(evidence: Option<&ModelEvidence>) -> String {
+/// The card for one detection. `None` means the read failed. `cutoff` is the
+/// station's own cutoff for the detection (`detections.Cutoff`), when it kept one.
+pub fn card(evidence: Option<&ModelEvidence>, cutoff: Option<f64>) -> String {
     let Some(ev) = evidence else {
         return super::error_states::inline("which classifiers heard this");
     };
-    if !ev.scores.is_empty() {
-        return per_model_card(&ev.scores);
+    // Two answers are the least a comparison can be made of. One is the
+    // detection row's own record, which the page already shows.
+    if ev.scores.len() >= 2 {
+        return per_model_card(&ev.scores, cutoff);
     }
     summary_card(ev.summary.as_ref())
 }
@@ -88,7 +97,7 @@ const fn models(n: usize) -> &'static str {
 }
 
 /// The card when each classifier's answer was stored.
-fn per_model_card(scores: &[ModelScore]) -> String {
+fn per_model_card(scores: &[ModelScore], cutoff: Option<f64>) -> String {
     let (heard, judged) = tally(scores);
     let no_label = scores
         .iter()
@@ -154,6 +163,7 @@ fn per_model_card(scores: &[ModelScore]) -> String {
         r#"<div class="bnb-card pad ws-card">
   <div class="section-header"><div><div class="bnb-eyebrow">Models</div><h2 class="sh-h">Who heard it</h2></div><span class="{pill}">{pill_text}</span></div>
   <p class="ws-headline">{headline}{aside}</p>
+  {station}
   <table class="ws-table">
     <caption class="sr-only">What each classifier said about this detection</caption>
     <thead><tr><th scope="col">Model</th><th scope="col">What it said</th><th scope="col"><span class="sr-only">Score against its bar</span><span aria-hidden="true">Score · its bar</span></th></tr></thead>
@@ -163,6 +173,41 @@ fn per_model_card(scores: &[ModelScore]) -> String {
   {windows}
 </div>"#,
         windows = windows_note(scores),
+        station = station_cutoff_note(scores, cutoff),
+    )
+}
+
+/// Say so when an answer met its own classifier's bar and not the station's.
+///
+/// Only answers that *met their own bar* are named: one that scored under its own
+/// bar is already shown as "under its bar of ...", and saying it "met" a bar it
+/// missed would be false. Empty when the station kept no cutoff for the
+/// detection, or when every such answer reached it (the usual case: the bars
+/// agree).
+fn station_cutoff_note(scores: &[ModelScore], cutoff: Option<f64>) -> String {
+    let Some(cutoff) = cutoff else {
+        return String::new();
+    };
+    let under: Vec<String> = scores
+        .iter()
+        .filter(|s| s.state == ModelScoreState::Heard)
+        .filter_map(|s| {
+            s.score.filter(|v| *v < cutoff).map(|v| {
+                format!(
+                    "<span class=\"mono\">{}</span> ({})",
+                    escape_html(&s.model_id),
+                    pct(v)
+                )
+            })
+        })
+        .collect();
+    if under.is_empty() {
+        return String::new();
+    }
+    format!(
+        r#"<p class="bnb-meta ws-note">This station's cutoff for this detection was <b>{}</b>. Under it: {}. Those scores met their own classifier's bar, not the station's.</p>"#,
+        pct(cutoff),
+        under.join(", ")
     )
 }
 
@@ -300,6 +345,12 @@ fn summary_card(summary: Option<&DetectionModelSummary>) -> String {
 mod tests {
     use super::*;
 
+    /// The card with the station keeping no cutoff for the detection, which is
+    /// what most of these are about; the cutoff tests call `super::card`.
+    fn card(ev: Option<&ModelEvidence>) -> String {
+        super::card(ev, None)
+    }
+
     fn s(id: &str, state: ModelScoreState, score: Option<f64>, own_bar: Option<f64>) -> ModelScore {
         ModelScore {
             model_id: id.to_owned(),
@@ -334,6 +385,37 @@ mod tests {
             "",
             "a row from before the column says nothing"
         );
+    }
+
+    /// One stored answer is not a comparison. A station that runs one classifier
+    /// is told nothing about a second opinion it never sought, even when a
+    /// database already holds a single row per detection.
+    #[test]
+    fn one_stored_answer_is_not_a_comparison_and_renders_nothing() {
+        let one = ModelEvidence {
+            scores: vec![s("birdnet", ModelScoreState::Heard, Some(0.91), Some(0.70))],
+            summary: Some(DetectionModelSummary {
+                model_id: Some("birdnet".into()),
+                agreement: Some(1),
+            }),
+        };
+        assert_eq!(card(Some(&one)), "", "one classifier, no card");
+    }
+
+    /// With one stored answer the row's own agreement count is still honoured: a
+    /// row that says two classifiers cleared their bars says so.
+    #[test]
+    fn one_stored_answer_still_lets_the_row_state_an_agreement() {
+        let ev = ModelEvidence {
+            scores: vec![s("v3", ModelScoreState::Heard, Some(0.91), Some(0.70))],
+            summary: Some(DetectionModelSummary {
+                model_id: Some("v3".into()),
+                agreement: Some(2),
+            }),
+        };
+        let html = card(Some(&ev));
+        assert!(html.contains("2 classifiers each cleared"), "{html}");
+        assert!(!html.contains("ws-table"), "{html}");
     }
 
     #[test]
@@ -471,7 +553,10 @@ mod tests {
     #[test]
     fn a_model_id_typed_by_the_operator_is_escaped() {
         let ev = ModelEvidence {
-            scores: vec![s("<b>x</b>", ModelScoreState::Heard, Some(0.9), Some(0.7))],
+            scores: vec![
+                s("<b>x</b>", ModelScoreState::Heard, Some(0.9), Some(0.7)),
+                s("v3", ModelScoreState::Heard, Some(0.8), Some(0.7)),
+            ],
             summary: None,
         };
         let html = card(Some(&ev));
@@ -501,9 +586,124 @@ mod tests {
         assert!(with.contains("0.0\u{2013}4.5 s"), "{with}");
         assert!(with.contains("0.0\u{2013}5.0 s"), "{with}");
         let without = card(Some(&ModelEvidence {
-            scores: vec![s("v3", ModelScoreState::Heard, Some(0.9), Some(0.7))],
+            scores: vec![
+                s("v3", ModelScoreState::Heard, Some(0.9), Some(0.7)),
+                s("perch", ModelScoreState::Heard, Some(0.8), Some(0.5)),
+            ],
             summary: None,
         }));
         assert!(!without.contains("ws-method"), "{without}");
+    }
+
+    fn two(v3: f64, perch: f64) -> ModelEvidence {
+        ModelEvidence {
+            scores: vec![
+                s("v3", ModelScoreState::Heard, Some(v3), Some(0.70)),
+                s("perch", ModelScoreState::Heard, Some(perch), Some(0.50)),
+            ],
+            summary: None,
+        }
+    }
+
+    /// An answer can meet its classifier's own bar and still be under what the
+    /// station holds the species to; the card must not let "heard it" read as
+    /// "the station accepted it".
+    #[test]
+    fn an_answer_under_the_stations_cutoff_is_said_to_be_under_it() {
+        let html = super::card(Some(&two(0.81, 1.0)), Some(0.95));
+        assert!(
+            html.contains("cutoff for this detection was <b>95%</b>"),
+            "{html}"
+        );
+        let note = html
+            .split("cutoff for this detection")
+            .nth(1)
+            .expect("note")
+            .split("</p>")
+            .next()
+            .expect("note end");
+        assert!(note.contains(">v3<") && note.contains("(81%)"), "{note}");
+        assert!(
+            !note.contains("perch"),
+            "an answer that reached the cutoff is not named: {note}"
+        );
+    }
+
+    #[test]
+    fn no_cutoff_note_when_every_answer_reaches_it() {
+        // Exactly at the cutoff reaches it: the station's rule is `>=`.
+        for cutoff in [Some(0.70), Some(0.64), None] {
+            let html = super::card(Some(&two(0.87, 0.70)), cutoff);
+            assert!(
+                !html.contains("cutoff for this detection"),
+                "{cutoff:?}: {html}"
+            );
+        }
+    }
+
+    /// An answer under its *own* bar is shown as such; the cutoff note must not
+    /// say it "met its own classifier's bar". Found by looking at the rendered
+    /// card, where a 31% against a bar of 50% sat in a sentence saying it had.
+    #[test]
+    fn an_answer_under_its_own_bar_is_not_named_as_having_met_it() {
+        let ev = ModelEvidence {
+            scores: vec![
+                s("v3", ModelScoreState::Heard, Some(0.85), Some(0.70)),
+                s("perch", ModelScoreState::BelowBar, Some(0.31), Some(0.50)),
+            ],
+            summary: None,
+        };
+        let html = super::card(Some(&ev), Some(0.70));
+        assert!(
+            !html.contains("cutoff for this detection"),
+            "v3 reached 70% and perch did not meet its own bar, so there is nothing to say: {html}"
+        );
+        // The counterpart: a classifier that *did* meet its own bar and fell under
+        // the station's is still named, and the one under its own bar is not.
+        let ev = ModelEvidence {
+            scores: vec![
+                s("v3", ModelScoreState::Heard, Some(0.81), Some(0.70)),
+                s("perch", ModelScoreState::BelowBar, Some(0.31), Some(0.50)),
+            ],
+            summary: None,
+        };
+        let html = super::card(Some(&ev), Some(0.95));
+        let note = html
+            .split("cutoff for this detection")
+            .nth(1)
+            .expect("note")
+            .split("</p>")
+            .next()
+            .expect("note end");
+        assert!(note.contains(">v3<"), "{note}");
+        assert!(!note.contains("perch"), "{note}");
+    }
+
+    #[test]
+    fn a_classifier_that_did_not_score_is_never_named_as_under_a_cutoff() {
+        let ev = ModelEvidence {
+            scores: vec![
+                s("v3", ModelScoreState::Heard, Some(0.97), Some(0.70)),
+                s("regional", ModelScoreState::NoLabel, None, None),
+                s("flaky", ModelScoreState::Failed, None, None),
+            ],
+            summary: None,
+        };
+        let html = super::card(Some(&ev), Some(0.95));
+        assert!(!html.contains("cutoff for this detection"), "{html}");
+    }
+
+    #[test]
+    fn an_operator_typed_model_id_is_escaped_in_the_cutoff_note_too() {
+        let ev = ModelEvidence {
+            scores: vec![
+                s("<i>x</i>", ModelScoreState::Heard, Some(0.8), Some(0.7)),
+                s("v3", ModelScoreState::Heard, Some(0.99), Some(0.7)),
+            ],
+            summary: None,
+        };
+        let html = super::card(Some(&ev), Some(0.95));
+        assert!(!html.contains("<i>x</i>"), "{html}");
+        assert!(html.contains("&lt;i&gt;x&lt;/i&gt;"), "{html}");
     }
 }

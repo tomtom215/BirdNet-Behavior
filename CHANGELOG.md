@@ -15,14 +15,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that could judge it" and never averaged. Station Health gains a *Models* section: one card per classifier with
   its state, what it is (window length, sample rate, classes, bar), its last window, the mean time one answered
   window has taken, and the share of today's detections that carry its answer and that another classifier also
-  cleared. The detection daemon now stores every classifier's own answer with the detection (migration 57,
-  `detection_model_scores`): for each species any classifier reported, every classifier that listened has a
-  row, including one whose score fell under its own bar. The daemon also states what each classifier is once,
-  when they have loaded. The API gains `GET /api/v2/detections/models` and
-  `GET /api/v2/detections/export/model-scores`; detection rows and the detections CSV carry `model_id` and
-  `model_agreement` (`Model_Id`, `Model_Agreement`). Prometheus gains
-  `birdnet_model_inference_seconds_total` and `birdnet_model_inference_windows_total` per classifier, absent
-  until a window has answered. New CSS classes `ws-*`, no new tokens.
+  cleared. The detection daemon stores every classifier's own answer with the detection (migrations 57 and 58,
+  `detection_model_scores`) for a chunk two or more classifiers listened to: for each species any classifier
+  reported, every classifier that listened has a row, including one whose score fell under its own bar. A
+  station running one classifier stores none and sees no card, because the detection row already is the whole
+  record. The answers are keyed by the detection's date, time, species **and clip**, so two sources hearing one
+  bird in the same second keep their own (found by running two sources through the real models: the first
+  version keyed them without the clip, and the second source's answers overwrote the first's); they are removed
+  with their detection, and when it is relabelled, because they were about the old species. When an answer
+  met its own classifier's bar but not the station's cutoff for the detection, the card says so. The daemon
+  also states what each classifier is once, when they have loaded. The API gains
+  `GET /api/v2/detections/models` (with `file_name` to choose between detections that share a date, time and
+  species; `409` and the candidates without it) and `GET /api/v2/detections/export/model-scores`; detection
+  rows and the detections CSV carry `model_id` and `model_agreement` (`Model_Id`, `Model_Agreement`).
+  Prometheus gains `birdnet_model_inference_seconds_total` and `birdnet_model_inference_windows_total` per
+  classifier, absent until a window has answered. New CSS classes `ws-*`, no new tokens.
+- **`--install-model perch-v2` now installs Perch's labels.** Google publishes Perch v2's 14 795 classes as a
+  bare list and the ONNX conversion ships none, so an operator had to find the list and reshape it by hand;
+  labels are positional, so a mistake renames every bird without an error. The binary now writes
+  `perch-v2_labels.csv` itself, verified against a pinned digest, in the model's own order (the position of one
+  class was checked against the real model: a magpie recording puts the largest output on class 10 397, which
+  is *Pica pica*). `scripts/build-perch-labels.py` regenerates it from the pinned source.
+
+### Fixed
+
+- **Perch v2's scores were put through the wrong function.** Its classifier is trained with a softmax, but the
+  station read its outputs through V2.4's sigmoid like any other classifier's. On a real recording of one
+  magpie, between 809 and 1 066 of Perch's 14 795 classes cleared the default 0.70 bar in *every* window,
+  traffic noise included, so each window filled the ten-detections cap with confidences of 0.98 to 0.99: 70
+  detections of 42 "species" from one bird. A Perch classifier's confidence is now its class's share of the
+  window's softmax (its scores sum to 1, and `SENSITIVITY` does not apply), which reports the same recording's
+  magpie at about 96% in its four clear windows, with no other class holding more than 8.5% of any of the
+  seven. **If you raised `MODEL_2_THRESHOLD`
+  to tame it, lower it**: shares that large almost never occur, and 0.98 would now report nothing from Perch.
+  Two species singing at once split a window, so neither can reach 50%; Perch wants a bar of its own (the
+  manual's example uses 0.35). Detections Perch made before this change carry the old scale; the run record
+  (`analysis_runs`) holds the binary version that wrote each row. The start-up log now names each classifier's
+  mapping (`output_scale`).
+- A relabelled or deleted detection no longer leaves its classifier answers behind (they are removed with it,
+  by a trigger on `detections`, so every delete path is covered).
 
 ## [0.19.0] - 2026-10-31
 

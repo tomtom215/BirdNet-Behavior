@@ -116,7 +116,7 @@ handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	delete_comment
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	match-err	match state.with_read_db(|conn| detection_comments::list(conn, date, time, sci_name)) { Err .. }
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || render_thread(&st, &date, &time, &sci_name, None)) .await .unwrap_or_else(
 decoration	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	unwrap_or_default	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
-handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	match-err	match super::model_evidence::read(conn, &det.date, &det.time, &det.sci_name) { Err .. }
+handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	match-err	match super::model_evidence::read(conn, &key) { Err .. }
 task-panic	crates/birdnet-web/src/routes/pages/health.rs	station_health_line_partial	unwrap_or_default	tokio::task::spawn_blocking(move || {
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) }) .ok()
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| species_sparklines(conn, days)) .ok()

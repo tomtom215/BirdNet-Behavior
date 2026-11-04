@@ -13,7 +13,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER, ModelHealth};
-use birdnet_db::sqlite::{ModelScore, ModelScoreState, insert_model_score};
+use birdnet_db::sqlite::{DetectionKey, ModelScore, ModelScoreState, insert_model_score};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
@@ -27,14 +27,29 @@ fn station() -> (tempfile::TempDir, AppState) {
     (dir, state)
 }
 
+/// The clip every detection here comes from unless a test says otherwise.
+const CLIP: &str = "x.wav";
+
 fn add_detection(state: &AppState, model: Option<&str>, agreement: Option<i64>) {
+    add_detection_from(state, CLIP, 0.7, model, agreement);
+}
+
+/// A detection of the test species at the test's date and time, heard from the
+/// source whose clip is `clip` and recorded at station cutoff `cutoff`.
+fn add_detection_from(
+    state: &AppState,
+    clip: &str,
+    cutoff: f64,
+    model: Option<&str>,
+    agreement: Option<i64>,
+) {
     state.with_db(|conn| {
         conn.execute(
             "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
                   File_Name, chunk_offset_secs, model_id, model_agreement)
-             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.9, 0.7, 18, 1.25, 0.0, 'x.wav', 0, ?4, ?5)",
-            rusqlite::params![DATE, TIME, SCI, model, agreement],
+             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.9, ?6, 18, 1.25, 0.0, ?7, 0, ?4, ?5)",
+            rusqlite::params![DATE, TIME, SCI, model, agreement, cutoff, clip],
         )
         .expect("insert detection");
     });
@@ -47,12 +62,26 @@ fn store(
     score: Option<f64>,
     own_bar: Option<f64>,
 ) {
+    store_for(state, CLIP, model, st, score, own_bar);
+}
+
+fn store_for(
+    state: &AppState,
+    clip: &str,
+    model: &str,
+    st: ModelScoreState,
+    score: Option<f64>,
+    own_bar: Option<f64>,
+) {
     state.with_db(|conn| {
         insert_model_score(
             conn,
-            DATE,
-            TIME,
-            SCI,
+            &DetectionKey {
+                date: DATE,
+                time: TIME,
+                sci_name: SCI,
+                file_name: Some(clip),
+            },
             &ModelScore {
                 model_id: model.to_owned(),
                 state: st,
@@ -183,6 +212,134 @@ async fn a_one_classifier_station_is_never_shown_a_second_opinion_it_did_not_see
         !body.contains("Who heard it"),
         "one classifier, nothing stored, no card"
     );
+}
+
+/// A database can already hold one answer per detection, the shape a station
+/// running one classifier had before the daemon stopped writing it. One answer
+/// is not a comparison, so it is not a card either.
+#[tokio::test]
+async fn one_stored_answer_does_not_make_a_card_on_a_one_classifier_station() {
+    let (_dir, state) = station();
+    add_detection(&state, Some("birdnet"), Some(1));
+    store(
+        &state,
+        "birdnet",
+        ModelScoreState::Heard,
+        Some(0.91),
+        Some(0.70),
+    );
+    let body = detail(&state).await;
+    assert!(
+        !body.contains("Who heard it") && !body.contains("Heard by 1 of 1"),
+        "one answer, no card"
+    );
+}
+
+/// Two sources hearing one bird in one second are two detections that share a
+/// date, a time and a species. The page shows one of them; the answers it shows
+/// must be that detection's own, never a mixture or the other's.
+#[tokio::test]
+async fn two_sources_in_the_same_second_never_show_each_others_answers() {
+    let (_dir, state) = station();
+    add_detection_from(&state, "pond.wav", 0.7, Some("birdnet-v3"), Some(2));
+    add_detection_from(&state, "lake.wav", 0.7, Some("birdnet-v3"), Some(1));
+    // The pond's classifiers both heard it; at the lake one scored it low.
+    store_for(
+        &state,
+        "pond.wav",
+        "birdnet-v3",
+        ModelScoreState::Heard,
+        Some(0.91),
+        Some(0.70),
+    );
+    store_for(
+        &state,
+        "pond.wav",
+        "perch-v2",
+        ModelScoreState::Heard,
+        Some(0.64),
+        Some(0.50),
+    );
+    store_for(
+        &state,
+        "lake.wav",
+        "birdnet-v3",
+        ModelScoreState::BelowBar,
+        Some(0.33),
+        Some(0.70),
+    );
+    store_for(
+        &state,
+        "lake.wav",
+        "perch-v2",
+        ModelScoreState::Heard,
+        Some(0.58),
+        Some(0.50),
+    );
+    let body = detail(&state).await;
+    let card = card(&body).expect("the card renders for the detection shown");
+    let pond = card.contains("<b>91%</b>") && card.contains("<b>64%</b>");
+    let lake = card.contains("<b>33%</b>") && card.contains("<b>58%</b>");
+    assert!(
+        pond ^ lake,
+        "exactly one detection's complete answers, never both or a mixture: {card}"
+    );
+    assert!(
+        card.matches("<tr class=\"ws-row").count() == 2,
+        "two classifiers, two rows: {card}"
+    );
+}
+
+/// An answer can meet its own classifier's bar and still be under the station's
+/// cutoff for the species. "Heard it" must not read as "the station accepted it".
+#[tokio::test]
+async fn an_answer_under_the_stations_cutoff_is_named_on_the_page() {
+    let (_dir, state) = station();
+    add_detection_from(&state, CLIP, 0.95, Some("perch-v2"), Some(2));
+    store(
+        &state,
+        "birdnet-v3",
+        ModelScoreState::Heard,
+        Some(0.81),
+        Some(0.70),
+    );
+    store(
+        &state,
+        "perch-v2",
+        ModelScoreState::Heard,
+        Some(0.99),
+        Some(0.50),
+    );
+    let body = detail(&state).await;
+    let card = card(&body).expect("card");
+    assert!(
+        card.contains("cutoff for this detection was <b>95%</b>"),
+        "{card}"
+    );
+    assert!(card.contains("(81%)"), "{card}");
+}
+
+#[tokio::test]
+async fn no_cutoff_note_when_every_answer_reaches_the_stations_cutoff() {
+    let (_dir, state) = station();
+    add_detection_from(&state, CLIP, 0.70, Some("perch-v2"), Some(2));
+    store(
+        &state,
+        "birdnet-v3",
+        ModelScoreState::Heard,
+        Some(0.91),
+        Some(0.70),
+    );
+    store(
+        &state,
+        "perch-v2",
+        ModelScoreState::Heard,
+        Some(0.75),
+        Some(0.50),
+    );
+    let body = detail(&state).await;
+    let card = card(&body).expect("card");
+    assert!(!card.contains("cutoff for this detection"), "{card}");
 }
 
 #[tokio::test]

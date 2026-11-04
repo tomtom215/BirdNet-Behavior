@@ -45,8 +45,8 @@ pub use queries::maintenance::{
 };
 pub use queries::model_scores::{
     DetectionModelScore, DetectionModelSummary, ModelLead, ModelScore, ModelScoreState,
-    detection_model_summary, insert_model_score, insert_model_scores, model_lead_counts,
-    model_scores_between, model_scores_for_detection,
+    detection_files_at, detection_model_summary, insert_model_score, insert_model_scores,
+    model_lead_counts, model_scores_between, model_scores_for_detection,
 };
 pub use queries::{
     ALL_QUARANTINE_REASONS, AnalysisRun, BulkOutcome, CLIP_AVAILABLE, DateRange, DetectionFilter,

@@ -1126,17 +1126,20 @@ fn seed_models(conn: &Connection) {
 
     // The newest rows, whatever their confidence: the accessibility sweep opens
     // `/api/v2/detections?limit=1`, so the newest row is the one the page is graded on.
-    let rows: Vec<(String, String, String, f64)> = {
+    let rows: Vec<(String, String, String, f64, String)> = {
         let mut stmt = conn
             .prepare(
-                "SELECT Date, Time, Sci_Name, Confidence FROM detections
+                "SELECT Date, Time, Sci_Name, Confidence, COALESCE(File_Name, '')
+                   FROM detections
                   ORDER BY Date DESC, Time DESC LIMIT 30",
             )
             .expect("prepare newest rows");
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .expect("query newest rows")
-            .filter_map(Result::ok)
-            .collect()
+        stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .expect("query newest rows")
+        .filter_map(Result::ok)
+        .collect()
     };
 
     let answer = |model: &str, state: ModelScoreState, score: Option<f64>, own_bar: Option<f64>| {
@@ -1151,7 +1154,7 @@ fn seed_models(conn: &Connection) {
         }
     };
 
-    for (i, (date, time, sci, c)) in rows.iter().enumerate() {
+    for (i, (date, time, sci, c, file)) in rows.iter().enumerate() {
         use ModelScoreState::{BelowBar, Failed, Heard, NoLabel};
         // A row whose confidence is under v3's own bar cannot have v3's answer on it, so
         // those are Perch's (its bar is lower than every seeded confidence). Everything
@@ -1202,12 +1205,19 @@ fn seed_models(conn: &Connection) {
         };
         conn.execute(
             "UPDATE detections SET model_id = ?4, model_agreement = ?5
-              WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
-            params![date, time, sci, lead, agree],
+              WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3
+                AND COALESCE(File_Name, '') = ?6",
+            params![date, time, sci, lead, agree, file],
         )
         .expect("lead model");
+        let key = birdnet_db::sqlite::DetectionKey {
+            date,
+            time,
+            sci_name: sci,
+            file_name: Some(file),
+        };
         for a in [v3, perch] {
-            insert_model_score(conn, date, time, sci, &a).expect("model score");
+            insert_model_score(conn, &key, &a).expect("model score");
         }
     }
 }

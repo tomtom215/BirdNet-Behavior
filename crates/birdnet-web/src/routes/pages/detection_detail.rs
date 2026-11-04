@@ -94,8 +94,15 @@ async fn detection_detail_page(
             // What each classifier said. Unlike the corroboration list this is a
             // claim about the detection, so a failed read is kept as `None` and
             // rendered as a fault rather than defaulted to "nobody else heard it".
-            let models = match super::model_evidence::read(conn, &det.date, &det.time, &det.sci_name)
-            {
+            // Read by the identity the row was stored under (its clip too), so two
+            // sources that heard one bird in one second each show their own.
+            let key = birdnet_db::sqlite::DetectionKey {
+                date: &det.date,
+                time: &det.time,
+                sci_name: &det.sci_name,
+                file_name: det.file_name.as_deref(),
+            };
+            let models = match super::model_evidence::read(conn, &key) {
                 Ok(m) => Some(m),
                 Err(e) => {
                     tracing::warn!(error = %e, "detection detail: classifier scores could not be read");
@@ -187,7 +194,7 @@ fn render_detail_page(
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
     let correlation_section = build_correlation_section(det);
-    let models_section = super::model_evidence::card(models);
+    let models_section = super::model_evidence::card(models, det.cutoff);
     let corroboration_section = build_corroboration_section(corroboration);
     let nearby_section = build_nearby_section(nearby, &det.sci_name, ebird::now_unix());
     let conf = conf_bar(det.confidence, floor);

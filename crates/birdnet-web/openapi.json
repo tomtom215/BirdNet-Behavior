@@ -1285,7 +1285,7 @@
           "detections"
         ],
         "summary": "What each classifier said about a detection",
-        "description": "The classifier whose answer a detection carries, how many classifiers cleared their own bar, and every classifier's own answer, each against its own bar. `models` is empty for a row from before the answers were stored, which is not the same as no classifier having heard it. Nothing is averaged.",
+        "description": "The classifier whose answer a detection carries, how many classifiers cleared their own bar, and every classifier's own answer, each against its own bar. `models` is empty for a row from before the answers were stored, for a station that runs one classifier, and for a chunk only one classifier listened to; that is not the same as no classifier having heard it. Nothing is averaged. Two sources hearing one bird in one second are two detections that share `date`, `time` and `sci_name`: pass `file_name` (as it appears on the detection row) to say which. Without it the request is answered when those three name one detection, and refused with `409` and the clips to choose from when they name several.",
         "operationId": "getDetectionModels",
         "parameters": [
           {
@@ -1315,6 +1315,16 @@
               "type": "string"
             },
             "example": "Dryobates villosus"
+          },
+          {
+            "name": "file_name",
+            "in": "query",
+            "required": false,
+            "description": "The detection's clip, as `file_name` on a detection row. Needed only when several detections share the date, time and species. An empty value names a detection with no clip.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Hairy_Woodpecker-91-2026-09-03-birdnet-06:12:44.wav"
           }
         ],
         "responses": {
@@ -1328,6 +1338,11 @@
                     "detection": {
                       "type": "string",
                       "example": "2026-09-03 06:12:44 Dryobates villosus"
+                    },
+                    "file_name": {
+                      "type": "string",
+                      "description": "The clip of the detection this answers for; empty when it has none.",
+                      "example": "Hairy_Woodpecker-91-2026-09-03-birdnet-06:12:44.wav"
                     },
                     "model_id": {
                       "type": "string",
@@ -1354,6 +1369,32 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "Several detections share that date, time and species, and `file_name` was not given. Answers nothing; lists the clips.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "file_names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Every clip that shares the date, time and species. An empty string is a detection with no clip."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "file_names"
+                  ]
+                }
+              }
+            }
           },
           "404": {
             "description": "No such detection."
@@ -7051,7 +7092,7 @@
           "export"
         ],
         "summary": "Export each classifier's own scores",
-        "description": "One row per (detection, classifier) as CSV (default) or JSON, for detections the analytics stand behind (a rejected detection is left out, as in the detections export). `Score` and `Bar` are empty for a classifier that had no class for the species or whose window failed, never 0. Scores are each classifier's own and are not comparable across classifiers. The detection is named by `Date`, `Time` and `Sci_Name`, as in `/detections/export`.",
+        "description": "One row per (detection, classifier) as CSV (default) or JSON, for detections the analytics stand behind (a rejected detection is left out, as in the detections export). `Score` and `Bar` are empty for a classifier that had no class for the species or whose window failed, never 0. Scores are each classifier's own and are not comparable across classifiers. The detection is named by `Date`, `Time`, `Sci_Name` and `File_Name`, as in `/detections/export`; all four are needed, because two sources hearing one bird in one second share the first three. `File_Name` is empty for a detection with no clip.",
         "operationId": "exportDetectionModelScores",
         "parameters": [
           {
@@ -9259,7 +9300,7 @@
         ]
       },
       "DetectionModelScore": {
-        "description": "One classifier's answer with the detection it is about, as one flat object. `date`, `time` and `sci_name` name the detection as the detections export does.",
+        "description": "One classifier's answer with the detection it is about, as one flat object. `date`, `time`, `sci_name` and `file_name` name the detection as the detections export does; all four are needed, because two sources hearing one bird in one second share the first three.",
         "allOf": [
           {
             "type": "object",
@@ -9273,12 +9314,17 @@
               },
               "sci_name": {
                 "type": "string"
+              },
+              "file_name": {
+                "type": "string",
+                "description": "The detection's clip; empty when it has none."
               }
             },
             "required": [
               "date",
               "time",
-              "sci_name"
+              "sci_name",
+              "file_name"
             ]
           },
           {

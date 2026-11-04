@@ -1,5 +1,5 @@
 //! CSV and JSON export of what each classifier said about each detection
-//! (migration 57).
+//! (migrations 57 and 58).
 //!
 //! One row per (detection, classifier), the form the table stores and the form a
 //! spreadsheet or a script can filter: a wide form would need a column per
@@ -104,20 +104,25 @@ pub(super) async fn export_model_scores(
     }
 }
 
-/// `Date,Time,Sci_Name` name the detection exactly as the detections export
-/// does, so the two join on them. `Score` and `Bar` are empty when the
+/// `Date,Time,Sci_Name,File_Name` name the detection exactly as the detections
+/// export does, so the two join on them. All four are needed: two sources
+/// hearing one bird in one second share the first three. `File_Name` is empty
+/// for a detection with no clip. `Score` and `Bar` are empty when the
 /// classifier did not score (`no_label`, `failed`), never `0`.
 fn scores_to_csv(rows: &[birdnet_db::sqlite::DetectionModelScore]) -> String {
     let mut csv = String::with_capacity(rows.len() * 90);
-    csv.push_str("Date,Time,Sci_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs\n");
+    csv.push_str(
+        "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs\n",
+    );
     let num = |v: Option<f64>, places: usize| v.map_or(String::new(), |x| format!("{x:.places$}"));
     for r in rows {
         let _ = writeln!(
             csv,
-            "{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&r.date),
             escape_csv(&r.time),
             escape_csv(&r.sci_name),
+            escape_csv(&r.file_name),
             escape_csv(&r.answer.model_id),
             r.answer.state.as_str(),
             num(r.answer.score, 4),
@@ -139,6 +144,7 @@ mod tests {
             date: "2026-11-01".into(),
             time: "06:30:00".into(),
             sci_name: "Pica pica".into(),
+            file_name: "pond.wav".into(),
             answer: ModelScore {
                 model_id: model.into(),
                 state,
@@ -159,15 +165,15 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[0],
-            "Date,Time,Sci_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs"
+            "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs"
         );
         assert_eq!(
             lines[1],
-            "2026-11-01,06:30:00,Pica pica,v3,heard,0.8700,0.7000,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,v3,heard,0.8700,0.7000,3.00,7.50"
         );
         assert_eq!(
             lines[2],
-            "2026-11-01,06:30:00,Pica pica,perch,below_bar,0.4100,0.7000,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,perch,below_bar,0.4100,0.7000,3.00,7.50"
         );
     }
 
@@ -180,11 +186,11 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[1],
-            "2026-11-01,06:30:00,Pica pica,regional,no_label,,,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,regional,no_label,,,3.00,7.50"
         );
         assert_eq!(
             lines[2],
-            "2026-11-01,06:30:00,Pica pica,flaky,failed,,,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,flaky,failed,,,3.00,7.50"
         );
     }
 
@@ -205,6 +211,19 @@ mod tests {
         assert_eq!(v["model_id"], "regional");
         assert_eq!(v["state"], "no_label");
         assert_eq!(v["sci_name"], "Pica pica");
+        assert_eq!(v["file_name"], "pond.wav", "the JSON names the clip too");
         assert!(v["score"].is_null() && v["bar"].is_null(), "{v}");
+    }
+
+    /// A detection with no clip has an empty `File_Name`, not the word "null".
+    #[test]
+    fn a_detection_with_no_clip_has_an_empty_file_name() {
+        let mut r = row("v3", ModelScoreState::Heard, Some(0.9));
+        r.file_name = String::new();
+        let csv = scores_to_csv(&[r]);
+        assert_eq!(
+            csv.lines().nth(1).unwrap(),
+            "2026-11-01,06:30:00,Pica pica,,v3,heard,0.9000,0.7000,3.00,7.50"
+        );
     }
 }

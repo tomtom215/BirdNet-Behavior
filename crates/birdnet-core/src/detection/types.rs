@@ -46,12 +46,14 @@ pub struct Detection {
     #[serde(default)]
     pub agreeing_models: Option<u8>,
     /// What every classifier that listened to this chunk said about this
-    /// species, each on its own scale (migration 57).
+    /// species, each on its own scale (migrations 57 and 58).
     ///
-    /// Empty when nothing recorded it (a detection built outside the daemon, or
-    /// a row older than the feature). One entry per classifier that ran, so a
-    /// classifier absent from the list was not asked, which is not the same as
-    /// one that was asked and could not judge ([`AnswerState::NoLabel`]).
+    /// Empty when nothing recorded it: a detection built outside the daemon, a
+    /// row older than the feature, or a chunk only one classifier listened to
+    /// (a comparison needs two; with one, the detection row is the whole
+    /// record). One entry per classifier that ran, so a classifier absent from
+    /// the list was not asked, which is not the same as one that was asked and
+    /// could not judge ([`AnswerState::NoLabel`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_scores: Vec<ModelAnswer>,
 }
