@@ -154,7 +154,9 @@ Each classifier is judged against its own threshold, and the results are combine
 
 `model_agreement` is `NULL` on rows written before this feature existed — a third state, and not the same as `1` ("one classifier asked, one answered").
 
-> Both columns are stored on every detection today, and nothing in the web interface or the API reads them back yet. They are there so that a station running two classifiers now is not analysing a season of data later with the corroboration missing.
+> Both columns are stored on every detection. Two places read them: a detection's own page shows a **Who heard it** card when more than one classifier cleared its bar, and the **Models** section of Station Health shows each classifier's share of today's detections and how many of those another classifier also cleared. The API and the exports do not carry them yet.
+>
+> What each classifier scored is a separate table, `detection_model_scores` (one row per detection and classifier, in four states: heard it, scored it below its own bar, has no class for the species, or its window failed). A detection page that finds rows there lists every classifier's own score against its own bar, never averaged. **The detection daemon does not write that table yet**, so on a station running today the card can say that several classifiers agreed and which one's score is shown, but not what the others scored.
 
 ## Windows: what "the same chunk" means
 

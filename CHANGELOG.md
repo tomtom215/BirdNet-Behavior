@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Which classifiers heard a detection, and a Models board.** A detection's page shows a *Who heard it* card
+  when several classifiers cleared their bars: each classifier's own score against its own bar, in four states
+  that are never rounded to a zero (heard it, scored it below its bar, has no class for the species, its
+  window failed), counted as "heard by N of M models that could judge it" and never averaged. Station Health
+  gains a *Models* section: one card per classifier with its state, its last window, and the share of today's
+  detections that carry its answer and that another classifier also cleared. Migration 57 adds
+  `detection_model_scores` for the per-classifier scores; **the daemon does not write it yet**, so until it
+  does the card can state agreement from `model_agreement` but not the other classifiers' scores. New CSS
+  classes `ws-*`, no new tokens.
+
 ## [0.19.0] - 2026-10-31
 
 ### Added

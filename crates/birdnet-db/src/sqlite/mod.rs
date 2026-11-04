@@ -43,6 +43,10 @@ pub use queries::maintenance::{
     JobStatus, NOTIFICATION_RETENTION_DAYS, QUARANTINE_RETENTION_DAYS, SOUND_LEVEL_RETENTION_DAYS,
     due_state, job_statuses, last_run_result, last_run_unix, record_run, record_run_result,
 };
+pub use queries::model_scores::{
+    DetectionModelSummary, ModelLead, ModelScore, ModelScoreState, detection_model_summary,
+    insert_model_score, model_lead_counts, model_scores_for_detection,
+};
 pub use queries::{
     ALL_QUARANTINE_REASONS, AnalysisRun, BulkOutcome, CLIP_AVAILABLE, DateRange, DetectionFilter,
     DetectionKey, HourWindow, ImageBlacklist, LockFilter, ModelVsReviewRow, NewAnalysisRun,

@@ -5443,6 +5443,35 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .st-source-retry { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--dawn-ink); margin-top: var(--space-8); }
 .st-source.stalled .st-source-retry { color: var(--rare); }
 
+/* Models: the board on Station Health and the "Who heard it" card on a detection.
+   Tokens only. A mark's shape and the words beside it say the state; colour only echoes it. */
+.ws-lede { margin: 0 0 var(--space-12); }
+.ws-day { margin: var(--space-12) 0 0; font-size: var(--fs-sm); color: var(--fg-2); }
+.ws-day b { font-weight: var(--fw-semibold); color: var(--fg); }
+.ws-headline { font-size: var(--fs-md); margin: var(--space-12) 0 var(--space-14); }
+.ws-note { margin-top: var(--space-12); }
+.ws-method { margin-top: var(--space-14); }
+.ws-table { width: 100%; border-collapse: collapse; }
+.ws-table thead th { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--fg-3); text-align: left; padding: 0 var(--space-10) var(--space-6) 0; border-bottom: var(--bw) solid var(--border); }
+.ws-table tbody th, .ws-table tbody td { padding: var(--space-10) var(--space-10) var(--space-10) 0; border-bottom: var(--bw) solid var(--hairline); text-align: left; font-weight: var(--fw-regular); vertical-align: middle; }
+.ws-table tbody tr:last-child > * { border-bottom: 0; }
+.ws-mark { display: inline-block; min-width: 1.2em; text-align: center; font-family: var(--font-mono); color: var(--fg-3); }
+.ws-mark.heard { color: var(--moss); }
+.ws-mark.failed { color: var(--rare); }
+.ws-table tbody th { text-transform: none; letter-spacing: normal; font-size: var(--fs-sm); color: var(--fg); }
+.ws-railcell { width: 32%; min-width: 7.5rem; }
+.ws-inline-rail { display: none; margin-top: var(--space-8); }
+/* On a phone the score column has no room: the rail drops under the sentence and the third column goes. The rail is decorative (aria-hidden); the words carry every number. */
+@media (max-width: 560px) {
+  .ws-railcell, .ws-table thead th:last-child { display: none; }
+  .ws-inline-rail { display: block; }
+}
+.ws-rail { position: relative; display: block; margin-inline: calc(var(--space-14) / 2); height: var(--space-12); border-radius: var(--r-pill); background: var(--surface-2); border: var(--bw) solid var(--border); box-sizing: border-box; }
+.ws-rail.none { background: transparent; border-style: dashed; }
+.ws-tick { position: absolute; top: calc(-1 * var(--space-4)); bottom: calc(-1 * var(--space-4)); width: var(--bw-strong); margin-left: calc(var(--bw-strong) / -2); background: var(--fg-3); }
+.ws-dot { position: absolute; top: 50%; width: var(--space-14); height: var(--space-14); margin: calc(var(--space-14) / -2) 0 0 calc(var(--space-14) / -2); border-radius: var(--r-pill); box-sizing: border-box; border: var(--bw-strong) solid var(--moss); background: var(--moss); }
+.ws-dot.below { background: var(--surface); border-color: var(--fg-3); }
+
 /* vitals meter row */
 .st-vitals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: var(--bw) solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
 @media (max-width: 720px) { .st-vitals { grid-template-columns: 1fr 1fr; } }

@@ -116,6 +116,7 @@ handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	delete_comment
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	match-err	match state.with_read_db(|conn| detection_comments::list(conn, date, time, sci_name)) { Err .. }
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || render_thread(&st, &date, &time, &sci_name, None)) .await .unwrap_or_else(
 decoration	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	unwrap_or_default	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
+handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	match-err	match super::model_evidence::read(conn, &det.date, &det.time, &det.sci_name) { Err .. }
 task-panic	crates/birdnet-web/src/routes/pages/health.rs	station_health_line_partial	unwrap_or_default	tokio::task::spawn_blocking(move || {
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) }) .ok()
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| species_sparklines(conn, days)) .ok()
@@ -145,6 +146,7 @@ task-panic	crates/birdnet-web/src/routes/pages/species_pages.rs	species_page	unw
 handled	crates/birdnet-web/src/routes/pages/station_health.rs	gather	match-err	match state.with_read_db(|conn| birdnet_db::audio_levels::drift_by_source(conn, 7, 30)) { Err .. }
 fail-closed	crates/birdnet-web/src/routes/pages/station_health.rs	gather	unwrap_or	birdnet_db::sqlite::quick_check(conn).unwrap_or(false)
 handled	crates/birdnet-web/src/routes/pages/station_health.rs	gather	unwrap_or_else	tokio::task::spawn_blocking(move || { let sys = system_info::sample(); let (disk, scratch) = super::station_is
+handled	crates/birdnet-web/src/routes/pages/station_health.rs	gather	match-err	match state.with_read_db(|conn| { birdnet_db::sqlite::model_lead_counts(conn, &super::today_date_string()) }) 
 omitted	crates/birdnet-web/src/routes/pages/station_issues.rs	recorded_integrity	ok	birdnet_db::sqlite::last_run_result(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK) .ok()
 fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	map_or	birdnet_db::settings::get_or(conn, "onboarding_complete", "false") .map_or(true, |v| v == "true")
 fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	map_or	birdnet_db::sqlite::detection_count(conn).map_or(true, |n| n > 0)

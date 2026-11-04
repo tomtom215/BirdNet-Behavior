@@ -101,6 +101,9 @@ struct Snapshot {
     occurrence: OccurrenceFilterState,
     /// Classifiers failing every window (`e853776`), by id.
     failing_classifiers: Vec<String>,
+    /// One card per classifier the daemon has reported on; empty before it has
+    /// analysed a file.
+    models: Vec<super::model_board::ModelCard>,
     /// What a scan of the watch folder found, when the folder is known and
     /// readable.
     recordings_folder: Option<crate::watch_folder::FolderScan>,
@@ -183,6 +186,29 @@ async fn gather(state: &AppState) -> Snapshot {
                 }
             };
 
+        // Each classifier's window record, and today's detections by the
+        // classifier that supplied the answer. A failed read leaves the counts
+        // unknown (`None`), which the cards say, rather than zero.
+        let health = state.metrics().model_health();
+        let leads = if health.is_empty() {
+            Some(Vec::new())
+        } else {
+            match state.with_read_db(|conn| {
+                birdnet_db::sqlite::model_lead_counts(conn, &super::today_date_string())
+            }) {
+                Ok(leads) => Some(leads),
+                Err(e) => {
+                    tracing::warn!(error = %e, "station health: per-classifier counts could not be read");
+                    None
+                }
+            }
+        };
+        let models = super::model_board::cards(
+            &health,
+            leads.as_deref(),
+            birdnet_core::inference::health::unix_now(),
+        );
+
         let vitals = build_vitals(&sys, disk.as_ref(), scratch.as_ref());
         Snapshot {
             vitals,
@@ -225,6 +251,7 @@ async fn gather(state: &AppState) -> Snapshot {
                 .filter(|(_, h)| h.is_failing())
                 .map(|(id, _)| id)
                 .collect(),
+            models,
             recordings_folder: state
                 .watch_dir()
                 .and_then(|dir| crate::watch_folder::scan(&dir)),
@@ -263,6 +290,7 @@ async fn gather(state: &AppState) -> Snapshot {
             candidates: None,
         },
         failing_classifiers: Vec::new(),
+        models: Vec::new(),
         recordings_folder: None,
     })
 }
@@ -364,11 +392,12 @@ fn render(s: &Snapshot) -> String {
         "<p class=\"bnb-lede\"><b>Everything your station needs to keep listening</b> — the \
          streams, the hardware, and the pipeline behind them. This is the screen to check from \
          the field. {help}</p>{banner}<h2 class=\"st-h3\">Audio sources</h2>{sources}\
-         <h2 class=\"st-h3\">Vitals</h2>{vitals}{acoustic}<h2 class=\"st-h3\">Pipeline</h2>{pipeline}\
+         {models}<h2 class=\"st-h3\">Vitals</h2>{vitals}{acoustic}<h2 class=\"st-h3\">Pipeline</h2>{pipeline}\
          <h2 class=\"st-h3\">Diagnostics</h2>{checks}",
         help = super::help::help_link(super::help::Topic::AdminSystem),
         banner = status_banner(s),
         sources = source_panel(s),
+        models = super::model_board::section(&s.models),
         vitals = vitals_row(&s.vitals),
         acoustic = acoustic_panel(s),
         pipeline = pipeline_row(s),
@@ -848,7 +877,7 @@ fn diagnostics(s: &Snapshot) -> String {
 }
 
 /// Human "X ago" for the seconds-since-last-detection freshness signal.
-fn format_freshness(secs: u64) -> String {
+pub(super) fn format_freshness(secs: u64) -> String {
     match secs {
         0..=119 => "just now".to_string(),
         120..=7_199 => format!("{} min ago", secs / 60),
@@ -887,6 +916,7 @@ mod tests {
                 candidates: None,
             },
             failing_classifiers: Vec::new(),
+            models: Vec::new(),
             recordings_folder: None,
         }
     }

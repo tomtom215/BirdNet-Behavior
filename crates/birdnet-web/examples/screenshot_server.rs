@@ -1095,6 +1095,163 @@ fn seed_thresholds(conn: &Connection) {
     );
 }
 
+/// Two classifiers' worth of demo data: which one supplied each row's answer, how many
+/// cleared their own bar, and, for the newest 30 rows, every classifier's own
+/// answer in `detection_model_scores`.
+///
+/// The ids are the model catalogue's (`birdnet-v3`, `perch-v2`), the two it can run
+/// together. The fixture runs no daemon, so this writes what the daemon will: the
+/// `model_id` / `model_agreement` columns (migration 50) on every row, and the per-model
+/// rows (migration 57) for the rows a screenshot is likely to open. Older rows keep only
+/// the columns, so the page's second path (the row alone says "2 classifiers agreed")
+/// is drawn too. Scores are chosen from each row's own confidence so a row never
+/// contradicts itself: the model whose answer the row carries scored exactly its
+/// `Confidence`, and any model shown as `heard` is at or above its own bar.
+fn seed_models(conn: &Connection) {
+    use birdnet_db::sqlite::{ModelScore, ModelScoreState, insert_model_score};
+    const V3: &str = "birdnet-v3";
+    const PERCH: &str = "perch-v2";
+    const V3_BAR: f64 = 0.70;
+    const PERCH_BAR: f64 = 0.50;
+
+    // Every row carries a classifier and an agreement count. Roughly a quarter of the
+    // answers are Perch's, roughly a third were cleared by both.
+    conn.execute(
+        "UPDATE detections SET
+             model_id = CASE WHEN rowid % 4 = 0 THEN 'perch-v2' ELSE 'birdnet-v3' END,
+             model_agreement = CASE WHEN rowid % 3 = 0 THEN 2 ELSE 1 END",
+        [],
+    )
+    .expect("model columns");
+
+    // The newest rows, whatever their confidence: the accessibility sweep opens
+    // `/api/v2/detections?limit=1`, so the newest row is the one the page is graded on.
+    let rows: Vec<(String, String, String, f64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT Date, Time, Sci_Name, Confidence FROM detections
+                  ORDER BY Date DESC, Time DESC LIMIT 30",
+            )
+            .expect("prepare newest rows");
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .expect("query newest rows")
+            .filter_map(Result::ok)
+            .collect()
+    };
+
+    let answer = |model: &str, state: ModelScoreState, score: Option<f64>, own_bar: Option<f64>| {
+        let (start, end) = if model == V3 { (0.0, 4.5) } else { (0.0, 5.0) };
+        ModelScore {
+            model_id: model.to_owned(),
+            state,
+            score,
+            bar: own_bar,
+            window_start_secs: score.map(|_| start),
+            window_end_secs: score.map(|_| end),
+        }
+    };
+
+    for (i, (date, time, sci, c)) in rows.iter().enumerate() {
+        use ModelScoreState::{BelowBar, Failed, Heard, NoLabel};
+        // A row whose confidence is under v3's own bar cannot have v3's answer on it, so
+        // those are Perch's (its bar is lower than every seeded confidence). Everything
+        // else cycles through the states a page has to draw.
+        let case = if *c < V3_BAR { 2 } else { i % 6 };
+        // (lead, agreement, v3's answer, perch's answer)
+        let (lead, agree, v3, perch) = match case {
+            // Both heard it; v3's score is the row's.
+            0 | 3 => (
+                V3,
+                2,
+                answer(V3, Heard, Some(*c), Some(V3_BAR)),
+                answer(
+                    PERCH,
+                    Heard,
+                    Some((c * 0.82).max(PERCH_BAR + 0.03)),
+                    Some(PERCH_BAR),
+                ),
+            ),
+            // v3 heard it, Perch scored it and did not clear its bar.
+            1 => (
+                V3,
+                1,
+                answer(V3, Heard, Some(*c), Some(V3_BAR)),
+                answer(PERCH, BelowBar, Some(0.31), Some(PERCH_BAR)),
+            ),
+            // Perch heard it; v3 scored it below its bar.
+            2 => (
+                PERCH,
+                1,
+                answer(V3, BelowBar, Some(0.42), Some(V3_BAR)),
+                answer(PERCH, Heard, Some(*c), Some(PERCH_BAR)),
+            ),
+            // Only v3 has a class for this species.
+            4 => (
+                V3,
+                1,
+                answer(V3, Heard, Some(*c), Some(V3_BAR)),
+                answer(PERCH, NoLabel, None, None),
+            ),
+            // v3 heard it; Perch's window failed.
+            _ => (
+                V3,
+                1,
+                answer(V3, Heard, Some(*c), Some(V3_BAR)),
+                answer(PERCH, Failed, None, None),
+            ),
+        };
+        conn.execute(
+            "UPDATE detections SET model_id = ?4, model_agreement = ?5
+              WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+            params![date, time, sci, lead, agree],
+        )
+        .expect("lead model");
+        for a in [v3, perch] {
+            insert_model_score(conn, date, time, sci, &a).expect("model score");
+        }
+    }
+}
+
+/// What the Models board reads from the daemon's window record. `BNB_FIXTURE_MODELS`:
+/// unset = two classifiers answering normally; `one` = a single classifier; `failing` =
+/// the second has failed its last windows; `none` = the daemon has reported nothing.
+fn seed_model_health(state: &AppState) {
+    use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER, ModelHealth};
+    let now = birdnet_core::inference::health::unix_now();
+    let answering = |windows: u64, ago: u64| ModelHealth {
+        consecutive_failures: 0,
+        windows,
+        last_window_at: Some(now.saturating_sub(ago)),
+        last_success_at: Some(now.saturating_sub(ago)),
+        error_class: None,
+    };
+    let health: Vec<(String, ModelHealth)> = match std::env::var("BNB_FIXTURE_MODELS")
+        .unwrap_or_default()
+        .as_str()
+    {
+        "none" => Vec::new(),
+        "one" => vec![("birdnet-v24".to_owned(), answering(41_208, 2))],
+        "failing" => vec![
+            ("birdnet-v3".to_owned(), answering(41_208, 2)),
+            (
+                "perch-v2".to_owned(),
+                ModelHealth {
+                    consecutive_failures: FAILING_AFTER,
+                    windows: 40_911,
+                    last_window_at: Some(now.saturating_sub(3)),
+                    last_success_at: Some(now.saturating_sub(7 * 60)),
+                    error_class: Some(ErrorClass::NonFiniteOutput),
+                },
+            ),
+        ],
+        _ => vec![
+            ("birdnet-v3".to_owned(), answering(41_208, 2)),
+            ("perch-v2".to_owned(), answering(40_911, 4)),
+        ],
+    };
+    state.metrics().set_model_health(&health);
+}
+
 /// Write synthetic bird-call WAVs for the given clip filenames into `dir`, so
 /// the spectrogram-thumbnail route has real audio to render previews from.
 fn seed_demo_audio(dir: &std::path::Path, clips: &[String]) {
@@ -1391,7 +1548,10 @@ async fn main() {
         "empty" => seed_profile_empty(&conn),
         "one" => seed_profile_one(&conn, today_days),
         "stress" => seed_profile_stress(&conn, today_days),
-        _ => seed(&conn, today_days),
+        _ => {
+            seed(&conn, today_days);
+            seed_models(&conn);
+        }
     }
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
@@ -1498,6 +1658,7 @@ async fn main() {
     // operator-grade per-source cards (this server runs no real supervisor).
     // Labels match the seeded detection sources so "detections today" merges.
     let state = state.with_capture_status(seed_capture_status());
+    seed_model_health(&state);
 
     // The range filter, so the "Why isn't a bird heard here?" page has data to
     // show. The fixture runs no detection daemon and loads no range model; this

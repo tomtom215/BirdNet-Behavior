@@ -2350,6 +2350,57 @@ pub const MIGRATIONS: &[Migration] = &[
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     },
+    Migration {
+        version: 57,
+        description: "Each classifier's own score for a detection, kept beside the one that won",
+        // ## Why
+        //
+        // `detections.model_id` names the classifier whose answer a row carries
+        // and `model_agreement` counts how many cleared their own bar
+        // (migration 50). Every other classifier's score is gone by the time the
+        // row is written. So a species two models scored 91% and 88% cannot be
+        // told from one a second model scored 12% — the difference between
+        // corroboration and one confident guess — and nobody can later test
+        // whether agreement predicts a correct identification, because the
+        // scores that would be tested were never kept.
+        //
+        // ## Shape
+        //
+        // One row per (detection, classifier), keyed on the (Date, Time,
+        // Sci_Name) a review verdict is keyed on: that is how every page names a
+        // detection, and `detections` has no stable id of its own.
+        //
+        // `state` is four things rather than a score with a flag, because they
+        // are different facts and a reader that rounds them all to 0 reports a
+        // model's silence as its opinion:
+        //   heard     scored at or above its own bar
+        //   below_bar scored, and did not clear its bar
+        //   no_label  has no class for this species, so it cannot judge
+        //   failed    its window for this chunk failed
+        // `score` is NULL for exactly the last two (the CHECK keeps the pair
+        // together). Scores are each classifier's own, on its own scale; they
+        // are not comparable across classifiers and nothing here blends them.
+        //
+        // ## Status
+        //
+        // The table and its reader land before the writer: the detection daemon
+        // does not fill it yet, so rows exist only on a database something else
+        // wrote. Pages built on it stay silent when there are none.
+        up_sql: "CREATE TABLE IF NOT EXISTS detection_model_scores (
+            Date TEXT NOT NULL,
+            Time TEXT NOT NULL,
+            Sci_Name TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            state TEXT NOT NULL
+                CHECK (state IN ('heard', 'below_bar', 'no_label', 'failed')),
+            score REAL CHECK (score IS NULL OR (score >= 0.0 AND score <= 1.0)),
+            bar REAL CHECK (bar IS NULL OR (bar >= 0.0 AND bar <= 1.0)),
+            window_start_secs REAL,
+            window_end_secs REAL,
+            PRIMARY KEY (Date, Time, Sci_Name, model_id),
+            CHECK ((state IN ('heard', 'below_bar')) = (score IS NOT NULL))
+        );",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
