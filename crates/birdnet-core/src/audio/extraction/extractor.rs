@@ -456,6 +456,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         }
     }
 
@@ -786,6 +787,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         };
 
         let first = extractor
@@ -1074,6 +1076,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         }
     }
 
@@ -1637,6 +1640,7 @@ mod tests {
                         file_name_extr: None,
                         model_id: None,
                         agreeing_models: None,
+                        model_scores: Vec::new(),
                     },
                 )
                 .expect("extraction succeeds");
@@ -1691,6 +1695,7 @@ mod tests {
                     file_name_extr: None,
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 },
             )
             .expect("WAV extraction succeeds");

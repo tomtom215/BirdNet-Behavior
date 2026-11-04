@@ -2,6 +2,7 @@
 //!
 //! Defines the core detection data structures and the watch -> analyze -> report pipeline.
 
+pub mod answers;
 pub mod corroboration;
 pub mod daemon;
 pub mod dynamic_threshold;
@@ -112,6 +113,7 @@ mod chunk_filter_tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         }
     }
 

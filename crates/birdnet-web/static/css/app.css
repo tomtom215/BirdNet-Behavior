@@ -5446,6 +5446,8 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 /* Models: the board on Station Health and the "Who heard it" card on a detection.
    Tokens only. A mark's shape and the words beside it say the state; colour only echoes it. */
 .ws-lede { margin: 0 0 var(--space-12); }
+.ws-facts { margin: var(--space-10) 0 0; font-size: var(--fs-xs); color: var(--fg-3); }
+.ws-foot { flex-wrap: wrap; row-gap: var(--space-6); }
 .ws-day { margin: var(--space-12) 0 0; font-size: var(--fs-sm); color: var(--fg-2); }
 .ws-day b { font-weight: var(--fw-semibold); color: var(--fg); }
 .ws-headline { font-size: var(--fs-md); margin: var(--space-12) 0 var(--space-14); }

@@ -1217,39 +1217,77 @@ fn seed_models(conn: &Connection) {
 /// the second has failed its last windows; `none` = the daemon has reported nothing.
 fn seed_model_health(state: &AppState) {
     use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER, ModelHealth};
+    use birdnet_core::inference::registry::ModelInfo;
     let now = birdnet_core::inference::health::unix_now();
-    let answering = |windows: u64, ago: u64| ModelHealth {
+    // `mean_ms` is the mean the daemon would have measured over the windows it
+    // answered. Demo figures: this fixture runs no classifier.
+    let answering = |windows: u64, ago: u64, mean_ms: u64| ModelHealth {
         consecutive_failures: 0,
         windows,
         last_window_at: Some(now.saturating_sub(ago)),
         last_success_at: Some(now.saturating_sub(ago)),
         error_class: None,
+        answered_micros: windows * mean_ms * 1_000,
+        timed_windows: windows,
     };
-    let health: Vec<(String, ModelHealth)> = match std::env::var("BNB_FIXTURE_MODELS")
-        .unwrap_or_default()
-        .as_str()
-    {
-        "none" => Vec::new(),
-        "one" => vec![("birdnet-v24".to_owned(), answering(41_208, 2))],
-        "failing" => vec![
-            ("birdnet-v3".to_owned(), answering(41_208, 2)),
-            (
-                "perch-v2".to_owned(),
-                ModelHealth {
-                    consecutive_failures: FAILING_AFTER,
-                    windows: 40_911,
-                    last_window_at: Some(now.saturating_sub(3)),
-                    last_success_at: Some(now.saturating_sub(7 * 60)),
-                    error_class: Some(ErrorClass::NonFiniteOutput),
-                },
+    let v3 = || ModelInfo {
+        id: "birdnet-v3".to_owned(),
+        window_secs: 4.5,
+        sample_rate: 32_000,
+        labels: 11_560,
+        bar: 0.70,
+    };
+    let perch = || ModelInfo {
+        id: "perch-v2".to_owned(),
+        window_secs: 5.0,
+        sample_rate: 32_000,
+        labels: 14_795,
+        bar: 0.50,
+    };
+    let (health, info): (Vec<(String, ModelHealth)>, Vec<ModelInfo>) =
+        match std::env::var("BNB_FIXTURE_MODELS")
+            .unwrap_or_default()
+            .as_str()
+        {
+            "none" => (Vec::new(), Vec::new()),
+            "one" => (
+                vec![("birdnet-v24".to_owned(), answering(41_208, 2, 96))],
+                vec![ModelInfo {
+                    id: "birdnet-v24".to_owned(),
+                    window_secs: 3.0,
+                    sample_rate: 48_000,
+                    labels: 6_522,
+                    bar: 0.70,
+                }],
             ),
-        ],
-        _ => vec![
-            ("birdnet-v3".to_owned(), answering(41_208, 2)),
-            ("perch-v2".to_owned(), answering(40_911, 4)),
-        ],
-    };
+            "failing" => (
+                vec![
+                    ("birdnet-v3".to_owned(), answering(41_208, 2, 412)),
+                    (
+                        "perch-v2".to_owned(),
+                        ModelHealth {
+                            consecutive_failures: FAILING_AFTER,
+                            windows: 40_911,
+                            last_window_at: Some(now.saturating_sub(3)),
+                            last_success_at: Some(now.saturating_sub(7 * 60)),
+                            error_class: Some(ErrorClass::NonFiniteOutput),
+                            answered_micros: 40_901 * 903_000,
+                            timed_windows: 40_901,
+                        },
+                    ),
+                ],
+                vec![v3(), perch()],
+            ),
+            _ => (
+                vec![
+                    ("birdnet-v3".to_owned(), answering(41_208, 2, 412)),
+                    ("perch-v2".to_owned(), answering(40_911, 4, 903)),
+                ],
+                vec![v3(), perch()],
+            ),
+        };
     state.metrics().set_model_health(&health);
+    state.metrics().set_model_info(&info);
 }
 
 /// Write synthetic bird-call WAVs for the given clip filenames into `dir`, so

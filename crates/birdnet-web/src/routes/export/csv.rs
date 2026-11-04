@@ -229,8 +229,14 @@ fn event_date_of(row: &birdnet_db::sqlite::DetectionRow) -> Option<String> {
 /// wrote them — then the instant in two readings (`Event_Date`, the same wall
 /// clock with the offset that was in force, RFC 3339; `Detected_At_UTC`, the
 /// instant in UTC), then the run's identity: `Run_Id`, `Model_Name`,
-/// `Model_SHA256`. The instant columns are empty on a row that names no point
-/// in time; the run columns on a row no run of this station produced.
+/// `Model_SHA256`, then the classifier behind the row: `Model_Id` (the
+/// classifier whose answer the row carries) and `Model_Agreement` (how many
+/// classifiers cleared their own bar). The instant columns are empty on a row
+/// that names no point in time; the run columns on a row no run of this
+/// station produced; the classifier columns on a row written before they were
+/// recorded, where empty means nobody was counting and `1` means one
+/// classifier was asked and one answered. Each classifier's own score is in the
+/// separate model-scores export.
 fn detections_to_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
@@ -238,14 +244,14 @@ fn detections_to_csv(
     let mut csv = String::with_capacity(rows.len() * 240);
     csv.push_str(
         "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
-         Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256\n",
+         Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement\n",
     );
 
     for row in rows {
         let model = row.run_id.and_then(|id| runs.get(&id));
         let _ = writeln!(
             csv,
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&row.date),
             escape_csv(&row.time),
             escape_csv(&row.sci_name),
@@ -264,6 +270,8 @@ fn detections_to_csv(
             row.run_id.map_or(String::new(), |v| v.to_string()),
             model.map_or(String::new(), |m| escape_csv(&m.model_name)),
             model.map_or(String::new(), |m| escape_csv(&m.model_sha256)),
+            row.model_id.as_deref().map_or(String::new(), escape_csv),
+            row.model_agreement.map_or(String::new(), |n| n.to_string()),
         );
     }
 
@@ -300,7 +308,7 @@ mod tests {
         assert_eq!(
             csv.trim_end(),
             "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
-             Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256"
+             Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement"
         );
     }
 
@@ -356,6 +364,44 @@ mod tests {
         assert!(v.get("detected_at_utc").is_none(), "{v}");
     }
 
+    /// The classifier behind a row is exported, and a row from before it was
+    /// recorded exports empty cells, not a `1` and not a `0`.
+    #[test]
+    fn detections_csv_and_json_carry_the_classifier_and_its_agreement() {
+        let two = birdnet_db::sqlite::DetectionRow {
+            date: "2026-11-01".into(),
+            time: "06:30:00".into(),
+            sci_name: "Pica pica".into(),
+            com_name: "Eurasian Magpie".into(),
+            confidence: 0.9,
+            model_id: Some("perch,v2".into()),
+            model_agreement: Some(2),
+            ..Default::default()
+        };
+        let legacy = birdnet_db::sqlite::DetectionRow {
+            model_id: None,
+            model_agreement: None,
+            ..two.clone()
+        };
+        let runs = std::collections::HashMap::new();
+        let csv = detections_to_csv(&[two.clone(), legacy.clone()], &runs);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(lines[1].ends_with(",\"perch,v2\",2"), "{}", lines[1]);
+        assert!(
+            lines[2].ends_with(",,"),
+            "a legacy row leaves both empty: {}",
+            lines[2]
+        );
+        let v = serde_json::to_value(ExportedDetection::new(&two, &runs)).unwrap();
+        assert_eq!(v["model_id"], "perch,v2");
+        assert_eq!(v["model_agreement"], 2);
+        let v = serde_json::to_value(ExportedDetection::new(&legacy, &runs)).unwrap();
+        assert!(
+            v.get("model_id").is_none() && v.get("model_agreement").is_none(),
+            "{v}"
+        );
+    }
+
     /// R-1: the CSV names the model that made each row, and leaves the three
     /// columns empty on a row no run produced rather than inventing one.
     #[test]
@@ -388,12 +434,14 @@ mod tests {
         };
         let csv = detections_to_csv(&[made_by_run, imported], &runs);
         let lines: Vec<&str> = csv.lines().collect();
+        // The run's three columns are followed by `Model_Id,Model_Agreement`,
+        // empty here because neither row names a classifier.
         assert!(
-            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb"),
+            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,"),
             "{}",
             lines[1]
         );
-        assert!(lines[2].ends_with(",,,,,"), "{}", lines[2]);
+        assert!(lines[2].ends_with(",,,,,,,"), "{}", lines[2]);
         assert_eq!(lines[2].matches(',').count(), lines[1].matches(',').count());
     }
 

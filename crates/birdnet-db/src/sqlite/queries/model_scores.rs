@@ -118,6 +118,31 @@ pub fn insert_model_score(
     Ok(())
 }
 
+/// Store every classifier's answer for a detection, all or none.
+///
+/// A detection's answers are one fact (who heard it, and what each said), so a
+/// failure part-way must not leave a card reading "heard by 1 of 1" over a set
+/// that was meant to hold two.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure, including a row the table's `CHECK`
+/// refuses; nothing is stored then.
+pub fn insert_model_scores(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+    scores: &[ModelScore],
+) -> Result<(), DbError> {
+    let tx = conn.unchecked_transaction()?;
+    for score in scores {
+        insert_model_score(&tx, date, time, sci_name, score)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Every stored classifier answer for one detection.
 ///
 /// Heard first, then scored below the bar, then no class for the species, then
@@ -164,6 +189,83 @@ pub fn model_scores_for_detection(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// One classifier's answer, with the detection it is about.
+///
+/// The long form a spreadsheet or a script wants: one row per (detection,
+/// classifier), which is also how the table stores it. A wide form would need a
+/// column per classifier, and the set of classifiers changes over a station's
+/// life.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DetectionModelScore {
+    /// Detection date (local wall clock, as `detections.Date`).
+    pub date: String,
+    /// Detection time (local wall clock, as `detections.Time`).
+    pub time: String,
+    /// The species the answer is about.
+    pub sci_name: String,
+    /// The classifier's answer.
+    #[serde(flatten)]
+    pub answer: ModelScore,
+}
+
+/// Every stored classifier answer for detections in a date range, oldest first.
+///
+/// Answers are returned only for detections the analytics stand behind (the
+/// `detections_analytic` view), so a detection a reviewer rejected is left out
+/// here exactly as it is left out of the detections export. The second value is
+/// `true` when more than `limit` rows matched and the list was cut.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure, or when a stored state is not one this
+/// code knows.
+pub fn model_scores_between(
+    conn: &Connection,
+    from: Option<&str>,
+    to: Option<&str>,
+    limit: u32,
+) -> Result<(Vec<DetectionModelScore>, bool), DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT s.Date, s.Time, s.Sci_Name, s.model_id, s.state, s.score, s.bar,
+                s.window_start_secs, s.window_end_secs
+           FROM detection_model_scores s
+          WHERE (?1 IS NULL OR s.Date >= ?1) AND (?2 IS NULL OR s.Date <= ?2)
+            AND EXISTS (SELECT 1 FROM detections_analytic d
+                         WHERE d.Date = s.Date AND d.Time = s.Time AND d.Sci_Name = s.Sci_Name)
+          ORDER BY s.Date, s.Time, s.Sci_Name, s.model_id
+          LIMIT ?3",
+    )?;
+    let fetch = i64::from(limit) + 1;
+    let mut rows = stmt
+        .query_map(params![from, to, fetch], |row| {
+            let state: String = row.get(4)?;
+            let state = ModelScoreState::parse(&state).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    format!("unknown model score state {state:?}").into(),
+                )
+            })?;
+            Ok(DetectionModelScore {
+                date: row.get(0)?,
+                time: row.get(1)?,
+                sci_name: row.get(2)?,
+                answer: ModelScore {
+                    model_id: row.get(3)?,
+                    state,
+                    score: row.get(5)?,
+                    bar: row.get(6)?,
+                    window_start_secs: row.get(7)?,
+                    window_end_secs: row.get(8)?,
+                },
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let truncated = rows.len() > limit as usize;
+    rows.truncate(limit as usize);
+    Ok((rows, truncated))
 }
 
 /// What `detections` itself recorded about the classifiers behind one row.
@@ -314,6 +416,119 @@ mod tests {
         assert_eq!(
             got[2].score, None,
             "a model with no class has no score, not 0"
+        );
+    }
+
+    #[test]
+    fn answers_between_dates_are_returned_oldest_first_and_only_for_standing_detections() {
+        let conn = db();
+        for (date, sci) in [
+            ("2026-11-01", "A"),
+            ("2026-11-02", "B"),
+            ("2026-11-03", "C"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections
+                     (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week,
+                      Sens, Overlap, File_Name)
+                 VALUES (?1, '06:30:00', ?2, ?2, 0.9, 0.0, 0.0, 0.7, 44, 1.25, 0.0, ?2 || '.wav')",
+                params![date, sci],
+            )
+            .expect("insert detection");
+            insert_model_score(
+                &conn,
+                date,
+                "06:30:00",
+                sci,
+                &score("m", ModelScoreState::Heard, Some(0.9)),
+            )
+            .expect("score");
+        }
+        // An answer for a detection the table never had a row for.
+        insert_model_score(
+            &conn,
+            "2026-11-02",
+            "07:00:00",
+            "orphan",
+            &score("m", ModelScoreState::Heard, Some(0.9)),
+        )
+        .expect("orphan");
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Sci_Name = 'C'",
+            [],
+        )
+        .expect("reject");
+
+        let (all, cut) = model_scores_between(&conn, None, None, 100).expect("read");
+        let names: Vec<_> = all.iter().map(|r| r.sci_name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["A", "B"],
+            "rejected and orphaned answers are left out"
+        );
+        assert!(!cut);
+        let (one, _) =
+            model_scores_between(&conn, Some("2026-11-02"), Some("2026-11-02"), 100).expect("read");
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].sci_name, "B");
+        let (capped, cut) = model_scores_between(&conn, None, None, 1).expect("read");
+        assert_eq!(capped.len(), 1);
+        assert!(cut, "more matched than the limit, and it says so");
+    }
+
+    #[test]
+    fn a_detection_row_carries_its_classifier_and_agreement_and_a_legacy_row_carries_neither() {
+        let conn = db();
+        insert_detection(&conn, "Two models", Some("v3"), Some(2));
+        insert_detection(&conn, "Legacy", None, None);
+        let two = crate::sqlite::detection_at(&conn, "2026-11-01", "06:30:00", Some("Two models"))
+            .expect("read")
+            .expect("row");
+        assert_eq!(two.model_id.as_deref(), Some("v3"));
+        assert_eq!(two.model_agreement, Some(2));
+        let old = crate::sqlite::detection_at(&conn, "2026-11-01", "06:30:00", Some("Legacy"))
+            .expect("read")
+            .expect("row");
+        assert_eq!((old.model_id.as_deref(), old.model_agreement), (None, None));
+        // And the JSON omits what is unknown rather than printing a null.
+        let json = serde_json::to_value(&old).expect("json");
+        assert!(
+            json.get("model_id").is_none() && json.get("model_agreement").is_none(),
+            "{json}"
+        );
+        let json = serde_json::to_value(&two).expect("json");
+        assert_eq!(json["model_agreement"], 2);
+    }
+
+    #[test]
+    fn a_set_of_answers_is_stored_whole_or_not_at_all() {
+        let conn = db();
+        let good = score("a", ModelScoreState::Heard, Some(0.9));
+        // A second answer the table refuses: a score on a state that has none.
+        let bad = score("b", ModelScoreState::NoLabel, Some(0.5));
+        assert!(
+            insert_model_scores(&conn, "2026-11-01", "06:30:00", "x", &[good.clone(), bad])
+                .is_err()
+        );
+        assert!(
+            model_scores_for_detection(&conn, "2026-11-01", "06:30:00", "x")
+                .expect("read")
+                .is_empty(),
+            "the good one must not survive its sibling's failure"
+        );
+        insert_model_scores(
+            &conn,
+            "2026-11-01",
+            "06:30:00",
+            "x",
+            &[good, score("b", ModelScoreState::BelowBar, Some(0.3))],
+        )
+        .expect("a valid set is stored");
+        assert_eq!(
+            model_scores_for_detection(&conn, "2026-11-01", "06:30:00", "x")
+                .expect("read")
+                .len(),
+            2
         );
     }
 

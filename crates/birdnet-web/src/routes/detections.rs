@@ -15,6 +15,7 @@ pub fn router() -> Router<AppState> {
         .route("/detections", get(list_detections))
         .route("/detections/recent", get(recent_detections))
         .route("/detections/daily", get(daily_detections))
+        .route("/detections/models", get(detection_models))
 }
 
 #[derive(Deserialize)]
@@ -108,6 +109,85 @@ async fn list_detections(
                 "detections": [],
                 "count": 0,
             })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct ModelsQuery {
+    date: Option<String>,
+    time: Option<String>,
+    sci_name: Option<String>,
+}
+
+/// What each classifier said about one detection (migration 57).
+///
+/// `model_id` and `model_agreement` are the row's own record of which
+/// classifier supplied its answer and how many cleared their bars; `models` is
+/// every classifier's own answer, which may be empty (a row from before the
+/// feature, or one stored without them) and is then not the same as "no
+/// classifier heard it". Each score is on its classifier's own scale and none is
+/// combined with another.
+async fn detection_models(
+    State(state): State<AppState>,
+    Query(query): Query<ModelsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let (Some(date), Some(time), Some(sci_name)) = (
+        nonblank(query.date),
+        nonblank(query.time),
+        nonblank(query.sci_name),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "date, time and sci_name are required"})),
+        );
+    };
+    if !is_valid_date(&date) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid date format, expected YYYY-MM-DD"})),
+        );
+    }
+    let (d, t, s) = (date.clone(), time.clone(), sci_name.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| {
+            let Some(summary) = birdnet_db::sqlite::detection_model_summary(conn, &d, &t, &s)?
+            else {
+                return Ok(None);
+            };
+            let models = birdnet_db::sqlite::model_scores_for_detection(conn, &d, &t, &s)?;
+            Ok::<_, DbError>(Some((summary, models)))
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some((summary, models)))) => {
+            let mut body = json!({
+                "detection": format!("{date} {time} {sci_name}"),
+                "models": models,
+            });
+            // Omitted when unknown, as on a detection row: a legacy row has no
+            // record of either, which `null` would blur with a recorded zero.
+            if let Some(id) = summary.model_id {
+                body["model_id"] = json!(id);
+            }
+            if let Some(n) = summary.agreement {
+                body["model_agreement"] = json!(n);
+            }
+            (StatusCode::OK, Json(body))
+        }
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such detection"})),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
     }
 }

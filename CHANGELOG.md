@@ -9,15 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Which classifiers heard a detection, and a Models board.** A detection's page shows a *Who heard it* card
-  when several classifiers cleared their bars: each classifier's own score against its own bar, in four states
-  that are never rounded to a zero (heard it, scored it below its bar, has no class for the species, its
-  window failed), counted as "heard by N of M models that could judge it" and never averaged. Station Health
-  gains a *Models* section: one card per classifier with its state, its last window, and the share of today's
-  detections that carry its answer and that another classifier also cleared. Migration 57 adds
-  `detection_model_scores` for the per-classifier scores; **the daemon does not write it yet**, so until it
-  does the card can state agreement from `model_agreement` but not the other classifiers' scores. New CSS
-  classes `ws-*`, no new tokens.
+- **Which classifiers heard a detection, and a Models board.** A detection's page shows a *Who heard it* card:
+  each classifier's own score against its own bar, in four states that are never rounded to a zero (heard it,
+  scored it below its bar, has no class for the species, its window failed), counted as "heard by N of M models
+  that could judge it" and never averaged. Station Health gains a *Models* section: one card per classifier with
+  its state, what it is (window length, sample rate, classes, bar), its last window, the mean time one answered
+  window has taken, and the share of today's detections that carry its answer and that another classifier also
+  cleared. The detection daemon now stores every classifier's own answer with the detection (migration 57,
+  `detection_model_scores`): for each species any classifier reported, every classifier that listened has a
+  row, including one whose score fell under its own bar. The daemon also states what each classifier is once,
+  when they have loaded. The API gains `GET /api/v2/detections/models` and
+  `GET /api/v2/detections/export/model-scores`; detection rows and the detections CSV carry `model_id` and
+  `model_agreement` (`Model_Id`, `Model_Agreement`). Prometheus gains
+  `birdnet_model_inference_seconds_total` and `birdnet_model_inference_windows_total` per classifier, absent
+  until a window has answered. New CSS classes `ws-*`, no new tokens.
 
 ## [0.19.0] - 2026-10-31
 

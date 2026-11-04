@@ -206,6 +206,7 @@ async fn gather(state: &AppState) -> Snapshot {
         let models = super::model_board::cards(
             &health,
             leads.as_deref(),
+            &state.metrics().model_info(),
             birdnet_core::inference::health::unix_now(),
         );
 

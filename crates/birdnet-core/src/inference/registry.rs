@@ -85,6 +85,27 @@ pub struct ModelSpec {
     pub sample_rate: Option<u32>,
 }
 
+/// What a loaded classifier is, as the station can state it without running it:
+/// the facts an operator checks against what they think they configured.
+///
+/// Every field is read from the loaded model or the registry, none is declared
+/// by hand: the window is the one the pipeline cuts audio to, the labels are the
+/// ones loaded, and the bar is the one detections are finally judged against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelInfo {
+    /// The operator's name for it.
+    pub id: String,
+    /// How long one inference window is, in seconds.
+    pub window_secs: f32,
+    /// The sample rate it is fed, in hertz, after any declared rate is applied.
+    pub sample_rate: u32,
+    /// How many classes it has names for.
+    pub labels: usize,
+    /// The bar its detections are judged against: its own threshold, else the
+    /// station's, as loaded.
+    pub bar: f32,
+}
+
 /// A loaded classifier and what was declared about it.
 pub struct RegisteredModel {
     /// The operator's name for it.
@@ -383,6 +404,21 @@ impl ClassifierRegistry {
     #[must_use]
     pub fn model(&self, idx: usize) -> Option<&RegisteredModel> {
         self.models.get(idx)
+    }
+
+    /// What each classifier is, primary first.
+    #[must_use]
+    pub fn info(&self) -> Vec<ModelInfo> {
+        self.models
+            .iter()
+            .map(|m| ModelInfo {
+                id: m.id.clone(),
+                window_secs: m.spec.window_secs(),
+                sample_rate: m.spec.sample_rate,
+                labels: m.model.label_count(),
+                bar: m.own_threshold,
+            })
+            .collect()
     }
 
     /// Each classifier's id and health, primary first.

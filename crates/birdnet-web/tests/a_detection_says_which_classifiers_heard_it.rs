@@ -236,6 +236,7 @@ fn health(windows: u64, ok: bool) -> ModelHealth {
         last_window_at: Some(birdnet_core::inference::health::unix_now()),
         last_success_at: ok.then(birdnet_core::inference::health::unix_now),
         error_class: (!ok).then_some(ErrorClass::Inference),
+        ..ModelHealth::default()
     }
 }
 

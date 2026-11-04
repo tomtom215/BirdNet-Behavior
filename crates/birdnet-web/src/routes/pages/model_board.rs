@@ -7,13 +7,20 @@
 //!
 //! # Only what is real
 //!
-//! Every figure on a card is read from something the station records:
-//! the window record the daemon keeps per classifier
-//! ([`birdnet_core::inference::health::ModelHealth`]), and the `model_id` /
-//! `model_agreement` columns of `detections` (migration 50). Window length,
-//! label count, the model's own bar and per-window latency are not published by
-//! the daemon, so they are not shown; a card does not print a dash where a
-//! number belongs to make it look complete.
+//! Every figure on a card is read from something the station records: the
+//! window record the daemon keeps per classifier
+//! ([`birdnet_core::inference::health::ModelHealth`], which includes the time
+//! each answered window took), what each classifier is
+//! ([`birdnet_core::inference::registry::ModelInfo`], stated by the daemon once
+//! they have loaded), and the `model_id` / `model_agreement` columns of
+//! `detections` (migration 50). A figure the station has not recorded is left
+//! out, not printed as a dash: a card that has not yet had a window answered has
+//! no mean time, and a station with no daemon (web-only) has no descriptors.
+//!
+//! The mean time per window is wall-clock time on this machine since the
+//! classifier loaded, so it includes the first window's warm-up and whatever
+//! else the board was doing. It is a measurement of this station, not a
+//! benchmark of the model.
 //!
 //! # Agreement is only claimed when there is something to agree
 //!
@@ -23,6 +30,7 @@
 //! and withheld.
 
 use birdnet_core::inference::health::{ErrorClass, ModelHealth};
+use birdnet_core::inference::registry::ModelInfo;
 use birdnet_db::sqlite::ModelLead;
 
 use super::escape_html;
@@ -39,7 +47,7 @@ pub enum ModelState {
 }
 
 /// One classifier's card.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModelCard {
     /// The operator's name for it.
     pub id: String,
@@ -57,6 +65,11 @@ pub struct ModelCard {
     pub consecutive_failures: u32,
     /// Its share of today's detections; `None` when that read failed.
     pub lead: Option<ModelLead>,
+    /// What it is, when the daemon has stated it.
+    pub info: Option<ModelInfo>,
+    /// Mean microseconds per answered window since it loaded; `None` before it
+    /// has answered one.
+    pub mean_window_micros: Option<u64>,
 }
 
 /// Build the cards from the daemon's health record and today's per-model counts.
@@ -66,6 +79,7 @@ pub struct ModelCard {
 pub fn cards(
     health: &[(String, ModelHealth)],
     leads: Option<&[ModelLead]>,
+    infos: &[ModelInfo],
     now: u64,
 ) -> Vec<ModelCard> {
     health
@@ -99,6 +113,8 @@ pub fn cards(
                 error: h.error_class,
                 consecutive_failures: h.consecutive_failures,
                 lead,
+                info: infos.iter().find(|i| &i.id == id).cloned(),
+                mean_window_micros: h.mean_inference_micros(),
             }
         })
         .collect()
@@ -157,18 +173,71 @@ fn card(c: &ModelCard, several: bool) -> String {
     };
     let day = day_line(c, several);
     let fault = fault_line(c);
+    let facts = c.info.as_ref().map_or_else(String::new, facts_line);
+    let mean = c.mean_window_micros.map_or_else(String::new, |us| {
+        format!("<span><b>{}</b> · per window</span>", fmt_duration(us))
+    });
     format!(
         "<div class=\"bnb-card st-source{failing} ws-model\"><div class=\"st-source-head\">\
          <div><div class=\"st-source-name mono\">{id}</div>\
          <div class=\"st-source-type\">classifier</div></div>{chip}</div>\
-         {day}\
-         <div class=\"st-source-foot\"><span><b>{last}</b> · last window</span>\
-         <span><b>{windows}</b> · windows run</span></div>{fault}</div>",
+         {facts}{day}\
+         <div class=\"st-source-foot ws-foot\"><span><b>{last}</b> · last window</span>\
+         {mean}<span><b>{windows}</b> · windows run</span></div>{fault}</div>",
         id = escape_html(&c.id),
         chip = chip(c.state),
         last = ago(c.last_window_age),
         windows = super::group_thousands(i64::try_from(c.windows).unwrap_or(i64::MAX)),
     )
+}
+
+/// What the classifier is, in one line: window, rate, classes and bar.
+fn facts_line(info: &ModelInfo) -> String {
+    format!(
+        "<p class=\"ws-facts mono\">{window} window · {rate} · {labels} classes · bar {bar}</p>",
+        window = fmt_seconds(info.window_secs),
+        rate = fmt_khz(info.sample_rate),
+        labels = super::group_thousands(i64::try_from(info.labels).unwrap_or(i64::MAX)),
+        bar = fmt_percent(info.bar),
+    )
+}
+
+/// `4.5 s`, `3 s`: one decimal unless it is a whole number of seconds.
+fn fmt_seconds(secs: f32) -> String {
+    let tenths = (secs * 10.0).round();
+    if (tenths % 10.0).abs() < f32::EPSILON {
+        format!("{:.0} s", tenths / 10.0)
+    } else {
+        format!("{:.1} s", tenths / 10.0)
+    }
+}
+
+/// `32 kHz`, `44.1 kHz`.
+fn fmt_khz(hz: u32) -> String {
+    if hz.is_multiple_of(1000) {
+        format!("{} kHz", hz / 1000)
+    } else {
+        format!("{:.1} kHz", f64::from(hz) / 1000.0)
+    }
+}
+
+/// A 0 to 1 bar as the whole percent the rest of the app prints.
+fn fmt_percent(v: f32) -> String {
+    format!("{:.0}%", v * 100.0)
+}
+
+/// A duration given in microseconds, in the unit a person reads it in: under 10
+/// ms to a tenth, under a second in whole milliseconds, then seconds.
+#[allow(clippy::cast_precision_loss)]
+fn fmt_duration(micros: u64) -> String {
+    let ms = micros as f64 / 1000.0;
+    if ms < 10.0 {
+        format!("{ms:.1} ms")
+    } else if ms < 1000.0 {
+        format!("{ms:.0} ms")
+    } else {
+        format!("{:.1} s", ms / 1000.0)
+    }
 }
 
 /// Today's share, and agreement only when there is a second classifier to agree.
@@ -223,6 +292,7 @@ mod tests {
             last_window_at: Some(last),
             last_success_at: Some(last),
             error_class: None,
+            ..ModelHealth::default()
         }
     }
 
@@ -236,7 +306,7 @@ mod tests {
 
     #[test]
     fn a_station_the_daemon_has_not_reported_on_has_no_section() {
-        assert_eq!(section(&cards(&[], Some(&[]), 1_000)), "");
+        assert_eq!(section(&cards(&[], Some(&[]), &[], 1_000)), "");
     }
 
     #[test]
@@ -249,7 +319,7 @@ mod tests {
             ("b".to_owned(), failing),
             ("c".to_owned(), ModelHealth::default()),
         ];
-        let got = cards(&health, Some(&[]), 1_000);
+        let got = cards(&health, Some(&[]), &[], 1_000);
         let states: Vec<_> = got.iter().map(|c| c.state).collect();
         assert_eq!(
             states,
@@ -266,14 +336,14 @@ mod tests {
     #[test]
     fn a_classifier_that_led_nothing_today_is_zero_not_missing() {
         let health = vec![("a".to_owned(), ok(1, 1)), ("b".to_owned(), ok(1, 1))];
-        let got = cards(&health, Some(&[lead("a", 5, 2)]), 10);
+        let got = cards(&health, Some(&[lead("a", 5, 2)]), &[], 10);
         assert_eq!(got[1].lead, Some(lead("b", 0, 0)));
     }
 
     #[test]
     fn a_failed_database_read_is_said_not_rounded_to_zero() {
         let health = vec![("a".to_owned(), ok(1, 1))];
-        let html = section(&cards(&health, None, 10));
+        let html = section(&cards(&health, None, &[], 10));
         assert!(html.contains("could not be read"), "{html}");
         assert!(!html.contains("<b class=\"mono\">0</b>"), "{html}");
     }
@@ -283,6 +353,7 @@ mod tests {
         let one = section(&cards(
             &[("a".to_owned(), ok(3, 5))],
             Some(&[lead("a", 40, 0)]),
+            &[],
             10,
         ));
         assert!(
@@ -295,6 +366,7 @@ mod tests {
         let two = section(&cards(
             &[("a".to_owned(), ok(3, 5)), ("b".to_owned(), ok(3, 5))],
             Some(&[lead("a", 40, 12), lead("b", 9, 0)]),
+            &[],
             10,
         ));
         assert!(two.contains("never averaged"), "{two}");
@@ -308,7 +380,7 @@ mod tests {
         h.consecutive_failures = FAILING_AFTER;
         h.error_class = Some(ErrorClass::NonFiniteOutput);
         h.last_window_at = Some(990);
-        let html = section(&cards(&[("bats".to_owned(), h)], Some(&[]), 1_000));
+        let html = section(&cards(&[("bats".to_owned(), h)], Some(&[]), &[], 1_000));
         assert!(html.contains("Failing"), "{html}");
         assert!(html.contains("invalid scores"), "{html}");
         assert!(
@@ -320,7 +392,12 @@ mod tests {
 
     #[test]
     fn a_healthy_card_has_no_fault_line_and_an_operator_typed_id_is_escaped() {
-        let html = section(&cards(&[("<i>x</i>".to_owned(), ok(2, 9))], Some(&[]), 10));
+        let html = section(&cards(
+            &[("<i>x</i>".to_owned(), ok(2, 9))],
+            Some(&[]),
+            &[],
+            10,
+        ));
         assert!(!html.contains("windows in a row failed"), "{html}");
         assert!(!html.contains("<i>x</i>"), "{html}");
         assert!(html.contains("&lt;i&gt;x&lt;/i&gt;"), "{html}");
@@ -331,9 +408,88 @@ mod tests {
         let html = section(&cards(
             &[("a".to_owned(), ModelHealth::default())],
             Some(&[]),
+            &[],
             10,
         ));
         assert!(html.contains("Waiting for audio"), "{html}");
         assert!(html.contains("<b>never</b> · last window"), "{html}");
+    }
+
+    fn info(id: &str, window_secs: f32, rate: u32, labels: usize, bar: f32) -> ModelInfo {
+        ModelInfo {
+            id: id.to_owned(),
+            window_secs,
+            sample_rate: rate,
+            labels,
+            bar,
+        }
+    }
+
+    #[test]
+    fn what_a_classifier_is_is_stated_only_when_the_daemon_has_stated_it() {
+        let health = vec![("v3".to_owned(), ok(5, 9))];
+        let without = section(&cards(&health, Some(&[]), &[], 10));
+        assert!(!without.contains("ws-facts"), "{without}");
+        let with = section(&cards(
+            &health,
+            Some(&[]),
+            &[info("v3", 4.5, 32_000, 11_560, 0.70)],
+            10,
+        ));
+        assert!(
+            with.contains("4.5 s window · 32 kHz · 11,560 classes · bar 70%"),
+            "{with}"
+        );
+    }
+
+    #[test]
+    fn a_descriptor_is_matched_to_its_own_classifier_by_id() {
+        let health = vec![("a".to_owned(), ok(1, 1)), ("b".to_owned(), ok(1, 1))];
+        let got = cards(
+            &health,
+            Some(&[]),
+            &[
+                info("b", 5.0, 32_000, 14_795, 0.5),
+                info("a", 3.0, 48_000, 6_522, 0.7),
+            ],
+            10,
+        );
+        assert_eq!(got[0].info.as_ref().map(|i| i.labels), Some(6_522));
+        assert_eq!(got[1].info.as_ref().map(|i| i.labels), Some(14_795));
+        assert!(
+            cards(&health, Some(&[]), &[info("zzz", 1.0, 1, 1, 0.1)], 10)[0]
+                .info
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_mean_window_time_is_shown_only_once_a_window_has_answered() {
+        let mut h = ok(3, 9);
+        h.answered_micros = 1_250_000;
+        h.timed_windows = 3;
+        let shown = section(&cards(&[("v3".to_owned(), h)], Some(&[]), &[], 10));
+        assert!(shown.contains("<b>417 ms</b> · per window"), "{shown}");
+        let untimed = section(&cards(&[("v3".to_owned(), ok(3, 9))], Some(&[]), &[], 10));
+        assert!(
+            !untimed.contains("per window"),
+            "no number, not a dash: {untimed}"
+        );
+    }
+
+    #[test]
+    fn durations_sample_rates_and_windows_are_written_the_way_a_person_reads_them() {
+        assert_eq!(fmt_duration(800), "0.8 ms");
+        assert_eq!(fmt_duration(9_000), "9.0 ms");
+        assert_eq!(fmt_duration(10_000), "10 ms");
+        assert_eq!(fmt_duration(999_000), "999 ms");
+        assert_eq!(fmt_duration(1_000_000), "1.0 s");
+        assert_eq!(fmt_duration(412_000), "412 ms");
+        assert_eq!(fmt_duration(1_500_000), "1.5 s");
+        assert_eq!(fmt_khz(32_000), "32 kHz");
+        assert_eq!(fmt_khz(44_100), "44.1 kHz");
+        assert_eq!(fmt_seconds(3.0), "3 s");
+        assert_eq!(fmt_seconds(4.5), "4.5 s");
+        assert_eq!(fmt_percent(0.7), "70%");
     }
 }

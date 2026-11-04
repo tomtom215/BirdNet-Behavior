@@ -9,12 +9,14 @@
 //! 3. Apply sigmoid with sensitivity adjustment
 //! 4. Return top-N species above confidence threshold
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
 use ort::session::Session;
 use ort::value::{Tensor, ValueType};
 
+use crate::detection::answers::ClassScore;
 use crate::detection::privacy::names_a_human;
 use crate::detection::types::{ChunkPrediction, Detection};
 use crate::inference::labels::LabelSet;
@@ -105,6 +107,16 @@ pub struct BirdNetModel {
     /// numbers; read by the daemon's per-classifier health
     /// ([`super::health`]). Zero before the first window.
     last_non_finite: usize,
+    /// The confidence the most recent window gave every class, by output
+    /// index, as [`compute_confidence`] maps it. A class whose output was not a
+    /// finite number holds NaN rather than the 0 the confidence mapping would
+    /// give it, so [`Self::score_of_last_window`] can tell "scored zero" from
+    /// "gave no number". Overwritten by every window; empty before the first.
+    last_scores: Vec<f32>,
+    /// Output indices by scientific name, found once at load, so "what did you
+    /// score this species" is a lookup rather than a scan of every label. A
+    /// name a label file repeats maps to every index that carries it.
+    class_index: HashMap<String, Vec<usize>>,
     /// Output indices whose label names a human class, found once at load so
     /// the per-chunk human score is a lookup rather than a scan of every label.
     human_indices: Vec<usize>,
@@ -209,6 +221,7 @@ impl BirdNetModel {
         );
 
         let human_indices = human_indices(&labels);
+        let class_index = class_index(&labels);
         Ok(Self {
             session,
             labels,
@@ -218,6 +231,8 @@ impl BirdNetModel {
             warned_label_count_mismatch: false,
             warned_non_finite: false,
             last_non_finite: 0,
+            last_scores: Vec::new(),
+            class_index,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -241,6 +256,7 @@ impl BirdNetModel {
         let is_probability_output = output_is_probability(&input_shape);
 
         let human_indices = human_indices(&labels);
+        let class_index = class_index(&labels);
         Ok(Self {
             session,
             labels,
@@ -250,6 +266,8 @@ impl BirdNetModel {
             warned_label_count_mismatch: false,
             warned_non_finite: false,
             last_non_finite: 0,
+            last_scores: Vec::new(),
+            class_index,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -289,6 +307,45 @@ impl BirdNetModel {
     #[must_use]
     pub const fn last_non_finite_scores(&self) -> usize {
         self.last_non_finite
+    }
+
+    /// How many classes this model has names for.
+    #[must_use]
+    pub const fn label_count(&self) -> usize {
+        self.labels.len()
+    }
+
+    /// What the most recent [`Self::predict_chunk`] scored the class named
+    /// `scientific_name`, on this model's own scale.
+    ///
+    /// Only meaningful straight after a window that succeeded: the scores are
+    /// those of the last window run, so a caller whose window failed must not
+    /// ask. When a label file gives a name more than one class, the highest
+    /// usable score among them is returned.
+    #[must_use]
+    pub fn score_of_last_window(&self, scientific_name: &str) -> ClassScore {
+        let Some(indices) = self.class_index.get(scientific_name) else {
+            return ClassScore::NoClass;
+        };
+        let mut best: Option<f32> = None;
+        let mut had_output = false;
+        for &i in indices {
+            // A label past the end of the output has no number behind it: the
+            // model and labels are a mismatched pair (warned about at the
+            // first window), and that class cannot be judged.
+            let Some(&score) = self.last_scores.get(i) else {
+                continue;
+            };
+            had_output = true;
+            if score.is_finite() {
+                best = Some(best.map_or(score, |b| b.max(score)));
+            }
+        }
+        match (best, had_output) {
+            (Some(score), _) => ClassScore::Score(score),
+            (None, true) => ClassScore::Unusable,
+            (None, false) => ClassScore::NoClass,
+        }
     }
 
     /// Run inference on raw audio samples.
@@ -400,9 +457,18 @@ impl BirdNetModel {
 
         let mut detections = Vec::new();
 
+        self.last_scores.clear();
+        self.last_scores.reserve(flat_logits.len());
         for (i, &raw) in flat_logits.iter().enumerate() {
             let confidence =
                 compute_confidence(raw, self.config.sensitivity, self.is_probability_output);
+            // Kept for every class, before either cut below: a species this
+            // window did not report is still a species the window scored.
+            self.last_scores.push(if raw.is_finite() {
+                confidence
+            } else {
+                f32::NAN
+            });
 
             if confidence >= self.config.confidence_threshold
                 && let Some(label) = self.labels.get(i)
@@ -423,6 +489,7 @@ impl BirdNetModel {
                     // both in with one classifier and an agreement of one.
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 });
             }
         }
@@ -508,6 +575,7 @@ impl BirdNetModel {
                     file_name_extr: None,
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 })
             });
 
@@ -1230,6 +1298,18 @@ fn human_indices(labels: &LabelSet) -> Vec<usize> {
         .collect()
 }
 
+/// Output indices by scientific name.
+fn class_index(labels: &LabelSet) -> HashMap<String, Vec<usize>> {
+    let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+    for label in labels.iter() {
+        by_name
+            .entry(label.scientific_name.clone())
+            .or_default()
+            .push(label.index);
+    }
+    by_name
+}
+
 /// Apply sigmoid function: `1 / (1 + exp(-x))`.
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
@@ -1542,6 +1622,156 @@ mod tests {
                 window[i]
             );
         }
+    }
+
+    /// A 96 000-sample window whose first eleven values are `head` (the tiny V3.0
+    /// model returns `audio[i]` at output `i`) and the rest zero.
+    fn window_with(head: &[f32]) -> Vec<f32> {
+        let mut w = vec![0.0_f32; 96_000];
+        w[..head.len()].copy_from_slice(head);
+        w
+    }
+
+    fn run_window(m: &mut BirdNetModel, head: &[f32]) -> ChunkPrediction {
+        m.predict_chunk(&window_with(head), "2026-11-01", "06:00:00", 0.0, 3.0, 44)
+            .expect("the tiny V3.0 model infers")
+    }
+
+    /// The reason this exists: the classifier reports only what cleared its
+    /// threshold and fits the top-N cut, so a species it scored 0.40 is absent
+    /// from the result, and "what did this model score it" had no answer.
+    #[test]
+    fn every_class_the_window_scored_is_kept_not_only_the_reported_ones() {
+        let config = ModelConfig {
+            confidence_threshold: 0.70,
+            ..ModelConfig::default()
+        };
+        let mut m =
+            BirdNetModel::load_from_bytes(TINY_V30_MODEL, tiny_labels(), config).expect("loads");
+        let out = run_window(&mut m, &[0.10, 0.95, 0.40, 0.88]);
+        let reported: Vec<_> = out
+            .detections
+            .iter()
+            .map(|d| d.scientific_name.as_str())
+            .collect();
+        assert_eq!(
+            reported,
+            ["Species_1", "Species_3"],
+            "only 0.95 and 0.88 clear 0.70"
+        );
+        // Not reported, still scored.
+        assert_eq!(m.score_of_last_window("Species_2"), ClassScore::Score(0.40));
+        assert_eq!(m.score_of_last_window("Species_0"), ClassScore::Score(0.10));
+        assert_eq!(m.score_of_last_window("Species_1"), ClassScore::Score(0.95));
+        // A class the window scored exactly zero is a score of zero.
+        assert_eq!(m.score_of_last_window("Species_9"), ClassScore::Score(0.0));
+    }
+
+    /// What a row says (`Confidence`) and what this reports for the same
+    /// species must be the same number, or the lead classifier's answer on the
+    /// card would disagree with the row beside it.
+    #[test]
+    fn a_reported_detection_and_its_kept_score_are_the_same_number() {
+        let config = ModelConfig {
+            confidence_threshold: 0.30,
+            ..ModelConfig::default()
+        };
+        let mut m =
+            BirdNetModel::load_from_bytes(TINY_V30_MODEL, tiny_labels(), config).expect("loads");
+        let out = run_window(&mut m, &[0.35, 0.95, 0.40, 0.88, 0.5, 0.31]);
+        assert!(out.detections.len() >= 5, "{:?}", out.detections.len());
+        for d in &out.detections {
+            assert_eq!(
+                m.score_of_last_window(&d.scientific_name),
+                ClassScore::Score(d.confidence),
+                "{}",
+                d.scientific_name
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_the_model_has_no_class_for_is_no_class_and_so_is_everything_before_a_window() {
+        let mut m = load_tiny_v30();
+        assert_eq!(
+            m.score_of_last_window("Species_3"),
+            ClassScore::NoClass,
+            "no window yet"
+        );
+        run_window(&mut m, &[0.9]);
+        assert_eq!(m.score_of_last_window("Turdus merula"), ClassScore::NoClass);
+    }
+
+    #[test]
+    fn a_non_finite_output_is_unusable_and_not_a_score_of_zero() {
+        let mut m = load_tiny_v30();
+        run_window(&mut m, &[0.9, 0.9, 0.9, 0.9, f32::NAN]);
+        assert_eq!(m.score_of_last_window("Species_4"), ClassScore::Unusable);
+        assert_eq!(m.score_of_last_window("Species_3"), ClassScore::Score(0.9));
+        assert_eq!(m.last_non_finite_scores(), 1);
+    }
+
+    #[test]
+    fn a_label_file_that_repeats_a_name_scores_it_as_its_best_class() {
+        let mut entries: Vec<(String, String)> = (0..11)
+            .map(|i| (format!("Species_{i}"), format!("Bird {i}")))
+            .collect();
+        entries[6].0 = "Species_2".to_owned();
+        let mut m = BirdNetModel::load_from_bytes(
+            TINY_V30_MODEL,
+            LabelSet::from_entries(entries),
+            ModelConfig::default(),
+        )
+        .expect("loads");
+        run_window(&mut m, &[0.0, 0.0, 0.40, 0.0, 0.0, 0.0, 0.80]);
+        assert_eq!(m.score_of_last_window("Species_2"), ClassScore::Score(0.80));
+        // And a name only one class carries is unaffected by the other.
+        assert_eq!(m.score_of_last_window("Species_6"), ClassScore::NoClass);
+    }
+
+    /// Scores are those of the last window. If a window did not replace them, a
+    /// classifier that failed would answer with the previous window's numbers.
+    #[test]
+    fn the_next_window_replaces_the_scores_it_does_not_add_to_them() {
+        let mut m = load_tiny_v30();
+        run_window(&mut m, &[0.9, 0.2]);
+        assert_eq!(m.score_of_last_window("Species_0"), ClassScore::Score(0.9));
+        run_window(&mut m, &[0.1, 0.8]);
+        assert_eq!(m.score_of_last_window("Species_0"), ClassScore::Score(0.1));
+        assert_eq!(m.score_of_last_window("Species_1"), ClassScore::Score(0.8));
+    }
+
+    #[test]
+    fn a_logit_model_s_kept_score_goes_through_the_same_sigmoid_as_its_detections() {
+        // V2.4 shape: raw logits mapped by sigmoid(slope × logit).
+        let config = ModelConfig {
+            confidence_threshold: 0.01,
+            sensitivity: 1.25,
+            ..ModelConfig::default()
+        };
+        let mut m =
+            BirdNetModel::load_from_bytes(TINY_V24_MODEL, tiny_labels(), config).expect("loads");
+        let mut w = vec![0.0_f32; 144_000];
+        w[0] = 2.0;
+        w[1] = -3.0;
+        let out = m
+            .predict_chunk(&w, "2026-11-01", "06:00:00", 0.0, 3.0, 44)
+            .expect("the tiny V2.4 model infers");
+        let expected = compute_confidence(2.0, 1.25, false);
+        assert_eq!(
+            m.score_of_last_window("Species_0"),
+            ClassScore::Score(expected)
+        );
+        assert!(expected > 0.8 && expected < 1.0, "{expected}");
+        let d0 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species_0")
+            .expect("reported");
+        assert_eq!(
+            m.score_of_last_window("Species_0"),
+            ClassScore::Score(d0.confidence)
+        );
     }
 
     #[test]

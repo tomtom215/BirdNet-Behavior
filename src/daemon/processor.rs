@@ -270,6 +270,37 @@ impl ThresholdCache {
     }
 }
 
+/// Each classifier's answer about a detection, as the rows
+/// `detection_model_scores` (migration 57) stores.
+///
+/// The score and the bar are carried as the numbers the classifier produced,
+/// widened to the column's `f64` the way `Confidence` is, and the four states
+/// map one to one. Nothing is computed here: in particular nothing is averaged,
+/// and a classifier without a class for the species stays a row without a score
+/// instead of becoming a zero.
+pub(super) fn db_model_scores(
+    answers: &[birdnet_core::detection::types::ModelAnswer],
+) -> Vec<birdnet_db::sqlite::ModelScore> {
+    use birdnet_core::detection::types::AnswerState;
+    use birdnet_db::sqlite::ModelScoreState;
+    answers
+        .iter()
+        .map(|a| birdnet_db::sqlite::ModelScore {
+            model_id: a.model_id.clone(),
+            state: match a.state {
+                AnswerState::Heard => ModelScoreState::Heard,
+                AnswerState::BelowBar => ModelScoreState::BelowBar,
+                AnswerState::NoLabel => ModelScoreState::NoLabel,
+                AnswerState::Failed => ModelScoreState::Failed,
+            },
+            score: a.score.map(f64::from),
+            bar: a.bar.map(f64::from),
+            window_start_secs: Some(f64::from(a.window_start_secs)),
+            window_end_secs: Some(f64::from(a.window_end_secs)),
+        })
+        .collect()
+}
+
 /// The lowest confidence any species may be recorded at: `model`, or a
 /// per-species threshold below it. Clamped to 0–1 — a stored threshold is
 /// validated where it is typed, but this feeds the classifier directly.
@@ -1025,9 +1056,35 @@ pub(super) fn event_processor(
         // `with_ingest_db`, not `with_db`: PS-5. A database that has failed its
         // daily integrity check stops taking detection rows, and this is one of
         // the three writes that stop.
-        let Some(insert_result) =
-            state.with_ingest_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record))
-        else {
+        let model_scores = db_model_scores(&detection.model_scores);
+        let Some(insert_result) = state.with_ingest_db(|conn| {
+            let inserted = birdnet_db::sqlite::insert_detection(conn, &record);
+            // What each classifier said, kept beside the row so a page can show
+            // it (migration 57). Only for a row that was stored: an answer set
+            // for a detection the station has no record of would be evidence
+            // for nothing. A failure here costs the detail, not the detection:
+            // the row keeps `model_id` and `model_agreement`, and the card says
+            // what those alone can say.
+            if inserted.is_ok()
+                && !model_scores.is_empty()
+                && let Err(e) = birdnet_db::sqlite::insert_model_scores(
+                    conn,
+                    record.date,
+                    record.time,
+                    record.sci_name,
+                    &model_scores,
+                )
+            {
+                tracing::warn!(
+                    correlation_id,
+                    error = %e,
+                    species = %detection.scientific_name,
+                    "the classifiers' own scores for this detection could not be stored; \
+                     the detection itself was"
+                );
+            }
+            inserted
+        }) else {
             // Not a database failure — a refusal. Counted through the same
             // metric anyway, because that metric's contract is "a classified
             // detection was lost after the model agreed it was real", and this
@@ -1699,6 +1756,47 @@ pub(super) fn event_processor(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn answers_become_rows_one_to_one_and_nothing_is_invented() {
+        use birdnet_core::detection::types::{AnswerState, ModelAnswer};
+        use birdnet_db::sqlite::ModelScoreState;
+        let answer = |id: &str, state, score, bar| ModelAnswer {
+            model_id: id.to_owned(),
+            state,
+            score,
+            bar,
+            window_start_secs: 3.0,
+            window_end_secs: 7.5,
+        };
+        let rows = db_model_scores(&[
+            answer("v3", AnswerState::Heard, Some(0.87), Some(0.70)),
+            answer("perch", AnswerState::BelowBar, Some(0.41), Some(0.50)),
+            answer("regional", AnswerState::NoLabel, None, None),
+            answer("flaky", AnswerState::Failed, None, None),
+        ]);
+        let states: Vec<_> = rows.iter().map(|r| r.state).collect();
+        assert_eq!(
+            states,
+            [
+                ModelScoreState::Heard,
+                ModelScoreState::BelowBar,
+                ModelScoreState::NoLabel,
+                ModelScoreState::Failed
+            ]
+        );
+        assert_eq!(rows[0].score, Some(f64::from(0.87_f32)));
+        assert_eq!(rows[0].bar, Some(f64::from(0.70_f32)));
+        assert_eq!(
+            (rows[2].score, rows[2].bar),
+            (None, None),
+            "no class is not a zero"
+        );
+        assert_eq!((rows[3].score, rows[3].bar), (None, None));
+        assert_eq!(rows[1].window_start_secs, Some(3.0));
+        assert_eq!(rows[1].window_end_secs, Some(7.5));
+        assert!(db_model_scores(&[]).is_empty());
+    }
+
     use super::*;
     use crate::daemon::test_support::thresholds;
     use birdnet_core::audio::extraction::ExtractionConfig;
@@ -2194,6 +2292,7 @@ mod tests {
                     file_name_extr: None,
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 },
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
@@ -3216,6 +3315,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         };
         event_tx
             .send(DetectionEvent {
@@ -3278,6 +3378,185 @@ mod tests {
         assert_eq!(recent[0].correlation_id.as_deref(), Some("test-corr-abc"));
     }
 
+    /// Feed `detections` through the real `event_processor`, in order, against
+    /// `state`, and return when it has drained them.
+    async fn drive(
+        state: &birdnet_web::state::AppState,
+        detections: Vec<birdnet_core::detection::types::Detection>,
+    ) {
+        use birdnet_core::audio::extraction::ExtractionConfig;
+        use birdnet_core::detection::daemon::DetectionEvent;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel::<DetectionEvent>();
+        for detection in detections {
+            event_tx
+                .send(DetectionEvent {
+                    detection,
+                    source_file: tmp.path().join("nonexistent.wav"),
+                    latency_ms: 100,
+                    correlation_id: "model-scores".into(),
+                    lease: None,
+                })
+                .unwrap();
+        }
+        drop(event_tx);
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let template = birdnet_integrations::notification::NotificationTemplate::default();
+        let extractor = Extractor::new(ExtractionConfig::default());
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(state);
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                None,
+                None,
+                None,
+                None,
+                filter,
+                template,
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                extractor,
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    fn magpie(
+        answers: Vec<birdnet_core::detection::types::ModelAnswer>,
+    ) -> birdnet_core::detection::types::Detection {
+        birdnet_core::detection::types::Detection {
+            date: "2026-05-19".into(),
+            time: "09:00:00".into(),
+            scientific_name: "Pica pica".into(),
+            common_name: "Eurasian Magpie".into(),
+            confidence: 0.95,
+            start: 0.0,
+            stop: 3.0,
+            week: 20,
+            file_name_extr: None,
+            model_id: Some("v3".into()),
+            agreeing_models: Some(1),
+            model_scores: answers,
+        }
+    }
+
+    fn answer(
+        id: &str,
+        state: birdnet_core::detection::types::AnswerState,
+        score: Option<f32>,
+        bar: Option<f32>,
+    ) -> birdnet_core::detection::types::ModelAnswer {
+        birdnet_core::detection::types::ModelAnswer {
+            model_id: id.into(),
+            state,
+            score,
+            bar,
+            window_start_secs: 0.0,
+            window_end_secs: 3.0,
+        }
+    }
+
+    /// The whole write path end to end: what the classifiers said about a species
+    /// reaches the table beside the row, where the page reads it back.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_classifiers_own_answers_are_stored_beside_the_detection() {
+        use birdnet_core::detection::types::AnswerState::{BelowBar, Heard};
+        use birdnet_db::sqlite::ModelScoreState;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        drive(
+            &state,
+            vec![magpie(vec![
+                answer("v3", Heard, Some(0.95), Some(0.70)),
+                answer("perch", BelowBar, Some(0.41), Some(0.50)),
+            ])],
+        )
+        .await;
+        let rows = state.with_db(|c| {
+            birdnet_db::sqlite::model_scores_for_detection(c, "2026-05-19", "09:00:00", "Pica pica")
+                .unwrap()
+        });
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(
+            (rows[0].model_id.as_str(), rows[0].state),
+            ("v3", ModelScoreState::Heard)
+        );
+        assert_eq!(rows[0].score, Some(f64::from(0.95_f32)));
+        assert_eq!(
+            (rows[1].model_id.as_str(), rows[1].state),
+            ("perch", ModelScoreState::BelowBar)
+        );
+        assert_eq!(rows[1].bar, Some(f64::from(0.50_f32)));
+        let summary = state.with_db(|c| {
+            birdnet_db::sqlite::detection_model_summary(c, "2026-05-19", "09:00:00", "Pica pica")
+                .unwrap()
+                .unwrap()
+        });
+        assert_eq!(summary.model_id.as_deref(), Some("v3"));
+    }
+
+    /// A detection built without answers (anything outside the multi-classifier
+    /// path) stores none, and the page then says only what the row itself can.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_detection_with_no_answers_stores_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        drive(&state, vec![magpie(Vec::new())]).await;
+        let n: i64 = state.with_db(|c| {
+            c.query_row("SELECT COUNT(*) FROM detection_model_scores", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        });
+        assert_eq!(n, 0);
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap()),
+            1
+        );
+    }
+
+    /// Answers are evidence for a row the station has. A detection the database
+    /// refuses (the same instant, species, file and offset again) must not have
+    /// its answers overwrite the stored row's.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refused_detection_leaves_the_stored_answers_alone() {
+        use birdnet_core::detection::types::AnswerState::{Failed, Heard};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let first = magpie(vec![answer("v3", Heard, Some(0.95), Some(0.70))]);
+        let duplicate = magpie(vec![answer("v3", Failed, None, None)]);
+        drive(&state, vec![first, duplicate]).await;
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap()),
+            1,
+            "precondition: the duplicate was refused"
+        );
+        let rows = state.with_db(|c| {
+            birdnet_db::sqlite::model_scores_for_detection(c, "2026-05-19", "09:00:00", "Pica pica")
+                .unwrap()
+        });
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, birdnet_db::sqlite::ModelScoreState::Heard);
+    }
+
     /// Drive one detection through the real `event_processor` and report what
     /// landed where.
     ///
@@ -3306,6 +3585,7 @@ mod tests {
                     file_name_extr: None,
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 },
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
@@ -3410,6 +3690,7 @@ mod tests {
                     file_name_extr: None,
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 },
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
@@ -4208,6 +4489,7 @@ mod tests {
                 file_name_extr: None,
                 model_id: None,
                 agreeing_models: None,
+                model_scores: Vec::new(),
             },
             source_file,
             latency_ms: 100,

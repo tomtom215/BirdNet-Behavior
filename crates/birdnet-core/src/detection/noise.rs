@@ -355,6 +355,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         }
     }
 
@@ -553,6 +554,7 @@ mod remember_tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         }
     }
 

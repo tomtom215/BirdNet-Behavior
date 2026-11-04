@@ -64,6 +64,7 @@ fn detection(start: f32) -> Detection {
         file_name_extr: None,
         model_id: None,
         agreeing_models: None,
+        model_scores: Vec::new(),
     }
 }
 

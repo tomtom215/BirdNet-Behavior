@@ -166,8 +166,12 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/detections/recent` | `limit` — most recent first |
 | `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
 | `GET /api/v2/detections/export` | `format` (`csv` or `json`, default `csv`), `from`, `to` (inclusive `YYYY-MM-DD`) — the detection history as a download (`detections.csv`); more than 1 000 000 rows is a `413` that asks you to narrow the range |
+| `GET /api/v2/detections/models` | `date`, `time`, `sci_name` (all required; the detection's key) — which classifier supplied the detection's answer (`model_id`), how many classifiers cleared their own bar (`model_agreement`), and every classifier's own answer in `models`: its `state` (`heard`, `below_bar`, `no_label`, `failed`), its `score` and the `bar` it was judged against, and the seconds of the recording it listened to. A classifier with no class for the species has no score (`null`), never `0`. Scores are each classifier's own and are never combined. `404` for a detection that does not exist; an empty `models` is a detection stored without them, not one nobody heard |
+| `GET /api/v2/detections/export/model-scores` | `format` (`csv` or `json`, default `csv`), `from`, `to` — the same answers for every detection the station stands behind, one row per detection and classifier (`detection-model-scores.csv`: `Date`, `Time`, `Sci_Name`, `Model_Id`, `State`, `Score`, `Bar`, `Window_Start_Secs`, `Window_End_Secs`), so it joins to the detections export on the first three; `Score` and `Bar` are empty, not zero, where the classifier did not score |
 | `GET /api/v2/detections/export/birddb` | `from`, `to` — BirdNET-Pi's semicolon-separated `BirdDB.txt` (`BirdDB.txt`), the twelve BirdNET-Pi columns and nothing more |
 | `GET /api/v2/detections/export/ebird` | `date`, `lat` with `lon`, `location`, `min_confidence`, `protocol`, `observers`, `state`, `country`, `complete` — eBird Record Format (`ebird_export_….csv`) |
+
+A detection row (`/detections`, `/detections/recent`, the export) carries `model_id` and `model_agreement` when they were recorded and omits them when they were not: a row from before they existed has no record of either, which is not the same as `model_agreement: 1` (one classifier was asked and one answered).
 
 The rest of the export family (`detections/export/raven`, the per-clip Raven and Audacity tables) is under [Export](#export), and the exports' columns are described on the [Backups](../admin/backups.md#export) page.
 

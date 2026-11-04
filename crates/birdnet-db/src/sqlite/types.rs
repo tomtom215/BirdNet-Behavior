@@ -189,6 +189,16 @@ pub struct DetectionRow {
     /// The detection's length in seconds (migration 47).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detection_secs: Option<f64>,
+    /// The classifier whose answer this row carries (migration 50). `None` on a
+    /// row written before the column, when nothing recorded it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// How many classifiers cleared their own bar for this species in this
+    /// chunk (migration 50). `None` is "nobody was counting", a row written
+    /// before the column; `Some(1)` is "one classifier was asked and one
+    /// answered". They are not the same, and neither is zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_agreement: Option<i64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -307,6 +317,8 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         detected_at_utc: row.get(17)?,
         clip_offset_secs: row.get(18)?,
         detection_secs: row.get(19)?,
+        model_id: row.get(20)?,
+        model_agreement: row.get(21)?,
     })
 }
 
@@ -345,13 +357,15 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "detected_at_utc",
     "clip_offset_secs",
     "detection_secs",
+    "model_id",
+    "model_agreement",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs, model_id, model_agreement";
 
 #[cfg(test)]
 mod drift_gate_tests {
