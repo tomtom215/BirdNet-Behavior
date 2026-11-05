@@ -120,6 +120,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mapping (`output_scale`).
 - A relabelled or deleted detection no longer leaves its classifier answers behind (they are removed with it,
   by a trigger on `detections`, so every delete path is covered).
+- **Two "Label in Name" defects (WCAG 2.5.3, level A) that axe 4.14 now reports.** On every page with the top bar (84 of the gate's
+  route, theme and width samples), the brand link's text rendered as "BirdNet" and "Behavior"
+  while its label read "BirdNet-Behavior home"; a voice-control user saying what they see would not match. The label
+  is now "BirdNet Behavior home" and a space separates the two spans, which axe joins without one (the spans are
+  `display: block`, so nothing moves). On the Species life list's phone layout, each row's `aria-label` rephrased its
+  text as a sentence that did not contain the visible text (rank, date, count); the label is gone, so the row is
+  named by what it shows, and the portrait is hidden from assistive technology. The sentence is still the card's.
+  Found by raising `axe-core` from 4.13.0 to 4.14.0: the gate reported 86 violations of this one rule on the
+  previous tree, and none on this one. All browser gates ran on it (axe, interactions, legibility, the two
+  self-tests, layout, tokens, chart ramps, surface layers, token doc, motion, focus, figures, DOM sinks, base path,
+  and the strict sweep: 184 screenshots, 0 pages with issues), with Playwright 1.63.0 here and 1.64.1 in CI.
 - **A muted microphone made BirdNET+ V3.0 look broken.** The real V3.0 model answers a window of exactly
   constant samples (digital silence, which a muted, unplugged or null source delivers) with NaN. The station
   counted each as a failed window, flipped the classifier to *Failing* after ten (ten windows, about 45 seconds of silence), told

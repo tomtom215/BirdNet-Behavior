@@ -2143,12 +2143,15 @@ class Discovery {
       a.href = s.href;
       a.dataset.i = String(s.i);
       a.tabIndex = -1;
-      a.setAttribute("aria-label", readingText(m, s));
+      // No `aria-label`: the row's name is its own text (rank, name, date, count), which is
+      // what a voice-control user reads off the screen (WCAG 2.5.3). A label that rephrased
+      // it as a sentence did not contain that text; the sentence is still the card's.
       a.appendChild(el("span", "dsc-no", fmt(s.rank)));
       const pic = el("span", "dsc-pic");
       pic.appendChild(el("span", "dsc-ini", initials(s, true)));
       if (s.day === newestDay) pic.classList.add("is-newest");
       pic.dataset.src = s.src || "";
+      pic.setAttribute("aria-hidden", "true");
       a.appendChild(pic);
       const t = el("span", "dsc-txt");
       t.appendChild(el("span", "dsc-nm", s.name));
