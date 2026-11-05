@@ -15,6 +15,7 @@ description = "Core detection pipeline: audio processing, ML inference, and dete
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 
 # Audio pipeline (pure Rust, zero C deps)

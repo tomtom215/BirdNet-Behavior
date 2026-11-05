@@ -110,6 +110,7 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
         Some(devices) if !devices.is_empty() => {
             for dev in devices {
                 out.push(probe_alsa_device(dev));
+                out.push(super::input_level::alsa_level(dev));
             }
             if let Some(cfg_dev) = alsa.as_deref()
                 && !devices.iter().any(|d| d == cfg_dev)
@@ -131,6 +132,7 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
         _ => {
             if let Some(dev) = alsa.as_deref() {
                 out.push(probe_alsa_device(dev));
+                out.push(super::input_level::alsa_level(dev));
             }
         }
     }
@@ -142,6 +144,7 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
     }
     if let Some(dev) = pulse.as_deref() {
         out.push(probe_pulse_source(dev));
+        out.push(super::input_level::pulse_level(dev));
     }
 
     out

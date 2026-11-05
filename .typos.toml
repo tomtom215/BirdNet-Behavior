@@ -221,6 +221,7 @@ nd = "nd"             # ndarray crate
 nin = "nin"           # NIN (neural network in network)
 arange = "arange"     # numpy-style function name
 certifi = "certifi"     # the PyPI package of CA certificates, pinned in tools/*/requirements*.txt
+hda = "hda"           # Intel High Definition Audio; an input-level fixture and the Input Level page
 ot_ = "ot_"
 crate_ = "crate_"
 mosquitto = "mosquitto" # MQTT broker, correct spelling (not "mosquito")

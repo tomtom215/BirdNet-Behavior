@@ -15,6 +15,7 @@ pub mod capture;
 pub mod decode;
 pub mod eq;
 pub mod extraction;
+pub mod input_level;
 pub mod quality;
 pub mod resample;
 pub mod soundlevel;

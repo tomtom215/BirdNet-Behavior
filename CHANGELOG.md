@@ -63,6 +63,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 2% to 41% by region. Re-running the analysis from the stored model outputs reproduced all 53 result
   files byte for byte (line ends aside: the scripts write CRLF and git stores LF). It does not show that any bar is right for a given station.
 
+- **The doctor reads the microphone's capture gain.** `--doctor` (and `/admin/doctor`) now reads each configured
+  ALSA card with `amixer` and each PulseAudio or PipeWire source with `pactl --format=json`, under a five-second
+  deadline, and says whether capture is switched off, at the control's maximum, or above a guard-rail cap of 75%
+  and +18 dB of hardware gain. Read-only: it prints the command that would reach the cap for you to run, and
+  never changes a mixer, because a level set at run time is lost on a replug or a power cut unless root also
+  runs `alsactl store`, and the right level is whatever keeps the loudest call below full scale. A finding is a
+  warning at most (`--doctor` exits 1; the start gate cannot be blocked by it), so a station whose microphone
+  sits at 100%, as many USB microphones do out of the box, will now see one. The new page *Input Level* says
+  why 100% is never neutral (a published USB codec reaches +23.81 dB at the top, a Raspberry Pi HAT codec +30 dB
+  with up to +29 dB of boost on top, and `amixer`'s percentages are of the raw range while `alsamixer`'s are
+  mapped), what the reading means per backend, and what is not established: **nothing here was measured on a sound
+  card**. It was run against a real PulseAudio 16.1 server and real `pactl`, parsed from captured PulseAudio 16.1
+  and `pipewire-pulse` 1.0.5 output, from `amixer` output published by others, and from `amixer` over an
+  emulated mixer. The cap is a design judgement with low evidence. The manual's unsourced "peaks near −6 dB" now
+  gives the two sources that exist (Cornell Lab −12 dB, Audacity −6 dB).
+
 ### Changed
 
 - **Rust 1.99 is now the minimum.** `rust-version`, `clippy.toml`, the CI `msrv` job, the release workflow,

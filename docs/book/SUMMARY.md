@@ -61,6 +61,7 @@ the manual.
 - [Field Deployment Runbook](./field/deployment.md)
 - [Security Hardening](./field/hardening.md)
 - [Hardware Validation](./field/hardware-test.md)
+- [Input Level](./field/input-level.md)
 - [Multi-stream (design note)](./field/multistream.md)
 - [Running on macOS](./field/macos.md)
 
