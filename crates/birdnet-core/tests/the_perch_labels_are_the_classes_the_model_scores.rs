@@ -70,7 +70,8 @@ fn common_names_agree_with_v24_where_it_has_one_and_are_never_shared() {
         .collect();
 
     let mut named = 0_usize;
-    let mut users: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut users: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::default();
     for i in 0..perch.len() {
         let label = perch.get(i).expect("index in range");
         if let Some(english) = v24_name.get(&label.scientific_name) {

@@ -42,6 +42,8 @@ extend-exclude = [
     # the taxonomies' scientific names, byte for byte, and the checksums of every
     # file read. The scripts and README beside them are spell-checked.
     "tools/perch-bar/results/**",
+    # Scientific names and eBird codes (`agular1`), byte for byte, one row per name.
+    "docs/data/**",
     "tools/perch-bar/meta/**",
     # The extended parity manifest: titles, creators and notes copied from the
     # upstream recording pages (a German "vor"/"unter" in a title, a creator
