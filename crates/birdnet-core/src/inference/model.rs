@@ -1568,6 +1568,17 @@ mod tests {
         assert_eq!(output_scale_of(&[1, 1, 1]), OutputScale::Probability);
     }
 
+    /// The `output_scale=` field of the `model loaded successfully` log line is
+    /// how an operator learns which of the three a classifier uses, and
+    /// `docs/book/admin/classifiers.md` names these three words. Nothing else
+    /// reads them, so only an exact comparison holds them.
+    #[test]
+    fn each_output_scale_has_the_name_the_manual_gives_it() {
+        assert_eq!(OutputScale::Logit.as_str(), "sigmoid");
+        assert_eq!(OutputScale::Probability.as_str(), "probability");
+        assert_eq!(OutputScale::Softmax.as_str(), "softmax");
+    }
+
     #[test]
     fn unknown_shape_defaults_to_logits() {
         // Belt-and-braces: an unknown future model is assumed to need
