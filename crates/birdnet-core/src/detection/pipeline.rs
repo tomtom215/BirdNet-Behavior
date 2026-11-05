@@ -164,6 +164,35 @@ pub struct PreparedChunk {
     pub end_secs: f32,
     /// Source recording file metadata.
     pub recording: RecordingFile,
+    /// Every sample of the chunk is the same value: digital silence (what a
+    /// muted, unplugged or null source delivers) or a constant offset.
+    ///
+    /// There is nothing in such a chunk for a classifier to hear, and the real
+    /// BirdNET+ V3.0 model answers it with NaN in all 11,560 outputs, which
+    /// the station would otherwise count as a damaged classifier and tell its
+    /// owner to replace the model file. [`is_constant`] says what is meant.
+    pub silent: bool,
+}
+
+/// Whether every sample is the same value, the test behind
+/// [`PreparedChunk::silent`].
+///
+/// Exact, not a level: a threshold on loudness would have to guess where the
+/// model starts to fail, and measured on the real V3.0 model it does not fail
+/// at one (ten one-LSB flips in zeros answer; one flip does not, and white
+/// noise changes between an RMS of 5e-7 and 7e-7). A window with no variation at all is
+/// the case no capture path argues about. A NaN or infinite sample is never
+/// "constant", so damaged audio still reaches the model and is counted as the
+/// failure it is.
+#[must_use]
+pub fn is_constant(samples: &[f32]) -> bool {
+    // Not a min/max fold: `f32::min` and `f32::max` skip a NaN, so one NaN
+    // among zeros would read as silence and the damaged audio never reach the
+    // model. `s - first` is NaN for a NaN or an infinity, and NaN is not zero.
+    let Some(&first) = samples.first() else {
+        return false;
+    };
+    samples.iter().all(|&s| s - first == 0.0)
 }
 
 /// The shortest trailing remainder of a recording that still gets a chunk of
@@ -254,6 +283,8 @@ pub fn process_file(
 
         let start_secs = pos as f32 / config.target_sample_rate as f32;
         let end_secs = end as f32 / config.target_sample_rate as f32;
+        // Judged on the padded chunk, which is what a model would be handed.
+        let silent = is_constant(&chunk_data);
 
         // V3.0 models (raw_audio_input=true) take the raw waveform directly.
         // Store as a "1 × N" MelSpectrogram so the rest of the pipeline is unchanged.
@@ -278,6 +309,7 @@ pub fn process_file(
             start_secs,
             end_secs,
             recording: recording.clone(),
+            silent,
         });
     }
 
@@ -469,6 +501,27 @@ mod tests {
         assert_eq!(config.target_sample_rate, 48000);
         assert!((config.chunk_duration_secs - 3.0).abs() < f32::EPSILON);
         assert!((config.confidence_threshold - 0.25).abs() < f32::EPSILON);
+    }
+
+    /// `is_constant` is exact: one sample that differs is enough to give the
+    /// model the chunk, and damaged samples are never "constant".
+    #[test]
+    fn is_constant_is_exact() {
+        assert!(is_constant(&[0.0; 1000]));
+        assert!(
+            is_constant(&[0.25; 1000]),
+            "a constant offset has nothing to hear either"
+        );
+        assert!(is_constant(&[0.0, -0.0, 0.0]), "negative zero is zero");
+        let mut one_lsb = vec![0.0_f32; 144_000];
+        one_lsb[72_000] = 1.0 / 32_768.0;
+        assert!(!is_constant(&one_lsb), "a single flipped bit is a signal");
+        assert!(
+            !is_constant(&[0.0, f32::NAN, 0.0]),
+            "damaged audio must reach the model"
+        );
+        assert!(!is_constant(&[f32::INFINITY; 4]), "inf - inf is not zero");
+        assert!(!is_constant(&[]), "no samples is not a window of silence");
     }
 
     #[test]

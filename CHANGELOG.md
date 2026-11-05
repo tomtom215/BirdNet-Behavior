@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mapping (`output_scale`).
 - A relabelled or deleted detection no longer leaves its classifier answers behind (they are removed with it,
   by a trigger on `detections`, so every delete path is covered).
+- **A muted microphone made BirdNET+ V3.0 look broken.** The real V3.0 model answers a window of exactly
+  constant samples (digital silence, which a muted, unplugged or null source delivers) with NaN. The station
+  counted each as a failed window, flipped the classifier to *Failing* after ten (ten windows, about 45 seconds of silence), told
+  its owner it was "answering with invalid scores", and read the NaN as speech, so the privacy filter also
+  suppressed the chunks beside the silence. Chunks with no variation at all are now skipped: neither answered
+  nor failed, the log says why once every ten minutes, and a NaN or infinite sample is never mistaken for
+  silence. Found by dropping two 30 s silent files through the real models. `docs/book/admin/classifiers.md`
+  now says what a failed window costs the other classifiers.
 
 ## [0.19.0] - 2026-10-31
 

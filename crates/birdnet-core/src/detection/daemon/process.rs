@@ -86,6 +86,37 @@ fn report_species_filter_failure(error: &crate::inference::model::InferenceError
     );
 }
 
+/// How often a source that delivers digital silence is named in the log, in
+/// seconds. A muted source fills every recording, so a line per recording
+/// would be a line every few seconds.
+const SILENT_AUDIO_LOG_INTERVAL_SECS: u64 = 600;
+
+/// When digital silence was last logged, in seconds since the Unix epoch
+/// (`0`: never).
+static SILENT_AUDIO_LOGGED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Say, at most once per [`SILENT_AUDIO_LOG_INTERVAL_SECS`], that a recording
+/// held a stretch of exactly constant audio.
+fn report_silent_audio(recording: &crate::detection::types::RecordingFile) {
+    use std::sync::atomic::Ordering;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let last = SILENT_AUDIO_LOGGED_AT.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < SILENT_AUDIO_LOG_INTERVAL_SECS {
+        return;
+    }
+    SILENT_AUDIO_LOGGED_AT.store(now.max(1), Ordering::Relaxed);
+    tracing::warn!(
+        date = %recording.date,
+        time = %recording.time,
+        repeat_suppressed_secs = SILENT_AUDIO_LOG_INTERVAL_SECS,
+        "part of this recording is digital silence (every sample identical): the microphone \
+         is muted or unplugged, or the source delivers zeros. Those windows are not \
+         classified and are not counted against any classifier"
+    );
+}
+
 /// Record one window's outcome on a classifier's health, and log the two
 /// moments worth a line: the first failure of a run (with its error, which
 /// is otherwise not logged when another classifier answered), and the window
@@ -148,6 +179,16 @@ fn infer_chunk(
     chunk: &crate::detection::pipeline::PreparedChunk,
     week: u32,
 ) -> Result<ChunkPrediction, DaemonError> {
+    // A chunk with no variation at all has nothing to classify, and the real
+    // V3.0 model answers it with NaN. Running it would count that as a failed
+    // window, flip the classifier to "failing" after ten of them — a muted
+    // microphone does that in about 45 seconds (ten windows at a 4.5 s step) — and read the NaN as speech, so the
+    // privacy filter would also suppress the chunks beside it. No window is
+    // recorded either way: the classifier neither answered nor failed.
+    if chunk.silent {
+        report_silent_audio(&chunk.recording);
+        return Ok(ChunkPrediction::default());
+    }
     let mut verdicts = Vec::with_capacity(route.len());
     let mut human_score = 0.0_f32;
     let mut human_rank: Option<usize> = None;
@@ -718,7 +759,37 @@ mod tests {
                 "/x/2026-05-19-birdnet-09:00:00.wav",
             )
             .unwrap(),
+            silent: false,
         }
+    }
+
+    /// A window with no variation at all is not given to any classifier, and
+    /// neither answers nor fails it. The real V3.0 model returns NaN for such
+    /// a window, which used to count as a failed window per classifier, turn
+    /// the classifier "failing" after ten, and read the NaN as speech.
+    #[test]
+    fn a_silent_chunk_is_not_a_failed_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers(tmp.path());
+        let mut silent = chunk_of(144_000);
+        silent.silent = true;
+        for _ in 0..crate::inference::health::FAILING_AFTER + 2 {
+            let out =
+                infer_chunk(&mut registry, &[0, 1], &silent, 20).expect("silence is not an error");
+            assert!(out.detections.is_empty());
+            assert!(out.human_score.abs() < f32::EPSILON);
+            assert_eq!(out.human_rank, None, "silence is not speech");
+        }
+        for (id, health) in registry.health() {
+            assert_eq!(health.windows, 0, "{id}: no window was run or recorded");
+            assert!(!health.is_failing(), "{id}: {health:?}");
+            assert_eq!(health.last_success_at, None, "{id}: it answered nothing");
+        }
+        // The counterpart: the same data not marked silent is classified, so the
+        // skip is the flag's doing and not a property of the stub models.
+        let heard = infer_chunk(&mut registry, &[0, 1], &chunk_of(144_000), 20).unwrap();
+        assert!(!heard.detections.is_empty());
+        assert!(registry.health().iter().all(|(_, h)| h.windows == 1));
     }
 
     /// `e853776`: a classifier that fails a window is recorded as failing it,
