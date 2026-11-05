@@ -159,7 +159,7 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt, rust-src
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-mutants@27.1.0
       # By hash, not only by version: `pyyaml==6.0.3` would install whatever file
@@ -676,7 +676,7 @@ jobs:
             ${{ runner.os }}-mutants-registry-v1-
 
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-mutants@27.1.0
 

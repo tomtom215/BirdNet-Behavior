@@ -235,5 +235,6 @@ fn det(sci: &str, start: f32, chunk_secs: f32) -> Detection {
         file_name_extr: None,
         model_id: None,
         agreeing_models: None,
+        model_scores: Vec::new(),
     }
 }

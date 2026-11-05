@@ -86,6 +86,37 @@ fn report_species_filter_failure(error: &crate::inference::model::InferenceError
     );
 }
 
+/// How often a source that delivers digital silence is named in the log, in
+/// seconds. A muted source fills every recording, so a line per recording
+/// would be a line every few seconds.
+const SILENT_AUDIO_LOG_INTERVAL_SECS: u64 = 600;
+
+/// When digital silence was last logged, in seconds since the Unix epoch
+/// (`0`: never).
+static SILENT_AUDIO_LOGGED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Say, at most once per [`SILENT_AUDIO_LOG_INTERVAL_SECS`], that a recording
+/// held a stretch of exactly constant audio.
+fn report_silent_audio(recording: &crate::detection::types::RecordingFile) {
+    use std::sync::atomic::Ordering;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let last = SILENT_AUDIO_LOGGED_AT.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < SILENT_AUDIO_LOG_INTERVAL_SECS {
+        return;
+    }
+    SILENT_AUDIO_LOGGED_AT.store(now.max(1), Ordering::Relaxed);
+    tracing::warn!(
+        date = %recording.date,
+        time = %recording.time,
+        repeat_suppressed_secs = SILENT_AUDIO_LOG_INTERVAL_SECS,
+        "part of this recording is digital silence (every sample identical): the microphone \
+         is muted or unplugged, or the source delivers zeros. Those windows are not \
+         classified and are not counted against any classifier"
+    );
+}
+
 /// Record one window's outcome on a classifier's health, and log the two
 /// moments worth a line: the first failure of a run (with its error, which
 /// is otherwise not logged when another classifier answered), and the window
@@ -148,6 +179,16 @@ fn infer_chunk(
     chunk: &crate::detection::pipeline::PreparedChunk,
     week: u32,
 ) -> Result<ChunkPrediction, DaemonError> {
+    // A chunk with no variation at all has nothing to classify, and the real
+    // V3.0 model answers it with NaN. Running it would count that as a failed
+    // window, flip the classifier to "failing" after ten of them — a muted
+    // microphone does that in about 45 seconds (ten windows at a 4.5 s step) — and read the NaN as speech, so the
+    // privacy filter would also suppress the chunks beside it. No window is
+    // recorded either way: the classifier neither answered nor failed.
+    if chunk.silent {
+        report_silent_audio(&chunk.recording);
+        return Ok(ChunkPrediction::default());
+    }
     let mut verdicts = Vec::with_capacity(route.len());
     let mut human_score = 0.0_f32;
     let mut human_rank: Option<usize> = None;
@@ -156,6 +197,10 @@ fn infer_chunk(
     // answered: one model failing must not silence the others (`e853776`).
     let mut first_error = None;
     let now = crate::inference::health::unix_now();
+    // Which routed classifiers answered this chunk and which failed it, in route
+    // order. Their kept scores are those of the *last* window they ran, so a
+    // classifier that failed this one must never be asked what it scored.
+    let mut windows: Vec<(usize, bool)> = Vec::with_capacity(route.len());
 
     for &idx in route {
         let Some(registered) = registry.model_mut(idx) else {
@@ -165,6 +210,7 @@ fn infer_chunk(
         };
         let model_id = registered.id.clone();
         let own_threshold = registered.own_threshold;
+        let inference_started = Instant::now();
         let prediction = match registered.model.predict_chunk(
             &chunk.spectrogram.data,
             &chunk.recording.date,
@@ -174,6 +220,10 @@ fn infer_chunk(
             week,
         ) {
             Ok(prediction) => {
+                // Only an answered window is timed; see `record_inference_time`.
+                registered
+                    .health
+                    .record_inference_time(inference_started.elapsed());
                 if registered.model.last_non_finite_scores() > 0 {
                     record_window(registered, Err((ErrorClass::NonFiniteOutput, None)), now);
                 } else {
@@ -184,9 +234,11 @@ fn infer_chunk(
             Err(e) => {
                 record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
                 first_error.get_or_insert(e);
+                windows.push((idx, false));
                 continue;
             }
         };
+        windows.push((idx, true));
         human_score = human_score.max(prediction.human_score);
         human_rank = match (human_rank, prediction.human_rank) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -215,12 +267,73 @@ fn infer_chunk(
         return Err(e.into());
     }
 
+    let mut detections = crate::detection::merge::merge_verdicts(&verdicts);
+    attach_answers(registry, &windows, chunk.start_secs, &mut detections);
     Ok(ChunkPrediction {
-        detections: crate::detection::merge::merge_verdicts(&verdicts),
+        detections,
         human_score,
         human_rank,
         loudest_noise,
     })
+}
+
+/// A classifier's most recent window, as something a species can be looked up in.
+type Lookup<'a> = Box<dyn Fn(&str) -> crate::detection::answers::ClassScore + 'a>;
+
+/// Give each merged detection what every classifier that listened to the chunk
+/// said about its species (migrations 57 and 58).
+///
+/// The merge keeps one detection per species and the winner's confidence; this
+/// is the rest. `windows` is `(route index, answered)` for each classifier that
+/// ran: a classifier that failed the chunk is recorded as failed and its kept
+/// scores, which are the previous window's, are never read.
+///
+/// **Only when two or more classifiers listened.** The answers exist so that
+/// classifiers can be compared. With one, the detection row is already the whole
+/// record (its `Confidence` is that classifier's score, its `Cutoff` the bar),
+/// and a row per detection would be a write per detection on every station, for
+/// a card that has nothing to compare. A source routed to the primary alone on a
+/// station that runs several classifiers is in the same position.
+fn attach_answers(
+    registry: &ClassifierRegistry,
+    windows: &[(usize, bool)],
+    chunk_start_secs: f32,
+    detections: &mut [crate::detection::types::Detection],
+) {
+    use crate::detection::answers::{WindowOutcome, answers_for};
+    if detections.is_empty() {
+        return;
+    }
+    let listening: Vec<(&crate::inference::registry::RegisteredModel, bool)> = windows
+        .iter()
+        .filter_map(|&(idx, answered)| Some((registry.model(idx)?, answered)))
+        .collect();
+    if listening.len() < 2 {
+        return;
+    }
+    let lookups: Vec<Option<Lookup<'_>>> = listening
+        .iter()
+        .map(|&(registered, answered)| {
+            answered.then(|| {
+                Box::new(move |name: &str| registered.model.score_of_last_window(name))
+                    as Lookup<'_>
+            })
+        })
+        .collect();
+    let outcomes: Vec<WindowOutcome<'_>> = listening
+        .iter()
+        .zip(&lookups)
+        .map(|(&(registered, _), lookup)| WindowOutcome {
+            model_id: &registered.id,
+            bar: registered.own_threshold,
+            window_start_secs: chunk_start_secs,
+            window_end_secs: chunk_start_secs + registered.spec.window_secs(),
+            scores: lookup.as_deref(),
+        })
+        .collect();
+    for detection in detections {
+        detection.model_scores = answers_for(&outcomes, &detection.scientific_name);
+    }
 }
 
 /// `correlation_id`, if non-empty, is stamped on every event emitted for
@@ -584,32 +697,46 @@ mod tests {
     /// 144 000 values, and the tiny V3.0 model, declared at 48 kHz so the two
     /// may share a station, takes 96 000.
     fn two_classifiers(dir: &Path) -> ClassifierRegistry {
+        two_classifiers_with(dir, (None, None), 11)
+    }
+
+    /// As [`two_classifiers`], with each classifier's own bar and the number of
+    /// classes the second one has names for (its outputs past that are unnamed).
+    fn two_classifiers_with(
+        dir: &Path,
+        bars: (Option<f32>, Option<f32>),
+        second_labels: usize,
+    ) -> ClassifierRegistry {
         use crate::inference::model::ModelConfig;
         use crate::inference::registry::ModelSpec;
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
         const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
-        let labels = dir.join("labels.txt");
-        std::fs::write(
-            &labels,
-            (0..11)
+        let names = |n: usize| {
+            (0..n)
                 .map(|i| format!("Species{i} bird_Bird {i}"))
                 .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .unwrap();
+                .join("\n")
+        };
+        let labels = dir.join("labels.txt");
+        std::fs::write(&labels, names(11)).unwrap();
+        let labels_second = dir.join("labels_second.txt");
+        std::fs::write(&labels_second, names(second_labels)).unwrap();
         let v24 = dir.join("v24.onnx");
         let v30 = dir.join("v30.onnx");
         std::fs::write(&v24, TINY_V24).unwrap();
         std::fs::write(&v30, TINY_V30).unwrap();
-        let spec = |id: &str, path: &Path, rate| ModelSpec {
+        let spec = |id: &str, path: &Path, labels_path: &Path, rate, threshold| ModelSpec {
             id: id.to_owned(),
             model_path: path.to_path_buf(),
-            labels_path: labels.clone(),
-            threshold: None,
+            labels_path: labels_path.to_path_buf(),
+            threshold,
             sample_rate: rate,
         };
         ClassifierRegistry::load(
-            &[spec("birdnet", &v24, None), spec("v3", &v30, Some(48_000))],
+            &[
+                spec("birdnet", &v24, &labels, None, bars.0),
+                spec("v3", &v30, &labels_second, Some(48_000), bars.1),
+            ],
             &std::collections::HashMap::new(),
             &ModelConfig {
                 confidence_threshold: 0.0,
@@ -632,7 +759,37 @@ mod tests {
                 "/x/2026-05-19-birdnet-09:00:00.wav",
             )
             .unwrap(),
+            silent: false,
         }
+    }
+
+    /// A window with no variation at all is not given to any classifier, and
+    /// neither answers nor fails it. The real V3.0 model returns NaN for such
+    /// a window, which used to count as a failed window per classifier, turn
+    /// the classifier "failing" after ten, and read the NaN as speech.
+    #[test]
+    fn a_silent_chunk_is_not_a_failed_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers(tmp.path());
+        let mut silent = chunk_of(144_000);
+        silent.silent = true;
+        for _ in 0..crate::inference::health::FAILING_AFTER + 2 {
+            let out =
+                infer_chunk(&mut registry, &[0, 1], &silent, 20).expect("silence is not an error");
+            assert!(out.detections.is_empty());
+            assert!(out.human_score.abs() < f32::EPSILON);
+            assert_eq!(out.human_rank, None, "silence is not speech");
+        }
+        for (id, health) in registry.health() {
+            assert_eq!(health.windows, 0, "{id}: no window was run or recorded");
+            assert!(!health.is_failing(), "{id}: {health:?}");
+            assert_eq!(health.last_success_at, None, "{id}: it answered nothing");
+        }
+        // The counterpart: the same data not marked silent is classified, so the
+        // skip is the flag's doing and not a property of the stub models.
+        let heard = infer_chunk(&mut registry, &[0, 1], &chunk_of(144_000), 20).unwrap();
+        assert!(!heard.detections.is_empty());
+        assert!(registry.health().iter().all(|(_, h)| h.windows == 1));
     }
 
     /// `e853776`: a classifier that fails a window is recorded as failing it,
@@ -679,6 +836,207 @@ mod tests {
         assert!(!health[0].1.is_failing());
         assert_eq!(health[0].1.consecutive_failures, 0);
         assert!(health[0].1.last_success_at.is_some());
+    }
+
+    /// A full 144 000-value window whose first values are `head`: both tiny
+    /// models read them as the scores of their first classes (V3.0 directly,
+    /// V2.4 as logits through the sigmoid).
+    fn chunk_scoring(head: &[f32]) -> PreparedChunk {
+        let mut chunk = chunk_of(144_000);
+        chunk.spectrogram.data.fill(0.0);
+        chunk.spectrogram.data[..head.len()].copy_from_slice(head);
+        chunk
+    }
+
+    fn answer_of<'a>(
+        d: &'a crate::detection::types::Detection,
+        model: &str,
+    ) -> &'a crate::detection::types::ModelAnswer {
+        d.model_scores
+            .iter()
+            .find(|a| a.model_id == model)
+            .unwrap_or_else(|| panic!("no answer from {model}: {:?}", d.model_scores))
+    }
+
+    /// The point of migration 57, end to end through two real ONNX sessions: a
+    /// species one classifier reported and the other scored below its bar keeps
+    /// *both* scores, each against its own bar. Before, the second classifier's
+    /// number was gone by the time the row was written.
+    #[test]
+    fn every_merged_species_carries_each_classifier_s_own_score_against_its_own_bar() {
+        use crate::detection::types::AnswerState::{BelowBar, Heard};
+        let tmp = tempfile::tempdir().unwrap();
+        // birdnet (V2.4, logits through a sigmoid) bar 0.60; v3 (probabilities) bar 0.70.
+        let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
+        // Species0: raw 0.9. Species1: raw 0.2. Species2: raw 0.5.
+        let chunk = chunk_scoring(&[0.9, 0.2, 0.5]);
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).expect("both answer");
+
+        let by_name = |n: &str| {
+            out.detections
+                .iter()
+                .find(|d| d.scientific_name == n)
+                .unwrap_or_else(|| panic!("{n} not reported: {:?}", out.detections))
+        };
+        // Species0: both clear their own bar.
+        let s0 = by_name("Species0 bird");
+        assert_eq!(answer_of(s0, "v3").state, Heard);
+        assert_eq!(answer_of(s0, "birdnet").state, Heard);
+        assert_eq!(s0.agreeing_models, Some(2));
+        // Species2: only birdnet reported it (sigmoid(0.5) = 0.622 clears 0.60);
+        // v3 did not report it, and its own score, 0.5, is kept and is under 0.70.
+        let s2 = by_name("Species2 bird");
+        assert_eq!(s2.agreeing_models, Some(1));
+        let birdnet = answer_of(s2, "birdnet");
+        assert_eq!(birdnet.state, Heard);
+        assert!(
+            (birdnet.score.unwrap() - 0.622_459).abs() < 1e-4,
+            "{birdnet:?}"
+        );
+        let v3 = answer_of(s2, "v3");
+        assert_eq!(
+            v3.state, BelowBar,
+            "a score the classifier did not report is still kept"
+        );
+        assert!((v3.score.unwrap() - 0.5).abs() < 1e-6, "{v3:?}");
+        assert_eq!(v3.bar, Some(0.70));
+        // Species1 scored under both bars, so nobody reported it: no detection.
+        assert!(
+            out.detections
+                .iter()
+                .all(|d| d.scientific_name != "Species1 bird")
+        );
+        // The classifier whose answer the row carries scored exactly the row's number.
+        for d in &out.detections {
+            let lead = answer_of(d, d.model_id.as_deref().unwrap());
+            assert_eq!(lead.score, Some(d.confidence), "{}", d.scientific_name);
+        }
+    }
+
+    /// A classifier that has no class for the species is `NoLabel`, with no
+    /// score and no bar, and not a score of zero.
+    #[test]
+    fn a_classifier_without_the_species_says_so_and_scores_nothing() {
+        use crate::detection::types::AnswerState::{Heard, NoLabel};
+        let tmp = tempfile::tempdir().unwrap();
+        // v3 is named for only its first 8 classes; outputs 8..10 have no label.
+        let mut registry = two_classifiers_with(tmp.path(), (None, None), 8);
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let s9 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species9 bird")
+            .expect("birdnet reports it");
+        let v3 = answer_of(s9, "v3");
+        assert_eq!(v3.state, NoLabel);
+        assert_eq!((v3.score, v3.bar), (None, None));
+        assert_eq!(answer_of(s9, "birdnet").state, Heard);
+    }
+
+    /// The scores a classifier keeps are those of its *last* window. If a failed
+    /// window were answered from them, a classifier that failed this chunk would
+    /// be reported as having heard what it heard in the previous one.
+    #[test]
+    fn a_classifier_that_failed_this_chunk_is_failed_and_not_answered_from_the_last_one() {
+        use crate::detection::types::AnswerState::{Failed, Heard};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
+        // A full window first: birdnet answers and keeps 0.71 for Species0.
+        let full = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let s0 = full
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species0 bird")
+            .unwrap();
+        assert_eq!(answer_of(s0, "birdnet").state, Heard, "precondition");
+        // Then a half window, which the V2.4 model refuses and V3.0 takes.
+        let mut half = chunk_of(60_000);
+        half.spectrogram.data[..1].copy_from_slice(&[0.9]);
+        let out = infer_chunk(&mut registry, &[0, 1], &half, 20).unwrap();
+        let s0 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species0 bird")
+            .expect("v3 reports it");
+        let birdnet = answer_of(s0, "birdnet");
+        assert_eq!(birdnet.state, Failed, "{birdnet:?}");
+        assert_eq!((birdnet.score, birdnet.bar), (None, None));
+        assert_eq!(answer_of(s0, "v3").state, Heard);
+    }
+
+    /// Classifiers' windows differ in length, so each answer says which instants
+    /// of the recording that classifier listened to.
+    #[test]
+    fn each_answer_names_the_window_that_classifier_listened_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
+        let mut chunk = chunk_scoring(&[0.9]);
+        chunk.start_secs = 6.0;
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).unwrap();
+        let d = &out.detections[0];
+        // birdnet: 144 000 samples at 48 kHz = 3 s. v3: 96 000 declared at 48 kHz = 2 s.
+        let b = answer_of(d, "birdnet");
+        assert!(
+            (b.window_start_secs - 6.0).abs() < 1e-6 && (b.window_end_secs - 9.0).abs() < 1e-6,
+            "{b:?}"
+        );
+        let v = answer_of(d, "v3");
+        assert!(
+            (v.window_start_secs - 6.0).abs() < 1e-6 && (v.window_end_secs - 8.0).abs() < 1e-6,
+            "{v:?}"
+        );
+    }
+
+    /// A classifier the source is not routed to was not asked, so it is absent
+    /// from the answers. With only one left listening there is nothing to
+    /// compare, and the detection row alone is the record: no answers at all.
+    #[test]
+    fn a_chunk_only_one_classifier_listened_to_leaves_no_answers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (None, None), 11);
+        let out = infer_chunk(&mut registry, &[1], &chunk_scoring(&[0.9]), 20).unwrap();
+        assert!(
+            !out.detections.is_empty(),
+            "the classifier still detects; only the comparison is skipped"
+        );
+        for d in &out.detections {
+            assert!(d.model_scores.is_empty(), "{:?}", d.model_scores);
+        }
+    }
+
+    /// The counterpart: routed to both, the same chunk carries an answer from
+    /// each. Without it the test above would pass for a writer that never
+    /// wrote anything.
+    #[test]
+    fn a_chunk_two_classifiers_listened_to_carries_an_answer_from_each() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (None, None), 11);
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        assert!(!out.detections.is_empty());
+        for d in &out.detections {
+            let mut ids: Vec<_> = d.model_scores.iter().map(|a| a.model_id.as_str()).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, ["birdnet", "v3"], "{:?}", d.model_scores);
+        }
+    }
+
+    /// What each classifier is, read from the loaded models: the facts an
+    /// operator checks against what they think they configured.
+    #[test]
+    fn the_registry_states_what_each_loaded_classifier_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 8);
+        let info = registry.info();
+        assert_eq!(info.len(), 2);
+        assert_eq!(info[0].id, "birdnet");
+        assert!((info[0].window_secs - 3.0).abs() < 1e-6, "{:?}", info[0]);
+        assert_eq!((info[0].sample_rate, info[0].labels), (48_000, 11));
+        assert!((info[0].bar - 0.60).abs() < 1e-6);
+        // v3 is declared 48 kHz over 96 000 samples: a 2 s window; named for 8 classes.
+        assert_eq!(info[1].id, "v3");
+        assert!((info[1].window_secs - 2.0).abs() < 1e-6, "{:?}", info[1]);
+        assert_eq!((info[1].sample_rate, info[1].labels), (48_000, 8));
+        assert!((info[1].bar - 0.70).abs() < 1e-6);
     }
 
     /// A classifier that answers with scores that are not numbers fails the

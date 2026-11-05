@@ -18,7 +18,7 @@ exclude = ["fuzz"]
 [workspace.package]
 version = "0.19.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 license = "CC-BY-NC-SA-4.0"
 repository = "https://github.com/tomtom215/BirdNet-Behavior"
 # The operator manual: the site root is the latest release's, `/dev/` is main's
@@ -72,7 +72,7 @@ rusqlite = { version = "0.41", features = ["bundled", "backup", "limits"] }
 #
 # - `icu` is a C++ extension and loads only into the exact DuckDB version it
 #   was built for (`allow_extensions_metadata_mismatch` does not bypass this).
-# - `behavioral` v0.10.1 is built on DuckDB's stable C API (footer ABI
+# - `behavioral` v0.10.1 and v0.11.0 are built on DuckDB's stable C API (footer ABI
 #   `C_STRUCT`, C API v1.2.0). DuckDB 2.0.0 keeps that API at v1.5.6
 #   (`duckdb_extension.h`, read from the sources `libduckdb-sys` 1.20000.0
 #   compiles) and accepts any major-1 target up to it, so it loads by DuckDB's own
@@ -87,7 +87,8 @@ rusqlite = { version = "0.41", features = ["bundled", "backup", "limits"] }
 # `the_engine_names_itself_as_a_release` is the gate. Measured 2026-10-28, not assumed.
 #
 # Verified, not assumed: the registries' `v2.0.0` artifacts for linux_amd64 and
-# linux_arm64 carry footers `C_STRUCT / v0.10.1 / v1.2.0` (behavioral) and
+# linux_arm64 carry footers `C_STRUCT / v0.11.0 / v1.2.0` (behavioral; v0.10.1
+# until 2026-11-05) and
 # `CPP / v2.0.0 / v2.0.0` (icu), and `file` reports x86-64 and aarch64
 # respectively. `extension_pins.rs` records which of them could be loaded here.
 #
@@ -142,12 +143,16 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 
 # System monitoring — CPU, memory, temperature, network interfaces.
 #
-# sysinfo 0.39.x requires Rust 1.95, which is what sets the workspace MSRV
-# floor (see `rust-version` above). The API we use — `RefreshKind::nothing()`,
+# sysinfo 0.40.x requires Rust 1.95, below the workspace MSRV (`rust-version`
+# above), so it no longer sets the floor. The API we use — `RefreshKind::nothing()`,
 # `Components::refresh(bool)`, `Component::temperature() -> Option<f32>` — is
-# stable across the 0.38/0.39 boundary, so only the version bump is needed.
+# unchanged from 0.39 to 0.40, but 0.40 made the constructors fallible
+# (`System::new_with_specifics`, `Components::new_with_refreshed_list`,
+# `Networks::new_with_refreshed_list` return `Result`), renamed `Cpu::cpu_usage`
+# to `Cpu::usage`, and keys network interfaces by `OsString`; `system_info.rs`
+# handles each.
 # `network` adds only Windows dependencies; on Linux it reads `/proc/net/dev`.
-sysinfo = { version = "0.39", default-features = false, features = ["system", "component", "network"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system", "component", "network"] }
 
 # `application/x-www-form-urlencoded` parsing for the one form axum's own
 # `Form` extractor cannot take: a checkbox group posts `selected=a&selected=b`,

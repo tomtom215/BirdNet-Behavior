@@ -145,7 +145,13 @@ pub struct ThroughputObserver {
     /// Each classifier's health after every file the pipeline ran inference
     /// on, primary first (`e853776`).
     model_health: Option<ModelHealthCallback>,
+    /// What each classifier is, once, after they are loaded.
+    model_info: Option<ModelInfoCallback>,
 }
+
+/// A shared callback taking what each loaded classifier is.
+type ModelInfoCallback =
+    std::sync::Arc<dyn Fn(&[crate::inference::registry::ModelInfo]) + Send + Sync>;
 
 /// A shared callback taking each classifier's id and health.
 type ModelHealthCallback =
@@ -345,6 +351,7 @@ impl ThroughputObserver {
             queue_depth: None,
             shed: None,
             model_health: None,
+            model_info: None,
         }
     }
 
@@ -356,6 +363,23 @@ impl ThroughputObserver {
     {
         self.model_health = Some(std::sync::Arc::new(f));
         self
+    }
+
+    /// Also report what each classifier is, once, when they have loaded.
+    #[must_use]
+    pub fn with_model_info<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&[crate::inference::registry::ModelInfo]) + Send + Sync + 'static,
+    {
+        self.model_info = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    /// Report what each classifier is.
+    pub fn model_info(&self, info: &[crate::inference::registry::ModelInfo]) {
+        if let Some(f) = &self.model_info {
+            f(info);
+        }
     }
 
     /// Report each classifier's health.
@@ -1044,6 +1068,7 @@ mod tests {
                 file_name_extr: None,
                 model_id: None,
                 agreeing_models: None,
+                model_scores: Vec::new(),
             },
             source_file: PathBuf::from("/tmp/x.wav"),
             latency_ms: 42,

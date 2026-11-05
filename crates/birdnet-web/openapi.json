@@ -1279,6 +1279,129 @@
         }
       }
     },
+    "/detections/models": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "What each classifier said about a detection",
+        "description": "The classifier whose answer a detection carries, how many classifiers cleared their own bar, and every classifier's own answer, each against its own bar. `models` is empty for a row from before the answers were stored, for a station that runs one classifier, and for a chunk only one classifier listened to; that is not the same as no classifier having heard it. Nothing is averaged. Two sources hearing one bird in one second are two detections that share `date`, `time` and `sci_name`: pass `file_name` (as it appears on the detection row) to say which. Without it the request is answered when those three name one detection, and refused with `409` and the clips to choose from when they name several.",
+        "operationId": "getDetectionModels",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "example": "2026-09-03"
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "06:12:44"
+          },
+          {
+            "name": "sci_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "Dryobates villosus"
+          },
+          {
+            "name": "file_name",
+            "in": "query",
+            "required": false,
+            "description": "The detection's clip, as `file_name` on a detection row. Needed only when several detections share the date, time and species. An empty value names a detection with no clip.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Hairy_Woodpecker-91-2026-09-03-birdnet-06:12:44.wav"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The detection's classifiers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detection": {
+                      "type": "string",
+                      "example": "2026-09-03 06:12:44 Dryobates villosus"
+                    },
+                    "file_name": {
+                      "type": "string",
+                      "description": "The clip of the detection this answers for; empty when it has none.",
+                      "example": "Hairy_Woodpecker-91-2026-09-03-birdnet-06:12:44.wav"
+                    },
+                    "model_id": {
+                      "type": "string",
+                      "description": "Absent on a row written before it was recorded."
+                    },
+                    "model_agreement": {
+                      "type": "integer",
+                      "description": "Absent on a row written before it was recorded."
+                    },
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ModelScore"
+                      }
+                    }
+                  },
+                  "required": [
+                    "detection",
+                    "models"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "Several detections share that date, time and species, and `file_name` was not given. Answers nothing; lists the clips.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "file_names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Every clip that shares the date, time and species. An empty string is a detection with no clip."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "file_names"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such detection."
+          }
+        }
+      }
+    },
     "/detections/review": {
       "post": {
         "tags": [
@@ -6963,6 +7086,65 @@
         }
       }
     },
+    "/detections/export/model-scores": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export each classifier's own scores",
+        "description": "One row per (detection, classifier) as CSV (default) or JSON, for detections the analytics stand behind (a rejected detection is left out, as in the detections export). `Score` and `Bar` are empty for a classifier that had no class for the species or whose window failed, never 0. Scores are each classifier's own and are not comparable across classifiers. The detection is named by `Date`, `Time`, `Sci_Name` and `File_Name`, as in `/detections/export`; all four are needed, because two sources hearing one bird in one second share the first three. `File_Name` is empty for a detection with no clip.",
+        "operationId": "exportDetectionModelScores",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Format"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exported scores.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "model_scores": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DetectionModelScore"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "model_scores",
+                    "total"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "Result set too large (over 1,000,000 rows)."
+          }
+        }
+      }
+    },
     "/languages": {
       "get": {
         "tags": [
@@ -8704,6 +8886,14 @@
           "detected_at_utc": {
             "type": "integer",
             "description": "The instant, seconds since the Unix epoch. Absent on a row that names no point in time: a local time that never happened, or an unparseable date."
+          },
+          "model_id": {
+            "type": "string",
+            "description": "The classifier whose answer this row carries (a station can run several). Absent on a row written before it was recorded."
+          },
+          "model_agreement": {
+            "type": "integer",
+            "description": "How many classifiers cleared their own bar for this species in this chunk. Absent on a row written before it was recorded, which is not the same as 1: `1` says one classifier was asked and one answered. `/detections/models` lists what each classifier said."
           }
         },
         "required": [
@@ -9050,6 +9240,96 @@
           "overlap",
           "sf_thresh",
           "detections"
+        ]
+      },
+      "ModelScore": {
+        "type": "object",
+        "description": "What one classifier could say about one species in one chunk, on its own scale. Scores are not comparable across classifiers and nothing combines them. `score` and `bar` are present exactly when `state` is `heard` or `below_bar`; a classifier with no class for the species (`no_label`) has not scored it low, it has said nothing.",
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "examples": [
+              "birdnet-v3"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "heard",
+              "below_bar",
+              "no_label",
+              "failed"
+            ],
+            "description": "`heard`: scored at or above its own bar. `below_bar`: scored, did not clear it. `no_label`: has no class for this species. `failed`: its window failed."
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "bar": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "The bar `score` was judged against: that classifier's own threshold, else the station's."
+          },
+          "window_start_secs": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Where in the recording this classifier's window began."
+          },
+          "window_end_secs": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Where it ended. Classifiers' windows differ in length."
+          }
+        },
+        "required": [
+          "model_id",
+          "state"
+        ]
+      },
+      "DetectionModelScore": {
+        "description": "One classifier's answer with the detection it is about, as one flat object. `date`, `time`, `sci_name` and `file_name` name the detection as the detections export does; all four are needed, because two sources hearing one bird in one second share the first three.",
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": "string"
+              },
+              "sci_name": {
+                "type": "string"
+              },
+              "file_name": {
+                "type": "string",
+                "description": "The detection's clip; empty when it has none."
+              }
+            },
+            "required": [
+              "date",
+              "time",
+              "sci_name",
+              "file_name"
+            ]
+          },
+          {
+            "$ref": "#/components/schemas/ModelScore"
+          }
         ]
       }
     }

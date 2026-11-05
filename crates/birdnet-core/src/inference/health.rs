@@ -66,6 +66,12 @@ pub struct ModelHealth {
     pub last_success_at: Option<u64>,
     /// Why the most recent failed window failed; cleared by a good one.
     pub error_class: Option<ErrorClass>,
+    /// Microseconds the classifier spent inside `predict_chunk`, summed over
+    /// the windows it answered. Wall-clock time on this machine, not a
+    /// benchmark: it includes whatever else the board was doing.
+    pub answered_micros: u64,
+    /// How many windows `answered_micros` is the sum over.
+    pub timed_windows: u64,
 }
 
 impl ModelHealth {
@@ -84,6 +90,27 @@ impl ModelHealth {
         self.last_window_at = Some(now);
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         self.error_class = Some(class);
+    }
+
+    /// Add one answered window's inference time to the running total.
+    ///
+    /// Only windows that answered are timed: a window that errored stops early,
+    /// and averaging its few microseconds in would make a model that fails
+    /// often look fast.
+    pub fn record_inference_time(&mut self, took: std::time::Duration) {
+        let micros = u64::try_from(took.as_micros()).unwrap_or(u64::MAX);
+        self.answered_micros = self.answered_micros.saturating_add(micros);
+        self.timed_windows = self.timed_windows.saturating_add(1);
+    }
+
+    /// The mean time per answered window since the classifier was loaded, in
+    /// microseconds; `None` before it has answered one.
+    #[must_use]
+    pub const fn mean_inference_micros(&self) -> Option<u64> {
+        match self.answered_micros.checked_div(self.timed_windows) {
+            Some(mean) => Some(mean),
+            None => None,
+        }
     }
 
     /// Whether the classifier has failed enough windows in a row to say so.
@@ -155,5 +182,25 @@ mod tests {
     fn error_class_names_are_upstreams() {
         assert_eq!(ErrorClass::Inference.as_str(), "inference_error");
         assert_eq!(ErrorClass::NonFiniteOutput.as_str(), "non_finite_output");
+    }
+    #[test]
+    fn a_mean_window_time_exists_only_once_a_window_has_answered() {
+        use std::time::Duration;
+        let mut h = ModelHealth::default();
+        assert_eq!(h.mean_inference_micros(), None, "no window yet: no number");
+        h.record_inference_time(Duration::from_millis(120));
+        h.record_inference_time(Duration::from_millis(80));
+        assert_eq!(h.timed_windows, 2);
+        assert_eq!(h.mean_inference_micros(), Some(100_000));
+    }
+
+    #[test]
+    fn failing_a_window_neither_adds_to_the_time_nor_counts_as_timed() {
+        use std::time::Duration;
+        let mut h = ModelHealth::default();
+        h.record_inference_time(Duration::from_millis(100));
+        h.failed(ErrorClass::Inference, 5);
+        assert_eq!((h.answered_micros, h.timed_windows), (100_000, 1));
+        assert_eq!(h.windows, 1, "the failed window is still a window run");
     }
 }

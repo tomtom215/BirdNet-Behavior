@@ -107,6 +107,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         }
     }
 
@@ -237,6 +238,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         };
 
         let result = extractor.extract_detection(&source_path, &det);

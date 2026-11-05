@@ -21,8 +21,9 @@
 //! This module is the facade: it owns the shared [`Status`] / [`Check`] /
 //! [`Format`] types, the [`run_with_format`] orchestration, and the two
 //! filesystem helpers ([`writable`], [`tool_exists`]) several checks share.
-//! The checks live in fifteen submodules — `analytics`, `audio`, `clock`,
-//! `config`, `database`, `disk`, `embedding`, `environment`, `model`, `mqtt`, `offsite`,
+//! The checks live in sixteen submodules — `analytics`, `audio`, `clock`,
+//! `config`, `database`, `disk`, `embedding`, `environment`, `input_level` (read by
+//! `audio`, not a family of its own), `model`, `mqtt`, `offsite`,
 //! `paths`, `tls`, `watchdog`, plus `fix`, whose `repair` runs *before* the checks when
 //! `--fix` is given — and all report rendering (`text` / `json` / exit-code)
 //! lives in `render`.
@@ -54,6 +55,7 @@ mod disk;
 mod embedding;
 mod environment;
 mod fix;
+mod input_level;
 mod model;
 mod mqtt;
 mod offsite;

@@ -1,0 +1,645 @@
+v3_sci_name	v3_class	relation	confidence	perch_counterparts	independent_sources	agreeing_sources	record_ids
+Acanthis cabaret	Aves	perch_lumps_it	high	Acanthis flammea			eBird:lesred1; iNat:145301; iNat->531733; GBIF:6871058
+Acanthis hornemanni	Aves	perch_lumps_it	high	Acanthis flammea			eBird:hoared; iNat:145302; iNat->145300; GBIF:5231646; IOCxwalk-seq:34654..34656(3)
+Accipiter chionogaster	Aves	perch_lumps_it	high	Accipiter striatus			iNat:474206; GBIF:2480619; IOCxwalk-seq:8566..8567(2)
+Accipiter erythronemius	Aves	perch_lumps_it	high	Accipiter striatus			iNat:474208; GBIF:2480598; IOCxwalk-seq:8570..8571(2)
+Accipiter toussenelii	Aves	perch_lumps_it	low	Aerospiza tachiro			eBird:recgos1; iNat:144461; iNat->1578973; GBIF:2480625; IOCxwalk-seq:8429..8434(6)
+Accipiter ventralis	Aves	perch_lumps_it	high	Accipiter striatus			iNat:470125; GBIF:2480620; IOCxwalk-seq:8568..8569(2)
+Acrididae	Insecta	absent_from_perch	high				iNat:47649; GBIF:9394
+Acris	Amphibia	absent_from_perch	high				iNat:24229; GBIF:2427609
+Acrocephalus baeticatus	Aves	perch_lumps_it	high	Acrocephalus scirpaceus			eBird:afrwar1; iNat:144927; iNat->204455; GBIF:5231319; IOCxwalk-seq:26061..26072(7)
+Adenomera	Amphibia	absent_from_perch	high				iNat:134231; GBIF:2426180
+Aegithalos bonvaloti	Aves	perch_lumps_it	high	Aegithalos iouschistos			iNat:1065903; iNat->7279; GBIF:5845000; IOCxwalk-seq:25663..25667(4)
+Aegithalos sharpei	Aves	perch_lumps_it	high	Aegithalos iouschistos			iNat:629626; GBIF:5844994; IOCxwalk-seq:25666
+Aerodramus germani	Aves	perch_lumps_it	high	Aerodramus fuciphagus			eBird:gerswi1; iNat:144632; iNat->1051195; GBIF:7342328; IOCxwalk-seq:2446
+Aethopyga eximia	Aves	absent_from_perch	high				eBird:whfsun1; iNat:13415; GBIF:2484673; IOCxwalk-seq:32732
+Aethopyga jefferyi	Aves	perch_lumps_it	high	Aethopyga pulcherrima			eBird:mousun1; iNat:339880; iNat->1506272; GBIF:8145843; IOCxwalk-seq:32703
+Aglais io	Insecta	absent_from_perch	high				iNat:207977; GBIF:4535827
+Aglaothorax ovata	Insecta	same_species_other_name	medium	Aglaothorax ovatus	1	iNaturalist synonym	iNat:507592; iNat->1501031; GBIF:5976827
+Alaudala athensis	Aves	perch_lumps_it	high	Alaudala somalica			iNat:546384; GBIF:9124368; IOCxwalk-seq:24495
+Alcedo peninsulae	Aves	absent_from_perch	high				eBird:bubkin1; iNat:1435797; GBIF:10779995; IOCxwalk-seq:10627
+Allonemobius sparsalus	Insecta	absent_from_perch	low				iNat:1270650; GBIF:4298917
+Alophoixus bres	Aves	absent_from_perch	high				eBird:gycbul3; iNat:204459,14631,1288736; GBIF:2486198; IOCxwalk-seq:24705..24715(6)
+Alophoixus tephrogenys	Aves	absent_from_perch	high				eBird:gycbul2; iNat:1286879; GBIF:11036190; IOCxwalk-seq:24706..24708(3)
+Alouatta	Mammalia	absent_from_perch	high				iNat:43434; GBIF:2436647
+Amandava formosa	Aves	absent_from_perch	high				eBird:grnava1; iNat:1289372,73435; GBIF:2493696; IOCxwalk-seq:33670
+Amazona diadema	Aves	perch_lumps_it	high	Amazona autumnalis			eBird:relpar4; iNat:1650085; GBIF:2479628; IOCxwalk-seq:13289
+Amazona guatemalae	Aves	perch_lumps_it	high	Amazona farinosa			iNat:603025; iNat->605801; GBIF:9024774; IOCxwalk-seq:13329..13331(3)
+Amblycorypha bartrami	Insecta	absent_from_perch	high				iNat:355576; GBIF:1688363
+Amblycorypha carinata	Insecta	absent_from_perch	high				iNat:129384; GBIF:1688343
+Amblycorypha longinicta	Insecta	absent_from_perch	high				iNat:371385; GBIF:1688341
+Amblycorypha	Insecta	absent_from_perch	high				iNat:129358; GBIF:1688340
+Anas carolinensis	Aves	perch_lumps_it	high	Anas crecca			iNat:123676; GBIF:2498125; IOCxwalk-seq:451..452(2)
+Anaxipha delicatula	Insecta	absent_from_perch	medium				iNat:1563719,638953; GBIF:1719757
+Anaxipha imitator	Insecta	absent_from_perch	high				iNat:1270429; GBIF:1719571
+Anaxipha litarena	Insecta	absent_from_perch	medium				iNat:1563721,1028760; GBIF:1719569
+Anaxipha	Insecta	absent_from_perch	high				iNat:173168; GBIF:1719496
+Anaxyrus houstonensis	Amphibia	absent_from_perch	high				iNat:64979; GBIF:2422886
+Anaxyrus microscaphus	Amphibia	absent_from_perch	high				iNat:64982; GBIF:2422911
+Animalia	Animalia	absent_from_perch	high				iNat:1,1547415,1564826; GBIF:1
+Anthracothorax aurulentus	Aves	absent_from_perch	high				eBird:antman3; iNat:1428819; GBIF:7624890; IOCxwalk-seq:2853
+Anthus japonicus	Aves	absent_from_perch	high				eBird:sibpip1; iNat:1580267; GBIF:2490241; IOCxwalk-seq:34087
+Anthus lutescens	Aves	same_species_other_name	high	Anthus chii	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:yelpip2; iNat:13707; iNat->1506152; GBIF:2490248; IOCxwalk-seq:34129..34133(4)
+Anurolimnas fasciatus	Aves	same_species_other_name	high	Rufirallus fasciatus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:blbcra1; iNat:257; iNat->1583669; GBIF:2474493; IOCxwalk-seq:5982
+Aotus trivirgatus	Mammalia	absent_from_perch	high				iNat:43413; GBIF:5219590
+Aotus	Mammalia	absent_from_perch	high				iNat:141529,43412
+Apalis flavocincta	Aves	perch_lumps_it	high	Apalis flavida			iNat:719402; GBIF:11017895; IOCxwalk-seq:26798..26801(3)
+Apalis stronachi	Aves	absent_from_perch	high				eBird:karapa3; iNat:1586680; GBIF:2492701; IOCxwalk-seq:26863
+Ara glaucogularis	Aves	absent_from_perch	high				eBird:bltmac1; iNat:19024; GBIF:5959235; IOCxwalk-seq:13526
+Psittacara rubritorquis	Aves	perch_lumps_it	high	Psittacara holochlorus			iNat:448166; GBIF:9177667; IOCxwalk-seq:13561
+Arborophila rubrirostris	Aves	absent_from_perch	high				eBird:rebpar3; iNat:789; GBIF:2473646; IOCxwalk-seq:1030
+Arctocephalus pusillus pusillus	Mammalia	subspecies_or_form_only	medium	Arctocephalus pusillus			iNat:346947; GBIF:7059319
+Arremon nigriceps	Aves	absent_from_perch	high				eBird:bkcspa2; iNat:1586779; GBIF:8156843; IOCxwalk-seq:35287
+Asthenes arequipae	Aves	perch_lumps_it	high	Asthenes dorbignyi			eBird:crbcan4; iNat:1651837; GBIF:6100760; IOCxwalk-seq:15337
+Asthenes huancavelicae	Aves	absent_from_perch	low				eBird:patcan1; iNat:1651830,1246830; GBIF:6100759; IOCxwalk-seq:15333..15336(3)
+Asthenes sclateri	Aves	perch_lumps_it	high	Asthenes wyatti			eBird:puncan1; iNat:11340; iNat->11296; GBIF:5230060; IOCxwalk-seq:15370..15375(6)
+Atlanticus americanus	Insecta	absent_from_perch	high				iNat:501410; GBIF:1685319
+Atlanticus dorsalis	Insecta	absent_from_perch	high				iNat:559999; GBIF:1685339
+Atlanticus pachymerus	Insecta	absent_from_perch	high				iNat:450843; GBIF:1685326
+Atlapetes blancae	Aves	absent_from_perch	high				eBird:antbrf1; iNat:72547; GBIF:5788834; IOCxwalk-seq:35699
+Atlapetes meridae	Aves	perch_lumps_it	high	Atlapetes albofrenatus			iNat:718037; GBIF:8811941; IOCxwalk-seq:35662
+Atlapetes nigrifrons	Aves	perch_lumps_it	high	Atlapetes latinuchus			eBird:yebbru1; iNat:1651673; GBIF:8090315; IOCxwalk-seq:35710
+Atlapetes taczanowskii	Aves	absent_from_perch	high				eBird:slabru2; iNat:1586698; GBIF:7939952; IOCxwalk-seq:35694
+Aulacorhynchus atrogularis	Aves	perch_lumps_it	high	Aulacorhynchus albivitta			iNat:570357; GBIF:5844042; IOCxwalk-seq:11273..11276(4)
+Aulacorhynchus caeruleogularis	Aves	perch_lumps_it	high	Aulacorhynchus prasinus			iNat:362450; iNat->362470; GBIF:5229024; IOCxwalk-seq:11260..11264(3)
+Aulacorhynchus wagleri	Aves	perch_lumps_it	high	Aulacorhynchus prasinus			iNat:570349; GBIF:5229032; IOCxwalk-seq:11253
+Tadarida australis	Mammalia	absent_from_perch	medium				iNat:41297; iNat->765537; GBIF:2433013
+Babina adenopleura	Amphibia	perch_splits_it	medium	Nidirana adenopleura			iNat:65073; iNat->717558,1176940; GBIF:5217814
+Bairdiella chrysoura	Actinopterygii	absent_from_perch	high				iNat:179512; GBIF:2400214
+Balaenoptera acutorostrata	Mammalia	absent_from_perch	high				iNat:41550; GBIF:2440728
+Balaenoptera brydei/edeni	Mammalia	absent_from_perch	medium				GBIF:2440715
+Balaenoptera musculus	Mammalia	absent_from_perch	high				iNat:41553; GBIF:2440735
+Belocephalus davisi	Insecta	absent_from_perch	high				iNat:475520; GBIF:1689289
+Belocephalus hebardi	Insecta	absent_from_perch	low				GBIF:1689290
+Belocephalus sabalis	Insecta	absent_from_perch	high				iNat:849514; GBIF:1689284
+Belocephalus sleighti	Insecta	absent_from_perch	high				iNat:48116; GBIF:1689286
+Metrioptera roeselii	Insecta	same_species_other_name	medium	Roeseliana roeselii	1	iNaturalist synonym	iNat:225008; iNat->458944; GBIF:4298895
+Hypsiboas albomarginatus	Amphibia	same_species_other_name	high	Boana albomarginata	2	iNaturalist synonym; GBIF synonym	iNat:65747; iNat->555074; GBIF:2428738
+Hypsiboas albopunctatus	Amphibia	same_species_other_name	high	Boana albopunctata	2	iNaturalist synonym; GBIF synonym	iNat:65749; iNat->555076; GBIF:2428866
+Hypsiboas bischoffi	Amphibia	same_species_other_name	high	Boana bischoffi	2	iNaturalist synonym; GBIF synonym	iNat:65757; iNat->555085; GBIF:2428758
+Hypsiboas boans	Amphibia	same_species_other_name	high	Boana boans	2	iNaturalist synonym; GBIF synonym	iNat:65758; iNat->555086; GBIF:2428727
+Hypsiboas calcaratus	Amphibia	same_species_other_name	high	Boana calcarata	2	iNaturalist synonym; GBIF synonym	iNat:65761; iNat->555091; GBIF:2428769
+Hypsiboas cinerascens	Amphibia	same_species_other_name	high	Boana cinerascens	2	iNaturalist synonym; GBIF synonym	iNat:65763; iNat->555094; GBIF:2428712
+Hypsiboas crepitans	Amphibia	perch_splits_it	medium	Boana crepitans			iNat:65766; iNat->555164,555738; GBIF:2428781
+Hypsiboas faber	Amphibia	same_species_other_name	high	Boana faber	2	iNaturalist synonym; GBIF synonym	iNat:65772; iNat->555104; GBIF:2428760
+Hypsiboas fasciatus	Amphibia	same_species_other_name	high	Boana fasciata	2	iNaturalist synonym; GBIF synonym	iNat:65773; iNat->555105; GBIF:2428730
+Hypsiboas geographicus	Amphibia	perch_splits_it	medium	Boana geographica			iNat:65776; iNat->555107,1273328; GBIF:11059133
+Hypsiboas lanciformis	Amphibia	same_species_other_name	high	Boana lanciformis	2	iNaturalist synonym; GBIF synonym	iNat:65785; iNat->555117; GBIF:2428878
+Hypsiboas multifasciatus	Amphibia	same_species_other_name	high	Boana multifasciata	2	iNaturalist synonym; GBIF synonym	iNat:65796; iNat->555129; GBIF:2428842
+Hypsiboas pardalis	Amphibia	same_species_other_name	high	Boana pardalis	2	iNaturalist synonym; GBIF synonym	iNat:65801; iNat->555134; GBIF:2428723
+Hypsiboas polytaenius	Amphibia	same_species_other_name	high	Boana polytaenia	2	iNaturalist synonym; GBIF synonym	iNat:65805; iNat->555139; GBIF:2428793
+Hypsiboas pulchellus	Amphibia	same_species_other_name	high	Boana pulchella	2	iNaturalist synonym; GBIF synonym	iNat:134943,65809; iNat->555143; GBIF:2428800
+Hypsiboas punctatus	Amphibia	same_species_other_name	high	Boana punctata	2	iNaturalist synonym; GBIF synonym	iNat:65811; iNat->555145; GBIF:2428746
+Hypsiboas raniceps	Amphibia	same_species_other_name	high	Boana raniceps	2	iNaturalist synonym; GBIF synonym	iNat:65812,134944; iNat->555146; GBIF:2428716
+Hypsiboas riojanus	Amphibia	same_species_other_name	high	Boana riojana	2	iNaturalist synonym; GBIF synonym	iNat:134945,65814; iNat->555148; GBIF:2428844
+Hypsiboas rosenbergi	Amphibia	same_species_other_name	high	Boana rosenbergi	2	iNaturalist synonym; GBIF synonym	iNat:65817; iNat->555150; GBIF:2428725
+Hypsiboas rufitelus	Amphibia	same_species_other_name	high	Boana rufitela	2	iNaturalist synonym; GBIF synonym	iNat:65819; iNat->555152; GBIF:2428852
+Bos taurus (Domestic type)	Mammalia	subspecies_or_form_only	medium	Bos taurus			GBIF:2441022
+Brachypteryx poliogyna	Aves	absent_from_perch	high				eBird:whbsho7; iNat:1436812; GBIF:8725424; IOCxwalk-seq:31560..31568(8)
+Brachypteryx saturata	Aves	absent_from_perch	high				eBird:whbsho9; iNat:1436814; GBIF:10799048; IOCxwalk-seq:31571
+Brachyramphus brevirostris	Aves	absent_from_perch	high				eBird:kitmur; iNat:4533; GBIF:5229286; IOCxwalk-seq:7225
+Breviceps sylvestris	Amphibia	absent_from_perch	high				iNat:24990; GBIF:5218080
+Bubo coromandus	Aves	same_species_other_name	high	Ketupa coromanda	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:dueowl1; iNat:20041; iNat->1441747; GBIF:5959156; IOCxwalk-seq:9570..9572(3)
+Bubo nipalensis	Aves	same_species_other_name	high	Ketupa nipalensis	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:sbeowl1; iNat:20037; iNat->1441750; GBIF:5959136; IOCxwalk-seq:9567..9569(3)
+Bubo sumatranus	Aves	same_species_other_name	high	Ketupa sumatrana	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:baeowl1; iNat:20088; iNat->1441879; GBIF:5959152; IOCxwalk-seq:9563..9566(4)
+Bubo vosseleri	Aves	perch_lumps_it	high	Ketupa poensis			eBird:useowl1; iNat:20079; iNat->1423907; GBIF:5959114; IOCxwalk-seq:9541
+Bufo	Amphibia	absent_from_perch	high				iNat:21360; GBIF:7580221
+Bufonidae	Amphibia	absent_from_perch	high				iNat:21359; GBIF:6727
+Bunopithecus hoolock	Mammalia	same_species_other_name	low	Hoolock hoolock	1	iNaturalist epithet match	iNat:74439; GBIF:4267262
+Burhinus bistriatus	Aves	same_species_other_name	high	Hesperoburhinus bistriatus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:dstkne; iNat:4924; iNat->1505518; GBIF:2482101; IOCxwalk-seq:6349..6353(5)
+Burhinus superciliaris	Aves	same_species_other_name	high	Hesperoburhinus superciliaris	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:petkne1; iNat:4927; iNat->1505526; GBIF:2482096; IOCxwalk-seq:6354
+Cacicus leucoramphus	Aves	perch_lumps_it	high	Cacicus chrysonotus			iNat:720155; GBIF:5845538; IOCxwalk-seq:35861..35863(3)
+Cacicus microrhynchus	Aves	perch_lumps_it	high	Cacicus uropygialis			iNat:423609; iNat->533552; GBIF:6100777; IOCxwalk-seq:35855..35858(3)
+Cacomantis addendus	Aves	absent_from_perch	high				eBird:brucuc13; iNat:1583424; GBIF:11798906; IOCxwalk-seq:4275
+Cacomantis virescens	Aves	absent_from_perch	high				eBird:brucuc5; iNat:1583423; GBIF:8215527; IOCxwalk-seq:4260
+Calendulauda alopex	Aves	perch_lumps_it	high	Calendulauda africanoides			eBird:foxlar1; iNat:144766; iNat->144765; GBIF:7340939; IOCxwalk-seq:24099..24103(3)
+Callicebus discolor	Mammalia	same_species_other_name	high	Plecturocebus discolor	2	iNaturalist synonym; GBIF synonym	iNat:43677; iNat->738187; GBIF:9134962
+Callicebus donacophilus	Mammalia	absent_from_perch	medium				iNat:43671; iNat->738182; GBIF:2436399
+Callicebus moloch	Mammalia	same_species_other_name	high	Plecturocebus moloch	2	iNaturalist synonym; GBIF synonym	iNat:43669; iNat->738189; GBIF:2436388
+Callicebus oenanthe	Mammalia	same_species_other_name	high	Plecturocebus oenanthe	2	iNaturalist synonym; GBIF synonym	iNat:43680; iNat->738178; GBIF:2436381
+Callicebus	Mammalia	absent_from_perch	high				iNat:43655; GBIF:2436376
+Calliope obscura	Aves	absent_from_perch	high				eBird:btbrob1; iNat:145063; GBIF:6090086; IOCxwalk-seq:31480
+Camaroptera brevicaudata	Aves	perch_lumps_it	high	Camaroptera brachyura			iNat:349344; iNat->133712; GBIF:5231298; IOCxwalk-seq:26881..26892(12)
+Campethera cailliautii	Aves	perch_lumps_it	medium	Campethera maculosa			eBird:grbwoo2; iNat:17610; iNat->17609; GBIF:2478189; IOCxwalk-seq:11933..11940(6)
+Campylorhamphus probatus	Aves	absent_from_perch	high				eBird:tapscy2; iNat:1507406; GBIF:10865636; IOCxwalk-seq:14836..14839(3)
+Canis anthus	Mammalia	uncertain	low	Canis lupaster			iNat:546402; iNat->825289; GBIF:8538199
+Canis lupus (Domestic type)	Mammalia	subspecies_or_form_only	medium	Canis lupus			GBIF:5219173
+Caprimulgus griseatus	Aves	absent_from_perch	high				eBird:kaynig1; iNat:1505288; GBIF:8880490; IOCxwalk-seq:2111..2113(3)
+Caprimulgus nigriscapularis	Aves	perch_lumps_it	high	Caprimulgus pectoralis			eBird:bksnig1; iNat:19491; iNat->1424160; GBIF:2496904; IOCxwalk-seq:2065
+Caprimulgus ritae	Aves	absent_from_perch	high				eBird:timnig1; iNat:1583636; GBIF:2496826; IOCxwalk-seq:2054
+Carduelis caniceps	Aves	absent_from_perch	high				eBird:eurgol2; iNat:1584584; GBIF:10823562; IOCxwalk-seq:34711..34715(5)
+Orocharis vaginalis	Insecta	absent_from_perch	low				GBIF:1721788
+Cebidae	Mammalia	absent_from_perch	high				iNat:43399; GBIF:9621
+Cebus apella	Mammalia	same_species_other_name	high	Sapajus apella	2	iNaturalist synonym; GBIF synonym	iNat:43431; iNat->496700; GBIF:2436639
+Cebus nigritus	Mammalia	same_species_other_name	high	Sapajus nigritus	2	iNaturalist synonym; GBIF synonym	iNat:74158; iNat->410834; GBIF:7261992
+Cecropis melanocrissus	Aves	absent_from_perch	high				eBird:rerswa12; iNat:1584771; GBIF:6085729; IOCxwalk-seq:25312..25318(5)
+Celebenna thomarosa	Insecta	absent_from_perch	low				GBIF:8319922
+Celeus grammicus	Aves	perch_lumps_it	high	Celeus undatus			eBird:scbwoo5; iNat:18076; iNat->18063; GBIF:5228935; IOCxwalk-seq:12470..12475(6)
+Centrolenidae	Amphibia	absent_from_perch	high				iNat:21218; GBIF:6728
+Cercocebus galeritus	Mammalia	absent_from_perch	high				iNat:43468; GBIF:2436545
+Erythropygia coryphoeus	Aves	uncertain	low				iNat:1079789; GBIF:6100854
+Certhilauda brevirostris	Aves	perch_lumps_it	high	Certhilauda curvirostris			eBird:agular1; iNat:144773; iNat->1423460; GBIF:4845858; IOCxwalk-seq:24004
+Cetacea	Mammalia	absent_from_perch	high				iNat:152871,1643155; GBIF:733
+Ceyx rufidorsa	Aves	absent_from_perch	high				eBird:rubkin1; iNat:72646,850881; GBIF:5228389; IOCxwalk-seq:10663..10668(6)
+Chaetocercus jourdanii	Aves	absent_from_perch	high				eBird:ruswoo1; iNat:6177; GBIF:5228579; IOCxwalk-seq:3291..3294(4)
+Chalinolobus tuberculatus	Mammalia	absent_from_perch	high				iNat:40550; GBIF:2432286
+Charadrius alticola	Aves	same_species_other_name	high	Anarhynchus alticola	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:punplo1; iNat:4822; iNat->1505665; GBIF:2480324; IOCxwalk-seq:6575
+Charadrius bicinctus	Aves	same_species_other_name	high	Anarhynchus bicinctus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:dobplo1; iNat:4826; iNat->1505639; GBIF:2480294; IOCxwalk-seq:6559..6561(3)
+Charadrius collaris	Aves	same_species_other_name	high	Anarhynchus collaris	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:colplo1; iNat:4807; iNat->1505645; GBIF:2480296; IOCxwalk-seq:6573
+Charadrius dubius	Aves	same_species_other_name	high	Thinornis dubius	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:lirplo; iNat:4811; iNat->1580336; GBIF:7937336; IOCxwalk-seq:6488..6491(4)
+Charadrius falklandicus	Aves	same_species_other_name	high	Anarhynchus falklandicus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:twbplo1; iNat:4816; iNat->1505666; GBIF:2480287; IOCxwalk-seq:6576
+Charadrius forbesi	Aves	same_species_other_name	high	Thinornis forbesi	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:forplo1; iNat:4824; iNat->1580334; GBIF:2480315; IOCxwalk-seq:6478
+Charadrius javanicus	Aves	same_species_other_name	high	Anarhynchus javanicus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:javplo1; iNat:4827; iNat->1505656; GBIF:2480290; IOCxwalk-seq:6600
+Charadrius marginatus	Aves	same_species_other_name	high	Anarhynchus marginatus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:whfplo1; iNat:4806; iNat->1505776; GBIF:2480288; IOCxwalk-seq:6592..6599(6)
+Elseyornis melanops	Aves	same_species_other_name	high	Thinornis melanops	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:blfdot1; iNat:4914; iNat->1580333; GBIF:2480342; IOCxwalk-seq:6484
+Charadrius mongolus	Aves	perch_splits_it	high	Anarhynchus mongolus; Anarhynchus atrifrons			eBird:lesplo; iNat:4785; iNat->1505780,1505781; GBIF:9722670; IOCxwalk-seq:6549..6554(6)
+Charadrius montanus	Aves	same_species_other_name	high	Anarhynchus montanus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:mouplo; iNat:4804; iNat->1505648; GBIF:2480292; IOCxwalk-seq:6574
+Charadrius nivosus	Aves	same_species_other_name	high	Anarhynchus nivosus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:snoplo5; iNat:144485; iNat->1505663; GBIF:6065879; IOCxwalk-seq:6584..6587(3)
+Charadrius pallidus	Aves	same_species_other_name	high	Anarhynchus pallidus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:chbplo1; iNat:4819; iNat->1505774; GBIF:2480289; IOCxwalk-seq:6588..6590(3)
+Charadrius pecuarius	Aves	same_species_other_name	high	Anarhynchus pecuarius	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:kitplo1; iNat:4828; iNat->1505668; GBIF:2480317; IOCxwalk-seq:6578..6580(3)
+Charadrius peronii	Aves	same_species_other_name	high	Anarhynchus peronii	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:malplo1; iNat:4818; iNat->1505775; GBIF:2480306; IOCxwalk-seq:6591
+Charadrius placidus	Aves	same_species_other_name	high	Thinornis placidus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:lobplo1; iNat:4825; iNat->1580337; GBIF:2480322; IOCxwalk-seq:6492
+Charadrius ruficapillus	Aves	same_species_other_name	high	Anarhynchus ruficapillus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:recplo1; iNat:4803; iNat->1505662; GBIF:2480307; IOCxwalk-seq:6582
+Charadrius thoracicus	Aves	same_species_other_name	high	Anarhynchus thoracicus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:madplo1; iNat:4823; iNat->1505667; GBIF:2480293; IOCxwalk-seq:6577
+Charadrius tricollaris	Aves	same_species_other_name	high	Thinornis tricollaris	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:thbplo1; iNat:4805; iNat->1580335; GBIF:2480325; IOCxwalk-seq:6479..6483(4)
+Charadrius veredus	Aves	same_species_other_name	high	Anarhynchus veredus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:oriplo1; iNat:4810; iNat->1505627; GBIF:2480309; IOCxwalk-seq:6547
+Charadrius wilsonia	Aves	same_species_other_name	high	Anarhynchus wilsonia	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:wilplo; iNat:4795; iNat->1505633; GBIF:2480302; IOCxwalk-seq:6567..6572(6)
+Charmosynoides margarethae	Aves	same_species_other_name	high	Vini margarethae	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:duclor1; iNat:1289571; iNat->1583077; GBIF:11180458; IOCxwalk-seq:13977
+Chiasmocleis	Amphibia	absent_from_perch	high				iNat:25056; GBIF:2421909
+Chlorophonia flavifrons	Aves	absent_from_perch	high				eBird:anteup4; iNat:1506246; GBIF:12320276; IOCxwalk-seq:34800
+Chloropsis lazulina	Aves	perch_lumps_it	high	Chloropsis hardwickii			iNat:721029; GBIF:10928496; IOCxwalk-seq:32074..32076(3)
+Chorthippus bornhalmi	Insecta	perch_lumps_it	medium	Chorthippus maritimus			iNat:428636; iNat->371317; GBIF:1708367
+Cicada	Insecta	absent_from_perch	high				iNat:205175; GBIF:1682542
+Cinnyris aurora	Aves	absent_from_perch	high				eBird:olbsun6; iNat:1505010; GBIF:6087249; IOCxwalk-seq:32641
+Cinnyris clementiae	Aves	absent_from_perch	high				eBird:olbsun1; iNat:1505011; GBIF:6087249; IOCxwalk-seq:32654..32657(4)
+Cinnyris hellmayri	Aves	absent_from_perch	high				eBird:shisun4; iNat:1580404; GBIF:11001932; IOCxwalk-seq:32588..32590(3)
+Cinnyris melanogastrus	Aves	absent_from_perch	high				eBird:beasun3; iNat:1578607; GBIF:7828520; IOCxwalk-seq:32561
+Cisticola emini	Aves	perch_lumps_it	high	Cisticola aberrans			iNat:721308; GBIF:2492801; IOCxwalk-seq:26384
+Cochoa azurea	Aves	absent_from_perch	high				eBird:javcoc1; iNat:12922; GBIF:2492555; IOCxwalk-seq:30223..30225(3)
+Colaptes aeruginosus	Aves	perch_lumps_it	high	Colaptes rubiginosus			iNat:718213; GBIF:6101203; IOCxwalk-seq:12387..12388(2)
+Colobus	Mammalia	absent_from_perch	high				iNat:43524; GBIF:1
+Colostethus fraterdanieli	Amphibia	perch_splits_it	medium	Leucostethus jota; Leucostethus fraterdanieli			iNat:21013; iNat->787624,787625; GBIF:2428968
+Colostethus	Amphibia	absent_from_perch	high				iNat:20983; GBIF:2426198
+Conocephalus discolor	Insecta	same_species_other_name	medium	Conocephalus fuscus	2	iNaturalist synonym; GBIF synonym	iNat:118889; iNat->466317; GBIF:1683073
+Conocephalus nigropleuroides	Insecta	absent_from_perch	high				iNat:1399838; GBIF:5095768
+Conocephalus spartinae	Insecta	absent_from_perch	high				iNat:203448; GBIF:5095907
+Conopophaga snethlageae	Aves	absent_from_perch	high				eBird:chbgna3; iNat:1444299; GBIF:8764987; IOCxwalk-seq:16689..16691(3)
+Copsychus leggei	Aves	absent_from_perch	high				eBird:whrsha5; iNat:1584560; GBIF:2492674; IOCxwalk-seq:30945
+Coracina guillemardi	Aves	absent_from_perch	high				eBird:babcuc24; iNat:1588676; GBIF:2482359; IOCxwalk-seq:20683
+Coracina larutensis	Aves	absent_from_perch	high				eBird:larcuc3; iNat:1586160; GBIF:2482359; IOCxwalk-seq:20696
+Corvus celebensis	Mammalia	absent_from_perch	high				eBird:slbcro12; iNat:1580284; GBIF:5787117; IOCxwalk-seq:23040..23042(3)
+Corvus culminatus	Aves	perch_lumps_it	high	Corvus macrorhynchos			iNat:512241; GBIF:6100959; IOCxwalk-seq:23111..23112(2)
+Corvus hawaiiensis	Aves	absent_from_perch	high				eBird:hawcro; iNat:8015; GBIF:2482517; IOCxwalk-seq:23087
+Corvus levaillantii	Aves	perch_lumps_it	high	Corvus macrorhynchos			iNat:98523; iNat->512240; GBIF:2482512; IOCxwalk-seq:23109..23110(2)
+Corvus sierramadrensis	Aves	absent_from_perch	high				eBird:slbcro5; iNat:1580282; GBIF:2482468; IOCxwalk-seq:23045
+Corypha kabalii	Aves	absent_from_perch	high				eBird:plalar1; iNat:1572852; IOCxwalk-seq:24242..24245(4)
+Cossypha ansorgei	Aves	same_species_other_name	medium	Xenocopsychus ansorgei	1	IOC/Clements cross-reference	GBIF:2492580; IOCxwalk-seq:31394
+Coua olivaceiceps	Aves	absent_from_perch	high				eBird:reccou3; iNat:1583319; GBIF:7843012; IOCxwalk-seq:4011
+Laniellus albonotatus	Aves	absent_from_perch	high				eBird:spocro1; iNat:1289430; GBIF:10672637; IOCxwalk-seq:28334
+Laniellus langbianis	Aves	absent_from_perch	high				eBird:gyccro1; iNat:1289431; GBIF:10842921; IOCxwalk-seq:28333
+Crotalus molossus	Reptilia	absent_from_perch	high				iNat:515948,30731,320751; GBIF:2444473
+Culicidae	Insecta	absent_from_perch	high				iNat:52134; GBIF:3346
+Curruca althaea	Aves	perch_lumps_it	high	Curruca curruca			iNat:1289981; GBIF:7988924; IOCxwalk-seq:27101
+Curruca minula	Aves	perch_lumps_it	high	Curruca curruca			iNat:1289983; GBIF:10731929; IOCxwalk-seq:27104
+Cyanocorax luxuosus	Aves	perch_lumps_it	high	Cyanocorax yncas			iNat:509330; GBIF:6100960; IOCxwalk-seq:22736..22744(8)
+Cyanoderma ambiguum	Aves	perch_lumps_it	high	Cyanoderma rufifrons			eBird:bucbab1; iNat:339785; iNat->339786; GBIF:7506618; IOCxwalk-seq:27843..27847(5)
+Cyclopsitta gulielmitertii	Aves	perch_splits_it	medium	Nannopsittacus gulielmitertii			eBird:obfpar1,orbfip2; iNat:19274; iNat->1584081,1584076,1584080; GBIF:2480148; IOCxwalk-seq:14111..14121(8)
+Cycloptilum exsanguis	Insecta	absent_from_perch	high				iNat:1204510; GBIF:1724170
+Cycloptilum irregularis	Insecta	absent_from_perch	high				iNat:98846; GBIF:1724158
+Cycloptilum kelainopum	Insecta	absent_from_perch	high				iNat:1204183; GBIF:1724185
+Cycloptilum slossoni	Insecta	absent_from_perch	medium				iNat:1204181,746461; GBIF:1724155
+Cycloptilum squamosum	Insecta	absent_from_perch	medium				iNat:1204509,1204512; GBIF:1724177
+Cycloptilum tardum	Insecta	absent_from_perch	high				iNat:1204517; GBIF:1724190
+Cycloptilum velox	Insecta	absent_from_perch	high				iNat:1204518; GBIF:1724153
+Cycloptilum	Insecta	absent_from_perch	high				iNat:87780; GBIF:1724147
+Cynoscion nebulosus	Actinopterygii	absent_from_perch	high				iNat:179620; GBIF:2400015
+Cynoscion regalis	Actinopterygii	absent_from_perch	high				iNat:154500; GBIF:2399985
+Cyrtoxipha confusa	Insecta	absent_from_perch	high				iNat:1432994; GBIF:1718567
+Cyrtoxipha	Insecta	absent_from_perch	high				iNat:324894; GBIF:7955770
+Dacnis egregia	Aves	perch_lumps_it	high	Dacnis lineata			eBird:bkfdac1; iNat:1651310,418794; GBIF:6100781; IOCxwalk-seq:36885..36887(3)
+Deconychura typica	Aves	absent_from_perch	high				eBird:lotwoo3; iNat:1586658; GBIF:10760902; IOCxwalk-seq:14559..14562(4)
+Delphinidae	Mammalia	absent_from_perch	high				iNat:41479; GBIF:5314
+Delphinus delphis	Mammalia	absent_from_perch	high				iNat:41526,1120698; GBIF:8324617
+Dendrocitta occipitalis	Aves	absent_from_perch	high				eBird:sumtre1; iNat:578371,8307; GBIF:2482453; IOCxwalk-seq:22945..22948(3)
+Dryobates pernyii	Aves	absent_from_perch	high				eBird:crbwoo7; iNat:1505421; GBIF:11077296; IOCxwalk-seq:12135..12138(4)
+Dendropsophus bokermanni	Amphibia	absent_from_perch	high				iNat:65337; GBIF:2428426
+Dendropsophus carnifex	Amphibia	absent_from_perch	high				iNat:65341; GBIF:2428500
+Dendropsophus labialis	Amphibia	same_species_other_name	medium	Dendropsophus molitor	2	iNaturalist synonym; GBIF synonym	iNat:65363,555168; iNat->1595931; GBIF:2428514
+Dendropsophus parviceps	Amphibia	absent_from_perch	high				iNat:65384; GBIF:2428495
+Dendropsophus phlebodes	Amphibia	absent_from_perch	high				iNat:65387; GBIF:2428571
+Dendropsophus	Amphibia	absent_from_perch	high				iNat:64765; GBIF:2428387
+Desmodus rotundus	Mammalia	absent_from_perch	high				iNat:41168; GBIF:2433298
+Dicaeum agile	Aves	same_species_other_name	high	Pachyglossa agilis	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:thbflo1; iNat:13392; iNat->1586473; GBIF:2484691; IOCxwalk-seq:32105..32118(13)
+Dicaeum cambodianum	Aves	absent_from_perch	high				eBird:fibflo3; iNat:1506961; GBIF:10997162; IOCxwalk-seq:32253
+Dicaeum chrysorrheum	Aves	same_species_other_name	high	Pachyglossa chrysorrhea	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:yevflo1; iNat:13400; iNat->1586470; GBIF:2484696; IOCxwalk-seq:32097..32099(3)
+Dicaeum melanozanthum	Aves	same_species_other_name	high	Pachyglossa melanozantha	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:yebflo1; iNat:979691; iNat->1586428; GBIF:7666175; IOCxwalk-seq:32100
+Dicaeum proprium	Aves	same_species_other_name	high	Pachyglossa propria	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:whiflo1; iNat:13407; iNat->1586427; GBIF:2484695; IOCxwalk-seq:32096
+Dicrurus atactus	Aves	perch_lumps_it	high	Dicrurus modestus			eBird:vemdro5; iNat:979693; iNat->1505546; GBIF:2493960
+Dicrurus densus	Aves	absent_from_perch	high				eBird:waldro1; iNat:8274; GBIF:2493981; IOCxwalk-seq:21865..21877(7)
+Dicrurus divaricatus	Aves	perch_lumps_it	high	Dicrurus adsimilis			eBird:fotdro4; iNat:980058; iNat->8268,979692,1505546; GBIF:2493960
+Dicrurus occidentalis	Aves	perch_lumps_it	high	Dicrurus sharpei			eBird:wstdro1; iNat:980196; iNat->1509112; GBIF:10737698
+Dicrurus striatus	Aves	absent_from_perch	high				eBird:hacdro3; iNat:1507763; GBIF:10811537; IOCxwalk-seq:21862..21864(3)
+Dicrurus sumatranus	Aves	absent_from_perch	high				eBird:sumdro1; iNat:8285; GBIF:2493962; IOCxwalk-seq:21807..21835(3)
+Dryophytes andersonii	Amphibia	absent_from_perch	high				iNat:1668924,517460; GBIF:10770209
+Dryophytes chrysoscelis x femoralis	Amphibia	absent_from_perch	medium				
+Dryophytes cinerea x gratiosa	Amphibia	absent_from_perch	medium				
+Dryophytes eximius	Amphibia	absent_from_perch	high				iNat:1668952,547339; GBIF:10867288
+Edolisoma erythropygium	Aves	absent_from_perch	high				eBird:cemcic1; iNat:1585845; GBIF:4846833; IOCxwalk-seq:20810..20815(5)
+Egretta dimorpha	Aves	perch_lumps_it	high	Egretta garzetta			iNat:467459; iNat->467749; GBIF:2480879; IOCxwalk-seq:7977
+Eidolon helvum	Mammalia	absent_from_perch	high				iNat:40827; GBIF:2432851
+Elachistocleis	Amphibia	absent_from_perch	high				iNat:25086; GBIF:2421943
+Elaenia chilensis	Aves	perch_lumps_it	high	Elaenia albiceps			iNat:568439; GBIF:7488808; IOCxwalk-seq:16957..16958(2)
+Eleutherodactylidae	Amphibia	absent_from_perch	high				iNat:64721; GBIF:3082
+Eleutherodactylus gossei	Amphibia	absent_from_perch	high				iNat:22375; GBIF:2424138
+Eleutherodactylus inoptatus	Amphibia	absent_from_perch	high				iNat:22302; GBIF:2424256
+Eleutherodactylus	Amphibia	absent_from_perch	high				iNat:22086; GBIF:2424035
+Empidonax occidentalis	Aves	perch_lumps_it	high	Empidonax difficilis			eBird:corfly; iNat:16625; iNat->16598; GBIF:2482805; IOCxwalk-seq:17752..17754(3)
+Epipedobates boulengeri	Amphibia	absent_from_perch	high				iNat:21165; GBIF:2429053
+Epomophorus gambianus	Mammalia	absent_from_perch	high				iNat:40812; GBIF:2432790
+Epomophorus wahlbergi	Mammalia	absent_from_perch	high				iNat:40811; GBIF:2432787
+Erethizon dorsata	Mammalia	same_species_other_name	medium	Erethizon dorsatum	1	iNaturalist synonym	iNat:324204; iNat->44026; GBIF:6066824
+Larvivora tanensis	Aves	absent_from_perch	high				eBird:japrob3; iNat:1424148; GBIF:11063548; IOCxwalk-seq:31586
+Eschrichtius robustus	Mammalia	absent_from_perch	high				iNat:41478; GBIF:2440704
+Eulemur rubriventer	Mammalia	absent_from_perch	high				iNat:43612; GBIF:2436421
+Eumops floridanus	Mammalia	absent_from_perch	high				iNat:74328; GBIF:5787307
+Eunemobius confusus	Insecta	absent_from_perch	high				iNat:501404; GBIF:1721598
+Eunemobius melodius	Insecta	absent_from_perch	high				iNat:501405; GBIF:1721569
+Eupherusa poliocerca	Aves	absent_from_perch	high				eBird:whthum1; iNat:5659; GBIF:2476327; IOCxwalk-seq:3502
+Eupsophus roseus	Amphibia	absent_from_perch	high				iNat:23112; GBIF:5217383
+Euscarthmus fulviceps	Aves	absent_from_perch	high				eBird:tacpyt2; iNat:1286937; GBIF:8896866; IOCxwalk-seq:17139
+Tamias sibiricus	Mammalia	same_species_other_name	medium	Eutamias sibiricus	1	iNaturalist synonym	iNat:46212; iNat->520585; GBIF:2437450
+Fagus grandifolia	Rosids	absent_from_perch	high				iNat:49202; GBIF:2882274
+Falcunculus whitei	Aves	absent_from_perch	high				eBird:cresht3; iNat:1435880; GBIF:4846563; IOCxwalk-seq:20983
+Felis catus (Domestic type)	Mammalia	subspecies_or_form_only	medium	Felis catus			GBIF:2435035
+Felis silvestris f. domestica	Mammalia	subspecies_or_form_only	medium	Felis silvestris			GBIF:7964291
+Fringilla canariensis	Aves	absent_from_perch	high				eBird:caicha1; iNat:1504816; GBIF:12225089; IOCxwalk-seq:34176..34180(5)
+Galago demidoff	Mammalia	same_species_other_name	medium	Galagoides demidoff	2	iNaturalist epithet match; GBIF synonym	iNat:566537; GBIF:4267292
+Galago senegalensis	Mammalia	absent_from_perch	high				iNat:43565; GBIF:9198359
+Galerida macrorhyncha	Aves	perch_lumps_it	high	Galerida cristata			eBird:crelar3; iNat:558525; iNat->578607; GBIF:6100966; IOCxwalk-seq:24375..24377(3)
+Garrulax annamensis	Aves	absent_from_perch	high				eBird:orblau1; iNat:72869; GBIF:5788987; IOCxwalk-seq:28638
+Ianthocincla cineracea	Aves	absent_from_perch	high				eBird:moulau1; iNat:339828; GBIF:7626687; IOCxwalk-seq:28692..28696(4)
+Garrulax merulinus	Aves	absent_from_perch	high				eBird:spblau1; iNat:15192; GBIF:2493485; IOCxwalk-seq:28634..28639(5)
+Garrulax rufifrons	Aves	absent_from_perch	high				eBird:ruflau1; iNat:15161; GBIF:2493475; IOCxwalk-seq:28656..28658(3)
+Gastrophryne	Amphibia	absent_from_perch	high				iNat:25077; GBIF:2421765
+Gastrotheca	Amphibia	absent_from_perch	high				iNat:24126; GBIF:2430015
+Gekko	Reptilia	absent_from_perch	high				iNat:34591,1676779; GBIF:2447294
+Geokichla cinerea	Aves	absent_from_perch	high				eBird:ashthr1; iNat:201205; GBIF:6100881; IOCxwalk-seq:30466
+Geokichla dohertyi	Aves	absent_from_perch	high				eBird:chbthr1; iNat:201210; GBIF:6100887; IOCxwalk-seq:30464
+Geokichla interpres	Aves	absent_from_perch	high				eBird:chcthr1; iNat:201208; GBIF:6100879; IOCxwalk-seq:30460..30463(3)
+Geothlypis chiriquensis	Aves	perch_lumps_it	high	Geothlypis semiflava			iNat:827490; GBIF:6100792; IOCxwalk-seq:36180..36181(2)
+Gephyromantis	Amphibia	absent_from_perch	high				iNat:64775; GBIF:2423208
+Glaucidium californicum	Aves	perch_lumps_it	high	Glaucidium gnoma			iNat:237013; GBIF:5232157; IOCxwalk-seq:9208..9212(5)
+Glaucidium cobanense	Aves	perch_lumps_it	high	Glaucidium gnoma			iNat:509667; GBIF:8114306; IOCxwalk-seq:9217..9218(2)
+Glaucidium hoskinsii	Aves	perch_lumps_it	high	Glaucidium gnoma			iNat:206097; GBIF:5817042; IOCxwalk-seq:9215..9216(2)
+Globicephala macrorhynchus	Mammalia	absent_from_perch	high				iNat:41532; GBIF:2440605
+Globicephala melas	Mammalia	absent_from_perch	high				iNat:41529; GBIF:2440596
+Globicephala	Mammalia	absent_from_perch	high				iNat:41528; GBIF:2440595
+Glossopsitta concinna	Aves	same_species_other_name	high	Trichoglossus concinnus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:muslor1; iNat:19246; iNat->1580414; GBIF:2480170; IOCxwalk-seq:14043..14045(3)
+Grallaria atuensis	Aves	absent_from_perch	high				eBird:tawant4; iNat:1507404; GBIF:10826518; IOCxwalk-seq:16600
+Grampus griseus	Mammalia	absent_from_perch	high				iNat:41541; GBIF:5220027
+Gryllotalpidae	Insecta	absent_from_perch	high				iNat:71220; GBIF:8555
+Guttera edouardi	Aves	absent_from_perch	high				eBird:cregui4; iNat:1424115; GBIF:2473328; IOCxwalk-seq:797..809(9)
+Haemulon sciurus	Actinopterygii	absent_from_perch	high				iNat:49262; GBIF:2382543
+Haliaeetus humilis	Aves	same_species_other_name	high	Icthyophaga humilis	2	eBird code continuity; iNaturalist synonym	eBird:lefeag1; iNat:558447; iNat->1505758; GBIF:8004473
+Haliaeetus ichthyaetus	Aves	same_species_other_name	high	Icthyophaga ichthyaetus	2	eBird code continuity; iNaturalist synonym	eBird:gyhfie1; iNat:558448; iNat->1505727; GBIF:7763239
+Icthyophaga vociferoides	Aves	absent_from_perch	high				eBird:mafeag1; iNat:1505672; GBIF:12298364; IOCxwalk-seq:8676
+Hapalemur griseus	Mammalia	absent_from_perch	high				iNat:43620; GBIF:2436414
+Orocharis gryllodes	Insecta	absent_from_perch	low				iNat:1494942; GBIF:1722035
+Hapithus melodius	Insecta	absent_from_perch	high				iNat:1432975; GBIF:1717364
+Heleia javanica	Aves	absent_from_perch	high				eBird:jgtwhe1; iNat:1289459; GBIF:11060979; IOCxwalk-seq:27375..27378(4)
+Heliobletus sp.nov.Lontras	Aves	absent_from_perch	medium				GBIF:1
+Heliothraupis oneilli	Aves	absent_from_perch	high				eBird:saptan1; iNat:1353240; GBIF:11373210; IOCxwalk-seq:37123
+Urva urva	Mammalia	absent_from_perch	medium				iNat:925966; GBIF:10986840
+Himantopus melanurus	Aves	perch_lumps_it	high	Himantopus mexicanus			iNat:881719; iNat->464940; GBIF:5229127; IOCxwalk-seq:6435..6436(2)
+Hipposideros armiger	Mammalia	absent_from_perch	high				iNat:40717; GBIF:5218572
+Holocentrus adscensionis	Actinopterygii	absent_from_perch	high				iNat:49626; GBIF:5204778
+Hoplobatrachus rugulosus	Amphibia	uncertain	low	Hoplobatrachus chinensis			iNat:65541; iNat->1423577; GBIF:2430382
+Horornis vulcanius	Aves	perch_lumps_it	high	Horornis flavolivaceus			eBird:subwar4; iNat:339713; iNat->339714; GBIF:8027352; IOCxwalk-seq:25531..25539(9)
+Hubbellia marginifera	Insecta	absent_from_perch	high				iNat:221503; GBIF:1691700
+Hyalinobatrachium valerioi	Amphibia	absent_from_perch	high				iNat:21323; GBIF:2429295
+Hydrobates melania	Aves	absent_from_perch	high				eBird:bkspet; iNat:1289613; GBIF:11068810; IOCxwalk-seq:7437
+Hydrochoeris hydrochaeris	Mammalia	absent_from_perch	low				GBIF:4263032
+Hydropsalis maculicaudus	Aves	same_species_other_name	high	Antiurus maculicaudus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:sptnig1; iNat:337419; iNat->1584760; GBIF:7792881; IOCxwalk-seq:1939
+Hydrurga leptonyx	Mammalia	absent_from_perch	high				iNat:41724; GBIF:2434790
+Hygronemobius alleni	Insecta	absent_from_perch	high				iNat:1180306; GBIF:1723109
+Hyla	Amphibia	absent_from_perch	high				iNat:23747; GBIF:2423589
+Hylarana attigua	Amphibia	absent_from_perch	high				iNat:1677705,65560; GBIF:2426863
+Hylexetastes brigidai	Aves	perch_lumps_it	high	Hylexetastes uniformis			iNat:103068; iNat->1290113; GBIF:2485252; IOCxwalk-seq:14674
+Hylidae	Amphibia	absent_from_perch	high				iNat:1658175,23540; GBIF:6735
+Hyliola regilla	Amphibia	same_species_other_name	low	Pseudacris regilla	1	GBIF synonym	iNat:517224; GBIF:10927585
+Hylobates lar x pileatus	Mammalia	absent_from_perch	medium				GBIF:9318571
+Hylobatidae	Mammalia	absent_from_perch	high				iNat:43585; GBIF:5484
+Hylodes fredi	Amphibia	absent_from_perch	high				iNat:65634; GBIF:5218118
+Hyloscirtus phyllognathus	Amphibia	absent_from_perch	high				iNat:65662; GBIF:2428327
+Hyperolius drewesi	Amphibia	absent_from_perch	high				iNat:521548; GBIF:9584714
+Hyperolius molleri	Amphibia	absent_from_perch	high				iNat:65728; GBIF:5217675
+Hypsignathus monstrosus	Mammalia	absent_from_perch	high				iNat:40843; GBIF:2432958
+Hypsipetes harterti	Aves	absent_from_perch	high				eBird:sulgob2; iNat:1507176; GBIF:10907409; IOCxwalk-seq:24809
+Hypsipetes lucasi	Aves	absent_from_perch	high				eBird:obigob1; iNat:1437222; GBIF:10720918; IOCxwalk-seq:24815
+Incilius marmoreus	Amphibia	absent_from_perch	high				iNat:65846; GBIF:2422401
+Indicator archipelagicus	Aves	absent_from_perch	high				eBird:malhon1; iNat:17569; GBIF:5229002; IOCxwalk-seq:11654
+Indicator conirostris	Aves	perch_lumps_it	high	Indicator minor			eBird:thbhon1; iNat:144674; iNat->204526; GBIF:5228973; IOCxwalk-seq:11633..11635(3)
+Inscudderia strigata	Insecta	absent_from_perch	high				iNat:516397; GBIF:1691245
+Irena tweeddalii	Aves	absent_from_perch	high				eBird:asifab2; iNat:1506245; GBIF:8312089; IOCxwalk-seq:28801
+Ischnocnema randorum	Amphibia	absent_from_perch	high				iNat:65897; GBIF:2424840
+Isthmohyla rivularis	Amphibia	absent_from_perch	high				iNat:65913; GBIF:2428120
+Kleinothraupis auricularis	Aves	perch_lumps_it	high	Kleinothraupis atropileus			iNat:718479; GBIF:11095319; IOCxwalk-seq:37340..37341(2)
+Lagenorhynchus acutus	Mammalia	absent_from_perch	medium				iNat:41509; iNat->1368483; GBIF:5220073
+Lagothrix lagotricha	Mammalia	same_species_other_name	medium	Lagothrix lagothricha	2	iNaturalist synonym (to subspecies of the same species); GBIF fuzzy match to the accepted species	iNat:43402; iNat->1369211; GBIF:5786085
+Lamprotornis elisabeth	Aves	perch_lumps_it	high	Lamprotornis chloropterus			iNat:104006; iNat->547213; GBIF:2489085; IOCxwalk-seq:30028
+Laterallus leucopyrrhus	Aves	same_species_other_name	high	Rufirallus leucopyrrhus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:rawcra1; iNat:332; iNat->1583682; GBIF:2474598; IOCxwalk-seq:5981
+Laterallus xenopterus	Aves	same_species_other_name	high	Rufirallus xenopterus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:rufcra1; iNat:328; iNat->1583678; GBIF:2474596; IOCxwalk-seq:5980
+Lemuridae	Mammalia	absent_from_perch	high				iNat:43607; GBIF:5485
+Saguinus tripartitus	Mammalia	absent_from_perch	medium				iNat:43381; GBIF:2436473
+Leptodactylidae	Amphibia	absent_from_perch	high				iNat:22085; GBIF:6739
+Leptodactylus	Amphibia	absent_from_perch	high				iNat:22923; GBIF:2424034
+Leptotila battyi	Aves	perch_lumps_it	high	Leptotila plumbeiceps			iNat:104366; iNat->3268; GBIF:2496094; IOCxwalk-seq:4985..4987(3)
+Lichmera limbata	Aves	perch_lumps_it	medium	Lichmera indistincta			eBird:indhon1; iNat:72985; iNat->1424495; GBIF:2487345; IOCxwalk-seq:19264
+Limnonectes	Amphibia	absent_from_perch	high				iNat:25904; GBIF:2430447
+Lophoceros semifasciatus	Aves	absent_from_perch	high				eBird:afphor2; iNat:1505274,638023; GBIF:10939066; IOCxwalk-seq:10111
+Lophochroa leadbeateri	Aves	same_species_other_name	high	Cacatua leadbeateri	2	eBird code continuity; iNaturalist synonym	eBird:pincoc1; iNat:145357; iNat->116835; GBIF:7340185; IOCxwalk-seq:13058
+Lophura rufa	Aves	absent_from_perch	high				eBird:crefir3; iNat:1425711; GBIF:8783320; IOCxwalk-seq:1416
+Luscinia sibilans	Aves	same_species_other_name	high	Larvivora sibilans	2	IOC/Clements cross-reference; iNaturalist synonym	iNat:13080; iNat->145055; GBIF:5231260; IOCxwalk-seq:31593
+Lysapsus limellum	Amphibia	same_species_other_name	medium	Pseudis limellum	1	iNaturalist synonym	iNat:135115; iNat->1595929; GBIF:2428373
+Magicicada cassini	Insecta	same_species_other_name	medium	Magicicada cassinii	1	iNaturalist synonym	iNat:105097; iNat->549305; GBIF:7500492
+Megascops vermiculatus	Aves	perch_lumps_it	high	Megascops guatemalae			iNat:718543; GBIF:2497401; IOCxwalk-seq:9651..9671(4)
+Tibicen figurata	Insecta	uncertain	low				GBIF:7681691
+Tibicen marginalis	Insecta	perch_lumps_it	low	Megatibicen pronotalis			GBIF:11359303
+Tibicen resonans	Insecta	same_species_other_name	high	Megatibicen resonans	2	iNaturalist synonym; GBIF synonym	iNat:210019; iNat->740120; GBIF:7408235
+Meiglyptes grammithorax	Aves	absent_from_perch	high				eBird:burwoo1; iNat:1505545; GBIF:10782366; IOCxwalk-seq:12772
+Melaenornis infuscatus	Aves	same_species_other_name	high	Agricola infuscatus	2	IOC/Clements cross-reference; iNaturalist synonym	iNat:904155; iNat->522889; GBIF:2492655; IOCxwalk-seq:30978..30983(6)
+Melaenornis mariquensis	Aves	same_species_other_name	high	Bradornis mariquensis	2	IOC/Clements cross-reference; iNaturalist epithet match	iNat:12803; GBIF:2492655; IOCxwalk-seq:31055..31058(4)
+Melaenornis microrhynchus	Aves	same_species_other_name	high	Bradornis microrhynchus	2	IOC/Clements cross-reference; iNaturalist synonym	iNat:546731; iNat->12799; GBIF:2492655; IOCxwalk-seq:31048..31054(6)
+Melanerpes santacruzi	Aves	perch_lumps_it	high	Melanerpes aurifrons			iNat:708028; GBIF:6101202
+Melopyrrha taylori	Aves	absent_from_perch	high				eBird:cubbul3; iNat:1506200; GBIF:8243473; IOCxwalk-seq:37024
+Merops americanus	Aves	absent_from_perch	high				eBird:rucbee1; iNat:201077; GBIF:8286122; IOCxwalk-seq:10915
+Microptilotis imitatrix	Aves	same_species_other_name	high	Meliphaga imitatrix	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:grahon5; iNat:1289202; iNat->1582960; GBIF:10998770; IOCxwalk-seq:19402
+Microsciurus	Mammalia	absent_from_perch	high				iNat:46098; GBIF:2437359
+Milvus aegyptius	Aves	perch_lumps_it	high	Milvus migrans			iNat:1259836; GBIF:5788522; IOCxwalk-seq:8656..8658(3)
+Miogryllus saussurei	Insecta	uncertain	low	Miogryllus verticalis			iNat:129154; iNat->129136; GBIF:1717246
+Mionectes galbinus	Aves	absent_from_perch	high				eBird:olsfly1; iNat:1444111; GBIF:10803607; IOCxwalk-seq:17233..17240(5)
+Mirafra cantillans	Aves	perch_lumps_it	high	Mirafra javanica			eBird:sinbus1; iNat:7320; iNat->7318; GBIF:2490599; IOCxwalk-seq:24138..24142(5)
+Moho braccatus	Aves	absent_from_perch	high				eBird:kauoo; iNat:12672; GBIF:2486982; IOCxwalk-seq:23529
+Monarcha erythrostictus	Aves	perch_lumps_it	high	Monarcha castaneiventris			eBird:boumon1; iNat:8107; iNat->1585112; GBIF:5230426; IOCxwalk-seq:22403
+Muscicapa boehmi	Aves	same_species_other_name	high	Myopornis boehmi	2	IOC/Clements cross-reference; iNaturalist synonym	iNat:12973; iNat->1586069; GBIF:2492570; IOCxwalk-seq:31059
+Muscicapa tessmanni	Aves	same_species_other_name	high	Fraseria tessmanni	2	IOC/Clements cross-reference; iNaturalist synonym	iNat:12979; iNat->522884; GBIF:2492568; IOCxwalk-seq:31012
+Muscicapa tyrrhenica	Aves	perch_lumps_it	high	Muscicapa striata			eBird:spofly3; iNat:1720558; GBIF:9559647; IOCxwalk-seq:31111..31113(3)
+Muscicapa ussheri	Aves	same_species_other_name	high	Artomyias ussheri	2	IOC/Clements cross-reference; iNaturalist synonym	iNat:12974; iNat->1586071; GBIF:2492560; IOCxwalk-seq:31060
+Myadestes myadestinus	Aves	absent_from_perch	high				eBird:kamao; iNat:12963; GBIF:2490853; IOCxwalk-seq:30190
+Myiomela diana	Aves	absent_from_perch	low				eBird:sunrob1,sunrob3; iNat:558548; GBIF:5845282; IOCxwalk-seq:31477..31479(3)
+Myiopagis cinerea	Aves	absent_from_perch	high				eBird:gryela2; iNat:1440714; GBIF:10946252; IOCxwalk-seq:16909
+Myiopagis parambae	Aves	absent_from_perch	high				eBird:gryela1; iNat:1440713; GBIF:11107644; IOCxwalk-seq:16906..16908(3)
+Myiophobus crypterythrus	Aves	absent_from_perch	high				eBird:brcfly4; iNat:1444346; GBIF:10977645; IOCxwalk-seq:17331
+Myiophobus rufescens	Aves	absent_from_perch	high				eBird:brcfly3; iNat:1444348; GBIF:10968123; IOCxwalk-seq:17333
+Myiopsitta luchsi	Aves	perch_lumps_it	high	Myiopsitta monachus			eBird:monpar2; iNat:1651787; GBIF:2479411; IOCxwalk-seq:13180
+Myiornis sp.nov.Maranhao_Piaui	Aves	absent_from_perch	medium				GBIF:2482865
+Myiothlypis roraimae	Aves	perch_lumps_it	high	Myiothlypis bivittata			iNat:718619; GBIF:8864530; IOCxwalk-seq:36390..36391(2)
+Myotis austroriparius	Mammalia	absent_from_perch	high				iNat:40323; GBIF:2432451
+Myotis dasycneme	Mammalia	absent_from_perch	high				iNat:40308; GBIF:2432452
+Myotis formosus	Mammalia	absent_from_perch	high				iNat:40312; GBIF:2432443
+Myotis nattereri	Mammalia	absent_from_perch	medium				iNat:1588715,210400,40289; GBIF:2432389
+Myrmotherula luctuosa	Aves	perch_lumps_it	high	Myrmotherula axillaris			iNat:574123; iNat->574544; GBIF:6100902; IOCxwalk-seq:15789..15790(2)
+Myzomela nigriventris	Aves	absent_from_perch	high				eBird:carmyz4; iNat:558509; GBIF:7350138; IOCxwalk-seq:19125
+Nannopsittacus melanogenia	Aves	absent_from_perch	high				eBird:orbfip1; iNat:1584081; GBIF:4844340; IOCxwalk-seq:14118..14121(4)
+Neoconocephalus affinis	Insecta	absent_from_perch	high				iNat:293515; GBIF:1691836
+Neoconocephalus bivocatus	Insecta	absent_from_perch	high				iNat:225597; GBIF:1691835
+Neoconocephalus caudellianus	Insecta	absent_from_perch	high				iNat:205615; GBIF:1691878
+Neoconocephalus maxillosus	Insecta	absent_from_perch	high				iNat:847742; GBIF:1691972
+Neoconocephalus melanorhinus	Insecta	absent_from_perch	high				iNat:1399833; GBIF:1691764
+Neonemobius	Insecta	absent_from_perch	high				iNat:90241; GBIF:1723146
+Neophema chrysogaster	Aves	absent_from_perch	high				eBird:orbpar1; iNat:18877; GBIF:2479508; IOCxwalk-seq:13941..13943(3)
+Scapteriscus borellii	Insecta	same_species_other_name	high	Neoscapteriscus borellii	2	iNaturalist synonym; GBIF synonym	iNat:322916; iNat->523711; GBIF:1716100
+Scapteriscus vicinus	Insecta	same_species_other_name	high	Neoscapteriscus vicinus	2	iNaturalist synonym; GBIF synonym	iNat:230505; iNat->558126; GBIF:1716095
+Tamias dorsalis	Mammalia	same_species_other_name	medium	Neotamias dorsalis	1	iNaturalist synonym	iNat:46225; iNat->197809; GBIF:2437431
+Tamias minimus	Mammalia	same_species_other_name	medium	Neotamias minimus	1	iNaturalist synonym	iNat:46222; iNat->225743; GBIF:2437432
+Tamias townsendii	Mammalia	same_species_other_name	medium	Neotamias townsendii	1	iNaturalist synonym	iNat:46218; iNat->225756; GBIF:2437449
+Tibicen davisi	Insecta	same_species_other_name	medium	Neotibicen davisi	1	iNaturalist synonym	iNat:210001; iNat->469243; GBIF:7799533
+Tibicen pruinosa	Insecta	same_species_other_name	medium	Neotibicen pruinosus	1	iNaturalist synonym	iNat:126266; iNat->469268; GBIF:7653879
+Tibicen chloromera	Insecta	perch_lumps_it	medium	Neotibicen tibicen			iNat:203221; iNat->469282; GBIF:7591828
+Nesotriccus maranonicus	Aves	absent_from_perch	high				eBird:moctyr4; iNat:1444140; GBIF:12278746; IOCxwalk-seq:17104
+Phaeomyias murina	Aves	perch_splits_it	medium	Nesotriccus tumbezanus; Nesotriccus murinus			eBird:moctyr1; iNat:17186; iNat->1444137,1444140,1444145; GBIF:2484076; IOCxwalk-seq:17094..17105(9)
+Nesotriccus ridgwayi	Aves	absent_from_perch	high				eBird:cocfly1; iNat:17215; GBIF:2483450; IOCxwalk-seq:17093
+Numenius hudsonicus	Aves	perch_lumps_it	high	Numenius phaeopus			eBird:whimbr3; iNat:1188213; GBIF:4408523; IOCxwalk-seq:6662..6664(3)
+Nyctalus aviator	Mammalia	absent_from_perch	high				iNat:40575; GBIF:5218526
+Nyctalus lasiopterus	Mammalia	absent_from_perch	high				iNat:40576; GBIF:5218525
+Nystalus striatipectus	Aves	perch_lumps_it	high	Nystalus maculatus			iNat:210920; iNat->210926; GBIF:6101201; IOCxwalk-seq:11025
+Silvicultrix spodionota	Aves	perch_lumps_it	high	Silvicultrix frontalis			iNat:1440176; GBIF:4845334; IOCxwalk-seq:17918..17920(3)
+Ochthoeca superciliosa	Aves	absent_from_perch	high				eBird:bnbcht2; iNat:1441741; GBIF:8855744; IOCxwalk-seq:17954
+Oenanthe frenata	Aves	absent_from_perch	high				eBird:rebwhe3; iNat:1437017; GBIF:7414071; IOCxwalk-seq:31917
+Okanagana sequoiae	Insecta	absent_from_perch	high				iNat:1125286; GBIF:8130055
+Onychorhynchus mexicanus	Aves	perch_lumps_it	high	Onychorhynchus coronatus			iNat:107612; iNat->486431; GBIF:5789103; IOCxwalk-seq:18655..18657(3)
+Oophaga histrionica	Amphibia	absent_from_perch	high				iNat:66275; GBIF:2429137
+Opsanus tau	Actinopterygii	absent_from_perch	high				iNat:51372; GBIF:2350910
+Orchelimum concinnum	Insecta	absent_from_perch	high				iNat:226529; GBIF:1693718
+Orchelimum fidicinium	Insecta	absent_from_perch	high				iNat:504425; GBIF:1693714
+Oreobates cruralis	Amphibia	absent_from_perch	high				iNat:66284; GBIF:2424954
+Oriolus consanguineus	Aves	absent_from_perch	high				eBird:bacori1; iNat:1507135; GBIF:11058099; IOCxwalk-seq:21674..21677(4)
+Oriolus consobrinus	Aves	absent_from_perch	high				eBird:datori7; iNat:1507073; GBIF:8832498; IOCxwalk-seq:21697..21699(3)
+Orocharis luteolira	Insecta	same_species_other_name	medium	Hapithus luteolira	1	iNaturalist synonym	iNat:461962; iNat->780311; GBIF:1722914
+Orocharis nigrifrons	Insecta	absent_from_perch	low				GBIF:1722945
+Orocharis saltator	Insecta	same_species_other_name	medium	Hapithus saltator	1	iNaturalist synonym	iNat:146725; iNat->780312; GBIF:1722962
+Orocharis tricornis	Insecta	absent_from_perch	low				GBIF:1722940
+Orocharis	Insecta	absent_from_perch	high				iNat:767620,146726; GBIF:1722912
+Osteocephalus	Amphibia	absent_from_perch	high				iNat:24174; GBIF:2427621
+Osteopilus ocellatus	Amphibia	absent_from_perch	high				iNat:24378; GBIF:7746572
+Otophryne robusta	Amphibia	absent_from_perch	high				iNat:25176; GBIF:2421609
+Spermophilus beecheyi	Mammalia	perch_splits_it	medium	Otospermophilus beecheyi; Otospermophilus douglasii			iNat:46057; iNat->180007,1511713; GBIF:2437293
+Spermophilus variegatus	Mammalia	same_species_other_name	high	Otospermophilus variegatus	2	iNaturalist synonym; GBIF synonym	iNat:46073; iNat->180008; GBIF:2437329
+Otus madagascariensis	Aves	perch_lumps_it	high	Otus rutilus			eBird:torsco1; iNat:144589; iNat->1424162; GBIF:5232286; IOCxwalk-seq:9295..9296(2)
+Otus sulaensis	Aves	absent_from_perch	high				eBird:sulsco3; iNat:979850; GBIF:6101160; IOCxwalk-seq:9367
+Pachycephala fuliginosa	Aves	perch_lumps_it	high	Pachycephala pectoralis			eBird:weswhi2; iNat:1287027; iNat->472650,1583704; GBIF:7528260; IOCxwalk-seq:21118..21121(3)
+Pachycephala calliope	Aves	absent_from_perch	high				eBird:rubwhi1; iNat:1578907; GBIF:1; IOCxwalk-seq:21077..21087(6)
+Pachycephala graeffii	Aves	absent_from_perch	high				eBird:fijwhi1; iNat:1585805,201141; GBIF:6100860; IOCxwalk-seq:21167..21174(8)
+Pachycephala orpheus	Aves	absent_from_perch	high				eBird:fabwhi1; iNat:7929; GBIF:5959165; IOCxwalk-seq:21065..21070(5)
+Pachyramphus salvini	Aves	absent_from_perch	high				eBird:bawbec6; iNat:1508945; GBIF:8120211; IOCxwalk-seq:18595
+Pachyramphus xanthogenys	Aves	perch_lumps_it	high	Pachyramphus viridis			iNat:1248097; GBIF:5845251; IOCxwalk-seq:18573..18575(3)
+Pampa excellens	Aves	perch_lumps_it	high	Pampa curvipennis			eBird:lotsab1; iNat:1289671; iNat->1424161; GBIF:11075355; IOCxwalk-seq:3407
+Pampa pampa	Aves	perch_lumps_it	high	Pampa curvipennis			GBIF:10973400; IOCxwalk-seq:3409..3410(2)
+Pandion cristatus	Aves	perch_lumps_it	medium	Pandion haliaetus			iNat:542350; GBIF:5788498
+Sinosuthora webbiana	Aves	same_species_other_name	high	Suthora webbiana	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:vitpar1; iNat:339760; iNat->1505899; GBIF:6100921; IOCxwalk-seq:27300..27306(7)
+Parotia helenae	Aves	absent_from_perch	high				eBird:lawpar2; iNat:1508398,108806; GBIF:2494890; IOCxwalk-seq:23226
+Parus minor	Aves	perch_lumps_it	low	Parus cinereus			eBird:gretit4; iNat:339692; iNat->339691; GBIF:5844847; IOCxwalk-seq:23832
+Parvipsitta porphyrocephala	Aves	same_species_other_name	high	Psitteuteles porphyrocephalus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:puclor1; iNat:1289564; iNat->1584102; GBIF:9143066; IOCxwalk-seq:14022
+Parvipsitta pusilla	Aves	same_species_other_name	high	Psitteuteles pusillus	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:litlor1; iNat:1289565; iNat->1584101; GBIF:8754747; IOCxwalk-seq:14023
+Passerella megarhyncha	Aves	perch_lumps_it	high	Passerella iliaca			iNat:343342; GBIF:7614445; IOCxwalk-seq:35343..35348(6)
+Passerella schistacea	Aves	perch_lumps_it	high	Passerella iliaca			iNat:343341; GBIF:8408419; IOCxwalk-seq:35337..35345(7)
+Passerella unalaschcensis	Aves	perch_lumps_it	high	Passerella iliaca			iNat:343338; GBIF:7425645; IOCxwalk-seq:35329..35336(8)
+Homo Sapiens	Mammalia	same_species_other_name	high	Homo sapiens	2	iNaturalist epithet match; iNaturalist name match (case-only difference)	iNat:43584
+Percnostola fortis	Aves	uncertain	low				GBIF:2490115
+Percnostola goeldii	Aves	uncertain	low				GBIF:2490115
+Percnostola immaculata	Aves	uncertain	low				GBIF:2490115
+Percnostola melanoceps	Aves	uncertain	low				GBIF:2490115
+Percnostola zeledoni	Aves	uncertain	low				GBIF:2490115
+Phalacrocorax lucidus	Aves	perch_lumps_it	high	Phalacrocorax carbo			iNat:425972; GBIF:6066527; IOCxwalk-seq:7758
+Phaner furcifer	Mammalia	absent_from_perch	high				iNat:43555; GBIF:2436443
+Philemon novaeguineae	Aves	perch_lumps_it	high	Philemon buceroides			iNat:109287; iNat->510438; GBIF:2487080; IOCxwalk-seq:19183..19201(11)
+Philemon yorki	Aves	perch_lumps_it	high	Philemon buceroides			iNat:508758; GBIF:6101037; IOCxwalk-seq:19199
+Phocoena phocoena	Mammalia	absent_from_perch	high				iNat:41440; GBIF:2440669
+Phyllastrephus placidus	Aves	perch_lumps_it	high	Phyllastrephus cabanisi			iNat:718745; GBIF:2486100; IOCxwalk-seq:24672
+Phyllomedusa	Amphibia	absent_from_perch	high				iNat:23714; GBIF:2427962
+Phylloscartes difficilis	Aves	same_species_other_name	high	Pogonotriccus difficilis	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:sdmtyr2; iNat:16922; iNat->1440089; GBIF:2483215; IOCxwalk-seq:17203
+Phylloscartes paulista	Aves	same_species_other_name	high	Pogonotriccus paulista	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:saptyr1; iNat:16923; iNat->1440096; GBIF:2483212; IOCxwalk-seq:17202
+Physalaemus maculiventris	Amphibia	absent_from_perch	high				iNat:23140; GBIF:2423554
+Physalaemus	Amphibia	absent_from_perch	high				iNat:23113; GBIF:2423536
+Physeter catodon	Mammalia	same_species_other_name	medium	Physeter macrocephalus	2	iNaturalist synonym; GBIF synonym	iNat:357988; iNat->74890; GBIF:2440352
+Pictonemobius ambitiosus	Insecta	absent_from_perch	high				iNat:1360980; GBIF:1717381
+Pictonemobius hubbelli	Insecta	absent_from_perch	high				iNat:452187; GBIF:1717385
+Pinaroloxias inornata	Aves	absent_from_perch	high				eBird:cocfin1; iNat:10367; GBIF:2491137; IOCxwalk-seq:37069
+Pionus seniloides	Aves	perch_lumps_it	high	Pionus tumultuosus			iNat:718770; GBIF:2479916; IOCxwalk-seq:13246..13247(2)
+Pipile grayi	Aves	absent_from_perch	high				eBird:butpig2; iNat:1424089; GBIF:8307145; IOCxwalk-seq:721
+Piranga hepatica	Aves	perch_lumps_it	high	Piranga flava			iNat:357529; iNat->9924; GBIF:6100782; IOCxwalk-seq:36540..36557(12)
+Piranga lutea	Aves	perch_lumps_it	high	Piranga flava			iNat:425115; GBIF:6100783; IOCxwalk-seq:36539..36546(7)
+Pithecia monachus	Mammalia	absent_from_perch	high				iNat:852369,43645; GBIF:2436375
+Pithecopus palliatus	Amphibia	absent_from_perch	high				iNat:517131; GBIF:10688948
+Pitta abbotti	Aves	absent_from_perch	high				eBird:hoopit4; iNat:1508562; GBIF:2489451; IOCxwalk-seq:14413
+Pitta novaeguineae	Aves	absent_from_perch	high				eBird:eahpit1; iNat:1508572; GBIF:8403801; IOCxwalk-seq:14417..14421(4)
+Pitta rosenbergii	Aves	absent_from_perch	high				eBird:hoopit11; iNat:1508573; GBIF:10758000; IOCxwalk-seq:14422
+Platypleura kaempferi	Insecta	same_species_other_name	medium	Planopleura kaempferi	1	iNaturalist synonym	iNat:359500; iNat->1594925; GBIF:5867595
+Platypleura takasagona	Insecta	same_species_other_name	medium	Planopleura takasagona	1	iNaturalist synonym	iNat:711948; iNat->1594929; GBIF:5734968
+Platymantis	Amphibia	absent_from_perch	high				iNat:25956; GBIF:2421446
+Platysteira castanea	Aves	same_species_other_name	high	Dyaphorophyia castanea	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:chweye1; iNat:8461; iNat->1586790; GBIF:2492317; IOCxwalk-seq:20068..20070(3)
+Ploceus brachypterus	Aves	absent_from_perch	high				eBird:bknwea1; iNat:1440666; GBIF:10680018; IOCxwalk-seq:33048
+Ploceus castaneofuscus	Aves	absent_from_perch	high				eBird:viewea2; iNat:1440667; GBIF:10768448; IOCxwalk-seq:33120
+Ploceus megarhynchus	Aves	absent_from_perch	high				eBird:yelwea1; iNat:13832; GBIF:2494017; IOCxwalk-seq:33167..33169(3)
+Pnoepyga mutica	Aves	perch_lumps_it	high	Pnoepyga albiventer			eBird:chicup1; iNat:367654; iNat->1423522; GBIF:7488889; IOCxwalk-seq:25367
+Spermophilus franklinii	Mammalia	same_species_other_name	high	Poliocitellus franklinii	2	iNaturalist synonym; GBIF synonym	iNat:46069; iNat->179937; GBIF:2437307
+Polioptila maior	Aves	absent_from_perch	high				eBird:trogna3; iNat:1587069; GBIF:8126681; IOCxwalk-seq:29457
+Pomatorhinus phayrei	Aves	absent_from_perch	high				eBird:bncscb1; iNat:1444546; GBIF:10756235; IOCxwalk-seq:27881..27888(7)
+Poospiza goeringi	Aves	absent_from_perch	high				eBird:slbhem1; iNat:558581; GBIF:9349591; IOCxwalk-seq:37335
+Populus tremuloides	Rosids	absent_from_perch	high				iNat:54840; GBIF:3040215
+Presbytis melalophos	Mammalia	absent_from_perch	high				iNat:43504; GBIF:5219561
+Primates	Mammalia	absent_from_perch	high				iNat:43367; GBIF:798
+Prinia khasiana	Aves	absent_from_perch	high				eBird:bktpri2; iNat:1444459; GBIF:7794481; IOCxwalk-seq:26627
+Prinia melanops	Aves	perch_lumps_it	high	Prinia bairdii			iNat:729082; GBIF:2492744; IOCxwalk-seq:26732
+Prioniturus luconensis	Aves	absent_from_perch	high				eBird:grrtai1; iNat:18955; GBIF:2480043; IOCxwalk-seq:13678
+Prioniturus platurus	Aves	absent_from_perch	high				eBird:gmrtai1; iNat:18961; GBIF:2480039; IOCxwalk-seq:13661..13664(4)
+Prionochilus olivaceus	Aves	same_species_other_name	high	Pachyglossa olivacea	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:olbflo1; iNat:13448; iNat->1586116; GBIF:5229958; IOCxwalk-seq:32092..32095(4)
+Pristimantis toftae	Amphibia	absent_from_perch	high				iNat:66905; GBIF:2425062
+Pristimantis	Amphibia	absent_from_perch	high				iNat:64811; GBIF:2424987
+Propithecus edwardsi	Mammalia	absent_from_perch	high				iNat:74962; GBIF:5707429
+Propithecus verreauxi	Mammalia	absent_from_perch	high				iNat:43603; GBIF:5219530
+Pseudeos fuscata	Aves	same_species_other_name	high	Chalcopsitta fuscata	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:duslor1; iNat:19300; iNat->1584103; GBIF:2479306; IOCxwalk-seq:14024..14026(3)
+Pseudorca crassidens	Mammalia	absent_from_perch	high				iNat:41539; GBIF:2440440
+Psittacula caniceps	Aves	absent_from_perch	high				eBird:nicpar1; iNat:18906; GBIF:5229035; IOCxwalk-seq:13809
+Psittirostra psittacea	Aves	absent_from_perch	high				eBird:ou; iNat:10672; GBIF:2494566; IOCxwalk-seq:34404
+Turdus simensis	Aves	absent_from_perch	high				eBird:grothr2; iNat:1440652; GBIF:12273603; IOCxwalk-seq:30472
+Psophodes leucogaster	Aves	perch_lumps_it	high	Psophodes nigrogularis			iNat:501157; GBIF:4846496
+Pteroglossus erythropygius	Aves	absent_from_perch	low				eBird:pamara1; iNat:338135; GBIF:2478842; IOCxwalk-seq:11227..11230(3)
+Pteroglossus mariae	Aves	perch_lumps_it	high	Pteroglossus azara			iNat:711932; GBIF:2478821; IOCxwalk-seq:11208
+Pteroglossus sanguineus	Aves	absent_from_perch	low				iNat:464754; iNat->1650080; GBIF:2478832; IOCxwalk-seq:11228
+Pteropus alecto	Mammalia	absent_from_perch	high				iNat:40913; GBIF:5218686
+Pteropus conspicillatus	Mammalia	absent_from_perch	high				iNat:40911; GBIF:5218680
+Pteropus giganteus	Mammalia	absent_from_perch	medium				iNat:40917; iNat->1641421; GBIF:5218642
+Pteropus poliocephalus	Mammalia	absent_from_perch	high				iNat:40905; GBIF:5218655
+Pteropus rufus	Mammalia	absent_from_perch	high				iNat:40874; GBIF:7697909
+Pteropus scapulatus	Mammalia	absent_from_perch	high				iNat:40908; GBIF:5218649
+Pteruthius aenobarbus	Aves	absent_from_perch	high				eBird:cfsbab1; iNat:567131,15268; GBIF:2492993; IOCxwalk-seq:21340..21345(6)
+Pteruthius annamensis	Aves	perch_lumps_it	high	Pteruthius aeralatus			eBird:dalshb1; iNat:144731; iNat->1424497; GBIF:5844708; IOCxwalk-seq:21335
+Pteruthius ripleyi	Aves	perch_lumps_it	high	Pteruthius aeralatus			eBird:himshb1; iNat:144729; iNat->1424496; GBIF:6100767; IOCxwalk-seq:21326
+Pycnonotus dodsoni	Aves	perch_lumps_it	high	Pycnonotus barbatus			iNat:132987; GBIF:2486140; IOCxwalk-seq:25045
+Pycnonotus somaliensis	Aves	perch_lumps_it	high	Pycnonotus barbatus			iNat:132988; GBIF:2486139; IOCxwalk-seq:25048
+Pycnonotus tricolor	Aves	perch_lumps_it	high	Pycnonotus barbatus			iNat:516780; iNat->516932; GBIF:2486126; IOCxwalk-seq:25054
+Pyrgocorypha uncinata	Insecta	absent_from_perch	high				iNat:293519; GBIF:1690919
+Pyrocephalus obscurus	Aves	uncertain	low	Pyrocephalus rubinus			iNat:1005378; iNat->16447,1286895; GBIF:8959307; IOCxwalk-seq:17768..17777(10)
+Pyrrhura emma	Aves	perch_lumps_it	high	Pyrrhura picta			eBird:paipar6; iNat:1649792; GBIF:2479849; IOCxwalk-seq:13418..13420(3)
+Quercus montana	Rosids	absent_from_perch	high				iNat:128686; GBIF:2881118
+Quercus rubra	Rosids	absent_from_perch	high				iNat:49005; GBIF:2880539
+Ramphastos citreolaemus	Aves	perch_lumps_it	high	Ramphastos vitellinus			iNat:121395; GBIF:2478788; IOCxwalk-seq:11181..11182(2)
+Ramphocelus icteronotus	Aves	perch_lumps_it	high	Ramphocelus flammigerus			iNat:202297; GBIF:5845475; IOCxwalk-seq:37177
+Ramphocinclus sanctaeluciae	Aves	absent_from_perch	high				eBird:whbthr4; iNat:1569220; GBIF:2494917; IOCxwalk-seq:29776
+Rana aurora draytonii	Amphibia	subspecies_or_form_only	medium	Rana draytonii			iNat:67016; GBIF:6170058
+Ranidae	Amphibia	absent_from_perch	high				iNat:25473; GBIF:6746
+Ranoidea lesueurii	Amphibia	absent_from_perch	low				iNat:1633177; GBIF:10787842
+Rhacophorus moltrechti	Amphibia	same_species_other_name	high	Zhangixalus moltrechti	2	iNaturalist synonym; GBIF synonym	iNat:26497; iNat->923294; GBIF:5217304
+Rhacophorus taipeianus	Amphibia	same_species_other_name	high	Zhangixalus taipeianus	2	iNaturalist synonym; GBIF synonym	iNat:26509; iNat->923300; GBIF:5217271
+Rhinella schneideri	Amphibia	same_species_other_name	medium	Rhinella diptycha	2	iNaturalist synonym; GBIF synonym	iNat:67147; iNat->67107; GBIF:5216849
+Rhinolophus ferrumequinum	Mammalia	absent_from_perch	high				iNat:40645,320637; GBIF:2432655
+Rhipidura layardi	Aves	absent_from_perch	high				eBird:fisfan1; iNat:1508391; GBIF:10807858; IOCxwalk-seq:22063..22067(4)
+Rhipidura rufofronta	Aves	absent_from_perch	high				eBird:sorfan1; iNat:1508371; GBIF:5231742; IOCxwalk-seq:22132..22141(8)
+Rhipidura semicollaris	Aves	absent_from_perch	high				eBird:arafan2; iNat:1508263; GBIF:1; IOCxwalk-seq:22104..22113(10)
+Rhipidura versicolor	Aves	absent_from_perch	high				eBird:mirfan1; iNat:1508332; GBIF:1; IOCxwalk-seq:22127..22131(5)
+Rhizothera longirostris	Aves	absent_from_perch	high				eBird:lobpar3; iNat:979939,1273; GBIF:2474095; IOCxwalk-seq:1277..1280(3)
+Rhodopechys alienus	Aves	perch_lumps_it	high	Rhodopechys sanguineus			iNat:144250; iNat->73344; GBIF:5788927; IOCxwalk-seq:34263
+Rhyticeros narcondami	Aves	absent_from_perch	high				eBird:narhor1; iNat:514336; GBIF:7559341; IOCxwalk-seq:10201
+Rousettus aegyptiacus	Mammalia	absent_from_perch	high				iNat:75042; GBIF:2432953
+Saccopteryx bilineata	Mammalia	absent_from_perch	high				iNat:41337; GBIF:5218731
+Saccopteryx leptura	Mammalia	absent_from_perch	high				iNat:41339; GBIF:5218730
+Saguinus	Mammalia	absent_from_perch	high				iNat:43379,1369274; GBIF:2436465
+Saudareos meyeri	Aves	same_species_other_name	high	Trichoglossus meyeri	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:yaglor2; iNat:1289205; iNat->1584163; GBIF:11172958; IOCxwalk-seq:14053
+Saudareos ornatus	Aves	same_species_other_name	high	Trichoglossus ornatus	2	eBird code continuity; iNaturalist synonym	eBird:ornlor1; iNat:1289559; iNat->19116; GBIF:11205963
+Saxicola sibilla	Aves	perch_lumps_it	high	Saxicola torquatus			iNat:132993; GBIF:6100850; IOCxwalk-seq:31831
+Scepomycter rubehoensis	Aves	perch_lumps_it	high	Scepomycter winifredae			iNat:541647; iNat->558791; GBIF:5846102; IOCxwalk-seq:26935
+Sciaenidae	Actinopterygii	absent_from_perch	high				iNat:49172; GBIF:5062
+Scinax cruentommus	Amphibia	same_species_other_name	medium	Scinax cruentomma	1	iNaturalist synonym	iNat:24330; iNat->555176; GBIF:5217850
+Scinax elaeochrous	Amphibia	same_species_other_name	medium	Scinax elaeochroa	1	iNaturalist synonym	iNat:67175; iNat->134631; GBIF:5217897
+Scinax ictericus	Amphibia	absent_from_perch	high				iNat:24339; GBIF:5217851
+Scinax quinquefasciatus	Amphibia	absent_from_perch	high				iNat:24283,1123591; GBIF:5217918
+Scinax rostratus	Amphibia	absent_from_perch	high				iNat:24292; GBIF:5217865
+Scinax	Amphibia	absent_from_perch	high				iNat:24278; GBIF:2427373
+Sciurus brasiliensis	Mammalia	absent_from_perch	medium				iNat:1546001; GBIF:44
+Sciurus spadiceus	Mammalia	absent_from_perch	high				iNat:46011; GBIF:5219676
+Sciurus	Mammalia	absent_from_perch	high				iNat:45994,1431495; GBIF:44
+Scleroptila streptophora	Aves	absent_from_perch	high				eBird:rinfra2; iNat:550891; GBIF:6101189; IOCxwalk-seq:1538
+Sericornis virgatus	Aves	perch_lumps_it	low	Sericornis nouhuysi			eBird:perscr1; iNat:13518; iNat->13516; GBIF:2486609; IOCxwalk-seq:19667..19672(6)
+Serilophus rubropygius	Aves	absent_from_perch	high				eBird:sibbro2; iNat:1507112; GBIF:10980040; IOCxwalk-seq:14250
+Serpophaga munda	Aves	perch_lumps_it	high	Serpophaga subcristata			eBird:whbtyr2; iNat:17209; iNat->1424494; GBIF:2483969; IOCxwalk-seq:17088
+Setophaga aestiva	Aves	perch_lumps_it	high	Setophaga petechia			eBird:yelwar1; iNat:1188207; GBIF:8378494; IOCxwalk-seq:36254..36263(10)
+Setophaga auduboni	Aves	perch_lumps_it	high	Setophaga coronata			iNat:126562; GBIF:7760978; IOCxwalk-seq:36317..36321(4)
+Spermestes nigriceps	Aves	perch_lumps_it	high	Spermestes bicolor			iNat:558807; iNat->559000; GBIF:7838797; IOCxwalk-seq:33369
+Spermophilus armatus	Mammalia	same_species_other_name	high	Urocitellus armatus	2	iNaturalist synonym; GBIF synonym	iNat:46066; iNat->179994; GBIF:2437316
+Spermophilus beldingi	Mammalia	same_species_other_name	high	Urocitellus beldingi	2	iNaturalist synonym; GBIF synonym	iNat:46056; iNat->179995; GBIF:2437317
+Spermophilus columbianus	Mammalia	same_species_other_name	high	Urocitellus columbianus	2	iNaturalist synonym; GBIF synonym	iNat:46070; iNat->179998; GBIF:2437295
+Spermophilus parryii	Mammalia	same_species_other_name	high	Urocitellus parryii	2	iNaturalist synonym; GBIF synonym	iNat:46072; iNat->180001; GBIF:2437291
+Spermophilus richardsonii	Mammalia	same_species_other_name	high	Urocitellus richardsonii	2	iNaturalist synonym; GBIF synonym	iNat:46065; iNat->180002; GBIF:2437299
+Sphenopsis ochracea	Aves	perch_lumps_it	high	Sphenopsis melanotis			iNat:718948; GBIF:11072745; IOCxwalk-seq:37355..37356(2)
+Sphenopsis piurae	Aves	perch_lumps_it	high	Sphenopsis melanotis			iNat:730500; GBIF:10687503; IOCxwalk-seq:37357..37359(3)
+Sporophila murallae	Aves	perch_lumps_it	high	Sporophila americana			eBird:caqsee1; iNat:62547; iNat->1509234; GBIF:2491329; IOCxwalk-seq:37233
+Stenella attenuata	Mammalia	absent_from_perch	high				iNat:41500; GBIF:5220050
+Stenella coeruleoalba	Mammalia	absent_from_perch	high				iNat:41494; GBIF:5220055
+Stenella frontalis	Mammalia	absent_from_perch	high				iNat:41503; GBIF:5220045
+Stenella longirostris	Mammalia	absent_from_perch	high				iNat:41496; GBIF:5220060
+Stenella	Mammalia	absent_from_perch	high				iNat:41493,353320
+Steno bredanensis	Mammalia	absent_from_perch	high				iNat:41545; GBIF:2440433
+Sula brewsteri	Aves	absent_from_perch	high				eBird:cocboo1; iNat:1578501; GBIF:2480966; IOCxwalk-seq:7694..7696(3)
+Synallaxis beverlyae	Aves	absent_from_perch	high				eBird:riospi1; iNat:73468; GBIF:6089868; IOCxwalk-seq:15585
+Systellura decussata	Aves	same_species_other_name	high	Quechuavis decussata	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:bawnig3; iNat:558469; iNat->1584384; GBIF:9038593; IOCxwalk-seq:1913
+Tadarida teniotis	Mammalia	absent_from_perch	high				iNat:41298; GBIF:2433009
+Tamias	Mammalia	absent_from_perch	high				iNat:520586; GBIF:2437422
+Tangara brasiliensis	Aves	absent_from_perch	high				eBird:turtan3; iNat:566794; GBIF:8134525; IOCxwalk-seq:37966
+Tarsiger albocoeruleus	Aves	absent_from_perch	high				eBird:refblu2; iNat:1587675; GBIF:2492508; IOCxwalk-seq:31710
+Telophorus quadricolor	Aves	perch_lumps_it	high	Telophorus viridis			iNat:113884; iNat->558817; GBIF:2484854; IOCxwalk-seq:20140..20143(3)
+Teratohyla spinosa	Amphibia	absent_from_perch	high				iNat:21279; GBIF:2429432
+Thalasseus acuflavidus	Aves	perch_lumps_it	high	Thalasseus sandvicensis			iNat:546270; GBIF:6065838; IOCxwalk-seq:7054..7057(3)
+Thripophaga berlepschi	Aves	same_species_other_name	high	Cranioleuca berlepschi	3	eBird code continuity; IOC/Clements cross-reference; iNaturalist synonym	eBird:rumsof1; iNat:11803; iNat->1506344; GBIF:2486009; IOCxwalk-seq:15441
+Trachylaemus goffinii	Aves	absent_from_perch	high				eBird:yebbar1; iNat:1583558; GBIF:10884443; IOCxwalk-seq:11403..11406(3)
+Trachyphonus usambiro	Aves	perch_lumps_it	high	Trachyphonus darnaudii			iNat:117134; iNat->541120; GBIF:2478896; IOCxwalk-seq:11431..11432(2)
+Treron permagnus	Aves	perch_lumps_it	high	Treron formosae			iNat:468198; GBIF:10707731; IOCxwalk-seq:5277..5279(3)
+Trichoglossus capistratus	Aves	absent_from_perch	high				eBird:railor2; iNat:980096,786564; GBIF:2479680; IOCxwalk-seq:14099..14102(4)
+Trochalopteron ngoclinhense	Aves	absent_from_perch	high				eBird:gowlau1; iNat:339872; GBIF:6101121; IOCxwalk-seq:28396
+Trochalopteron yersini	Aves	absent_from_perch	high				eBird:collau1; iNat:339873; GBIF:6101122; IOCxwalk-seq:28374
+Troglodytes martinicensis	Aves	absent_from_perch	high				eBird:cinwre1; iNat:1578444; GBIF:7672534; IOCxwalk-seq:29257..29260(4)
+Troglodytes grenadensis	Aves	absent_from_perch	high				eBird:houwre11; iNat:1578447; GBIF:44; IOCxwalk-seq:29265
+Troglodytes musicus	Aves	absent_from_perch	high				eBird:houwre10; iNat:1578446; GBIF:44; IOCxwalk-seq:29263
+Trogon cupreicauda	Aves	absent_from_perch	high				eBird:bkttro5; iNat:1507438; GBIF:11236628; IOCxwalk-seq:9979
+Tropicoperdix charltonii	Aves	absent_from_perch	high				eBird:chnpar1; iNat:1289693; GBIF:9178296; IOCxwalk-seq:1445..1450(5)
+Tropicoperdix graydoni	Aves	absent_from_perch	high				eBird:chnpar3; iNat:1434947; GBIF:11392242; IOCxwalk-seq:1449
+Tsuga canadensis	Pinopsida	absent_from_perch	high				iNat:48734; GBIF:2687182
+Turdus daguae	Aves	perch_lumps_it	high	Turdus assimilis			eBird:whtthr2; iNat:1651574; GBIF:6100894; IOCxwalk-seq:30783
+Turdus erythropleurus	Aves	absent_from_perch	high				eBird:islthr9; iNat:1574874; GBIF:2490714; IOCxwalk-seq:30588
+Turdus papuensis	Aves	absent_from_perch	high				eBird:papist1; iNat:1574882; GBIF:2490714; IOCxwalk-seq:30602..30607(6)
+Turdus ruficeps	Aves	absent_from_perch	high				eBird:fijist1; iNat:1574895; GBIF:2490714; IOCxwalk-seq:30636..30641(6)
+Turdus thomassoni	Aves	absent_from_perch	high				eBird:islthr36; iNat:1574870; GBIF:2490714; IOCxwalk-seq:30575..30577(3)
+Turdus vanikorensis	Aves	absent_from_perch	high				eBird:vanist1; iNat:1574889; GBIF:2490714; IOCxwalk-seq:30617..30625(9)
+Tyto multipunctata	Aves	perch_lumps_it	high	Tyto tenebricosa			iNat:1186156; iNat->512861; GBIF:5232372; IOCxwalk-seq:8864..8867(3)
+Upupa africana	Aves	perch_lumps_it	high	Upupa epops			iNat:142774; GBIF:2498421; IOCxwalk-seq:10032
+Vaccinium floribundum	Asterids	absent_from_perch	high				iNat:535109; GBIF:7971787
+Vespertilio murinus	Mammalia	absent_from_perch	high				iNat:40446; GBIF:2432564
+Vireo approximans	Aves	perch_lumps_it	high	Vireo pallens			iNat:980034; GBIF:6100766; IOCxwalk-seq:21572
+Vitreorana eurygnatha	Amphibia	absent_from_perch	high				iNat:21344; GBIF:8743060
+Xenops genibarbis	Aves	absent_from_perch	high				eBird:plaxen3; iNat:1586809; GBIF:8839576; IOCxwalk-seq:14908..14918(11)
+Xiphorhynchus chunchotambo	Aves	perch_lumps_it	high	Xiphorhynchus ocellatus			iNat:732366; GBIF:6100761; IOCxwalk-seq:14737..14740(4)
+Zimmerius flavidifrons	Aves	perch_lumps_it	high	Zimmerius viridiflavus			iNat:827441; GBIF:6101061; IOCxwalk-seq:17186
+Zoothera andromedae	Aves	absent_from_perch	high				eBird:sunthr1; iNat:13023; GBIF:2490912; IOCxwalk-seq:30364
+Zosterops chloris	Aves	absent_from_perch	high				eBird:yebwhe1; iNat:17445; GBIF:2489391; IOCxwalk-seq:27566..27608(9)
+Zosterops chrysolaemus	Aves	perch_lumps_it	high	Zosterops minor			iNat:732549; GBIF:10747072; IOCxwalk-seq:27587..27591(4)
+Zosterops hypolais	Aves	absent_from_perch	high				eBird:plweye1; iNat:17482; GBIF:2489408; IOCxwalk-seq:27730

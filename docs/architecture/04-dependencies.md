@@ -57,9 +57,9 @@
 
 ### Notes on specific versions
 
-- **sysinfo 0.39** — `Components` is gated behind the `component` feature;
-  the workspace manifest enables `features = ["system", "component"]`. It is
-  also what sets the workspace MSRV floor at Rust 1.95.
+- **sysinfo 0.40** — `Components` is gated behind the `component` feature;
+  the workspace manifest enables `features = ["system", "component", "network"]`.
+  It requires Rust 1.95, below the workspace MSRV, so it no longer sets the floor.
 - **axum 0.8** — the routing API uses `IntoResponse`, `Router::merge`,
   `extract::Path`, and `extract::State`.
 - **lettre** — `AsyncSmtpTransport::<Tokio1Executor>` built with `relay`

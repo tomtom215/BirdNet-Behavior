@@ -8,10 +8,12 @@
 //! | `csv`     | CSV/JSON detection and species export     |
 //! | `ebird`   | eBird-compatible CSV export               |
 //! | `birddb`  | BirdNET-Pi BirdDB.txt legacy export       |
+//! | `model_scores` | Each classifier's own score per detection |
 
 mod birddb;
 mod csv;
 mod ebird;
+mod model_scores;
 mod raven;
 
 use axum::{Router, routing::get};
@@ -36,6 +38,10 @@ pub fn router() -> Router<AppState> {
         .route("/detections/export/ebird", get(ebird::export_ebird))
         .route("/detections/export/birddb", get(birddb::export_birddb))
         .route("/detections/export/raven", get(raven::export_raven))
+        .route(
+            "/detections/export/model-scores",
+            get(model_scores::export_model_scores),
+        )
         .route("/recordings/{filename}/raven.txt", get(raven::clip_raven))
         .route("/recordings/{filename}/labels.txt", get(raven::clip_labels))
 }

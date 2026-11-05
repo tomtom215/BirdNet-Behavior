@@ -142,6 +142,13 @@ fn throughput_observer(
                 let metrics = state.metrics();
                 move |health| metrics.set_model_health(health)
             })
+            // What each classifier is, once they have loaded: the Models board
+            // on Station Health states these instead of leaving them to the
+            // config file.
+            .with_model_info({
+                let metrics = state.metrics();
+                move |info| metrics.set_model_info(info)
+            })
 }
 
 /// Whether the board is at the limit the shed policy backs off at: the CPU

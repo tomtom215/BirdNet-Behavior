@@ -61,6 +61,7 @@ the manual.
 - [Field Deployment Runbook](./field/deployment.md)
 - [Security Hardening](./field/hardening.md)
 - [Hardware Validation](./field/hardware-test.md)
+- [Input Level](./field/input-level.md)
 - [Multi-stream (design note)](./field/multistream.md)
 - [Running on macOS](./field/macos.md)
 
@@ -72,6 +73,7 @@ the manual.
 - [HTTP & WebSocket API](./reference/api.md)
 - [Design Tokens](./reference/design-tokens.md)
 - [Integrations Reference](./reference/integrations.md)
+- [Taxonomy Overlap Between Classifiers](./reference/taxonomy-overlap.md)
 - [Architecture](./reference/architecture.md)
 
 ---

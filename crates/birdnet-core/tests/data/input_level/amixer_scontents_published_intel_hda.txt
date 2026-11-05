@@ -1,0 +1,20 @@
+Simple mixer control 'Mic Boost',0
+  Capabilities: volume penum
+  Playback channels: Front Left - Front Right
+  Capture channels: Front Left - Front Right
+  Limits: 0 - 2
+  Front Left: 0 [0%] <---
+  Front Right: 0 [0%] <---
+Simple mixer control 'Capture',0
+  Capabilities: cvolume cswitch penum
+  Capture channels: Front Left - Front Right
+  Limits: Capture 0 - 31
+  Front Left: Capture 0 [0%] [-16.50dB] [on] <---
+  Front Right: Capture 0 [0%] [-16.50dB] [on] <---
+Simple mixer control 'Internal Mic Boost',0
+  Capabilities: volume penum
+  Playback channels: Front Left - Front Right
+  Capture channels: Front Left - Front Right
+  Limits: 0 - 2
+  Front Left: 0 [0%] <---
+  Front Right: 0 [0%] <---

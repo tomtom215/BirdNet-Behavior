@@ -8,7 +8,7 @@ use serde::Serialize;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 /// Snapshot of current system resource usage.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SystemSnapshot {
     /// CPU usage averaged across all cores (0.0–100.0).
     pub cpu_usage_pct: f32,
@@ -126,12 +126,16 @@ pub fn sample() -> SystemSnapshot {
 
     // First call in this process. sysinfo 0.39 renamed `RefreshKind::new()` to
     // `RefreshKind::nothing()` because the previous name was misleading (the
-    // value was actually empty, not "default everything").
-    let mut sys = System::new_with_specifics(
+    // value was actually empty, not "default everything"). Since 0.40 the
+    // constructor can fail; the readout then stays zeroed, as documented above,
+    // and the next call tries again.
+    let Ok(mut sys) = System::new_with_specifics(
         RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
-    );
+    ) else {
+        return SystemSnapshot::default();
+    };
     sys.refresh_cpu_usage();
     // The one remaining sleep, once per process, so the first reader gets a real
     // number instead of 0 %.
@@ -154,7 +158,7 @@ fn refresh_into_snapshot(sys: &mut System) -> SystemSnapshot {
     sys.refresh_memory();
 
     let cpus = sys.cpus();
-    let cpu_cores: Vec<f32> = cpus.iter().map(sysinfo::Cpu::cpu_usage).collect();
+    let cpu_cores: Vec<f32> = cpus.iter().map(sysinfo::Cpu::usage).collect();
     #[allow(clippy::cast_precision_loss)]
     let cpu_usage_pct = if cpu_cores.is_empty() {
         0.0
@@ -173,7 +177,9 @@ fn refresh_into_snapshot(sys: &mut System) -> SystemSnapshot {
         0.0
     };
 
-    let uptime_secs = System::uptime();
+    // 0.40 returns an error where the platform cannot say; the readout was
+    // already `0` there.
+    let uptime_secs = System::uptime().unwrap_or(0);
     let cpu_count = sys.cpus().len();
 
     // Temperature (optional — not available on all platforms)
@@ -223,7 +229,8 @@ fn sample_cpu_temperature() -> Option<f32> {
     //      no thermal reading, and the old API conflated "no sensor" with
     //      "0 °C". We propagate the inner None with `.flatten()`.
     use sysinfo::{Component, Components};
-    let mut components = Components::new_with_refreshed_list();
+    // 0.40 made the constructor fallible; no sensor list is "no reading", as before.
+    let mut components = Components::new_with_refreshed_list().ok()?;
     components.refresh(true);
 
     let from_sysinfo = components
@@ -371,13 +378,14 @@ pub struct NetworkInterface {
 /// Every network interface, loopback last.
 #[must_use]
 pub fn network_interfaces() -> Vec<NetworkInterface> {
-    let networks = sysinfo::Networks::new_with_refreshed_list();
+    let Ok(networks) = sysinfo::Networks::new_with_refreshed_list() else {
+        return Vec::new();
+    };
     let mut out: Vec<NetworkInterface> = networks
-        .list()
         .iter()
         .map(|(name, data)| {
             interface(
-                name,
+                &name.to_string_lossy(),
                 data.mac_address(),
                 data.ip_networks(),
                 data.total_received(),
@@ -445,7 +453,9 @@ pub fn station_processes() -> Vec<StationProcess> {
         .with_cpu()
         .with_memory()
         .without_tasks();
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new_with_specifics(RefreshKind::nothing()) else {
+        return Vec::new();
+    };
     sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
     std::thread::sleep(PROCESS_SAMPLE);
     sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);

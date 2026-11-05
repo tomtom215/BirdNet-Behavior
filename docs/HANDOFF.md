@@ -7,6 +7,15 @@ section 6 says where to start. The header and sections 5 and 6 were corrected fo
 2026-11-01. Facts about GitHub were read on the dates given, with the commands named; read them again before
 relying on them. Anything not attributed to a command is marked as reported, read or unknown.
 
+**Branch `claude/compassionate-cerf-olwih1`, 2026-11-05.** Draft pull request #281 (opened 2026-11-05 09:00 UTC), not
+merged; section 4's last subsection says what CI did with it. It carries the
+multi-classifier work of earlier sessions (up to `5e3fe52`) and this session's commits, `f1f668b` to the last
+one on the branch: digital silence skipped instead of counted as a classifier failure, Rust 1.99 and a refresh of the
+dependencies, CI pins and tools, English names for Perch's classes, the taxonomy overlap, the Perch-bar study, the
+doctor's reading of the microphone's capture gain, and two accessibility fixes found by axe 4.14. Section 4's last
+subsection says what ran on it and what did not; section 5, items 39 to 45, is what it leaves open. The paragraphs
+below describe `main` and the 0.19.0 release as of 2026-11-01 and were not touched.
+
 **State on 2026-11-01.** The latest *published* release is **v0.18.1** (2026-10-26). **`v0.19.0` is tagged and not
 released**, and `main` has been red since #276 merged (`f54e8ab`, 2026-10-31 23:54 UTC):
 
@@ -300,6 +309,14 @@ the commits to read first (hashes valid on this branch).
 - *2026-11-01, the same branch name restarted from `f54e8ab` (`git log f54e8ab..`):* the `sel` fix in `pages/history.rs` (the
   boundary, the sink, four tests), the sweep's `seed_sql`, the changelog entry, the lesson in `CLAUDE.md`. Item 38.
 
+- *The real-model round of 2026-11-05* (`f1f668b`, `2b35865`, `c2f7436`, `e0c4b3e`, `20baf15`, `8bda13f`, `b690a89`, `924de5b`): a third classifier and failed windows through the real models; digital silence no
+  longer makes V3.0 "fail"; Rust 1.99; `perch-v2.csv` with English names (`scripts/build-perch-labels.py` takes the IOC
+  workbook); `docs/book/reference/taxonomy-overlap.md` and `docs/data/taxonomy/`; `tools/perch-bar/`; the doctor's
+  `Input level` check (`birdnet_core::audio::input_level`, `src/doctor/input_level.rs`) and the page *Input Level*.
+  CI on the draft pull request then found three things, fixed in `d2cbcba` (the study's two generated command files
+  had no shebang, which shellcheck needs), `d979403` (the community registry now serves `behavioral` v0.11.0, which
+  `extension_pins.rs` refuses to embed unless it is pinned) and `1859a3a` (two surviving mutants on `OutputScale::as_str`).
+
 ## 4. What was verified, and by what command
 
 The test suite and the lint gates (the first five rows) were run again on 2026-10-23 on the tree
@@ -486,6 +503,51 @@ The tree was `f54e8ab` plus 5 uncommitted files (`history.rs`, the sweep's test 
 | `release.yml` dispatched on this branch, version blank (run 41300853479, head `fc9cfde`, 2026-11-01 11:12 to 12:15 UTC) | run `success`; 15 of 17 jobs `success`, `Publish GitHub Release` and `Verify the published Release` skipped, as in any dry run. **`CI gate: test` succeeded** (11:14 to 11:41 UTC, the gate that was red that morning), with the other four gates, `Validate release tag`, the three builds, `Package and attest` (attestation skipped, as in a dry run) and the four `Upgrade from v0.17.0 / v0.17.1 / v0.18.0 / v0.18.1` rows. The macOS job on `macos-15`: `uname -m: arm64; macOS 15.8.2`, the release build 21 minutes, `minos 11.0` and `sdk 15.5`, the same as on 10-31 |
 
 **Not run:** a real tag push (the maintainer's step, section 6), the browser gates (for a real `sel` the calendar's output is what it was), the `--all-features` workspace test command as one command (the same tests ran by crate), CodeQL, the image, the install and upgrade smoke tests and the aarch64 cross-check.
+
+### 2026-11-05, the real-model round (`claude/compassionate-cerf-olwih1`, container, `~/.duckdb` not populated)
+
+The tree was `5e3fe52` plus the commits listed in section 3. Numbers are from the commands' own output.
+
+| Command | Printed |
+|---|---|
+| the real models (V3.0 preview 3 primary, Perch v2, Perch v2 without the DFT) through the running daemon, a 30 s magpie recording | 4 detections, `model_agreement` 3 on each, 12 answer rows |
+| the same with two 1e20 samples in the file (V3.0 returns NaN for such a window; Perch does not), privacy filter on, then `PRIVACY_RANK=0` | on: 1 detection stored of 4 (a non-finite human score is read as speech, so the filter suppresses the neighbours); off: 4, two with a V3.0 `failed` answer beside two Perch `heard` answers, and the detection page says "Heard by 2 of 2 models that could judge it. 1 model failed this window." |
+| a 60 s file with a spike in every V3.0 window | `birdnet_model_failing{model="birdnet-v3"} 1`, 14 consecutive failed windows, the banner on `/station`, a 0 detection result; the same audio without the spikes: 7 detections, agreement 3 |
+| two 30 s files of digital silence, before the fix | V3.0 **Failing** with "answering with invalid scores"; after it (`f1f668b`): `windows_total` 0, no banner, one WARN naming the cause. Mutants of the fix (early return removed, `silent` never set, `silent` always set): each failed the expected test, restored byte-identical |
+| onnxruntime 1.29.0 on V3.0 preview 3, inputs near silence | NaN for zeros, DC, one flipped LSB, white noise at an RMS of 5e-7 or less; finite for ten flipped LSBs and for 7e-7. Perch finite on all |
+| `scripts/preflight.sh` on `c2f7436` | 4 gates failed (typos, clippy x3, third-party notices); fixed in `e0c4b3e` |
+| `scripts/preflight.sh` on `8bda13f` | exit 0, 17 gates `ok`: fmt, typos 1.52.0, machete, installer drift, deny, audit, OSV, clippy at default, all and no default features, rustdoc, build at default and all features, CLI help, manual links, third-party notices, doc tests |
+| `RUSTUP_TOOLCHAIN=1.99 cargo check --workspace --all-features --all-targets --locked` | exit 0 (8 m 37 s, rustc 1.99.1) |
+| `cargo test` by stage, on `20baf15` (the container gate's table fixed in `8bda13f`): `--lib --bins` at default, no default and all features | 4,983, 3,713 and 4,987 passed, 0 failed, 1 ignored each |
+| the integration tests, in batches, default features | core 77, db 74, integrations 115, migrate 72, scheduler 4, web 693, root 414 plus the container gate (1 failed on `20baf15`: `amixer` was not in its table; 6 passed after) |
+| the integration tests that compile to nothing without `analytics`, run with `--all-features` | `birdnet-behavioral` and `birdnet-timeseries` 225 in 15 binaries, `birdnet-web` 15 in 5, the root crate 54 in 6. **The default-feature batches had reported 0 passed for these**; a zero is not a pass |
+| `cargo audit --deny warnings`; `scripts/osv-check.py` | clean (RUSTSEC-2026-0433 on pulldown-cmark 0.13.5 was reported, unwaived, before the update); no advisory for the 651 locked packages |
+| mutants by hand: input-level grading (18), the doctor layer (8), the V3 names table (2), the Perch labels (2) | all killed; the first round of the grading mutants left two survivors, each of which became a test |
+| a real PulseAudio 16.1 server with a virtual source and the real `pactl`, `--doctor --pipewire-device` | 100%, 40%, 150%, muted, a monitor, `default` and a missing source each gave the expected finding |
+| `birdnet-behavior --doctor --alsa-device` on cards that do not exist | skipped with `amixer`'s own message; not run against any sound card |
+| the real models with the new `perch-v2.csv` | Perch-led detections store `Com_Name` "Eurasian Magpie" (they stored "Pica pica" before) |
+| `python3 scripts/check-ci-config.py` with `cargo-mutants` 27.1.0 | passed |
+| the browser gates of `a11y.yml` in Chromium, Playwright 1.63.0 with axe 4.14.0 | axe **failed with 86 violations** of `label-content-name-mismatch` on `b690a89`; after `924de5b` axe passes, and so do interactions, legibility, the qa and layout self-tests, layout, tokens, chart ramps, surface layers, token doc, motion, focus, figures, DOM sinks, base path, and the strict sweep (184 screenshots, 0 pages with issues) |
+| re-running `tools/perch-bar`'s analysis steps from the stored model outputs | all 53 result files identical to the study's (the committed copies differ only in line ends) |
+
+**After `8bda13f`** these ran again on what changed: the doctor tests (217), `birdnet-core`'s input-level tests (23),
+clippy on the two crates, and the web tests that assert on page structure (23). The whole suite was not run again.
+
+**CI on the draft pull request**, read with `get_check_runs` and `get_job_logs` on 2026-11-05:
+
+| Head | What CI reported |
+|---|---|
+| `a379741` | `shellcheck` refused the two generated command files in `tools/perch-bar/meta/` (SC2148, no shebang): fixed in `d2cbcba` |
+| `d2cbcba` | `Tests (x86_64)`, `Build the candidate tarball`, `Build amd64` and `Build arm64` failed. The logs of the tarball and `Build amd64` were read: `build.rs` refused to embed `behavioral` v0.11.0 for `linux_amd64` (sha256 `0dea2ff3…6bb`), which `extension_pins.rs` did not pin. The `Build arm64` log was not read; `Tests (x86_64)` was read in an earlier pass and found the same refusal |
+| `d979403` (the v0.11.0 pins, trusted on first use) | `cargo-mutants on inference/model.rs [1/3]`: 2 of 14 mutants survived, both `OutputScale::as_str` (replaced by `""` and by `"xyzzy"`): fixed in `1859a3a`. `cargo-llvm-cov` failed once on `system_info::tests::cpu_temperature_alone_never_waits` (item 45); a re-run on that commit was cancelled by the next push |
+| `1859a3a` | all 75 check runs `success` or `skipped` (`deploy` and `Merge multi-arch manifest` are the two skipped), read in one `get_check_runs` call at 10:40 UTC |
+
+**Run in CI on `1859a3a`, all `success`, which the section above had as not run:** CodeQL (four jobs), the container image
+(`Build amd64`, `Build arm64`), the candidate tarball, the install and upgrade smoke tests (`install.sh → web UI`,
+`Upgrade from v0.17.1`, `v0.18.0`, `v0.18.1`), the aarch64 cross-check and `Tests (aarch64, native)`, and the browser
+gates on Playwright 1.64.1 (`Accessibility (axe) + visual-QA sweep`). **Not run:** Firefox and WebKit for the two
+accessibility fixes (whether CI's job covers them was not read); any sound card; a real systemd host (whether CI's
+upgrade jobs use one was not read); macOS.
 
 ## 5. Open items, with severity
 
@@ -705,6 +767,47 @@ it says otherwise.
     year or leap-day boundary.
     A failing test binary stops `cargo test`, so on 2026-11-01 neither CI on `main` nor the release gate ran the binaries
     after the sweep; that is why the whole suite was run by hand on the day.
+39. **Digital silence made BirdNET+ V3.0 "fail"; fixed, with two things left.** Resolved on this branch: a window of
+    identical samples is skipped. Left: (a) V3.0 preview 3 also returns NaN for noise below an RMS of about 6e-7 and for a
+    single flipped bit; those still count as failed windows, which is true of the model (the edge was measured on one file
+    and may differ in a release); (b) a non-finite human-class score is read as speech by design, so one failing
+    classifier makes the privacy filter drop the chunk and its neighbours *whichever classifier heard the bird* (4
+    detections became 1). Whether a non-primary classifier's NaN should count is a decision for the maintainer; the manual
+    now says what it costs. Medium.
+40. **The station merges by exact scientific name.** 121 of the 644 V3.0 names Perch lacks are the same species under a
+    new genus (`docs/data/taxonomy/`), so a bird the two classifiers name differently is two detections with
+    `model_agreement` 1. No alias table is applied, because the name keys the species list, history, exports and
+    watchlists; it needs a decision about which name a stored detection carries. Also 146 IOC names are withheld from
+    Perch's labels because V2.4 already uses that English name for a species it knows under another scientific name (120 are
+    renames). Medium.
+41. **The Perch bar is measured, not validated.** `tools/perch-bar` and `classifiers.md`: at 0.35 17% (15-20) of annotated
+    species found, 0.04 unmarked reports per window; 74% of the data is one Central European set, four sets have three
+    recordings, the tropical sets are 2-8%, training overlap is unknown, and the study ran the model without the station's
+    filters. A study on the station's own recordings is the missing step. Medium.
+42. **The capture-gain reader has not met a sound card.** The cap (75% and +18 dB) is a design judgement with low evidence;
+    the `HW_VOLUME_CTRL` flag is read from libpulse and was not seen on hardware; ALSA was run only against emulated and
+    published output. No setter was built on purpose (a run-time change is lost at a replug or power cut unless root runs
+    `alsactl store`; the service cannot). A station whose microphone sits at 100% now gets a warning and `--doctor`
+    exits 1, which a monitoring script may treat as a failure. Medium.
+43. **Toolchain changes: CI has now built them; the release notes are still unread.** On `1859a3a` CI built the Docker
+    image for amd64 and arm64 on `rust:1.99-slim-trixie`, cross-checked aarch64 and ran the browser gates on Playwright
+    1.64.1, all `success` (section 4). Left: MSRV 1.99 is a policy choice (no dependency needs it), and six Actions moved
+    without their release notes being read (each SHA is the upstream tag's). Low.
+44. **How the research was done.** Three research agents ran with no write access to reports and returned text; their
+    numbers were checked against their own result files and, for the label counts, recomputed here. One of them made
+    three requests to Xeno-canto (one API call, two pages) before reading its `robots.txt`, which by that agent's account
+    disallows this kind of agent (not re-read here); the content was not used, and Xeno-canto data is not in the study. Low.
+45. **A timing test failed once in CI and its cause is not established.** `system_info::tests::cpu_temperature_alone_never_waits`
+    asserts that `cpu_temperature()` returns in under `MIN_CPU_DELTA` (200 ms). In `cargo-llvm-cov` on `d979403` it took
+    1.499757475 s. The same job passed on `d2cbcba` and on `1859a3a`, and `crates/birdnet-web` is identical between
+    `d2cbcba` and `d979403` (`git diff --stat` empty). Not reproduced here. Read: the sysinfo 0.40.1 Linux component code
+    differs from 0.39.6 in no wait or sleep, and in the failed job's log no other test finished after 09:47:31.36 UTC while
+    this test ended at 09:47:32.25 (failed) and `cpu_temperature_is_plausible_or_absent`, which makes the same sysfs reads,
+    at 09:47:32.75, so the load test's spinning threads, which ended at 09:47:31.05, do not account for the whole delay.
+    The slow runner read is CONJECTURED to be a one-off of that VM; nothing here shows it. The test measures wall-clock time
+    over real I/O, so it can fail on a slow machine without the code being wrong. If it recurs, root-cause it before
+    changing the bound. Low.
+
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
   cross-site check (403; behind a reverse proxy whose `Origin` differs from `Host`, every
@@ -759,7 +862,7 @@ cohort retention of new arrivals and gap sensitivity (item 28).
 
 **Before every push: `scripts/preflight.sh`** (add `--msrv`; `--tests` when the disk allows). It is the workflows'
 own commands at the workflows' scope, and it fails on a tool it cannot find. Install the tools it names first
-(`cargo install --locked typos-cli --version 1.51.1`, `cargo-machete`, `cargo-deny`, `cargo-audit --version
+(`cargo install --locked typos-cli --version 1.52.0`, `cargo-machete`, `cargo-deny`, `cargo-audit --version
 0.22.2`; crates.io and PyPI are reachable from the container, GitHub release downloads are not). The pull requests
 before #274 lost CI cycles to checks that were not run locally; `CLAUDE.md`, *Testing Conventions*, has the list and
 the reasons. What earlier sessions learned from CI (CodeQL's path-injection class, the kiosk's focus ring, the GNU ld

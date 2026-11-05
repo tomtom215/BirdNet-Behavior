@@ -225,6 +225,11 @@ pub fn run_daemon(
 
     let filter_observer = config.on_species_filter_state.clone();
     let throughput = config.on_file_analysed.clone();
+    // What each classifier is, stated once now that they are loaded. The window
+    // record (`model_health`) says how they are doing; this says what they are.
+    if let Some(observer) = throughput.as_ref() {
+        observer.model_info(&registry.info());
+    }
     let in_flight = config.in_flight.clone();
     let shed_policy = config.shed.clone();
     // The shed decision is logged on change, not on every 500 ms sweep.
@@ -1196,9 +1201,17 @@ mod tests {
         config.process_existing = true;
         let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let r = std::sync::Arc::clone(&reported);
+        let stated = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stated_in = std::sync::Arc::clone(&stated);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = std::sync::Arc::clone(&calls);
         config.on_file_analysed = Some(
             super::super::ThroughputObserver::new(|_| {})
-                .with_model_health(move |h| r.lock().unwrap().clone_from(&h.to_vec())),
+                .with_model_health(move |h| r.lock().unwrap().clone_from(&h.to_vec()))
+                .with_model_info(move |info| {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    stated_in.lock().unwrap().clone_from(&info.to_vec());
+                }),
         );
         let old = write_noise(&config.watch_dir, "2026-05-19-birdnet-08:00:00.wav", 3);
         std::fs::File::options()
@@ -1237,6 +1250,21 @@ mod tests {
         );
         assert!(health[0].1.last_success_at.is_some(), "{health:?}");
         assert!(!health[0].1.is_failing(), "{health:?}");
+        // The time each answered window took is measured, so a mean exists.
+        assert!(health[0].1.timed_windows >= 1, "{health:?}");
+        assert!(health[0].1.mean_inference_micros().is_some(), "{health:?}");
+
+        // What the classifier is was stated exactly once, at startup, from the
+        // loaded model: not once per file, and not from the config's say-so.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let info = stated.lock().unwrap().clone();
+        assert_eq!(info.len(), 1, "{info:?}");
+        assert_eq!(info[0].id, "birdnet");
+        assert!(info[0].window_secs > 0.0 && info[0].labels > 0, "{info:?}");
+        assert!(
+            (info[0].bar - config.model.confidence_threshold).abs() < f32::EPSILON,
+            "the bar is the one detections are judged against: {info:?}"
+        );
     }
 
     /// A watched segment is judged by its source's route (`MODEL_ROUTES`).

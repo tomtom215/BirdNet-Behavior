@@ -45,6 +45,56 @@ pub struct Detection {
     /// answered.
     #[serde(default)]
     pub agreeing_models: Option<u8>,
+    /// What every classifier that listened to this chunk said about this
+    /// species, each on its own scale (migrations 57 and 58).
+    ///
+    /// Empty when nothing recorded it: a detection built outside the daemon, a
+    /// row older than the feature, or a chunk only one classifier listened to
+    /// (a comparison needs two; with one, the detection row is the whole
+    /// record). One entry per classifier that ran, so a classifier absent from
+    /// the list was not asked, which is not the same as one that was asked and
+    /// could not judge ([`AnswerState::NoLabel`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_scores: Vec<ModelAnswer>,
+}
+
+/// What one classifier could say about one species in one chunk.
+///
+/// Four states rather than a score and a flag: scoring a species low, having no
+/// class for it, and failing the window are different facts, and a reader that
+/// rounds them all to zero reports a model's silence as its opinion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerState {
+    /// Scored at or above its own bar.
+    Heard,
+    /// Scored, and did not clear its own bar.
+    BelowBar,
+    /// Has no class for this species, so it cannot judge.
+    NoLabel,
+    /// Its window failed, or gave no usable number for this species.
+    Failed,
+}
+
+/// One classifier's own answer about one species in one chunk.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelAnswer {
+    /// The classifier's id, as configured.
+    pub model_id: String,
+    /// What it could say.
+    pub state: AnswerState,
+    /// Its own score, 0 to 1, on its own scale. `Some` exactly for
+    /// [`AnswerState::Heard`] and [`AnswerState::BelowBar`].
+    pub score: Option<f32>,
+    /// The bar that score was judged against: the classifier's own threshold,
+    /// else the station's, as loaded (not the lowered floor the daemon runs it
+    /// at). `Some` exactly when `score` is.
+    pub bar: Option<f32>,
+    /// Where in the recording the classifier's window began, seconds.
+    pub window_start_secs: f32,
+    /// Where it ended. Classifiers' windows differ in length, so "the same
+    /// chunk" is not "the same instants".
+    pub window_end_secs: f32,
 }
 
 /// What one inference pass says about one chunk of audio.
@@ -252,6 +302,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         };
         assert_eq!(det.confidence_pct(), 88);
         assert_eq!(det.common_name_safe(), "Eurasian_Blackbird");
@@ -302,6 +353,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         };
         let display = format!("{det}");
         assert!(display.contains("Eurasian Blackbird"));
@@ -322,6 +374,7 @@ mod tests {
             file_name_extr: None,
             model_id: None,
             agreeing_models: None,
+            model_scores: Vec::new(),
         };
         assert_eq!(det.species(), "Turdus merula_Eurasian Blackbird");
     }

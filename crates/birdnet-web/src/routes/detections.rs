@@ -15,6 +15,7 @@ pub fn router() -> Router<AppState> {
         .route("/detections", get(list_detections))
         .route("/detections/recent", get(recent_detections))
         .route("/detections/daily", get(daily_detections))
+        .route("/detections/models", get(detection_models))
 }
 
 #[derive(Deserialize)]
@@ -108,6 +109,140 @@ async fn list_detections(
                 "detections": [],
                 "count": 0,
             })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct ModelsQuery {
+    date: Option<String>,
+    time: Option<String>,
+    sci_name: Option<String>,
+    /// The detection's clip (`file_name` on a detection row). Needed only when
+    /// several detections share the date, time and species; `""` names one with
+    /// no clip.
+    file_name: Option<String>,
+}
+
+/// Which detection a models request named.
+enum ModelsLookup {
+    /// No detection has that date, time, species (and clip).
+    NotFound,
+    /// Several detections share the date, time and species; the caller must say
+    /// which by clip. Carries every clip.
+    Ambiguous(Vec<String>),
+    /// The detection: its clip, what its row recorded, and every stored answer.
+    Found(
+        String,
+        birdnet_db::sqlite::DetectionModelSummary,
+        Vec<birdnet_db::sqlite::ModelScore>,
+    ),
+}
+
+/// What each classifier said about one detection (migrations 57 and 58).
+///
+/// `model_id` and `model_agreement` are the row's own record of which
+/// classifier supplied its answer and how many cleared their bars; `models` is
+/// every classifier's own answer, which may be empty (a row from before the
+/// feature, a station that runs one classifier, or a source only one classifier
+/// listened to) and is then not the same as "no classifier heard it". Each score
+/// is on its classifier's own scale and none is combined with another.
+///
+/// Two sources hearing one bird in one second are two detections that share a
+/// date, a time and a species. Pass `file_name` (as it appears on the detection
+/// row) to say which; without it the request is answered when the triple names
+/// one detection and refused with `409` and the clips to choose from when it
+/// names several, rather than answering for whichever came first.
+async fn detection_models(
+    State(state): State<AppState>,
+    Query(query): Query<ModelsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let (Some(date), Some(time), Some(sci_name)) = (
+        nonblank(query.date),
+        nonblank(query.time),
+        nonblank(query.sci_name),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "date, time and sci_name are required"})),
+        );
+    };
+    if !is_valid_date(&date) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid date format, expected YYYY-MM-DD"})),
+        );
+    }
+    let (read_date, read_time, read_sci, named_file) = (
+        date.clone(),
+        time.clone(),
+        sci_name.clone(),
+        query.file_name,
+    );
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| {
+            let file = if let Some(file) = named_file {
+                file
+            } else {
+                let mut files = birdnet_db::sqlite::detection_files_at(
+                    conn, &read_date, &read_time, &read_sci,
+                )?;
+                match files.len() {
+                    0 => return Ok(ModelsLookup::NotFound),
+                    1 => files.remove(0),
+                    _ => return Ok(ModelsLookup::Ambiguous(files)),
+                }
+            };
+            let key = birdnet_db::sqlite::DetectionKey {
+                date: &read_date,
+                time: &read_time,
+                sci_name: &read_sci,
+                file_name: Some(&file),
+            };
+            let Some(summary) = birdnet_db::sqlite::detection_model_summary(conn, &key)? else {
+                return Ok(ModelsLookup::NotFound);
+            };
+            let models = birdnet_db::sqlite::model_scores_for_detection(conn, &key)?;
+            Ok::<_, DbError>(ModelsLookup::Found(file, summary, models))
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(ModelsLookup::Found(file, summary, models))) => {
+            let mut body = json!({
+                "detection": format!("{date} {time} {sci_name}"),
+                "file_name": file,
+                "models": models,
+            });
+            // Omitted when unknown, as on a detection row: a legacy row has no
+            // record of either, which `null` would blur with a recorded zero.
+            if let Some(id) = summary.model_id {
+                body["model_id"] = json!(id);
+            }
+            if let Some(n) = summary.agreement {
+                body["model_agreement"] = json!(n);
+            }
+            (StatusCode::OK, Json(body))
+        }
+        Ok(Ok(ModelsLookup::Ambiguous(files))) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "several detections share that date, time and species; pass file_name to choose one",
+                "file_names": files,
+            })),
+        ),
+        Ok(Ok(ModelsLookup::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such detection"})),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
     }
 }

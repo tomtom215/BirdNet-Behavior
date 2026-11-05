@@ -222,6 +222,9 @@ pub struct MetricsRegistry {
     /// Each classifier's health as the daemon last reported it, primary
     /// first (`e853776`). Empty until the daemon has analysed a file.
     model_health: RwLock<Vec<(String, birdnet_core::inference::health::ModelHealth)>>,
+    /// What each classifier is (window, rate, labels, bar), as the daemon stated
+    /// it once the classifiers had loaded, primary first. Empty until then.
+    model_info: RwLock<Vec<birdnet_core::inference::registry::ModelInfo>>,
     /// Notifications that never left the station, by why.
     ///
     /// Both guards on the outbound path — the per-destination circuit breaker
@@ -303,6 +306,7 @@ impl MetricsRegistry {
             segments_shed: RwLock::new(HashMap::new()),
             analysis_queue_depth: AtomicU64::new(u64::MAX),
             model_health: RwLock::new(Vec::new()),
+            model_info: RwLock::new(Vec::new()),
             notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
@@ -415,6 +419,23 @@ impl MetricsRegistry {
             current.clear();
             current.extend_from_slice(health);
         }
+    }
+
+    /// Publish what each classifier is, once they have loaded.
+    pub fn set_model_info(&self, info: &[birdnet_core::inference::registry::ModelInfo]) {
+        if let Ok(mut current) = self.model_info.write() {
+            current.clear();
+            current.extend_from_slice(info);
+        }
+    }
+
+    /// What each classifier is, primary first; empty before the daemon has
+    /// loaded them (or in web-only mode, where none is).
+    #[must_use]
+    pub fn model_info(&self) -> Vec<birdnet_core::inference::registry::ModelInfo> {
+        self.model_info
+            .read()
+            .map_or_else(|_| Vec::new(), |m| m.clone())
     }
 
     /// Each classifier's health as last reported, primary first; empty before
@@ -968,6 +989,31 @@ fn push_model_health_series(
             h.windows
         );
     }
+    out.push_str("# HELP birdnet_model_inference_seconds_total Seconds a classifier has spent inside inference on windows it answered, since it was loaded. Divide its rate by the rate of birdnet_model_inference_windows_total for the mean time per window. Absent for one that has answered none.\n");
+    out.push_str("# TYPE birdnet_model_inference_seconds_total counter\n");
+    for (model, h) in health {
+        if h.timed_windows > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            let secs = h.answered_micros as f64 / 1_000_000.0;
+            let _ = writeln!(
+                out,
+                "birdnet_model_inference_seconds_total{{model=\"{}\"}} {secs}",
+                escape_label(model)
+            );
+        }
+    }
+    out.push_str("# HELP birdnet_model_inference_windows_total Windows a classifier answered and timed, since it was loaded. The count behind birdnet_model_inference_seconds_total.\n");
+    out.push_str("# TYPE birdnet_model_inference_windows_total counter\n");
+    for (model, h) in health {
+        if h.timed_windows > 0 {
+            let _ = writeln!(
+                out,
+                "birdnet_model_inference_windows_total{{model=\"{}\"}} {}",
+                escape_label(model),
+                h.timed_windows
+            );
+        }
+    }
     out.push_str("# HELP birdnet_model_last_success_timestamp_seconds When a classifier last answered a window cleanly, in seconds since the Unix epoch. Absent for one that has not.\n");
     out.push_str("# TYPE birdnet_model_last_success_timestamp_seconds gauge\n");
     for (model, h) in health {
@@ -1460,6 +1506,56 @@ mod tests {
         // A later report replaces the earlier one rather than adding to it.
         m.set_model_health(&[("birdnet".to_owned(), good)]);
         assert_eq!(m.model_health().len(), 1);
+    }
+
+    /// The time a classifier spent answering is exported as a counter pair so a
+    /// scraper can compute the mean over any interval. A classifier that has
+    /// answered nothing has no time, which is omitted rather than exported as
+    /// zero: zero seconds over zero windows would read as a very fast model.
+    #[test]
+    fn the_time_a_classifier_spent_is_exported_only_once_it_has_answered() {
+        use birdnet_core::inference::health::ModelHealth;
+        use std::time::Duration;
+        let m = MetricsRegistry::new();
+        let mut timed = ModelHealth::default();
+        timed.succeeded(10);
+        timed.record_inference_time(Duration::from_millis(300));
+        timed.record_inference_time(Duration::from_millis(500));
+        let untimed = ModelHealth::default();
+        m.set_model_health(&[("perch".to_owned(), timed), ("new".to_owned(), untimed)]);
+        let text = render_runtime_metrics(&m.snapshot());
+        for line in [
+            "birdnet_model_inference_seconds_total{model=\"perch\"} 0.8",
+            "birdnet_model_inference_windows_total{model=\"perch\"} 2",
+        ] {
+            assert!(text.lines().any(|l| l == line), "missing {line}: {text}");
+        }
+        assert!(
+            !text.contains("birdnet_model_inference_seconds_total{model=\"new\"}")
+                && !text.contains("birdnet_model_inference_windows_total{model=\"new\"}"),
+            "a classifier that answered nothing has no time: {text}"
+        );
+    }
+
+    #[test]
+    fn what_each_classifier_is_replaces_rather_than_accumulates() {
+        use birdnet_core::inference::registry::ModelInfo;
+        let m = MetricsRegistry::new();
+        assert!(
+            m.model_info().is_empty(),
+            "nothing until the daemon states it"
+        );
+        let info = |id: &str| ModelInfo {
+            id: id.to_owned(),
+            window_secs: 3.0,
+            sample_rate: 48_000,
+            labels: 6_522,
+            bar: 0.7,
+        };
+        m.set_model_info(&[info("a"), info("b")]);
+        assert_eq!(m.model_info().len(), 2);
+        m.set_model_info(&[info("a")]);
+        assert_eq!(m.model_info().len(), 1);
     }
 
     #[test]

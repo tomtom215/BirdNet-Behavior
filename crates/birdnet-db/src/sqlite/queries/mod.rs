@@ -12,6 +12,7 @@ pub mod images;
 pub mod imports;
 pub mod insights;
 pub mod maintenance;
+pub mod model_scores;
 pub mod overview;
 pub mod quarantine;
 pub mod species;

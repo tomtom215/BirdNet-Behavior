@@ -9,12 +9,14 @@
 //! 3. Apply sigmoid with sensitivity adjustment
 //! 4. Return top-N species above confidence threshold
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
 use ort::session::Session;
 use ort::value::{Tensor, ValueType};
 
+use crate::detection::answers::ClassScore;
 use crate::detection::privacy::names_a_human;
 use crate::detection::types::{ChunkPrediction, Detection};
 use crate::inference::labels::LabelSet;
@@ -86,12 +88,11 @@ pub struct BirdNetModel {
     labels: LabelSet,
     config: ModelConfig,
     input_shape: Vec<usize>,
-    /// True when the model's `predictions` output is already a probability
-    /// distribution in `[0, 1]`. BirdNET+ V3.0 preview models report this;
-    /// V2.4 fixed-shape models emit raw logits that still need
-    /// sigmoid+sensitivity to reach probabilities. Set once at load time
-    /// from the input shape.
-    is_probability_output: bool,
+    /// How this model's raw output becomes a confidence: already a probability
+    /// (BirdNET+ V3.0), a logit through a sigmoid and the sensitivity setting
+    /// (BirdNET V2.4), or a logit through a softmax over all classes (Perch).
+    /// Set once at load time from the input shape.
+    output_scale: OutputScale,
     /// Latches once the first label-count/output-dimension mismatch has been
     /// logged, so a mispaired model+labels file warns a single time instead of
     /// on every 3-second inference. `&mut self` in `predict`, so a plain bool
@@ -105,6 +106,16 @@ pub struct BirdNetModel {
     /// numbers; read by the daemon's per-classifier health
     /// ([`super::health`]). Zero before the first window.
     last_non_finite: usize,
+    /// The confidence the most recent window gave every class, by output
+    /// index, as [`compute_confidence`] maps it. A class whose output was not a
+    /// finite number holds NaN rather than the 0 the confidence mapping would
+    /// give it, so [`Self::score_of_last_window`] can tell "scored zero" from
+    /// "gave no number". Overwritten by every window; empty before the first.
+    last_scores: Vec<f32>,
+    /// Output indices by scientific name, found once at load, so "what did you
+    /// score this species" is a lookup rather than a scan of every label. A
+    /// name a label file repeats maps to every index that carries it.
+    class_index: HashMap<String, Vec<usize>>,
     /// Output indices whose label names a human class, found once at load so
     /// the per-chunk human score is a lookup rather than a scan of every label.
     human_indices: Vec<usize>,
@@ -201,23 +212,26 @@ impl BirdNetModel {
 
         let input_shape = extract_input_shape(&session)?;
 
-        let is_probability_output = output_is_probability(&input_shape);
+        let output_scale = output_scale_of(&input_shape);
         tracing::info!(
             input_shape = ?input_shape,
-            is_probability_output,
+            output_scale = output_scale.as_str(),
             "model loaded successfully"
         );
 
         let human_indices = human_indices(&labels);
+        let class_index = class_index(&labels);
         Ok(Self {
             session,
             labels,
             config,
             input_shape,
-            is_probability_output,
+            output_scale,
             warned_label_count_mismatch: false,
             warned_non_finite: false,
             last_non_finite: 0,
+            last_scores: Vec::new(),
+            class_index,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -238,18 +252,21 @@ impl BirdNetModel {
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
         let input_shape = extract_input_shape(&session)?;
-        let is_probability_output = output_is_probability(&input_shape);
+        let output_scale = output_scale_of(&input_shape);
 
         let human_indices = human_indices(&labels);
+        let class_index = class_index(&labels);
         Ok(Self {
             session,
             labels,
             config,
             input_shape,
-            is_probability_output,
+            output_scale,
             warned_label_count_mismatch: false,
             warned_non_finite: false,
             last_non_finite: 0,
+            last_scores: Vec::new(),
+            class_index,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -289,6 +306,45 @@ impl BirdNetModel {
     #[must_use]
     pub const fn last_non_finite_scores(&self) -> usize {
         self.last_non_finite
+    }
+
+    /// How many classes this model has names for.
+    #[must_use]
+    pub const fn label_count(&self) -> usize {
+        self.labels.len()
+    }
+
+    /// What the most recent [`Self::predict_chunk`] scored the class named
+    /// `scientific_name`, on this model's own scale.
+    ///
+    /// Only meaningful straight after a window that succeeded: the scores are
+    /// those of the last window run, so a caller whose window failed must not
+    /// ask. When a label file gives a name more than one class, the highest
+    /// usable score among them is returned.
+    #[must_use]
+    pub fn score_of_last_window(&self, scientific_name: &str) -> ClassScore {
+        let Some(indices) = self.class_index.get(scientific_name) else {
+            return ClassScore::NoClass;
+        };
+        let mut best: Option<f32> = None;
+        let mut had_output = false;
+        for &i in indices {
+            // A label past the end of the output has no number behind it: the
+            // model and labels are a mismatched pair (warned about at the
+            // first window), and that class cannot be judged.
+            let Some(&score) = self.last_scores.get(i) else {
+                continue;
+            };
+            had_output = true;
+            if score.is_finite() {
+                best = Some(best.map_or(score, |b| b.max(score)));
+            }
+        }
+        match (best, had_output) {
+            (Some(score), _) => ClassScore::Score(score),
+            (None, true) => ClassScore::Unusable,
+            (None, false) => ClassScore::NoClass,
+        }
     }
 
     /// Run inference on raw audio samples.
@@ -400,9 +456,21 @@ impl BirdNetModel {
 
         let mut detections = Vec::new();
 
+        // Every conversion of a raw output to a confidence below goes through
+        // this one object, so the detections, the kept scores, the privacy gate
+        // and the noise filter cannot disagree about what a number means.
+        let scoring = Scoring::new(self.output_scale, self.config.sensitivity, flat_logits);
+        self.last_scores.clear();
+        self.last_scores.reserve(flat_logits.len());
         for (i, &raw) in flat_logits.iter().enumerate() {
-            let confidence =
-                compute_confidence(raw, self.config.sensitivity, self.is_probability_output);
+            let confidence = scoring.confidence(raw);
+            // Kept for every class, before either cut below: a species this
+            // window did not report is still a species the window scored.
+            self.last_scores.push(if raw.is_finite() {
+                confidence
+            } else {
+                f32::NAN
+            });
 
             if confidence >= self.config.confidence_threshold
                 && let Some(label) = self.labels.get(i)
@@ -423,6 +491,7 @@ impl BirdNetModel {
                     // both in with one classifier and an agreement of one.
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 });
             }
         }
@@ -477,7 +546,7 @@ impl BirdNetModel {
             .human_indices
             .iter()
             .filter_map(|&i| flat_logits.get(i))
-            .map(|&raw| human_confidence(raw, self.config.sensitivity, self.is_probability_output))
+            .map(|&raw| scoring.human_confidence(raw))
             .fold(0.0_f32, f32::max);
 
         // The watched noise classes, likewise before either cut: the noise
@@ -487,12 +556,7 @@ impl BirdNetModel {
             .noise_indices
             .iter()
             .filter_map(|&i| Some((i, *flat_logits.get(i)?)))
-            .map(|(i, raw)| {
-                (
-                    i,
-                    compute_confidence(raw, self.config.sensitivity, self.is_probability_output),
-                )
-            })
+            .map(|(i, raw)| (i, scoring.confidence(raw)))
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .and_then(|(i, confidence)| {
                 let label = self.labels.get(i)?;
@@ -508,6 +572,7 @@ impl BirdNetModel {
                     file_name_extr: None,
                     model_id: None,
                     agreeing_models: None,
+                    model_scores: Vec::new(),
                 })
             });
 
@@ -786,11 +851,17 @@ impl BirdNetModel {
     }
 
     /// Whether the model emits already-calibrated probabilities (`true`) or
-    /// raw logits requiring sigmoid + sensitivity scaling (`false`).
+    /// raw logits (`false`: through a sigmoid and the sensitivity for V2.4, or
+    /// a softmax for Perch; see [`Self::output_scale`]).
     ///
-    /// V3.0 preview models report `true`; V2.4 models report `false`.
+    /// V3.0 preview models report `true`; V2.4 and Perch models report `false`.
     pub const fn is_probability_output(&self) -> bool {
-        self.is_probability_output
+        matches!(self.output_scale, OutputScale::Probability)
+    }
+
+    /// How this model's raw output is turned into a confidence.
+    pub const fn output_scale(&self) -> OutputScale {
+        self.output_scale
     }
 
     /// Update the sensitivity value.
@@ -804,23 +875,140 @@ impl BirdNetModel {
     }
 }
 
-/// Determine whether the model's `predictions` output is already a
-/// probability distribution in `[0, 1]`, based on the input shape.
+/// How a model's raw output is turned into a confidence in `[0, 1]`.
 ///
-/// BirdNET+ V3.0 preview models declare a fully-dynamic input shape
-/// (`[1]` or `[1, 1]`) and emit calibrated probabilities. BirdNET V2.4
-/// fixed-shape models (`[1, 144_000]`) emit raw logits that still need
-/// sigmoid + sensitivity scaling.
+/// The three differ in what the model was *trained* to output, and the mapping
+/// has to follow the training: a number means something only under the loss that
+/// produced it.
 ///
-/// V3.0 fixed-shape (`[1, 96_000]`) follows the V3.0 calibration too.
-const fn output_is_probability(input_shape: &[usize]) -> bool {
+/// * [`Logit`](Self::Logit): BirdNET V2.4. Trained with a sigmoid and binary
+///   cross-entropy, one independent yes/no per class, so each class's logit goes
+///   through a sigmoid of its own, scaled by the `SENSITIVITY` setting.
+/// * [`Probability`](Self::Probability): BirdNET+ V3.0. Already a calibrated
+///   probability in `[0, 1]`; sensitivity does not apply.
+/// * [`Softmax`](Self::Softmax): Perch v2. Its classifier head is trained with a
+///   **softmax** and cross-entropy over all 14 795 classes ("rather than the more
+///   traditional sigmoid binary cross-entropy used in multi-label
+///   classification", Perch 2.0, arXiv:2508.04665 §2.3). A softmax logit is only
+///   meaningful relative to the others: a sigmoid of it is not a probability, and
+///   on a real recording it put about a thousand of the 14 795 classes above 0.70
+///   in *every* window, bird or no bird. The confidence is the class's share of
+///   the probability the model spreads over the classes, so the confidences of one
+///   window sum to 1, and two species singing at once cannot both exceed 0.5.
+///   Sensitivity does not apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputScale {
+    /// A logit through `sigmoid(slope(sensitivity) × raw)`.
+    Logit,
+    /// Already a probability.
+    Probability,
+    /// A logit through a softmax over every class in the output.
+    Softmax,
+}
+
+impl OutputScale {
+    /// The name the start-up log and the manual use for it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Logit => "sigmoid",
+            Self::Probability => "probability",
+            Self::Softmax => "softmax",
+        }
+    }
+}
+
+/// Which [`OutputScale`] a model has, from its input shape.
+///
+/// BirdNET+ V3.0 preview models declare a fully-dynamic input shape (`[1]` or
+/// `[1, 1]`) or `96 000` samples (32 kHz × 3 s) and emit calibrated
+/// probabilities. Perch v2 declares `160 000` samples (5 s at 32 kHz). BirdNET
+/// V2.4 (`144 000`, 48 kHz × 3 s) and anything unknown emit logits for a sigmoid:
+/// an unrecognised model is read as the one whose output carries the most
+/// information, rather than lose its signal.
+const fn output_scale_of(input_shape: &[usize]) -> OutputScale {
     match input_shape {
-        // V3.0 fixed (32 kHz × 3 s = 96 000 samples) and V3.0 dynamic
-        // preview both emit already-calibrated probabilities.
-        [_, 96_000] | [_, _, 96_000] | [1] | [1, 1] | [1, 1, 1] => true,
-        // V2.4 and any unknown future model → assume raw logits so we
-        // never lose the confidence signal for a model we can't classify.
-        _ => false,
+        [_, 96_000] | [_, _, 96_000] | [1] | [1, 1] | [1, 1, 1] => OutputScale::Probability,
+        [_, 160_000] | [_, _, 160_000] => OutputScale::Softmax,
+        _ => OutputScale::Logit,
+    }
+}
+
+/// The normaliser of one window's softmax: the largest finite output and the
+/// sum of `exp(output − largest)` over the finite ones. Subtracting the largest
+/// first is what keeps `exp` from overflowing on a large logit.
+struct SoftmaxNorm {
+    max: f32,
+    sum: f64,
+}
+
+impl SoftmaxNorm {
+    fn of(outputs: &[f32]) -> Self {
+        let max = outputs
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let sum = outputs
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .map(|v| f64::from(v - max).exp())
+            .sum();
+        Self { max, sum }
+    }
+
+    /// One class's share, `0.0` for an output that is not a number: a damaged
+    /// class is never a detection, as in [`compute_confidence`].
+    #[allow(clippy::cast_possible_truncation)]
+    fn probability(&self, raw: f32) -> f32 {
+        if !raw.is_finite() || self.sum <= 0.0 {
+            return 0.0;
+        }
+        ((f64::from(raw - self.max).exp() / self.sum) as f32).clamp(0.0, 1.0)
+    }
+}
+
+/// Turns a window's raw outputs into confidences under the model's
+/// [`OutputScale`]. Built once per window, because a softmax needs the whole
+/// output before it can say anything about one class.
+struct Scoring {
+    scale: OutputScale,
+    sensitivity: f32,
+    softmax: Option<SoftmaxNorm>,
+}
+
+impl Scoring {
+    fn new(scale: OutputScale, sensitivity: f32, outputs: &[f32]) -> Self {
+        Self {
+            scale,
+            sensitivity,
+            softmax: (scale == OutputScale::Softmax).then(|| SoftmaxNorm::of(outputs)),
+        }
+    }
+
+    fn confidence(&self, raw: f32) -> f32 {
+        self.softmax.as_ref().map_or_else(
+            || {
+                compute_confidence(
+                    raw,
+                    self.sensitivity,
+                    self.scale == OutputScale::Probability,
+                )
+            },
+            |norm| norm.probability(raw),
+        )
+    }
+
+    /// [`Self::confidence`] for a human class, failing towards privacy: a score
+    /// the model could not produce is treated as speech present (1.0), so the
+    /// clip is masked rather than kept on the strength of a broken output.
+    fn human_confidence(&self, raw: f32) -> f32 {
+        if raw.is_finite() {
+            self.confidence(raw)
+        } else {
+            1.0
+        }
     }
 }
 
@@ -1117,7 +1305,7 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 /// A non-finite `raw` is **0.0**, never a detection. A model that overflows
 /// emits `inf`, and both mappings send `+inf` to exactly 1.0 — a confident
 /// detection of whichever label sits at that index. The privacy gate reads
-/// the same output the opposite way (`human_confidence`, private).
+/// the same output the opposite way (`Scoring::human_confidence`, private).
 #[must_use]
 pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
     if !raw.is_finite() {
@@ -1140,17 +1328,6 @@ pub const fn logit_slope(sensitivity: f32) -> f32 {
     (2.0 - sensitivity).clamp(0.5, 1.5)
 }
 
-/// [`compute_confidence`] for a human class, failing towards privacy: a
-/// score the model could not produce is treated as speech present (1.0), so
-/// the clip is masked rather than kept on the strength of a broken output.
-fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
-    if raw.is_finite() {
-        compute_confidence(raw, sensitivity, is_probability)
-    } else {
-        1.0
-    }
-}
-
 /// How many classes outscored the best human class: `0` when a human class
 /// is the model's top answer, `None` when the label set has no human class
 /// the output covers.
@@ -1159,7 +1336,7 @@ fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
 /// confidences do (the sigmoid is monotonic, and a probability model's
 /// output already is the confidence), so this does not depend on the
 /// sensitivity setting. A human class whose score is not finite ranks `0`,
-/// for the reason [`human_confidence`] reads it as speech: a damaged output
+/// for the reason `Scoring::human_confidence` reads it as speech: a damaged output
 /// must not be able to switch the privacy filter off.
 fn human_rank(raw_scores: &[f32], human_indices: &[usize]) -> Option<usize> {
     human_indices
@@ -1228,6 +1405,18 @@ fn human_indices(labels: &LabelSet) -> Vec<usize> {
         .filter(|label| names_a_human(&label.scientific_name, &label.common_name))
         .map(|label| label.index)
         .collect()
+}
+
+/// Output indices by scientific name.
+fn class_index(labels: &LabelSet) -> HashMap<String, Vec<usize>> {
+    let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+    for label in labels.iter() {
+        by_name
+            .entry(label.scientific_name.clone())
+            .or_default()
+            .push(label.index);
+    }
+    by_name
 }
 
 /// Apply sigmoid function: `1 / (1 + exp(-x))`.
@@ -1351,31 +1540,51 @@ mod tests {
     #[test]
     fn v24_emits_raw_logits() {
         // V2.4 fixed-shape model needs sigmoid.
-        assert!(!output_is_probability(&[1, 144_000]));
-        assert!(!output_is_probability(&[1, 1, 144_000]));
+        assert_eq!(output_scale_of(&[1, 144_000]), OutputScale::Logit);
+        assert_eq!(output_scale_of(&[1, 1, 144_000]), OutputScale::Logit);
+    }
+
+    /// Perch v2's tensor is `[-1, 160000]`: 5 s at 32 kHz. Its head is trained
+    /// with a softmax, so it is neither V2.4's sigmoid nor V3.0's probability.
+    #[test]
+    fn perch_emits_softmax_logits() {
+        assert_eq!(output_scale_of(&[1, 160_000]), OutputScale::Softmax);
+        assert_eq!(output_scale_of(&[1, 1, 160_000]), OutputScale::Softmax);
+        assert_eq!(output_scale_of(&[7, 160_000]), OutputScale::Softmax);
     }
 
     #[test]
     fn v30_fixed_emits_probabilities() {
         // V3.0 fixed shape is already calibrated.
-        assert!(output_is_probability(&[1, 96_000]));
-        assert!(output_is_probability(&[1, 1, 96_000]));
+        assert_eq!(output_scale_of(&[1, 96_000]), OutputScale::Probability);
+        assert_eq!(output_scale_of(&[1, 1, 96_000]), OutputScale::Probability);
     }
 
     #[test]
     fn v30_dynamic_emits_probabilities() {
         // V3.0 preview (dynamic) is also already calibrated.
-        assert!(output_is_probability(&[1]));
-        assert!(output_is_probability(&[1, 1]));
-        assert!(output_is_probability(&[1, 1, 1]));
+        assert_eq!(output_scale_of(&[1]), OutputScale::Probability);
+        assert_eq!(output_scale_of(&[1, 1]), OutputScale::Probability);
+        assert_eq!(output_scale_of(&[1, 1, 1]), OutputScale::Probability);
+    }
+
+    /// The `output_scale=` field of the `model loaded successfully` log line is
+    /// how an operator learns which of the three a classifier uses, and
+    /// `docs/book/admin/classifiers.md` names these three words. Nothing else
+    /// reads them, so only an exact comparison holds them.
+    #[test]
+    fn each_output_scale_has_the_name_the_manual_gives_it() {
+        assert_eq!(OutputScale::Logit.as_str(), "sigmoid");
+        assert_eq!(OutputScale::Probability.as_str(), "probability");
+        assert_eq!(OutputScale::Softmax.as_str(), "softmax");
     }
 
     #[test]
     fn unknown_shape_defaults_to_logits() {
         // Belt-and-braces: an unknown future model is assumed to need
         // sigmoid rather than have us silently lose the confidence signal.
-        assert!(!output_is_probability(&[1, 999_999]));
-        assert!(!output_is_probability(&[]));
+        assert_eq!(output_scale_of(&[1, 999_999]), OutputScale::Logit);
+        assert_eq!(output_scale_of(&[]), OutputScale::Logit);
     }
 
     #[test]
@@ -1406,6 +1615,9 @@ mod tests {
 
     const TINY_V24_MODEL: &[u8] = include_bytes!("../testdata/tiny_v24_test.onnx");
     const TINY_V30_MODEL: &[u8] = include_bytes!("../testdata/tiny_v30_test.onnx");
+    /// Perch-shaped: input `[1, 160000]`, output `label` `[1, 11]` = the first 11
+    /// samples. (Generated like the V2.4 one: a single `Slice` node, ONNX opset 13.)
+    const TINY_PERCH_MODEL: &[u8] = include_bytes!("../testdata/tiny_perch_test.onnx");
     const TINY_DYNAMIC_MODEL: &[u8] = include_bytes!("../testdata/tiny_dynamic_test.onnx");
 
     fn tiny_labels() -> LabelSet {
@@ -1542,6 +1754,201 @@ mod tests {
                 window[i]
             );
         }
+    }
+
+    /// A 96 000-sample window whose first eleven values are `head` (the tiny V3.0
+    /// model returns `audio[i]` at output `i`) and the rest zero.
+    fn window_with(head: &[f32]) -> Vec<f32> {
+        let mut w = vec![0.0_f32; 96_000];
+        w[..head.len()].copy_from_slice(head);
+        w
+    }
+
+    fn run_window(m: &mut BirdNetModel, head: &[f32]) -> ChunkPrediction {
+        m.predict_chunk(&window_with(head), "2026-11-01", "06:00:00", 0.0, 3.0, 44)
+            .expect("the tiny V3.0 model infers")
+    }
+
+    /// The reason this exists: the classifier reports only what cleared its
+    /// threshold and fits the top-N cut, so a species it scored 0.40 is absent
+    /// from the result, and "what did this model score it" had no answer.
+    #[test]
+    fn every_class_the_window_scored_is_kept_not_only_the_reported_ones() {
+        let config = ModelConfig {
+            confidence_threshold: 0.70,
+            ..ModelConfig::default()
+        };
+        let mut m =
+            BirdNetModel::load_from_bytes(TINY_V30_MODEL, tiny_labels(), config).expect("loads");
+        let out = run_window(&mut m, &[0.10, 0.95, 0.40, 0.88]);
+        let reported: Vec<_> = out
+            .detections
+            .iter()
+            .map(|d| d.scientific_name.as_str())
+            .collect();
+        assert_eq!(
+            reported,
+            ["Species_1", "Species_3"],
+            "only 0.95 and 0.88 clear 0.70"
+        );
+        // Not reported, still scored.
+        assert_eq!(m.score_of_last_window("Species_2"), ClassScore::Score(0.40));
+        assert_eq!(m.score_of_last_window("Species_0"), ClassScore::Score(0.10));
+        assert_eq!(m.score_of_last_window("Species_1"), ClassScore::Score(0.95));
+        // A class the window scored exactly zero is a score of zero.
+        assert_eq!(m.score_of_last_window("Species_9"), ClassScore::Score(0.0));
+    }
+
+    /// What a row says (`Confidence`) and what this reports for the same
+    /// species must be the same number, or the lead classifier's answer on the
+    /// card would disagree with the row beside it.
+    #[test]
+    fn a_reported_detection_and_its_kept_score_are_the_same_number() {
+        let config = ModelConfig {
+            confidence_threshold: 0.30,
+            ..ModelConfig::default()
+        };
+        let mut m =
+            BirdNetModel::load_from_bytes(TINY_V30_MODEL, tiny_labels(), config).expect("loads");
+        let out = run_window(&mut m, &[0.35, 0.95, 0.40, 0.88, 0.5, 0.31]);
+        assert!(out.detections.len() >= 5, "{:?}", out.detections.len());
+        for d in &out.detections {
+            assert_eq!(
+                m.score_of_last_window(&d.scientific_name),
+                ClassScore::Score(d.confidence),
+                "{}",
+                d.scientific_name
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_the_model_has_no_class_for_is_no_class_and_so_is_everything_before_a_window() {
+        let mut m = load_tiny_v30();
+        assert_eq!(
+            m.score_of_last_window("Species_3"),
+            ClassScore::NoClass,
+            "no window yet"
+        );
+        run_window(&mut m, &[0.9]);
+        assert_eq!(m.score_of_last_window("Turdus merula"), ClassScore::NoClass);
+    }
+
+    #[test]
+    fn a_non_finite_output_is_unusable_and_not_a_score_of_zero() {
+        let mut m = load_tiny_v30();
+        run_window(&mut m, &[0.9, 0.9, 0.9, 0.9, f32::NAN]);
+        assert_eq!(m.score_of_last_window("Species_4"), ClassScore::Unusable);
+        assert_eq!(m.score_of_last_window("Species_3"), ClassScore::Score(0.9));
+        assert_eq!(m.last_non_finite_scores(), 1);
+    }
+
+    #[test]
+    fn a_label_file_that_repeats_a_name_scores_it_as_its_best_class() {
+        let mut entries: Vec<(String, String)> = (0..11)
+            .map(|i| (format!("Species_{i}"), format!("Bird {i}")))
+            .collect();
+        entries[6].0 = "Species_2".to_owned();
+        let mut m = BirdNetModel::load_from_bytes(
+            TINY_V30_MODEL,
+            LabelSet::from_entries(entries),
+            ModelConfig::default(),
+        )
+        .expect("loads");
+        run_window(&mut m, &[0.0, 0.0, 0.40, 0.0, 0.0, 0.0, 0.80]);
+        assert_eq!(m.score_of_last_window("Species_2"), ClassScore::Score(0.80));
+        // And a name only one class carries is unaffected by the other.
+        assert_eq!(m.score_of_last_window("Species_6"), ClassScore::NoClass);
+    }
+
+    /// Scores are those of the last window. If a window did not replace them, a
+    /// classifier that failed would answer with the previous window's numbers.
+    #[test]
+    fn the_next_window_replaces_the_scores_it_does_not_add_to_them() {
+        let mut m = load_tiny_v30();
+        run_window(&mut m, &[0.9, 0.2]);
+        assert_eq!(m.score_of_last_window("Species_0"), ClassScore::Score(0.9));
+        run_window(&mut m, &[0.1, 0.8]);
+        assert_eq!(m.score_of_last_window("Species_0"), ClassScore::Score(0.1));
+        assert_eq!(m.score_of_last_window("Species_1"), ClassScore::Score(0.8));
+    }
+
+    #[test]
+    fn a_logit_model_s_kept_score_goes_through_the_same_sigmoid_as_its_detections() {
+        // V2.4 shape: raw logits mapped by sigmoid(slope × logit).
+        let config = ModelConfig {
+            confidence_threshold: 0.01,
+            sensitivity: 1.25,
+            ..ModelConfig::default()
+        };
+        let mut m =
+            BirdNetModel::load_from_bytes(TINY_V24_MODEL, tiny_labels(), config).expect("loads");
+        let mut w = vec![0.0_f32; 144_000];
+        w[0] = 2.0;
+        w[1] = -3.0;
+        let out = m
+            .predict_chunk(&w, "2026-11-01", "06:00:00", 0.0, 3.0, 44)
+            .expect("the tiny V2.4 model infers");
+        let expected = compute_confidence(2.0, 1.25, false);
+        assert_eq!(
+            m.score_of_last_window("Species_0"),
+            ClassScore::Score(expected)
+        );
+        assert!(expected > 0.8 && expected < 1.0, "{expected}");
+        let d0 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species_0")
+            .expect("reported");
+        assert_eq!(
+            m.score_of_last_window("Species_0"),
+            ClassScore::Score(d0.confidence)
+        );
+    }
+
+    /// The whole path for a Perch-shaped model: loaded, recognised, and every
+    /// number it reports a share of the window's softmax, not a sigmoid.
+    #[test]
+    fn a_perch_shaped_model_reports_softmax_shares_end_to_end() {
+        let config = ModelConfig {
+            confidence_threshold: 0.5,
+            sensitivity: 1.25,
+            ..ModelConfig::default()
+        };
+        let mut m = BirdNetModel::load_from_bytes(TINY_PERCH_MODEL, tiny_labels(), config)
+            .expect("the tiny Perch-shaped model loads");
+        assert_eq!(m.output_scale(), OutputScale::Softmax);
+        assert!(!m.is_probability_output());
+        // Eleven classes. Class 3 is far above the rest, which sit at zero.
+        let mut w = vec![0.0_f32; 160_000];
+        w[3] = 8.0;
+        let out = m
+            .predict_chunk(&w, "2026-11-01", "06:00:00", 0.0, 5.0, 44)
+            .expect("infers");
+        let want = 8.0_f32.exp() / (8.0_f32.exp() + 10.0);
+        assert_eq!(
+            out.detections.len(),
+            1,
+            "one class holds the window: {:?}",
+            out.detections
+        );
+        assert_eq!(out.detections[0].scientific_name, "Species_3");
+        assert!((out.detections[0].confidence - want).abs() < 1e-6);
+        // The sigmoid this replaced would have called all eleven present:
+        // sigmoid(0.75 × 0) is 0.5 and sigmoid(0.75 × 8) is 0.998.
+        let zero_share = 1.0 / (8.0_f32.exp() + 10.0);
+        match m.score_of_last_window("Species_0") {
+            ClassScore::Score(s) => assert!(
+                (s - zero_share).abs() < 1e-7,
+                "a class at zero holds {zero_share} of the window, not {s}"
+            ),
+            other => panic!("expected a score, got {other:?}"),
+        }
+        assert_eq!(
+            m.score_of_last_window("Species_3"),
+            ClassScore::Score(out.detections[0].confidence),
+            "the kept score and the reported detection are one number"
+        );
     }
 
     #[test]
@@ -2108,7 +2515,7 @@ mod tests {
     }
 
     /// A damaged output must not be able to switch the privacy filter off: a
-    /// human class that is not finite ranks first, as `human_confidence`
+    /// human class that is not finite ranks first, as `Scoring::human_confidence`
     /// reads it as certain speech.
     #[test]
     fn a_non_finite_human_score_ranks_first() {
@@ -2119,17 +2526,109 @@ mod tests {
 
     #[test]
     fn human_confidence_non_finite_is_speech_present() {
-        for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
-            assert!(
-                (human_confidence(raw, 1.0, false) - 1.0).abs() < 1e-6,
-                "raw {raw}"
-            );
-            assert!(
-                (human_confidence(raw, 1.0, true) - 1.0).abs() < 1e-6,
-                "raw {raw}"
-            );
+        let outputs = [0.0_f32, 1.0, 2.0];
+        for scale in [
+            OutputScale::Logit,
+            OutputScale::Probability,
+            OutputScale::Softmax,
+        ] {
+            let scoring = Scoring::new(scale, 1.0, &outputs);
+            for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+                assert!(
+                    (scoring.human_confidence(raw) - 1.0).abs() < 1e-6,
+                    "{scale:?}: raw {raw}"
+                );
+            }
         }
-        assert!((human_confidence(0.0, 1.0, false) - 0.5).abs() < 1e-6);
+        let logit = Scoring::new(OutputScale::Logit, 1.0, &outputs);
+        assert!((logit.human_confidence(0.0) - 0.5).abs() < 1e-6);
+    }
+
+    /// The softmax's own arithmetic, against values worked out by hand: logits
+    /// `[ln 1, ln 2, ln 3, ln 4]` are shares `[0.1, 0.2, 0.3, 0.4]` of 10.
+    #[test]
+    fn a_softmax_confidence_is_the_share_of_the_window_the_class_holds() {
+        let logits = [1.0_f32.ln(), 2.0_f32.ln(), 3.0_f32.ln(), 4.0_f32.ln()];
+        let scoring = Scoring::new(OutputScale::Softmax, 1.0, &logits);
+        let got: Vec<f32> = logits.iter().map(|&z| scoring.confidence(z)).collect();
+        for (g, want) in got.iter().zip([0.1, 0.2, 0.3, 0.4]) {
+            assert!((g - want).abs() < 1e-6, "{got:?}");
+        }
+        assert!(
+            (got.iter().sum::<f32>() - 1.0).abs() < 1e-6,
+            "they sum to 1"
+        );
+    }
+
+    /// A softmax logit is meaningful only against the others, so adding one
+    /// constant to every logit changes nothing, and sensitivity (a sigmoid
+    /// setting) does not move it. A sigmoid does move under both.
+    #[test]
+    fn a_softmax_ignores_a_shift_of_every_logit_and_the_sensitivity() {
+        let base = [2.0_f32, 5.0, -1.0, 0.5];
+        let shifted: Vec<f32> = base.iter().map(|z| z + 7.0).collect();
+        let a = Scoring::new(OutputScale::Softmax, 1.25, &base);
+        let b = Scoring::new(OutputScale::Softmax, 0.5, &shifted);
+        for (x, y) in base.iter().zip(&shifted) {
+            assert!((a.confidence(*x) - b.confidence(*y)).abs() < 1e-6);
+        }
+        let s1 = Scoring::new(OutputScale::Logit, 1.25, &base).confidence(5.0);
+        let s2 = Scoring::new(OutputScale::Logit, 1.25, &shifted).confidence(12.0);
+        assert!((s1 - s2).abs() > 0.01, "a sigmoid is not shift-invariant");
+    }
+
+    /// The reason for the whole change, measured on Perch v2 with a real
+    /// recording: a thousand classes cleared 0.70 through a sigmoid in every
+    /// window. A softmax can never put more than one class over 0.5.
+    #[test]
+    fn at_most_one_class_can_clear_one_half_under_a_softmax() {
+        // Fourteen thousand classes, all of them plausible-looking logits.
+        let logits: Vec<f32> = (0..14_795_u32)
+            .map(|i| 3.0 + f32::from(u8::try_from(i % 7).unwrap()))
+            .collect();
+        let sigmoid_over: usize = logits
+            .iter()
+            .filter(|&&z| compute_confidence(z, 1.25, false) >= 0.7)
+            .count();
+        assert!(
+            sigmoid_over > 10_000,
+            "the sigmoid reads nearly all of them as present"
+        );
+        let scoring = Scoring::new(OutputScale::Softmax, 1.25, &logits);
+        let over_half = logits
+            .iter()
+            .filter(|&&z| scoring.confidence(z) >= 0.5)
+            .count();
+        assert_eq!(
+            over_half, 0,
+            "no class dominates a window of near-equal logits"
+        );
+    }
+
+    /// Large logits must not overflow `exp`, and a class that is not a number
+    /// scores 0 without poisoning the others.
+    #[test]
+    fn a_softmax_survives_huge_and_non_finite_outputs() {
+        let logits = [
+            1.0e30_f32,
+            1.0e30,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        let scoring = Scoring::new(OutputScale::Softmax, 1.0, &logits);
+        assert!(
+            (scoring.confidence(1.0e30) - 0.5).abs() < 1e-6,
+            "two equal finite classes share it"
+        );
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(scoring.confidence(bad).abs() < f32::EPSILON, "{bad}");
+        }
+        let none = Scoring::new(OutputScale::Softmax, 1.0, &[f32::NAN, f32::INFINITY]);
+        assert!(
+            none.confidence(3.0).abs() < f32::EPSILON,
+            "no finite output, no probability"
+        );
     }
 
     #[test]

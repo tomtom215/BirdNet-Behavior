@@ -94,7 +94,7 @@ manual's link check, rustdoc's `private-intra-doc-links` (`answers_sql`'s doc
 linked a private function; clippy passes over it, and the first run of the
 workflow's rustdoc command on that branch found it), and five tokens `typos` flagged in files from earlier
 commits on the same branch. Everything the script needs installs here
-(`cargo install --locked typos-cli --version 1.51.1`; crates.io and PyPI are
+(`cargo install --locked typos-cli --version 1.52.0`; crates.io and PyPI are
 reachable, GitHub release downloads are not), so "could not run it in this
 container" is not a reason, and the script fails on a missing tool instead of
 skipping it. Three more rules it encodes: run the **whole workspace** at **every
@@ -476,7 +476,7 @@ Corollaries, each learned the same way:
 - **lld resolves archive symbols in any order; GNU ld does not.** rustc 1.99.1
   links x86_64 Linux with lld, so a static archive that lands before the library
   it needs links there and fails with `undefined reference` under GNU ld, which is
-  what the aarch64 Docker image (Rust 1.95) used. `cargo rustc -p <pkg> --bin
+  what the aarch64 Docker image links with. `cargo rustc -p <pkg> --bin
   <bin> -- -C link-arg=-fuse-ld=bfd` reproduces it on x86_64, and `-- --print
   link-args` prints the order. It was `libduckdb-sys` 1.20000.0's autoregister
   archive; `build.rs` passes `--undefined=duckdb_register_static_extensions`.
@@ -496,4 +496,4 @@ Corollaries, each learned the same way:
 
 ### MSRV
 
-Rust 1.95 (edition 2024)
+Rust 1.99 (edition 2024)

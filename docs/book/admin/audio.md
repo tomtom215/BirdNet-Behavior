@@ -59,7 +59,7 @@ Open a source's **edit** panel to change:
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
-> Aim for peaks near −6 dB. Gain set too high clips the loudest calls and hurts identification more than a quiet signal does.
+> Aim for the loudest calls to peak between about −12 and −6 dB below full scale (Cornell Lab's recording guidance says −12 dB; the Audacity manual says −6 dB for general recording). Gain set too high clips the loudest calls for good. [Input Level](../field/input-level.md) says how to read the microphone's level from the operating system, why 100% is never a neutral setting, and what the doctor checks.
 
 ## The equaliser
 

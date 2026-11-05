@@ -1,0 +1,9 @@
+dataset,annotated_name,perch_name,reason,events
+CEB,Phylloscopus sibillatrix,Phylloscopus sibilatrix,"Wood Warbler, misspelling in the CEB table",7
+COR,Milvago chimachima,Daptrius chimachima,"Yellow-headed Caracara, genus placement",1
+COR,Psilorhinus morio,Cyanocorax morio,"Brown Jay, genus placement",1
+KEN,Buphagus erythrorynchus,Buphagus erythroryncha,"Red-billed Oxpecker, spelling of epithet",5
+KEN,Chloropicus fuscescens,Dendropicos fuscescens,"Cardinal Woodpecker, genus placement",12
+KEN,Corythaixoides leucogaster,Crinifer leucogaster,"White-bellied Go-away-bird, genus placement",14
+KEN,Telophorus sulfureopectus,Chlorophoneus sulfureopectus,"Sulphur-breasted Bushshrike, genus placement",63
+POW,Regulus calendula,Corthylio calendula,"Ruby-crowned Kinglet, genus placement",1

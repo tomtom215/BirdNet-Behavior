@@ -25,6 +25,26 @@ pub const BIRDNET_V24_ENGLISH_LABELS: &str = include_str!("../../data/labels/bir
 pub const BIRDNET_V24_ENGLISH_LABELS_SHA256: &str =
     "3773334c2ad218bde0ac083dd0b6e839a5cf34e84a6017830b9f446fbb57a215";
 
+/// The Perch v2 label file in the form this station's loader reads: a
+/// `sci_name,com_name` CSV, one row per class in the model's output order,
+/// 14 795 rows.
+///
+/// Google publishes Perch v2's classes as a bare list led by a line naming the
+/// label set, with Windows line ends, and the ONNX conversion this project
+/// installs ships no labels at all, so an operator had to find that list and
+/// reshape it by hand; labels are positional, so a mistake is not an error but a
+/// station reporting species under other species' names. Compiled in so that
+/// `--install-model perch-v2` writes it without a download.
+/// `scripts/build-perch-labels.py` regenerates it and states what it refuses;
+/// `data/labels/README.md` records the provenance.
+pub const PERCH_V2_LABELS: &str = include_str!("../../data/labels/perch-v2.csv");
+
+/// The lowercase hex SHA-256 of [`PERCH_V2_LABELS`], which is what the model
+/// catalogue pins and what `analysis_runs.labels_sha256` records for a station
+/// that installed it.
+pub const PERCH_V2_LABELS_SHA256: &str =
+    "1ddc4a95831dd09f4b407d173f5a0a8bbb5a9425ba74e8a71d3959a9794216b0";
+
 /// A species label entry.
 #[derive(Debug, Clone)]
 pub struct SpeciesLabel {

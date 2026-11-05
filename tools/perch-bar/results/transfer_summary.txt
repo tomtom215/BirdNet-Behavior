@@ -1,0 +1,3 @@
+direct downloads (manifest.tsv, 189 fetches): 547.5 MB
+zip range reads (Range-requested bytes incl. 4 MB read-ahead): 541.2 MB
+total transferred, excluding the small zip central-directory listings: 1088.6 MB

@@ -110,7 +110,7 @@ jobs:
         # build still grading the pull request.
         run: bash scripts/test-build-versioned-docs.sh
       - name: Install mdBook
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }}
       - name: Build every version, link-checking each

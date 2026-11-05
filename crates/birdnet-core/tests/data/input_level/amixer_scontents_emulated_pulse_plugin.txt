@@ -1,0 +1,13 @@
+Simple mixer control 'Master',0
+  Capabilities: pvolume pswitch pswitch-joined
+  Playback channels: Front Left - Front Right
+  Limits: Playback 0 - 65536
+  Mono:
+  Front Left: Playback 32768 [50%] [on]
+  Front Right: Playback 32768 [50%] [on]
+Simple mixer control 'Capture',0
+  Capabilities: cvolume cswitch cswitch-joined
+  Capture channels: Front Left - Front Right
+  Limits: Capture 0 - 65536
+  Front Left: Capture 65536 [100%] [on]
+  Front Right: Capture 65536 [100%] [on]

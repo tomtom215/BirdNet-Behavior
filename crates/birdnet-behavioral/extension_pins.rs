@@ -53,6 +53,19 @@
 //!   their digests are what the registry served that day — trust on first use.
 //!   They are still pinned, because a later change is then a visible failure.
 //!
+//! # Moved to `behavioral` v0.11.0 (2026-11-05)
+//!
+//! The community registry began serving v0.11.0 under the same `v2.0.0` path, and
+//! CI's "Tests (x86_64)" job then refused the unpinned file, as this module is
+//! meant to make it do. Checked as for v0.10.1: `INSTALL behavioral FROM community;
+//! LOAD behavioral` in the official `duckdb` 2.0.0 wheel (git revision `d54cbbe3df`)
+//! with a private extension directory loaded it, and the installed `linux_amd64`
+//! file's sha256 equals the digest below and the file downloaded from the CDN. Its
+//! footer reads `C_STRUCT / v0.11.0 / v1.2.0` on all three platforms the registry
+//! serves: the same ABI and target as v0.10.1. The `linux_arm64` digest could not
+//! be checked here (wrong platform) and is what the registry served that day: trust
+//! on first use. The `osx_arm64` build of `behavioral` is not embedded and has no pin.
+//!
 //! The engine this was checked against reports `v2.0.0` only because
 //! `.cargo/config.toml` sets its version macros; see `RELEASING.md`.
 
@@ -77,17 +90,17 @@ pub struct Pin {
 pub const PINS: &[Pin] = &[
     Pin {
         name: "behavioral",
-        extension_version: "v0.10.1",
+        extension_version: "v0.11.0",
         version_target: "v1.2.0",
         platform: "linux_amd64",
-        sha256: "7f13a1ac0b29dcd2a34eadb8fccaf242ce5561cd17204c84e6df95f4a69ff324",
+        sha256: "0dea2ff37388229b15caa27843da3c8267f4909e8dbdff34c936570c76d446bb",
     },
     Pin {
         name: "behavioral",
-        extension_version: "v0.10.1",
+        extension_version: "v0.11.0",
         version_target: "v1.2.0",
         platform: "linux_arm64",
-        sha256: "0277f3b7a825e10fa567c8ecc081dd67735804c7ec93263ce3744eeb386fc3e1",
+        sha256: "bd47e50d20d53f7eea2f8ca33cd186479cc7d0e59da0c301f9d6df2745e5911f",
     },
     Pin {
         name: "icu",

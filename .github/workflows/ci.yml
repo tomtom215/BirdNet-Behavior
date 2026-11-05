@@ -74,7 +74,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-clippy
       - name: Clippy — default features (deny warnings)
@@ -155,7 +155,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++ ffmpeg
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-test
       - name: Embed the behavioral extension (offline-load coverage)
@@ -284,7 +284,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-inference
       # The model is ~541 MB and immutable for a given release tag, so key the
@@ -444,7 +444,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-doc
       - name: Build docs (deny broken intra-doc links, all features)
@@ -468,7 +468,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-build
       - name: Build workspace (debug)
@@ -505,7 +505,7 @@ jobs:
 
   # ── msrv ───────────────────────────────────────────────────────────────────
   msrv:
-    name: MSRV (Rust 1.95)
+    name: MSRV (Rust 1.99)
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 8m33s
     steps:
@@ -548,8 +548,8 @@ jobs:
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
-          toolchain: "1.95"
-      # `dtolnay/rust-toolchain` only runs `rustup default 1.95`, and rustup
+          toolchain: "1.99"
+      # `dtolnay/rust-toolchain` only runs `rustup default 1.99`, and rustup
       # ranks a `rust-toolchain.toml` in the working directory *above* the
       # default: ours says `channel = "stable"`, so without this step every
       # `cargo` below ran on whatever stable is today and this job passed while
@@ -584,7 +584,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-msrv
       - name: Check MSRV build (all features incl. bundled DuckDB)
@@ -625,7 +625,7 @@ jobs:
             g++-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-cross-aarch64
       - name: Check aarch64 build (all features)
@@ -676,7 +676,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci-test-aarch64
       - name: Embed the ICU extension for this architecture (best effort)

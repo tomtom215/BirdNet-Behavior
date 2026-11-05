@@ -52,6 +52,8 @@ pub(crate) mod life_timeline;
 pub(crate) mod listen;
 pub(crate) mod listening;
 pub mod migration;
+pub(crate) mod model_board;
+pub(crate) mod model_evidence;
 pub(crate) mod name_search;
 pub(crate) mod nav;
 pub mod notification_center;

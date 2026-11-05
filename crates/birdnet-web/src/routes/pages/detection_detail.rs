@@ -91,13 +91,31 @@ async fn detection_detail_page(
                 .unwrap_or_default()
             });
             let floor = super::confidence::station_floor(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>(Some((det, verdict, corroboration, floor)))
+            // What each classifier said. Unlike the corroboration list this is a
+            // claim about the detection, so a failed read is kept as `None` and
+            // rendered as a fault rather than defaulted to "nobody else heard it".
+            // Read by the identity the row was stored under (its clip too), so two
+            // sources that heard one bird in one second each show their own.
+            let key = birdnet_db::sqlite::DetectionKey {
+                date: &det.date,
+                time: &det.time,
+                sci_name: &det.sci_name,
+                file_name: det.file_name.as_deref(),
+            };
+            let models = match super::model_evidence::read(conn, &key) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    tracing::warn!(error = %e, "detection detail: classifier scores could not be read");
+                    None
+                }
+            };
+            Ok::<_, birdnet_db::sqlite::DbError>(Some((det, verdict, corroboration, floor, models)))
         })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (det, verdict, corroboration, floor) = match found {
+    let (det, verdict, corroboration, floor, models) = match found {
         Ok(Some(found)) => found,
         Ok(None) => {
             return Ok((
@@ -125,6 +143,7 @@ async fn detection_detail_page(
         &headers,
         &names,
         floor,
+        models.as_ref(),
     )
     .into_response())
 }
@@ -160,6 +179,7 @@ fn render_detail_page(
     headers: &HeaderMap,
     names: &birdnet_core::i18n::NameLocalizer,
     floor: f64,
+    models: Option<&super::model_evidence::ModelEvidence>,
 ) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
@@ -174,6 +194,7 @@ fn render_detail_page(
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
     let correlation_section = build_correlation_section(det);
+    let models_section = super::model_evidence::card(models, det.cutoff);
     let corroboration_section = build_corroboration_section(corroboration);
     let nearby_section = build_nearby_section(nearby, &det.sci_name, ebird::now_unix());
     let conf = conf_bar(det.confidence, floor);
@@ -222,6 +243,7 @@ fn render_detail_page(
         {meta}
       </table>
     </div>
+    {models_section}
     {corroboration_section}
     {nearby_section}
     {review_widget}

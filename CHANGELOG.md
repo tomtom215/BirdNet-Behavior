@@ -7,6 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Which classifiers heard a detection, and a Models board.** A detection's page shows a *Who heard it* card:
+  each classifier's own score against its own bar, in four states that are never rounded to a zero (heard it,
+  scored it below its bar, has no class for the species, its window failed), counted as "heard by N of M models
+  that could judge it" and never averaged. Station Health gains a *Models* section: one card per classifier with
+  its state, what it is (window length, sample rate, classes, bar), its last window, the mean time one answered
+  window has taken, and the share of today's detections that carry its answer and that another classifier also
+  cleared. The detection daemon stores every classifier's own answer with the detection (migrations 57 and 58,
+  `detection_model_scores`) for a chunk two or more classifiers listened to: for each species any classifier
+  reported, every classifier that listened has a row, including one whose score fell under its own bar. A
+  station running one classifier stores none and sees no card, because the detection row already is the whole
+  record. The answers are keyed by the detection's date, time, species **and clip**, so two sources hearing one
+  bird in the same second keep their own (found by running two sources through the real models: the first
+  version keyed them without the clip, and the second source's answers overwrote the first's); they are removed
+  with their detection, and when it is relabelled, because they were about the old species. When an answer
+  met its own classifier's bar but not the station's cutoff for the detection, the card says so. The daemon
+  also states what each classifier is once, when they have loaded. The API gains
+  `GET /api/v2/detections/models` (with `file_name` to choose between detections that share a date, time and
+  species; `409` and the candidates without it) and `GET /api/v2/detections/export/model-scores`; detection
+  rows and the detections CSV carry `model_id` and `model_agreement` (`Model_Id`, `Model_Agreement`).
+  Prometheus gains `birdnet_model_inference_seconds_total` and `birdnet_model_inference_windows_total` per
+  classifier, absent until a window has answered. New CSS classes `ws-*`, no new tokens.
+- **`--install-model perch-v2` now installs Perch's labels.** Google publishes Perch v2's 14 795 classes as a
+  bare list and the ONNX conversion ships none, so an operator had to find the list and reshape it by hand;
+  labels are positional, so a mistake renames every bird without an error. The binary now writes
+  `perch-v2_labels.csv` itself, verified against a pinned digest, in the model's own order (the position of one
+  class was checked against the real model: a magpie recording puts the largest output on class 10 397, which
+  is *Pica pica*). `scripts/build-perch-labels.py` regenerates it from the pinned source.
+
+- **Perch-led detections now carry an English name.** Perch's class list has scientific names only, so a
+  detection Perch reported showed its scientific name where V2.4 shows "Eurasian Magpie". The bundled
+  `perch-v2.csv` now gives 10 178 of its 14 795 classes an English name: BirdNET V2.4's own, where V2.4 lists
+  the species (so one bird has one name whichever classifier heard it), then the IOC World Bird List 15.2
+  (CC BY 3.0, credited in `crates/birdnet-core/data/labels/README.md`) for 3 917 more. A name two species would
+  share is withheld, because the station groups by common name: 146 IOC names, 120 of them a genus rename of a
+  species V2.4 already names (Perch's *Acritillas indica*, V2.4's *Iole indica*) and some a real lump or split
+  (*Calonectris borealis*, "Cory's Shearwater" in IOC and V2.4's name for *C. diomedea*). Sound classes, frogs,
+  insects and mammals keep the class name; nothing is invented. `scripts/build-perch-labels.py` takes the IOC
+  workbook as a second pinned input; a test holds the file to V2.4's names, to there being no shared name,
+  and to the count.
+- **Taxonomy overlap, name by name.** `docs/book/reference/taxonomy-overlap.md` says how many names the three
+  classifiers share (BirdNET+ V3.0 preview 3 and Perch share 10 916 of V3.0's 11 560) and classifies each of
+  the 644 V3.0 names Perch lacks: 369 absent from Perch, 129 lumped into another species, 121 a rename of one
+  Perch has, 11 uncertain, 8 split, 6 subspecies. The table is `docs/data/taxonomy/v3-names-not-in-perch.tsv`,
+  with the record ids to check each row against; a test holds it to the Perch labels. The station still merges
+  by exact scientific name, so a bird two classifiers name differently is two detections; the page says why no
+  alias table is applied yet.
+- **What a Perch bar costs, measured.** `tools/perch-bar/` holds a study of Perch v2 on 120 annotated recordings
+  (8.4 hours, 6 069 windows) from eight public sets, with 1 100 controlled mixtures and 155 environmental
+  clips, and the scripts to rerun it. The manual's "0.35 is a starting point" is now numbers: at 0.35 the station
+  finds 17% (15-20) of the annotated species and reports 0.04 unmarked species per window; at 0.20, 26% and
+  0.10; no bar tested found half of them with fewer than one unmarked report in ten windows; the result varies
+  from 2% to 41% by region. Re-running the analysis from the stored model outputs reproduced all 53 result
+  files byte for byte (line ends aside: the scripts write CRLF and git stores LF). It does not show that any bar is right for a given station.
+
+- **The doctor reads the microphone's capture gain.** `--doctor` (and `/admin/doctor`) now reads each configured
+  ALSA card with `amixer` and each PulseAudio or PipeWire source with `pactl --format=json`, under a five-second
+  deadline, and says whether capture is switched off, at the control's maximum, or above a guard-rail cap of 75%
+  and +18 dB of hardware gain. Read-only: it prints the command that would reach the cap for you to run, and
+  never changes a mixer, because a level set at run time is lost on a replug or a power cut unless root also
+  runs `alsactl store`, and the right level is whatever keeps the loudest call below full scale. A finding is a
+  warning at most (`--doctor` exits 1; the start gate cannot be blocked by it), so a station whose microphone
+  sits at 100%, as many USB microphones do out of the box, will now see one. The new page *Input Level* says
+  why 100% is never neutral (a published USB codec reaches +23.81 dB at the top, a Raspberry Pi HAT codec +30 dB
+  with up to +29 dB of boost on top, and `amixer`'s percentages are of the raw range while `alsamixer`'s are
+  mapped), what the reading means per backend, and what is not established: **nothing here was measured on a sound
+  card**. It was run against a real PulseAudio 16.1 server and real `pactl`, parsed from captured PulseAudio 16.1
+  and `pipewire-pulse` 1.0.5 output, from `amixer` output published by others, and from `amixer` over an
+  emulated mixer. The cap is a design judgement with low evidence. The manual's unsourced "peaks near −6 dB" now
+  gives the two sources that exist (Cornell Lab −12 dB, Audacity −6 dB).
+
+### Changed
+
+- **The bundled `behavioral` extension moves to v0.11.0.** The DuckDB community registry now serves v0.11.0 under
+  the same `v2.0.0` path, and `crates/birdnet-behavioral/extension_pins.rs` pinned v0.10.1, so the build refused the
+  file (CI's "Tests (x86_64)" went red on this pull request with "does not pin", before and independently of any
+  change in it; `main` last ran on 2026-11-01). Verified as that module describes: the official `duckdb` 2.0.0 wheel
+  installed v0.11.0 from the community registry and loaded it, the installed file's SHA-256 equals the CDN file's, and
+  the footer is `C_STRUCT / v0.11.0 / v1.2.0`, the ABI and target of v0.10.1. With it embedded (and ICU, as CI does),
+  `birdnet-behavioral` and `birdnet-timeseries` passed 225 of 226 tests, the one failure being
+  the embedded-ICU test run without ICU embedded; with ICU embedded as CI does, all 21 `connection::tests` pass. The `linux_arm64`
+  digest could not be loaded here and is trust on first use.
+- **Rust 1.99 is now the minimum.** `rust-version`, `clippy.toml`, the CI `msrv` job, the release workflow,
+  the Docker builder (`rust:1.99-slim-trixie`, digest-pinned for amd64 and arm64) and the documentation say
+  1.99 (was 1.95). No dependency needs it: the highest `rust-version` any locked crate declares is 1.95
+  (sysinfo 0.40.1) and 115 declare none, so this is a policy choice, made in a minor release as `STABILITY.md`
+  requires. Stable is 1.99.1 (the official channel manifest, 2026-10-15).
+- **Dependencies.** 47 locked packages moved (`cargo update`, then sysinfo 0.39 to 0.40, whose constructors
+  became fallible, `Cpu::cpu_usage` became `Cpu::usage` and interface names became `OsString`;
+  `system_info.rs` follows, and a failed read still gives a zeroed readout as documented). `pulldown-cmark`
+  0.13.6 clears RUSTSEC-2026-0433, which `cargo audit` and OSV had reported on 0.13.5 and nothing waived:
+  `cargo audit` and OSV now report no advisory. Two crates have a newer release and cannot take it, because
+  their dependents pin them exactly: `matchit` 0.8.4 (axum 0.8.9 requires `=0.8.4`) and `generic-array` 0.14.7
+  (crypto-common 0.1.7 requires `=0.14.7`).
+- **CI pins.** Six GitHub Actions moved to their newest releases (eight pins: CodeQL's three entry points
+  share one) (`Swatinem/rust-cache` 2.9.3,
+  `crate-ci/typos` 1.52.0, `docker/login-action` 4.7.0, `github/codeql-action` 4.39.3,
+  `sigstore/cosign-installer` 4.1.3, `taiki-e/install-action` 2.90.1), each SHA taken from the upstream tag,
+  and the one `dtolnay/rust-toolchain` pin that was two months behind the other 22 was aligned. The local
+  `typos` is 1.52.0 to match. `axe-core` and `@axe-core/playwright` for the browser gates moved to 4.14.0
+  (Playwright 1.64.1 was current); `package.json` now states the versions in use. Every pinned cargo tool
+  (`cargo-audit`, `cargo-deny`, `cargo-mutants`, `cargo-llvm-cov`, `cargo-fuzz`, `mdbook`, `cargo-machete`)
+  was already at its newest release.
+
+### Fixed
+
+- **Perch v2's scores were put through the wrong function.** Its classifier is trained with a softmax, but the
+  station read its outputs through V2.4's sigmoid like any other classifier's. On a real recording of one
+  magpie, between 809 and 1 066 of Perch's 14 795 classes cleared the default 0.70 bar in *every* window,
+  traffic noise included, so each window filled the ten-detections cap with confidences of 0.98 to 0.99: 70
+  detections of 42 "species" from one bird. A Perch classifier's confidence is now its class's share of the
+  window's softmax (its scores sum to 1, and `SENSITIVITY` does not apply), which reports the same recording's
+  magpie at about 96% in its four clear windows, with no other class holding more than 8.5% of any of the
+  seven. **If you raised `MODEL_2_THRESHOLD`
+  to tame it, lower it**: shares that large almost never occur, and 0.98 would now report nothing from Perch.
+  Two species singing at once split a window, so neither can reach 50%; Perch wants a bar of its own (the
+  manual's example uses 0.35). Detections Perch made before this change carry the old scale; the run record
+  (`analysis_runs`) holds the binary version that wrote each row. The start-up log now names each classifier's
+  mapping (`output_scale`).
+- A relabelled or deleted detection no longer leaves its classifier answers behind (they are removed with it,
+  by a trigger on `detections`, so every delete path is covered).
+- **Two "Label in Name" defects (WCAG 2.5.3, level A) that axe 4.14 now reports.** On every page with the top bar (84 of the gate's
+  route, theme and width samples), the brand link's text rendered as "BirdNet" and "Behavior"
+  while its label read "BirdNet-Behavior home"; a voice-control user saying what they see would not match. The label
+  is now "BirdNet Behavior home" and a space separates the two spans, which axe joins without one (the spans are
+  `display: block`, so nothing moves). On the Species life list's phone layout, each row's `aria-label` rephrased its
+  text as a sentence that did not contain the visible text (rank, date, count); the label is gone, so the row is
+  named by what it shows, and the portrait is hidden from assistive technology. The sentence is still the card's.
+  Found by raising `axe-core` from 4.13.0 to 4.14.0: the gate reported 86 violations of this one rule on the
+  previous tree, and none on this one. All browser gates ran on it (axe, interactions, legibility, the two
+  self-tests, layout, tokens, chart ramps, surface layers, token doc, motion, focus, figures, DOM sinks, base path,
+  and the strict sweep: 184 screenshots, 0 pages with issues), with Playwright 1.63.0 here and 1.64.1 in CI.
+- **A muted microphone made BirdNET+ V3.0 look broken.** The real V3.0 model answers a window of exactly
+  constant samples (digital silence, which a muted, unplugged or null source delivers) with NaN. The station
+  counted each as a failed window, flipped the classifier to *Failing* after ten (ten windows, about 45 seconds of silence), told
+  its owner it was "answering with invalid scores", and read the NaN as speech, so the privacy filter also
+  suppressed the chunks beside the silence. Chunks with no variation at all are now skipped: neither answered
+  nor failed, the log says why once every ten minutes, and a NaN or infinite sample is never mistaken for
+  silence. Found by dropping two 30 s silent files through the real models. `docs/book/admin/classifiers.md`
+  now says what a failed window costs the other classifiers.
+
 ## [0.19.0] - 2026-10-31
 
 ### Added

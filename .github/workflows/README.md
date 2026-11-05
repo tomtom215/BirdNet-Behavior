@@ -35,7 +35,7 @@ on **every** pull request, with their names exactly as GitHub shows them.
 - `Inference against the real model`
 - `Rustdoc (no broken links)`
 - `Build (debug, all features)`
-- `MSRV (Rust 1.95)`
+- `MSRV (Rust 1.99)`
 - `Cross-check (aarch64 / Raspberry Pi)`
 - `Tests (aarch64, native)`
 - `cargo-deny`
