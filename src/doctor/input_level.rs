@@ -42,6 +42,20 @@ pub(super) fn alsa_level(device: &str) -> Check {
             format!("{device} is not a card the doctor can name, so its mixer was not read"),
         );
     };
+    // The id goes to `amixer` as one argument and never through a shell, so this is not a
+    // defence against injection; it keeps to the alphabet ALSA ids use, so an odd string
+    // from the configuration is reported as what it is rather than handed on.
+    if !card
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+    {
+        return Check::skip(
+            NAME,
+            format!(
+                "{device}: the card name has characters other than letters, digits and `_-.:`, so its mixer was not read"
+            ),
+        );
+    }
     if !tool_exists("amixer") {
         return Check::skip(
             NAME,
@@ -337,6 +351,30 @@ mod tests {
             check.message.contains("capture is switched off"),
             "{}",
             check.message
+        );
+    }
+
+    #[test]
+    fn a_card_name_outside_the_alsa_alphabet_is_reported_and_not_handed_to_amixer() {
+        for device in [
+            "plughw:CARD=a b,DEV=0",
+            "plughw:CARD=$(id),DEV=0",
+            "hw:CARD=x;y",
+        ] {
+            let check = super::alsa_level(device);
+            assert_eq!(check.status, Status::Skip, "{device}: {check:?}");
+            assert!(
+                check.message.contains("characters other than"),
+                "{device}: {}",
+                check.message
+            );
+        }
+        // A plain id still gets as far as the tool (which is absent or finds no such card here).
+        let plain = super::alsa_level("plughw:CARD=PRO,DEV=0");
+        assert!(
+            !plain.message.contains("characters other than"),
+            "{}",
+            plain.message
         );
     }
 
