@@ -162,7 +162,7 @@ COPY . .
 # pin in the root Cargo.toml, where `20000` encodes DuckDB 2.0.0. Both registries
 # publish per engine version, and ICU (a C++ extension) loads only into the exact
 # version it was built for; `allow_extensions_metadata_mismatch` does not bypass
-# that. `behavioral` v0.10.1 is a stable-C-API build that would load into other
+# that. `behavioral` (v0.10.1, v0.11.0) is a stable-C-API build that would load into other
 # engines too, but it is only published under the paths of engines it was built
 # for, so this path still has to name the bundled engine.
 #

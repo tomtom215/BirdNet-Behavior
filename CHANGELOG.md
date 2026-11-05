@@ -81,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bundled `behavioral` extension moves to v0.11.0.** The DuckDB community registry now serves v0.11.0 under
+  the same `v2.0.0` path, and `crates/birdnet-behavioral/extension_pins.rs` pinned v0.10.1, so the build refused the
+  file (CI's "Tests (x86_64)" went red on this pull request with "does not pin", before and independently of any
+  change in it; `main` last ran on 2026-11-01). Verified as that module describes: the official `duckdb` 2.0.0 wheel
+  installed v0.11.0 from the community registry and loaded it, the installed file's SHA-256 equals the CDN file's, and
+  the footer is `C_STRUCT / v0.11.0 / v1.2.0`, the ABI and target of v0.10.1. With it embedded (and ICU, as CI does),
+  `birdnet-behavioral` and `birdnet-timeseries` passed 225 of 226 tests, the one failure being
+  the embedded-ICU test run without ICU embedded; with ICU embedded as CI does, all 21 `connection::tests` pass. The `linux_arm64`
+  digest could not be loaded here and is trust on first use.
 - **Rust 1.99 is now the minimum.** `rust-version`, `clippy.toml`, the CI `msrv` job, the release workflow,
   the Docker builder (`rust:1.99-slim-trixie`, digest-pinned for amd64 and arm64) and the documentation say
   1.99 (was 1.95). No dependency needs it: the highest `rust-version` any locked crate declares is 1.95

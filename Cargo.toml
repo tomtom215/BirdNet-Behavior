@@ -72,7 +72,7 @@ rusqlite = { version = "0.41", features = ["bundled", "backup", "limits"] }
 #
 # - `icu` is a C++ extension and loads only into the exact DuckDB version it
 #   was built for (`allow_extensions_metadata_mismatch` does not bypass this).
-# - `behavioral` v0.10.1 is built on DuckDB's stable C API (footer ABI
+# - `behavioral` v0.10.1 and v0.11.0 are built on DuckDB's stable C API (footer ABI
 #   `C_STRUCT`, C API v1.2.0). DuckDB 2.0.0 keeps that API at v1.5.6
 #   (`duckdb_extension.h`, read from the sources `libduckdb-sys` 1.20000.0
 #   compiles) and accepts any major-1 target up to it, so it loads by DuckDB's own
@@ -87,7 +87,8 @@ rusqlite = { version = "0.41", features = ["bundled", "backup", "limits"] }
 # `the_engine_names_itself_as_a_release` is the gate. Measured 2026-10-28, not assumed.
 #
 # Verified, not assumed: the registries' `v2.0.0` artifacts for linux_amd64 and
-# linux_arm64 carry footers `C_STRUCT / v0.10.1 / v1.2.0` (behavioral) and
+# linux_arm64 carry footers `C_STRUCT / v0.11.0 / v1.2.0` (behavioral; v0.10.1
+# until 2026-11-05) and
 # `CPP / v2.0.0 / v2.0.0` (icu), and `file` reports x86-64 and aarch64
 # respectively. `extension_pins.rs` records which of them could be loaded here.
 #
