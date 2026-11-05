@@ -63,6 +63,9 @@ const TOOLS: &[(&str, Provenance)] = &[
              and the integration degrades to 'not configured' without it",
         ),
     ),
+    // `amixer` is run by the doctor only, to read a microphone's capture gain; it ships in the
+    // same package as `arecord`.
+    ("amixer", Provenance::Package("alsa-utils")),
     // Capture. The three that matter.
     ("arecord", Provenance::Package("alsa-utils")),
     ("df", Provenance::DebianBase),

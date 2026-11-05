@@ -124,7 +124,12 @@ pub fn assess(level: &InputLevel) -> Advice {
     }
     match level.backend {
         Backend::Alsa => {
-            let at_maximum = level.percent >= 100 && level.raw.is_some_and(|(_, lo, hi)| hi > lo);
+            // The raw step decides where it is known: `amixer` rounds, so step 4 094 of
+            // 4 095 prints as 100%.
+            let at_maximum = match level.raw {
+                Some((value, lo, hi)) if hi > lo => value >= hi,
+                _ => false,
+            };
             if at_maximum {
                 Advice::AtMaximum
             } else if level.percent > CAP_PERCENT || level.db.is_some_and(|d| d > CAP_HARDWARE_DB) {
@@ -134,7 +139,9 @@ pub fn assess(level: &InputLevel) -> Advice {
             }
         }
         Backend::Pulse if level.hardware_controlled => {
-            if level.percent >= 100 {
+            // Past 100% the source is boosted in software on top of the hardware's
+            // maximum, which is over the cap, not "at the maximum".
+            if level.percent == 100 {
                 Advice::AtMaximum
             } else if level.percent > CAP_PERCENT
                 || level.hardware_db.is_some_and(|d| d > CAP_HARDWARE_DB)

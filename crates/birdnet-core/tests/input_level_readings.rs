@@ -140,6 +140,15 @@ fn a_hardware_source_is_graded_against_the_cap_and_the_maximum() {
 }
 
 /// The dB cap binds before the percentage when the hardware range is large.
+/// A hardware source pushed past 100% is boosted in software on top of the hardware's maximum: above
+/// the cap, not "at the maximum".
+#[test]
+fn a_hardware_source_past_100_percent_is_above_the_cap() {
+    let level = parse_pactl_source(&hardware_source(150, "10.57 dB"), "virt_mic").expect("listed");
+    assert_eq!(level.percent, 150);
+    assert_eq!(assess(&level), Advice::AboveCap);
+}
+
 #[test]
 fn the_db_cap_can_bind_before_the_percentage() {
     let mut level =
@@ -294,6 +303,24 @@ fn a_control_is_muted_only_when_every_channel_is_off() {
     let text = "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Limits: Capture 0 - 31\n  Front Left: Capture 5 [16%] [-8.00dB] [on]\n  Front Right: Capture 5 [16%] [-8.00dB] [off]\n";
     assert_eq!(only(text).muted, Some(false));
     assert_eq!(only(&text.replace("[on]", "[off]")).muted, Some(true));
+}
+
+/// `amixer` rounds: step 4 094 of 4 095 prints as 100%. The maximum is the raw step, not the printed
+/// percentage, or a control one step below its top would be told it is at the top.
+#[test]
+fn one_step_below_the_top_prints_as_100_percent_and_is_not_the_maximum() {
+    let text = "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Limits: Capture 0 - 4095\n  Front Left: Capture 4094 [100%] [29.99dB] [on]\n";
+    let level = only(text);
+    assert_eq!(level.percent, 100);
+    assert_eq!(
+        assess(&level),
+        Advice::AboveCap,
+        "over the cap, but not at the maximum"
+    );
+    assert_eq!(
+        assess(&only(&text.replace("4094", "4095"))),
+        Advice::AtMaximum
+    );
 }
 
 #[test]
