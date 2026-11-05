@@ -43,7 +43,7 @@ pub const PERCH_V2_LABELS: &str = include_str!("../../data/labels/perch-v2.csv")
 /// catalogue pins and what `analysis_runs.labels_sha256` records for a station
 /// that installed it.
 pub const PERCH_V2_LABELS_SHA256: &str =
-    "813dc8beff664d4688a6f70f99a5bffc63a991e06fb4e9744cc55b22c8cc3aae";
+    "1ddc4a95831dd09f4b407d173f5a0a8bbb5a9425ba74e8a71d3959a9794216b0";
 
 /// A species label entry.
 #[derive(Debug, Clone)]

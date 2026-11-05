@@ -1,0 +1,11 @@
+set,quoted_text,source
+SSW,"Annotators were asked to box every bird call they could recognize, ignoring those that are too faint.",Zenodo 7079380 description.pdf
+SNE,"Annotators were asked to box every bird call they could recognize, ignoring those that are too faint or unidentifiable.",Zenodo 7525805 description.pdf
+COR,"annotators were asked to create a selection box around every bird call they could recognize, ignoring those that were too faint or unidentifiable.",Zenodo 7525349 description.pdf
+PER,A single annotator boxed every bird call he could identify and ignored those that were too faint.,Zenodo 7079124 description.pdf
+HAW,"annotators were asked to create a selection box around every bird call they could recognize, ignoring those that were too faint or unidentifiable at a spectrogram window size of 700 points. [and] Recordings that did not contain vocalizations of the species of interest were excluded from full annotation and thus this collection.",Zenodo 7078499 description.pdf
+KEN,"Annotators were tasked with identifying and labeling each bird call they could discern, excluding any calls that were too weak or indiscernible. ... Provided labels mark the center of each bird call",Zenodo 10943500 description.pdf
+POW,"All vocalizations that were not short ""chips"" and could be identified were annotated.",Zenodo 4656848 README.txt
+CEB,strongly-labeled PAM soundscapes for evaluation with vocalization type annotations,Zenodo 21821133 record description
+Perch 2.0,we train the linear classifier using a softmax activation layer and a cross entropy loss using a target vector where each of the k target classes (species) has the value 1/k,Perch 2.0 paper section 2.3 (local copy scratchpad/dl_perch/perch2.txt)
+Perch 2.0,"labeled audio datasets: Xeno-Canto ..., iNaturalist ..., the Tierstimmenarchiv ... and FSD50K",Perch 2.0 paper section 2.1 (same copy)

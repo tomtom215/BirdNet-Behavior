@@ -1,0 +1,13 @@
+record,doi,license,published,version,total_gb,title
+7079380,10.5281/zenodo.7079380,cc-by-4.0,2022-08-24,2,27.766,A collection of fully-annotated soundscape recordings from the Northeastern United States
+7525349,10.5281/zenodo.7525349,cc-by-4.0,2023-01-11,1,3.76,A collection of fully-annotated soundscape recordings from neotropical coffee farms in Colombia and Costa Rica
+7079124,10.5281/zenodo.7079124,cc-by-4.0,2022-09-14,1,2.372,A collection of fully-annotated soundscape recordings from the Southwestern Amazon Basin
+7525805,10.5281/zenodo.7525805,cc-by-4.0,2023-01-11,1,1.418,A collection of fully-annotated soundscape recordings from the southern Sierra Nevada mountain range
+7078499,10.5281/zenodo.7078499,cc-by-4.0,2022-09-14,1,5.775,A collection of fully-annotated soundscape recordings from the Island of Hawai'i
+10943500,10.5281/zenodo.10943500,cc-by-4.0,2024-04-08,1,3.329,A collection of annotated soundscape recordings from western Kenya
+4656848,10.5061/dryad.d2547d81z,cc-zero,2022-01-21,,1.611,"An annotated set of audio recordings of Eastern North American birds containing frequency, time, and species information"
+21821133,10.5281/zenodo.21821133,cc-by-4.0,2026-08-06,1.1,49.715,"CEB: A collection of strongly-labeled bird soundscapes and Xeno-Canto recordings from Central Europe, with bounding boxes and vocalization types"
+7828148,10.5281/zenodo.7828148,cc-by-4.0,2023-04-14,,1.378,Manually labeled Bird song dataset of 22 species from Xeno-canto to enhance deep learning acoustic classifiers with contextual information.
+20038954,10.5281/zenodo.20038954,cc-by-4.0,2025-12-24,,27.689,"Large-scale, Stratified, Fully Annotated Acoustic Forest Soundscape  Dataset of Avian Vocalizations from Eastern North America"
+19340660,10.5281/zenodo.19340660,cc-by-4.0,2026-03-31,,0.225,BioDCASE 2026 Task 4: BirdSet Dataset
+13994373,10.5281/zenodo.13994373,cc-by-nc-4.0,2024-10-26,,44.956,Soundscape Datasets for Few-Shot Bird Sound Classification

@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finds 17% (15-20) of the annotated species and reports 0.04 unmarked species per window; at 0.20, 26% and
   0.10; no bar tested found half of them with fewer than one unmarked report in ten windows; the result varies
   from 2% to 41% by region. Re-running the analysis from the stored model outputs reproduced all 53 result
-  files byte for byte. It does not show that any bar is right for a given station.
+  files byte for byte (line ends aside: the scripts write CRLF and git stores LF). It does not show that any bar is right for a given station.
 
 ### Changed
 

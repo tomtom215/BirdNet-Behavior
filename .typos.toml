@@ -38,6 +38,11 @@ extend-exclude = [
     # arrays.sha256: scientific names (afer, americanus, mexicanus, varius) and
     # hashes. Editing one to please a spell-checker would change what it proves.
     "tools/parity/golden/**",
+    # Result tables of the Perch-bar study (tools/perch-bar): the annotators' and
+    # the taxonomies' scientific names, byte for byte, and the checksums of every
+    # file read. The scripts and README beside them are spell-checked.
+    "tools/perch-bar/results/**",
+    "tools/perch-bar/meta/**",
     # The extended parity manifest: titles, creators and notes copied from the
     # upstream recording pages (a German "vor"/"unter" in a title, a creator
     # called Udo, a place called Hel), written by build_extended_manifest.py.

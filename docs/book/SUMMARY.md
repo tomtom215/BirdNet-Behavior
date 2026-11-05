@@ -72,6 +72,7 @@ the manual.
 - [HTTP & WebSocket API](./reference/api.md)
 - [Design Tokens](./reference/design-tokens.md)
 - [Integrations Reference](./reference/integrations.md)
+- [Taxonomy Overlap Between Classifiers](./reference/taxonomy-overlap.md)
 - [Architecture](./reference/architecture.md)
 
 ---

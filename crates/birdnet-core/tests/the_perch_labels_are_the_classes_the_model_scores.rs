@@ -19,7 +19,9 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use birdnet_core::inference::labels::{LabelSet, PERCH_V2_LABELS, PERCH_V2_LABELS_SHA256};
+use birdnet_core::inference::labels::{
+    BIRDNET_V24_ENGLISH_LABELS, LabelSet, PERCH_V2_LABELS, PERCH_V2_LABELS_SHA256,
+};
 use sha2::{Digest as _, Sha256};
 
 /// The embedded file is the one the catalogue pins: editing the data without
@@ -51,11 +53,69 @@ fn it_loads_as_the_14795_classes_the_model_outputs_each_once() {
             "{} appears twice: a class named twice is one the model cannot be read for",
             label.scientific_name
         );
-        assert_eq!(
-            label.scientific_name, label.common_name,
-            "the list carries no common names, and none are invented"
-        );
     }
+}
+
+/// Google's list carries no common names; the file gets them from the station's
+/// own V2.4 names and from the IOC list, and holds back any that two classes would
+/// share. What is held here is what the README states, and that the same bird has
+/// one name whichever classifier heard it.
+#[test]
+fn common_names_agree_with_v24_where_it_has_one_and_are_never_shared() {
+    let perch = LabelSet::load_from_str(PERCH_V2_LABELS).expect("parses");
+    let v24 = LabelSet::load_from_str(BIRDNET_V24_ENGLISH_LABELS).expect("parses");
+    let v24_name: std::collections::HashMap<String, String> = (0..v24.len())
+        .filter_map(|i| v24.get(i))
+        .map(|l| (l.scientific_name.clone(), l.common_name.clone()))
+        .collect();
+
+    let mut named = 0_usize;
+    let mut users: std::collections::HashMap<String, Vec<String>> = Default::default();
+    for i in 0..perch.len() {
+        let label = perch.get(i).expect("index in range");
+        if let Some(english) = v24_name.get(&label.scientific_name) {
+            assert_eq!(
+                &label.common_name, english,
+                "{}: the same species must carry the name V2.4 gives it",
+                label.scientific_name
+            );
+        }
+        if label.common_name != label.scientific_name {
+            named += 1;
+            users
+                .entry(label.common_name.clone())
+                .or_default()
+                .push(label.scientific_name.clone());
+        }
+    }
+    assert_eq!(
+        named, 10_178,
+        "6 261 from V2.4 (of its 6 266 matches, five are names V2.4 itself gives as the class name: \
+         Dog, Engine, Fireworks, Siren, Gryllus assimilis) and 3 917 from IOC, as the README states"
+    );
+    let shared: Vec<_> = users.iter().filter(|(_, v)| v.len() > 1).collect();
+    assert!(
+        shared.is_empty(),
+        "an English name given to two classes would merge two species wherever the station groups by common name: {shared:?}"
+    );
+}
+
+/// A name is only ever added to a species. The 200 classes that name a kind of
+/// sound keep the class name, and so does a frog: nothing is invented.
+#[test]
+fn sound_classes_keep_their_own_name_and_the_magpie_has_its_english_one() {
+    let set = LabelSet::load_from_str(PERCH_V2_LABELS).expect("parses");
+    let find = |name: &str| {
+        (0..set.len())
+            .filter_map(|i| set.get(i))
+            .find(|l| l.scientific_name == name)
+            .unwrap_or_else(|| panic!("{name} is a class"))
+    };
+    for sound in ["Engine", "Vehicle", "Animal", "Wild_animals"] {
+        assert_eq!(find(sound).common_name, sound);
+    }
+    assert_eq!(find("Abavorana luctuosa").common_name, "Abavorana luctuosa");
+    assert_eq!(find("Pica pica").common_name, "Eurasian Magpie");
 }
 
 /// The order, at the positions that are known.

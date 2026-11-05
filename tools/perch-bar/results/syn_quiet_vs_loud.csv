@@ -1,0 +1,3 @@
+cfg,difference_db,n_windows,median_ratio_quiet_over_loud,p25,p75,amplitude_ratio,power_ratio
+d10,10,70,0.244,0.059,0.651,0.316,0.1
+d20,20,74,0.056,0.005,0.282,0.1,0.01

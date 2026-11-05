@@ -1,0 +1,411 @@
+source,dataset,file,role,total_member_bytes,bytes_kept,kind,crc32_in_zip,sha256_of_bytes_kept,windows
+Zenodo 7525805,SNE,HSN_095_20150712_090105.flac,real annotated soundscape,14320873,14320873,full(crc-verified),0c2317b2,f35a5ad23aeb588171ec58ce1bcf221d504eb141adc033c23883110af53259ac,120
+Zenodo 7525805,SNE,HSN_058_20150711_070105.flac,real annotated soundscape,14825407,14825407,full(crc-verified),e4e68ff8,da6da8e78df534d2508e07eaa381393ede6399320be447ad0379cb670a331f61,120
+Zenodo 7525805,SNE,HSN_089_20150712_075805.flac,real annotated soundscape,14296381,14296381,full(crc-verified),90aa7651,20f0f65cf14bd17dbdb0a633544191d8bbcc03134c3f2701480c0df6bdd08e20,120
+Zenodo 7525805,SNE,HSN_054_20150711_065805.flac,real annotated soundscape,11952950,11952950,full(crc-verified),673bd2a1,499c74c7089645ff6534d1691f554d7c59137cf395a9ccfeafe46cb6bf8369c2,120
+Zenodo 7525805,SNE,HSN_047_20150711_062105.flac,real annotated soundscape,14320803,14320803,full(crc-verified),4727452c,0166ac7fe5d068809df31b5079852a4d2f50793800317995488264b72b82c525,120
+Zenodo 7525805,SNE,HSN_085_20150712_073105.flac,real annotated soundscape,14255292,14255292,full(crc-verified),61532d27,6165a8046c5c8de3fe6ca61fe71ceba6b33dd4c189f551ee2c8eee1df6bea664,120
+Zenodo 7525805,SNE,HSN_076_20150712_061805.flac,real annotated soundscape,11564551,11564551,full(crc-verified),320e4732,490d5ec6fd7a33fcaaf65ce9feb739f140c54b0bd9941c8497a7b314b4a1023e,120
+Zenodo 7525805,SNE,HSN_015_20150709_081805.flac,real annotated soundscape,11586690,11586690,full(crc-verified),313f493a,53bbfe2d0af5e344c0f179b45bc800b8897adfe483e1d5da09a3f23e0360f08e,120
+Zenodo 7078499,HAW,UHH_352_S01_20161205_151000.flac,real annotated soundscape,9593445,9593445,full(crc-verified),4055f6ef,c5f92cbaa0d4ca8653daa7ce94c30b3c362320013975025f1ee9176566d3e54e,60
+Zenodo 7078499,HAW,UHH_048_S01_20161124_071000.flac,real annotated soundscape,9562682,9562682,full(crc-verified),52f9231b,853b2bdb002084ed53a155b494cd8f0f3d0b3b9c0930a4d696cb97fa468e3dd6,60
+Zenodo 7078499,HAW,UHH_211_S01_20161201_092000.flac,real annotated soundscape,11711762,11711762,full(crc-verified),414bbc0c,dd472fc661fe833e149d6c5c8ef23821161af3b21746d9aea2b0a5efc18418b8,8
+Zenodo 7078499,HAW,UHH_500_S02_20210326_182000.flac,real annotated soundscape,8324089,8324089,full(crc-verified),a8cbce33,ca77b596ac135b71cbbeac18affb1dd5d61b94c0d1f85f8ab4fc67ce53691420,59
+Zenodo 7078499,HAW,UHH_483_S04_20190410_225000.flac,real annotated soundscape,13424184,13424184,full(crc-verified),f2cd2c43,a50c0871898996074b4cd2cb424c236e2475588e13f91ffa45c980ff8f764fe7,107
+Zenodo 7079380,SSW,SSW_173_20170603_150016Z.flac,real annotated soundscape,97162842,15000000,prefix,110d93dd,2082418bebaa4890ea4d6be4814daab71c170e3c1132513160379554b7636e6e,110
+Zenodo 7079380,SSW,SSW_212_20170617_220022Z.flac,real annotated soundscape,96004122,15000000,prefix,52af16d2,f55421752fef5e28426be907f7b31ee07ec68a73d7554e4b8f48fb75f1eaacd1,110
+Zenodo 7079380,SSW,SSW_040_20170311_120007Z.flac,real annotated soundscape,89538528,15000000,prefix,d07d559e,b1d67b82ecea46000316b140b5ab46984a80ce3c69258a742bb5e991aedd1a89,121
+Zenodo 7525349,COR,NES_029_S02_20191004_063001.flac,real annotated soundscape,119876297,15000000,prefix,34b8e68b,cf9dd5a002e109e539f6d7acc5f095ef36f968a21195934081387543e781b90e,90
+Zenodo 7525349,COR,NES_019_S02_20190904_053000.flac,real annotated soundscape,111081165,15000000,prefix,77962d87,e4ccd2a251c79126911511cb0354b50f3d595c99e2f81fc694f8a582683bd94c,96
+Zenodo 7525349,COR,NES_017_S02_20190901_160000.flac,real annotated soundscape,109964147,15000000,prefix,9a8a399c,a6edc4b5aa445f9a7564e7645ca4cfaaf3b3c24c52cd16cefb9d48fa134a1980,97
+Zenodo 7079124,PER,PER_011_S05_20190120_100007Z.flac,real annotated soundscape,110615885,15000000,prefix,9b043473,dfd56d9f1eb8abc90994827b1bc85f2a5424598e5b6b7f5607ad6f203fa9f0b2,102
+Zenodo 7079124,PER,PER_013_S08_20190120_100007Z.flac,real annotated soundscape,117245807,15000000,prefix,6c7b86d2,ef98037a91705a4303dc61b02610d40357952860798ac488d127a3936b25ffd5,90
+Zenodo 7079124,PER,PER_004_S05_20190116_100007Z.flac,real annotated soundscape,110289035,15000000,prefix,0fed9eec,5058ac6cbdb97d713384b1e3fc081e41411b378b65a2853d194f970714b6c033,104
+Zenodo 10943500,KEN,KEN_026_20220122_065805.flac,real annotated soundscape,92502306,15000000,prefix,81f33022,623a07df3d3ab705981bd20108d9798c15eaf39fd9aa87d0aa312b19458d7d6a,115
+Zenodo 10943500,KEN,KEN_013_20211231_033846.flac,real annotated soundscape,103439507,15000000,prefix,ff054520,968b7420b8486f7d2d7312deb72db6e5aa63a1086d98d45853a2a4dcc23af540,104
+Zenodo 10943500,KEN,KEN_015_20211231_064530.flac,real annotated soundscape,91853849,15000000,prefix,6cd46990,65f08c3a258893d1e14f38a2100a64d8cd98621f5eb4e4169200e4c5b76cb6a6,112
+Zenodo 4656848,POW,Recording_1_Segment_05.WAV,real annotated soundscape,26460044,26460044,full(crc-verified),ade1e40f,81466b1069dbe4bb17c758ec7229f57c802ce5cff3109cdb146f6b6cf788c8b0,60
+Zenodo 4656848,POW,Recording_1_Segment_32.WAV,real annotated soundscape,26460044,26460044,full(crc-verified),4dc5d597,a8fac0ca60cd9f5ea54603722b91da5c760c97fa01df901da5bb3bda81fe091a,60
+Zenodo 4656848,POW,Recording_2_Segment_07.wav,real annotated soundscape,26460044,26460044,full(crc-verified),19f64f20,844459e2fe266642f49e62a39a5e51dcf7cb99dedf998250dedc9e97fbc61e18,60
+Zenodo 4656848,POW,Recording_2_Segment_10.wav,real annotated soundscape,26460044,26460044,full(crc-verified),be3587fa,20b3c0ad9060fbf637c70b9f8a18e4f1964b29cd9252dca61207a5610b0644c1,60
+Zenodo 4656848,POW,Recording_4_Segment_11.wav,real annotated soundscape,26460044,26460044,full(crc-verified),1054ca6a,d08d447945e0d77b434c6515d451b5e6f5ffd2da67f89420f7902d8c71fa2882,60
+Zenodo 4656848,POW,Recording_4_Segment_16.wav,real annotated soundscape,26460044,26460044,full(crc-verified),efa3f73a,3a31b7040c0f6b179a17f83daf7bc8c5ac569640975133061268cb5102be2348,60
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000001_morning.flac,real annotated soundscape,2854153,2854153,full (complete tar member),,d3439153ef0deeba10c51e24f1c0224228653d67dbaecfaf868e6551a6816c77,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000002_morning.flac,real annotated soundscape,3761148,3761148,full (complete tar member),,3826b2910bd9533ad3b45c3a5c89126f260167eb9e83380975ed030d4a824ab1,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000003_morning.flac,real annotated soundscape,3701099,3701099,full (complete tar member),,5651ee803fbcfcbdb638107aedd430dade558cc8544f2ae794cec4ea34ece56d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000004_evening.flac,real annotated soundscape,2699043,2699043,full (complete tar member),,95aa80c4cae03d5cc5b2903a9f2993e9bf10882d5bdb9a7eab6d10100a97eb44,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000005_morning.flac,real annotated soundscape,3217068,3217068,full (complete tar member),,5fc63c4dba3e73caaffb8f73aea8ca33917b79bd271eafc4e6a06f6aebf05058,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000006_morning.flac,real annotated soundscape,4229892,4229892,full (complete tar member),,f7789192a7080ee22c74276b038355111cae134372daf0b7ee3d98daf2c5c3d2,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000007_morning.flac,real annotated soundscape,3276595,3276595,full (complete tar member),,0e676486d6f3e32dea0bac945994ef7091d04d42af97869c81679e34991b9046,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000008_morning.flac,real annotated soundscape,3455674,3455674,full (complete tar member),,6fbf43fe37fdecc175f1f522f076c8504aad55dd7be510ce74f1070ed980f0ce,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000009_evening.flac,real annotated soundscape,3786421,3786421,full (complete tar member),,9658eea6a8c85f2db831f5c23e7e8db0da43f253bd2f1ed7ec41986cf4f464e1,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000010_evening.flac,real annotated soundscape,3049679,3049679,full (complete tar member),,ad652acab3d453aa5e1beb578dcba833f26269c0f0c2e39d77a66cbd0b689b67,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000011_evening.flac,real annotated soundscape,3189485,3189485,full (complete tar member),,dad7c44c27063b0e8895f50e904c37f5ed0433e56cfa46042e4397e4501e98e4,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000012_morning.flac,real annotated soundscape,3670753,3670753,full (complete tar member),,1d17a7696f757deb1198aeeafbe7976299a4f6890eea1d8c4e165eca1e710d1c,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000013_evening.flac,real annotated soundscape,2676781,2676781,full (complete tar member),,ca56b25f8ecfc0d9812b4c8fff29d0b7fc21c11e7c89d8fa7b07c19dc8fef3f9,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000014_morning.flac,real annotated soundscape,3643218,3643218,full (complete tar member),,1a92413e579faf35ffdefc991e3f541335c2cb6f5fa1db8eb4eb508a4bc1c4b6,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000015_morning.flac,real annotated soundscape,2984717,2984717,full (complete tar member),,0d5d4cfec8ab3be3ff81b5f71aecf3d578e4f95c9a766e3d4a42c28db0cde2f8,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000016_evening.flac,real annotated soundscape,3134354,3134354,full (complete tar member),,4227d76b878ec97ef1e425cfb2139a7485b86cc5d3e5fc137155a7231e0b32bd,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000017_morning.flac,real annotated soundscape,3674924,3674924,full (complete tar member),,44ab566d115e20e02cb8a0b8e32a4acea11b401aea15398e0e7b4a8bf4da9603,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000018_morning.flac,real annotated soundscape,3334416,3334416,full (complete tar member),,cbc4044ad7d8db56dad6658e6ea1aa22a82829c8352516bdf5255e237bd5fd87,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000019_morning.flac,real annotated soundscape,2836917,2836917,full (complete tar member),,c49be1710eba500c5f67b53f57f762cfc781003aada935740da9c1e0b8855cdb,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000020_morning.flac,real annotated soundscape,3132406,3132406,full (complete tar member),,9c5d89561bdce7cbee73dfd0167c257afe2609d3db5352deacbfb8f6b70d1dd9,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000021_evening.flac,real annotated soundscape,3027949,3027949,full (complete tar member),,168f80f48482cd138f16b66ba5adf1668884a3ddee7de11a4aa0d797db64449b,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000022_evening.flac,real annotated soundscape,3041287,3041287,full (complete tar member),,ca3805a3a0472d9c9f63b363c2eedbf17d6e715c3b83d07fa8917c213eedeb23,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000023_morning.flac,real annotated soundscape,5982745,5982745,full (complete tar member),,219d75489decb1072023d8e23b022a25afbce968edc89da7f149aea4e64070f5,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000024_morning.flac,real annotated soundscape,3472664,3472664,full (complete tar member),,10501f51534b243d6131a1dc5c4d45813cc1087d285226e71c90e601ef39b82f,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000025_evening.flac,real annotated soundscape,4047054,4047054,full (complete tar member),,e2da285b183c2f35f5f0de75407c7869c60d775332a6dad2edcd493146bea835,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000026_morning.flac,real annotated soundscape,4803788,4803788,full (complete tar member),,2a4f31be8f433cfad84d19b918e6baf40bd070771f57ac247f863a6044cdf307,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000027_morning.flac,real annotated soundscape,3966081,3966081,full (complete tar member),,a7fadacf218c03048cd64bbcb8e91f459968be1db70b7d399dbdae6950a5cdad,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000028_morning.flac,real annotated soundscape,3308913,3308913,full (complete tar member),,0411d464936431e2d08a38e419e9a975294b9dd7ee720fa19d917105cd8fe343,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000029_evening.flac,real annotated soundscape,3709706,3709706,full (complete tar member),,da7b34b263ff7114a1a4ef24531a06deee64976ef336ababebe9f65952eb1da0,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000030_morning.flac,real annotated soundscape,3060153,3060153,full (complete tar member),,f9e79b8febc9f5424f6fb353676520e7588e3523f93d118552c19ea7904b2ba2,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000031_evening.flac,real annotated soundscape,2993957,2993957,full (complete tar member),,2193c12dd5590ce4a5c3dc0861e3f7c3a539a7f4531d73c484f8e39f964f8320,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000032_morning.flac,real annotated soundscape,3542820,3542820,full (complete tar member),,cfbcd41aac5d16eefcf163d1ea89e05d9edc4b28bf2018a273c4f312418a9aa2,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000033_morning.flac,real annotated soundscape,3099074,3099074,full (complete tar member),,258c7a547694f28adec97e1dbbfed389a7340e84d5bbeb6f4b2abd05e5bd25cf,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000034_morning.flac,real annotated soundscape,3280579,3280579,full (complete tar member),,3c07c35f3f9d32412947ab9be30f42578814c9bcaa2eb66783f1f50ee4fb74d4,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000035_morning.flac,real annotated soundscape,5427827,5427827,full (complete tar member),,3ee5103f8845b62b5933693d6064f36b1f1c57cadcaae178eefab00ed5ce99aa,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000036_evening.flac,real annotated soundscape,2784738,2784738,full (complete tar member),,9903510065af2ca159039a41f1cf538021d142d995fd9a5d8cdb675f2b6441a6,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000037_morning.flac,real annotated soundscape,3288474,3288474,full (complete tar member),,41d8fffe61447608730167cb1bb84c1205926740802a635db0acf280bfcbc50e,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000038_evening.flac,real annotated soundscape,2682218,2682218,full (complete tar member),,01b09003b7574faaa0f48b155044de28745e0667fcf2ec18acdaba3cfb53a3ae,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000039_evening.flac,real annotated soundscape,2684870,2684870,full (complete tar member),,fbc7eccb83b45fb58072a2bcde6aa23c65bbb96df944352d09f0b10fb6cb73aa,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000040_evening.flac,real annotated soundscape,3240702,3240702,full (complete tar member),,42f9be8210dbd60ea9f7b28d6791b0a60b78e1adf2a519e83130a31de1299e85,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000041_evening.flac,real annotated soundscape,5137321,5137321,full (complete tar member),,5af31efaf04f4f36207e3bff798140383fab126757905bad03660ab6dbc78769,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000042_morning.flac,real annotated soundscape,3380209,3380209,full (complete tar member),,4a1c1ffa6d1f7c2e9903305a4a3e9f7eaa4337459caba548288db3142d715d10,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000043_evening.flac,real annotated soundscape,2917086,2917086,full (complete tar member),,3115326aeecbbbf23b3b652936537fd7a0ec14961b05e60c1a5c365694464b99,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000044_morning.flac,real annotated soundscape,2897286,2897286,full (complete tar member),,f4b892fde782fad4a1beb43e5a97e34b97fd789f59fb3266c708c443ccb1df8f,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000045_morning.flac,real annotated soundscape,3410815,3410815,full (complete tar member),,97931df6aa8d60eee18625086f68b6f5a0f8d99866a98a906d7de13f1b925472,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000046_evening.flac,real annotated soundscape,2955200,2955200,full (complete tar member),,61463e69c0e7f819c1f11c63e1d6de781cc53fdee21a36e619e22d00bb1bd432,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000047_evening.flac,real annotated soundscape,2737660,2737660,full (complete tar member),,31159dec92665bc9a0677a4ca82febda4290d60950452fc3d99bbef7c659fd99,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000048_morning.flac,real annotated soundscape,3346036,3346036,full (complete tar member),,55023640dc549c97b5bcdbd3bf1805c3e0d134b3c021c6885dcb3cb6e9cb3427,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000049_evening.flac,real annotated soundscape,3376511,3376511,full (complete tar member),,d70734e2699a7257f51f2523b94c32a0ef03675b4001305ce8db50fbeb7c288e,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000050_morning.flac,real annotated soundscape,3018102,3018102,full (complete tar member),,09505a98044f2422a9975fd94bef3ef212a47c828c4642281e3b94a0c55dda4d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000051_morning.flac,real annotated soundscape,3235078,3235078,full (complete tar member),,4408ffe1136e7647283458dc99faf603dabf476356ce9dcf04ef050894dea61b,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000052_morning.flac,real annotated soundscape,3226017,3226017,full (complete tar member),,f8a5df53d07d0e6e10ef55e6f4d8c5835113a4e5a36bf4580c3836026ca6f440,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000053_morning.flac,real annotated soundscape,2961251,2961251,full (complete tar member),,95cae38e59b9d1d05c9273f89ccd7bcb85822a1642af9b78f2e3819295ba9f44,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000054_morning.flac,real annotated soundscape,3155348,3155348,full (complete tar member),,f5980f9179eac49c478abc135a750881d26e4579cbd1a937e80b452ab0fd966e,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000055_morning.flac,real annotated soundscape,3280846,3280846,full (complete tar member),,4e2900415bdaf615af0dd428d5bbbee92df8c546a57c4f214c7af7b3bc65262f,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000056_morning.flac,real annotated soundscape,3349266,3349266,full (complete tar member),,1cf6c18ae67771afce46f37a80dbaf88441542c49c17fcf1fc04c9f10fa1a0e0,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000057_morning.flac,real annotated soundscape,3573439,3573439,full (complete tar member),,73b0cb6b70bc534bc419830e504928aa4f4b7f6b5bfce0aeab09d274233dde92,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000058_morning.flac,real annotated soundscape,3597919,3597919,full (complete tar member),,6cbe2c0cdf757ef54709eb06fb307b2c4b3fa9b1fa3902037fc3071228673f32,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000059_morning.flac,real annotated soundscape,3766656,3766656,full (complete tar member),,e2c6b1fd5c932fb6b992a6ea5b6b38d50f9ea11a23770aeb1332574cce8c1940,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000060_evening.flac,real annotated soundscape,2891254,2891254,full (complete tar member),,ce43ab247505225e650654abf1f9faca27c3fe11aefecfc2208a47023b581ad3,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000061_morning.flac,real annotated soundscape,3399969,3399969,full (complete tar member),,12fb29ec7ff402383f1545f7cbd7f98bf5fb1d49175cc60d8e8f0ec7ba042618,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000062_morning.flac,real annotated soundscape,3204694,3204694,full (complete tar member),,0cbee04a94a35a116b730343b2eeaccde888e7d43e4e072b0d3e295dcb3cd24e,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000063_morning.flac,real annotated soundscape,2753229,2753229,full (complete tar member),,b3b0b1d87ea187d7c0e8e024b4bfa3da37e6dab920399aff14dfe2e54d0671f2,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000064_morning.flac,real annotated soundscape,3448705,3448705,full (complete tar member),,db90c97fbef0ffae55bd091ef913eb41186cb872914ed916c06692c991aa24de,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000065_morning.flac,real annotated soundscape,3114187,3114187,full (complete tar member),,9048db9b652ad262c5d6779273785ce66c52549cb9e1e2f5a4ba162bd373b5cb,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000066_morning.flac,real annotated soundscape,3061925,3061925,full (complete tar member),,f966b649a1ddfa0a6e723ab7ebe47fa076c553ae5a3df89b7083202a443f2ad8,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000067_morning.flac,real annotated soundscape,2967589,2967589,full (complete tar member),,3a972dd02db5535f1f911513f18ba40d7fa7ea5b0969d8b04f0749cc77efedf5,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000068_evening.flac,real annotated soundscape,2836932,2836932,full (complete tar member),,26eb9fb00e7b90b19fbcc5be1620656149d679aba6c44a13ee1c152104f4906a,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000069_evening.flac,real annotated soundscape,2578308,2578308,full (complete tar member),,397cbc53baaf7646bc5171048639c863d8b82a2343f05bc634cc9b5e4c6870c0,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000070_evening.flac,real annotated soundscape,2584177,2584177,full (complete tar member),,ce5dc3784044885a2a083d62056afe33a62a4e02e35a7792c4d1f2b898a8b165,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000071_morning.flac,real annotated soundscape,3901250,3901250,full (complete tar member),,0c3f64f188bd96de622a301404675087652f0c258824fbf9586467073b509c0d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000072_morning.flac,real annotated soundscape,4567649,4567649,full (complete tar member),,28236e6fcc281e67f84bd7ce2cd4d7b5989890159b1cb9b134fa16b01214cb95,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000073_morning.flac,real annotated soundscape,3586015,3586015,full (complete tar member),,dbb49c719a73a343ffd28a0dd92f6df652a6c10330f2bb38520b7f1c1d17c44f,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000074_morning.flac,real annotated soundscape,4070476,4070476,full (complete tar member),,fb6093cdbd7c877c6ac3e424bc8dee854bbb8cf3e4a88da39fd75bfc5702e35a,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000075_evening.flac,real annotated soundscape,3150596,3150596,full (complete tar member),,e9a36f5d4553ae56c1f72b55346c591729bce3c84d03aba0c5e119600efec053,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000076_morning.flac,real annotated soundscape,3636459,3636459,full (complete tar member),,72657422e4afcffda4e8e73aee2ea3472ed59eec260ff6fd2ad8f4b7f0d26d33,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000077_evening.flac,real annotated soundscape,3355462,3355462,full (complete tar member),,93ceefc3151829bc5399b2492ebd49d6ecd0566521604daf5b5e250769babd51,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000078_morning.flac,real annotated soundscape,3687995,3687995,full (complete tar member),,0f1f7df6cc420573eb033e151d52d15c4a149ca23551948f4283a95725f8646d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000079_morning.flac,real annotated soundscape,3044593,3044593,full (complete tar member),,a09d0eab48a6d5a15b74b5b52ea618177103b1c45454299d6b36d95a0d76f70f,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000080_evening.flac,real annotated soundscape,4601899,4601899,full (complete tar member),,773f017e77e0b2ad6f1d518824b0de2c6f3482c9ed31a5914d086bcd13373746,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000081_morning.flac,real annotated soundscape,3337675,3337675,full (complete tar member),,4bd9d4b1b6965acd97098a0392d656abb91d5ac1fd78fc48cc550b2082614483,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000082_morning.flac,real annotated soundscape,3258439,3258439,full (complete tar member),,bb5ef6f9795606d5840fcdfbc1b65f1e88e1cddda9070f00945cd8dca679595d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000083_morning.flac,real annotated soundscape,3709772,3709772,full (complete tar member),,34583ee6b15ed04140aee82bf0d76f48196c749c335be2dce613caaf50619470,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000084_morning.flac,real annotated soundscape,3863101,3863101,full (complete tar member),,0411dff90b60d058a399b80e38005ef132903fdaf72b5495fc24ca54a459b620,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000085_evening.flac,real annotated soundscape,2847626,2847626,full (complete tar member),,67f005a118e626ca915b5fdf8ffa80aaec6eaf5c5fe07dafa3512b3847570d5d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000086_morning.flac,real annotated soundscape,3126615,3126615,full (complete tar member),,37961c438c2db91c703fe4fa279bcbe4370c1e2879f8364a7a6bc9f545b2c200,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000087_morning.flac,real annotated soundscape,3596944,3596944,full (complete tar member),,a631ee067495975bed50899623d09f01039ecfad6b82fad52e27b6171a0665c6,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000088_morning.flac,real annotated soundscape,3343155,3343155,full (complete tar member),,424f452846c60a4b2d3200ba77935e60c500a54f9a2792fe3d1087350c270e4d,36
+Zenodo 21821133 (tar.gz prefix),CEB,TE001/000089_evening.flac,real annotated soundscape,2817413,2817413,full (complete tar member),,0c38e925af8903ae95271d32c2712273bcedd0a97b9388f10b4ae571b2aa3bfc,36
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000001.flac,clean single-species source (Xeno-canto focal),3048423,3048423,full (complete tar member),,cc404be704c0f4d7cd6884c4898607718a945a5938f8a48ac0adcbf44ffe3e5f,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000002.flac,clean single-species source (Xeno-canto focal),9038107,9038107,full (complete tar member),,24e173c5f9e03a5988681d71d74e56510a89172731adc094d80df8dcb172050f,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000003.flac,clean single-species source (Xeno-canto focal),2444532,2444532,full (complete tar member),,f4cc70b0c2151e083c249be5f94b09b87e59d5a46334980dc4850d2317dcf42c,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000004.flac,clean single-species source (Xeno-canto focal),4127167,4127167,full (complete tar member),,c5895bbb747f1901e53c18f9da64b1719a0db434d610ddedabb3b09875d67b23,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000005.flac,clean single-species source (Xeno-canto focal),1547737,1547737,full (complete tar member),,4136a7895ed5798132477be67b98633af81b383e958d8b36cbf3590fa612e5cb,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000006.flac,clean single-species source (Xeno-canto focal),733760,733760,full (complete tar member),,488f7d899e50b8e8180377ad01f33ab641f3f63db4ef0794febd0bc2943606cd,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000007.flac,clean single-species source (Xeno-canto focal),1889885,1889885,full (complete tar member),,5fa8ac9d21c9cbdb3e9a835be092dd8df813156e66aab81f4c5eac9a1bbd815f,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000008.flac,clean single-species source (Xeno-canto focal),789071,789071,full (complete tar member),,acc8ad16b8da527e54867d338ea4a7e13273c931db5f08694f48143027c8feb8,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000009.flac,clean single-species source (Xeno-canto focal),418145,418145,full (complete tar member),,cd0e4a5e7f08a9fcd9127aa70fe0646d8453edb4adf41fcd0203e5b3c1633976,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000010.flac,clean single-species source (Xeno-canto focal),2541751,2541751,full (complete tar member),,b12473581ef1eb5ce33a1a4b534b712354317f84c9449f507c0a54c211691dc2,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000011.flac,clean single-species source (Xeno-canto focal),357880,357880,full (complete tar member),,eb60daac8d930d74d404788ab707b76df4891eb941ff2913fb3e740d241000b5,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000012.flac,clean single-species source (Xeno-canto focal),737579,737579,full (complete tar member),,a2e9fb3bc149bf760b4f906ec118f0a2db950f0a31c7181ef10feec3eaa84029,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000013.flac,clean single-species source (Xeno-canto focal),343690,343690,full (complete tar member),,bc8e83ddb54092fa009dd54543445361342ae2e2e8aed16cd9c80d0aff6d7092,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000014.flac,clean single-species source (Xeno-canto focal),469279,469279,full (complete tar member),,3c078de8aa3edafebb6b1aeca5c6fa8211c65ff10104137ca6d303e23a57cc90,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000015.flac,clean single-species source (Xeno-canto focal),1005051,1005051,full (complete tar member),,d966604fb5dee8bdc2e4d186d56efea69231af532f02a378f87ec28b42fdb602,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000016.flac,clean single-species source (Xeno-canto focal),1906114,1906114,full (complete tar member),,3786ba2bac3df27eff02c03e73bf5461e7792373de8a5586f82ab88e90f91158,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000017.flac,clean single-species source (Xeno-canto focal),6628551,6628551,full (complete tar member),,d866e44fb007c1b5bf83e9794d03aef3337d9c74dd5df053486eb9ebf4644ab3,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000018.flac,clean single-species source (Xeno-canto focal),188511,188511,full (complete tar member),,8eaec58ea41e4348d71e9cf1f65a4923705d4935641c4f349d8cecb1892ba992,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000019.flac,clean single-species source (Xeno-canto focal),586233,586233,full (complete tar member),,d4b1a5382bf8a021c1f366f600fbef6ef6902523f772bc7c56ea6be68e1c2d50,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000020.flac,clean single-species source (Xeno-canto focal),525971,525971,full (complete tar member),,58fd0c82e84509e711f2fb2cb85414ff4ccc88f2c786eb985b6df8053cd5e841,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000021.flac,clean single-species source (Xeno-canto focal),450831,450831,full (complete tar member),,a54ca7ad0961003d8bbb4962b87292a449fc4b2489ade3abe750835145539414,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000022.flac,clean single-species source (Xeno-canto focal),1104320,1104320,full (complete tar member),,3e776f66a1a8b1c2117e225581a99b9f6e5dbf95d684107ce611e2d9a3bd3653,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000023.flac,clean single-species source (Xeno-canto focal),173881,173881,full (complete tar member),,9a9e2fd90d003855ef88acf61f235a0eb7a0de0422c4d44a82bf55dc308b88eb,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000024.flac,clean single-species source (Xeno-canto focal),441159,441159,full (complete tar member),,138ad617708390efcbd7f2048f977a8d77ab5eb4c7ecf10d68092bd214765659,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000025.flac,clean single-species source (Xeno-canto focal),725736,725736,full (complete tar member),,cda7ee56684e54784f2dd7273a50f8b16b8d81882f1506922e16b49e1bd1dcc6,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000026.flac,clean single-species source (Xeno-canto focal),1359019,1359019,full (complete tar member),,7a91a9ad39eea484df67f5d610335267f39084effde6a2402903adb4fc604a8a,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000027.flac,clean single-species source (Xeno-canto focal),798867,798867,full (complete tar member),,8a8db0bb474e0ad24779e4a053a41f4688d6400356c222ad5b5aefd708b7515a,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000028.flac,clean single-species source (Xeno-canto focal),655721,655721,full (complete tar member),,1a6cd520aab7fd08cc264594991dafb67c72a6a5112c86c6364c5c36a589a32d,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000029.flac,clean single-species source (Xeno-canto focal),473822,473822,full (complete tar member),,04c3f1fdd185e3a14c95557f73715e8eb98482898848ac1e62f6a61fb1d479d2,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000030.flac,clean single-species source (Xeno-canto focal),995047,995047,full (complete tar member),,130786380675a055a09157d640ad68de22b764069bca209d79f4258a03631968,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000031.flac,clean single-species source (Xeno-canto focal),571644,571644,full (complete tar member),,bc311c929c1a1b72c3a28873d324027b80ea664312c75bca0595030e9a127768,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000032.flac,clean single-species source (Xeno-canto focal),798666,798666,full (complete tar member),,d3b180f4362871581e140a43c0b4d976d344f1ce8ab2761fe464c4136a1161e0,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000033.flac,clean single-species source (Xeno-canto focal),281700,281700,full (complete tar member),,a7b825031665b5c53ee6b93e538bf963d8250326013cf5a3f78e48a53cf16d2e,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000034.flac,clean single-species source (Xeno-canto focal),909896,909896,full (complete tar member),,39bd876433bde6f98a863cf97ea4f824e1fbb148ea6e553a107d89ca8ed2a893,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000035.flac,clean single-species source (Xeno-canto focal),1034976,1034976,full (complete tar member),,f2c6124b57123ecd7441c3762387a70c5a5511a841390b42fc15887fb9219b5c,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000036.flac,clean single-species source (Xeno-canto focal),347899,347899,full (complete tar member),,b4f82a85753074f4cb55ca08963fd63ea082f29833b551bea1e094157f397c85,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000037.flac,clean single-species source (Xeno-canto focal),1060414,1060414,full (complete tar member),,dfecbc66d635fac12ec671f40a2546e3895093f95cf3c0beb53b9753d3eb0f58,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000038.flac,clean single-species source (Xeno-canto focal),529357,529357,full (complete tar member),,d4e7fc2daf0628aa02d3d2be8f097d52ab2651f75f9ca5e09839533f3e733699,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000039.flac,clean single-species source (Xeno-canto focal),550780,550780,full (complete tar member),,012e2ee1faaaae4e517fdeb6a55709d5195caa42aff760ae5ecfcde4c771b195,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000040.flac,clean single-species source (Xeno-canto focal),585093,585093,full (complete tar member),,b6640e848403a48ff26e36ad21184dad35c6a4907d37b4e8787015bac13bbc46,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000041.flac,clean single-species source (Xeno-canto focal),525730,525730,full (complete tar member),,f04c42373833eaf5f54846d674e5dc63f89b9879eb81b77b43defa0451fc4fc7,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000042.flac,clean single-species source (Xeno-canto focal),812691,812691,full (complete tar member),,64171eb2e8225263cf72c89bca3771eac383424f0b6f393a40d26735636b94b0,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000043.flac,clean single-species source (Xeno-canto focal),949751,949751,full (complete tar member),,7ca87275882efe8aeea762a4063fe4ac15f109b22ff037b1d422593e89e61afc,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000044.flac,clean single-species source (Xeno-canto focal),831819,831819,full (complete tar member),,759ac112a350659aaa2b51c8d2939c0548ca39ae9499164cde86a10c93eb31a9,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000045.flac,clean single-species source (Xeno-canto focal),364493,364493,full (complete tar member),,2743f57ad8be375bf9d9a345ca259e653c57625b817afc92c98f09309f4f04ea,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000046.flac,clean single-species source (Xeno-canto focal),1489212,1489212,full (complete tar member),,8c64e9485df73c93dfaa00dbf25af9770fe8b0dbff14334a7bf43a3f8f22e478,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000047.flac,clean single-species source (Xeno-canto focal),887882,887882,full (complete tar member),,9e4f3f806a343eb751d27ce84aca4d6f03f4420b2c5525c8673f0bc72e400b67,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000048.flac,clean single-species source (Xeno-canto focal),274790,274790,full (complete tar member),,d78b2d6113e43b2c60db5e07d461bae9914bfbde642a9f621ac8742820a9fe12,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000049.flac,clean single-species source (Xeno-canto focal),516998,516998,full (complete tar member),,1e430dbab12bb512105198113e5cc3c51eaea4b0003594987236b73847760571,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000050.flac,clean single-species source (Xeno-canto focal),421095,421095,full (complete tar member),,e577d5cb60697a6514e48b2a07669abee3708b3a856f8175e39a16f010aa5610,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000051.flac,clean single-species source (Xeno-canto focal),305344,305344,full (complete tar member),,222f8a53c2ae967399cf05e6076d87b1d43e77859a29b56dd4329fefd2a430f7,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000052.flac,clean single-species source (Xeno-canto focal),2656230,2656230,full (complete tar member),,0d3aa34c1c9a19ea133781cf40dcb00bf85c1fa180979f213f4ff68c85bbd38e,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000053.flac,clean single-species source (Xeno-canto focal),672382,672382,full (complete tar member),,a040fff175f6be6cf8b099d95fbda6beb3b965fba8010f7a5bb8b0dc9d0951e8,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000054.flac,clean single-species source (Xeno-canto focal),444523,444523,full (complete tar member),,aa8b5931f5338602cdb5b0e338a0056b9833869e61ccddf05f57c9d5e6f4f429,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000055.flac,clean single-species source (Xeno-canto focal),384028,384028,full (complete tar member),,4947a6a332491a1730e76e954f65e2a52eddb01162e5b2bc925f9b5423a31f97,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000056.flac,clean single-species source (Xeno-canto focal),4953617,4953617,full (complete tar member),,ae69debd5a71166dc6a3926b242d2770a2c31fcfd85f16e1e8506a2ed292a67c,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000057.flac,clean single-species source (Xeno-canto focal),612742,612742,full (complete tar member),,2c1dbe3e82f9fb3166a3b7db38882c2c4653e1f59a6e1c50f19aad53c653d504,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000058.flac,clean single-species source (Xeno-canto focal),487985,487985,full (complete tar member),,d33c14b56e0abed1ab74385e33c1e1a3509263e9664f8d14c95437eb7f15afa3,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000059.flac,clean single-species source (Xeno-canto focal),503778,503778,full (complete tar member),,08728e41b145a5c45f2b867e75a3cc03dda7632be5a4a6b3677d5e9f34d9a249,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000060.flac,clean single-species source (Xeno-canto focal),440575,440575,full (complete tar member),,36d7a70c36c753bb6422dd176f50f2554db756a4767f08cffcb82f1e8f206eed,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000061.flac,clean single-species source (Xeno-canto focal),1011542,1011542,full (complete tar member),,b2da5f14521c8ec78c0e4f727a61e064ace7aa46218d494879f5c86aafba9215,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000062.flac,clean single-species source (Xeno-canto focal),445888,445888,full (complete tar member),,8bfb92111c64ed176030c56c858c50f61c24260712eeec81cd11e824253ef866,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000063.flac,clean single-species source (Xeno-canto focal),935510,935510,full (complete tar member),,895367a765cf5900fad6b6d54f8223adcf25288ab3b25e07030dae68f13a2b99,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000064.flac,clean single-species source (Xeno-canto focal),1926804,1926804,full (complete tar member),,1832ec0983c757811afa4129cad5735ad0cd3d19d77621e5efaa03c492ec4b3c,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000065.flac,clean single-species source (Xeno-canto focal),632862,632862,full (complete tar member),,bdf9069f3e01cbe1ca3ba36a12135289e00b171e540ba360c01ecb3f305a3fa8,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000066.flac,clean single-species source (Xeno-canto focal),423330,423330,full (complete tar member),,b2ddd327410617c66a8d212a16a25cc9a4c016d61acbd9b25f3b82180bdf8ce5,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000067.flac,clean single-species source (Xeno-canto focal),1798657,1798657,full (complete tar member),,27185b6050632cb2e0ba65e224dc9434b8415a0387756159a6382f6da8d7c3b9,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000068.flac,clean single-species source (Xeno-canto focal),1960575,1960575,full (complete tar member),,0dfd9f14a46577316bdc656f9528ac381056823fb23ccecc13837077aec38f93,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000069.flac,clean single-species source (Xeno-canto focal),222294,222294,full (complete tar member),,7602294d3937e9ec6c7baf8b08473edb5167c8107294cb77e4496267e3a69570,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000070.flac,clean single-species source (Xeno-canto focal),1389804,1389804,full (complete tar member),,3e17225b831e08b493cd371a31552c92e619509cbf77f0503f3dfbcd126d4c1b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000071.flac,clean single-species source (Xeno-canto focal),1113568,1113568,full (complete tar member),,70a0fc69f283b48e44ef99ded3b24de44c2860fc2f1590a680899d54eaa5e78b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000072.flac,clean single-species source (Xeno-canto focal),114717,114717,full (complete tar member),,68ba4849f89f08fd643259ba273ee00e4331048873ded0b0905799a33a40e6cc,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000073.flac,clean single-species source (Xeno-canto focal),1305979,1305979,full (complete tar member),,1983ae6beabc9f9db9ee1ec8bd003af7e0c9b19b2237f9866d37713df60d8494,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000074.flac,clean single-species source (Xeno-canto focal),557586,557586,full (complete tar member),,5033e0cfb99b97c870161b4ec2ccfd93cfa42a98ce97e159df2438781067c29b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000075.flac,clean single-species source (Xeno-canto focal),2132708,2132708,full (complete tar member),,47df1592cc6503ed6f147d0a7b9ca9f14e380466ed063c24f8669a6954dec8c1,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000076.flac,clean single-species source (Xeno-canto focal),1357579,1357579,full (complete tar member),,d39dc78a3bb56302faf00c86f815d6bb43c58f19e78bf76c5858481056f75bf3,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000077.flac,clean single-species source (Xeno-canto focal),721427,721427,full (complete tar member),,6f24202cef8e51d88d30c7f7d9aa0d8171d3eb74d20bb00fc7ce0ecdade6e10c,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000078.flac,clean single-species source (Xeno-canto focal),600447,600447,full (complete tar member),,3c2afc3f7c78b0db6fb7e868f95b4792f66e5529613549c38021436061b93324,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000079.flac,clean single-species source (Xeno-canto focal),773318,773318,full (complete tar member),,df9473ab40c635fa8e3d40bc6a7764cd7de688aa653a361271dbb8ef9a741e3d,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000080.flac,clean single-species source (Xeno-canto focal),246279,246279,full (complete tar member),,e7073d1448544072c10cc95b28fb15ed583e14b2b2e9f856f40c213c9501f062,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000081.flac,clean single-species source (Xeno-canto focal),980321,980321,full (complete tar member),,4dd51f065f32d23841916a3712422ae2ca61306878db99d059ab7e085f3a7485,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000082.flac,clean single-species source (Xeno-canto focal),540464,540464,full (complete tar member),,0ac5dbc4548a1eec6a2033b589d55aa21e33e45034ac100baca36b1034255b9b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000083.flac,clean single-species source (Xeno-canto focal),706942,706942,full (complete tar member),,e9633301a581683400705a90ce4a84ca94d9393c67cfed9fec61799d9a442216,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000084.flac,clean single-species source (Xeno-canto focal),2710344,2710344,full (complete tar member),,711040a1a3da03d600c6b100ec58a83ac2e31a9f765758797d0a0da117f2015f,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000085.flac,clean single-species source (Xeno-canto focal),655610,655610,full (complete tar member),,91d4515a91a49ff3d2423c162a589d682d2c696ec449bb7a15704a6c77cc1239,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000086.flac,clean single-species source (Xeno-canto focal),296966,296966,full (complete tar member),,a90d081c26ae6deb655f4b1fef66725c72ed7f0c2a9a889b1ea4c343127f7184,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000087.flac,clean single-species source (Xeno-canto focal),716925,716925,full (complete tar member),,8399ffd07b833dc667d7c1df83b3ee1161ee6de9dbad35e7aead085180cb4eff,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000088.flac,clean single-species source (Xeno-canto focal),452047,452047,full (complete tar member),,577c2b4ddbb1c9d82ebc6048f84440626a171ce92947de33bf81604189f9c66d,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000089.flac,clean single-species source (Xeno-canto focal),648784,648784,full (complete tar member),,6f83a5e55c12cab8fae1b5f3b13b691ed4544719e99d3970438630160ef148cc,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000090.flac,clean single-species source (Xeno-canto focal),1986810,1986810,full (complete tar member),,2bd961747aefc97d57281150c8fc8a9c65fb2eee273ce45334a4ed3b2231a73d,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000091.flac,clean single-species source (Xeno-canto focal),926674,926674,full (complete tar member),,f6e58ce9d40994306ab02bc2f192c91315f726330ce705753420cef48ac7e392,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000092.flac,clean single-species source (Xeno-canto focal),754875,754875,full (complete tar member),,0ba47fac3dea748928a3385055b953d70ea2f91cddff176db985bc1b216d78ba,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000093.flac,clean single-species source (Xeno-canto focal),729728,729728,full (complete tar member),,84f41919b316f3b42fc912c604faee4c99e0de09e671b8f5101d0f9ee0aec43e,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000094.flac,clean single-species source (Xeno-canto focal),517316,517316,full (complete tar member),,516563e759d18ebe1d9ae1fd1ac029e380d3f2ad152802766f3e52aa6fc00447,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000095.flac,clean single-species source (Xeno-canto focal),361090,361090,full (complete tar member),,05065fb81f076268c125db1e0fb4ff4038d4b401ebdca07440716dac20b5ea56,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000096.flac,clean single-species source (Xeno-canto focal),707036,707036,full (complete tar member),,acbc5acc27cff4972af21be112dd71d23a25006b53ec9cbbf88046db6c41c53a,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000097.flac,clean single-species source (Xeno-canto focal),2561417,2561417,full (complete tar member),,cf46f416b12e2d654d660f5eea90d422df820eb8d533a910abd96e23895415c6,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000098.flac,clean single-species source (Xeno-canto focal),934897,934897,full (complete tar member),,84dd97a95031c6614c5377fff6c256b6b559feed2872888adace8cb2eb599af1,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000099.flac,clean single-species source (Xeno-canto focal),639287,639287,full (complete tar member),,9d948751150a5755212b7f46a72631237478e7b12f83a9507034c54a3ff59b0e,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000100.flac,clean single-species source (Xeno-canto focal),709994,709994,full (complete tar member),,1e17c38137d6de370e18b0d293076095fde3d15ff74ede299d65f1f300db5cbb,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000101.flac,clean single-species source (Xeno-canto focal),1382930,1382930,full (complete tar member),,de9151a6cbfcc5d57f27d2a740f3b6f6e6d4b858e98ccd486634b0bb44fcfb64,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000102.flac,clean single-species source (Xeno-canto focal),700910,700910,full (complete tar member),,71ce8556cf04bbdae13e89f82558e1e4015f947f96f6f3e77ad253af46f91925,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000103.flac,clean single-species source (Xeno-canto focal),690552,690552,full (complete tar member),,f5ec02e39b916ae431a9e21b6f516c4b961a59283e3e110bc3a8f1f745a57b13,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000104.flac,clean single-species source (Xeno-canto focal),708975,708975,full (complete tar member),,91739c7e92cf1846f882b4c452e911fb211276628365127391d9b686b166775a,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000105.flac,clean single-species source (Xeno-canto focal),1415727,1415727,full (complete tar member),,14cca4c173ad8a2c46ebad6c6a4f69593e9a9968990f03be927138d29ec2d58b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000106.flac,clean single-species source (Xeno-canto focal),1577839,1577839,full (complete tar member),,875ebc1ea24300e854621dbdbd9978f4902f7d30a63134ba2411e212b746c023,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000107.flac,clean single-species source (Xeno-canto focal),997187,997187,full (complete tar member),,1c765e06055c39530db75cef1344b7c0c04cb483d8c2e4ed26b5399c0c56ee07,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000108.flac,clean single-species source (Xeno-canto focal),491736,491736,full (complete tar member),,7c88ff49fdba98771531cf52050dceadfe592ae9221b75e85013f327fb087f4b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000109.flac,clean single-species source (Xeno-canto focal),473284,473284,full (complete tar member),,cc7bc0878f8aa3a595f67b344a4253d75cb433ae60a0b509584dab5ea22c6f8e,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000110.flac,clean single-species source (Xeno-canto focal),1853741,1853741,full (complete tar member),,6b34a08ddf049d4c6d4f493cfbf7bb4937bd1fa09f4805b95ec446e013ad9968,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000111.flac,clean single-species source (Xeno-canto focal),1974469,1974469,full (complete tar member),,8ffeda4a4e08e3cba17039368eb3e92135dcbe8b5ede028831cbff82a1a7bc06,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000112.flac,clean single-species source (Xeno-canto focal),1276923,1276923,full (complete tar member),,5b811f5f33714506758cce2dcac52662933a1df4aa07638f082dd90ef0906c8e,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000113.flac,clean single-species source (Xeno-canto focal),1634541,1634541,full (complete tar member),,76f65bbe753994d557f1c237c258de99c3ab4a7143f1a1bff2a8e0ee7298e5ca,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000114.flac,clean single-species source (Xeno-canto focal),1243780,1243780,full (complete tar member),,1b4259ea884f5018b76ba81204b08605af4d337b6ed1c1f01a060c26e3dc2133,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000115.flac,clean single-species source (Xeno-canto focal),520744,520744,full (complete tar member),,909347de416fe27fd29eb67eda9c494289bbabc5092396d10b65a5a6f2c1a578,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000116.flac,clean single-species source (Xeno-canto focal),609276,609276,full (complete tar member),,20af9b9fd8e98f8fd01319a7bc7abf57490fefe3c8cf705c2036675a64bfc39b,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000117.flac,clean single-species source (Xeno-canto focal),1017905,1017905,full (complete tar member),,eae05ec6ae52dd93984ca7638bcabf37a050eb89679210b886cd54914952fc34,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000118.flac,clean single-species source (Xeno-canto focal),743357,743357,full (complete tar member),,3900f50a104d836acd5fe1ddb3fcf3e004fd93f93dab3fd930965a3a6d101adc,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000119.flac,clean single-species source (Xeno-canto focal),1350386,1350386,full (complete tar member),,64874c6eb4d3e9cf7b8c53fb22f899b5f30be768cd108c5da232168a9da60861,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000120.flac,clean single-species source (Xeno-canto focal),1345947,1345947,full (complete tar member),,0fe16d170d4c3792642313feee93ffc65fec3a599599cc1949a1c1c45e8800a5,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000121.flac,clean single-species source (Xeno-canto focal),650184,650184,full (complete tar member),,ff33f40c3a06349f63777a3271e921e4663a48b0a8bb2268ead823dfa2fd6c48,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000122.flac,clean single-species source (Xeno-canto focal),1425425,1425425,full (complete tar member),,e7046c163d659e9008469c6740721ee07b801e04ef27d8fbd4f0987ef3a6e0bc,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000123.flac,clean single-species source (Xeno-canto focal),1010977,1010977,full (complete tar member),,a132a06f5c5bf1c7bee1f7897a706f9c497dc39a7d7bbeaeee34c61209619013,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000124.flac,clean single-species source (Xeno-canto focal),1432674,1432674,full (complete tar member),,18e24b2d3b0d2fee6401a00a284802a7e35836ffc2c09515376a1cbcbd193de7,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000125.flac,clean single-species source (Xeno-canto focal),767402,767402,full (complete tar member),,6fd2b807816f54bcadebdee27a3106f1994a1bd4a0e917545add758825546b01,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000126.flac,clean single-species source (Xeno-canto focal),723463,723463,full (complete tar member),,74475579b3f6bb6c7d6590e1e231447b15e7c293718b15a8fbeb14723e1a667d,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000127.flac,clean single-species source (Xeno-canto focal),729164,729164,full (complete tar member),,bc74f03e977dec46b0c4d03080a17e9dab5b9729f72a64d134086e44e8f6cc43,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000128.flac,clean single-species source (Xeno-canto focal),1634338,1634338,full (complete tar member),,26cb3791fd99bf76e3c08e98ec5a7d81af3d6f169645c57708bd06336c753513,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000129.flac,clean single-species source (Xeno-canto focal),865210,865210,full (complete tar member),,3e75ab076e3d6bc546145cbb33e7c940f08d6061c075838619c8bd2beb032ebc,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000130.flac,clean single-species source (Xeno-canto focal),731824,731824,full (complete tar member),,fc7f39f23b85d9f169a99c0dc32a113a0d8a9e4cde654c9df056ea75a8f84ce4,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000131.flac,clean single-species source (Xeno-canto focal),264727,264727,full (complete tar member),,c27585de1ab790b9e174805e1386f166a9e51600f0b67bf5ace924c2e2d6e194,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000132.flac,clean single-species source (Xeno-canto focal),1349006,1349006,full (complete tar member),,54d712e7c73285be79f3f7c05eb6dea55fb8a31241e14ebd19b0f3297d340cf2,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000133.flac,clean single-species source (Xeno-canto focal),1283687,1283687,full (complete tar member),,4f7154ebfcca7ed9ba20421d992a8f976c88d9a98ca87fbd9ac60899a8743289,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000134.flac,clean single-species source (Xeno-canto focal),1360764,1360764,full (complete tar member),,c043c73019890eadbe0826f65b08b0a0816ee3f0658d6c01aa4d259ce526f7ac,
+Zenodo 21821133 (tar.gz prefix),CEB-XC,XC001/000135.flac,clean single-species source (Xeno-canto focal),1204926,1204926,full (complete tar member),,cf71550b7bf025cdc382e926343b9575e9e04fce2a4374319798003403860c16,
+GitHub karolpiczak/ESC-50,ESC-50,4-164206-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,75f81596617c19cb01f4e0a0422798f100d1bedd796cd13aa59687b2bac13d16,1
+GitHub karolpiczak/ESC-50,ESC-50,5-193339-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,aec7a17013e61faedb111983e0699a8b63c0e1af9569bb4a819ffba86a28f778,1
+GitHub karolpiczak/ESC-50,ESC-50,4-177250-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,daae54d9bcfb4f31adfac8adbca4ab54c3543b8ed68c555b5a98c3fc20283358,1
+GitHub karolpiczak/ESC-50,ESC-50,3-140774-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,1dd994fb071b52e4232b0cbd06558dd8d179008be2e4cf1f41d4abdca4f390fe,1
+GitHub karolpiczak/ESC-50,ESC-50,2-73260-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,206b445eaf57f739c09185695e82bc0c3e7b9f68215ad9f7cb4374f7648e9acc,1
+GitHub karolpiczak/ESC-50,ESC-50,3-142005-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,784441f1c74be9dc64ec77aa9628df5b4557711b5f1435286dff9ea9317f02e0,1
+GitHub karolpiczak/ESC-50,ESC-50,1-54958-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,d93233d42dc57a3e81cb9ca446145f50cdc806f0174393b1055e5d9a327cef86,1
+GitHub karolpiczak/ESC-50,ESC-50,1-63871-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,9ae1461223eaecf2df3818b51e0d7b5987ef497b17038594455bbcee6673d350,1
+GitHub karolpiczak/ESC-50,ESC-50,4-161127-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,3ea9076dd2ee68b67bd0707652a0c0ca77811b0664426e10e6860c187401af89,1
+GitHub karolpiczak/ESC-50,ESC-50,5-195710-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,939959e3cb6df01e3a67d47cf1b1d0429785a1906562dd143805e8fb8db909c0,1
+GitHub karolpiczak/ESC-50,ESC-50,5-194892-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,12df0d996db614fff7148063232490f76413448b6b193034b5f9655ec5172a37,1
+GitHub karolpiczak/ESC-50,ESC-50,5-202898-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,06ba576df5efc793523c7adebfca21094e1d3cbdd924c0655a16ac5aa5785b78,1
+GitHub karolpiczak/ESC-50,ESC-50,3-157149-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,83d1a7c62ffbf4f2241775502ec2fe3cf5c32fd69b4c107d8ca66b21d08bcda9,1
+GitHub karolpiczak/ESC-50,ESC-50,3-132852-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,5d4960883ceabe28c008721ea3b5f5206a6f0234cacd4c1af81dd7594b4d3503,1
+GitHub karolpiczak/ESC-50,ESC-50,5-181766-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,608fcc0bef32512e2a984c7d3d2cac8ea161f6337ec0056850a6d34f07f8db35,1
+GitHub karolpiczak/ESC-50,ESC-50,1-17367-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,d732acd2e0c7c40405968010f49f250740c86998fc416eff2ed5330fc8c89dea,1
+GitHub karolpiczak/ESC-50,ESC-50,2-72970-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,f6d91324daa8863100c7f922b20727c86d46c27249cce9e15d66305e623e56b8,1
+GitHub karolpiczak/ESC-50,ESC-50,4-181286-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,f4adde0e7a70a466a161325824b020a28ae3aaf76568436116c82b6b25d76fdf,1
+GitHub karolpiczak/ESC-50,ESC-50,1-29561-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,4dc600962b53709664b27073f46ef2ad7d766ddad39c3ff04fcaf98442aae65b,1
+GitHub karolpiczak/ESC-50,ESC-50,2-87781-A-10.wav,real non-bird noise (5 s clip),441044,441044,full,,81fe7ce5da401a69a542439a5c8277864468a0bf09bf1378b0accac15c033638,1
+GitHub karolpiczak/ESC-50,ESC-50,3-117504-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,e8870d76a3bb29b43606231859c1b75ffc6dfaded319944028d122993470669e,1
+GitHub karolpiczak/ESC-50,ESC-50,1-47714-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,cfcba34eb24f53b5be2c5a824c664dc376890631490c29a46655abb43b19ae8b,1
+GitHub karolpiczak/ESC-50,ESC-50,2-109371-C-16.wav,real non-bird noise (5 s clip),441044,441044,full,,0f4cdd69ef229b244563c681b4b3fde04840941c9304dea0946b919c060752ef,1
+GitHub karolpiczak/ESC-50,ESC-50,4-163609-B-16.wav,real non-bird noise (5 s clip),441044,441044,full,,668cc23d97b4c9cc94053bff6b6d03797058e4d941a731d02c5df2cf6633ee51,1
+GitHub karolpiczak/ESC-50,ESC-50,3-134699-B-16.wav,real non-bird noise (5 s clip),441044,441044,full,,4836977a0362e609b42dcc47811190268da98d573cecc7a8a4270db979ecea54,1
+GitHub karolpiczak/ESC-50,ESC-50,5-217186-C-16.wav,real non-bird noise (5 s clip),441044,441044,full,,f1557bde7e98c6e4f433a4236e1bbb9a2d9486d4875783b137d904d50f9f6097,1
+GitHub karolpiczak/ESC-50,ESC-50,3-136608-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,0fb13968566e14200c01ac1aa3f0f878f8e11ba806fb4d5e2b19d34eb4844cc8,1
+GitHub karolpiczak/ESC-50,ESC-50,1-51036-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,77aee0377d909fb77cd085ef1a1828c8aec3da8306e8ca7cf8c17f5c77ae3111,1
+GitHub karolpiczak/ESC-50,ESC-50,2-104952-B-16.wav,real non-bird noise (5 s clip),441044,441044,full,,88d27648c6a78a46cebaba763af5e09dc491296dd49a0a928b1104c1cda1c735,1
+GitHub karolpiczak/ESC-50,ESC-50,1-51035-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,d8b851e1a4210e2a8ef92ce603b4dabe12743a51318a59d3b1d393e856de12b0,1
+GitHub karolpiczak/ESC-50,ESC-50,5-157204-B-16.wav,real non-bird noise (5 s clip),441044,441044,full,,9dc13dfb211d876dc322e31bc71d24166e1ea59d900d62be80a1d719c923d2bc,1
+GitHub karolpiczak/ESC-50,ESC-50,5-179496-B-16.wav,real non-bird noise (5 s clip),441044,441044,full,,7113369bc05fc966b3ddd86cf3d969ee6697400123282022515c8f9da8d23c2f,1
+GitHub karolpiczak/ESC-50,ESC-50,1-29532-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,f7161457776ff69adbb903e870a3ecf532228a033de6896f25af2f4ce77c5f68,1
+GitHub karolpiczak/ESC-50,ESC-50,2-109374-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,a4aaa0c3473b7db30a3738ad432299d2360d2236bb5816c9c5cf1f0fa855f52d,1
+GitHub karolpiczak/ESC-50,ESC-50,5-117773-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,d14a14512b9d39a4be54b218136bf188336f7798a193fd20623e4fdafa5fdf18,1
+GitHub karolpiczak/ESC-50,ESC-50,1-51037-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,3609c5ef4959aab64c320e757d5d7d6aab49ab027ba9cf955de00874d16e8b23,1
+GitHub karolpiczak/ESC-50,ESC-50,4-163606-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,92246658b7d47b7628efc35da952e4b1ef47322c809542e221037408b69d7de2,1
+GitHub karolpiczak/ESC-50,ESC-50,4-144085-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,b757e037f324d9c0986290237792ae24d2df71988e9c4f972d1252c9de8ac088,1
+GitHub karolpiczak/ESC-50,ESC-50,2-205966-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,ddd9c3577d08f999d3f1d8bc487d8a31570dc8380d150cabf50ad74dbca691a2,1
+GitHub karolpiczak/ESC-50,ESC-50,1-47709-A-16.wav,real non-bird noise (5 s clip),441044,441044,full,,179c0a007da435841be8bca63bb0aa44fefc1af1b9dbb2a413f9c0acff805fea,1
+GitHub karolpiczak/ESC-50,ESC-50,5-156999-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,1c612563515cd4cde24c16a25fe1060958a83adb8c0768cc36b901fe78993826,1
+GitHub karolpiczak/ESC-50,ESC-50,1-24524-C-19.wav,real non-bird noise (5 s clip),441044,441044,full,,3116ac95bb308961b1581d3db91e9926581ce901507828cf210d5540239239d3,1
+GitHub karolpiczak/ESC-50,ESC-50,1-101296-B-19.wav,real non-bird noise (5 s clip),441044,441044,full,,bdad401df959569dc44ad26fff3ff097de5ac98cde763eb37a557a4ab441440f,1
+GitHub karolpiczak/ESC-50,ESC-50,4-125070-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,61b68a9eb06ee056826f8ce06e56558bc46301a2f4df43b92d7619cd6b2e8475,1
+GitHub karolpiczak/ESC-50,ESC-50,3-103051-B-19.wav,real non-bird noise (5 s clip),441044,441044,full,,46b360eaebee376c82a17c6737ad581bf8dde1717e0ae9172480154154c7479a,1
+GitHub karolpiczak/ESC-50,ESC-50,1-23222-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,680bc85f2f6fb1f0fef85a1f4f059bc7b6957a30d0a0b3dd8e93c287216cbbd5,1
+GitHub karolpiczak/ESC-50,ESC-50,2-39441-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,3ce6a2b28d3934b0267c2eb6171646e3b4be749d4f40b37214efb2d2ca59d1f1,1
+GitHub karolpiczak/ESC-50,ESC-50,4-156993-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,542138c59d58acaab06659a09902e49fe7acffb07594680210f38a6ba21898e5,1
+GitHub karolpiczak/ESC-50,ESC-50,3-144891-B-19.wav,real non-bird noise (5 s clip),441044,441044,full,,31a199e7042205a1066faca86517a4f7bddfa604d5fa0dc0feca46e62a9dfc48,1
+GitHub karolpiczak/ESC-50,ESC-50,2-39945-C-19.wav,real non-bird noise (5 s clip),441044,441044,full,,85890d5d3d1539a609581bbd1cec56521d842ef545071baafe17283cae94f944,1
+GitHub karolpiczak/ESC-50,ESC-50,3-124600-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,f1842cefb0f9f540f4cb0024bf0454e5966e4bcccf39b7a36c149451152b4eeb,1
+GitHub karolpiczak/ESC-50,ESC-50,5-195557-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,377d2f337bff1c5c1f8fe2b95b88616846ddb618a588cffd58ede2c13eccf89d,1
+GitHub karolpiczak/ESC-50,ESC-50,3-103050-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,0cdb8c8e21c3dc74b10c935bf43292c1e3d7d4e7bb7026a0d047054001813295,1
+GitHub karolpiczak/ESC-50,ESC-50,2-39443-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,68d84d52cfdfe5ce0d9183074fbe068f27d46a1b817cf4b942fd43f1aa986444,1
+GitHub karolpiczak/ESC-50,ESC-50,2-104105-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,2ee21d7425178ca938f3415c8f45682c908902f357a07f727749f863b670e655,1
+GitHub karolpiczak/ESC-50,ESC-50,5-188495-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,003d9fe4e4e07c8e2a466aad385d8fcda287026f77e1d519a7ff6b3e9fcaf676,1
+GitHub karolpiczak/ESC-50,ESC-50,4-125072-B-19.wav,real non-bird noise (5 s clip),441044,441044,full,,740bc4d9421e207dd70835ed6daa6982fda8c16a51a00256baaa69b4491ca29e,1
+GitHub karolpiczak/ESC-50,ESC-50,1-115521-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,87c3f36e376c3c26faac723d3d1a8ba0af76c8b3e1b456cfe4062975e67b88d2,1
+GitHub karolpiczak/ESC-50,ESC-50,3-123224-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,e14050de1c0176d92f3dc430bf8d71f41930226649bf355c5cb37b1db0ba25b5,1
+GitHub karolpiczak/ESC-50,ESC-50,4-161519-A-19.wav,real non-bird noise (5 s clip),441044,441044,full,,883e430ff497be4e5d1d19c118273a209f76ab82a2133b585f2d1b93cdb73d84,1
+GitHub karolpiczak/ESC-50,ESC-50,3-187710-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,97714f535ad104a9eac0b85552f37b97e05b1d18f67223d502d201503b02dbaa,1
+GitHub karolpiczak/ESC-50,ESC-50,4-195497-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,754ff6b164f369e9bcda1b0d2ea28552a8097f8042a450f4987b79d916872dea,1
+GitHub karolpiczak/ESC-50,ESC-50,4-182613-B-11.wav,real non-bird noise (5 s clip),441044,441044,full,,4cb8e67374474186ba13ae2f6ee19f748c05d805603240154dd1b658cbbf45d4,1
+GitHub karolpiczak/ESC-50,ESC-50,2-124662-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,60c6883343535fcf14bb030d30c7b79c81fad89fdc7f4e6f34d81c1d98c1e645,1
+GitHub karolpiczak/ESC-50,ESC-50,4-204618-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,5df6ab900126bb95c8ea660cb15a668d3325f1770a081dfbe28e3bd37adf2dc0,1
+GitHub karolpiczak/ESC-50,ESC-50,2-133863-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,a5dc90f79b7bfbe1b1b8279d5f5542be82af3fa32502ba57518d1302e9e38a9f,1
+GitHub karolpiczak/ESC-50,ESC-50,2-125966-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,86643b7df512575db786b21b70092f27050b81e01f459f7fcbcb862314827e51,1
+GitHub karolpiczak/ESC-50,ESC-50,3-155642-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,2b3168d0ece00768528c830841cd6edd683367bfb1ae0da1788912713a8a895d,1
+GitHub karolpiczak/ESC-50,ESC-50,3-144827-B-11.wav,real non-bird noise (5 s clip),441044,441044,full,,977a5b671cb9b57aea049bce2b1c139c039aa745c5c46c1f84964d8098381aa8,1
+GitHub karolpiczak/ESC-50,ESC-50,2-137162-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,4d9d5bd94694230cc4d40e3c1e1bfc9a91228741fc516946852c0bb8dac6c2de,1
+GitHub karolpiczak/ESC-50,ESC-50,5-200461-B-11.wav,real non-bird noise (5 s clip),441044,441044,full,,772ed35d4a5617deb375b6532e830071b21e9b3d5d16b6b33b16c9535ef8e1a7,1
+GitHub karolpiczak/ESC-50,ESC-50,2-102852-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,88e893f0db59886dd96f9b2c0f839eaad0364e9d2ec948eca3ef6af1a66e64b5,1
+GitHub karolpiczak/ESC-50,ESC-50,3-164120-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,adcd03bf5b6a5c220cfbc4382ba6aa6873bedef53d0034a4dc5e2f0f6a183cb4,1
+GitHub karolpiczak/ESC-50,ESC-50,2-155801-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,1851566021e7ad54163515236574452dd86cadc4657317f6bc285c9e06a9b436,1
+GitHub karolpiczak/ESC-50,ESC-50,4-167063-B-11.wav,real non-bird noise (5 s clip),441044,441044,full,,0dd8330a8d102d1192dca1e0c43e83602f3f308994aaf8f9f68bb8b1c682cb4a,1
+GitHub karolpiczak/ESC-50,ESC-50,1-91359-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,dc68614d5082a595bce514b13304d91451cc6d570dddfb84a9283e5d77fc3148,1
+GitHub karolpiczak/ESC-50,ESC-50,1-61252-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,fb76a05332ed37fa76ef09b878d28831d5c433554d317893a9911384bd84082b,1
+GitHub karolpiczak/ESC-50,ESC-50,1-28135-B-11.wav,real non-bird noise (5 s clip),441044,441044,full,,806548ec876df9f91ced5503f76794a42dca6b8790324f87464de5ed780189cb,1
+GitHub karolpiczak/ESC-50,ESC-50,5-208810-A-11.wav,real non-bird noise (5 s clip),441044,441044,full,,ab3b06f58d545c4d7e4f543f5a1cc1b193f57be9bc76b3a5b1537ee0098a6bcb,1
+GitHub karolpiczak/ESC-50,ESC-50,1-39901-B-11.wav,real non-bird noise (5 s clip),441044,441044,full,,582d4c541bb4bdbc300ccbbaa52f120931a849b1616a4eb6135cf32c5ba8c517,1
+GitHub karolpiczak/ESC-50,ESC-50,4-186936-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,df22b88ba5d56f61e5204f7ad8bcdff77272d8c9677f7ca748321039799fea99,1
+GitHub karolpiczak/ESC-50,ESC-50,2-106014-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,b996815242ac0a881ee3f7e5f57f1c11e2254ae0c502014045e44c625e43afc2,1
+GitHub karolpiczak/ESC-50,ESC-50,5-209992-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,502bb337b61dfa4080eb22b9098a2b38f975c1544933187f530a5552eb7bd32d,1
+GitHub karolpiczak/ESC-50,ESC-50,2-106015-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,f0ba6aad7c9281f54565f01bb64435407705b363f81d67f0d1eab4532b40140c,1
+GitHub karolpiczak/ESC-50,ESC-50,2-78651-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,29aac54cca62321c035589859f2587bde651f0c358ff1e86463c6308e0ca4a98,1
+GitHub karolpiczak/ESC-50,ESC-50,5-243783-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,07aa41b5f501d8eed5e346b5cc2b4a6efb1f592449a72035588d6f2fbab10f43,1
+GitHub karolpiczak/ESC-50,ESC-50,5-243773-B-44.wav,real non-bird noise (5 s clip),441044,441044,full,,0e004566d5a5974d130b1d68363548584adcb058e148e8fd5db29547f10de028,1
+GitHub karolpiczak/ESC-50,ESC-50,1-61261-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,6f60f274364bab7ca04a1221448efd1c0436292f7dce158eabeafacd338f6065,1
+GitHub karolpiczak/ESC-50,ESC-50,3-115382-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,4f51f65b566eef881caa7a2ed1462b48eded5873ccd2afbe8b623863adf606d5,1
+GitHub karolpiczak/ESC-50,ESC-50,3-141240-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,135d63cb91ced3e627920812c1b416835dc4ab788fa5db36fe6addb52a8f08ea,1
+GitHub karolpiczak/ESC-50,ESC-50,1-18527-B-44.wav,real non-bird noise (5 s clip),441044,441044,full,,40f0ab8a2fa68cbdf814f10fc8b2c26916b3dc54c1b0e719d4697ba58c0bdb81,1
+GitHub karolpiczak/ESC-50,ESC-50,1-50661-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,10e7461b7fe455a10bceba5fd6299c5bb4bd73d7138853baa09f04ee777f09a4,1
+GitHub karolpiczak/ESC-50,ESC-50,4-186935-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,d5fa3e05bb7222e031cf0fde1866e20aee5f3686d45a69337757930c46769bf4,1
+GitHub karolpiczak/ESC-50,ESC-50,5-232272-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,e5562a8bf2a03e4f314ae65a5dbae73f8f15af6b22760f3ad7f51b5ce0b49435,1
+GitHub karolpiczak/ESC-50,ESC-50,4-171652-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,5f0b309e3fa62f6b34763b72f641d7ce1318a1db2fcd7c5ddd27cf380fd58401,1
+GitHub karolpiczak/ESC-50,ESC-50,3-146186-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,a01623d754693bd4121d8e3d98410a8d46ee8d708d97fc1a3fcf91c07714b7f3,1
+GitHub karolpiczak/ESC-50,ESC-50,1-50454-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,8110a6df1a30a16513c9516caf46dd34b9ae516dd28982e521019ad99831bcfa,1
+GitHub karolpiczak/ESC-50,ESC-50,4-201988-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,6e42b414c1b9a63712d74475f21afefc6553aa446c46b0b03ad8de40e061a3c0,1
+GitHub karolpiczak/ESC-50,ESC-50,2-107228-B-44.wav,real non-bird noise (5 s clip),441044,441044,full,,235a1adc585c4aaaa9447e843783b88e14326b61b68cac0d2b3c11982762e18b,1
+GitHub karolpiczak/ESC-50,ESC-50,1-62565-A-44.wav,real non-bird noise (5 s clip),441044,441044,full,,f1831f884cd66a7cd29180a49ff6efd577149ca50b0b130febf5a95ce16946f5,1
+GitHub karolpiczak/ESC-50,ESC-50,5-251962-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,e7f78478a96de77858b222267241d5f9ea85f411ea2aec25b03a5fe91950fd53,1
+GitHub karolpiczak/ESC-50,ESC-50,3-115387-C-47.wav,real non-bird noise (5 s clip),441044,441044,full,,79b3af558732ef99575e5b8e9f6b197350ca23f5930a28f4b640ef5a8f0410f8,1
+GitHub karolpiczak/ESC-50,ESC-50,1-11687-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,e622a52d904f2ec8f39c78e6f2487b84a14a927d1f9852e67a4c3c8e5dcf9419,1
+GitHub karolpiczak/ESC-50,ESC-50,2-98866-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,ed5dfd1852f46fa8f997a074186aaae5b85f14a994cd328269698ea3b965ce83,1
+GitHub karolpiczak/ESC-50,ESC-50,5-215449-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,e3fcd552628b868011f7e831aa71ae42236728f3abea56340c87da16ff5dd729,1
+GitHub karolpiczak/ESC-50,ESC-50,4-161103-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,faf8973d7984be8b6c04160ca191ec85a75e8c0e0989e66a6f9842fb9ae87d73,1
+GitHub karolpiczak/ESC-50,ESC-50,4-161105-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,93d3bfc2ccae3ddedf4254c370748b008346eca1ababe44218846d3e75793399,1
+GitHub karolpiczak/ESC-50,ESC-50,5-215447-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,55946234e8f695bd8648f8b3360a273319b5becd7908dc9b8f9ef4d6272da0e2,1
+GitHub karolpiczak/ESC-50,ESC-50,2-78781-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,7bf3a5523e101e029332bb09e7de9baa3622de2a971e3d543c509f6b6636eeab,1
+GitHub karolpiczak/ESC-50,ESC-50,1-36929-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,72360c7f354882ce449334f83b2e4f498b2b92a95a6c42bc4fc9b9a011e0db48,1
+GitHub karolpiczak/ESC-50,ESC-50,1-53467-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,d30d4483ea3579a4a1d20d28c118c952b930000726b7d94941e2efc358fe895f,1
+GitHub karolpiczak/ESC-50,ESC-50,4-255371-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,ea0643345642e6de194823855bbd7f1692a939bb45c16b48ab81ae0a670f4911,1
+GitHub karolpiczak/ESC-50,ESC-50,3-128512-B-47.wav,real non-bird noise (5 s clip),441044,441044,full,,a4b3eeee8e02d1e69def95616d4a982e186baeb12d0891c2367573b3565863c2,1
+GitHub karolpiczak/ESC-50,ESC-50,4-251959-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,a008167674520b58ef43718cedfcb2d758e754d5e4ef351651800a78c5a78f06,1
+GitHub karolpiczak/ESC-50,ESC-50,5-251971-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,ba15a37c7fa2d183324f28930ad7eac334ac076791a2e590e6e3612ee3632b7f,1
+GitHub karolpiczak/ESC-50,ESC-50,3-143562-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,eb2a0944d28a7c8b700089ec1012676ad9a33b1530bbfc438f3e2a49c9d3931a,1
+GitHub karolpiczak/ESC-50,ESC-50,5-251963-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,058fe2aeaae74891df77b1a1022a7e5c30c264a0d0899e6e2f43af007d10ab12,1
+GitHub karolpiczak/ESC-50,ESC-50,5-235956-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,3575adfd109a40d1cfb40fdd0c93031842f9559cad66c9cc8ae6933a1ab07398,1
+GitHub karolpiczak/ESC-50,ESC-50,4-161099-B-47.wav,real non-bird noise (5 s clip),441044,441044,full,,fb70ad4860e19a0d905a6edcb9ab2f26472358d63ee2c41d9a7658e00f494d67,1
+GitHub karolpiczak/ESC-50,ESC-50,1-24796-A-47.wav,real non-bird noise (5 s clip),441044,441044,full,,68937dd7e09efa68aa4afe588e933fd77fd60558c337c241f072e2cd99b5fe03,1
+GitHub karolpiczak/ESC-50,ESC-50,5-220955-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,0f65b8ca406c78dffd82f8e7e4deed7613154de9ee58856b90327e0cf356ad18,1
+GitHub karolpiczak/ESC-50,ESC-50,1-172649-E-40.wav,real non-bird noise (5 s clip),441044,441044,full,,2fa49f370f70849805b2467339431682860ac025c2beccfd4afaaa9939dc63c7,1
+GitHub karolpiczak/ESC-50,ESC-50,2-37806-C-40.wav,real non-bird noise (5 s clip),441044,441044,full,,512833e0ad721ba5c7bbb699403b50dd878ebd29de4cac2ca247e5315da5e987,1
+GitHub karolpiczak/ESC-50,ESC-50,4-193480-B-40.wav,real non-bird noise (5 s clip),441044,441044,full,,70a164e3d5cbb8735afd80b6507de1bc4234d30d70efa036ae1f5424573f02df,1
+GitHub karolpiczak/ESC-50,ESC-50,5-177957-C-40.wav,real non-bird noise (5 s clip),441044,441044,full,,5b8598501cf0737d37118d1c80582d7338fcd4f3a61f339aaec85f892a3117cd,1
+GitHub karolpiczak/ESC-50,ESC-50,1-181071-B-40.wav,real non-bird noise (5 s clip),441044,441044,full,,6727248f265e7f9d179c6b72e85f8d2cbc4a31edcac27492036422116bb1673d,1
+GitHub karolpiczak/ESC-50,ESC-50,4-175000-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,1955ca9fc02340cef8d66b125b0e2cdaabea757b1ee38fe9dc3df9646a50657e,1
+GitHub karolpiczak/ESC-50,ESC-50,3-150979-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,41e05ff06cd2d710f748b0d10bf136fd6e11d489327cbeafed690918b417fc42,1
+GitHub karolpiczak/ESC-50,ESC-50,5-205898-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,8d688e82f3ff6f075be0479c57c8a5cdffa09c2ed46dd3950f3682208b94dd21,1
+GitHub karolpiczak/ESC-50,ESC-50,4-125929-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,adfb82d86a3b2a7ac8fcf85c98f6b222ef5b0e47991cf6c0047e3d99e2f11443,1
+GitHub karolpiczak/ESC-50,ESC-50,3-68630-C-40.wav,real non-bird noise (5 s clip),441044,441044,full,,0358b8428bc77a109345b4f36f92fcdae1795efdf1928e74a4bbf35d58b607ee,1
+GitHub karolpiczak/ESC-50,ESC-50,5-191131-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,498f75725d397a2253c6fdc687f48773f2ed19a0e44c22463767f4ed186c3cc1,1
+GitHub karolpiczak/ESC-50,ESC-50,2-188822-D-40.wav,real non-bird noise (5 s clip),441044,441044,full,,7ffae2dcd7611c77a1d57de223433e1e70fa6ffe2422b9e882e815ccaedc62b8,1
+GitHub karolpiczak/ESC-50,ESC-50,4-161579-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,74bfa5c0c1d5926aa20fa25d4b57fc3cd445208a23200e282f5f603dc2d0fdc8,1
+GitHub karolpiczak/ESC-50,ESC-50,3-154926-A-40.wav,real non-bird noise (5 s clip),441044,441044,full,,c21a6fadacf782bac2e8efab3815d2fe18ff0130239e671fb666acd2d52dfac5,1
+GitHub karolpiczak/ESC-50,ESC-50,4-165845-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,acd0839d5d1cea8ba29b29a28b47c932631e296db87f3a0a7accb4cc7351f419,1
+GitHub karolpiczak/ESC-50,ESC-50,1-54065-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,984af507babc3cfb1097b754cb49811b49d7da308060d3c7d63191c70768a59f,1
+GitHub karolpiczak/ESC-50,ESC-50,5-188945-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,34782cd6f035dc77737dbc4a98fcfde13feadb483cbfa16d65302e7cf1e1fbb8,1
+GitHub karolpiczak/ESC-50,ESC-50,4-165791-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,b4f8c7c4eb2e2b408379c7e76c7983e274d76ed0817a83f6a4b4c71ab8660b27,1
+GitHub karolpiczak/ESC-50,ESC-50,4-178881-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,f9c68f75599c22c1ec196d1754081cb8df5535234b4ee40f414452e59f48f2b1,1
+GitHub karolpiczak/ESC-50,ESC-50,2-122066-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,e98e2da52271b2a34d436f3ec8ad4098ad1e6b5ca444da6c0c529f72b25a6ccb,1
+GitHub karolpiczak/ESC-50,ESC-50,2-262579-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,c4e18f7278701d60955aad71274e39f9b44f46a30cff56b64bdd74621133def6,1
+GitHub karolpiczak/ESC-50,ESC-50,5-197121-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,a30efb3eccfcea34dae3fce4e2d393b3e302e1674f1dd016933c4dca2b5941b4,1
+GitHub karolpiczak/ESC-50,ESC-50,5-199284-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,bef8126aae7e9e8a2288e3cf89c0d96f22f103d613d8f02f1426b9c92379a55c,1
+GitHub karolpiczak/ESC-50,ESC-50,5-197118-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,67d2f6fc339fb9a6734b0ad9f124dffb867f5c186c7619560cbfd78c83f37058,1
+GitHub karolpiczak/ESC-50,ESC-50,3-159445-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,fc76bed7e8c79bde05d7826648b6ea78bd436e1b07adc2c40d5b8851c9a9b455,1
+GitHub karolpiczak/ESC-50,ESC-50,4-165933-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,06f9ae9aff48c5bac6b61cc0d9c2e02fd79bf659a4519828dfea4dc3065e3ae7,1
+GitHub karolpiczak/ESC-50,ESC-50,3-136451-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,f667f7d746b4c70278a041fd8bf5e09c631f0f5d150e8c3f4660baa0b9fbd3b2,1
+GitHub karolpiczak/ESC-50,ESC-50,3-135650-B-45.wav,real non-bird noise (5 s clip),441044,441044,full,,ab5ca531ce389a27cf92e44e6dc91f09d5c7c072aaf3c0e9f8bbb0cf2e914e34,1
+GitHub karolpiczak/ESC-50,ESC-50,2-135649-C-45.wav,real non-bird noise (5 s clip),441044,441044,full,,4dc738a8b78f46c7c5f8acd45d8245b5f010da0fafe3dee256c5a9fa24774002,1
+GitHub karolpiczak/ESC-50,ESC-50,2-122067-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,359ec594e1755c59072bc2091b138124ecd3a6a8e0a4e12b4f0e5315d0cc9094,1
+GitHub karolpiczak/ESC-50,ESC-50,5-198600-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,28379aa553ef0b94e9b03b66aaee89f613a0715a9ff4e83a76a028e82678035b,1
+GitHub karolpiczak/ESC-50,ESC-50,3-138212-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,09aee3b73b209b98b2e34a1651cb72309a5840c2fc1831c342b968bea693cc4d,1
+GitHub karolpiczak/ESC-50,ESC-50,1-62509-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,03b1aeb6ccec6537abb404a569ec44c53d0f9eaada3f1d97f396293e9757cb24,1
+GitHub karolpiczak/ESC-50,ESC-50,4-165606-A-45.wav,real non-bird noise (5 s clip),441044,441044,full,,8db18f72cf0a09b40b78b62146a946235bcf4be656de7e5594615a90f51c969e,1

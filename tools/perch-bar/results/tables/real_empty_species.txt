@@ -1,0 +1,11 @@
+| group | windows | files | 0.05 | 0.1 | 0.15 | 0.2 | 0.25 | 0.3 | 0.35 | 0.4 | 0.5 | 0.7 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| all datasets, windows with no annotation | 1444 | 40 | 67.3 | 30.1 | 13.8 | 8.5 | 6.2 | 4.5 | 3.3 | 2.6 | 1.5 | 0.5 |
+| CEB, windows with no annotation | 263 | 17 | 50.6 | 20.9 | 13.3 | 9.9 | 7.6 | 4.9 | 3.8 | 3.4 | 2.7 | 1.1 |
+| POW, windows with no annotation | 5 | 1 | 100.0 | 100.0 | 60.0 | 60.0 | 60.0 | 40.0 | 20.0 | 20.0 | 20.0 | 0.0 |
+| SNE, windows with no annotation | 659 | 8 | 81.3 | 34.6 | 11.8 | 4.9 | 3.0 | 2.1 | 1.8 | 0.9 | 0.0 | 0.0 |
+| SSW, windows with no annotation | 98 | 3 | 91.8 | 45.9 | 21.4 | 15.3 | 10.2 | 8.2 | 6.1 | 5.1 | 4.1 | 1.0 |
+| COR, windows with no annotation | 58 | 3 | 46.6 | 17.2 | 13.8 | 10.3 | 6.9 | 1.7 | 1.7 | 1.7 | 0.0 | 0.0 |
+| PER, windows with no annotation | 16 | 1 | 37.5 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| KEN, windows with no annotation | 217 | 3 | 64.1 | 35.0 | 20.3 | 16.1 | 13.8 | 11.5 | 7.8 | 6.5 | 4.2 | 1.8 |
+| HAW, windows with no annotation | 128 | 4 | 28.1 | 11.7 | 7.8 | 4.7 | 2.3 | 1.6 | 0.8 | 0.8 | 0.0 | 0.0 |

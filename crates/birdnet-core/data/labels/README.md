@@ -74,10 +74,11 @@ station naming birds as their neighbours in the list.
 `scripts/build-perch-labels.py` converts `assets/labels.csv` of the Hugging Face
 repository `cgeorgiaw/Perch` at revision `c3c3c816976a6c1bb75140b8fbaef7397a6f708f`
 (SHA-256 `e4d5c0397d8fb08bf90c6b13a34810af53504faad927e472fcc567793c9de057`), the
-SavedModel of Google's `bird-vocalization-classifier` v2. It refuses to write
-unless the input has that digest, 14,795 distinct classes follow the first line,
-and no name could break a CSV row. The output's SHA-256 is
-`813dc8beff664d4688a6f70f99a5bffc63a991e06fb4e9744cc55b22c8cc3aae`.
+SavedModel of Google's `bird-vocalization-classifier` v2, and adds English names
+from two sources (below). It refuses to write unless both inputs and the V2.4
+names have the digests it was written against, 14,795 distinct classes follow the
+first line, and no name could break a CSV row. The output's SHA-256 is
+`1ddc4a95831dd09f4b407d173f5a0a8bbb5a9425ba74e8a71d3959a9794216b0`.
 `crates/birdnet-core/tests/the_perch_labels_are_the_classes_the_model_scores.rs`
 holds the file to that digest, to its length and to the positions that are known.
 
@@ -91,8 +92,38 @@ the 409 MB model, so it is not run in CI.
 14,595 classes are Latin binomials (iNaturalist 2024 taxa: birds, but also frogs,
 insects and mammals). The other 200 are FSD50K sound classes (`Engine`,
 `Vehicle`, `Animal`, `Wild_animals`, ...) that name a kind of sound, not a
-species. The list carries no common names, so the common name column repeats the
-class name; none is invented.
+species. Google's list carries no common names, so they are added from the two
+sources below, and where there is none the common name column repeats the class
+name; none is invented.
+
+### Where the common names come from
+
+Of the 14,595 species classes (the other 200 are sound classes), in this order:
+
+| Source | Classes | How |
+|---|---|---|
+| BirdNET V2.4's English names (`birdnet-v24-en.txt`, the file the station already uses; BirdNET-Pi's names) | 6,266 (five of them, `Dog`, `Engine`, `Fireworks`, `Siren` and *Gryllus assimilis*, are named by V2.4 with the class name itself) | the same bird has the same name whichever classifier heard it |
+| IOC World Bird List 15.2 English names ([worldbirdnames.org](https://worldbirdnames.org/master_ioc_list_v15.2.xlsx), SHA-256 `cbe406f71656323fafc6e30114385337c8c1cba54223b35fc668b3827bf28324`) | 3,917 | for a bird V2.4 does not list |
+| the class name itself | 4,612 | frogs, insects, mammals, the 200 sound classes, and the 146 birds whose IOC name is withheld |
+
+IOC names are Gill, F., D. Donsker & P. Rasmussen (Eds). 2026. *IOC World Bird
+List (v 15.2)*, doi:[10.14344/IOC.ML.15.2](https://doi.org/10.14344/IOC.ML.15.2),
+licensed CC BY 3.0 (Unported); they are credited here for that reason.
+
+**146 IOC names are withheld** because the English name is already V2.4's name for
+a species the station knows under a different scientific name. 120 of the 146
+are the same species renamed (Perch's *Acritillas indica* is V2.4's *Iole
+indica*, "Yellow-browed Bulbul"); the other 26 include names the two checklists give to
+different species after a split (IOC calls *Calonectris borealis* Cory's
+Shearwater; V2.4 uses that name for *C. diomedea*). The station groups detections by
+common name, so giving one name to both would merge species that a lump or split
+makes different, and the generator does not guess which is which. An alias table
+that said so, species by species, would let the 120 take the name; none exists
+yet (`docs/book/reference/taxonomy-overlap.md`).
+
+The two sources use different naming styles (V2.4's follow BirdNET-Pi's
+tables, IOC's its own), so a Perch-only species and a V2.4 species can differ in
+hyphens, capitals and "Grey"/"Gray".
 
 ### Licence
 
