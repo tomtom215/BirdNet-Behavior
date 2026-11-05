@@ -7,12 +7,13 @@ section 6 says where to start. The header and sections 5 and 6 were corrected fo
 2026-11-01. Facts about GitHub were read on the dates given, with the commands named; read them again before
 relying on them. Anything not attributed to a command is marked as reported, read or unknown.
 
-**Branch `claude/compassionate-cerf-olwih1`, 2026-11-05.** Not merged and not a pull request. It carries the
+**Branch `claude/compassionate-cerf-olwih1`, 2026-11-05.** Draft pull request #281 (opened 2026-11-05 09:00 UTC), not
+merged; section 4's last subsection says what CI did with it. It carries the
 multi-classifier work of earlier sessions (up to `5e3fe52`) and this session's commits, `f1f668b` to the last
 one on the branch: digital silence skipped instead of counted as a classifier failure, Rust 1.99 and a refresh of the
 dependencies, CI pins and tools, English names for Perch's classes, the taxonomy overlap, the Perch-bar study, the
 doctor's reading of the microphone's capture gain, and two accessibility fixes found by axe 4.14. Section 4's last
-subsection says what ran on it and what did not; section 5, items 39 to 44, is what it leaves open. The paragraphs
+subsection says what ran on it and what did not; section 5, items 39 to 45, is what it leaves open. The paragraphs
 below describe `main` and the 0.19.0 release as of 2026-11-01 and were not touched.
 
 **State on 2026-11-01.** The latest *published* release is **v0.18.1** (2026-10-26). **`v0.19.0` is tagged and not
@@ -312,6 +313,9 @@ the commits to read first (hashes valid on this branch).
   longer makes V3.0 "fail"; Rust 1.99; `perch-v2.csv` with English names (`scripts/build-perch-labels.py` takes the IOC
   workbook); `docs/book/reference/taxonomy-overlap.md` and `docs/data/taxonomy/`; `tools/perch-bar/`; the doctor's
   `Input level` check (`birdnet_core::audio::input_level`, `src/doctor/input_level.rs`) and the page *Input Level*.
+  CI on the draft pull request then found three things, fixed in `d2cbcba` (the study's two generated command files
+  had no shebang, which shellcheck needs), `d979403` (the community registry now serves `behavioral` v0.11.0, which
+  `extension_pins.rs` refuses to embed unless it is pinned) and `1859a3a` (two surviving mutants on `OutputScale::as_str`).
 
 ## 4. What was verified, and by what command
 
@@ -529,10 +533,21 @@ The tree was `5e3fe52` plus the commits listed in section 3. Numbers are from th
 **After `8bda13f`** these ran again on what changed: the doctor tests (217), `birdnet-core`'s input-level tests (23),
 clippy on the two crates, and the web tests that assert on page structure (23). The whole suite was not run again.
 
-**Not run:** CodeQL; the container image (the Docker builder digest was taken from the registry, the image was not
-built); the install and upgrade smoke tests; the aarch64 cross-check; Playwright 1.64.1 (CI's version; the preinstalled
-Chromium here matches 1.63.0) and Firefox and WebKit for the two accessibility fixes; any sound card; a real systemd
-host; macOS.
+**CI on the draft pull request**, read with `get_check_runs` and `get_job_logs` on 2026-11-05:
+
+| Head | What CI reported |
+|---|---|
+| `a379741` | `shellcheck` refused the two generated command files in `tools/perch-bar/meta/` (SC2148, no shebang): fixed in `d2cbcba` |
+| `d2cbcba` | `Tests (x86_64)`, `Build the candidate tarball`, `Build amd64` and `Build arm64` failed. The logs of the tarball and `Build amd64` were read: `build.rs` refused to embed `behavioral` v0.11.0 for `linux_amd64` (sha256 `0dea2ff3…6bb`), which `extension_pins.rs` did not pin. The `Build arm64` log was not read; `Tests (x86_64)` was read in an earlier pass and found the same refusal |
+| `d979403` (the v0.11.0 pins, trusted on first use) | `cargo-mutants on inference/model.rs [1/3]`: 2 of 14 mutants survived, both `OutputScale::as_str` (replaced by `""` and by `"xyzzy"`): fixed in `1859a3a`. `cargo-llvm-cov` failed once on `system_info::tests::cpu_temperature_alone_never_waits` (item 45); a re-run on that commit was cancelled by the next push |
+| `1859a3a` | all 75 check runs `success` or `skipped` (`deploy` and `Merge multi-arch manifest` are the two skipped), read in one `get_check_runs` call at 10:40 UTC |
+
+**Run in CI on `1859a3a`, all `success`, which the section above had as not run:** CodeQL (four jobs), the container image
+(`Build amd64`, `Build arm64`), the candidate tarball, the install and upgrade smoke tests (`install.sh → web UI`,
+`Upgrade from v0.17.1`, `v0.18.0`, `v0.18.1`), the aarch64 cross-check and `Tests (aarch64, native)`, and the browser
+gates on Playwright 1.64.1 (`Accessibility (axe) + visual-QA sweep`). **Not run:** Firefox and WebKit for the two
+accessibility fixes (whether CI's job covers them was not read); any sound card; a real systemd host (whether CI's
+upgrade jobs use one was not read); macOS.
 
 ## 5. Open items, with severity
 
@@ -774,14 +789,24 @@ it says otherwise.
     published output. No setter was built on purpose (a run-time change is lost at a replug or power cut unless root runs
     `alsactl store`; the service cannot). A station whose microphone sits at 100% now gets a warning and `--doctor`
     exits 1, which a monitoring script may treat as a failure. Medium.
-43. **Toolchain changes CI has not seen.** MSRV 1.99 is a policy choice (no dependency needs it); the Docker builder
-    (`rust:1.99-slim-trixie`, digest from the registry) was not built; the aarch64 image links with GNU ld and was not
-    cross-checked; six Actions moved without their release notes being read (each SHA is the upstream tag's); the browser
-    gates ran on Playwright 1.63.0, CI uses 1.64.1. Medium.
+43. **Toolchain changes: CI has now built them; the release notes are still unread.** On `1859a3a` CI built the Docker
+    image for amd64 and arm64 on `rust:1.99-slim-trixie`, cross-checked aarch64 and ran the browser gates on Playwright
+    1.64.1, all `success` (section 4). Left: MSRV 1.99 is a policy choice (no dependency needs it), and six Actions moved
+    without their release notes being read (each SHA is the upstream tag's). Low.
 44. **How the research was done.** Three research agents ran with no write access to reports and returned text; their
     numbers were checked against their own result files and, for the label counts, recomputed here. One of them made
     three requests to Xeno-canto (one API call, two pages) before reading its `robots.txt`, which by that agent's account
     disallows this kind of agent (not re-read here); the content was not used, and Xeno-canto data is not in the study. Low.
+45. **A timing test failed once in CI and its cause is not established.** `system_info::tests::cpu_temperature_alone_never_waits`
+    asserts that `cpu_temperature()` returns in under `MIN_CPU_DELTA` (200 ms). In `cargo-llvm-cov` on `d979403` it took
+    1.499757475 s. The same job passed on `d2cbcba` and on `1859a3a`, and `crates/birdnet-web` is identical between
+    `d2cbcba` and `d979403` (`git diff --stat` empty). Not reproduced here. Read: the sysinfo 0.40.1 Linux component code
+    differs from 0.39.6 in no wait or sleep, and in the failed job's log no other test finished after 09:47:31.36 UTC while
+    this test ended at 09:47:32.25 (failed) and `cpu_temperature_is_plausible_or_absent`, which makes the same sysfs reads,
+    at 09:47:32.75, so the load test's spinning threads, which ended at 09:47:31.05, do not account for the whole delay.
+    The slow runner read is CONJECTURED to be a one-off of that VM; nothing here shows it. The test measures wall-clock time
+    over real I/O, so it can fail on a slow machine without the code being wrong. If it recurs, root-cause it before
+    changing the bound. Low.
 
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
