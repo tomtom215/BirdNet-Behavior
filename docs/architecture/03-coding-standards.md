@@ -198,7 +198,7 @@ pub use queries::correlation::{FollowOn, SpeciesPair};
 - **Criterion.rs benchmarks** with HTML reports for performance-critical paths
 - End-to-end tests against real WAV fixtures and real SQLite databases
 - Coverage tracked via `cargo-llvm-cov` (`.github/workflows/coverage.yml`)
-- MSRV explicitly specified (1.95) and CI-enforced
+- MSRV explicitly specified (1.99) and CI-enforced
 - **Current test count**: 3 694 `#[test]` / `#[tokio::test]` attributes across
   the workspace at commit `dd10fe7` — re-derive with
   `grep -rn --include='*.rs' -E '^\s*#\[(test|tokio::test)' src crates tests | wc -l`

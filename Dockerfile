@@ -39,7 +39,7 @@
 # and the final `cargo build` link step aborts with "undefined reference".
 # Trixie ships glibc 2.41 and GCC 14, which matches what pyke builds against.
 #
-# The builder is Rust 1.95, the MSRV (`rust-version` in Cargo.toml), on purpose:
+# The builder is Rust 1.99, the MSRV (`rust-version` in Cargo.toml), on purpose:
 # the image compiles with the oldest compiler the project promises to support.
 # Dependabot is told not to move it (see .github/dependabot.yml).
 
@@ -51,7 +51,7 @@
 # file is copied into the cook stage, so the dependency layer is invalidated
 # solely when Cargo.lock or manifest files change — not on every source edit.
 # -----------------------------------------------------------------------------
-FROM rust:1.95-slim-trixie@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0 AS chef
+FROM rust:1.99-slim-trixie@sha256:ea0999ff67355d958b8799b6751c879a6d770076d26047dca66f6e51e77930d3 AS chef
 WORKDIR /build
 # cargo-chef is pinned to the 0.1 minor series for reproducibility.  The
 # --locked flag forces cargo to honour the bundled Cargo.lock from the

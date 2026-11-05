@@ -63,7 +63,7 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
 
 ## Getting a working tree
 
-- **Prerequisites** (a fresh Debian/Ubuntu machine): `git`, [Rust 1.95 or newer](https://rustup.rs)
+- **Prerequisites** (a fresh Debian/Ubuntu machine): `git`, [Rust 1.99 or newer](https://rustup.rs)
   (`rust-toolchain.toml` selects `stable` and `rustup` installs it on the first `cargo`
   command), and `cmake` and a C++ compiler (`sudo apt-get install cmake g++`) for the
   bundled DuckDB. `ffmpeg` is optional: CI installs it, and the tests that drive it skip

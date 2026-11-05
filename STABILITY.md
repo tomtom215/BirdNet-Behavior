@@ -92,7 +92,7 @@ which, and why.
 
 ## 5. Minimum supported Rust
 
-`workspace.package.rust-version` is the MSRV (`1.95`). It is raised only in a
+`workspace.package.rust-version` is the MSRV (`1.99`). It is raised only in a
 minor release and the changelog says so. CI compiles the whole workspace, tests
 included, with exactly that compiler (the `msrv` job asserts the compiler it ran
 is the declared one — it once did not).

@@ -163,7 +163,7 @@ docker compose down -v         # also remove volumes (deletes the database!)
 
 ## Building from source
 
-**Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`.
+**Prerequisites:** [Rust 1.99+](https://rustup.rs) and `git`.
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git

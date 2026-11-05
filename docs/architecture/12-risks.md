@@ -31,7 +31,7 @@
 | `duckdb` | C++ build cost and version coupling | Optional `analytics` feature; native per-architecture Docker builds avoid emulation; `Cargo.lock` pinned |
 | `axum` / `tokio` | Active, well-maintained ecosystem | Low risk |
 | `lettre` | Pure Rust SMTP with rustls | Low risk |
-| `sysinfo` | API churn between minor versions | Pinned to 0.39; workspace manifest enables the `system` and `component` features explicitly. It also sets the workspace MSRV floor at Rust 1.95 |
+| `sysinfo` | API churn between minor versions | Pinned to 0.40; workspace manifest enables the `system`, `component` and `network` features explicitly |
 
 ## Operational Risks
 

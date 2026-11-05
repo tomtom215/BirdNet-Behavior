@@ -8,7 +8,7 @@
 </p>
 <p align="center">
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Rust-1.95%2B-orange" alt="MSRV">
+  <img src="https://img.shields.io/badge/Rust-1.99%2B-orange" alt="MSRV">
   <img src="https://img.shields.io/badge/edition-2024-orange" alt="Edition 2024">
   <img src="https://img.shields.io/badge/platform-aarch64%20%7C%20x86__64-blue" alt="Platforms">
   <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="Unsafe forbidden">
@@ -209,7 +209,7 @@ A station is only useful if it keeps running when nobody is watching, and the da
 
 The project is built to be read as well as run:
 
-- **Language** — Rust 2024, **MSRV 1.95**, enforced by a dedicated CI job so a newer-toolchain feature can't slip in unnoticed.
+- **Language** — Rust 2024, **MSRV 1.99**, enforced by a dedicated CI job so a newer-toolchain feature can't slip in unnoticed.
 - **Safety** — `unsafe` code is **forbidden** across the entire workspace (`unsafe_code = "forbid"` — not merely denied, so a stray `#[allow]` can't reintroduce it). Public API is documented under `missing_docs`.
 - **Lints** — Clippy `pedantic` + `nursery` + `cargo`, and CI fails on any warning (`-D warnings`). `rustfmt` is checked, not just suggested.
 - **Errors** — library crates use hand-rolled error types; no `anyhow`/`thiserror` reaching for a `Box<dyn Error>`.
@@ -249,7 +249,7 @@ Safe, non-destructive import — BirdNET-Pi's files are never modified, and noth
 
 ## Building from source
 
-**Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`. The first build also compiles the bundled DuckDB (a few minutes of C++), so `cmake` and a C++ compiler must be on `PATH`.
+**Prerequisites:** [Rust 1.99+](https://rustup.rs) and `git`. The first build also compiles the bundled DuckDB (a few minutes of C++), so `cmake` and a C++ compiler must be on `PATH`.
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git

@@ -23,7 +23,7 @@
 #     change did not touch is the state of `main`, and is not yours to fix on this branch.
 #
 # Tools (versions as pinned in .github/workflows/supply-chain.yml):
-#   cargo install --locked typos-cli --version 1.51.1
+#   cargo install --locked typos-cli --version 1.52.0
 #   cargo install --locked cargo-machete cargo-deny
 #   cargo install --locked cargo-audit --version 0.22.2
 set -uo pipefail
@@ -73,7 +73,7 @@ tool() {
 }
 
 typos_gate() {
-    tool typos typos 1.51.1 "cargo install --locked typos-cli --version 1.51.1" && typos
+    tool typos typos 1.52.0 "cargo install --locked typos-cli --version 1.52.0" && typos
 }
 machete_gate() {
     tool cargo-machete cargo-machete "" "cargo install --locked cargo-machete" && cargo machete

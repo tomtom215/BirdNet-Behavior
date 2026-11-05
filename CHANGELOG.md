@@ -37,6 +37,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class was checked against the real model: a magpie recording puts the largest output on class 10 397, which
   is *Pica pica*). `scripts/build-perch-labels.py` regenerates it from the pinned source.
 
+- **Perch-led detections now carry an English name.** Perch's class list has scientific names only, so a
+  detection Perch reported showed its scientific name where V2.4 shows "Eurasian Magpie". The bundled
+  `perch-v2.csv` now gives 10 178 of its 14 795 classes an English name: BirdNET V2.4's own, where V2.4 lists
+  the species (so one bird has one name whichever classifier heard it), then the IOC World Bird List 15.2
+  (CC BY 3.0, credited in `crates/birdnet-core/data/labels/README.md`) for 3 917 more. A name two species would
+  share is withheld, because the station groups by common name: 146 IOC names, 120 of them a genus rename of a
+  species V2.4 already names (Perch's *Acritillas indica*, V2.4's *Iole indica*) and some a real lump or split
+  (*Calonectris borealis*, "Cory's Shearwater" in IOC and V2.4's name for *C. diomedea*). Sound classes, frogs,
+  insects and mammals keep the class name; nothing is invented. `scripts/build-perch-labels.py` takes the IOC
+  workbook as a second pinned input; a test holds the file to V2.4's names, to there being no shared name,
+  and to the count.
+- **Taxonomy overlap, name by name.** `docs/book/reference/taxonomy-overlap.md` says how many names the three
+  classifiers share (BirdNET+ V3.0 preview 3 and Perch share 10 916 of V3.0's 11 560) and classifies each of
+  the 644 V3.0 names Perch lacks: 369 absent from Perch, 129 lumped into another species, 121 a rename of one
+  Perch has, 11 uncertain, 8 split, 6 subspecies. The table is `docs/data/taxonomy/v3-names-not-in-perch.tsv`,
+  with the record ids to check each row against; a test holds it to the Perch labels. The station still merges
+  by exact scientific name, so a bird two classifiers name differently is two detections; the page says why no
+  alias table is applied yet.
+- **What a Perch bar costs, measured.** `tools/perch-bar/` holds a study of Perch v2 on 120 annotated recordings
+  (8.4 hours, 6 069 windows) from eight public sets, with 1 100 controlled mixtures and 155 environmental
+  clips, and the scripts to rerun it. The manual's "0.35 is a starting point" is now numbers: at 0.35 the station
+  finds 17% (15-20) of the annotated species and reports 0.04 unmarked species per window; at 0.20, 26% and
+  0.10; no bar tested found half of them with fewer than one unmarked report in ten windows; the result varies
+  from 2% to 41% by region. Re-running the analysis from the stored model outputs reproduced all 53 result
+  files byte for byte. It does not show that any bar is right for a given station.
+
+### Changed
+
+- **Rust 1.99 is now the minimum.** `rust-version`, `clippy.toml`, the CI `msrv` job, the release workflow,
+  the Docker builder (`rust:1.99-slim-trixie`, digest-pinned for amd64 and arm64) and the documentation say
+  1.99 (was 1.95). No dependency needs it: the highest `rust-version` any locked crate declares is 1.95
+  (sysinfo 0.40.1) and 115 declare none, so this is a policy choice, made in a minor release as `STABILITY.md`
+  requires. Stable is 1.99.1 (the official channel manifest, 2026-10-15).
+- **Dependencies.** 47 locked packages moved (`cargo update`, then sysinfo 0.39 to 0.40, whose constructors
+  became fallible, `Cpu::cpu_usage` became `Cpu::usage` and interface names became `OsString`;
+  `system_info.rs` follows, and a failed read still gives a zeroed readout as documented). `pulldown-cmark`
+  0.13.6 clears RUSTSEC-2026-0433, which `cargo audit` and OSV had reported on 0.13.5 and nothing waived:
+  `cargo audit` and OSV now report no advisory. Two crates have a newer release and cannot take it, because
+  their dependents pin them exactly: `matchit` 0.8.4 (axum 0.8.9 requires `=0.8.4`) and `generic-array` 0.14.7
+  (crypto-common 0.1.7 requires `=0.14.7`).
+- **CI pins.** Six GitHub Actions moved to their newest releases (eight pins: CodeQL's three entry points
+  share one) (`Swatinem/rust-cache` 2.9.3,
+  `crate-ci/typos` 1.52.0, `docker/login-action` 4.7.0, `github/codeql-action` 4.39.3,
+  `sigstore/cosign-installer` 4.1.3, `taiki-e/install-action` 2.90.1), each SHA taken from the upstream tag,
+  and the one `dtolnay/rust-toolchain` pin that was two months behind the other 22 was aligned. The local
+  `typos` is 1.52.0 to match. `axe-core` and `@axe-core/playwright` for the browser gates moved to 4.14.0
+  (Playwright 1.64.1 was current); `package.json` now states the versions in use. Every pinned cargo tool
+  (`cargo-audit`, `cargo-deny`, `cargo-mutants`, `cargo-llvm-cov`, `cargo-fuzz`, `mdbook`, `cargo-machete`)
+  was already at its newest release.
+
 ### Fixed
 
 - **Perch v2's scores were put through the wrong function.** Its classifier is trained with a softmax, but the
