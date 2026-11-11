@@ -114,6 +114,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The support bundle and `--doctor` printed the station's position to four decimals (about 11 m).** The
+  bundle's own rule is one decimal, and it applied it to the journal and the settings, but `doctor.txt` and
+  `doctor.json` are the doctor's report as the doctor printed it, and the doctor's "Station location" and
+  "BirdWeather location" lines carried the exact position, for a position in the configuration file and for
+  one typed on the dashboard alike. The bug-report template asks for that output in a public issue. The report
+  now prints one decimal, with a note saying it did. The bundle's scrubbing could not have fixed it from
+  outside: it looks for the coordinates in the *configuration file*, and a position set on the dashboard is
+  only in the settings table. The exact value is unchanged on the settings page and in the file. Seen failing
+  first: two bundle tests that unpack a real archive and search every member for the exact digits.
 - **Perch v2's scores were put through the wrong function.** Its classifier is trained with a softmax, but the
   station read its outputs through V2.4's sigmoid like any other classifier's. On a real recording of one
   magpie, between 809 and 1 066 of Perch's 14 795 classes cleared the default 0.70 bar in *every* window,

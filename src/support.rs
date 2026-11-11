@@ -237,18 +237,14 @@ const fn is_coordinate_key(key: &str) -> bool {
     key.eq_ignore_ascii_case("LATITUDE") || key.eq_ignore_ascii_case("LONGITUDE")
 }
 
-/// A coordinate as the bundle shows it: one decimal place, about 11 km.
+/// A coordinate as the bundle shows it: one decimal place, about 11 km
+/// ([`crate::helpers::coordinates::shared`], which the doctor report uses too).
 ///
-/// The bundle is written to be pasted into a public issue, and four decimals of
-/// a station's latitude and longitude are a house. One decimal still says which
-/// hemisphere, which season's daylight and which region's species the station
-/// was configured for, which is everything a support question about the
-/// scheduler or the occurrence filter needs. `None` for text that is not a
-/// number: it is shown as [`REDACTED`], because an unparseable coordinate may be
-/// degrees-minutes-seconds with the exact position in it.
+/// `None` for text that is not a number: it is shown as [`REDACTED`], because
+/// an unparseable coordinate may be degrees-minutes-seconds with the exact
+/// position in it.
 fn coarse_coordinate(raw: &str) -> Option<String> {
-    let value: f64 = raw.trim().parse().ok()?;
-    value.is_finite().then(|| format!("{value:.1}"))
+    crate::helpers::coordinates::shared(raw.trim().parse().ok()?)
 }
 
 /// Replace the exact coordinates in `text` with their [`coarse_coordinate`]
@@ -1078,6 +1074,93 @@ FLICKR_FILTER_EMAIL=me@example.com",
             grep.trim().is_empty(),
             "a secret reached the bundle:\n{grep}"
         );
+    }
+
+    // ── the station's position ──────────────────────────────────────────
+
+    /// A latitude and longitude typed to five decimals. No other number in an
+    /// archive resembles their first four digits, so a leak at the doctor's
+    /// four decimals is still a hit.
+    const EXACT_LAT: &str = "47.38291";
+    const EXACT_LON: &str = "-122.31746";
+
+    /// Build a bundle for `cfg`, unpack it, and return the directory holding
+    /// its members.
+    fn unpacked_bundle(dir: &Path, cfg: &Config) -> std::path::PathBuf {
+        use clap::Parser as _;
+        let dest = dir.join("bundle.tar.gz");
+        build(&Cli::parse_from(["birdnet-behavior"]), Some(cfg), &dest).expect("the bundle");
+        let out = dir.join("x");
+        std::fs::create_dir_all(&out).unwrap();
+        let _ = capture(
+            "tar",
+            &["xzf", dest.to_str().unwrap(), "-C", out.to_str().unwrap()],
+        );
+        out.join("birdnet-support")
+    }
+
+    /// No member of the unpacked bundle holds the position finer than one
+    /// decimal, and the doctor still says where the station is.
+    ///
+    /// The second half is the counterpart: without it a doctor that stopped
+    /// printing the position would pass the first.
+    fn assert_the_position_left_at_one_decimal(members: &Path) {
+        for digits in ["47.38", "122.31"] {
+            let grep = capture("grep", &["-rF", digits, members.to_str().unwrap()]);
+            assert!(
+                grep.trim().is_empty(),
+                "the station's exact position ({digits}…) reached the bundle:\n{grep}"
+            );
+        }
+        let doctor = std::fs::read_to_string(members.join("doctor.txt")).expect("doctor.txt");
+        assert!(
+            doctor.contains("47.4, -122.3"),
+            "the doctor must still report where the station is, to one decimal:\n{doctor}"
+        );
+    }
+
+    /// The bundle is written to be pasted into a public issue, and its own
+    /// rule is one decimal (see [`coarse_coordinate`]). `doctor.txt` and
+    /// `doctor.json` were staged as the doctor printed them: the station's
+    /// position to four decimals, about 11 m.
+    #[test]
+    fn a_position_in_the_config_file_leaves_the_bundle_at_one_decimal() {
+        if !crate::doctor::tool_exists("tar") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // A token as well, so the BirdWeather check, which prints the position
+        // it would upload at, runs too.
+        let cfg = Config::parse(&format!(
+            "LATITUDE={EXACT_LAT}\nLONGITUDE={EXACT_LON}\nBIRDWEATHER_TOKEN=bwtoken-9911"
+        ))
+        .unwrap();
+        assert_the_position_left_at_one_decimal(&unpacked_bundle(dir.path(), &cfg));
+    }
+
+    /// The same, for a station whose position was typed on the dashboard. It is
+    /// then only in the database's settings table, which is where
+    /// `coarsen_coordinates_in_text` cannot look: it hunts the values the
+    /// *config file* holds.
+    #[test]
+    fn a_position_typed_on_the_dashboard_leaves_the_bundle_at_one_decimal() {
+        if !crate::doctor::tool_exists("tar") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = browser_configured_station(dir.path());
+        let conn = rusqlite::Connection::open(dir.path().join("birds.db")).expect("open");
+        for (key, value) in [("latitude", EXACT_LAT), ("longitude", EXACT_LON)] {
+            birdnet_db::settings::set(
+                &conn,
+                key,
+                value,
+                birdnet_db::settings::SettingsCategory::System,
+            )
+            .expect("setting");
+        }
+        drop(conn);
+        assert_the_position_left_at_one_decimal(&unpacked_bundle(dir.path(), &cfg));
     }
 
     /// A database that cannot be read is said so, with where it looked; it is

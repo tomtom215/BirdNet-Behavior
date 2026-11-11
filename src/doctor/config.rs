@@ -9,6 +9,7 @@ use birdnet_core::detection::pipeline::PipelineConfig;
 
 use super::Check;
 use crate::cli::Cli;
+use crate::helpers::coordinates;
 
 /// Warn when the station has no coordinates, because the effect is invisible
 /// and severe.
@@ -42,12 +43,15 @@ use crate::cli::Cli;
 pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Check {
     let (lat, lon) = crate::daemon::resolve_station_coords(cli, config);
     if let (Some(lat), Some(lon)) = (lat, lon) {
-        return Check::pass("Station location", format!("{lat:.4}, {lon:.4}"));
+        return Check::pass("Station location", coordinates::label(lat, lon));
     }
     if let Some((lat, lon)) = location_from_settings(config) {
         return Check::pass(
             "Station location",
-            format!("{lat:.4}, {lon:.4} (from the dashboard settings)"),
+            format!(
+                "{} (from the dashboard settings)",
+                coordinates::label(lat, lon)
+            ),
         );
     }
     Check::warn(
@@ -101,11 +105,16 @@ pub(super) fn check_birdweather_location(cli: &Cli, config: Option<&Config>) -> 
     };
     Some(
         match crate::integrations::birdweather_location(cli, config) {
-            Ok((lat, lon)) => Check::pass(NAME, format!("uploads at {lat:.4}, {lon:.4}")),
+            Ok((lat, lon)) => {
+                Check::pass(NAME, format!("uploads at {}", coordinates::label(lat, lon)))
+            }
             Err(why) => match from_settings() {
                 Some((lat, lon)) => Check::pass(
                     NAME,
-                    format!("uploads at {lat:.4}, {lon:.4} (from the dashboard settings)"),
+                    format!(
+                        "uploads at {} (from the dashboard settings)",
+                        coordinates::label(lat, lon)
+                    ),
                 ),
                 None => Check::warn(
                     NAME,
@@ -1189,7 +1198,12 @@ mod tests {
         ]);
         let check = check_station_location(&cli(), Some(&cfg));
         assert_eq!(check.status, Status::Pass);
-        assert!(check.message.contains("42.3601"));
+        assert!(check.message.contains("42.4, -71.1"), "{}", check.message);
+        assert!(
+            !check.message.contains("42.36") && !check.message.contains("71.05"),
+            "the exact position must not be in the report: {}",
+            check.message
+        );
     }
 
     /// A station configured entirely through the dashboard keeps its
@@ -1231,7 +1245,12 @@ mod tests {
             "dashboard-configured station must not be warned at: {}",
             check.message
         );
-        assert!(check.message.contains("51.5074"));
+        assert!(check.message.contains("51.5, -0.1"), "{}", check.message);
+        assert!(
+            !check.message.contains("51.50"),
+            "the exact position must not be in the report: {}",
+            check.message
+        );
     }
 
     // ── BirdWeather needs a position to publish at ──────────────────────
@@ -1275,7 +1294,12 @@ mod tests {
         ]);
         let check = check_birdweather_location(&cli(), Some(&cfg)).expect("a token is set");
         assert_eq!(check.status, Status::Pass);
-        assert!(check.message.contains("42.3601"), "{}", check.message);
+        assert!(check.message.contains("42.4, -71.1"), "{}", check.message);
+        assert!(
+            !check.message.contains("42.36") && !check.message.contains("71.05"),
+            "the exact position must not be in the report: {}",
+            check.message
+        );
     }
 
     #[test]
@@ -1325,7 +1349,12 @@ mod tests {
         write("51.5074", "-0.1278");
         let check = check_birdweather_location(&cli(), Some(&cfg)).expect("token is in settings");
         assert_eq!(check.status, Status::Pass, "{}", check.message);
-        assert!(check.message.contains("51.5074"), "{}", check.message);
+        assert!(check.message.contains("51.5, -0.1"), "{}", check.message);
+        assert!(
+            !check.message.contains("51.50"),
+            "the exact position must not be in the report: {}",
+            check.message
+        );
 
         write("0", "0");
         let check = check_birdweather_location(&cli(), Some(&cfg)).expect("token is in settings");

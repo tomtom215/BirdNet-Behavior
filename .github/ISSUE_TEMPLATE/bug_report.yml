@@ -20,7 +20,7 @@ body:
     id: doctor
     attributes:
       label: Output of `birdnet-behavior --doctor`
-      description: The full preflight report. Redact tokens or location data if needed.
+      description: The full preflight report. The station's latitude and longitude in it are rounded to 0.1° (about 11 km). Redact tokens or any other location data if needed.
       render: shell
     validations:
       required: true
