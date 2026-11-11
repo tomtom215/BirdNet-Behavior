@@ -217,7 +217,7 @@ setting-default	src/integrations/email.rs	sender_name	ok	birdnet_db::settings::g
 handled	src/integrations/mqtt_presence.rs	spawn_mqtt_presence	match-err	match tokio::task::spawn_blocking(move || open.shutdown()).await { Err .. }
 handled	src/integrations/mqtt_presence.rs	tick_presence	match-err	match tokio::task::spawn_blocking(move || PresenceSession::connect(&cfg)).await { Err .. }
 handled	src/integrations/station_health.rs	check_maintenance	match-err	match state.with_db(|conn| birdnet_db::sqlite::last_run_result(conn, job)) { Err .. }
-handled	src/integrations/station_health.rs	check_metric_rules	match-err	match state.with_db(|conn| birdnet_db::metric_rules::list(conn)) { Err .. }
+handled	src/integrations/station_health.rs	check_metric_rules	match-err	match state.with_db(birdnet_db::metric_rules::list) { Err .. }
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::outbound_queue::depth(conn, birdnet_integrations::birdweather::QUEUE_KIND) .ok()
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::last_hour_count(conn) .ok()
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::seconds_since_last_detection(conn) .ok()
