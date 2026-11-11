@@ -166,7 +166,9 @@ handled	crates/birdnet-web/src/routes/system.rs	health	unwrap_or	tokio::task::sp
 handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source)) { Err .. }
 handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24)) { Err .. }
 handled	crates/birdnet-web/src/state.rs	approve_quarantine	ok	self.with_read_db(|conn| { birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name) }) .ok
+handled	crates/birdnet-web/src/state.rs	clear_detection_review	match-err	match review_clip(conn, row)? { Err .. }
 handled	crates/birdnet-web/src/state.rs	run_blocking	match-err	match tokio::task::spawn_blocking(move || f(&state)).await { Err .. }
+handled	crates/birdnet-web/src/state.rs	set_detection_review	match-err	match review_clip(conn, row)? { Err .. }
 task-panic	crates/birdnet-web/src/tls.rs	on_the_pool	ok	tokio::task::spawn_blocking(move || work(&cert, &key)) .await .ok()
 task-panic	crates/birdnet-web/src/tls.rs	spawn_renewer	ok	tokio::task::spawn_blocking(move || self_signed_expiry(&state_dir)) .await .ok()
 setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()

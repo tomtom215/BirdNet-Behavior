@@ -34,6 +34,11 @@ pub struct DetectionDetailQuery {
     time: Option<String>,
     /// Common name filter (optional, used to disambiguate if multiple species at same time).
     name: Option<String>,
+    /// The detection's clip (optional): `""` for one with no clip. Two sources
+    /// that heard one bird in one second share the date, time and name, and
+    /// without this the page can only show whichever comes first. A link built
+    /// from a list row carries it.
+    file: Option<String>,
 }
 
 async fn detection_detail_page(
@@ -44,6 +49,7 @@ async fn detection_detail_page(
     let date = query.date.unwrap_or_default();
     let time = query.time.unwrap_or_default();
     let com_name = query.name.unwrap_or_default();
+    let file = query.file;
 
     if date.is_empty() || time.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -52,6 +58,7 @@ async fn detection_detail_page(
     let date2 = date.clone();
     let time2 = time.clone();
     let com2 = com_name.clone();
+    let file2 = file.clone();
 
     // An in-memory read, so it happens here rather than on the blocking pool,
     // and before `state` is moved into the closure below.
@@ -65,16 +72,18 @@ async fn detection_detail_page(
     // below is decoration and still defaults.
     let found = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let Some(det) = find_detection(conn, &date2, &time2, &com2)? else {
+            let Some(det) = find_detection(conn, &date2, &time2, &com2, file2.as_deref())? else {
                 return Ok(None);
             };
-            let verdict = birdnet_db::sqlite::get_detection_review(
-                conn,
-                &det.date,
-                &det.time,
-                &det.sci_name,
-            )?
-            .map(|r| r.status);
+            // This detection's verdict, by its own key: the verdict on the other
+            // microphone's detection of the same bird is not this one's.
+            let key = birdnet_db::sqlite::DetectionKey {
+                date: &det.date,
+                time: &det.time,
+                sci_name: &det.sci_name,
+                file_name: det.file_name.as_deref(),
+            };
+            let verdict = birdnet_db::sqlite::get_detection_review(conn, &key)?.map(|r| r.status);
             // Multi-stream corroboration: other sources that heard this species
             // near the same time. Only meaningful for rows with a known source
             // (historical / imported rows are NULL → no corroboration shown).
@@ -96,12 +105,6 @@ async fn detection_detail_page(
             // rendered as a fault rather than defaulted to "nobody else heard it".
             // Read by the identity the row was stored under (its clip too), so two
             // sources that heard one bird in one second each show their own.
-            let key = birdnet_db::sqlite::DetectionKey {
-                date: &det.date,
-                time: &det.time,
-                sci_name: &det.sci_name,
-                file_name: det.file_name.as_deref(),
-            };
             let models = match super::model_evidence::read(conn, &key) {
                 Ok(m) => Some(m),
                 Err(e) => {
@@ -157,6 +160,7 @@ fn find_detection(
     date: &str,
     time: &str,
     com_name: &str,
+    file: Option<&str>,
 ) -> Result<Option<birdnet_db::sqlite::DetectionRow>, birdnet_db::sqlite::DbError> {
     // One query, one mapper, both owned by `birdnet-db`. This used to be two
     // hand-written copies of the fifteen-column projection and its row mapper,
@@ -164,7 +168,10 @@ fn find_detection(
     // exactly this — and they were found the only way such a thing is: a column
     // was added to `DetectionRow` and both copies failed to compile.
     let name = (!com_name.is_empty()).then_some(com_name);
-    birdnet_db::sqlite::detection_at(conn, date, time, name)
+    file.map_or_else(
+        || birdnet_db::sqlite::detection_at(conn, date, time, name),
+        |file| birdnet_db::sqlite::detection_with_clip(conn, date, time, name, file),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +209,7 @@ fn render_detail_page(
         &det.date,
         &det.time,
         &det.sci_name,
+        det.file_name.as_deref().unwrap_or_default(),
         &det.com_name,
         verdict,
     );

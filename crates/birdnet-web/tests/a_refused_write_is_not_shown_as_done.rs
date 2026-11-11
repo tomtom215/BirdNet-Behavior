@@ -127,8 +127,8 @@ fn review_station(refuse: Option<&str>) -> axum::Router {
          VALUES ('2026-05-01', '04:10:00', 'Bubo scandiacus', 'Snowy Owl', 0.9, 'below_sf_thresh');
          -- An existing verdict, so a clear has a row to delete: a row trigger
          -- does not fire on a DELETE that matches nothing.
-         INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
-         VALUES ('2026-05-01', '06:10:00', 'Turdus merula', 'Eurasian Blackbird', 'confirmed');",
+         INSERT INTO detection_reviews (date, time, sci_name, file_name, com_name, status)
+         VALUES ('2026-05-01', '06:10:00', 'Turdus merula', 'b.wav', 'Eurasian Blackbird', 'confirmed');",
     )
     .expect("seed");
     if let Some(table) = refuse {

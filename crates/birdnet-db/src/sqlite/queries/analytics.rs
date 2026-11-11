@@ -428,6 +428,7 @@ pub fn review_verdict_trend(
                FROM detections d
           LEFT JOIN detection_reviews r
                  ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+                 AND r.file_name = COALESCE(d.File_Name, '') AND r.detached IS NULL
               WHERE d.Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
               GROUP BY d.Date
          )
@@ -501,6 +502,7 @@ pub fn model_vs_review_by_species(
                FROM detections d
           LEFT JOIN detection_reviews r
                  ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+                 AND r.file_name = COALESCE(d.File_Name, '') AND r.detached IS NULL
               GROUP BY d.Com_Name, d.Sci_Name
              HAVING COUNT(*) >= 5
                 AND SUM(CASE WHEN r.status IS NOT NULL THEN 1 END) >= 3
@@ -553,6 +555,7 @@ pub fn reviewed_detections_by_species(
            FROM detection_reviews r
            JOIN detections d
              ON d.Date = r.date AND d.Time = r.time AND d.Sci_Name = r.sci_name
+            AND COALESCE(d.File_Name, '') = r.file_name AND r.detached IS NULL
           ORDER BY d.Sci_Name, d.Confidence",
     )?;
     let rows = stmt
@@ -604,6 +607,7 @@ pub fn species_shapes(conn: &Connection) -> Result<Vec<crate::phantoms::SpeciesS
            FROM detections d
       LEFT JOIN detection_reviews r
              ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+                 AND r.file_name = COALESCE(d.File_Name, '') AND r.detached IS NULL
           GROUP BY d.Sci_Name",
     )?;
     let rows = stmt
@@ -1082,10 +1086,16 @@ mod tests {
     }
 
     fn add_review(conn: &Connection, date: &str, time: &str, sci: &str, com: &str, status: &str) {
+        // Named by the clip of the detection it is about, as the review code
+        // names it: a review that named another clip would be about nothing.
         conn.execute(
-            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(date, time, sci_name) DO UPDATE SET status = excluded.status",
+            "INSERT INTO detection_reviews (date, time, sci_name, file_name, com_name, status)
+             VALUES (?1, ?2, ?3,
+                     COALESCE((SELECT File_Name FROM detections
+                                WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3), ''),
+                     ?4, ?5)
+             ON CONFLICT(date, time, sci_name, file_name) WHERE detached IS NULL
+             DO UPDATE SET status = excluded.status",
             params![date, time, sci, com, status],
         )
         .unwrap();
@@ -1214,8 +1224,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
-             VALUES ('2026-03-14', ?1, ?2, ?2, ?3)",
+            "INSERT INTO detection_reviews (date, time, sci_name, file_name, com_name, status)
+             VALUES ('2026-03-14', ?1, ?2, 'x.wav', ?2, ?3)",
             params![time, sci, status],
         )
         .unwrap();
@@ -1307,6 +1317,108 @@ mod tests {
         let confirmed: Vec<bool> = reviews.iter().map(|r| r.confirmed).collect();
         // Ordered by confidence ascending: the rejected 0.55 first.
         assert_eq!(confirmed, vec![false, true]);
+    }
+
+    /// Every query that joins reviews to detections counts a verdict for the
+    /// detection it names and not for its neighbour. Two sources that heard one
+    /// bird in one second share date, time and species and differ only in their
+    /// clip; a join on the triple counted the one verdict twice, once for each.
+    #[test]
+    fn a_verdict_is_counted_for_the_detection_it_names_and_not_its_neighbour() {
+        use crate::sqlite::DetectionKey;
+        use crate::sqlite::queries::detection_reviews::{ReviewStatus, set_detection_review};
+
+        let (_tmp, conn) = empty_db();
+        let today = days_ago(&conn, 0);
+        for clip in ["a.wav", "b.wav"] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES (?1, '05:00:00', 'Turdus merula', 'Blackbird', 0.8, ?2)",
+                params![today, clip],
+            )
+            .unwrap();
+        }
+        let a = DetectionKey {
+            date: &today,
+            time: "05:00:00",
+            sci_name: "Turdus merula",
+            file_name: Some("a.wav"),
+        };
+        assert!(
+            set_detection_review(&conn, &a, "Blackbird", ReviewStatus::Rejected, None).unwrap()
+        );
+
+        let shape = &species_shapes(&conn).unwrap()[0];
+        assert_eq!((shape.total, shape.rejected, shape.confirmed), (2, 1, 0));
+
+        let reviewed = reviewed_detections_by_species(&conn).unwrap();
+        assert_eq!(reviewed[0].2.len(), 1, "one reviewed detection, not two");
+
+        let day = review_verdict_trend(&conn, 3)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.day == today)
+            .unwrap();
+        assert_eq!(
+            (day.total, day.rejected, day.unreviewed),
+            (2, 1, 1),
+            "the other microphone's detection is still unreviewed"
+        );
+    }
+
+    /// The model-versus-review panel's floor is "at least 3 verdicts". One verdict
+    /// on one of two same-second detections is one verdict: a join on the triple
+    /// counted it for both rows and let a species past the floor on two real
+    /// verdicts.
+    #[test]
+    fn the_verdict_floor_counts_verdicts_and_not_the_rows_they_were_joined_to() {
+        use crate::sqlite::DetectionKey;
+        use crate::sqlite::queries::detection_reviews::{ReviewStatus, set_detection_review};
+
+        let (_tmp, conn) = empty_db();
+        let day = "2026-03-14";
+        // Five detections of one species: a same-second pair, then three singles.
+        for (time, clip) in [
+            ("05:00:00", "a.wav"),
+            ("05:00:00", "b.wav"),
+            ("05:00:01", "c.wav"),
+            ("05:00:02", "d.wav"),
+            ("05:00:03", "e.wav"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.8, ?3)",
+                params![day, time, clip],
+            )
+            .unwrap();
+        }
+        let verdict = |time: &str, clip: &str, status| {
+            let key = DetectionKey {
+                date: day,
+                time,
+                sci_name: "Turdus merula",
+                file_name: Some(clip),
+            };
+            assert!(set_detection_review(&conn, &key, "Blackbird", status, None).unwrap());
+        };
+        verdict("05:00:00", "a.wav", ReviewStatus::Rejected); // one verdict, on one of the pair
+        verdict("05:00:01", "c.wav", ReviewStatus::Confirmed);
+
+        assert!(
+            model_vs_review_by_species(&conn, 10).unwrap().is_empty(),
+            "two verdicts are under the floor of three, however many rows they join to"
+        );
+
+        // The counterpart: a third real verdict puts the species over it, so the
+        // function is not simply returning nothing.
+        verdict("05:00:02", "d.wav", ReviewStatus::Confirmed);
+        let rows = model_vs_review_by_species(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            (rows[0].human_avg - 2.0 / 3.0).abs() < 1e-9,
+            "{:?}",
+            rows[0]
+        );
     }
 
     // ── species shapes, for the phantom report ──────────────────────────

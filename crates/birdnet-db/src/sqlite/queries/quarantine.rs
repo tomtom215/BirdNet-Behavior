@@ -304,16 +304,16 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     // verdict is. `review_verdict = 'confirmed'` alone left the approved
     // detection in the review queue (which lists detections with no
     // `detection_reviews` row) as though nobody had looked at it, and absent
-    // from the verdict list and counts. `DO NOTHING` on the triple: a verdict
-    // already recorded there is someone's, and is not overwritten here.
+    // from the verdict list and counts. `DO NOTHING` on the detection's key: a
+    // verdict already recorded for it is someone's, and is not overwritten here.
     if inserted > 0 {
         tx.execute(
             "INSERT INTO detection_reviews
-                (date, time, sci_name, com_name, status, notes, reviewed_at)
-             SELECT date, time, sci_name, com_name, 'confirmed',
+                (date, time, sci_name, file_name, com_name, status, notes, reviewed_at)
+             SELECT date, time, sci_name, COALESCE(file_name, ''), com_name, 'confirmed',
                     'Approved from quarantine', datetime('now')
                FROM quarantine WHERE id = ?1
-             ON CONFLICT(date, time, sci_name) DO NOTHING",
+             ON CONFLICT(date, time, sci_name, file_name) WHERE detached IS NULL DO NOTHING",
             params![id],
         )?;
     }
@@ -542,6 +542,19 @@ mod tests {
         conn
     }
 
+    /// The clip `sample` points at, and so the clip the approved detection has.
+    const SAMPLE_CLIP: &str = "BirdSongs/2026-03-27_07-15-30.wav";
+
+    /// The key of the detection that approving `sample` creates.
+    const fn sample_key() -> crate::sqlite::DetectionKey<'static> {
+        crate::sqlite::DetectionKey {
+            date: "2026-03-27",
+            time: "07:15:30",
+            sci_name: "Upupa epops",
+            file_name: Some(SAMPLE_CLIP),
+        }
+    }
+
     fn sample<'a>(reason: QuarantineReason) -> QuarantineRecord<'a> {
         QuarantineRecord {
             date: "2026-03-27",
@@ -633,7 +646,7 @@ mod tests {
         let id = list_quarantine(&conn, QuarantineFilter::Pending, 10, 0).unwrap()[0].id;
         assert!(approve_quarantine(&conn, id).unwrap());
         assert!(unreviewed_recent_detections(&conn, 10).unwrap().is_empty());
-        let review = get_detection_review(&conn, "2026-03-27", "07:15:30", "Upupa epops")
+        let review = get_detection_review(&conn, &sample_key())
             .unwrap()
             .expect("a verdict on record");
         assert_eq!(review.status, "confirmed");
@@ -647,17 +660,15 @@ mod tests {
         use crate::sqlite::queries::detection_reviews::get_detection_review;
         let conn = open();
         conn.execute(
-            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
-             VALUES ('2026-03-27', '07:15:30', 'Upupa epops', 'Eurasian Hoopoe', 'rejected')",
-            [],
+            "INSERT INTO detection_reviews (date, time, sci_name, file_name, com_name, status)
+             VALUES ('2026-03-27', '07:15:30', 'Upupa epops', ?1, 'Eurasian Hoopoe', 'rejected')",
+            [SAMPLE_CLIP],
         )
         .unwrap();
         insert_quarantine(&conn, &sample(QuarantineReason::LowConfidence)).unwrap();
         let id = list_quarantine(&conn, QuarantineFilter::Pending, 10, 0).unwrap()[0].id;
         approve_quarantine(&conn, id).unwrap();
-        let review = get_detection_review(&conn, "2026-03-27", "07:15:30", "Upupa epops")
-            .unwrap()
-            .unwrap();
+        let review = get_detection_review(&conn, &sample_key()).unwrap().unwrap();
         assert_eq!(review.status, "rejected");
     }
 

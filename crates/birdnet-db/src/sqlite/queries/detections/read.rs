@@ -579,6 +579,47 @@ pub fn detection_at(
         .map_err(Into::into)
 }
 
+/// The detection at `date`, `time` that points at `file_name`: `""` for a
+/// detection with no clip, compared the way the unique index compares it.
+///
+/// [`detection_at`] cannot name one of two detections that two sources heard in
+/// the same second, since it takes whichever row comes first. This can, and is
+/// what a page opened from a list row, which knows its clip, asks for.
+///
+/// `com_name` narrows the same way as in [`detection_at`].
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_with_clip(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    com_name: Option<&str>,
+    file_name: &str,
+) -> Result<Option<DetectionRow>, DbError> {
+    let sql = match com_name {
+        Some(_) => format!(
+            "SELECT {DETECTION_COLS} FROM detections \
+             WHERE Date = ?1 AND Time = ?2 AND COALESCE(File_Name, '') = ?3 \
+               AND Com_Name = ?4 LIMIT 1"
+        ),
+        None => format!(
+            "SELECT {DETECTION_COLS} FROM detections \
+             WHERE Date = ?1 AND Time = ?2 AND COALESCE(File_Name, '') = ?3 LIMIT 1"
+        ),
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = match com_name {
+        Some(name) => stmt.query(rusqlite::params![date, time, file_name, name])?,
+        None => stmt.query(rusqlite::params![date, time, file_name])?,
+    };
+    rows.next()?
+        .map(map_detection_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
 /// The common name of the detection identified by `(date, time, sci_name)`.
 ///
 /// Exists so a bulk review does not have to take the operator's word for it.

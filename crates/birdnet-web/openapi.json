@@ -1442,6 +1442,10 @@
                     "example": "Erithacus rubecula",
                     "description": "Scientific name exactly as the detection was recorded."
                   },
+                  "file_name": {
+                    "type": "string",
+                    "description": "The clip of the detection, `\"\"` for a detection with no clip. A verdict is about one detection, and two sources that heard one bird in the same second share the date, time and name and differ only in the clip. Optional while the date, time and name leave exactly one detection; with more than one the request is refused with `409` and nothing is written."
+                  },
                   "com_name": {
                     "type": "string",
                     "description": "Common name stored alongside the verdict. Defaults to `sci_name`."
@@ -1481,7 +1485,10 @@
             "description": "No `Authorization: Bearer` header, or the token does not match."
           },
           "404": {
-            "description": "No detection matches that date, time and scientific name — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist."
+            "description": "No detection matches that date, time, scientific name and `file_name` — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist. No verdict is recorded about a detection that is not there."
+          },
+          "409": {
+            "description": "The date, time and scientific name name more than one detection and no `file_name` was given. Nothing was written; the body says how many (`detections`)."
           }
         }
       }

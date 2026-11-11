@@ -1,11 +1,18 @@
 //! Detection-review (confirm / reject) triage queries.
 //!
-//! A *review* is a reviewer's verdict on an individual detection — `confirmed`
-//! (the species ID looks right) or `rejected` (likely a misidentification),
-//! identified by the same `(date, time, sci_name)` triple the rest of the UI
-//! keys on. Unlike quarantine — which gates uncertain rows *out* of
-//! `detections` before they are ever admitted — a review is a non-destructive
-//! annotation layered on detections that already exist.
+//! A *review* is a reviewer's verdict on **one detection**: `confirmed` (the
+//! species ID looks right) or `rejected` (likely a misidentification). The
+//! detection is named by [`DetectionKey`]: date, time, species **and clip**.
+//! The triple alone is not a key. Two microphones that hear one bird in the
+//! same second write two detections that share it and differ only in the clip
+//! they point at, and a verdict addressed by the triple reached both: a
+//! rejection of the one the reviewer listened to also withdrew from every
+//! count a detection nobody had listened to.
+//!
+//! Unlike quarantine, which gates uncertain rows *out* of `detections` before
+//! they are ever admitted, a review is a non-destructive annotation layered on
+//! detections that already exist, and no verdict is written about one that does
+//! not.
 //!
 //! # Workflow
 //!
@@ -17,9 +24,27 @@
 //! 3. **Queue** — [`unreviewed_recent_detections`] lists detections still
 //!    awaiting a verdict.
 //! 4. **Undo** — [`clear_detection_review`] removes a verdict.
+//!
+//! # Verdicts attached to no detection: `detached`
+//!
+//! A verdict can outlive the detection it was about, and is kept, not
+//! deleted, because it records what a person decided:
+//!
+//! * `relabelled` — the detection was given another species, and a verdict on
+//!   the old one says nothing about the new one (see migration 59);
+//! * `ambiguous` — recorded before reviews named a clip, when more than one
+//!   detection shared its date, time and species. Which one the reviewer meant
+//!   cannot be recovered, so none carries it and each is unreviewed again;
+//! * `orphaned` — recorded before reviews named a clip, and its detection no
+//!   longer exists.
+//!
+//! A detached verdict is listed so it can be seen and dismissed
+//! ([`dismiss_detached_review`]); it is in no count and excludes nothing.
 
 use rusqlite::{Connection, params};
 
+use super::DetectionKey;
+use super::detections::KEY_WHERE;
 use crate::sqlite::connection::DbError;
 
 // ---------------------------------------------------------------------------
@@ -66,15 +91,56 @@ impl ReviewStatus {
     }
 }
 
+/// Why a recorded verdict is attached to no detection. See the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detached {
+    /// The detection it was about was given another species.
+    Relabelled,
+    /// More than one detection shared its date, time and species when it was
+    /// recorded, and which one was meant cannot be known.
+    Ambiguous,
+    /// The detection it was about no longer exists.
+    Orphaned,
+}
+
+impl Detached {
+    /// The value stored in `detection_reviews.detached`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Relabelled => "relabelled",
+            Self::Ambiguous => "ambiguous",
+            Self::Orphaned => "orphaned",
+        }
+    }
+
+    /// Read a stored value; `None` for anything the column's `CHECK` forbids.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "relabelled" => Some(Self::Relabelled),
+            "ambiguous" => Some(Self::Ambiguous),
+            "orphaned" => Some(Self::Orphaned),
+            _ => None,
+        }
+    }
+}
+
 /// A detection-review row read from the database.
 #[derive(Debug, Clone)]
 pub struct DetectionReview {
+    /// Row id, which names a detached verdict for [`dismiss_detached_review`].
+    pub id: i64,
     /// Detection date (YYYY-MM-DD).
     pub date: String,
     /// Detection time (HH:MM:SS).
     pub time: String,
-    /// Scientific name.
+    /// Scientific name the detection had when it was reviewed.
     pub sci_name: String,
+    /// The clip of the detection reviewed; `""` for a detection with no clip.
+    /// Meaningless when [`detached`](Self::detached) is `Ambiguous` or
+    /// `Orphaned`: those name no clip.
+    pub file_name: String,
     /// Common name.
     pub com_name: String,
     /// Verdict (`confirmed` / `rejected`).
@@ -83,6 +149,8 @@ pub struct DetectionReview {
     pub notes: Option<String>,
     /// When the verdict was last set (`datetime('now')`).
     pub reviewed_at: String,
+    /// `None` while the verdict is attached to its detection.
+    pub detached: Option<Detached>,
 }
 
 /// A recent detection still awaiting a review verdict.
@@ -102,83 +170,151 @@ pub struct UnreviewedDetection {
     pub file_name: Option<String>,
 }
 
+/// The columns [`map_review`] reads, in its order.
+const REVIEW_COLS: &str =
+    "id, date, time, sci_name, file_name, com_name, status, notes, reviewed_at, detached";
+
 // ---------------------------------------------------------------------------
 // Write operations
 // ---------------------------------------------------------------------------
 
-/// Record (or update) a verdict for the detection identified by
-/// `(date, time, sci_name)`. Idempotent: re-reviewing the same detection
-/// replaces the prior verdict via `ON CONFLICT`.
+/// Record (or update) a verdict for the one detection `key` names. Idempotent:
+/// re-reviewing the same detection replaces the prior verdict via `ON CONFLICT`.
+///
+/// Returns `false`, writing nothing, when no detection has that key: a verdict
+/// about nothing is not recorded, and a caller that holds a stale link is told
+/// so instead of being thanked.
 ///
 /// # Errors
 ///
 /// Returns [`DbError`] on write failure.
 pub fn set_detection_review(
     conn: &Connection,
-    date: &str,
-    time: &str,
-    sci_name: &str,
+    key: &DetectionKey<'_>,
     com_name: &str,
     status: ReviewStatus,
     notes: Option<&str>,
-) -> Result<(), DbError> {
+) -> Result<bool, DbError> {
     // One transaction: a verdict whose mirror failed would show as reviewed in
     // the queue while every analytic still counted the detection (DB8).
     let tx = conn.unchecked_transaction()?;
+    // Mirror onto the detection itself (migration 26). `detection_reviews`
+    // stays the record of who said what and when; this is the current verdict,
+    // in the one place every analytic can filter on cheaply and identically in
+    // both stores. Without it a verdict is recorded and applied to nothing.
+    // First, because it is also the existence check.
+    let mirrored = tx.execute(
+        &format!("UPDATE detections SET review_verdict = ?5 WHERE {KEY_WHERE}"),
+        params![
+            key.date,
+            key.time,
+            key.sci_name,
+            key.file_name,
+            status.as_str()
+        ],
+    )?;
+    if mirrored == 0 {
+        // Dropping the transaction rolls it back; nothing was written.
+        return Ok(false);
+    }
     tx.execute(
         "INSERT INTO detection_reviews
-            (date, time, sci_name, com_name, status, notes, reviewed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
-         ON CONFLICT(date, time, sci_name) DO UPDATE SET
+            (date, time, sci_name, file_name, com_name, status, notes, reviewed_at)
+         VALUES (?1, ?2, ?3, COALESCE(?4, ''), ?5, ?6, ?7, datetime('now'))
+         ON CONFLICT(date, time, sci_name, file_name) WHERE detached IS NULL DO UPDATE SET
             status = excluded.status,
             com_name = excluded.com_name,
             notes = excluded.notes,
             reviewed_at = datetime('now')",
-        params![date, time, sci_name, com_name, status.as_str(), notes],
-    )?;
-    // Mirror onto the detection itself (migration 26). `detection_reviews` stays
-    // the record of who said what and when; this is the current verdict, in the
-    // one place every analytic can filter on cheaply and identically in both
-    // stores. Without it a verdict is recorded and applied to nothing.
-    tx.execute(
-        "UPDATE detections SET review_verdict = ?4
-          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
-        params![date, time, sci_name, status.as_str()],
+        params![
+            key.date,
+            key.time,
+            key.sci_name,
+            key.file_name,
+            com_name,
+            status.as_str(),
+            notes
+        ],
     )?;
     tx.commit()?;
-    Ok(())
+    Ok(true)
 }
 
-/// Remove a verdict, returning the detection to the unreviewed queue.
+/// Remove the verdict on the one detection `key` names, returning it to the
+/// unreviewed queue.
+///
+/// Returns `true` if there was a verdict, or a mirrored one, to remove.
 ///
 /// # Errors
 ///
 /// Returns [`DbError`] on write failure.
-pub fn clear_detection_review(
-    conn: &Connection,
-    date: &str,
-    time: &str,
-    sci_name: &str,
-) -> Result<(), DbError> {
+pub fn clear_detection_review(conn: &Connection, key: &DetectionKey<'_>) -> Result<bool, DbError> {
     let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM detection_reviews WHERE date = ?1 AND time = ?2 AND sci_name = ?3",
-        params![date, time, sci_name],
+    let removed = tx.execute(
+        "DELETE FROM detection_reviews
+          WHERE date = ?1 AND time = ?2 AND sci_name = ?3
+            AND file_name = COALESCE(?4, '') AND detached IS NULL",
+        params![key.date, key.time, key.sci_name, key.file_name],
     )?;
     // Return the detection to "unreviewed" in the denormalised copy too, or the
     // exclusion would outlive the verdict that justified it.
-    tx.execute(
-        "UPDATE detections SET review_verdict = NULL
-          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
-        params![date, time, sci_name],
+    let cleared = tx.execute(
+        &format!("UPDATE detections SET review_verdict = NULL WHERE {KEY_WHERE}"),
+        params![key.date, key.time, key.sci_name, key.file_name],
     )?;
     tx.commit()?;
-    Ok(())
+    Ok(removed > 0 || cleared > 0)
+}
+
+/// Remove a verdict that is attached to no detection (see the module docs),
+/// by its row id. Never removes an attached one: that is
+/// [`clear_detection_review`], which also clears the detection's mirror.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on write failure.
+pub fn dismiss_detached_review(conn: &Connection, id: i64) -> Result<bool, DbError> {
+    let n = conn.execute(
+        "DELETE FROM detection_reviews WHERE id = ?1 AND detached IS NOT NULL",
+        params![id],
+    )?;
+    Ok(n > 0)
 }
 
 // ---------------------------------------------------------------------------
 // Read operations
 // ---------------------------------------------------------------------------
+
+/// The clips of the detections that share a date, time and species: `None`
+/// for a detection with no clip. One entry per distinct clip.
+///
+/// For a caller that names a detection by the triple alone (an API client
+/// written before reviews carried a clip): one entry says which detection it
+/// meant, none says there is none, and more than one says the triple does not
+/// name a detection and the caller must not be guessed for.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn detection_clips(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<Vec<Option<String>>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT COALESCE(File_Name, '') FROM detections
+          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3
+          ORDER BY 1",
+    )?;
+    let rows = stmt.query_map(params![date, time, sci_name], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        let clip = r?;
+        out.push((!clip.is_empty()).then_some(clip));
+    }
+    Ok(out)
+}
 
 /// Count detections carrying a `rejected` verdict.
 ///
@@ -199,22 +335,26 @@ pub fn rejected_detection_count(conn: &Connection) -> Result<u64, DbError> {
     Ok(u64::try_from(n).unwrap_or(0))
 }
 
-/// Fetch the verdict for a single detection, or `None` if unreviewed.
+/// Fetch the verdict on the one detection `key` names, or `None` if
+/// unreviewed. A detached verdict is not a detection's verdict and is not
+/// returned.
 ///
 /// # Errors
 ///
 /// Returns [`DbError`] on query failure.
 pub fn get_detection_review(
     conn: &Connection,
-    date: &str,
-    time: &str,
-    sci_name: &str,
+    key: &DetectionKey<'_>,
 ) -> Result<Option<DetectionReview>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT date, time, sci_name, com_name, status, notes, reviewed_at
-         FROM detection_reviews WHERE date = ?1 AND time = ?2 AND sci_name = ?3",
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {REVIEW_COLS} FROM detection_reviews
+          WHERE date = ?1 AND time = ?2 AND sci_name = ?3
+            AND file_name = COALESCE(?4, '') AND detached IS NULL"
+    ))?;
+    let mut rows = stmt.query_map(
+        params![key.date, key.time, key.sci_name, key.file_name],
+        map_review,
     )?;
-    let mut rows = stmt.query_map(params![date, time, sci_name], map_review)?;
     match rows.next() {
         Some(r) => Ok(Some(r?)),
         None => Ok(None),
@@ -230,12 +370,12 @@ pub fn recent_detection_reviews(
     conn: &Connection,
     limit: u32,
 ) -> Result<Vec<DetectionReview>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT date, time, sci_name, com_name, status, notes, reviewed_at
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {REVIEW_COLS}
          FROM detection_reviews
          ORDER BY reviewed_at DESC, id DESC
-         LIMIT ?1",
-    )?;
+         LIMIT ?1"
+    ))?;
     let rows = stmt.query_map(params![limit], map_review)?;
     let mut out = Vec::new();
     for r in rows {
@@ -245,6 +385,8 @@ pub fn recent_detection_reviews(
 }
 
 /// A page of recorded verdicts, newest first, optionally narrowed to one status.
+/// Detached verdicts are in the list, marked as such, so they can be found and
+/// dismissed.
 ///
 /// # Why this exists beside [`recent_detection_reviews`]
 ///
@@ -271,19 +413,19 @@ pub fn detection_reviews_page(
     // the latter is a filter SQLite cannot use the status index for, and this
     // list is read on a page an operator pages through.
     let mut stmt = match status {
-        Some(_) => conn.prepare(
-            "SELECT date, time, sci_name, com_name, status, notes, reviewed_at
+        Some(_) => conn.prepare(&format!(
+            "SELECT {REVIEW_COLS}
                FROM detection_reviews
               WHERE status = ?3
               ORDER BY reviewed_at DESC, id DESC
-              LIMIT ?1 OFFSET ?2",
-        )?,
-        None => conn.prepare(
-            "SELECT date, time, sci_name, com_name, status, notes, reviewed_at
+              LIMIT ?1 OFFSET ?2"
+        ))?,
+        None => conn.prepare(&format!(
+            "SELECT {REVIEW_COLS}
                FROM detection_reviews
               ORDER BY reviewed_at DESC, id DESC
-              LIMIT ?1 OFFSET ?2",
-        )?,
+              LIMIT ?1 OFFSET ?2"
+        ))?,
     };
     let mut out = Vec::new();
     match status {
@@ -301,7 +443,8 @@ pub fn detection_reviews_page(
     Ok(out)
 }
 
-/// How many verdicts are recorded, optionally narrowed to one status.
+/// How many verdicts are recorded, optionally narrowed to one status. Counts
+/// the detached ones too, because [`detection_reviews_page`] lists them.
 ///
 /// Paired with [`detection_reviews_page`] so the page can say whether there is
 /// more to show. A list that silently ends is the failure this replaces.
@@ -330,23 +473,38 @@ pub fn detection_review_total(
     Ok(n)
 }
 
-/// Count verdicts as `(confirmed, rejected)`.
+/// Count verdicts that are attached to a detection, as `(confirmed, rejected)`.
+/// A detached verdict (see [`detached_review_count`]) is not a verdict on any
+/// detection and is in neither.
 ///
 /// # Errors
 ///
 /// Returns [`DbError`] on query failure.
 pub fn detection_review_counts(conn: &Connection) -> Result<(i64, i64), DbError> {
     let confirmed = conn.query_row(
-        "SELECT COUNT(*) FROM detection_reviews WHERE status = 'confirmed'",
+        "SELECT COUNT(*) FROM detection_reviews WHERE status = 'confirmed' AND detached IS NULL",
         [],
         |row| row.get(0),
     )?;
     let rejected = conn.query_row(
-        "SELECT COUNT(*) FROM detection_reviews WHERE status = 'rejected'",
+        "SELECT COUNT(*) FROM detection_reviews WHERE status = 'rejected' AND detached IS NULL",
         [],
         |row| row.get(0),
     )?;
     Ok((confirmed, rejected))
+}
+
+/// How many recorded verdicts are attached to no detection.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn detached_review_count(conn: &Connection) -> Result<i64, DbError> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM detection_reviews WHERE detached IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 /// List recent detections that have no verdict yet — the triage queue.
@@ -363,6 +521,7 @@ pub fn unreviewed_recent_detections(
          FROM detections d
          LEFT JOIN detection_reviews r
             ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+           AND r.file_name = COALESCE(d.File_Name, '') AND r.detached IS NULL
          WHERE r.id IS NULL
          ORDER BY d.Date DESC, d.Time DESC
          LIMIT ?1",
@@ -385,14 +544,18 @@ pub fn unreviewed_recent_detections(
 }
 
 fn map_review(row: &rusqlite::Row<'_>) -> rusqlite::Result<DetectionReview> {
+    let detached: Option<String> = row.get(9)?;
     Ok(DetectionReview {
-        date: row.get(0)?,
-        time: row.get(1)?,
-        sci_name: row.get(2)?,
-        com_name: row.get(3)?,
-        status: row.get(4)?,
-        notes: row.get(5)?,
-        reviewed_at: row.get(6)?,
+        id: row.get(0)?,
+        date: row.get(1)?,
+        time: row.get(2)?,
+        sci_name: row.get(3)?,
+        file_name: row.get(4)?,
+        com_name: row.get(5)?,
+        status: row.get(6)?,
+        notes: row.get(7)?,
+        reviewed_at: row.get(8)?,
+        detached: detached.as_deref().and_then(Detached::parse),
     })
 }
 
@@ -416,6 +579,41 @@ mod tests {
         .unwrap();
     }
 
+    /// A detection that points at `clip`, as one microphone's would.
+    fn seed_clip(conn: &Connection, date: &str, time: &str, sci: &str, com: &str, clip: &str) {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES (?1, ?2, ?3, ?4, 0.8, ?5)",
+            params![date, time, sci, com, clip],
+        )
+        .unwrap();
+    }
+
+    /// The key of a detection with no clip.
+    const fn key<'a>(date: &'a str, time: &'a str, sci: &'a str) -> DetectionKey<'a> {
+        DetectionKey {
+            date,
+            time,
+            sci_name: sci,
+            file_name: None,
+        }
+    }
+
+    /// The key of the detection that points at `clip`.
+    const fn key_for<'a>(
+        date: &'a str,
+        time: &'a str,
+        sci: &'a str,
+        clip: &'a str,
+    ) -> DetectionKey<'a> {
+        DetectionKey {
+            date,
+            time,
+            sci_name: sci,
+            file_name: Some(clip),
+        }
+    }
+
     /// DB8: the verdict and its mirror on the detection are one change.
     ///
     /// They were two statements with no transaction: if the `detections`
@@ -433,6 +631,7 @@ mod tests {
             "Turdus merula",
             "Blackbird",
         );
+        let k = key("2026-05-01", "06:00:00", "Turdus merula");
         conn.execute_batch(
             "CREATE TRIGGER fail_mirror BEFORE UPDATE OF review_verdict ON detections
              BEGIN SELECT RAISE(ABORT, 'mirror failed'); END;",
@@ -443,15 +642,7 @@ mod tests {
                 .unwrap()
         };
 
-        let set = set_detection_review(
-            &conn,
-            "2026-05-01",
-            "06:00:00",
-            "Turdus merula",
-            "Blackbird",
-            ReviewStatus::Rejected,
-            None,
-        );
+        let set = set_detection_review(&conn, &k, "Blackbird", ReviewStatus::Rejected, None);
         assert!(
             set.is_err(),
             "precondition: the trigger made the mirror fail"
@@ -460,23 +651,15 @@ mod tests {
 
         // Clearing: the delete must not stand when the mirror is refused.
         conn.execute_batch("DROP TRIGGER fail_mirror").unwrap();
-        set_detection_review(
-            &conn,
-            "2026-05-01",
-            "06:00:00",
-            "Turdus merula",
-            "Blackbird",
-            ReviewStatus::Rejected,
-            None,
-        )
-        .expect("counterpart: without the trigger the verdict is written");
+        set_detection_review(&conn, &k, "Blackbird", ReviewStatus::Rejected, None)
+            .expect("counterpart: without the trigger the verdict is written");
         assert_eq!(reviews(&conn), 1);
         conn.execute_batch(
             "CREATE TRIGGER fail_mirror BEFORE UPDATE OF review_verdict ON detections
              BEGIN SELECT RAISE(ABORT, 'mirror failed'); END;",
         )
         .unwrap();
-        assert!(clear_detection_review(&conn, "2026-05-01", "06:00:00", "Turdus merula").is_err());
+        assert!(clear_detection_review(&conn, &k).is_err());
         assert_eq!(
             reviews(&conn),
             1,
@@ -486,6 +669,218 @@ mod tests {
             .query_row("SELECT review_verdict FROM detections", [], |r| r.get(0))
             .unwrap();
         assert_eq!(verdict.as_deref(), Some("rejected"));
+    }
+
+    /// A review is a verdict on one detection. Two microphones that heard one
+    /// bird in the same second have two, which share date, time and species.
+    #[test]
+    fn a_verdict_names_one_detection_by_its_clip() {
+        let conn = db();
+        seed_clip(
+            &conn,
+            "2026-09-08",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            "a.wav",
+        );
+        seed_clip(
+            &conn,
+            "2026-09-08",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            "b.wav",
+        );
+        let a = key_for("2026-09-08", "06:00:00", "Turdus merula", "a.wav");
+        let b = key_for("2026-09-08", "06:00:00", "Turdus merula", "b.wav");
+
+        assert!(
+            set_detection_review(&conn, &a, "Blackbird", ReviewStatus::Rejected, None).unwrap()
+        );
+
+        assert_eq!(
+            get_detection_review(&conn, &a).unwrap().map(|r| r.status),
+            Some("rejected".to_owned())
+        );
+        assert!(
+            get_detection_review(&conn, &b).unwrap().is_none(),
+            "the other microphone's detection was never reviewed"
+        );
+        let mirrored: Vec<(String, Option<String>)> = conn
+            .prepare("SELECT File_Name, review_verdict FROM detections ORDER BY File_Name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            mirrored,
+            [
+                ("a.wav".to_owned(), Some("rejected".to_owned())),
+                ("b.wav".to_owned(), None)
+            ]
+        );
+        let pending = unreviewed_recent_detections(&conn, 10).unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|d| d.file_name.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("b.wav")],
+            "only the detection nobody reviewed is in the queue"
+        );
+
+        // Reviewing the second does not disturb the first; clearing one leaves the other.
+        set_detection_review(&conn, &b, "Blackbird", ReviewStatus::Confirmed, None).unwrap();
+        assert!(clear_detection_review(&conn, &a).unwrap());
+        assert!(get_detection_review(&conn, &a).unwrap().is_none());
+        assert_eq!(
+            get_detection_review(&conn, &b).unwrap().map(|r| r.status),
+            Some("confirmed".to_owned())
+        );
+        assert_eq!(detection_review_counts(&conn).unwrap(), (1, 0));
+    }
+
+    /// A verdict about nothing is not recorded: a stale link must be told so.
+    #[test]
+    fn a_verdict_about_a_detection_that_is_not_there_is_not_recorded() {
+        let conn = db();
+        seed_clip(
+            &conn,
+            "2026-09-08",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            "a.wav",
+        );
+        let missing = key_for("2026-09-08", "06:00:00", "Turdus merula", "other.wav");
+
+        assert!(
+            !set_detection_review(&conn, &missing, "Blackbird", ReviewStatus::Rejected, None)
+                .unwrap()
+        );
+
+        assert_eq!(detection_review_total(&conn, None).unwrap(), 0);
+        let verdict: Option<String> = conn
+            .query_row("SELECT review_verdict FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            verdict, None,
+            "and the detection that is there is untouched"
+        );
+    }
+
+    /// A detection with no clip is a detection: `None` and `Some("")` name it
+    /// the way the unique index does.
+    #[test]
+    fn a_detection_with_no_clip_can_be_reviewed() {
+        let conn = db();
+        seed_detection(&conn, "2026-09-08", "06:00:00", "Pica pica", "Magpie");
+
+        assert!(
+            set_detection_review(
+                &conn,
+                &key("2026-09-08", "06:00:00", "Pica pica"),
+                "Magpie",
+                ReviewStatus::Confirmed,
+                None
+            )
+            .unwrap()
+        );
+        let said_empty = key_for("2026-09-08", "06:00:00", "Pica pica", "");
+        assert!(get_detection_review(&conn, &said_empty).unwrap().is_some());
+    }
+
+    /// `detection_clips` is what lets a caller that names only the triple be
+    /// refused instead of guessed for.
+    #[test]
+    fn the_triple_says_how_many_detections_it_names() {
+        let conn = db();
+        assert!(
+            detection_clips(&conn, "2026-09-08", "06:00:00", "Pica pica")
+                .unwrap()
+                .is_empty()
+        );
+        seed_clip(
+            &conn,
+            "2026-09-08",
+            "06:00:00",
+            "Pica pica",
+            "Magpie",
+            "a.wav",
+        );
+        assert_eq!(
+            detection_clips(&conn, "2026-09-08", "06:00:00", "Pica pica").unwrap(),
+            [Some("a.wav".to_owned())]
+        );
+        seed_detection(&conn, "2026-09-08", "06:00:00", "Pica pica", "Magpie");
+        assert_eq!(
+            detection_clips(&conn, "2026-09-08", "06:00:00", "Pica pica").unwrap(),
+            [None, Some("a.wav".to_owned())],
+            "a detection with no clip is one of the two, reported as None"
+        );
+    }
+
+    /// A detached verdict is history: listed, in no count, and the only kind
+    /// [`dismiss_detached_review`] will remove.
+    #[test]
+    fn a_detached_verdict_is_listed_counted_apart_and_dismissable() {
+        let conn = db();
+        seed_clip(
+            &conn,
+            "2026-09-08",
+            "06:00:00",
+            "Pica pica",
+            "Magpie",
+            "a.wav",
+        );
+        let k = key_for("2026-09-08", "06:00:00", "Pica pica", "a.wav");
+        set_detection_review(&conn, &k, "Magpie", ReviewStatus::Rejected, None).unwrap();
+        let attached_id: i64 = conn
+            .query_row("SELECT id FROM detection_reviews", [], |r| r.get(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status, detached)
+             VALUES ('2026-09-09', '07:00:00', 'Pica pica', 'Magpie', 'rejected', 'ambiguous')",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            detection_review_counts(&conn).unwrap(),
+            (0, 1),
+            "attached only"
+        );
+        assert_eq!(detached_review_count(&conn).unwrap(), 1);
+        assert_eq!(
+            detection_review_total(&conn, None).unwrap(),
+            2,
+            "the list shows both"
+        );
+        let page = detection_reviews_page(&conn, None, 10, 0).unwrap();
+        assert!(page.iter().any(|r| r.detached == Some(Detached::Ambiguous)));
+        assert!(
+            get_detection_review(&conn, &key("2026-09-09", "07:00:00", "Pica pica"))
+                .unwrap()
+                .is_none(),
+            "a detached verdict is no detection's verdict"
+        );
+
+        assert!(
+            !dismiss_detached_review(&conn, attached_id).unwrap(),
+            "never an attached one"
+        );
+        let detached_id: i64 = conn
+            .query_row(
+                "SELECT id FROM detection_reviews WHERE detached IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(dismiss_detached_review(&conn, detached_id).unwrap());
+        assert_eq!(detached_review_count(&conn).unwrap(), 0);
+        assert_eq!(detection_review_counts(&conn).unwrap(), (0, 1));
     }
 
     /// Every recorded verdict must be reachable, not just the newest page.
@@ -504,11 +899,10 @@ mod tests {
             } else {
                 ReviewStatus::Confirmed
             };
+            seed_detection(&conn, "2026-01-01", &time, "Turdus merula", "Blackbird");
             set_detection_review(
                 &conn,
-                "2026-01-01",
-                &time,
-                "Turdus merula",
+                &key("2026-01-01", &time, "Turdus merula"),
                 "Blackbird",
                 status,
                 None,
@@ -551,11 +945,10 @@ mod tests {
             } else {
                 ReviewStatus::Confirmed
             };
+            seed_detection(&conn, "2026-01-01", &time, "Turdus merula", "Blackbird");
             set_detection_review(
                 &conn,
-                "2026-01-01",
-                &time,
-                "Turdus merula",
+                &key("2026-01-01", &time, "Turdus merula"),
                 "Blackbird",
                 status,
                 None,
@@ -595,38 +988,34 @@ mod tests {
     #[test]
     fn set_get_and_upsert_verdict() {
         let conn = db();
-        set_detection_review(
+        seed_detection(
             &conn,
             "2026-05-20",
             "06:14:08",
             "Pica pica",
+            "Eurasian Magpie",
+        );
+        let k = key("2026-05-20", "06:14:08", "Pica pica");
+        set_detection_review(
+            &conn,
+            &k,
             "Eurasian Magpie",
             ReviewStatus::Confirmed,
             Some("clear call"),
         )
         .unwrap();
-        let r = get_detection_review(&conn, "2026-05-20", "06:14:08", "Pica pica")
+        let r = get_detection_review(&conn, &k)
             .unwrap()
             .expect("verdict present");
         assert_eq!(r.status, "confirmed");
         assert_eq!(r.notes.as_deref(), Some("clear call"));
+        assert_eq!(r.detached, None);
 
         // Re-review updates in place rather than inserting a second row.
-        set_detection_review(
-            &conn,
-            "2026-05-20",
-            "06:14:08",
-            "Pica pica",
-            "Eurasian Magpie",
-            ReviewStatus::Rejected,
-            None,
-        )
-        .unwrap();
+        set_detection_review(&conn, &k, "Eurasian Magpie", ReviewStatus::Rejected, None).unwrap();
         let (confirmed, rejected) = detection_review_counts(&conn).unwrap();
         assert_eq!((confirmed, rejected), (0, 1));
-        let r = get_detection_review(&conn, "2026-05-20", "06:14:08", "Pica pica")
-            .unwrap()
-            .unwrap();
+        let r = get_detection_review(&conn, &k).unwrap().unwrap();
         assert_eq!(r.status, "rejected");
     }
 
@@ -650,11 +1039,10 @@ mod tests {
 
         assert_eq!(unreviewed_recent_detections(&conn, 10).unwrap().len(), 2);
 
+        let magpie = key("2026-05-20", "06:00:00", "Pica pica");
         set_detection_review(
             &conn,
-            "2026-05-20",
-            "06:00:00",
-            "Pica pica",
+            &magpie,
             "Eurasian Magpie",
             ReviewStatus::Confirmed,
             None,
@@ -664,7 +1052,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].sci_name, "Turdus merula");
 
-        clear_detection_review(&conn, "2026-05-20", "06:00:00", "Pica pica").unwrap();
+        clear_detection_review(&conn, &magpie).unwrap();
         assert_eq!(unreviewed_recent_detections(&conn, 10).unwrap().len(), 2);
     }
 
@@ -679,5 +1067,17 @@ mod tests {
             Some(ReviewStatus::Rejected)
         );
         assert_eq!(ReviewStatus::parse("garbage"), None);
+    }
+
+    #[test]
+    fn a_detached_reason_round_trips_and_an_unknown_one_is_refused() {
+        for d in [
+            Detached::Relabelled,
+            Detached::Ambiguous,
+            Detached::Orphaned,
+        ] {
+            assert_eq!(Detached::parse(d.as_str()), Some(d));
+        }
+        assert_eq!(Detached::parse("garbage"), None);
     }
 }

@@ -32,12 +32,14 @@ pub use read::{
     analytic_species_count_for_date, best_detections_for_date, com_name_for,
     concurrent_detections_from_other_sources, detected_at_utc_for, detection_at, detection_count,
     detection_count_for_date, detection_count_for_species_date, detection_dates,
-    detections_by_date, detections_by_species, detections_for_clip, detections_per_day,
-    recent_clips, recent_clips_count, recent_detections, seconds_since_last_detection,
-    species_detection_count_between, species_for_date, species_heard_on, todays_detection_count,
-    todays_detections, todays_source_activity, unstamped_detection_count,
+    detection_with_clip, detections_by_date, detections_by_species, detections_for_clip,
+    detections_per_day, recent_clips, recent_clips_count, recent_detections,
+    seconds_since_last_detection, species_detection_count_between, species_for_date,
+    species_heard_on, todays_detection_count, todays_detections, todays_source_activity,
+    unstamped_detection_count,
 };
 pub use search::{SearchTerm, like_contains, parse_search_term};
+pub(crate) use write::KEY_WHERE;
 pub use write::{
     DetectionKey, delete_detection, delete_detection_at, insert_detection, relabel_detection,
     relabel_detection_at, set_birdweather_soundscape,

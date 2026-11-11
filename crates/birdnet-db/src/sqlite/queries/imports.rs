@@ -154,10 +154,11 @@ pub fn imported_detection_count(conn: &Connection) -> Result<i64, DbError> {
 /// row stays too — they reference it, and they are still attributable to it.
 ///
 /// Verdicts in `detection_reviews` on the removed rows go with them. They key
-/// on `(date, time, sci_name)`, so a verdict left behind judged nothing and
-/// still listed on the review page, and a re-import would not bring it back
-/// into force: `review_verdict` is written by the review, not by the import.
-/// A verdict whose triple still names a detection that stays is kept.
+/// on the detection (date, time, species and clip), so a verdict left behind
+/// judged nothing and still listed on the review page, and a re-import would not
+/// bring it back into force: `review_verdict` is written by the review, not by
+/// the import. A verdict whose detection stays is kept, and so is a detached one
+/// (it names no detection; the review page lets it be dismissed).
 /// `detection_comments` are append-only records of what someone said, whose
 /// deletion is audited one by one; they are left for the operator to remove.
 ///
@@ -175,12 +176,13 @@ pub fn remove_import_batch(conn: &Connection, batch_id: i64) -> Result<ImportRem
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS import_removal_keys (
-            date TEXT NOT NULL, time TEXT NOT NULL, sci_name TEXT NOT NULL);
+            date TEXT NOT NULL, time TEXT NOT NULL, sci_name TEXT NOT NULL,
+            file_name TEXT NOT NULL);
          DELETE FROM import_removal_keys;",
     )?;
     tx.execute(
         "INSERT INTO import_removal_keys
-         SELECT DISTINCT Date, Time, Sci_Name FROM detections
+         SELECT DISTINCT Date, Time, Sci_Name, COALESCE(File_Name, '') FROM detections
           WHERE import_batch_id = ?1 AND COALESCE(is_locked, 0) = 0",
         params![batch_id],
     )?;
@@ -190,14 +192,17 @@ pub fn remove_import_batch(conn: &Connection, batch_id: i64) -> Result<ImportRem
     )?;
     tx.execute(
         "DELETE FROM detection_reviews
-          WHERE EXISTS (SELECT 1 FROM import_removal_keys k
+          WHERE detached IS NULL
+            AND EXISTS (SELECT 1 FROM import_removal_keys k
                          WHERE k.date = detection_reviews.date
                            AND k.time = detection_reviews.time
-                           AND k.sci_name = detection_reviews.sci_name)
+                           AND k.sci_name = detection_reviews.sci_name
+                           AND k.file_name = detection_reviews.file_name)
             AND NOT EXISTS (SELECT 1 FROM detections d
                              WHERE d.Date = detection_reviews.date
                                AND d.Time = detection_reviews.time
-                               AND d.Sci_Name = detection_reviews.sci_name)",
+                               AND d.Sci_Name = detection_reviews.sci_name
+                               AND COALESCE(d.File_Name, '') = detection_reviews.file_name)",
         [],
     )?;
     tx.execute_batch("DROP TABLE import_removal_keys;")?;

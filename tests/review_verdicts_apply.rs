@@ -28,8 +28,20 @@
 
 #![cfg(feature = "analytics")]
 
-use birdnet_db::sqlite::ReviewStatus;
-use birdnet_web::state::AppState;
+use birdnet_db::sqlite::{DetectionKey, ReviewStatus};
+use birdnet_web::state::{AppState, ReviewOutcome, RowRef};
+
+/// The detection at `date`, `time` for `sci`, named by date, time and species
+/// alone: each station here has one detection of a species per second, so that
+/// names one, and the paired write resolves its clip.
+fn row(date: &str, time: &str, sci: &str) -> RowRef {
+    RowRef {
+        date: date.to_owned(),
+        time: time.to_owned(),
+        sci_name: sci.to_owned(),
+        file_name: None,
+    }
+}
 
 /// A station with three detections of three species on one day, synced.
 fn station(dir: &std::path::Path) -> (AppState, String) {
@@ -82,16 +94,17 @@ fn station(dir: &std::path::Path) -> (AppState, String) {
 /// assertions and be blind to the half that matters for the behavioural
 /// dashboards.
 fn reject(state: &AppState, date: &str, time: &str, sci: &str, com: &str) {
-    state
+    let outcome = state
         .set_detection_review(
-            date,
-            time,
-            sci,
+            &row(date, time, sci),
             com,
             ReviewStatus::Rejected,
             Some("misidentified — traffic noise"),
         )
         .expect("record verdict");
+    // A verdict about a detection that is not there is refused, not recorded:
+    // a fixture that named the wrong row would otherwise pass on nothing.
+    assert_eq!(outcome, ReviewOutcome::Done, "{date} {time} {sci}");
 }
 
 /// Rows the SQLite aggregate surfaces see.
@@ -216,16 +229,15 @@ fn unreviewed_and_confirmed_detections_stay_in_the_aggregates() {
     let dir = tempfile::tempdir().unwrap();
     let (state, today) = station(dir.path());
 
-    state
+    let outcome = state
         .set_detection_review(
-            &today,
-            "06:15:00",
-            "Turdus merula",
+            &row(&today, "06:15:00", "Turdus merula"),
             "Eurasian Blackbird",
             ReviewStatus::Confirmed,
             None,
         )
         .expect("confirm");
+    assert_eq!(outcome, ReviewOutcome::Done);
 
     assert_eq!(
         analytic_rows(&state),
@@ -252,9 +264,10 @@ fn clearing_a_verdict_returns_the_detection_to_the_aggregates() {
     );
     assert_eq!(analytic_rows(&state), 2, "rejected");
 
-    state
-        .clear_detection_review(&today, "07:15:00", "Erithacus rubecula")
+    let outcome = state
+        .clear_detection_review(&row(&today, "07:15:00", "Erithacus rubecula"))
         .expect("clear verdict");
+    assert_eq!(outcome, ReviewOutcome::Done);
 
     assert_eq!(
         analytic_rows(&state),
@@ -709,16 +722,32 @@ async fn an_old_rejection_is_still_reachable_through_the_review_page() {
     state.with_db(|conn| {
         for i in 0..40 {
             let time = format!("1{i:01}:{:02}:00", i % 60);
-            birdnet_db::sqlite::set_detection_review(
-                conn,
-                &today,
-                &time,
-                "Parus major",
-                "Great Tit",
-                ReviewStatus::Confirmed,
-                None,
+            let clip = format!("{today}-birdnet-{time}.wav");
+            // The detection each verdict is about: one that is not there is
+            // refused, and the paging below needs the verdicts recorded.
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES (?1, ?2, 'Parus major', 'Great Tit', 0.92, ?3)",
+                rusqlite::params![&today, &time, &clip],
             )
-            .expect("confirm");
+            .expect("detection");
+            let key = DetectionKey {
+                date: &today,
+                time: &time,
+                sci_name: "Parus major",
+                file_name: Some(&clip),
+            };
+            assert!(
+                birdnet_db::sqlite::set_detection_review(
+                    conn,
+                    &key,
+                    "Great Tit",
+                    ReviewStatus::Confirmed,
+                    None,
+                )
+                .expect("confirm"),
+                "{time} was recorded"
+            );
         }
     });
 
@@ -773,16 +802,32 @@ async fn the_verdict_pager_only_offers_pages_that_exist() {
     state.with_db(|conn| {
         for i in 0..30 {
             let time = format!("1{i:01}:{:02}:00", i % 60);
-            birdnet_db::sqlite::set_detection_review(
-                conn,
-                &today,
-                &time,
-                "Parus major",
-                "Great Tit",
-                ReviewStatus::Confirmed,
-                None,
+            let clip = format!("{today}-birdnet-{time}.wav");
+            // The detection each verdict is about: one that is not there is
+            // refused, and the paging below needs the verdicts recorded.
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES (?1, ?2, 'Parus major', 'Great Tit', 0.92, ?3)",
+                rusqlite::params![&today, &time, &clip],
             )
-            .expect("confirm");
+            .expect("detection");
+            let key = DetectionKey {
+                date: &today,
+                time: &time,
+                sci_name: "Parus major",
+                file_name: Some(&clip),
+            };
+            assert!(
+                birdnet_db::sqlite::set_detection_review(
+                    conn,
+                    &key,
+                    "Great Tit",
+                    ReviewStatus::Confirmed,
+                    None,
+                )
+                .expect("confirm"),
+                "{time} was recorded"
+            );
         }
     });
     let (_, many) = get(&state, "/pages/detection-reviews-queue").await;

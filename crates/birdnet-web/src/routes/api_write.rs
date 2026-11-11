@@ -392,6 +392,11 @@ struct ReviewBody {
     date: String,
     time: String,
     sci_name: String,
+    /// The detection's clip, as on the lock and delete endpoints: absent when
+    /// the caller does not say (accepted only if the date, time and name leave
+    /// one detection), `""` for a detection with no clip.
+    #[serde(default)]
+    file_name: Option<String>,
     /// Shown in the review UI; the schema stores it alongside the verdict.
     com_name: Option<String>,
     /// `confirmed`, `rejected`, or absent to clear an existing verdict.
@@ -455,6 +460,21 @@ fn not_found() -> (StatusCode, Json<Value>) {
     )
 }
 
+/// The date, time and scientific name name more than one detection, and the
+/// caller did not say which by its `file_name`. Nothing was written: a verdict
+/// is never attached by guessing between two sources that heard one bird in
+/// one second.
+fn ambiguous(detections: usize) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "more than one detection matches that date, time and scientific name; \
+                      name the one you mean with file_name",
+            "detections": detections,
+        })),
+    )
+}
+
 fn server_error(e: &birdnet_db::sqlite::DbError) -> (StatusCode, Json<Value>) {
     tracing::warn!(error = %e, "mutating API request failed");
     (
@@ -493,9 +513,15 @@ async fn review(
                 return e;
             }
             let target = target_of(&body.date, &body.time, &body.sci_name);
+            let row = crate::state::RowRef {
+                date: body.date.clone(),
+                time: body.time.clone(),
+                sci_name: body.sci_name.clone(),
+                file_name: body.file_name.clone(),
+            };
 
             let outcome = match body.status.as_deref() {
-                None => state.clear_detection_review(&body.date, &body.time, &body.sci_name),
+                None => state.clear_detection_review(&row),
                 Some(s) => {
                     let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
                         return bad_request(
@@ -503,9 +529,7 @@ async fn review(
                         );
                     };
                     state.set_detection_review(
-                        &body.date,
-                        &body.time,
-                        &body.sci_name,
+                        &row,
                         body.com_name.as_deref().unwrap_or(&body.sci_name),
                         status,
                         body.notes.as_deref(),
@@ -514,7 +538,9 @@ async fn review(
             };
 
             match outcome {
-                Ok(()) => {
+                Ok(crate::state::ReviewOutcome::NoSuchDetection) => not_found(),
+                Ok(crate::state::ReviewOutcome::Ambiguous { detections }) => ambiguous(detections),
+                Ok(crate::state::ReviewOutcome::Done) => {
                     crate::audit::audit(
                         state,
                         None,
@@ -649,6 +675,22 @@ struct BatchKey {
     /// Read only when `op` is `review`; defaults to `sci_name`, as the
     /// single-detection endpoint does.
     com_name: Option<String>,
+}
+
+/// Whether a review outcome applied, remembering how many detections made it
+/// ambiguous so the item can say so.
+const fn review_applied(
+    outcome: crate::state::ReviewOutcome,
+    ambiguous_with: &mut Option<usize>,
+) -> bool {
+    match outcome {
+        crate::state::ReviewOutcome::Done => true,
+        crate::state::ReviewOutcome::NoSuchDetection => false,
+        crate::state::ReviewOutcome::Ambiguous { detections } => {
+            *ambiguous_with = Some(detections);
+            false
+        }
+    }
 }
 
 fn batch_row(key: &BatchKey) -> crate::state::RowRef {
@@ -796,21 +838,22 @@ async fn batch(
                     continue;
                 }
 
+                // Set when a review could not be applied because the date, time and
+                // name leave more than one detection and the item gave no clip.
+                let mut ambiguous_with = None;
                 let outcome: Result<bool, birdnet_db::sqlite::DbError> = match op {
                     BatchOp::Review => match verdict {
                         Some(status) => state
                             .set_detection_review(
-                                &key.date,
-                                &key.time,
-                                &key.sci_name,
+                                &batch_row(key),
                                 key.com_name.as_deref().unwrap_or(&key.sci_name),
                                 status,
                                 body.notes.as_deref(),
                             )
-                            .map(|()| true),
+                            .map(|o| review_applied(o, &mut ambiguous_with)),
                         None => state
-                            .clear_detection_review(&key.date, &key.time, &key.sci_name)
-                            .map(|()| true),
+                            .clear_detection_review(&batch_row(key))
+                            .map(|o| review_applied(o, &mut ambiguous_with)),
                     },
                     BatchOp::Lock => state.set_detection_lock(&batch_row(key), true),
                     BatchOp::Unlock => state.set_detection_lock(&batch_row(key), false),
@@ -848,7 +891,13 @@ async fn batch(
                         results.push(json!({
                             "detection": target,
                             "applied": false,
-                            "error": "no detection matches that date, time and scientific name",
+                            "error": ambiguous_with.map_or_else(
+                                || "no detection matches that date, time and scientific name".to_owned(),
+                                |n| format!(
+                                    "{n} detections match that date, time and scientific name; \
+                                     name the one you mean with file_name"
+                                ),
+                            ),
                         }));
                     }
                     Err(e) => {

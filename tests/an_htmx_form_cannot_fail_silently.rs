@@ -1072,6 +1072,13 @@ const FORMS: &[Form] = &[
         Typed::None,
     ),
     f(
+        "pages/detection_reviews.rs::detection_review_dismiss",
+        "POST",
+        "/pages/detection-review-dismiss",
+        &["id"],
+        Typed::Required("id"),
+    ),
+    f(
         "pages/recordings.rs::lock_clip",
         "POST",
         "/pages/recordings-lock",

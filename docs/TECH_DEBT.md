@@ -150,3 +150,22 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   not look" would list the clock as unchecked on every such station for ever, so the fix needs a
   decision first: whether a probe that can never answer is "unchecked" or simply "not
   applicable here", and how the API says which.
+
+## TD-9 A detection's comments are addressed by date, time and species
+
+* **Where:** `crates/birdnet-db/src/detection_comments.rs` (`list` selects `WHERE date = ?1 AND time
+  = ?2 AND sci_name = ?3`, line 201; `detection_comments` has no clip column, migration 38) and
+  `crates/birdnet-web/src/routes/pages/detection_comments.rs` (`thread_placeholder(date, time,
+  sci_name)`).
+* **What it does:** the thread on a detection's page is the thread of every detection that shares
+  its date, time and species. Two microphones that heard one bird in the same second have two
+  detections, and a comment on the one is shown under the other. A relabel leaves a thread under
+  the old name. This is the shape reviews had until migration 59, with a smaller consequence: a
+  comment withdraws nothing from any count.
+* **Evidence:** read at the two places above; not reproduced with a test.
+* **Why it is open:** the reviews change (migration 59) was already a table rebuild, a data
+  decision about legacy rows and a change to every form that posts a verdict; comments are
+  append-only records whose deletion is audited one by one, so re-keying them wants its own
+  decision about what a comment on an ambiguous legacy triple becomes. The same key
+  (`DetectionKey`: date, time, species, clip) is the one to use.
+

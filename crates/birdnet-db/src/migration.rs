@@ -2483,6 +2483,125 @@ pub const MIGRATIONS: &[Migration] = &[
                AND File_Name = COALESCE(OLD.File_Name, '');
         END;",
     },
+    Migration {
+        version: 59,
+        description: "A review names one detection, by its clip; reviews that name more than one are kept as legacy",
+        // ## Why
+        //
+        // `detection_reviews` was unique on `(date, time, sci_name)` and every
+        // write addressed `detections` by the same triple. `detections` is unique on
+        // `(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs)`:
+        // two microphones that hear one bird in the same second write two
+        // detections that differ only in their clip. A verdict on the one the
+        // reviewer listened to was therefore written to both, and a rejection
+        // withdrew from every count a detection nobody had listened to. (Migration 58
+        // found the same shape in the classifier answers, and its comment says reviews
+        // were addressed by `DetectionKey`; they were not, until this migration.)
+        //
+        // A detection's identity is `DetectionKey`: date, time, species and clip.
+        // There is no id column to use instead, and one cannot be added here:
+        // `detections` has years of rows, an implicit rowid that `VACUUM`
+        // is free to renumber, and views, triggers and a DuckDB copy that name its
+        // columns. The key the delete, lock, relabel and classifier-answer
+        // paths already use is the one reviews take.
+        //
+        // ## What a legacy review becomes
+        //
+        // A review recorded before this names a triple, not a clip, so its
+        // detection can only be recovered by looking at how many detections share the
+        // triple (counted by distinct clip, the way `DetectionKey` compares):
+        //
+        // * **exactly one**: the review is that detection's; it is given its clip
+        //   and nothing else changes;
+        // * **more than one**: there is no telling which the reviewer meant, and
+        //   guessing would attach a verdict (a rejection withdraws a detection from
+        //   every count and share link) to a detection nobody judged. The review is
+        //   kept, marked `detached = 'ambiguous'`, and attached to none; the verdict
+        //   the old code had written onto every one of those detections is withdrawn,
+        //   so each is unreviewed again and appears in the review queue to be judged
+        //   on its own. The `species_summary` triggers follow the change;
+        // * **none**: its detection was deleted or relabelled. Kept as history,
+        //   `detached = 'orphaned'`.
+        //
+        // No review row is deleted, and no detection is. The only data that changes
+        // meaning is the mirrored `review_verdict` of detections in the ambiguous
+        // case, which is why this migration is in `HISTORY_REWRITES`: a backup is
+        // taken when any review is ambiguous, and the preview says how many verdicts
+        // would be withdrawn. The DuckDB copy is left to the startup drift check, which
+        // compares the two stores' rejected counts and rebuilds the copy.
+        //
+        // ## Relabelling
+        //
+        // A verdict is about a species. When a detection's `Sci_Name` changes, the
+        // verdict on it described the old species: the review is kept as history
+        // (`detached = 'relabelled'`) and the detection's mirrored verdict is cleared,
+        // so the review queue, the analytics and the species summary all see an
+        // unreviewed detection of its new species. Done in a trigger, as for the
+        // classifier answers in migration 58, so every path that renames a
+        // detection is covered, including ones that do not exist yet; the only
+        // path today is a single-detection relabel. A future rename of a whole
+        // species to a synonym would clear its verdicts too, and would have to
+        // carry them across itself.
+        //
+        // ## Rolling back
+        //
+        // `detached` is the only new meaning. Older code does not read it, so it
+        // would read the rebuilt table as it does any other, but it would address
+        // reviews by triple again and would see a legacy row as an ordinary one; the
+        // supported way back is the `pre-migration-59` backup this migration takes
+        // when it changes anything.
+        up_sql: "CREATE TABLE detection_reviews_v59 (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            date        TEXT NOT NULL,
+            time        TEXT NOT NULL,
+            sci_name    TEXT NOT NULL,
+            file_name   TEXT NOT NULL DEFAULT '',
+            com_name    TEXT NOT NULL,
+            status      TEXT NOT NULL CHECK(status IN ('confirmed','rejected')),
+            notes       TEXT,
+            reviewed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            detached    TEXT CHECK(detached IS NULL
+                                   OR detached IN ('ambiguous','orphaned','relabelled'))
+        );
+        WITH named AS (
+            SELECT r.id AS id,
+                   (SELECT COUNT(DISTINCT COALESCE(d.File_Name, '')) FROM detections d
+                     WHERE d.Date = r.date AND d.Time = r.time AND d.Sci_Name = r.sci_name) AS clips,
+                   (SELECT MIN(COALESCE(d.File_Name, '')) FROM detections d
+                     WHERE d.Date = r.date AND d.Time = r.time AND d.Sci_Name = r.sci_name) AS clip
+              FROM detection_reviews r)
+        INSERT INTO detection_reviews_v59
+            (id, date, time, sci_name, file_name, com_name, status, notes, reviewed_at, detached)
+        SELECT r.id, r.date, r.time, r.sci_name,
+               CASE WHEN n.clips = 1 THEN n.clip ELSE '' END,
+               r.com_name, r.status, r.notes, r.reviewed_at,
+               CASE n.clips WHEN 1 THEN NULL WHEN 0 THEN 'orphaned' ELSE 'ambiguous' END
+          FROM detection_reviews r JOIN named n ON n.id = r.id;
+        UPDATE detections
+           SET review_verdict = NULL
+         WHERE review_verdict IS NOT NULL
+           AND EXISTS (SELECT 1 FROM detection_reviews_v59 r
+                        WHERE r.detached = 'ambiguous'
+                          AND r.date = detections.Date
+                          AND r.time = detections.Time
+                          AND r.sci_name = detections.Sci_Name);
+        DROP TABLE detection_reviews;
+        ALTER TABLE detection_reviews_v59 RENAME TO detection_reviews;
+        CREATE UNIQUE INDEX idx_detection_reviews_detection
+            ON detection_reviews(date, time, sci_name, file_name) WHERE detached IS NULL;
+        CREATE INDEX idx_detection_reviews_status ON detection_reviews(status);
+        CREATE INDEX idx_detection_reviews_reviewed_at ON detection_reviews(reviewed_at DESC);
+        CREATE TRIGGER detections_relabel_detaches_review
+        AFTER UPDATE OF Sci_Name ON detections
+        WHEN OLD.Sci_Name IS NOT NEW.Sci_Name
+        BEGIN
+            UPDATE detection_reviews SET detached = 'relabelled'
+             WHERE date = OLD.Date AND time = OLD.Time AND sci_name = OLD.Sci_Name
+               AND file_name = COALESCE(OLD.File_Name, '') AND detached IS NULL;
+            UPDATE detections SET review_verdict = NULL
+             WHERE rowid = NEW.rowid AND review_verdict IS NOT NULL;
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2606,7 +2725,50 @@ const HISTORY_REWRITES: &[HistoryRewrite] = &[
                                           WHERE x.Date = r.date AND x.Time = r.time
                                             AND x.Sci_Name = r.sci_name)",
     },
+    HistoryRewrite {
+        version: 59,
+        // Reads `detection_reviews` as it was before this migration, and
+        // `review_verdict` (26).
+        ready_at: 58,
+        // The reviews that name more than one detection: the ones whose meaning
+        // changes. A review that names exactly one is only given its clip and one
+        // whose detection is gone is only labelled, so neither loses anything a
+        // backup could restore. Zero means the migration withdraws no verdict.
+        affects_sql: M59_AFFECTS_SQL,
+        // The same classification the migration makes, counted instead of
+        // applied. Deliberately mirrors the migration's own subquery rather than
+        // approximating it.
+        preview_sql: "WITH m59 AS (
+                         SELECT r.id AS id, r.date AS date, r.time AS time, r.sci_name AS sci_name,
+                                (SELECT COUNT(DISTINCT COALESCE(d.File_Name, '')) FROM detections d
+                                  WHERE d.Date = r.date AND d.Time = r.time
+                                    AND d.Sci_Name = r.sci_name) AS clips
+                           FROM detection_reviews r)
+                      SELECT 'verdicts attached to the one detection they name' AS label,
+                             CAST(COUNT(*) AS TEXT) AS value FROM m59 WHERE clips = 1
+                      UNION ALL
+                      SELECT 'verdicts that name more than one detection (kept, attached to none)',
+                             CAST(COUNT(*) AS TEXT) FROM m59 WHERE clips > 1
+                      UNION ALL
+                      SELECT 'detections whose verdict is withdrawn, to be judged again',
+                             CAST(COUNT(*) AS TEXT)
+                        FROM detections d
+                       WHERE d.review_verdict IS NOT NULL
+                         AND EXISTS (SELECT 1 FROM m59 WHERE m59.clips > 1
+                                        AND m59.date = d.Date AND m59.time = d.Time
+                                        AND m59.sci_name = d.Sci_Name)
+                      UNION ALL
+                      SELECT 'verdicts whose detection no longer exists (kept as history)',
+                             CAST(COUNT(*) AS TEXT) FROM m59 WHERE clips = 0",
+    },
 ];
+
+/// How many reviews migration 59 leaves attached to no detection because more than
+/// one shares their date, time and species. Its own subquery is the spec; this
+/// repeats it.
+const M59_AFFECTS_SQL: &str = "SELECT COUNT(*) FROM detection_reviews r
+     WHERE (SELECT COUNT(DISTINCT COALESCE(d.File_Name, '')) FROM detections d
+             WHERE d.Date = r.date AND d.Time = r.time AND d.Sci_Name = r.sci_name) > 1";
 
 /// How many rows migration 51 may change. Its own statements are the spec;
 /// this selects the same sets.
@@ -3140,19 +3302,9 @@ mod tests {
     /// detections (the very case that overwrote them), cannot be attributed.
     #[test]
     fn migration_58_keeps_only_the_answers_that_belong_to_exactly_one_detection() {
-        let conn = memory_db();
-        migrate(&conn).unwrap();
-        // Put the database back as migration 57 left it.
-        conn.execute_batch(
-            "DROP TRIGGER detections_delete_model_scores;
-             DROP TRIGGER detections_relabel_model_scores;
-             DROP TABLE detection_model_scores;",
-        )
-        .unwrap();
-        let m57 = MIGRATIONS.iter().find(|m| m.version == 57).unwrap();
-        conn.execute_batch(m57.up_sql).unwrap();
-        conn.execute("DELETE FROM schema_version WHERE version = 58", [])
-            .unwrap();
+        // The database as migration 57 left it: built at that version, not
+        // migrated and then dismantled, so a later migration cannot be in the way.
+        let conn = memory_db_at_version(57);
 
         for (sci, file) in [("Solo", "solo.wav"), ("Twin", "a.wav"), ("Twin", "b.wav")] {
             conn.execute(
@@ -3172,7 +3324,12 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(migrate(&conn).unwrap(), 1, "only migration 58 is pending");
+        let pending = u32::try_from(MIGRATIONS.iter().filter(|m| m.version > 57).count()).unwrap();
+        assert_eq!(
+            migrate(&conn).unwrap(),
+            pending,
+            "every migration after 57 is pending, 58 first"
+        );
 
         let kept: Vec<(String, String, String, f64)> = conn
             .prepare(
@@ -4388,14 +4545,14 @@ mod tests {
             )
             .unwrap();
         }
-        crate::sqlite::queries::detection_reviews::set_detection_review(
-            &conn,
-            "2026-03-11",
-            "08:30:00",
-            "Turdus merula",
-            "Blackbird",
-            crate::sqlite::queries::detection_reviews::ReviewStatus::Rejected,
-            None,
+        // The verdict as the code of that schema wrote it: a review keyed on the
+        // triple, mirrored onto the detections that triple names. Spelled in SQL
+        // because the current API writes a column this schema does not have yet.
+        conn.execute_batch(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Blackbird', 'rejected');
+             UPDATE detections SET review_verdict = 'rejected'
+              WHERE Date = '2026-03-11' AND Time = '08:30:00' AND Sci_Name = 'Turdus merula';",
         )
         .unwrap();
         migrate(&conn).unwrap();
@@ -4433,6 +4590,304 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(times, vec!["08:30:06".to_string(), "08:30:03".to_string()]);
+    }
+
+    // ── migration 59: a review names one detection ──────────────────────
+
+    /// A detection as the schema before migration 59 stored it.
+    fn detection_at_58(conn: &Connection, time: &str, clip: Option<&str>) {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-09-08', ?1, 'Turdus merula', 'Blackbird', 0.9, ?2)",
+            rusqlite::params![time, clip],
+        )
+        .unwrap();
+    }
+
+    /// A verdict as the code before migration 59 wrote it: one review keyed on
+    /// the triple, mirrored onto every detection the triple names.
+    fn legacy_verdict(conn: &Connection, time: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-09-08', ?1, 'Turdus merula', 'Blackbird', ?2)",
+            rusqlite::params![time, status],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE detections SET review_verdict = ?2
+              WHERE Date = '2026-09-08' AND Time = ?1 AND Sci_Name = 'Turdus merula'",
+            rusqlite::params![time, status],
+        )
+        .unwrap();
+    }
+
+    /// `(time, file_name, status, detached)` of every review, by id.
+    fn reviews_after(conn: &Connection) -> Vec<(String, String, String, Option<String>)> {
+        conn.prepare("SELECT time, file_name, status, detached FROM detection_reviews ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// The common case: the triple names one detection, so the review is that
+    /// detection's, and only gains its clip. Nothing else about it changes.
+    #[test]
+    fn migration_59_attaches_a_review_to_the_one_detection_it_names() {
+        let conn = memory_db_at_version(58);
+        detection_at_58(&conn, "06:00:00", Some("a.wav"));
+        legacy_verdict(&conn, "06:00:00", "rejected");
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(
+            reviews_after(&conn),
+            [("06:00:00".into(), "a.wav".into(), "rejected".into(), None)]
+        );
+        assert_eq!(verdict_at(&conn, "06:00:00").as_deref(), Some("rejected"));
+    }
+
+    /// A detection with no clip is a detection too: its review gains the empty
+    /// clip, the way the unique index compares it.
+    #[test]
+    fn migration_59_attaches_a_review_to_a_detection_that_has_no_clip() {
+        let conn = memory_db_at_version(58);
+        detection_at_58(&conn, "06:00:00", None);
+        legacy_verdict(&conn, "06:00:00", "confirmed");
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(
+            reviews_after(&conn),
+            [("06:00:00".into(), String::new(), "confirmed".into(), None)]
+        );
+    }
+
+    /// The case the migration exists for. Two microphones heard one bird in the
+    /// same second and the old code wrote one verdict onto both. Which one the
+    /// reviewer meant cannot be known, and guessing would attach a rejection to a
+    /// detection nobody judged. The review is kept and attached to neither; each
+    /// detection is unreviewed again, in the queue, counted by the analytics, and
+    /// the maintained species summary agrees.
+    #[test]
+    fn migration_59_does_not_guess_between_two_detections() {
+        let conn = memory_db_at_version(58);
+        detection_at_58(&conn, "06:00:00", Some("a.wav"));
+        detection_at_58(&conn, "06:00:00", Some("b.wav"));
+        legacy_verdict(&conn, "06:00:00", "rejected");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM detections_analytic", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "precondition: the old code excluded both"
+        );
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(
+            reviews_after(&conn),
+            [(
+                "06:00:00".into(),
+                String::new(),
+                "rejected".into(),
+                Some("ambiguous".into())
+            )],
+            "the review is kept, not deleted, and is attached to neither"
+        );
+        let verdicts: Vec<Option<String>> = conn
+            .prepare("SELECT review_verdict FROM detections ORDER BY File_Name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(verdicts, [None, None], "both are unreviewed again");
+        let queued =
+            crate::sqlite::queries::detection_reviews::unreviewed_recent_detections(&conn, 10)
+                .unwrap();
+        assert_eq!(queued.len(), 2, "and both are in the review queue");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM detections_analytic", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2,
+            "and both count again"
+        );
+        let drift = crate::sqlite::queries::species::species_summary_drift(&conn).unwrap();
+        assert!(drift.is_empty(), "the species summary followed: {drift:#?}");
+    }
+
+    /// A review whose detection is gone is history, kept and dismissable.
+    #[test]
+    fn migration_59_keeps_a_review_whose_detection_no_longer_exists() {
+        let conn = memory_db_at_version(58);
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-09-08', '06:00:00', 'Turdus merula', 'Blackbird', 'rejected')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(
+            reviews_after(&conn),
+            [(
+                "06:00:00".into(),
+                String::new(),
+                "rejected".into(),
+                Some("orphaned".into())
+            )]
+        );
+    }
+
+    /// What the preview says, what the backup gate counts and what the migration
+    /// does are one classification: a gate that counted a different set would be
+    /// believed and wrong.
+    #[test]
+    fn migration_59_preview_and_gate_count_what_it_does() {
+        let conn = memory_db_at_version(58);
+        // attached: one detection
+        detection_at_58(&conn, "06:00:00", Some("a.wav"));
+        legacy_verdict(&conn, "06:00:00", "confirmed");
+        // ambiguous: two detections, both carrying the old verdict
+        detection_at_58(&conn, "07:00:00", Some("a.wav"));
+        detection_at_58(&conn, "07:00:00", Some("b.wav"));
+        legacy_verdict(&conn, "07:00:00", "rejected");
+        // orphaned: no detection
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-09-08', '08:00:00', 'Turdus merula', 'Blackbird', 'rejected')",
+            [],
+        )
+        .unwrap();
+
+        let rewrite = HISTORY_REWRITES.iter().find(|r| r.version == 59).unwrap();
+        let predicted: i64 = conn
+            .query_row(rewrite.affects_sql, [], |r| r.get(0))
+            .unwrap();
+        let preview = preview_pending(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.version == 59)
+            .expect("a preview for 59");
+        let said = |label: &str| {
+            preview
+                .rows
+                .iter()
+                .find(|(l, _)| l.starts_with(label))
+                .map_or_else(
+                    || panic!("no row {label:?} in {:?}", preview.rows),
+                    |(_, v)| v.clone(),
+                )
+        };
+
+        let withdrawn_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE review_verdict IS NOT NULL
+                   AND Time = '07:00:00'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        migrate(&conn).unwrap();
+        let count = |detached: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM detection_reviews WHERE detached {detached}"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            predicted,
+            count("= 'ambiguous'"),
+            "the gate counts what it detaches"
+        );
+        assert_eq!(said("verdicts attached"), count("IS NULL").to_string());
+        assert_eq!(
+            said("verdicts that name more than one"),
+            count("= 'ambiguous'").to_string()
+        );
+        assert_eq!(
+            said("verdicts whose detection no longer"),
+            count("= 'orphaned'").to_string()
+        );
+        assert_eq!(
+            said("detections whose verdict is withdrawn"),
+            withdrawn_before.to_string()
+        );
+        assert_eq!(withdrawn_before, 2);
+    }
+
+    /// A backup is taken when a verdict is withdrawn, and not otherwise: the
+    /// ordinary station, whose reviews each name one detection, does not pay a
+    /// whole-database copy for a lossless rebuild.
+    #[test]
+    fn migration_59_takes_a_backup_only_when_it_withdraws_a_verdict() {
+        let backup = |dir: &Path| dir.join("birds.db.pre-migration-59.backup");
+
+        let ambiguous_dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(ambiguous_dir.path(), 58);
+        // `seg.wav` already has detections at 08:30:00; a second clip makes the triple ambiguous.
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-11','08:30:00','Turdus merula','Blackbird',0.9,'other.wav')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-03-11','08:30:00','Turdus merula','Blackbird','rejected')",
+            [],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert!(
+            backup(ambiguous_dir.path()).exists(),
+            "an ambiguous review takes a backup"
+        );
+
+        let plain_dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(plain_dir.path(), 58);
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-03-11','08:30:00','Turdus merula','Blackbird','rejected')",
+            [],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert!(
+            !backup(plain_dir.path()).exists(),
+            "a review that names one detection takes none"
+        );
+    }
+
+    /// The new key is enforced: two verdicts on one detection cannot both be
+    /// attached, while history (detached rows) may repeat.
+    #[test]
+    fn migration_59_makes_the_detection_key_unique_among_attached_reviews() {
+        let conn = memory_db_at_version(58);
+        migrate(&conn).unwrap();
+        let insert = |detached: Option<&str>| {
+            conn.execute(
+                "INSERT INTO detection_reviews
+                    (date, time, sci_name, file_name, com_name, status, detached)
+                 VALUES ('2026-09-08', '06:00:00', 'Turdus merula', 'a.wav', 'Blackbird',
+                         'rejected', ?1)",
+                [detached],
+            )
+        };
+        insert(None).unwrap();
+        assert!(
+            insert(None).is_err(),
+            "a second attached verdict on one detection"
+        );
+        insert(Some("relabelled")).unwrap();
+        insert(Some("relabelled")).expect("history may repeat");
     }
 
     /// The backup gate for migration 51 is zero exactly when it has nothing
