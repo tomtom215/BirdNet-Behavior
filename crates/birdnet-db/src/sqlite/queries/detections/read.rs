@@ -2245,6 +2245,111 @@ mod tests {
         );
     }
 
+    /// `detection_with_clip` names one of two detections that two sources heard
+    /// in the same second, which `detection_at` cannot: it takes whichever comes
+    /// first. A page opened from a list row asks for the row's own clip, so
+    /// `Ok(None)` made every such page answer "not found" and
+    /// `Ok(Some(Default::default()))` showed a nameless bird.
+    ///
+    /// `tests/a_review_names_one_detection.rs` asserts the same thing, but the
+    /// mutation gate runs `--lib` only, which is how the `Ok(None)` mutant
+    /// survived a green integration test.
+    #[test]
+    fn detection_with_clip_opens_the_detection_its_clip_names() {
+        let conn = test_conn();
+        let heard =
+            |time: &'static str, clip: &'static str, source: &'static str| DetectionRecord {
+                model_id: None,
+                model_agreement: None,
+                date: "2026-09-08",
+                time,
+                sci_name: "Turdus merula",
+                com_name: "Eurasian Blackbird",
+                confidence: 0.9,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: clip,
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source: Some(source),
+                duration_secs: Some(6.0),
+                detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
+            };
+        // Two microphones, one bird, one second; and a detection with no clip.
+        insert_detection(&conn, &heard("06:00:00", "mic_a.wav", "mic-a")).unwrap();
+        insert_detection(&conn, &heard("06:00:00", "mic_b.wav", "mic-b")).unwrap();
+        insert_detection(&conn, &heard("06:10:00", "", "mic-a")).unwrap();
+
+        for (clip, source) in [("mic_a.wav", "mic-a"), ("mic_b.wav", "mic-b")] {
+            let row = detection_with_clip(&conn, "2026-09-08", "06:00:00", None, clip)
+                .unwrap()
+                .unwrap_or_else(|| panic!("the detection that points at {clip}"));
+            assert_eq!(
+                (row.file_name.as_deref(), row.source.as_deref()),
+                (Some(clip), Some(source)),
+                "the clip decides which of the two comes back"
+            );
+            assert_eq!(row.sci_name, "Turdus merula");
+            assert!((row.confidence - 0.9).abs() < 1e-9, "the row's own value");
+        }
+
+        // `com_name` narrows the same way as in `detection_at`.
+        let named = detection_with_clip(
+            &conn,
+            "2026-09-08",
+            "06:00:00",
+            Some("Eurasian Blackbird"),
+            "mic_b.wav",
+        )
+        .unwrap()
+        .expect("named, and heard");
+        assert_eq!(named.source.as_deref(), Some("mic-b"));
+        assert!(
+            detection_with_clip(
+                &conn,
+                "2026-09-08",
+                "06:00:00",
+                Some("Great Tit"),
+                "mic_b.wav"
+            )
+            .unwrap()
+            .is_none(),
+            "a bird that was not heard then must not fall back to one that was"
+        );
+
+        // A clip that names no detection opens none, and neither does the
+        // right clip at the wrong second.
+        assert!(
+            detection_with_clip(&conn, "2026-09-08", "06:00:00", None, "other.wav")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            detection_with_clip(&conn, "2026-09-08", "06:00:01", None, "mic_a.wav")
+                .unwrap()
+                .is_none()
+        );
+
+        // A detection with no clip is asked for by the empty name.
+        let clipless = detection_with_clip(&conn, "2026-09-08", "06:10:00", None, "")
+            .unwrap()
+            .expect("the clipless detection");
+        assert_eq!(clipless.source.as_deref(), Some("mic-a"));
+
+        // The lookup that ignores the clip still takes the first of the two.
+        let first = detection_at(&conn, "2026-09-08", "06:00:00", None)
+            .unwrap()
+            .expect("one of the two");
+        assert_eq!(first.file_name.as_deref(), Some("mic_a.wav"));
+    }
+
     /// `com_name_for` must name the bird the row actually carries.
     ///
     /// It exists so a bulk review cannot take the browser's word for which
