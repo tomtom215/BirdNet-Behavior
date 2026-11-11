@@ -242,6 +242,15 @@ alert. "Cannot tell" is not "fine", but it is not a fault to wake somebody for
 either, and treating a missing reading as zero would make every *below* rule
 fire for ever.
 
+The same holds the other way round. If a rule was already firing when its
+measurement became unreadable, its alert stays open, with no recovery notice,
+until the measurement reads again or you disable or delete the rule; a reading
+nobody could take is not evidence that the fault has gone. While that lasts,
+`/api/v2/health/conditions` lists `metric-rules` under `unchecked`. The same
+applies to the built-in audio-source, disk, backup and integrity-check
+conditions when the station cannot read the database or the disk they are
+judged from: they are held, not closed.
+
 A rule that could never stop firing is refused when you create it: a percentage
 is never below zero or above 100, so "disk above −1" is a notification, not an
 alert.

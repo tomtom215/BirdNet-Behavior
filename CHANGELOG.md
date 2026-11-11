@@ -114,6 +114,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A read that failed in the station-health check ended the alert it should have kept.** The notifier closes
+  the episode of any condition a poll does not report and sends "Station health recovered", and four checks
+  reported nothing when they *could not look*: the audio-source list (a "microphone down" alert ended by a
+  failed read of the list), the scheduled-job records (a failing integrity check ended by a failed read of its
+  own record, which a corrupt database makes most likely), the operator's metric rules (an unreadable rule
+  list, or a metric with no reading), and the disk measurement (a mount that has gone away). Each now says it
+  could not look, the notifier leaves the episodes it owns open (neither recovered nor re-opened, and a fault
+  counting towards its alert starts again), the journal says so when that changes, and
+  `/api/v2/health/conditions` gains `unchecked`, the names of the checks that could not look, so an empty
+  `conditions` list beside it is not read as an all-clear. A sensor that has gone away still closes its
+  episode, as before; so does a read that succeeded and found nothing. Seen failing first: five tests that
+  drive a real poll with the table or mount broken and an episode open (they said "recovered"), each with a
+  counterpart where the read succeeds. One instance of the shape remains and is recorded as TD-8: the clock
+  check's "cannot tell". Closes TD-1.
 - **The support bundle and `--doctor` printed the station's position to four decimals (about 11 m).** The
   bundle's own rule is one decimal, and it applied it to the journal and the settings, but `doctor.txt` and
   `doctor.json` are the doctor's report as the doctor printed it, and the doctor's "Station location" and

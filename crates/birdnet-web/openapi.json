@@ -8733,12 +8733,20 @@
                 "body"
               ]
             }
+          },
+          "unchecked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The checks that could not look at the last evaluation (for example `sources` when the audio-source list could not be read). Empty when every check ran. A non-empty list beside an empty `conditions` is not an all-clear."
           }
         },
         "required": [
           "evaluated_at",
           "count",
-          "conditions"
+          "conditions",
+          "unchecked"
         ]
       },
       "Stats": {

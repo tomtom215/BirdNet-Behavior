@@ -83,6 +83,18 @@
 //!
 //! Each condition keeps its own episode state, so a hot afternoon does not
 //! suppress a disk alert.
+//!
+//! # A check that could not look
+//!
+//! There are three answers, not two: the condition holds, it does not, or the
+//! check could not tell. The third is what [`Unchecked`] is for. A check that
+//! reads the database or the disk and fails reports itself unchecked instead of
+//! reporting nothing, because nothing is how a recovered condition looks:
+//! [`transitions`] closes the episode of any key a poll does not report, and a
+//! recovery notice for a fault nobody has looked at since is worse than silence.
+//! The episodes such a check owns are held until it can look again, and the
+//! conditions endpoint says which checks could not (`unchecked`). A sensor that
+//! has gone away is a different case and closes its episode, as it always did.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
@@ -165,6 +177,86 @@ pub struct Condition {
     pub body: String,
 }
 
+/// The conditions a check that could not look owns: one key, or every key that
+/// starts with a prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Owns {
+    /// Exactly this condition key (`disk`, `maintenance-failed:backup_vacuum`).
+    Key(String),
+    /// Every key of a family (`source:` is `source:cam1`, `source:usb0`, ...).
+    Family(&'static str),
+}
+
+impl Owns {
+    fn covers(&self, key: &str) -> bool {
+        match self {
+            Self::Key(own) => own == key,
+            Self::Family(prefix) => key.starts_with(prefix),
+        }
+    }
+}
+
+/// A check that could not look at this poll.
+///
+/// "Could not look" is not "looked, and found nothing". A check that reads the
+/// database and gets an error knows nothing about the conditions it owns. If it
+/// reported none, [`transitions`], which treats a key missing from a poll as
+/// recovered, would close an open "microphone down" episode and send "Station
+/// health recovered" for a fault nobody has looked at since. That is the worst
+/// moment to say so: the reads most likely to fail are the ones on a database
+/// that is itself failing, which is when the episodes matter most.
+///
+/// Not for a sensor that has gone away. A temperature or a power reading that
+/// can no longer be taken still closes its episode, as [`transitions`] says,
+/// rather than alerting for ever on a reading nobody can take. This is for the
+/// checks whose answer exists and could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Unchecked {
+    /// The check's name in [`CHECKS`]: what the log and the API say could not
+    /// be looked at.
+    check: &'static str,
+    /// The conditions it therefore could not judge.
+    owns: Owns,
+    /// Why, for the log.
+    why: String,
+}
+
+/// What one poll found: what is wrong, and what could not be looked at.
+#[derive(Debug, Default)]
+struct Findings {
+    /// Every condition that holds, as of this poll.
+    conditions: Vec<Condition>,
+    /// The checks that could not look, with the conditions each leaves undecided.
+    unchecked: Vec<Unchecked>,
+}
+
+impl Findings {
+    fn extend(&mut self, conditions: impl IntoIterator<Item = Condition>) {
+        self.conditions.extend(conditions);
+    }
+
+    /// Record that `check` could not look, and so decided nothing about `owns`.
+    fn could_not_look(&mut self, check: &'static str, owns: Owns, why: String) {
+        self.unchecked.push(Unchecked { check, owns, why });
+    }
+
+    /// The names of the checks that could not look, once each, in order.
+    fn unchecked_checks(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self.unchecked.iter().map(|u| u.check).collect();
+        names.dedup();
+        names
+    }
+
+    /// Why each check could not look, for the log.
+    fn describe_unchecked(&self) -> String {
+        self.unchecked
+            .iter()
+            .map(|u| format!("{}: {}", u.check, u.why))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
 /// A condition that is currently in an episode.
 ///
 /// The title so a recovery notice can name what recovered; the clock so an
@@ -191,12 +283,19 @@ struct OpenEpisode {
 /// condition that stops being measurable (a temperature sensor that disappears)
 /// closes its episode instead of alerting forever on a reading nobody can take.
 ///
+/// The exception is `unchecked`: a check that *could not look* (see
+/// [`Unchecked`]) has not seen its episode end, so an open episode it owns is
+/// left open, and is neither recovered nor re-opened. A fault that was being
+/// counted towards its alert starts again, because a poll that could not look
+/// is not an observation, so the polls are no longer consecutive.
+///
 /// Generic in the map's value type because the loop keeps an [`OpenEpisode`]
 /// per key while the tests keep a title; only the key set is read here.
 fn transitions<V>(
     alerted: &BTreeMap<String, V>,
     streak: &mut BTreeMap<String, u32>,
     now: &[Condition],
+    unchecked: &[Unchecked],
 ) -> (Vec<Condition>, Vec<String>) {
     // Drop streaks for anything that is no longer faulty, so a fault that comes
     // and goes has to earn its alert from scratch rather than accumulating
@@ -215,6 +314,7 @@ fn transitions<V>(
     let recovered: Vec<String> = alerted
         .keys()
         .filter(|k| !now.iter().any(|c| &c.key == *k))
+        .filter(|k| !unchecked.iter().any(|u| u.owns.covers(k)))
         .cloned()
         .collect();
     (broken, recovered)
@@ -257,7 +357,7 @@ fn due_reminders<'a>(
 }
 
 /// One condition check: reads the station, appends whatever is wrong.
-type Check = fn(&AppState, &mut Vec<Condition>);
+type Check = fn(&AppState, &mut Findings);
 
 /// Every check [`evaluate`] runs, paired with the name it is known by.
 ///
@@ -291,8 +391,8 @@ const CHECKS: [(&str, Check); 16] = [
 ///
 /// Runs on a blocking thread: it touches `SQLite`, `statvfs`, sysfs, and — for
 /// the clock — one short-lived subprocess.
-fn evaluate(state: &AppState) -> Vec<Condition> {
-    let mut out = Vec::new();
+fn evaluate(state: &AppState) -> Findings {
+    let mut out = Findings::default();
     for (_name, check) in CHECKS {
         check(state, &mut out);
     }
@@ -301,8 +401,9 @@ fn evaluate(state: &AppState) -> Vec<Condition> {
 
 /// Make what was just evaluated askable (OP-4): the same conditions the
 /// notifier pushes, on the state, for `/api/v2/health/conditions`.
-fn publish(state: &AppState, current: &[Condition]) {
-    let conditions = current
+fn publish(state: &AppState, found: &Findings) {
+    let conditions = found
+        .conditions
         .iter()
         .map(|c| birdnet_web::station_conditions::Condition {
             key: c.key.clone(),
@@ -310,9 +411,15 @@ fn publish(state: &AppState, current: &[Condition]) {
             body: c.body.clone(),
         })
         .collect();
-    state.set_station_conditions(birdnet_web::station_conditions::ConditionsSnapshot::now(
-        conditions,
-    ));
+    state.set_station_conditions(
+        birdnet_web::station_conditions::ConditionsSnapshot::now(conditions).with_unchecked(
+            found
+                .unchecked_checks()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        ),
+    );
 }
 
 /// What the system will say about its own clock synchronisation.
@@ -383,7 +490,7 @@ fn probe_ntp_state() -> NtpState {
 /// slower failure the floor cannot see: a clock that *is* plausible and has
 /// been drifting away from real time for months, filing every detection under
 /// the wrong hour while every count and chart looks healthy.
-fn check_clock(state: &AppState, out: &mut Vec<Condition>) {
+fn check_clock(state: &AppState, out: &mut Findings) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -434,11 +541,23 @@ fn clock_condition(now: u64, ntp: NtpState) -> Option<Condition> {
 /// Reads the supervisor's own `birdnet_audio_source_up` gauge — the same signal
 /// the Station Health page shows — rather than probing the device, so this
 /// cannot itself disturb capture.
-fn check_sources(state: &AppState, out: &mut Vec<Condition>) {
-    let sources = state.with_db(|conn| {
+///
+/// A source list that cannot be read is not an empty one. Which sources exist
+/// comes from the database, so an error leaves every `source:` condition
+/// undecided ([`Unchecked`]); defaulting it to "no sources" ended an open
+/// "microphone down" episode with a recovery notice.
+fn check_sources(state: &AppState, out: &mut Findings) {
+    let read = state.with_db(|conn| {
         use birdnet_db::audio_sources::AudioSourceStore;
-        AudioSourceStore::list(conn).unwrap_or_default()
+        AudioSourceStore::list(conn)
     });
+    let sources = match read {
+        Ok(sources) => sources,
+        Err(e) => {
+            out.could_not_look("sources", Owns::Family("source:"), e.to_string());
+            return;
+        }
+    };
     let enabled: Vec<(String, Option<bool>)> = sources
         .iter()
         .filter(|s| s.disabled_at.is_none())
@@ -477,7 +596,7 @@ fn source_conditions(enabled: &[(String, Option<bool>)]) -> Vec<Condition> {
 }
 
 /// Disk usage high enough that recordings are being purged.
-fn check_disk(state: &AppState, out: &mut Vec<Condition>) {
+fn check_disk(state: &AppState, out: &mut Findings) {
     let dir = state
         .db_path()
         .parent()
@@ -486,8 +605,14 @@ fn check_disk(state: &AppState, out: &mut Vec<Condition>) {
             || std::path::PathBuf::from("."),
             std::path::Path::to_path_buf,
         );
-    let Ok(usage) = birdnet_core::audio::capture::disk_usage(&dir) else {
-        return;
+    // A disk that cannot be measured is not a disk that is fine: a mount that
+    // has gone away fails here, and the disk episode must not end because of it.
+    let usage = match birdnet_core::audio::capture::disk_usage(&dir) {
+        Ok(usage) => usage,
+        Err(e) => {
+            out.could_not_look("disk", Owns::Key("disk".to_owned()), e.to_string());
+            return;
+        }
     };
     out.extend(disk_condition(usage.used_percent()));
 }
@@ -504,7 +629,7 @@ const MQTT_ALERT_AFTER: Duration = Duration::from_secs(10 * 60);
 /// health page, the alerts and the overview showed nothing. Home Assistant
 /// then shows the station offline, which is the one state an operator
 /// cannot tell from a dead station.
-fn check_mqtt(state: &AppState, out: &mut Vec<Condition>) {
+fn check_mqtt(state: &AppState, out: &mut Findings) {
     let metrics = state.metrics();
     let since = metrics.mqtt_disconnected_since();
     let now = super::unix_now_secs();
@@ -543,7 +668,7 @@ fn mqtt_condition(
 /// a mount that has gone away with the station writing into the directory
 /// underneath it (DD-19, DD-20). Reads the watch's last probe rather than
 /// probing again, so this and `/api/v2/health` cannot disagree.
-fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
+fn check_data_volume(state: &AppState, out: &mut Findings) {
     let Some(volume) = state.data_volume() else {
         return;
     };
@@ -552,7 +677,7 @@ fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
 
 /// A purge that stopped achieving anything (PR-7), and a recording that stopped
 /// because the disk is full and the station is set to keep everything.
-fn check_purge(state: &AppState, out: &mut Vec<Condition>) {
+fn check_purge(state: &AppState, out: &mut Findings) {
     out.extend(purge_condition(state.metrics().purge_ineffective()));
     out.extend(hold_condition(state.metrics().recording_held()));
 }
@@ -592,7 +717,7 @@ fn purge_condition(ineffective: bool) -> Option<Condition> {
 }
 
 /// A source restarting repeatedly while never reading as down (AD-3).
-fn check_flapping(state: &AppState, out: &mut Vec<Condition>) {
+fn check_flapping(state: &AppState, out: &mut Findings) {
     let sources: Vec<(String, u32, bool)> = state
         .capture_status()
         .map(|h| birdnet_core::audio::capture::read_capture_status(&h))
@@ -643,10 +768,17 @@ fn flapping_conditions(sources: &[(String, u32, bool)]) -> Vec<Condition> {
 /// inherits the fifteen-minute debounce, the episode latching, the recovery
 /// notice, the notification log, the store-and-forward outbox, and a place on
 /// `/api/v2/health/conditions` — none of which a parallel engine would have.
-fn check_metric_rules(state: &AppState, out: &mut Vec<Condition>) {
+fn check_metric_rules(state: &AppState, out: &mut Findings) {
     use birdnet_db::metric_rules::{Metric, Sample};
 
-    let rules = state.with_db(|conn| birdnet_db::metric_rules::list(conn).unwrap_or_default());
+    // A rule list that cannot be read leaves every rule's episode undecided.
+    let rules = match state.with_db(birdnet_db::metric_rules::list) {
+        Ok(rules) => rules,
+        Err(e) => {
+            out.could_not_look("metric-rules", Owns::Family("metric-rule:"), e.to_string());
+            return;
+        }
+    };
     if rules.is_empty() {
         return;
     }
@@ -667,6 +799,22 @@ fn check_metric_rules(state: &AppState, out: &mut Vec<Condition>) {
         title: f.title(),
         body: f.body(),
     }));
+
+    // A rule whose metric had no reading did not fire, but it did not look
+    // fine either: `sample_metric` says `None` is deliberately not zero, and
+    // the same holds for the episode. A rule that was firing when its sensor
+    // went away stays open until the metric reads again, or the operator
+    // disables or deletes the rule.
+    for rule in rules
+        .iter()
+        .filter(|r| r.enabled && matches!(cache.get(&r.metric), Some(None)))
+    {
+        out.could_not_look(
+            "metric-rules",
+            Owns::Key(rule.key()),
+            format!("no reading for {}", rule.metric.key()),
+        );
+    }
 }
 
 /// Read one metric, or `None` when this station cannot.
@@ -737,7 +885,7 @@ fn sample_metric(state: &AppState, metric: birdnet_db::metric_rules::Metric) -> 
     }
 }
 
-fn check_backlog(state: &AppState, out: &mut Vec<Condition>) {
+fn check_backlog(state: &AppState, out: &mut Findings) {
     out.extend(backlog_condition(state.metrics().analysis_queue_depth()));
 }
 
@@ -762,7 +910,7 @@ fn backlog_condition(queue_depth: Option<u64>) -> Option<Condition> {
     })
 }
 
-fn check_classifiers(state: &AppState, out: &mut Vec<Condition>) {
+fn check_classifiers(state: &AppState, out: &mut Findings) {
     out.extend(classifier_conditions(
         &state.metrics().model_health(),
         birdnet_core::inference::health::unix_now(),
@@ -825,7 +973,7 @@ fn classifier_conditions(
 }
 
 /// The Pi's own account of its power (NP-5).
-fn check_power(out: &mut Vec<Condition>) {
+fn check_power(out: &mut Findings) {
     out.extend(power_condition(birdnet_web::system_info::pi_throttled()));
 }
 
@@ -870,7 +1018,7 @@ fn power_condition(throttle: Option<birdnet_web::system_info::PiThrottle>) -> Op
 const MIRROR_FAILURE_RECENT_SECS: u64 = 60 * 60;
 
 /// Detections the DuckDB copy refused (OP-7).
-fn check_analytics_mirror(state: &AppState, out: &mut Vec<Condition>) {
+fn check_analytics_mirror(state: &AppState, out: &mut Findings) {
     let metrics = state.metrics();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -911,7 +1059,7 @@ fn analytics_mirror_condition(
 
 /// What the boot journal found at this start (UP-3). A fact of the run: the
 /// condition holds until the next start, and fires its episode once.
-fn check_boot_anomalies(state: &AppState, out: &mut Vec<Condition>) {
+fn check_boot_anomalies(state: &AppState, out: &mut Findings) {
     out.extend(boot_anomaly_condition(&state.boot_anomalies()));
 }
 
@@ -994,7 +1142,7 @@ fn disk_condition(used: f64) -> Option<Condition> {
 ///
 /// Neither reached anything before: no scan matched the SQLite name, no
 /// condition existed for either, and no prune removes the file.
-fn check_quarantined_stores(state: &AppState, out: &mut Vec<Condition>) {
+fn check_quarantined_stores(state: &AppState, out: &mut Findings) {
     let dir = state.db_path().parent().map(std::path::Path::to_path_buf);
     let found = crate::doctor::analytics::quarantined_files(dir.as_deref());
     out.extend(quarantine_condition(&found));
@@ -1032,7 +1180,7 @@ fn quarantine_condition(found: &[std::path::PathBuf]) -> Option<Condition> {
 }
 
 /// A CPU sitting at or above the throttling threshold.
-fn check_thermal(out: &mut Vec<Condition>) {
+fn check_thermal(out: &mut Findings) {
     out.extend(thermal_condition(
         birdnet_web::system_info::cpu_temperature(),
     ));
@@ -1073,7 +1221,7 @@ fn thermal_condition(temp: Option<f32>) -> Option<Condition> {
 /// recorded one: a `Some(false)` there means the database is corrupting, and it
 /// reached the operator as a `tracing::error!` and a red pixel on a page nobody
 /// has open. It pushed nothing.
-fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
+fn check_maintenance(state: &AppState, out: &mut Findings) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
@@ -1082,11 +1230,22 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
         (birdnet_db::sqlite::JOB_INTEGRITY_CHECK, "integrity check"),
         (birdnet_db::sqlite::JOB_OFFSITE_BACKUP, "offsite backup"),
     ] {
-        let last = state.with_db(|conn| {
-            birdnet_db::sqlite::last_run_result(conn, job)
-                .ok()
-                .flatten()
-        });
+        // `Err` is not "never run". An unreadable record decides neither the
+        // failed nor the stale condition for this job, and it is the integrity
+        // check's own record that a corrupt database is most likely to make
+        // unreadable.
+        let last = match state.with_db(|conn| birdnet_db::sqlite::last_run_result(conn, job)) {
+            Ok(last) => last,
+            Err(e) => {
+                for key in [
+                    format!("maintenance-failed:{job}"),
+                    format!("maintenance:{job}"),
+                ] {
+                    out.could_not_look("maintenance", Owns::Key(key), e.to_string());
+                }
+                continue;
+            }
+        };
         // `None` means "never run", which on a station that has just been
         // installed is normal and on one that has been up for weeks is not.
         // The maintenance loop records a run on its first tick, so a persistent
@@ -1195,6 +1354,9 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
         // How many consecutive polls each currently-faulty key has been seen
         // for; see REQUIRED_CONSECUTIVE_POLLS.
         let mut streak: BTreeMap<String, u32> = BTreeMap::new();
+        // The checks that could not look at the last poll, so the journal says
+        // so when that changes and not every five minutes.
+        let mut last_unchecked: Vec<&'static str> = Vec::new();
         let mut tick = tokio::time::interval(POLL_EVERY);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -1207,8 +1369,28 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
             };
             publish(&state, &current);
 
+            let unchecked = current.unchecked_checks();
+            if unchecked != last_unchecked {
+                if unchecked.is_empty() {
+                    tracing::info!("station health can look at everything again");
+                } else {
+                    tracing::warn!(
+                        checks = ?unchecked,
+                        why = %current.describe_unchecked(),
+                        "STATION HEALTH — could not look at some conditions; any open \
+                         episode for them is held, not closed"
+                    );
+                }
+                last_unchecked = unchecked;
+            }
+
             let now = std::time::Instant::now();
-            let (broken, recovered) = transitions(&alerted, &mut streak, &current);
+            let (broken, recovered) = transitions(
+                &alerted,
+                &mut streak,
+                &current.conditions,
+                &current.unchecked,
+            );
             for condition in broken {
                 tracing::warn!(
                     key = %condition.key,
@@ -1231,7 +1413,7 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
                     },
                 );
             }
-            for (condition, open_for) in due_reminders(&mut alerted, &current, now) {
+            for (condition, open_for) in due_reminders(&mut alerted, &current.conditions, now) {
                 tracing::warn!(
                     key = %condition.key,
                     "STATION HEALTH — still unresolved: {}",
@@ -1621,10 +1803,10 @@ mod tests {
         let mut streak = BTreeMap::new();
         let now = vec![clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("condition")];
         for poll in 1..REQUIRED_CONSECUTIVE_POLLS {
-            let (broken, _) = transitions(&alerted, &mut streak, &now);
+            let (broken, _) = transitions(&alerted, &mut streak, &now, &[]);
             assert!(broken.is_empty(), "poll {poll} must not alert yet");
         }
-        let (broken, _) = transitions(&alerted, &mut streak, &now);
+        let (broken, _) = transitions(&alerted, &mut streak, &now, &[]);
         assert_eq!(
             broken.len(),
             1,
@@ -1657,7 +1839,7 @@ mod tests {
         let mut streak = BTreeMap::new();
         let mut fired = Vec::new();
         for _ in 0..polls {
-            let (broken, _) = transitions(&alerted_set, &mut streak, conditions);
+            let (broken, _) = transitions(&alerted_set, &mut streak, conditions, &[]);
             fired.extend(broken.into_iter().map(|c| c.key));
         }
         fired
@@ -1666,7 +1848,7 @@ mod tests {
     #[test]
     fn a_healthy_station_says_nothing() {
         let mut streak = BTreeMap::new();
-        let (broken, recovered) = transitions(&alerted(&[]), &mut streak, &[]);
+        let (broken, recovered) = transitions(&alerted(&[]), &mut streak, &[], &[]);
         assert!(broken.is_empty());
         assert!(recovered.is_empty());
     }
@@ -1709,7 +1891,8 @@ mod tests {
     fn an_ongoing_condition_does_not_re_fire() {
         let mut streak: BTreeMap<String, u32> =
             [("disk".to_owned(), REQUIRED_CONSECUTIVE_POLLS)].into();
-        let (broken, recovered) = transitions(&alerted(&["disk"]), &mut streak, &[cond("disk")]);
+        let (broken, recovered) =
+            transitions(&alerted(&["disk"]), &mut streak, &[cond("disk")], &[]);
         assert!(
             broken.is_empty(),
             "still broken on the next poll must not re-fire — an alert that \
@@ -1722,9 +1905,9 @@ mod tests {
     #[test]
     fn a_resolved_condition_announces_recovery_exactly_once() {
         let mut streak = BTreeMap::new();
-        let (_, recovered) = transitions(&alerted(&["disk"]), &mut streak, &[]);
+        let (_, recovered) = transitions(&alerted(&["disk"]), &mut streak, &[], &[]);
         assert_eq!(recovered, vec!["disk".to_owned()]);
-        let (broken, recovered) = transitions(&alerted(&[]), &mut streak, &[]);
+        let (broken, recovered) = transitions(&alerted(&[]), &mut streak, &[], &[]);
         assert!(broken.is_empty() && recovered.is_empty());
     }
 
@@ -1738,11 +1921,11 @@ mod tests {
         let alerted_set = alerted(&[]);
         let mut streak = BTreeMap::new();
         for _ in 0..(REQUIRED_CONSECUTIVE_POLLS - 1) {
-            transitions(&alerted_set, &mut streak, &[cond("disk")]);
+            transitions(&alerted_set, &mut streak, &[cond("disk")], &[]);
         }
         // One healthy poll in between.
-        transitions(&alerted_set, &mut streak, &[]);
-        let (broken, _) = transitions(&alerted_set, &mut streak, &[cond("disk")]);
+        transitions(&alerted_set, &mut streak, &[], &[]);
+        let (broken, _) = transitions(&alerted_set, &mut streak, &[cond("disk")], &[]);
         assert!(
             broken.is_empty(),
             "the streak must restart after a healthy poll, not resume"
@@ -1765,6 +1948,7 @@ mod tests {
             &alerted(&["thermal"]),
             &mut streak,
             &[cond("thermal"), cond("disk")],
+            &[],
         );
         assert_eq!(
             broken.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
@@ -1788,7 +1972,7 @@ mod tests {
     #[test]
     fn an_unmeasurable_condition_recovers_rather_than_sticking() {
         let mut streak = BTreeMap::new();
-        let (_, recovered) = transitions(&alerted(&["thermal"]), &mut streak, &[]);
+        let (_, recovered) = transitions(&alerted(&["thermal"]), &mut streak, &[], &[]);
         assert_eq!(recovered, vec!["thermal".to_owned()]);
     }
 
@@ -2127,11 +2311,12 @@ mod tests {
             .with_db(|c| birdnet_db::metric_rules::insert(c, &quiet))
             .expect("insert");
 
-        let mut out = Vec::new();
+        let mut out = Findings::default();
         check_metric_rules(&state, &mut out);
         assert!(
-            out.is_empty(),
-            "a metric with no reading must not fire: {out:?}"
+            out.conditions.is_empty(),
+            "a metric with no reading must not fire: {:?}",
+            out.conditions
         );
 
         // The other half: a rule on a metric that always reads — the hourly
@@ -2148,16 +2333,239 @@ mod tests {
             .with_db(|c| birdnet_db::metric_rules::insert(c, &dying_mic))
             .expect("insert");
 
-        let mut out = Vec::new();
+        let mut out = Findings::default();
         check_metric_rules(&state, &mut out);
-        assert_eq!(out.len(), 1, "{out:?}");
-        assert_eq!(out[0].key, format!("metric-rule:{id}"));
+        assert_eq!(out.conditions.len(), 1, "{:?}", out.conditions);
+        assert_eq!(out.conditions[0].key, format!("metric-rule:{id}"));
         assert!(
-            out[0].title.contains("Feeder mic has gone quiet"),
+            out.conditions[0]
+                .title
+                .contains("Feeder mic has gone quiet"),
             "the alert has to name the rule: {}",
-            out[0].title
+            out.conditions[0].title
         );
-        assert!(out[0].body.contains("20"), "{}", out[0].body);
+        assert!(
+            out.conditions[0].body.contains("20"),
+            "{}",
+            out.conditions[0].body
+        );
+    }
+
+    // ── a failed read is not a recovery (TD-1) ──────────────────────────
+
+    /// A station whose database answers every question but the one a test
+    /// breaks on purpose, by dropping the table it reads.
+    fn station_with(broken_table: Option<&str>, db_path: &str) -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        if let Some(table) = broken_table {
+            conn.execute_batch(&format!("DROP TABLE {table}")).unwrap();
+        }
+        AppState::from_connection(conn, std::path::PathBuf::from(db_path))
+    }
+
+    /// The checks a full poll of `state` could not look at.
+    fn unchecked_by_polling(state: &AppState) -> Vec<&'static str> {
+        evaluate(state).unchecked_checks()
+    }
+
+    /// What a full poll of `state` ends, when `open_key` has an open episode.
+    fn recovered_by_polling(state: &AppState, open_key: &str) -> Vec<String> {
+        let found = evaluate(state);
+        let mut streak = BTreeMap::new();
+        transitions(
+            &alerted(&[open_key]),
+            &mut streak,
+            &found.conditions,
+            &found.unchecked,
+        )
+        .1
+    }
+
+    /// The microphone-down episode survives a poll that could not read the
+    /// audio-source list.
+    ///
+    /// `check_sources` read the list with `unwrap_or_default()`, so an error
+    /// was an empty station, and `transitions` closes the episode of any key
+    /// the poll does not report: "Station health recovered", for a microphone
+    /// nobody has looked at since.
+    #[test]
+    fn a_source_list_that_could_not_be_read_does_not_end_a_microphone_down_episode() {
+        let broken = station_with(Some("audio_sources"), ":memory:");
+        assert!(
+            recovered_by_polling(&broken, "source:cam1").is_empty(),
+            "a poll that could not read the source list said the microphone recovered"
+        );
+        assert_eq!(
+            unchecked_by_polling(&broken),
+            ["sources"],
+            "and it must say it could not look, not that it found nothing"
+        );
+    }
+
+    /// The counterpart: a list that *was* read and no longer holds the source
+    /// (it was removed) really does end the episode. A fix that held every
+    /// episode on every poll would pass the test above and fail this one.
+    #[test]
+    fn a_source_list_that_was_read_and_no_longer_holds_the_source_ends_the_episode() {
+        let healthy = station_with(None, ":memory:");
+        assert_eq!(
+            recovered_by_polling(&healthy, "source:cam1"),
+            vec!["source:cam1".to_owned()]
+        );
+        assert!(
+            unchecked_by_polling(&healthy).is_empty(),
+            "a list that was read and is empty is not an unchecked one"
+        );
+    }
+
+    /// A failing integrity check must not be recovered by a failed read of the
+    /// record that says it is failing. The reads most likely to fail are the
+    /// ones on a database that is itself corrupt, which is the episode.
+    #[test]
+    fn a_maintenance_record_that_could_not_be_read_does_not_end_a_failing_check() {
+        let key = format!(
+            "maintenance-failed:{}",
+            birdnet_db::sqlite::JOB_INTEGRITY_CHECK
+        );
+        let broken = station_with(Some("maintenance_runs"), ":memory:");
+        assert!(
+            recovered_by_polling(&broken, &key).is_empty(),
+            "an unreadable maintenance record said the failing job recovered"
+        );
+        assert_eq!(unchecked_by_polling(&broken), ["maintenance"]);
+        // The counterpart: read, and holding no record of the job.
+        let healthy = station_with(None, ":memory:");
+        assert_eq!(recovered_by_polling(&healthy, &key), vec![key]);
+        assert!(unchecked_by_polling(&healthy).is_empty());
+    }
+
+    /// The operator's rules: a rule list that could not be read says nothing
+    /// about the rule that is firing.
+    #[test]
+    fn a_rule_list_that_could_not_be_read_does_not_end_a_firing_rules_episode() {
+        let broken = station_with(Some("metric_rules"), ":memory:");
+        assert!(
+            recovered_by_polling(&broken, "metric-rule:1").is_empty(),
+            "an unreadable rule list said the firing rule recovered"
+        );
+        assert_eq!(unchecked_by_polling(&broken), ["metric-rules"]);
+    }
+
+    /// A metric nobody could read is not a metric that is healthy; one that was
+    /// read, and is healthy, does end the episode.
+    #[test]
+    fn a_metric_that_could_not_be_sampled_does_not_end_a_firing_rules_episode() {
+        use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
+
+        let state = station_with(None, ":memory:");
+        let insert = |metric, comparison, threshold| {
+            state
+                .with_db(|c| {
+                    birdnet_db::metric_rules::insert(
+                        c,
+                        &NewMetricRule {
+                            name: "rule".into(),
+                            enabled: true,
+                            metric,
+                            comparison,
+                            threshold,
+                        },
+                    )
+                })
+                .expect("insert")
+        };
+        // No capture supervisor here, so this metric has no reading at all.
+        let unreadable = insert(Metric::MaxCaptureRestartsPerHour, Comparison::Above, 0.0);
+        let key = format!("metric-rule:{unreadable}");
+        assert!(
+            recovered_by_polling(&state, &key).is_empty(),
+            "a metric nobody could read said the firing rule recovered"
+        );
+        assert_eq!(unchecked_by_polling(&state), ["metric-rules"]);
+        // The counterpart: a metric that is read, and is now healthy, ends it.
+        let healthy = insert(Metric::DetectionsPerHour, Comparison::Above, 1_000.0);
+        let key = format!("metric-rule:{healthy}");
+        assert_eq!(recovered_by_polling(&state, &key), vec![key]);
+    }
+
+    /// A disk that could not be measured is not a disk that is fine.
+    #[test]
+    fn a_disk_that_could_not_be_measured_does_not_end_the_disk_episode() {
+        let nowhere = station_with(None, "/nonexistent-bnb-health-test/birds.db");
+        assert!(
+            recovered_by_polling(&nowhere, "disk").is_empty(),
+            "a disk that could not be measured said the disk alert recovered"
+        );
+        assert!(unchecked_by_polling(&nowhere).contains(&"disk"));
+        // The counterpart: a directory that can be measured is not unchecked,
+        // whatever its usage is on the machine running the test.
+        let here = station_with(None, ":memory:");
+        assert!(!unchecked_by_polling(&here).contains(&"disk"));
+    }
+
+    /// A check that could not look holds exactly what it owns, and nothing
+    /// else: a family by prefix, a single key by equality.
+    #[test]
+    fn a_check_that_could_not_look_holds_only_the_episodes_it_owns() {
+        let family = Unchecked {
+            check: "sources",
+            owns: Owns::Family("source:"),
+            why: "no such table".into(),
+        };
+        let mut streak = BTreeMap::new();
+        let (broken, recovered) = transitions(
+            &alerted(&["source:cam1", "source:usb0", "disk"]),
+            &mut streak,
+            &[],
+            &[family],
+        );
+        assert!(broken.is_empty());
+        assert_eq!(
+            recovered,
+            vec!["disk".to_owned()],
+            "the family is held; an unrelated key that is absent still recovers"
+        );
+
+        let exact = Unchecked {
+            check: "disk",
+            owns: Owns::Key("disk".to_owned()),
+            why: "no such mount".into(),
+        };
+        let (_, recovered) = transitions(
+            &alerted(&["disk", "disk-2", "data-volume"]),
+            &mut BTreeMap::new(),
+            &[],
+            &[exact],
+        );
+        assert_eq!(
+            recovered,
+            vec!["data-volume".to_owned(), "disk-2".to_owned()],
+            "an exact key holds that key, not one that merely starts with it"
+        );
+    }
+
+    /// A poll that could not look is not an observation, so it cannot be one of
+    /// the consecutive polls a fault needs before it alerts.
+    #[test]
+    fn a_poll_that_could_not_look_breaks_the_run_a_fault_needs_to_alert() {
+        let held = Unchecked {
+            check: "sources",
+            owns: Owns::Family("source:"),
+            why: "busy".into(),
+        };
+        let down = [cond("source:cam1")];
+        let mut streak = BTreeMap::new();
+        let open = alerted(&[]);
+        for _ in 0..(REQUIRED_CONSECUTIVE_POLLS - 1) {
+            transitions(&open, &mut streak, &down, &[]);
+        }
+        transitions(&open, &mut streak, &[], std::slice::from_ref(&held));
+        let (broken, _) = transitions(&open, &mut streak, &down, &[]);
+        assert!(
+            broken.is_empty(),
+            "two polls, one that could not look, and one more must not be three in a row"
+        );
     }
 
     /// And the poll itself runs it — not just the function in isolation.
@@ -2191,9 +2599,12 @@ mod tests {
 
         let found = evaluate(&state);
         assert!(
-            found.iter().any(|c| c.key == format!("metric-rule:{id}")),
+            found
+                .conditions
+                .iter()
+                .any(|c| c.key == format!("metric-rule:{id}")),
             "the poll did not evaluate the operator's rule; it found {:?}",
-            found.iter().map(|c| &c.key).collect::<Vec<_>>()
+            found.conditions.iter().map(|c| &c.key).collect::<Vec<_>>()
         );
     }
 
@@ -2249,9 +2660,9 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         birdnet_db::migration::migrate(&conn).unwrap();
         let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
-        let mut out = Vec::new();
+        let mut out = Findings::default();
         check_metric_rules(&state, &mut out);
-        assert!(out.is_empty());
+        assert!(out.conditions.is_empty() && out.unchecked.is_empty());
     }
 
     /// A disabled rule is stored and not evaluated.
@@ -2277,16 +2688,16 @@ mod tests {
             })
             .expect("insert");
 
-        let mut on = Vec::new();
+        let mut on = Findings::default();
         check_metric_rules(&state, &mut on);
-        assert_eq!(on.len(), 1, "the counterpart: enabled, it fires");
+        assert_eq!(on.conditions.len(), 1, "the counterpart: enabled, it fires");
 
         state
             .with_db(|c| birdnet_db::metric_rules::toggle(c, id))
             .expect("toggle");
-        let mut off = Vec::new();
+        let mut off = Findings::default();
         check_metric_rules(&state, &mut off);
-        assert!(off.is_empty(), "{off:?}");
+        assert!(off.conditions.is_empty(), "{:?}", off.conditions);
     }
 
     /// Every metric can be sampled without panicking, whatever this machine is.
@@ -2317,17 +2728,35 @@ mod tests {
         birdnet_db::migration::migrate(&conn).unwrap();
         let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
         assert_eq!(state.station_conditions().evaluated_at, None, "nothing yet");
-        let found = vec![Condition {
+        let mut found = Findings::default();
+        found.extend([Condition {
             key: "disk".to_owned(),
             title: "Disk nearly full".to_owned(),
             body: "…".to_owned(),
-        }];
+        }]);
         publish(&state, &found);
         let snap = state.station_conditions();
         assert!(snap.evaluated_at.is_some());
         assert_eq!(snap.conditions.len(), 1);
         assert_eq!(snap.conditions[0].key, "disk");
         assert_eq!(snap.conditions[0].title, "Disk nearly full");
+        assert!(
+            snap.unchecked.is_empty(),
+            "every check ran: {:?}",
+            snap.unchecked
+        );
+
+        // A check that could not look is published by name, so the endpoint can
+        // say "nothing found" apart from "could not look".
+        found.could_not_look("sources", Owns::Family("source:"), "no such table".into());
+        found.could_not_look("sources", Owns::Family("source:"), "again".into());
+        found.could_not_look("disk", Owns::Key("disk".to_owned()), "no such mount".into());
+        publish(&state, &found);
+        assert_eq!(
+            state.station_conditions().unchecked,
+            ["sources", "disk"],
+            "each check once, in the order they ran"
+        );
     }
 
     /// NP-5: under-voltage now is a condition; only "has occurred" is not;

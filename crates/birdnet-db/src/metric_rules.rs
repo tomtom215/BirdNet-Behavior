@@ -227,6 +227,18 @@ pub struct MetricRule {
     pub threshold: f64,
 }
 
+impl MetricRule {
+    /// A stable key for episode tracking, unique per rule.
+    ///
+    /// On the rule and not only on [`Firing`], because the notifier needs it
+    /// for a rule that has *not* fired: one whose metric could not be read this
+    /// poll must leave its open episode alone, and has no `Firing` to ask.
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!("metric-rule:{}", self.id)
+    }
+}
+
 /// A rule as submitted, before it has an id.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewMetricRule {
@@ -388,7 +400,7 @@ impl Firing {
     /// A stable key for episode tracking, unique per rule.
     #[must_use]
     pub fn key(&self) -> String {
-        format!("metric-rule:{}", self.rule.id)
+        self.rule.key()
     }
 
     /// The alert title.

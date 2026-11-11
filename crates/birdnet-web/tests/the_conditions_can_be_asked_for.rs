@@ -48,6 +48,7 @@ async fn the_last_evaluation_is_served_with_its_time() {
             title: "Data volume has gone away — detections are being lost".into(),
             body: "Check the card.".into(),
         }],
+        unchecked: vec![],
     });
     let (status, body) = get(&state, "/api/v2/health/conditions").await;
     assert_eq!(status, StatusCode::OK, "the answer, not a verdict: {body}");
@@ -59,5 +60,30 @@ async fn the_last_evaluation_is_served_with_its_time() {
             .as_str()
             .unwrap()
             .contains("gone away")
+    );
+}
+
+/// "Nothing found" and "could not look" are different answers, and the endpoint
+/// says which. A poll whose audio-source list could not be read finds no
+/// condition from it; reporting that as an empty list would read as an
+/// all-clear for the one check that was blind.
+#[tokio::test]
+async fn a_check_that_could_not_look_is_not_an_all_clear() {
+    let state = station();
+
+    // The counterpart: a station whose checks all ran has nothing unchecked.
+    let (_, body) = get(&state, "/api/v2/health/conditions").await;
+    assert_eq!(body["unchecked"], serde_json::json!([]), "{body}");
+
+    state.set_station_conditions(
+        ConditionsSnapshot::now(vec![]).with_unchecked(vec!["sources".into()]),
+    );
+    let (status, body) = get(&state, "/api/v2/health/conditions").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], 0, "no condition was found: {body}");
+    assert_eq!(
+        body["unchecked"],
+        serde_json::json!(["sources"]),
+        "but a check could not look, and the answer must say so: {body}"
     );
 }

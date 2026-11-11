@@ -14,27 +14,6 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
 (a test or a command showed it), **VALIDATED** (checked another way, said how),
 **PLAUSIBLE**, **CONJECTURED**.
 
-## TD-1 A failed read inside the station-health evaluator ends an alert
-
-* **Where:** `src/integrations/station_health.rs`: `check_sources` (the audio
-  source list), `check_metric_rules` (the operator's rules) and
-  `check_maintenance` (the recorded maintenance runs) each default a failed read
-  to "nothing" (`unwrap_or_default()`, `.ok().flatten()`).
-* **What it does:** `evaluate` returns the conditions that hold *now*, and the
-  episode latch treats a key absent from that list as recovered
-  (`transitions`, "a key absent from it has recovered"). A poll whose source list
-  could not be read therefore ends an open "microphone down" episode and sends
-  "Station health recovered". `check_maintenance` does the opposite: a run record
-  that could not be read is "never run".
-* **Evidence:** PROVEN by reading, not by a test: the three call sites and the
-  latch are in the same file and the sweep (`tests/a_failed_read_is_not_defaulted_into_a_fact.rs`)
-  lists them. No test drives a failed read through `transitions`.
-* **Why it is open:** a fix needs a third state for a check ("could not look"),
-  carried through `evaluate` and `transitions` so that neither a new episode nor
-  a recovery is declared for a key whose check did not run. That changes the
-  signature of all sixteen checks or adds a side channel to `Condition`; it is
-  larger than a sweep fix and wants its own tests.
-
 ## TD-2 Help links: half the topics have no call site
 
 * **Where:** `crates/birdnet-web/src/routes/pages/help.rs`.
@@ -152,3 +131,22 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   `a_protected_clip_survives_the_purge` (2, with an unlocked control) were run by their author.
 * **Still open about it:** the new "Where BirdNET-Pi is installed" field was not rendered in a browser, and
   the CLI has no flag for that folder (it discovers the list beside the recordings).
+
+## TD-8 The clock check reads "cannot tell" as "recovered"
+
+* **Where:** `src/integrations/station_health.rs`: `check_clock` and `clock_condition`.
+  `clock_condition` returns no condition when the system answers neither synchronised nor
+  unsynchronised (`NtpState::Unknown`), and `transitions` treats a key missing from a poll as
+  recovered.
+* **What it does:** when `timedatectl` does not answer in time (`TIMEDATECTL_TIMEOUT`, ten
+  seconds), an open "Station clock is not synchronised" episode closes with "Station health
+  recovered". The next poll that does answer re-opens it, after the debounce. A station whose
+  clock is really unsynchronised and whose `timedatectl` hangs now and then therefore alerts and
+  recovers in turn. This is the TD-1 shape (a check that could not look is read as a check that
+  found nothing); the database and disk reads that had it are fixed (`Findings`, `Unchecked`).
+* **Evidence:** read at `clock_condition` and `transitions`; not reproduced with a test.
+* **Why it is open:** `Unknown` is also the permanent answer in a container with no systemd,
+  where `NtpState`'s documentation says the clock is the host's problem. Reporting it as "could
+  not look" would list the clock as unchecked on every such station for ever, so the fix needs a
+  decision first: whether a probe that can never answer is "unchecked" or simply "not
+  applicable here", and how the API says which.

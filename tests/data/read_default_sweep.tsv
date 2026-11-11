@@ -216,9 +216,8 @@ setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or_else	s
 setting-default	src/integrations/email.rs	sender_name	ok	birdnet_db::settings::get_or(conn, "email_from_name", DEFAULT_SENDER_NAME) .ok()
 handled	src/integrations/mqtt_presence.rs	spawn_mqtt_presence	match-err	match tokio::task::spawn_blocking(move || open.shutdown()).await { Err .. }
 handled	src/integrations/mqtt_presence.rs	tick_presence	match-err	match tokio::task::spawn_blocking(move || PresenceSession::connect(&cfg)).await { Err .. }
-tracked:TD-1	src/integrations/station_health.rs	check_maintenance	ok	birdnet_db::sqlite::last_run_result(conn, job) .ok()
-tracked:TD-1	src/integrations/station_health.rs	check_metric_rules	unwrap_or_default	birdnet_db::metric_rules::list(conn).unwrap_or_default()
-tracked:TD-1	src/integrations/station_health.rs	check_sources	unwrap_or_default	AudioSourceStore::list(conn).unwrap_or_default()
+handled	src/integrations/station_health.rs	check_maintenance	match-err	match state.with_db(|conn| birdnet_db::sqlite::last_run_result(conn, job)) { Err .. }
+handled	src/integrations/station_health.rs	check_metric_rules	match-err	match state.with_db(|conn| birdnet_db::metric_rules::list(conn)) { Err .. }
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::outbound_queue::depth(conn, birdnet_integrations::birdweather::QUEUE_KIND) .ok()
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::last_hour_count(conn) .ok()
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::seconds_since_last_detection(conn) .ok()
