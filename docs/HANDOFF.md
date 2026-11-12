@@ -579,12 +579,11 @@ it says otherwise.
    browser settings now), no certificate upload or generate page (P-22), the data-volume check
    judges one of upstream's four paths (P-4), no OIDC (G-20), the rest of the gap analysis'
    9.7 table.
-8. **Known debt, each with evidence:** [`TECH_DEBT.md`](TECH_DEBT.md) TD-1 (a failed read
-    inside the station-health evaluator ends an alert), TD-2 (12 of 24 help topics have no
+8. **Known debt, each with evidence:** [`TECH_DEBT.md`](TECH_DEBT.md) TD-2 (12 of 24 help topics have no
     call site), TD-3 (the boot journal records a detection count it could not read as 0),
     TD-4 (the Capture tab's duplicate guard; the wizard logs and says nothing), TD-5 (RTSP
     credentials on ffmpeg's command line; a way around it is proven with `concat` and
-    `tools/rtsp-probe`, not built), TD-6 (ten page partials routed and never linked); TD-7 (protected clips) is closed. Counts in that file were rechecked on 2026-10-21 where a command could.
+    `tools/rtsp-probe`, not built), TD-6 (ten page partials routed and never linked); TD-8 (the clock check reads "cannot tell" as "recovered"); TD-1 (a failed read inside the station-health evaluator ends an alert) and TD-7 (protected clips) are closed. Counts in that file were rechecked on 2026-10-21 where a command could.
 9. **Public pages that scan the whole history are still slow one at a time**, and an
     unescaped reflection can still inject non-script markup (the CSP nonce goes only onto
     sealed tags and any other `<script` is rewritten to text; an `hx-post` attribute is a

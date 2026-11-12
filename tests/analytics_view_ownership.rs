@@ -25,7 +25,7 @@
 #![cfg(feature = "analytics")]
 
 use birdnet_db::sqlite::ReviewStatus;
-use birdnet_web::state::AppState;
+use birdnet_web::state::{AppState, ReviewOutcome, RowRef};
 
 /// Collapse whitespace so formatting differences are not treated as drift.
 fn normalise(sql: &str) -> String {
@@ -97,16 +97,24 @@ fn ts_rows(state: &AppState) -> i64 {
 fn a_time_series_query_does_not_readmit_a_rejected_detection() {
     let dir = tempfile::tempdir().unwrap();
     let (state, today) = station(dir.path());
-    state
+    let outcome = state
         .set_detection_review(
-            &today,
-            "07:15:00",
-            "Erithacus rubecula",
+            &RowRef {
+                date: today,
+                time: "07:15:00".to_owned(),
+                sci_name: "Erithacus rubecula".to_owned(),
+                file_name: None,
+            },
             "European Robin",
             ReviewStatus::Rejected,
             Some("misidentified — traffic noise"),
         )
         .expect("review recorded");
+    assert_eq!(
+        outcome,
+        ReviewOutcome::Done,
+        "the fixture's detection is there"
+    );
 
     let before = ts_rows(&state);
     assert_eq!(before, 2, "the rejection reached the analytics store");

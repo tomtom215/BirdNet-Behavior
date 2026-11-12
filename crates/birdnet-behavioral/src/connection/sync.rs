@@ -748,6 +748,11 @@ impl AnalyticsDb {
     /// Re-label the one detection a key names; see
     /// [`Self::delete_detection_at`].
     ///
+    /// Clears the detection's verdict, as `SQLite`'s `detections_relabel_detaches_review`
+    /// trigger does (migration 59): a verdict is about a species, and this
+    /// copy has no triggers, so the two stores would otherwise disagree about a
+    /// relabelled detection until the next start's drift repair.
+    ///
     /// # Errors
     ///
     /// Returns an error if the update fails.
@@ -761,7 +766,7 @@ impl AnalyticsDb {
         new_com_name: &str,
     ) -> Result<u64, AnalyticsError> {
         let n = self.conn.execute(
-            "UPDATE detections SET Sci_Name = ?, Com_Name = ? \
+            "UPDATE detections SET Sci_Name = ?, Com_Name = ?, review_verdict = NULL \
              WHERE Date = ? AND Time = ? AND Sci_Name = ? \
              AND COALESCE(File_Name, '') = COALESCE(?, '')",
             params![
@@ -903,7 +908,7 @@ impl AnalyticsDb {
         new_com_name: &str,
     ) -> Result<u64, AnalyticsError> {
         let n = self.conn.execute(
-            "UPDATE detections SET Sci_Name = ?, Com_Name = ? \
+            "UPDATE detections SET Sci_Name = ?, Com_Name = ?, review_verdict = NULL \
              WHERE Date = ? AND Time = ? AND Sci_Name = ?",
             params![new_sci_name, new_com_name, date, time, old_sci_name],
         )?;
@@ -1038,6 +1043,12 @@ impl AnalyticsDb {
     /// rejection changes the SQLite aggregates and leaves every behavioural and
     /// time-series dashboard still counting the reject.
     ///
+    /// The detection is named by its clip as well as its date, time and species,
+    /// compared the way `SQLite`'s unique index compares it (`None` is a
+    /// detection with no clip). Two sources that heard one bird in one second
+    /// share the triple and differ only in the clip, and a verdict addressed by
+    /// the triple reached both.
+    ///
     /// Returns the number of rows updated.
     ///
     /// # Errors
@@ -1048,12 +1059,14 @@ impl AnalyticsDb {
         date: &str,
         time: &str,
         sci_name: &str,
+        file_name: Option<&str>,
         verdict: Option<&str>,
     ) -> Result<u64, AnalyticsError> {
         let n = self.conn.execute(
             "UPDATE detections SET review_verdict = ? \
-             WHERE Date = ? AND Time = ? AND Sci_Name = ?",
-            params![verdict, date, time, sci_name],
+             WHERE Date = ? AND Time = ? AND Sci_Name = ? \
+             AND COALESCE(File_Name, '') = COALESCE(?, '')",
+            params![verdict, date, time, sci_name, file_name],
         )?;
         Ok(n as u64)
     }
@@ -1748,6 +1761,119 @@ mod tests {
                 ("2026-03-13".to_string(), 2)
             ]
         );
+    }
+
+    /// A copy holding two detections that share date, time and species and differ
+    /// only in their clip: two microphones that heard one bird in one second.
+    fn two_sources_one_second() -> (AnalyticsDb, tempfile::TempDir) {
+        let (db, tmp) = make_db();
+        let sc = rusqlite::Connection::open_in_memory().unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT, \
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER, Sens REAL, \
+             Overlap REAL, File_Name TEXT, review_verdict TEXT, detected_at_utc INTEGER);",
+        )
+        .unwrap();
+        for clip in ["a.wav", "b.wav"] {
+            sc.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) \
+                 VALUES ('2026-03-11', '06:00:00', 'Turdus merula', 'Blackbird', 0.85, ?1)",
+                rusqlite::params![clip],
+            )
+            .unwrap();
+        }
+        db.full_resync_from_sqlite(&sc).unwrap();
+        (db, tmp)
+    }
+
+    /// A verdict on one microphone's detection is not a verdict on the other's:
+    /// both stores must agree, or the drift check rebuilds this copy at the next
+    /// start and the dashboards change under the operator.
+    #[test]
+    fn a_verdict_reaches_only_the_detection_whose_clip_it_names() {
+        let (db, _tmp) = two_sources_one_second();
+
+        let n = db
+            .set_review_verdict(
+                "2026-03-11",
+                "06:00:00",
+                "Turdus merula",
+                Some("a.wav"),
+                Some("rejected"),
+            )
+            .unwrap();
+
+        assert_eq!(n, 1, "one row, not both");
+        assert_eq!(db.rejected_detection_count().unwrap(), 1);
+        // Clearing the other one's (nothing) leaves the first alone, and clearing
+        // the first returns it.
+        let n = db
+            .set_review_verdict(
+                "2026-03-11",
+                "06:00:00",
+                "Turdus merula",
+                Some("b.wav"),
+                None,
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            db.rejected_detection_count().unwrap(),
+            1,
+            "A is still rejected"
+        );
+        db.set_review_verdict(
+            "2026-03-11",
+            "06:00:00",
+            "Turdus merula",
+            Some("a.wav"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(db.rejected_detection_count().unwrap(), 0);
+    }
+
+    /// A verdict is about a species: relabelling clears it here as `SQLite`'s
+    /// trigger does there, so the two stores agree without a repair.
+    #[test]
+    fn relabelling_a_detection_clears_its_verdict_in_this_copy_too() {
+        let (db, _tmp) = two_sources_one_second();
+        for clip in ["a.wav", "b.wav"] {
+            db.set_review_verdict(
+                "2026-03-11",
+                "06:00:00",
+                "Turdus merula",
+                Some(clip),
+                Some("rejected"),
+            )
+            .unwrap();
+        }
+        assert_eq!(db.rejected_detection_count().unwrap(), 2);
+
+        db.relabel_detection_at(
+            "2026-03-11",
+            "06:00:00",
+            "Turdus merula",
+            Some("a.wav"),
+            "Parus major",
+            "Great Tit",
+        )
+        .unwrap();
+        assert_eq!(
+            db.rejected_detection_count().unwrap(),
+            1,
+            "only the relabelled detection lost its verdict"
+        );
+
+        db.relabel_detection(
+            "2026-03-11",
+            "06:00:00",
+            "Turdus merula",
+            "Parus major",
+            "Great Tit",
+        )
+        .unwrap();
+        assert_eq!(db.rejected_detection_count().unwrap(), 0);
     }
 
     /// A verdict is part of the fingerprint: rejecting a row in `SQLite` alone

@@ -198,12 +198,16 @@ pub(crate) fn db_health(state: &AppState) -> DbHealth {
 /// The conditions the notifier pushes were push-only; an operator who
 /// missed a push could not ask. Always 200: this is the answer, not a
 /// verdict — `/health` carries the status code.
+///
+/// `unchecked` names the checks that could not look at the last evaluation. An
+/// empty `conditions` beside a non-empty `unchecked` is not an all-clear.
 async fn conditions(State(state): State<AppState>) -> Json<Value> {
     let snapshot = state.station_conditions();
     Json(json!({
         "evaluated_at": snapshot.evaluated_at,
         "count": snapshot.conditions.len(),
         "conditions": snapshot.conditions,
+        "unchecked": snapshot.unchecked,
     }))
 }
 

@@ -1263,6 +1263,9 @@ fn render_detection_card(
     let time_clk = crate::display::clock(&d.time);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
+    // The clip too: two sources that heard one bird in one second share the
+    // date, time and name, and a link without it opens whichever comes first.
+    let file_enc = simple_url_encode(d.file_name.as_deref().unwrap_or_default());
     let row_vals = super::recordings::row_vals(&crate::state::RowRef::from(d));
 
     let _ = write!(
@@ -1275,7 +1278,7 @@ fn render_detection_card(
          {conf}\
          </div>\
          <div class=\"bnb-meta mono tdl-card-sci\">{sci_name} · \
-         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time_clk}</a></div>\
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}&file={file_enc}\" class=\"tdl-time\">{time_clk}</a></div>\
          {audio}\
          </div>\
          <div class=\"tdl-card-actions\">\

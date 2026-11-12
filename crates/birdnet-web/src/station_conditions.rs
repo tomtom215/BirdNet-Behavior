@@ -29,6 +29,11 @@ pub struct ConditionsSnapshot {
     pub evaluated_at: Option<u64>,
     /// Everything wrong at that moment; empty when nothing was.
     pub conditions: Vec<Condition>,
+    /// The checks that could not look at that moment, by name (`sources`,
+    /// `maintenance`, ...). Empty when every check ran. An empty `conditions`
+    /// next to a non-empty `unchecked` is not "all clear": it is "nothing
+    /// found by the checks that could look".
+    pub unchecked: Vec<String>,
 }
 
 impl ConditionsSnapshot {
@@ -43,6 +48,14 @@ impl ConditionsSnapshot {
                     .as_secs(),
             ),
             conditions,
+            unchecked: Vec::new(),
         }
+    }
+
+    /// The same snapshot, saying which checks could not look.
+    #[must_use]
+    pub fn with_unchecked(mut self, unchecked: Vec<String>) -> Self {
+        self.unchecked = unchecked;
+        self
     }
 }

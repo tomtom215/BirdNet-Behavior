@@ -36,7 +36,48 @@ A running tally at the top shows how many detections you have confirmed,
 rejected, and have left to review. Recorded verdicts move to the **Recent
 verdicts** list, where an **Undo** button clears a verdict and returns the
 detection to the queue. Re-reviewing a detection simply replaces its previous
-verdict — there is never more than one verdict per `(date, time, species)`.
+verdict — a detection has at most one.
+
+### One verdict, one detection
+
+A verdict is about **one detection**: the species, the second, and the clip it
+points at. When two microphones hear the same bird in the same second, the
+station keeps two detections, and a verdict on the one you listened to is not a
+verdict on the other. Each is in the queue until it has its own, and each row's
+time is a link to that detection's own page, so you can listen to the one you
+are about to judge. A page left open from an older version, which does not say
+which clip it means, is refused with a message when the second would make that a
+guess; open the detection from the list and review it there.
+
+### When the detection changes underneath a verdict
+
+A verdict says something about a species. If you **relabel** a detection, the
+verdict on it described the old species and no longer applies: the detection is
+unreviewed again, under its new name, and counts as what it now is. The old
+verdict is kept in the list, marked **Not attached**, because it records what
+you decided.
+
+### Verdicts from before the station could tell them apart
+
+Earlier versions recorded a verdict against the date, time and species only.
+On the first start after upgrading, each of those is looked at:
+
+- if one detection has that date, time and species, the verdict is attached to
+  it and nothing else changes;
+- if **more than one** does (two microphones, same second), there is no telling
+  which you meant, and the station will not guess: a rejection withdraws a
+  detection from every count and share link, and attaching it to the wrong one
+  would hide a bird nobody had judged. The verdict is kept, marked **Not
+  attached**, and the detections it had been applied to are unreviewed again and
+  back in the queue for you to judge one at a time;
+- if none does, its detection has since been deleted; the verdict is kept as
+  history.
+
+A **Not attached** verdict is in no tally and excludes nothing. **Dismiss**
+removes it once you have read it. When the first start would withdraw a verdict
+from a detection, the station copies the database first
+(`birds.db.pre-migration-59.backup`) and the admin migration preview says how
+many verdicts it will touch.
 
 ## Reviewing from a detection
 

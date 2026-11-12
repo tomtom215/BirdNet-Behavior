@@ -134,7 +134,7 @@ looks healthy.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/v2/health` | JSON liveness/health check (use for monitoring). |
-| `GET /api/v2/health/conditions` | What is wrong right now: the station-health conditions (a dead microphone, a full disk, a failing backup, a lost data volume, a boot that lost something) as the notifier last evaluated them, with `evaluated_at`. These used to be push-only. Always 200; `/health` carries the verdict. |
+| `GET /api/v2/health/conditions` | What is wrong right now: the station-health conditions (a dead microphone, a full disk, a failing backup, a lost data volume, a boot that lost something) as the notifier last evaluated them, with `evaluated_at`. These used to be push-only. `unchecked` names the checks that could not look at the last evaluation (for example `sources` when the audio-source list could not be read); an empty `conditions` beside a non-empty `unchecked` is not an all-clear. Always 200; `/health` carries the verdict. |
 | `GET /api/v2/metrics` | Prometheus metrics (text format) — see [Integrations](./integrations.md#prometheus-metrics). |
 | `GET /api/v2/stats` | Summary counts (detections, species, today). |
 | `GET /api/v2/system/disk` | Disk usage for the data directory. Answers 503 when the disk is critical (95 % used) and 200 otherwise. Fullness is measured against the space this user can actually reach — `used / (used + available)`, the same figure `df`'s `Use%` column reports — not against the raw device size, which on any ext4 with its default 5 % root reserve, or inside a container quota, is larger than anything the station can use. |

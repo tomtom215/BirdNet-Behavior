@@ -26,8 +26,9 @@ pub mod types;
 pub use connection::{DbError, open_connection, open_or_create, open_readonly, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::detection_reviews::{
-    DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
-    detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
+    Detached, DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
+    detached_review_count, detection_clips, detection_review_counts, detection_review_total,
+    detection_reviews_page, dismiss_detached_review, get_detection_review,
     recent_detection_reviews, rejected_detection_count, set_detection_review,
     unreviewed_recent_detections,
 };
@@ -62,9 +63,9 @@ pub use queries::{
     delete_quarantine, delete_species_detections, delete_species_interval,
     delete_species_threshold, detected_at_utc_for, detection_at, detection_count,
     detection_count_for_date, detection_count_for_species_date, detection_counts_by_run,
-    detection_dates, detection_quality_by_hour, detections_by_date, detections_by_species,
-    detections_for_clip, detections_per_day, distinct_detection_dates, get_quarantine,
-    get_species_interval_map, get_species_intervals, get_species_threshold_map,
+    detection_dates, detection_quality_by_hour, detection_with_clip, detections_by_date,
+    detections_by_species, detections_for_clip, detections_per_day, distinct_detection_dates,
+    get_quarantine, get_species_interval_map, get_species_intervals, get_species_threshold_map,
     get_species_thresholds, hourly_activity, hourly_totals, insert_analysis_run, insert_detection,
     insert_quarantine, is_detection_locked, is_detection_locked_at, is_image_blacklisted,
     known_sources, last_hour_count, latest_analysis_run, latest_detection, latest_detection_full,

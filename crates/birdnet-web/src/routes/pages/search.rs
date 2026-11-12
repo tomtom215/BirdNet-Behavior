@@ -479,6 +479,9 @@ async fn bulk_action(
     // `SQLite` left every analytics dashboard counting the row.
     let applied = tokio::task::spawn_blocking(move || {
         let mut done = 0_usize;
+        // Selected rows whose date, time and species name several detections and
+        // whose key gave no clip: skipped, and said to be, rather than guessed.
+        let mut ambiguous = 0_usize;
         for k in &keys {
             let ok = match action {
                 BulkAction::Delete => state.delete_detection(k)?,
@@ -501,15 +504,14 @@ async fn bulk_action(
                             } else {
                                 birdnet_db::sqlite::ReviewStatus::Rejected
                             };
-                            state.set_detection_review(
-                                &k.date,
-                                &k.time,
-                                &k.sci_name,
-                                &com_name,
-                                status,
-                                None,
-                            )?;
-                            true
+                            match state.set_detection_review(k, &com_name, status, None)? {
+                                crate::state::ReviewOutcome::Done => true,
+                                crate::state::ReviewOutcome::NoSuchDetection => false,
+                                crate::state::ReviewOutcome::Ambiguous { .. } => {
+                                    ambiguous += 1;
+                                    false
+                                }
+                            }
                         }
                         None => false,
                     }
@@ -543,18 +545,24 @@ async fn bulk_action(
                 );
             }
         }
-        Ok::<_, birdnet_db::sqlite::DbError>(done)
+        Ok::<_, birdnet_db::sqlite::DbError>((done, ambiguous))
     })
     .await;
 
     match applied {
-        Ok(Ok(done)) => {
+        Ok(Ok((done, ambiguous))) => {
             // Reporting what was *asked* alongside what happened, because a
             // silent shortfall — a row somebody else already deleted — reads as
             // the action having failed.
             let verb = action.past();
             let msg = if done == requested {
                 format!("{done} detections {verb}.")
+            } else if ambiguous > 0 {
+                format!(
+                    "{done} of {requested} detections {verb}. {ambiguous} were skipped: more \
+                     than one source heard that species at that second and the selection did \
+                     not say which clip. Open them from the list to review each one."
+                )
             } else {
                 format!("{done} of {requested} detections {verb}; the rest were already gone.")
             };

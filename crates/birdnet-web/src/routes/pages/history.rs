@@ -561,7 +561,7 @@ fn render_day_log_row(
          {conf}\
          </div>\
          <div class=\"bnb-meta mono tdl-card-sci\">{sci} · \
-         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}&file={file_enc}\" class=\"tdl-time\">{time}</a></div>\
          </div></div>",
         av = avatar(&d.com_name, shown, &d.sci_name, ""),
         conf = conf_bar(d.confidence, floor),
@@ -570,6 +570,7 @@ fn render_day_log_row(
         time = crate::display::clock(&d.time),
         date_enc = simple_url_encode(&d.date),
         time_enc = simple_url_encode(&d.time),
+        file_enc = simple_url_encode(d.file_name.as_deref().unwrap_or_default()),
     );
 }
 

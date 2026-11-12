@@ -166,7 +166,9 @@ handled	crates/birdnet-web/src/routes/system.rs	health	unwrap_or	tokio::task::sp
 handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source)) { Err .. }
 handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24)) { Err .. }
 handled	crates/birdnet-web/src/state.rs	approve_quarantine	ok	self.with_read_db(|conn| { birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name) }) .ok
+handled	crates/birdnet-web/src/state.rs	clear_detection_review	match-err	match review_clip(conn, row)? { Err .. }
 handled	crates/birdnet-web/src/state.rs	run_blocking	match-err	match tokio::task::spawn_blocking(move || f(&state)).await { Err .. }
+handled	crates/birdnet-web/src/state.rs	set_detection_review	match-err	match review_clip(conn, row)? { Err .. }
 task-panic	crates/birdnet-web/src/tls.rs	on_the_pool	ok	tokio::task::spawn_blocking(move || work(&cert, &key)) .await .ok()
 task-panic	crates/birdnet-web/src/tls.rs	spawn_renewer	ok	tokio::task::spawn_blocking(move || self_signed_expiry(&state_dir)) .await .ok()
 setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()
@@ -216,9 +218,8 @@ setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or_else	s
 setting-default	src/integrations/email.rs	sender_name	ok	birdnet_db::settings::get_or(conn, "email_from_name", DEFAULT_SENDER_NAME) .ok()
 handled	src/integrations/mqtt_presence.rs	spawn_mqtt_presence	match-err	match tokio::task::spawn_blocking(move || open.shutdown()).await { Err .. }
 handled	src/integrations/mqtt_presence.rs	tick_presence	match-err	match tokio::task::spawn_blocking(move || PresenceSession::connect(&cfg)).await { Err .. }
-tracked:TD-1	src/integrations/station_health.rs	check_maintenance	ok	birdnet_db::sqlite::last_run_result(conn, job) .ok()
-tracked:TD-1	src/integrations/station_health.rs	check_metric_rules	unwrap_or_default	birdnet_db::metric_rules::list(conn).unwrap_or_default()
-tracked:TD-1	src/integrations/station_health.rs	check_sources	unwrap_or_default	AudioSourceStore::list(conn).unwrap_or_default()
+handled	src/integrations/station_health.rs	check_maintenance	match-err	match state.with_db(|conn| birdnet_db::sqlite::last_run_result(conn, job)) { Err .. }
+handled	src/integrations/station_health.rs	check_metric_rules	match-err	match state.with_db(birdnet_db::metric_rules::list) { Err .. }
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::outbound_queue::depth(conn, birdnet_integrations::birdweather::QUEUE_KIND) .ok()
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::last_hour_count(conn) .ok()
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::seconds_since_last_detection(conn) .ok()

@@ -15,6 +15,12 @@
 //! | GET    | `/pages/detection-reviews-queue`  | HTMX partial: queue + verdicts  |
 //! | POST   | `/pages/detection-review`         | Record a confirm/reject verdict |
 //! | POST   | `/pages/detection-review-clear`   | Undo a verdict                  |
+//! | POST   | `/pages/detection-review-dismiss` | Dismiss a verdict attached to no detection |
+//!
+//! A verdict is about one detection, named by its date, time, species **and
+//! clip**: two microphones that hear one bird in one second have two. Every form
+//! here carries the clip; one that does not (an older page left open) is
+//! accepted only when its date, time and species name a single detection.
 
 use std::fmt::Write as _;
 
@@ -60,6 +66,10 @@ pub fn mutating_router() -> Router<AppState> {
             "/pages/detection-review-inline",
             axum::routing::post(detection_review_inline),
         )
+        .route(
+            "/pages/detection-review-dismiss",
+            axum::routing::post(detection_review_dismiss),
+        )
 }
 /// Form for recording a verdict.
 #[derive(Debug, Deserialize)]
@@ -70,6 +80,11 @@ pub struct ReviewForm {
     pub time: String,
     /// Scientific name used with `date`/`time` to identify the detection row.
     pub sci_name: String,
+    /// The detection's clip, `""` for one with no clip; absent from a form that
+    /// predates it, which is then accepted only if the date, time and species
+    /// name one detection.
+    #[serde(default)]
+    pub file_name: Option<String>,
     /// Common name stored alongside the verdict for display purposes.
     pub com_name: String,
     /// `confirmed` or `rejected`; anything else is rejected as bad input.
@@ -85,6 +100,16 @@ pub struct ClearForm {
     pub time: String,
     /// Scientific name used with `date`/`time` to locate the verdict to clear.
     pub sci_name: String,
+    /// The detection's clip; see [`ReviewForm::file_name`].
+    #[serde(default)]
+    pub file_name: Option<String>,
+}
+
+/// Form for dismissing a verdict that is attached to no detection.
+#[derive(Debug, Deserialize)]
+pub struct DismissForm {
+    /// The review row's id.
+    pub id: i64,
 }
 
 async fn detection_reviews_page(headers: HeaderMap) -> Html<String> {
@@ -138,19 +163,23 @@ async fn detection_reviews_queue_partial(
                 birdnet_db::sqlite::detection_reviews_page(conn, status, RECENT_LIMIT, offset)?;
             let matching = birdnet_db::sqlite::detection_review_total(conn, status)?;
             let counts = birdnet_db::sqlite::detection_review_counts(conn)?;
+            let detached = birdnet_db::sqlite::detached_review_count(conn)?;
             let floor = super::confidence::station_floor(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((pending, recent, matching, counts, floor))
+            Ok::<_, birdnet_db::sqlite::DbError>((
+                pending, recent, matching, counts, detached, floor,
+            ))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((pending, recent, matching, (confirmed, rejected), floor))) => {
+        Ok(Ok((pending, recent, matching, (confirmed, rejected), detached, floor))) => {
             let html = render_queue(
                 &pending,
                 &recent,
                 confirmed,
                 rejected,
+                detached,
                 QueueView {
                     status: q
                         .status
@@ -191,6 +220,7 @@ fn render_queue(
     recent: &[birdnet_db::sqlite::DetectionReview],
     confirmed: i64,
     rejected: i64,
+    detached: i64,
     view: QueueView,
     names: &birdnet_core::i18n::NameLocalizer,
     floor: f64,
@@ -202,9 +232,14 @@ fn render_queue(
         "<div class=\"dr-counts\">\
   <span class=\"bnb-pill moss\">&#10003; {confirmed} confirmed</span>\
   <span class=\"bnb-pill rare\">&#10007; {rejected} rejected</span>\
-  <span class=\"bnb-pill\">{} awaiting review</span>\
+  <span class=\"bnb-pill\">{} awaiting review</span>{not_attached}\
 </div>",
-        pending.len()
+        pending.len(),
+        not_attached = if detached > 0 {
+            format!("<span class=\"bnb-pill\">{detached} not attached to a detection</span>")
+        } else {
+            String::new()
+        },
     );
 
     html.push_str("<div class=\"bnb-card pad dr-card-mb\">");
@@ -264,6 +299,18 @@ fn render_pending_row(
     let time = escape_html(&d.time);
     let time_clk = crate::display::clock(&d.time);
     let enc_com = simple_url_encode(&d.com_name);
+    // `""` for a detection with no clip: said, not absent, so the form names it.
+    let clip = d.file_name.as_deref().unwrap_or_default();
+    let file = escape_html(clip);
+    // The page for this detection, not for whichever of two same-second
+    // detections comes first: the reviewer should be able to listen to the
+    // one they are about to judge.
+    let open = format!(
+        "/detections/detail?date={}&time={}&name={enc_com}&file={}",
+        simple_url_encode(&d.date),
+        simple_url_encode(&d.time),
+        simple_url_encode(clip)
+    );
     let conf = super::atoms::conf_pill(d.confidence * 100.0, floor);
     // Per-row form: hidden inputs carry the (possibly apostrophe-bearing)
     // identity safely as escaped attribute values; the clicked submit button's
@@ -275,16 +322,18 @@ fn render_pending_row(
   <input type=\"hidden\" name=\"date\" value=\"{date}\">\
   <input type=\"hidden\" name=\"time\" value=\"{time}\">\
   <input type=\"hidden\" name=\"sci_name\" value=\"{sci}\">\
+  <input type=\"hidden\" name=\"file_name\" value=\"{file}\">\
   <input type=\"hidden\" name=\"com_name\" value=\"{com}\">\
   <div class=\"dr-row-main\">\
     <a href=\"/species/detail?name={enc_com}\" class=\"dr-row-name\">{shown}</a>\
     <div class=\"dr-row-sci\">{sci}</div>\
-    <div class=\"dr-row-meta\">{date} · {time_clk}</div>\
+    <div class=\"dr-row-meta\"><a href=\"{open_href}\" class=\"dr-link\">{date} · {time_clk}</a></div>\
   </div>\
   {conf}\
   <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"bnb-btn dr-confirm-btn\">&#10003; Confirm</button>\
   <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"bnb-btn ghost dr-nowrap\">&#10007; Reject</button>\
-</form>"
+</form>",
+        open_href = escape_html(&open),
     );
 }
 
@@ -388,19 +437,72 @@ fn render_verdict_row(
     } else {
         ("&#10007; Rejected", "rare")
     };
-    let _ = write!(
-        html,
-        "<form hx-post=\"/pages/detection-review-clear\" hx-target=\"#dr-queue\" hx-swap=\"innerHTML\" \
+    let Some(why) = r.detached else {
+        // Attached: it is this detection's verdict, and undoing it is naming
+        // the same detection, clip included.
+        let file = escape_html(&r.file_name);
+        let _ = write!(
+            html,
+            "<form hx-post=\"/pages/detection-review-clear\" hx-target=\"#dr-queue\" hx-swap=\"innerHTML\" \
           class=\"dr-vrow\">\
   <input type=\"hidden\" name=\"date\" value=\"{date}\">\
   <input type=\"hidden\" name=\"time\" value=\"{time}\">\
   <input type=\"hidden\" name=\"sci_name\" value=\"{sci}\">\
+  <input type=\"hidden\" name=\"file_name\" value=\"{file}\">\
   <span class=\"bnb-pill {badge_cls}\">{badge}</span>\
   <div class=\"dr-vrow-main\">{com}\
     <span class=\"dr-vrow-meta\"> · {date} {time_clk}</span></div>\
   <button type=\"submit\" class=\"bnb-btn ghost dr-undo-btn\">Undo</button>\
 </form>"
+        );
+        return;
+    };
+    // Detached: kept because it records what a person decided, attached to no
+    // detection and in no count. It can be read and dismissed, not undone.
+    let note = match why {
+        birdnet_db::sqlite::Detached::Ambiguous => {
+            "Recorded when more than one detection shared this date, time and species, \
+             so it cannot be said which was meant. It is attached to none of them, and \
+             each is back in the queue above."
+        }
+        birdnet_db::sqlite::Detached::Orphaned => "Its detection no longer exists.",
+        birdnet_db::sqlite::Detached::Relabelled => {
+            "About the species this detection had before it was relabelled."
+        }
+    };
+    let id = r.id;
+    let _ = write!(
+        html,
+        "<form hx-post=\"/pages/detection-review-dismiss\" hx-target=\"#dr-queue\" hx-swap=\"innerHTML\" \
+          class=\"dr-vrow\">\
+  <input type=\"hidden\" name=\"id\" value=\"{id}\">\
+  <span class=\"bnb-pill {badge_cls}\">{badge}</span>\
+  <div class=\"dr-vrow-main\">{com}\
+    <span class=\"dr-vrow-meta\"> · {date} {time_clk}</span>\
+    <div class=\"bnb-meta\"><span class=\"bnb-pill\">Not attached</span> {note}</div></div>\
+  <button type=\"submit\" class=\"bnb-btn ghost dr-undo-btn\">Dismiss</button>\
+</form>"
     );
+}
+
+/// The detection a form names.
+fn row_of(
+    date: &str,
+    time: &str,
+    sci_name: &str,
+    file_name: Option<&String>,
+) -> crate::state::RowRef {
+    crate::state::RowRef {
+        date: date.to_owned(),
+        time: time.to_owned(),
+        sci_name: sci_name.to_owned(),
+        file_name: file_name.cloned(),
+    }
+}
+
+/// The clip for the audit row: what the form said, `-` when it did not.
+fn clip_for_audit(row: &crate::state::RowRef) -> &str {
+    row.file_name.as_deref().unwrap_or("-")
 }
 
 async fn detection_review_set(
@@ -413,29 +515,33 @@ async fn detection_review_set(
         // both `detections_analytic` and `detections_ts` filter on the verdict,
         // so one that reached only SQLite would change the species totals and
         // leave every behavioural dashboard still counting the reject.
+        let row = row_of(
+            &form.date,
+            &form.time,
+            &form.sci_name,
+            form.file_name.as_ref(),
+        );
+        let com_name = form.com_name;
         let result = tokio::task::spawn_blocking(move || {
-            let result = state.set_detection_review(
-                &form.date,
-                &form.time,
-                &form.sci_name,
-                &form.com_name,
-                status,
-                None,
-            );
+            let result = state.set_detection_review(&row, &com_name, status, None);
             // A rejection withdraws a detection from every count and every
             // share link; a verdict nobody can attribute is a detection that
             // vanished with no one having done it.
-            if result.is_ok() {
+            if matches!(result, Ok(crate::state::ReviewOutcome::Done)) {
                 crate::audit::audit(
                     &state,
                     Some(&request_user),
                     "detection.review",
                     Some(&crate::audit::detection_target(
-                        &form.date,
-                        &form.time,
-                        &form.sci_name,
+                        &row.date,
+                        &row.time,
+                        &row.sci_name,
                     )),
-                    Some(&format!("via=review verdict={}", status.as_str())),
+                    Some(&format!(
+                        "via=review verdict={} clip={}",
+                        status.as_str(),
+                        clip_for_audit(&row)
+                    )),
                 );
             }
             result
@@ -450,24 +556,51 @@ async fn detection_review_set(
     reload_queue().into_response()
 }
 
-/// The page left as it was and a toast saying why, when a review write failed.
+/// The page left as it was and a toast saying why, when a review write did not
+/// happen: the database refused it, or the detection it names is not one.
 ///
 /// These handlers discarded the result and answered as if it had worked, so a
 /// verdict the database refused showed as recorded — and a rejection is what
-/// withdraws a detection from every count and every share link.
-fn refused_review<T, E: std::fmt::Display>(
-    result: Result<Result<T, E>, tokio::task::JoinError>,
+/// withdraws a detection from every count and every share link. A 4xx would not
+/// do either: htmx never swaps one, so the page would change nothing and say
+/// nothing. The answer is a 200 carrying the toast.
+fn refused_review<E: std::fmt::Display>(
+    result: Result<Result<crate::state::ReviewOutcome, E>, tokio::task::JoinError>,
     what: &str,
 ) -> Option<axum::response::Response> {
+    use crate::state::ReviewOutcome;
     let detail = match result {
-        Ok(Ok(_)) => return None,
+        Ok(Ok(ReviewOutcome::Done)) => return None,
+        Ok(Ok(ReviewOutcome::NoSuchDetection)) => {
+            return Some(refusal(
+                "That detection is no longer in the log, so there is nothing to review. \
+                 Nothing was changed.",
+            ));
+        }
+        Ok(Ok(ReviewOutcome::Ambiguous { detections })) => {
+            return Some(refusal(&format!(
+                "{detections} sources heard this species at that second, and this page \
+                 does not say which of them you mean. Open the one you want from the list \
+                 and review it there. Nothing was changed."
+            )));
+        }
         Ok(Err(e)) => e.to_string(),
         Err(e) => e.to_string(),
     };
+    Some(write_failed(&detail, what))
+}
+
+/// A refusal the reader should see, as a 200 with a toast.
+fn refusal(message: &str) -> axum::response::Response {
+    super::toast::not_applied(&super::toast::Toast::error(message))
+}
+
+/// The toast for a write that failed, with the detail kept in the log.
+fn write_failed(detail: &str, what: &str) -> axum::response::Response {
     tracing::warn!(error = %detail, "detection review write failed: {what}");
-    Some(super::toast::not_applied(&super::toast::Toast::error(
-        format!("The station could not {what}. Nothing was changed."),
-    )))
+    refusal(&format!(
+        "The station could not {what}. Nothing was changed."
+    ))
 }
 
 async fn detection_review_clear(
@@ -477,19 +610,28 @@ async fn detection_review_clear(
 ) -> axum::response::Response {
     // Paired write — see `detection_review_set`. Clearing must reach both
     // stores or the exclusion outlives the verdict that justified it.
+    let row = row_of(
+        &form.date,
+        &form.time,
+        &form.sci_name,
+        form.file_name.as_ref(),
+    );
     let result = tokio::task::spawn_blocking(move || {
-        let result = state.clear_detection_review(&form.date, &form.time, &form.sci_name);
-        if result.is_ok() {
+        let result = state.clear_detection_review(&row);
+        if matches!(result, Ok(crate::state::ReviewOutcome::Done)) {
             crate::audit::audit(
                 &state,
                 Some(&request_user),
                 "detection.review",
                 Some(&crate::audit::detection_target(
-                    &form.date,
-                    &form.time,
-                    &form.sci_name,
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
                 )),
-                Some("via=review verdict=cleared"),
+                Some(&format!(
+                    "via=review verdict=cleared clip={}",
+                    clip_for_audit(&row)
+                )),
             );
         }
         result
@@ -501,6 +643,34 @@ async fn detection_review_clear(
     reload_queue().into_response()
 }
 
+/// Dismiss a verdict that is attached to no detection: read, and let go.
+async fn detection_review_dismiss(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    HtmxForm(form): HtmxForm<DismissForm>,
+) -> axum::response::Response {
+    let result = tokio::task::spawn_blocking(move || {
+        let result =
+            state.with_db(|conn| birdnet_db::sqlite::dismiss_detached_review(conn, form.id));
+        if matches!(result, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "detection.review",
+                Some(&format!("review {}", form.id)),
+                Some("via=review verdict=dismissed"),
+            );
+        }
+        result
+    })
+    .await;
+    match result {
+        Ok(Ok(_)) => reload_queue().into_response(),
+        Ok(Err(e)) => write_failed(&e.to_string(), "dismiss that verdict"),
+        Err(e) => write_failed(&e.to_string(), "dismiss that verdict"),
+    }
+}
+
 /// Inline verdict handler for the detection-detail page. Writes the verdict
 /// and returns the self-replacing review widget reflecting the new state.
 async fn detection_review_inline(
@@ -509,22 +679,31 @@ async fn detection_review_inline(
     HtmxForm(form): HtmxForm<ReviewForm>,
 ) -> axum::response::Response {
     let current = if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
-        let (date, time, sci, com) = (
-            form.date.clone(),
-            form.time.clone(),
-            form.sci_name.clone(),
-            form.com_name.clone(),
+        let row = row_of(
+            &form.date,
+            &form.time,
+            &form.sci_name,
+            form.file_name.as_ref(),
         );
+        let com = form.com_name.clone();
         // Paired write — see `detection_review_set`.
         let result = tokio::task::spawn_blocking(move || {
-            let result = state.set_detection_review(&date, &time, &sci, &com, status, None);
-            if result.is_ok() {
+            let result = state.set_detection_review(&row, &com, status, None);
+            if matches!(result, Ok(crate::state::ReviewOutcome::Done)) {
                 crate::audit::audit(
                     &state,
                     Some(&request_user),
                     "detection.review",
-                    Some(&crate::audit::detection_target(&date, &time, &sci)),
-                    Some(&format!("via=detection verdict={}", status.as_str())),
+                    Some(&crate::audit::detection_target(
+                        &row.date,
+                        &row.time,
+                        &row.sci_name,
+                    )),
+                    Some(&format!(
+                        "via=detection verdict={} clip={}",
+                        status.as_str(),
+                        clip_for_audit(&row)
+                    )),
                 );
             }
             result
@@ -541,6 +720,7 @@ async fn detection_review_inline(
         &form.date,
         &form.time,
         &form.sci_name,
+        form.file_name.as_deref().unwrap_or_default(),
         &form.com_name,
         current,
     );
@@ -559,12 +739,16 @@ pub(crate) fn render_review_widget(
     date: &str,
     time: &str,
     sci_name: &str,
+    file_name: &str,
     com_name: &str,
     current: Option<&str>,
 ) -> String {
     let date_e = escape_html(date);
     let time_e = escape_html(time);
     let sci_e = escape_html(sci_name);
+    // The clip of the detection on this page, `""` for one with none: said, so
+    // the verdict goes to this detection and not to its neighbour.
+    let file_e = escape_html(file_name);
     let com_e = escape_html(com_name);
     let badge = match current {
         Some("confirmed") => "<span class=\"bnb-pill moss\">&#10003; Confirmed</span>",
@@ -589,6 +773,7 @@ pub(crate) fn render_review_widget(
     <input type=\"hidden\" name=\"date\" value=\"{date_e}\">\
     <input type=\"hidden\" name=\"time\" value=\"{time_e}\">\
     <input type=\"hidden\" name=\"sci_name\" value=\"{sci_e}\">\
+    <input type=\"hidden\" name=\"file_name\" value=\"{file_e}\">\
     <input type=\"hidden\" name=\"com_name\" value=\"{com_e}\">\
     <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"{confirm_cls} dr-nowrap\">&#10003; Confirm</button>\
     <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"{reject_cls} dr-nowrap\">&#10007; Reject</button>\

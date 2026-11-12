@@ -112,6 +112,7 @@ fn render_feed_row(
     let shown = names.name(&d.sci_name, &d.com_name);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
+    let file_enc = simple_url_encode(d.file_name.as_deref().unwrap_or_default());
     let time_short = crate::display::clock(d.time.get(0..5).unwrap_or(&d.time));
 
     // Marks the one detection that *was* the species' first ever — not every
@@ -158,7 +159,7 @@ fn render_feed_row(
     let fresh_cls = if fresh { " fresh bnb-rise" } else { "" };
     let _ = write!(
         html,
-        r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
+        r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}&file={file_enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
         avatar = avatar(&d.com_name, shown, &d.sci_name, ""),
         name = escape_html(shown),
         sci = escape_html(&d.sci_name),

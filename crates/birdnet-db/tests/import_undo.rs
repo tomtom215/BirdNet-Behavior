@@ -342,3 +342,56 @@ fn removing_an_import_takes_the_verdicts_on_its_rows() {
         .expect("the survivor");
     assert_eq!(left, ld);
 }
+
+/// A verdict goes with the imported detection it was about, not with a
+/// detection this station heard itself that happens to share its date, time and
+/// species. They are two detections and differ only in their clip, so a
+/// verdict is about exactly one of them. Keyed on the triple, the survivor made
+/// the imported detection's verdict look like it still had a detection and it
+/// was left behind, listed on the review page and judging nothing.
+#[test]
+fn removing_an_import_takes_its_verdict_and_not_a_neighbours() {
+    let (conn, a, _b) = station_with_two_imports();
+    for (clip, batch) in [("imported.wav", Some(a)), ("local.wav", None)] {
+        conn.execute(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, import_batch_id)
+             VALUES ('2026-08-01', '05:05:05', 'Turdus merula', 'Blackbird', 0.9, ?1, ?2)",
+            rusqlite::params![clip, batch],
+        )
+        .expect("detection");
+        let key = birdnet_db::sqlite::DetectionKey {
+            date: "2026-08-01",
+            time: "05:05:05",
+            sci_name: "Turdus merula",
+            file_name: Some(clip),
+        };
+        assert!(
+            birdnet_db::sqlite::set_detection_review(
+                &conn,
+                &key,
+                "Blackbird",
+                birdnet_db::sqlite::ReviewStatus::Rejected,
+                None
+            )
+            .expect("review"),
+            "precondition: {clip} has a verdict"
+        );
+    }
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM detection_reviews"), 2);
+
+    birdnet_db::sqlite::delete_import_batch(&conn, a).expect("delete");
+
+    let left: Vec<String> = conn
+        .prepare("SELECT file_name FROM detection_reviews")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        left,
+        ["local.wav"],
+        "the imported detection's verdict went, the local one's stayed"
+    );
+}

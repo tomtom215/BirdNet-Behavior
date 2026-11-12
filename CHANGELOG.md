@@ -114,6 +114,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A review reached every detection that shared its date, time and species.** Two microphones that hear one
+  bird in the same second make two detections that differ only in their clip, and a verdict was written to
+  both: rejecting the one you listened to also withdrew from every count, species total and share link a
+  detection nobody had judged, and the other source's own verdict overwrote it. A review now names one
+  detection (date, time, species and clip, the key delete, lock, relabel and the classifiers' answers already
+  use), every form and the API carry the clip, a list row's time links to that detection's own page
+  (`/detections/detail?...&file=`), and the DuckDB copy follows. **Migration 59** rebuilds `detection_reviews`.
+  A verdict recorded before it is attached to its detection when exactly one shares the date, time and species;
+  when more than one does, which was meant cannot be recovered, so it is kept, marked *Not attached*, and attached
+  to none: the verdict the old code had written onto each of them is withdrawn and each is back in the review
+  queue to be judged on its own, which changes the species totals of a station that had such a verdict. A
+  verdict whose detection is gone is kept as history. Nothing is deleted; a station with such a verdict gets a
+  `birds.db.pre-migration-59.backup` first and a preview of how many verdicts the migration will touch. The
+  DuckDB copy is brought level by the start-up drift check.
+  **Relabelling clears the verdict**: it described the old species, so the detection is unreviewed again under
+  its new name and counts as what it now is (a rejected detection relabelled used to stay excluded, while the
+  queue listed it as unreviewed); the old verdict is kept, *Not attached*. A review of a detection that does not
+  exist is refused instead of recorded. The review API answers `404` for no such detection and `409` (with the
+  number of detections) when the date, time and name leave more than one and no `file_name` is given; a client
+  that omits `file_name` still works while they leave one. The model-versus-human panel, the review verdict
+  trend, the phantom report and the threshold suggester joined reviews to detections by the triple and counted
+  one verdict for each microphone's row; they join by the detection now. Seen failing first: three tests on the
+  unchanged code (both detections `rejected`; a relabelled row listed as unreviewed beside `rejected`; a corrected
+  detection not counted); the migration, the four joins, the import undo, the DuckDB copy and the web forms were
+  each then watched failing against a deliberate mutant. Comments are keyed by the triple
+  too and are recorded as TD-9.
+
+- **A read that failed in the station-health check ended the alert it should have kept.** The notifier closes
+  the episode of any condition a poll does not report and sends "Station health recovered", and four checks
+  reported nothing when they *could not look*: the audio-source list (a "microphone down" alert ended by a
+  failed read of the list), the scheduled-job records (a failing integrity check ended by a failed read of its
+  own record, which a corrupt database makes most likely), the operator's metric rules (an unreadable rule
+  list, or a metric with no reading), and the disk measurement (a mount that has gone away). Each now says it
+  could not look, the notifier leaves the episodes it owns open (neither recovered nor re-opened, and a fault
+  counting towards its alert starts again), the journal says so when that changes, and
+  `/api/v2/health/conditions` gains `unchecked`, the names of the checks that could not look, so an empty
+  `conditions` list beside it is not read as an all-clear. A sensor that has gone away still closes its
+  episode, as before; so does a read that succeeded and found nothing. Seen failing first: five tests that
+  drive a real poll with the table or mount broken and an episode open (they said "recovered"), each with a
+  counterpart where the read succeeds. One instance of the shape remains and is recorded as TD-8: the clock
+  check's "cannot tell". Closes TD-1.
+- **The support bundle and `--doctor` printed the station's position to four decimals (about 11 m).** The
+  bundle's own rule is one decimal, and it applied it to the journal and the settings, but `doctor.txt` and
+  `doctor.json` are the doctor's report as the doctor printed it, and the doctor's "Station location" and
+  "BirdWeather location" lines carried the exact position, for a position in the configuration file and for
+  one typed on the dashboard alike. The bug-report template asks for that output in a public issue. The report
+  now prints one decimal, with a note saying it did. The bundle's scrubbing could not have fixed it from
+  outside: it looks for the coordinates in the *configuration file*, and a position set on the dashboard is
+  only in the settings table. The exact value is unchanged on the settings page and in the file. Seen failing
+  first: two bundle tests that unpack a real archive and search every member for the exact digits.
 - **Perch v2's scores were put through the wrong function.** Its classifier is trained with a softmax, but the
   station read its outputs through V2.4's sigmoid like any other classifier's. On a real recording of one
   magpie, between 809 and 1 066 of Perch's 14 795 classes cleared the default 0.70 bar in *every* window,

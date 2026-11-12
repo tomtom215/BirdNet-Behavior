@@ -20,6 +20,7 @@
 
 mod auth;
 pub mod boot_journal;
+pub mod coordinates;
 mod db;
 pub mod diagnostics;
 pub mod egress;

@@ -1581,3 +1581,140 @@ fn table_sizes_are_reused_until_they_expire() {
         "measured again once expired"
     );
 }
+
+// ── a verdict names one detection, by its clip ──────────────────────────────
+
+/// A second microphone's detection of the same bird in the same second: it
+/// shares date, time and name with the seeded one and differs in its clip.
+fn add_second_source(state: &AppState) {
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-09-03', '09:00:00', 'Pica pica', 'Eurasian Magpie', 0.9, 'y.wav', 0)",
+            [],
+        )
+        .expect("a second source");
+    });
+}
+
+/// `(clip, verdict)` of every detection, by clip, and how many reviews exist.
+fn clip_verdicts(state: &AppState) -> (Vec<(String, Option<String>)>, i64) {
+    state.with_db(|conn| {
+        let rows = conn
+            .prepare("SELECT File_Name, review_verdict FROM detections ORDER BY File_Name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let reviews = conn
+            .query_row("SELECT COUNT(*) FROM detection_reviews", [], |r| r.get(0))
+            .unwrap();
+        (rows, reviews)
+    })
+}
+
+/// Two sources heard the bird; a review that does not say which is a `409`, and
+/// nothing is written. One that names the clip is applied to that detection
+/// alone. (A station with one detection still accepts the key without a clip:
+/// that is the first half of `the_api_can_review_lock_and_delete_a_detection`.)
+#[tokio::test]
+async fn a_review_that_names_no_clip_is_refused_when_two_sources_share_the_key() {
+    let (_dir, state) = station(true);
+    add_second_source(&state);
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/review",
+        Some(TOKEN),
+        None,
+        r#"{"date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica","status":"rejected"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body.contains("\"detections\":2") && body.contains("file_name"),
+        "{body}"
+    );
+    assert_eq!(
+        clip_verdicts(&state),
+        (vec![("x.wav".into(), None), ("y.wav".into(), None)], 0),
+        "a refused review wrote nothing"
+    );
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/review",
+        Some(TOKEN),
+        None,
+        r#"{"date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica","file_name":"y.wav","status":"rejected"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        clip_verdicts(&state),
+        (
+            vec![
+                ("x.wav".into(), None),
+                ("y.wav".into(), Some("rejected".into()))
+            ],
+            1
+        ),
+        "only the named detection carries it"
+    );
+}
+
+/// A clip that names no detection is a `404`, and no verdict about nothing is
+/// recorded.
+#[tokio::test]
+async fn a_review_of_a_clip_that_names_no_detection_is_not_found() {
+    let (_dir, state) = station(true);
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/review",
+        Some(TOKEN),
+        None,
+        r#"{"date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica","file_name":"nope.wav","status":"rejected"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(clip_verdicts(&state), (vec![("x.wav".into(), None)], 0));
+}
+
+/// A batch item that cannot be applied says why, and does not stop the rest.
+#[tokio::test]
+async fn a_batch_review_says_which_item_was_ambiguous_and_applies_the_rest() {
+    let (_dir, state) = station(true);
+    add_second_source(&state);
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        r#"{"op":"review","status":"rejected","detections":[
+            {"date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica"},
+            {"date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica","file_name":"y.wav"}]}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("\"applied\":1") && body.contains("\"failed\":1"),
+        "{body}"
+    );
+    assert!(
+        body.contains("2 detections match"),
+        "the item says why: {body}"
+    );
+    assert_eq!(
+        clip_verdicts(&state).0,
+        vec![
+            ("x.wav".into(), None),
+            ("y.wav".into(), Some("rejected".into()))
+        ]
+    );
+}

@@ -104,7 +104,7 @@ pub struct DetectionKey<'a> {
 }
 
 /// The `WHERE` clause a [`DetectionKey`] binds as `?1`–`?4`.
-pub(super) const KEY_WHERE: &str = "Date = ?1 AND Time = ?2 AND Sci_Name = ?3 \
+pub const KEY_WHERE: &str = "Date = ?1 AND Time = ?2 AND Sci_Name = ?3 \
      AND COALESCE(File_Name, '') = COALESCE(?4, '')";
 
 /// Delete the one detection `key` names.

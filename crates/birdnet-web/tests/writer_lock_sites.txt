@@ -59,6 +59,7 @@ routes/auth_pages.rs :: logout_submit  1  POST /logout
 routes/dynamic_thresholds.rs :: reset  1  POST /api/v2/dynamic-thresholds/reset and POST /admin/species/learned/reset: deletes the learned threshold rows
 routes/pages/detection_comments.rs :: add_comment  1  POST /pages/detection-comments/add
 routes/pages/detection_comments.rs :: delete_comment  1  POST /pages/detection-comments/delete
+routes/pages/detection_reviews.rs :: detection_review_dismiss  1  POST /pages/detection-review-dismiss: marks a legacy verdict dismissed
 routes/pages/onboarding.rs :: onboarding_save  1  POST /onboarding/save
 routes/pages/onboarding.rs :: set_first_admin_password  1  POST /onboarding/save
 routes/pages/quarantine.rs :: quarantine_reject  1  POST /pages/quarantine-reject

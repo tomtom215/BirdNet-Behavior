@@ -1590,12 +1590,19 @@ impl AppState {
         Ok(removed)
     }
 
-    /// Record a reviewer's verdict in `SQLite` **and** the analytics copy.
+    /// Record a reviewer's verdict on one detection in `SQLite` **and** the
+    /// analytics copy.
     ///
     /// The verdict is what makes curation mean something: `detections_analytic`
     /// and `detections_ts` both filter on it, so a rejection that reached only
     /// one store would change the species totals and leave every behavioural
     /// dashboard counting the reject.
+    ///
+    /// The detection is named by `row`, clip included. A caller that names only
+    /// the date, time and species is accepted when exactly one detection has
+    /// them, and refused (nothing written) when several do: which one was meant
+    /// is not something to guess, because a rejection withdraws a detection from
+    /// every count and every share link.
     ///
     /// # Errors
     ///
@@ -1603,48 +1610,83 @@ impl AppState {
     /// [`Self::delete_detection`] for why a mirror failure is not returned.
     pub fn set_detection_review(
         &self,
-        date: &str,
-        time: &str,
-        sci_name: &str,
+        row: &RowRef,
         com_name: &str,
         status: birdnet_db::sqlite::ReviewStatus,
         notes: Option<&str>,
-    ) -> Result<(), birdnet_db::sqlite::DbError> {
-        self.with_db(|conn| {
-            birdnet_db::sqlite::set_detection_review(
-                conn, date, time, sci_name, com_name, status, notes,
-            )
+    ) -> Result<ReviewOutcome, birdnet_db::sqlite::DbError> {
+        let target = self.with_db(|conn| -> Result<_, birdnet_db::sqlite::DbError> {
+            let clip = match review_clip(conn, row)? {
+                Ok(clip) => clip,
+                Err(refused) => return Ok(Err(refused)),
+            };
+            let recorded = birdnet_db::sqlite::set_detection_review(
+                conn,
+                &row.key_with(clip.as_deref()),
+                com_name,
+                status,
+                notes,
+            )?;
+            Ok(if recorded {
+                Ok(clip)
+            } else {
+                Err(ReviewOutcome::NoSuchDetection)
+            })
         })?;
+        let clip = match target {
+            Ok(clip) => clip,
+            Err(refused) => return Ok(refused),
+        };
         #[cfg(feature = "analytics")]
         if let Some(Err(e)) = self.with_analytics(|adb| {
-            adb.set_review_verdict(date, time, sci_name, Some(status.as_str()))
+            adb.set_review_verdict(
+                &row.date,
+                &row.time,
+                &row.sci_name,
+                clip.as_deref(),
+                Some(status.as_str()),
+            )
         }) {
             tracing::warn!(error = %e, "review verdict recorded in SQLite but not in the analytics copy");
         }
-        Ok(())
+        #[cfg(not(feature = "analytics"))]
+        let _ = clip;
+        Ok(ReviewOutcome::Done)
     }
 
-    /// Clear a verdict in `SQLite` **and** the analytics copy.
+    /// Clear a verdict in `SQLite` **and** the analytics copy. A detection that
+    /// has no verdict is left as it is, and that is `Done`: undo is idempotent.
+    ///
+    /// Named and refused the way [`Self::set_detection_review`] is.
     ///
     /// # Errors
     ///
     /// Returns `DbError` if the `SQLite` write fails.
     pub fn clear_detection_review(
         &self,
-        date: &str,
-        time: &str,
-        sci_name: &str,
-    ) -> Result<(), birdnet_db::sqlite::DbError> {
-        self.with_db(|conn| {
-            birdnet_db::sqlite::clear_detection_review(conn, date, time, sci_name)
+        row: &RowRef,
+    ) -> Result<ReviewOutcome, birdnet_db::sqlite::DbError> {
+        let target = self.with_db(|conn| -> Result<_, birdnet_db::sqlite::DbError> {
+            let clip = match review_clip(conn, row)? {
+                Ok(clip) => clip,
+                Err(refused) => return Ok(Err(refused)),
+            };
+            birdnet_db::sqlite::clear_detection_review(conn, &row.key_with(clip.as_deref()))?;
+            Ok(Ok(clip))
         })?;
+        let clip = match target {
+            Ok(clip) => clip,
+            Err(refused) => return Ok(refused),
+        };
         #[cfg(feature = "analytics")]
-        if let Some(Err(e)) =
-            self.with_analytics(|adb| adb.set_review_verdict(date, time, sci_name, None))
-        {
+        if let Some(Err(e)) = self.with_analytics(|adb| {
+            adb.set_review_verdict(&row.date, &row.time, &row.sci_name, clip.as_deref(), None)
+        }) {
             tracing::warn!(error = %e, "review verdict cleared in SQLite but not in the analytics copy");
         }
-        Ok(())
+        #[cfg(not(feature = "analytics"))]
+        let _ = clip;
+        Ok(ReviewOutcome::Done)
     }
 
     /// Whether the `DuckDB` analytics database is available.
@@ -2248,6 +2290,47 @@ impl RowRef {
             time: &self.time,
             sci_name: &self.sci_name,
             file_name: file,
+        }
+    }
+}
+
+/// What came of asking to record or clear a review verdict.
+///
+/// Only `Done` wrote anything. The other two are refusals a person should be
+/// told about, not errors: a verdict is never recorded about a detection that is
+/// not there, and never attached by guessing between two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewOutcome {
+    /// Recorded (or cleared), in both stores.
+    Done,
+    /// No detection has that date, time, species and clip: a stale link, or a
+    /// detection deleted since the page was drawn. Nothing was written.
+    NoSuchDetection,
+    /// The caller named a date, time and species and no clip, and more than one
+    /// detection has them: two sources heard one bird in one second. Nothing was
+    /// written.
+    Ambiguous {
+        /// How many detections share the date, time and species.
+        detections: usize,
+    },
+}
+
+/// The clip of the detection `row` is about: as the caller named it, or the one
+/// clip its date, time and species leave. `Err` says why it cannot be told.
+fn review_clip(
+    conn: &Connection,
+    row: &RowRef,
+) -> Result<Result<Option<String>, ReviewOutcome>, birdnet_db::sqlite::DbError> {
+    match row.clip() {
+        Clip::Named(clip) => Ok(Ok(clip.map(str::to_owned))),
+        Clip::Unsaid => {
+            let clips =
+                birdnet_db::sqlite::detection_clips(conn, &row.date, &row.time, &row.sci_name)?;
+            Ok(match clips.len() {
+                0 => Err(ReviewOutcome::NoSuchDetection),
+                1 => Ok(clips.into_iter().next().flatten()),
+                detections => Err(ReviewOutcome::Ambiguous { detections }),
+            })
         }
     }
 }
