@@ -1198,7 +1198,7 @@ mod tests {
         ]);
         let check = check_station_location(&cli(), Some(&cfg));
         assert_eq!(check.status, Status::Pass);
-        assert!(check.message.contains("42.4, -71.1"), "{}", check.message);
+        assert!(check.message.contains("42.4, -71.1"));
         assert!(
             !check.message.contains("42.36") && !check.message.contains("71.05"),
             "the exact position must not be in the report: {}",
@@ -1245,7 +1245,7 @@ mod tests {
             "dashboard-configured station must not be warned at: {}",
             check.message
         );
-        assert!(check.message.contains("51.5, -0.1"), "{}", check.message);
+        assert!(check.message.contains("51.5, -0.1"));
         assert!(
             !check.message.contains("51.50"),
             "the exact position must not be in the report: {}",
