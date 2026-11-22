@@ -113,7 +113,7 @@ Header (lines 10–49) describes PR #281 as an unmerged draft and v0.19.0 as "ta
 | 5.42 | Capture-gain reader never met a sound card | UNVERIFIABLE-HERE | needs hardware | | Medium |
 | 5.43 | MSRV choice; Action release notes unread | MAINTAINER-ONLY | — | | Low |
 | 5.44 | Research method record | STALE (record) | — | | Low |
-| 5.45 | `cpu_temperature_alone_never_waits` slow once | UNVERIFIABLE-HERE | Coverage passed on `c7f69d9` and `9d8bb1c` | | Low |
+| 5.45 | `cpu_temperature_alone_never_waits` slow once | UNVERIFIABLE-HERE | Coverage passed on `c7f69d9` and `9d8bb1c`. *WP-00:* failed twice more on `0019295` (1.5 s); the bound was replaced by a count of `sample()` entries (HANDOFF item 45) | | Low |
 | 5.A | htmx hides middleware 4xx (CSRF 403, viewer 403, 429) | STILL-OPEN | `HX-Reswap` set only in route handlers (`routes/form.rs:25`, `pages/toast.rs:284`), none in `rate_limit.rs` | UI | — |
 | 5.B | WebKit `style-src-attr` on `<select>` | UNVERIFIABLE-HERE | needs Safari | | — |
 | 5.C | Phone charts scale; Data tab hint at 320 px | UNVERIFIABLE-HERE | needs a render | | — |

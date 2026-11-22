@@ -817,16 +817,21 @@ it says otherwise.
     numbers were checked against their own result files and, for the label counts, recomputed here. One of them made
     three requests to Xeno-canto (one API call, two pages) before reading its `robots.txt`, which by that agent's account
     disallows this kind of agent (not re-read here); the content was not used, and Xeno-canto data is not in the study. Low.
-45. **A timing test failed once in CI and its cause is not established.** `system_info::tests::cpu_temperature_alone_never_waits`
-    asserts that `cpu_temperature()` returns in under `MIN_CPU_DELTA` (200 ms). In `cargo-llvm-cov` on `d979403` it took
-    1.499757475 s. The same job passed on `d2cbcba` and on `1859a3a`, and `crates/birdnet-web` is identical between
-    `d2cbcba` and `d979403` (`git diff --stat` empty). Not reproduced here. Read: the sysinfo 0.40.1 Linux component code
-    differs from 0.39.6 in no wait or sleep, and in the failed job's log no other test finished after 09:47:31.36 UTC while
-    this test ended at 09:47:32.25 (failed) and `cpu_temperature_is_plausible_or_absent`, which makes the same sysfs reads,
-    at 09:47:32.75, so the load test's spinning threads, which ended at 09:47:31.05, do not account for the whole delay.
-    The slow runner read is CONJECTURED to be a one-off of that VM; nothing here shows it. The test measures wall-clock time
-    over real I/O, so it can fail on a slow machine without the code being wrong. If it recurs, root-cause it before
-    changing the bound. Low.
+45. **A timing test failed in CI three times; replaced by a check that does not time the host.** Low.
+    `system_info::tests::cpu_temperature_alone_never_waits` asserted that `cpu_temperature()` returns in under
+    `MIN_CPU_DELTA` (200 ms). In `cargo-llvm-cov` it took 1.499757475 s on `d979403` and 1.499955 s twice on `0019295`
+    (WP-00's pull request, the second run being its one re-run); it passed on `d2cbcba`, `1859a3a` and `9fd01c5`, and the
+    lockfile change between `9fd01c5` and `0019295` touches nothing it reads. What was read, not run: `cpu_temperature()`
+    is sysinfo's `Components` list plus `/sys/class/thermal` reads, and sysinfo 0.40.1's `src/unix/linux/component.rs`
+    has no lock, `static`, sleep or timeout, so the time is spent in the runner's sysfs reads or waiting to be scheduled;
+    which, and why so close to 1.5 s every time, is CONJECTURED and not settled (it needs a run on a GitHub runner).
+    WP-00 replaced the wall-clock bound, at the maintainer's choice, with `cpu_temperature_alone_never_enters_the_sampler`:
+    a test-only, thread-local count of entries to `sample()` must not move across `cpu_temperature()`. Routing it
+    through `sample().cpu_temp_celsius` turns it red; its counterpart, `the_sampler_count_sees_a_sample`, turns red when
+    the count is not taken. What it does not see: a `cpu_temperature()` that built its own `System` and slept without
+    calling `sample()`, which the old bound would have caught on a fast host. If a host's sensor reads taking 1.5 s
+    matters to a page (the Today page's station line polls it every 60 s), that is a separate question; on a Pi the
+    read is a single sysfs file.
 
 - **Refusals that htmx hides.** `HtmxForm` turns unreadable forms into toasts, but three
   middleware layers still answer a plain 4xx to an htmx write, which htmx discards: the
