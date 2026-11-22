@@ -821,8 +821,7 @@ fn coordinate(v: Option<&serde_json::Value>, limit: f64) -> Option<f64> {
 fn clean_text(v: Option<&serde_json::Value>, max: usize) -> String {
     v.and_then(serde_json::Value::as_str)
         .map(|s| s.chars().filter(|c| !c.is_control()).take(max).collect())
-        .map(|s: String| s.trim().to_owned())
-        .unwrap_or_default()
+        .map_or_default(|s: String| s.trim().to_owned())
 }
 
 /// A timezone name only if it has the shape of an IANA one

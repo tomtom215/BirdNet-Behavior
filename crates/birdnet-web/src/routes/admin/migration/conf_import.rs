@@ -133,7 +133,7 @@ impl Bundle {
             (path.to_path_buf(), None)
         } else if path.is_file() && path.file_name().is_some_and(|n| n == "birdnet.conf") {
             (
-                path.parent().map(Path::to_path_buf).unwrap_or_default(),
+                path.parent().map_or_default(Path::to_path_buf),
                 Some(path.to_path_buf()),
             )
         } else {

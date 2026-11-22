@@ -433,14 +433,12 @@ pub(crate) fn names_listed<'a>(
 
 /// Parse a comma-separated species list into a `HashSet`.
 fn parse_species_list(input: Option<&str>) -> HashSet<String> {
-    input
-        .map(|s| {
-            s.split(',')
-                .map(|name| name.trim().to_string())
-                .filter(|name| !name.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    input.map_or_default(|s| {
+        s.split(',')
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    })
 }
 
 /// Full notification filter that combines trigger mode, species filter,

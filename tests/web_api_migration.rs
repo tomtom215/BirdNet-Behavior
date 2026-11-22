@@ -665,13 +665,11 @@ async fn confirming_with_a_stale_token_imports_nothing() {
 
 /// The names in `dir`, sorted; empty when it does not exist.
 fn names_in(dir: &std::path::Path) -> Vec<String> {
-    let mut out: Vec<String> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut out: Vec<String> = std::fs::read_dir(dir).map_or_default(|rd| {
+        rd.flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect()
+    });
     out.sort();
     out
 }

@@ -680,8 +680,7 @@ pub fn seed_db_settings_from_config(
         // any read error) as "nothing already present" rather than failing.
         ensure_settings_table(conn).ok();
         let existing: HashSet<String> = list(conn, None)
-            .map(|rows| rows.into_iter().map(|s| s.key).collect())
-            .unwrap_or_default();
+            .map_or_default(|rows| rows.into_iter().map(|s| s.key).collect());
 
         // Merge the two install sources into one row-per-key set. File config
         // first; CLI/env then overrides for the same key. A BTreeMap keeps the

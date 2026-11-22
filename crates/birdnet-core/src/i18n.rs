@@ -500,7 +500,7 @@ impl NameLocalizer {
             by_scientific: pack.translations,
             by_stored: HashMap::new(),
             ambiguous: HashSet::new(),
-            named_by_language: labels.map(bundled_names_per_language).unwrap_or_default(),
+            named_by_language: labels.map_or_default(bundled_names_per_language),
             active_named,
             label_count: labels.map_or(0, |l| l.iter().count()),
         };
@@ -669,8 +669,7 @@ fn bundled_names_per_language(labels: &LabelSet) -> HashMap<&'static str, usize>
     let mut lines = TABLE.lines();
     let codes: Vec<&'static str> = lines
         .next()
-        .map(|h| h.split('\t').skip(1).collect())
-        .unwrap_or_default();
+        .map_or_default(|h| h.split('\t').skip(1).collect());
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
     for line in lines {
         let mut cells = line.split('\t');

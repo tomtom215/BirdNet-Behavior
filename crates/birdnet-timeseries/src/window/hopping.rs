@@ -110,14 +110,10 @@ impl WindowSpec for HoppingSpec {
             "ASC"
         };
 
-        let species_filter = self
-            .species
-            .as_deref()
-            .map(|s| {
-                let escaped = s.replace('\'', "''");
-                format!("AND d.Com_Name = '{escaped}'")
-            })
-            .unwrap_or_default();
+        let species_filter = self.species.as_deref().map_or_default(|s| {
+            let escaped = s.replace('\'', "''");
+            format!("AND d.Com_Name = '{escaped}'")
+        });
 
         format!(
             "WITH time_range AS (

@@ -53,8 +53,7 @@ fn nearest_card(before: &str) -> Option<String> {
 fn class_tokens(tag: &str) -> impl Iterator<Item = &str> {
     tag.split_once("class=\"")
         .and_then(|(_, rest)| rest.split_once('"'))
-        .map(|(classes, _)| classes)
-        .unwrap_or_default()
+        .map_or_default(|(classes, _)| classes)
         .split_whitespace()
 }
 

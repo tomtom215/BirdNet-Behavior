@@ -1976,8 +1976,7 @@ impl AppState {
         self.inner
             .notification_probes
             .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+            .map_or_default(|g| g.clone())
     }
 
     /// Publish what the station-health evaluation just found.
@@ -1994,8 +1993,7 @@ impl AppState {
         self.inner
             .station_conditions
             .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+            .map_or_default(|g| g.clone())
     }
 
     /// Publish what eBird last said was reported near the station (`G-27`).
@@ -2029,8 +2027,7 @@ impl AppState {
         self.inner
             .boot_anomalies
             .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+            .map_or_default(|g| g.clone())
     }
 
     /// Record that the admin-password bootstrap failed at start.

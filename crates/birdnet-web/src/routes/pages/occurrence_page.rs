@@ -207,7 +207,7 @@ async fn occurrence_page(
 
 /// The lookup form: a GET, so every answer is a link that can be shared.
 fn lookup_form(query: Option<&str>, week: u32, current: u32) -> String {
-    let value = query.map(escape_html).unwrap_or_default();
+    let value = query.map_or_default(escape_html);
     let weeks = week_select(week, current);
     format!(
         r#"<form class="occ-form" method="get" action="{PATH}" role="search" aria-label="Look up a bird">
@@ -399,9 +399,7 @@ fn more_control(
 ) -> String {
     let shown_to = offset + LIST_PAGE;
     let link = if shown_to < matched {
-        let q = query
-            .map(|q| format!("&amp;q={}", simple_url_encode(q)))
-            .unwrap_or_default();
+        let q = query.map_or_default(|q| format!("&amp;q={}", simple_url_encode(q)));
         format!(
             r##"<p><a class="bnb-btn" id="occ-more-link" href="{PATH}?week={week}{q}&amp;offset={shown_to}#occ-admitted-h" hx-get="{PATH}?week={week}{q}&amp;offset={shown_to}&amp;more=1" hx-target="#occ-list" hx-swap="beforeend" hx-push-url="false">Show the next {LIST_PAGE}</a></p>"##
         )

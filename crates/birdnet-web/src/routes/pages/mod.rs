@@ -247,9 +247,8 @@ fn render_page_inner(
     let sign_out_link = if signed_in { SIGN_OUT_LINK_HTML } else { "" };
     // Live process uptime for the topnav pill; empty when unavailable (non-Linux
     // or `/proc` unreadable) so the O-26 `[data-empty-hide=""]` rule hides it.
-    let uptime_short = crate::system_info::process_uptime_secs()
-        .map(crate::system_info::format_uptime)
-        .unwrap_or_default();
+    let uptime_short =
+        crate::system_info::process_uptime_secs().map_or_default(crate::system_info::format_uptime);
     // Both navigation surfaces (desktop top-nav, phone bottom bar) are
     // generated from the single `nav` manifest — the v3 spine's six homes — so
     // they can't drift apart. Active-state is derived from the page's

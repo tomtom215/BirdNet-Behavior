@@ -36,14 +36,12 @@ pub fn record_boot(
     let devices: Vec<String> = if db_present {
         state.with_db(|conn| {
             use birdnet_db::audio_sources::{AudioSourceStore, SourceKind};
-            conn.list()
-                .map(|rows| {
-                    rows.into_iter()
-                        .filter(|s| s.kind == SourceKind::UsbAlsa)
-                        .map(|s| s.device_id)
-                        .collect()
-                })
-                .unwrap_or_default()
+            conn.list().map_or_default(|rows| {
+                rows.into_iter()
+                    .filter(|s| s.kind == SourceKind::UsbAlsa)
+                    .map(|s| s.device_id)
+                    .collect()
+            })
         })
     } else {
         Vec::new()

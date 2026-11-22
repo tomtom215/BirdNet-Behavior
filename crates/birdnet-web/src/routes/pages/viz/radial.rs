@@ -806,8 +806,7 @@ mod tests {
             el.split(&format!("{name}=\""))
                 .nth(1)
                 .and_then(|r| r.split('"').next())
-                .map(|t| t.split(' ').map(str::to_owned).collect())
-                .unwrap_or_default()
+                .map_or_default(|t| t.split(' ').map(str::to_owned).collect())
         };
         let ribbons: Vec<(Vec<String>, Vec<String>)> = svg
             .split('<')

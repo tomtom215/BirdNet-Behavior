@@ -739,8 +739,7 @@ struct PirateWeatherHour {
 impl PirateWeatherResponse {
     fn into_rows(self) -> Vec<WeatherRow> {
         self.hourly
-            .map(|block| block.data)
-            .unwrap_or_default()
+            .map_or_default(|block| block.data)
             .into_iter()
             .map(|hour| WeatherRow {
                 at: birdnet_core::civil::rfc3339_utc(hour.time),

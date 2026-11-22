@@ -303,8 +303,7 @@ fn first_bullet_summary(r: &Release<'_>) -> String {
         .sections
         .iter()
         .find(|(h, _)| h.eq_ignore_ascii_case("Added"))
-        .map(|(_, bullets)| bullets.iter().collect::<Vec<_>>())
-        .unwrap_or_default();
+        .map_or_default(|(_, bullets)| bullets.iter().collect::<Vec<_>>());
     if pool.is_empty() {
         return r
             .sections

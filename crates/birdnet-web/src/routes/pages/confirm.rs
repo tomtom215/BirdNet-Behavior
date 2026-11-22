@@ -88,12 +88,10 @@ pub fn confirm_button(c: Confirm<'_>) -> String {
     let url = c.action.url();
     let target = c
         .target
-        .map(|t| format!(r#" hx-target="{}""#, escape_html(t)))
-        .unwrap_or_default();
+        .map_or_default(|t| format!(r#" hx-target="{}""#, escape_html(t)));
     let swap = c
         .swap
-        .map(|s| format!(r#" hx-swap="{}""#, escape_html(s)))
-        .unwrap_or_default();
+        .map_or_default(|s| format!(r#" hx-swap="{}""#, escape_html(s)));
 
     format!(
         r#"<button type="button" class="{cls}"

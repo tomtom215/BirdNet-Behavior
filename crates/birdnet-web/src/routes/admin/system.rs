@@ -336,14 +336,13 @@ async fn render_status_partial(state: &AppState) -> String {
             let uptime = system_info::format_uptime(snap.uptime_secs);
             let temp_html = snap
                 .cpu_temp_celsius
-                .map(|t| {
+                .map_or_default(|t| {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
                     let tc = t as u32;
                     let temp_tone = if tc > 80 { "crit" } else if tc > 65 { "warn" } else { "ok" };
                     let shown = crate::display::temperature(f64::from(tc), 0, true);
                     format!(r#"<p class="temp-line">CPU Temp: <span class="temp-val {temp_tone}">{shown}</span></p>"#)
-                })
-                .unwrap_or_default();
+                });
 
             format!(
                 r#"<p class="res-head">

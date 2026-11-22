@@ -1010,14 +1010,12 @@ async fn today_partial(
                 let search_param = search2
                     .as_ref()
                     .filter(|s| !s.trim().is_empty())
-                    .map(|s| format!("&search={}", simple_url_encode(s)))
-                    .unwrap_or_default();
+                    .map_or_default(|s| format!("&search={}", simple_url_encode(s)));
                 let filter_param = params
                     .filter
                     .as_ref()
                     .filter(|f| !f.trim().is_empty() && f.as_str() != "all")
-                    .map(|f| format!("&filter={}", simple_url_encode(f)))
-                    .unwrap_or_default();
+                    .map_or_default(|f| format!("&filter={}", simple_url_encode(f)));
                 let remaining = total_u.saturating_sub(shown);
                 let _ = write!(
                     html,
@@ -1231,28 +1229,25 @@ fn render_detection_card(
         .file_name
         .as_deref()
         .filter(|f| !f.is_empty())
-        .map(|f| {
+        .map_or_default(|f| {
             let basename = std::path::Path::new(f)
                 .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+                .map_or_default(|n| n.to_string_lossy().to_string());
             let safe = escape_html(&basename);
             format!(
                 "<button type=\"button\" class=\"x-fplay tdl-play\" data-play-src=\"/api/v2/recordings/{safe}\" \
                  title=\"Play clip\" aria-label=\"Play clip\">▶</button>"
             )
-        })
-        .unwrap_or_default();
+        });
 
     let lock = d
         .file_name
         .as_deref()
         .filter(|f| !f.is_empty())
-        .map(|f| {
+        .map_or_default(|f| {
             let is_locked = locked.contains(&super::recordings::base_name(f));
             super::recordings::lock_button(&crate::state::RowRef::from(d), is_locked)
-        })
-        .unwrap_or_default();
+        });
     let av = avatar(&d.com_name, shown, &d.sci_name, "");
     let conf = conf_bar(d.confidence, floor);
     let com_name = escape_html(shown);

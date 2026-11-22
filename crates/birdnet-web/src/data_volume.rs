@@ -627,9 +627,7 @@ mod tests {
     fn the_mount_holding_a_directory_is_decided_by_whole_components() {
         let table = parse_mountinfo(&docker_with("/home/pi/birdnet"));
         let holder = |dir: &str| {
-            mount_holding(&table, Path::new(dir))
-                .map(|e| e.mount_point.clone())
-                .unwrap_or_default()
+            mount_holding(&table, Path::new(dir)).map_or_default(|e| e.mount_point.clone())
         };
         assert_eq!(holder("/data"), "/data");
         assert_eq!(holder("/data/model"), "/data");

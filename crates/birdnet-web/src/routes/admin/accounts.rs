@@ -263,8 +263,7 @@ fn render_audit_rows(audit: &[AuditEntry], users: &[User]) -> String {
         let target = e
             .target
             .as_ref()
-            .map(|t| format!(r#"<span class="target">{}</span>"#, escape_html(t)))
-            .unwrap_or_default();
+            .map_or_default(|t| format!(r#"<span class="target">{}</span>"#, escape_html(t)));
         let _ = write!(
             out,
             r#"<li>
@@ -897,20 +896,15 @@ fn render_audit_full_rows(entries: &[AuditEntry], users: &[User]) -> String {
         let target = e
             .target
             .as_ref()
-            .map(|t| format!(r#" <span class="target">{}</span>"#, escape_html(t)))
-            .unwrap_or_default();
-        let metadata = e
-            .metadata
-            .as_ref()
-            .map(|m| {
-                format!(
-                    r#"<div class="mono bnb-meta audit-meta-row">{}</div>"#,
-                    // A break opportunity after each comma: a saved-settings
-                    // entry is one long comma-joined list with no spaces.
-                    escape_html(m).replace(',', ",<wbr>")
-                )
-            })
-            .unwrap_or_default();
+            .map_or_default(|t| format!(r#" <span class="target">{}</span>"#, escape_html(t)));
+        let metadata = e.metadata.as_ref().map_or_default(|m| {
+            format!(
+                r#"<div class="mono bnb-meta audit-meta-row">{}</div>"#,
+                // A break opportunity after each comma: a saved-settings
+                // entry is one long comma-joined list with no spaces.
+                escape_html(m).replace(',', ",<wbr>")
+            )
+        });
         let _ = write!(
             out,
             r#"<li class="audit-row">

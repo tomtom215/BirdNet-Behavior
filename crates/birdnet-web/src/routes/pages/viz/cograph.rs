@@ -88,9 +88,8 @@ impl CoGraph {
         }
         let n = self.n();
         let mut out = Vec::new();
-        for a in 0..n {
-            for b in a + 1..n {
-                let v = self.strength[a][b];
+        for (a, row) in self.strength.iter().enumerate().take(n) {
+            for (b, &v) in row.iter().enumerate().take(n).skip(a + 1) {
                 if v > 0.0 && v.is_finite() {
                     out.push(Link { a, b, v });
                 }

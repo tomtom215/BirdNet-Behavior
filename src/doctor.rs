@@ -227,8 +227,7 @@ const CHECK_FAMILIES: [(&str, Family); 30] = [
         vec![config::check_config_file(cli, cfg)]
     }),
     ("config::check_config_values", |cli, cfg| {
-        cfg.map(|c| config::check_config_values(cli, c))
-            .unwrap_or_default()
+        cfg.map_or_default(|c| config::check_config_values(cli, c))
     }),
     ("config::check_station_location", |cli, cfg| {
         vec![config::check_station_location(cli, cfg)]

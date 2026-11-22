@@ -218,8 +218,7 @@ fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
             )
         });
     let take = super::insight::weekday_sentence(&weekday_counts(&cells), occurrences, days)
-        .map(|s| super::frame::takeaway(&s))
-        .unwrap_or_default();
+        .map_or_default(|s| super::frame::takeaway(&s));
     Some(format!(
         "{take}{}",
         render_heatmap_svg(&cells, occurrences, listened.is_some(), days, now)
@@ -255,8 +254,7 @@ fn compute_hourly_totals(state: &AppState, days: u32) -> Option<String> {
         None
     };
     let take = super::insight::hours_sentence(&hour_array(&totals))
-        .map(|s| super::frame::takeaway(&s))
-        .unwrap_or_default();
+        .map_or_default(|s| super::frame::takeaway(&s));
     Some(format!(
         "{take}{}",
         render_hourly_bars(&totals, solar, days)
@@ -346,8 +344,7 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
         super::listening::listened_days(&effort, end, n_days)
     });
     let take = super::insight::leader_sentence(&named, total)
-        .map(|s| super::frame::takeaway(&s))
-        .unwrap_or_default();
+        .map_or_default(|s| super::frame::takeaway(&s));
     Some(format!(
         "{take}{}",
         super::viz::streamgraph(&series, today.as_deref(), listened.as_deref())

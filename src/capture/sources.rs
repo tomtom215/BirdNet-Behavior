@@ -31,16 +31,13 @@ fn resolve_rtsp_urls(cli: &Cli, config: Option<&birdnet_core::config::Config>) -
         return cli.rtsp_urls.clone();
     }
     if let Some(config) = config {
-        let multi: Vec<String> = config
-            .get("RTSP_URLS")
-            .map(|s| {
-                s.split(',')
-                    .map(str::trim)
-                    .filter(|u| !u.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let multi: Vec<String> = config.get("RTSP_URLS").map_or_default(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        });
         if !multi.is_empty() {
             return multi;
         }
