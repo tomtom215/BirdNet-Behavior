@@ -104,7 +104,7 @@ jobs:
     # (73% of 60) and a slower runner then hit the 60-minute cancel while still
     # passing tests (2026-10-22, in the root crate's first test files). 44m is
     # 49% of 90.
-    timeout-minutes: 90  # observed 34m31s
+    timeout-minutes: 90  # observed 56m13s
     env:
       # Whether the extension-gated tests are allowed to skip.
       #
