@@ -60,6 +60,9 @@ const DEFAULTERS: &[&str] = &[
     "ok",
     "map_or",
     "map_or_else",
+    // `x.map(f).unwrap_or_default()` spelled the way clippy 1.100's
+    // `map_unwrap_or` asks for: the same default, one adaptor.
+    "map_or_default",
     "is_ok_and",
     "is_ok",
     "is_err",
@@ -578,6 +581,7 @@ fn the_sweep_flags_each_shape() {
             tokio::task::spawn_blocking(move || s.with_read_db(|c| n(c))).await.unwrap_or(0)
         }
         fn map_or(conn: &Connection) -> bool { count(conn).map_or(true, |n| n > 0) }
+        fn map_or_default(conn: &Connection) -> Vec<u8> { list(conn).map_or_default(|v| v) }
     ";
     // Sorted as the sweep sorts: by function name.
     assert_eq!(
@@ -588,6 +592,7 @@ fn the_sweep_flags_each_shape() {
             pair("if_let", "let-ok"),
             pair("let_else", "let-ok"),
             pair("map_or", "map_or"),
+            pair("map_or_default", "map_or_default"),
             pair("match_err", "match-err"),
             pair("task_default", "unwrap_or"),
         ]
@@ -605,6 +610,7 @@ fn the_sweep_passes_what_is_not_a_defaulted_read() {
         fn parameter(q: Q) -> u32 { q.limit.unwrap_or(50) }
         // A file: no connection reaches it.
         fn file(p: &Path) -> String { std::fs::read_to_string(p).unwrap_or_default() }
+        fn file_mapped(p: &Path) -> usize { std::fs::read_to_string(p).map_or_default(|s| s.len()) }
         // Mapped, with the error kept.
         fn kept(conn: &Connection) -> Result<u8, String> { count(conn).map_err(|e| e.to_string()) }
         // Test code is not shipped code.

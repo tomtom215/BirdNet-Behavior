@@ -191,12 +191,12 @@ fail-closed	src/helpers/auth.rs	admin_is_open	is_ok_and	state .with_db(|conn| co
 handled	src/helpers/auth.rs	purge_legacy_credential_settings	is_err	ensure_settings_table(conn).is_err()
 handled	src/helpers/auth.rs	purge_legacy_credential_settings	unwrap_or	delete(conn, key).unwrap_or(false)
 tracked:TD-3	src/helpers/boot_journal.rs	record_boot	unwrap_or	birdnet_db::sqlite::detection_count(conn).unwrap_or(0)
-tracked:TD-3	src/helpers/boot_journal.rs	record_boot	unwrap_or_default	conn.list() .map(|rows| { rows.into_iter() .filter(|s| s.kind == SourceKind::UsbAlsa) .map(|s| s.device_id) .c
+tracked:TD-3	src/helpers/boot_journal.rs	record_boot	map_or_default	conn.list().map_or_default(|rows| { rows.into_iter() .filter(|s| s.kind == SourceKind::UsbAlsa) .map(|s| s.dev
 setting-default	src/helpers/settings_overlay.rs	overlay_db_settings	ok	ensure_settings_table(conn).ok()
 setting-default	src/helpers/settings_overlay.rs	overlay_db_settings	unwrap_or_default	list(conn, None).unwrap_or_default()
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	is_ok	set(conn, key, value, *category).is_ok()
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	ok	ensure_settings_table(conn).ok()
-setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	unwrap_or_default	list(conn, None) .map(|rows| rows.into_iter().map(|s| s.key).collect()) .unwrap_or_default()
+setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	map_or_default	list(conn, None) .map_or_default(|rows| rows.into_iter().map(|s| s.key).collect())
 handled	src/helpers/state.rs	observed_names	match-err	match state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 100_000)) { Err .. }
 fail-closed	src/helpers/system.rs	locked_clips	match-err	match state.with_db(birdnet_db::sqlite::locked_file_names) { Err .. }
 handled	src/integrations/acoustic_health.rs	sample_once	match-err	match state.with_db(|conn| record_sample(conn, &date, hour, &source, assessment.level)) { Err .. }
@@ -237,7 +237,7 @@ handled	crates/birdnet-web/src/routes/admin/migration/conf_import.rs	apply_with_
 omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_heatmap_grid	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_hourly_totals	ok	state.with_read_db(|conn| hourly_totals(conn, days)).ok()
 omitted	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end)) .ok()
-setting-default	src/helpers/migrate_cli.rs	settings_of	unwrap_or_default	birdnet_db::settings::list(conn, None) .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect()) .unwr
+setting-default	src/helpers/migrate_cli.rs	settings_of	map_or_default	birdnet_db::settings::list(conn, None) .map_or_default(|rows| rows.into_iter().map(|s| (s.key, s.value)).colle
 omitted	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	listened_for	ok	state .with_read_db(|conn| super::listening::effort_by_date(conn, first, last)) .ok()
 omitted	crates/birdnet-web/src/routes/admin/audio.rs	count_oobs	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/audio.rs	listen_default	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
