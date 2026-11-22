@@ -111,7 +111,8 @@ unmerged draft and `v0.19.0` as unreleased (`08` lists every stale claim, docume
 **WP-00 done, 2026-11-22:** `d726025` (Clippy; the six errors were only `birdnet-core`'s, and the workspace held
 101 `map_unwrap_or` sites, two `redundant_clone` and four `needless_range_loop` behind them), `760e425` (the
 mutation budget gate's five checks), `cc4aec3` (`HANDOFF.md` and the other stale documents; `08`'s row 5.6 count
-was wrong and is corrected there). Not settled by this session: whether the next scheduled mutation run is green
+was wrong and is corrected there), `acb3d9a` (the read-default sweep learns `map_or_default`, which
+`d726025` had hidden three catalogued reads behind; found by the integration tests). Not settled by this session: whether the next scheduled mutation run is green
 (its headroom and annotation checks need run history), and the README's `v0.17.1` marks.
 
 ## Order of work
