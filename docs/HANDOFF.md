@@ -7,6 +7,12 @@ section 6 says where to start. The header and sections 5 and 6 were corrected fo
 2026-11-01. Facts about GitHub were read on the dates given, with the commands named; read them again before
 relying on them. Anything not attributed to a command is marked as reported, read or unknown.
 
+**2026-11-22: start at `docs/audit-2026-11/README.md`.** An audit of `9d8bb1c` (then also `main`) holds 187
+findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.json`. Its file `08` re-checked
+this document and found the two paragraphs below stale: #281 merged on 2026-11-05 (`c7f69d9`), `v0.19.0` was
+published on 2026-11-01, and `main` is red in Clippy (run 43311161060). They are left as written until work
+package WP-00 corrects them against the commands `08` names.
+
 **Branch `claude/compassionate-cerf-olwih1`, 2026-11-05.** Draft pull request #281 (opened 2026-11-05 09:00 UTC), not
 merged; section 4's last subsection says what CI did with it. It carries the
 multi-classifier work of earlier sessions (up to `5e3fe52`) and this session's commits, `f1f668b` to the last
