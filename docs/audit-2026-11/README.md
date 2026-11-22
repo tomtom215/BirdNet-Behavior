@@ -108,6 +108,12 @@ clippy 1.100.0. Nothing in the older backlogs records it. Fix this before any wo
 own pull request, and correct the header of `docs/HANDOFF.md`, which still describes #281 as an
 unmerged draft and `v0.19.0` as unreleased (`08` lists every stale claim, document by document).
 
+**WP-00 done, 2026-11-22:** `d726025` (Clippy; the six errors were only `birdnet-core`'s, and the workspace held
+101 `map_unwrap_or` sites, two `redundant_clone` and four `needless_range_loop` behind them), `760e425` (the
+mutation budget gate's five checks), `cc4aec3` (`HANDOFF.md` and the other stale documents; `08`'s row 5.6 count
+was wrong and is corrected there). Not settled by this session: whether the next scheduled mutation run is green
+(its headroom and annotation checks need run history), and the README's `v0.17.1` marks.
+
 ## Order of work
 
 The packages are in `work-packages.md`. The order below puts first what loses or misstates data,
