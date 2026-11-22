@@ -620,6 +620,10 @@ it says otherwise.
     (build-time only), htmx 2.0.11 (npm also publishes a 4.0.0, not evaluated). Four packages
     have newer releases their parents hold back (`comfy-table`, `generic-array`, `matchit`,
     `psm`: from the previous `cargo update --dry-run`, not re-run).
+    WP-00's pull request moved `lettre` to 0.11.24 and `url` to 2.5.9 for the RustSec advisories of 2026-11-17
+    and 11-20, and waived RUSTSEC-2026-0543 (`chrono` unmaintained, reached only through DuckDB's Arrow) until
+    2027-03-01 in `.cargo/audit.toml` and `osv-scanner.toml`; lift it when an Arrow release DuckDB accepts drops
+    `chrono`. Dependabot's #285 to #287 are still open and unreviewed.
 14. **Suggestions for `CLAUDE.md`, not added** (agents proposed them; I did not edit that file
     on their say-so): a full-page escaping test must probe with a payload `seal::redeem` does
     not rewrite (`<i>`, `<img onerror>`) and assert on the rendered region; a BLOB in a TEXT

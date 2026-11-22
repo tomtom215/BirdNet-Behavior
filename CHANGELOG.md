@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`url` 2.5.9 (RUSTSEC-2026-0592, published 2026-11-20).** `Url::origin()` overflowed the stack on nested
   `blob:` URLs. No code in this repository calls `origin()`; the version is moved because the advisory gates
   CI. `form_urlencoded` moves with it, 1.2.2 to 1.2.3.
+- **`chrono` 0.4.45 is waived until 2027-03-01 (RUSTSEC-2026-0543, unmaintained, no patched release).** No
+  workspace crate depends on it: DuckDB's Arrow (`arrow-arith`, `arrow-array`, `arrow-cast` 60) requires it, as
+  does the newest Arrow release. The waiver is in `.cargo/audit.toml` and `osv-scanner.toml`, whose date makes
+  the OSV job fail again on expiry; it is lifted when an Arrow release DuckDB accepts drops `chrono`.
 
 ### Added
 
