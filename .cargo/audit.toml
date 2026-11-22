@@ -16,9 +16,8 @@
 # chrono non-optionally in their newest release (60.2.0, read 2026-11-22);
 # no workspace crate depends on it. This file takes no expiry, so the same
 # waiver in osv-scanner.toml carries one (2027-03-01) and that job goes red
-# on the day. deny.toml has no entry because cargo-deny does not report this
-# advisory, and an ignore that matches nothing is a waiver nobody reviews.
-# Lift it from both files when an arrow release DuckDB accepts drops chrono.
+# on the day. deny.toml carries it too (CI's cargo-deny reports it).
+# Lift it from all three files when an arrow release DuckDB accepts drops chrono.
 #
 # The previous ignore (RUSTSEC-2026-0097 against rand 0.8.5) was dropped after
 # `cargo update --precise rand@0.8.6` landed in the lockfile.
