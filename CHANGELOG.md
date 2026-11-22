@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`lettre` 0.11.24, for six advisories published 2026-11-17**: RUSTSEC-2026-0560 (STARTTLS response
+  injection lets a man-in-the-middle forge SMTP replies), RUSTSEC-2026-0561 (missing dot-stuffing after a bare
+  LF or CR allows SMTP command injection), RUSTSEC-2026-0562 and RUSTSEC-2026-0564 (panics on an `EHLO` reply of
+  only white space and on a display name containing CR or LF), RUSTSEC-2026-0563 (an address with a quoted local
+  part is sent to a different address) and RUSTSEC-2026-0565 (unbounded buffering of an SMTP reply). The station
+  sends email notifications through `lettre` (`birdnet-integrations/src/email/smtp.rs`), over STARTTLS when
+  `use_starttls` is set. `email-encoding` moves with it, 0.4.2 to 0.4.3.
+- **`url` 2.5.9 (RUSTSEC-2026-0592, published 2026-11-20).** `Url::origin()` overflowed the stack on nested
+  `blob:` URLs. No code in this repository calls `origin()`; the version is moved because the advisory gates
+  CI. `form_urlencoded` moves with it, 1.2.2 to 1.2.3.
+
 ### Added
 
 - **Which classifiers heard a detection, and a Models board.** A detection's page shows a *Who heard it* card:
