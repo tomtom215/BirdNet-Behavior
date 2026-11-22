@@ -39,7 +39,7 @@
 |------|------------|
 | Disk exhaustion on long-running stations | Disk manager with automatic rotation, per-species file caps, and disk-usage thresholds |
 | Database corruption from power loss | WAL mode, integrity checks at startup, auto-recovery from the most recent backup |
-| Memory exhaustion on 1 GB Pi 4 | Target <50 MB RSS (a design target — nothing in-tree gates it); bounded broadcast channels (detections 256, spectrogram 16, log lines 512); no unbounded accumulation |
+| Memory exhaustion on 1 GB Pi 4 | Target <50 MB RSS (a design target — nothing in-tree gates it — and not met with a model loaded: the comment above `MemoryHigh` in `installer/lib/65-service.sh` records ~575 MB idle and ~650 MB analysing with the 541 MB V3.0 model; the default V2.4 model is unmeasured); bounded broadcast channels (detections 256, spectrogram 16, log lines 512); no unbounded accumulation |
 | Network outage blocking BirdWeather uploads | Exponential backoff with offline buffering |
 | Model file corruption or missing weights | Loader refuses to start with an invalid model; the Docker entrypoint re-downloads the model on first run |
 | Migration corrupts target database | Each import batch runs inside its own transaction (`insert_batch_tagged`), so a failure leaves earlier batches committed and the re-run is idempotent via `ON CONFLICT … DO NOTHING`; source is opened read-only |

@@ -73,7 +73,7 @@ Header (lines 10–49) describes PR #281 as an unmerged draft and v0.19.0 as "ta
 | 5.3 | Interface English only (A-5) | STILL-OPEN | no message catalogue in `git ls-files`; `birdnet-core/src/i18n.rs` translates species names only | UI | Medium, large |
 | 5.4 | Classifier fixed at 2 threads (A-7) | STILL-OPEN | `inference/model.rs:80` `num_threads: 2`; `src/daemon/config.rs:243` "comes from the model's defaults" | RELIABILITY | Medium, small |
 | 5.5 | V3.0 privacy / VAD (G-13) | STILL-OPEN (decision first) | as 2.2 | SECURITY | — |
-| 5.6 | Settings needing restart (P-7) | STILL-OPEN; count stale | `applies::every()` = 83 `APPLIES` + 34 extras = 117 entries: 97 Restart, 14 Now, 4 Soon, 2 RecordOnly (`admin/settings/applies.rs:82`, `:463-473`). "92 of 108" no longer holds | RELIABILITY | Low |
+| 5.6 | Settings needing restart (P-7) | STILL-OPEN | *Corrected by WP-00:* the count is not stale. A scratch unit test calling `applies::every()` on 2026-11-22 printed 108 entries (74 `APPLIES` + 34 extras): 92 Restart, 12 Now, 3 Soon, 1 RecordOnly, so HANDOFF's "92 of 108" holds; the 117/97 first written here was wrong | RELIABILITY | Low |
 | 5.7a | Weather per detection (A-6) | STILL-OPEN | `routes/pages/detection_detail.rs` has no "weather" | UI | Low |
 | 5.7b | Per-species actions (A-22) | STILL-OPEN | `git grep -il species_action` → nothing | NON-TECHNICAL/SETUP | Low |
 | 5.7c | Public address env-only (A-25) | STILL-OPEN | `config/known_keys.rs:315` "read from the environment as BNB_PUBLIC_URL" | NON-TECHNICAL/SETUP | Low |

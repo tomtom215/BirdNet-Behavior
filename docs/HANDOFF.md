@@ -9,32 +9,41 @@ relying on them. Anything not attributed to a command is marked as reported, rea
 
 **2026-11-22: start at `docs/audit-2026-11/README.md`.** An audit of `9d8bb1c` (then also `main`) holds 187
 findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.json`. Its file `08` re-checked
-this document and found the two paragraphs below stale: #281 merged on 2026-11-05 (`c7f69d9`), `v0.19.0` was
-published on 2026-11-01, and `main` is red in Clippy (run 43311161060). They are left as written until work
-package WP-00 corrects them against the commands `08` names.
+this document against the tree and GitHub; work package WP-00 corrected the header, sections 1, 2, 5 and 6 from it,
+re-running each command named below on 2026-11-22.
 
-**Branch `claude/compassionate-cerf-olwih1`, 2026-11-05.** Draft pull request #281 (opened 2026-11-05 09:00 UTC), not
-merged; section 4's last subsection says what CI did with it. It carries the
-multi-classifier work of earlier sessions (up to `5e3fe52`) and this session's commits, `f1f668b` to the last
-one on the branch: digital silence skipped instead of counted as a classifier failure, Rust 1.99 and a refresh of the
-dependencies, CI pins and tools, English names for Perch's classes, the taxonomy overlap, the Perch-bar study, the
-doctor's reading of the microphone's capture gain, and two accessibility fixes found by axe 4.14. Section 4's last
-subsection says what ran on it and what did not; section 5, items 39 to 45, is what it leaves open. The paragraphs
-below describe `main` and the 0.19.0 release as of 2026-11-01 and were not touched.
+**State on 2026-11-22.**
 
-**State on 2026-11-01.** The latest *published* release is **v0.18.1** (2026-10-26). **`v0.19.0` is tagged and not
-released**, and `main` has been red since #276 merged (`f54e8ab`, 2026-10-31 23:54 UTC):
+- **The latest published release is v0.19.0**, published 2026-11-01 14:33 UTC; the one before is v0.18.1
+  (2026-10-26) (`list_releases`). The tag is annotated and peels to `ec6f71e`, the merge of #277 (the `sel` fix)
+  (`git ls-remote --tags origin 'v0.19.0*'`): it was moved there from `f54e8ab` as section 6 asked, rather than
+  cutting v0.19.1.
+- **`main` is `9d8bb1c`**, the merge of #284 (2026-11-12). #281 (the multi-classifier work of earlier sessions,
+  digital silence, Rust 1.99 and the dependency refresh, English names for Perch's classes, the taxonomy overlap,
+  the Perch-bar study, the doctor's capture-gain check) merged on 2026-11-05 as `c7f69d9`
+  (`git log --merges origin/main`). `Cargo.toml` says 0.19.0 and `CHANGELOG.md` has `## [Unreleased]` above
+  `## [0.19.0] - 2026-10-31`; nothing after `ec6f71e` is released.
+- **`main` was red in Clippy**: CI run 43311161060 on `9d8bb1c` failed "Clippy (pedantic + nursery)" on six
+  `clippy::map_unwrap_or` errors in `birdnet-core` (`atomic_file.rs:27`, `audio/spectrogram/live.rs:128`,
+  `detection/daemon/mod.rs:477` and `:493`, `i18n.rs:503` and `:670`), reported by clippy 1.100.0. The code did not
+  change: those four files are identical at `c7f69d9`, whose CI run (42025623863, 2026-11-05) passed, and 1.100.0
+  was released on 2026-11-09 (`rustc --version`); CI's Clippy job installs `stable`. Every other job of that run
+  passed. **The six were only the first crate's:** clippy stops at the first crate that fails, so nothing that
+  depends on `birdnet-core` was linted. With those six fixed, 1.100.0 reports seven more in
+  `birdnet-integrations`, and a `cargo clippy --fix` pass over the whole workspace at the three feature sets CI
+  lints changed 101 `map(f).unwrap_or_default()` chains in 62 files to `map_or_default(f)` (the same value for
+  `Some`/`Ok`, the same `Default` for `None`/`Err`; `map_or_default` builds on 1.99, checked with `rustc +1.99`),
+  removed two clones `redundant_clone` flagged in `src/daemon/processor.rs` (each value's last use), and left four
+  `needless_range_loop` findings in two functions (`behavioral_answers.rs` `headline`, `viz/cograph.rs`
+  `ranked_links`) that were rewritten by hand as iterators over the same cells. WP-00's pull request carries all of it.
+- **Mutation testing was red on `main`** in the job "CI config (paths, shards, timeouts)" only: item 36 has the
+  cause and WP-00's change.
+- **Open pull requests** (`list_pull_requests`, state open): three from Dependabot, opened 2026-11-16: #285 (the
+  `rust` base image digest), #286 (six Cargo patch and minor updates), #287 (five GitHub Actions updates). None is
+  reviewed here.
 
-- CI on `main` at `f54e8ab` (run 41254446443): "Tests (x86_64)" failed in "Run integration tests", which began at
-  00:04 UTC on 2026-11-01, on `a_value_in_the_url_is_never_put_back_as_markup`. The steps behind it were skipped.
-- `v0.19.0` was pushed at 09:24 UTC on 2026-11-01, at `f54e8ab`. Its Release run (41292972060) failed at "CI gate: test"
-  on the same test, so there is no GitHub Release, no binary and no attestation. Its Docker run (41292972083) succeeded and
-  pushed and signed the multi-arch manifest, which by `docker.yml`'s tag rules carries `:0.19.0` and `:latest` (the job's
-  steps were read; GHCR was not queried). Its Docs run (41292972099) succeeded.
-- The cause is item 38; the pull request that carries this file fixes it. **After it merges, `v0.19.0` is moved to its
-  merge commit** (section 6): the maintainer chose that over cutting `v0.19.1`.
-
-0.19.0 is the first release since v0.18.1, so its changelog section holds the work of four merged pull requests:
+0.19.0 is the first release since v0.18.1, so its changelog section holds the work of four merged pull requests,
+and the `sel` fix of #277 that the moved tag also carries:
 
 - #271 (merged 2026-10-29): the engine moved to DuckDB 2.0.0; the Patterns, Species and Weekly pages got one
   frame; the kiosk is a plate, with a public-domain plate tier behind it; every picture carries a credit; the
@@ -50,9 +59,9 @@ released**, and `main` has been red since #276 merged (`f54e8ab`, 2026-10-31 23:
   waiver), a flaky webhook test that turned `main`'s CI red after #274's merge, and this file's corrections.
 - #276 (merged 2026-10-31): the release workflow's macOS leg moved from `macos-14` (retired 2026-11-02) to `macos-15`,
   with a step that proves the runner is `arm64` and one that prints the binary's `minos` (item 37).
-
-This pull request adds the `sel` fix, a seed for its sweep that spans two months on every day, and this file's corrections.
-Section 4's last subsection says what ran.
+- #277 (merged 2026-11-01, `ec6f71e`): the history calendar's `sel` must be a date, and the sweep's seed spans two
+  months on every day (item 38). Between #276's merge and this one, `main`'s CI and the first v0.19.0 Release run
+  failed on that test; there was no GitHub Release until the tag was moved.
 
 ## 1. Repository settings only the maintainer can change
 
@@ -64,7 +73,7 @@ not files, so no commit can make them true.
 | Private vulnerability reporting | **off** (`…/private-vulnerability-reporting` answers `{"enabled":false}`) | with it off, `SECURITY.md` tells a reporter to open an issue that holds no technical detail and says how to be reached; the issue chooser and `CODE_OF_CONDUCT.md` point at that route, and the chooser carries a comment saying when to point back at the advisory form (`.github/ISSUE_TEMPLATE/config.yml`) | Settings → Code security → Private vulnerability reporting |
 | Dependabot alerts | **off** (`…/dependabot/alerts` answers 403 "disabled for this repository") | the weekly `cargo audit` / `cargo deny` run and the OSV scan are the only advisory monitors | Settings → Code security |
 | Protection of `main` | **none** that could be read: the one ruleset, `protect-main` (id 14230539), has `enforcement: disabled`; the classic branch-protection endpoint answered 403 to this token, so it is **unknown**, not absent | nothing required means nothing stops a push that fails CI | Settings → Rules → Rulesets: enable `protect-main` and require the seventeen checks listed in [`.github/workflows/README.md`](../.github/workflows/README.md) (read its note on path-filtered workflows) |
-| Annotated release tags | **3 of 24** tag refs are annotated, 21 are lightweight (`…/git/refs/tags`, object type per ref) | `RELEASING.md` prescribes `git tag -a`, and `release.yml` now refuses a lightweight tag, so the *next* tag must be annotated | `git tag -a vX.Y.Z` (or `-s`) |
+| Annotated release tags | **6 of 27** tag refs are annotated, 21 are lightweight (re-read 2026-11-22: `git ls-remote --tags origin`, a `^{}` line per annotated tag; 3 of 24 on 2026-10-21) | `RELEASING.md` prescribes `git tag -a`, and `release.yml` now refuses a lightweight tag, so the *next* tag must be annotated | `git tag -a vX.Y.Z` (or `-s`) |
 | Issue labels | the repository has `bug`, `documentation`, `duplicate`, `enhancement`, `good first issue`, `help wanted`, `invalid`, `question`, `wontfix` (`…/labels`). **Missing, and named by files in the tree:** `needs-triage` (both issue forms), `dependencies`, `rust`, `ci`, `docker` (`.github/dependabot.yml`) | Dependabot's pull requests ask for labels that do not exist; GitHub drops a label it cannot find | Issues → Labels |
 | Topics | **none** (`topics: []`) | discoverability only | the gear beside About |
 | Repository licence detection | `license.spdx_id` is `NOASSERTION` (name "Other") | the sidebar shows no licence | see section 2: replacing `LICENSE` will **not** fix it |
@@ -73,10 +82,10 @@ not files, so no commit can make them true.
 Not readable from the session, so **unknown**: Actions permissions (the proxy answers
 "not permitted"), code-scanning alerts (403), secret scanning, who has write access.
 
-**Open pull requests, read on 2026-10-31** (`list_pull_requests`, state open, before #275 was opened; #275 has merged
-since and the pull request that carries this file was not yet open): two, both Dependabot's from 2026-10-26: #268 (the
-GitHub Actions group, six updates) and #267 (the `debian` base image digest). Neither is reviewed here; the pins they
-touch are the ones `.github/workflows/` and `docker/` name.
+**Open pull requests, read on 2026-11-22** (`list_pull_requests`, state open): three, all Dependabot's from
+2026-11-16: #285 (the `rust` base image digest), #286 (the Cargo patch-and-minor group, six updates) and #287 (the
+GitHub Actions group, five updates). Neither #267 nor #268, listed here before, is open. None is reviewed here; the
+pins they touch are the ones `.github/workflows/`, `docker/` and `Cargo.lock` name.
 
 **CI on `main` at `49a8173`, read on 2026-10-31** (`actions_list`, the runs for that SHA): eleven workflow runs, ten
 `success` (A11y & Visual QA, CodeQL, Coverage, Docker, Docs, Install smoke test, OSV-Scanner, Scorecard, Supply chain,
@@ -90,17 +99,14 @@ OSV-Scanner, Scorecard, Supply chain and Upgrade test. (The dry run dispatched o
 to a brownout: item 37.) **At `f54e8ab`, the merge of #276, CI failed**: the header and item 38. The other workflows' push runs at that
 SHA were not read.
 
-**Mutation testing on `ec59953`** (the merge of #271, 2026-10-29, the last run that exists: the workflow's push filter
-does not match the files of #274 or #275): `failure`, in the job "CI config
-(paths, shards, timeouts)" only. Every one of the 29 `cargo-mutants` shard jobs succeeded. The config job's check 4
-reported six shards past 75 % of their `timeout-minutes` (`inference/model.rs [3/3]` 60 of 60 minutes, 101 %;
-`sqlite/queries/detections/*.rs` shards 1, 3, 4 and 5 at 97 to 101 % of 45; `validate.rs [1/2]` 43 of 50, 86 %).
-That is the budget gate doing its job, and it will be red again on the Monday 09:00 UTC schedule until the budgets are
-raised or the rows split; editing `mutation.yml` would start the full matrix (hours) on the pull request that makes
-the edit, so it is left for its own change (item 36). #276 edited `release.yml`, which the filter matches
-(`.github/workflows/**`), so it ran (run 41249887562, 37 jobs): "CI config" was green, because that pull request edited no
-`timeout-minutes`, and two shards timed out at "Install ffmpeg" (15 minutes, before any mutation ran) and passed on one
-re-run. On a pull request each shard mutates only the changed lines, so the matrix took 18 minutes and not hours.
+**Mutation testing on `main`, read on 2026-11-22** (`actions_list`, `mutation.yml`, branch `main`): every run listed
+from #276's merge (run 41254446575) to the schedule of 2026-11-16 (run 43837159692) ended `failure`. In the scheduled
+run every `cargo-mutants` shard succeeded and only "CI config (paths, shards, timeouts)" failed, on five checks: four
+shards over 75 % of their `timeout-minutes` in the worst of `main`'s last five runs (`civil.rs [3/3]` 78 of 100,
+`inference/model.rs [3/3]` 45 of 60, `src/daemon/*.rs [3/10]` 95 of 120, `validate.rs [1/2]` 40 of 50) and one
+stale annotation (`ci.yml`'s `test` job, `# observed 34m31s` against a median of 56m13s). Item 36 has the change.
+On a pull request each shard runs `--in-diff`, so it mutates only the lines the pull request changed, and an edit to
+`mutation.yml` re-runs the matrix at that cost, not the full sweep's (#276's run, 41249887562, took 18 minutes).
 
 ## 2. Decisions that are the maintainer's
 
@@ -156,8 +162,9 @@ re-run. On a pull request each shard mutates only the changed lines, so the matr
   (78 %). A regex (the script at the end of this file) over the tracked `.rs` files of `crates`,
   `src`, `tests` and `tools` at the tip when this was written (`042973f`) finds 459 attributes, 440 without a reason, 796
   entries and 599 cast-lint entries (75 %); the two methods differ and the tree moved, so
-  the proportion is the stable number. The same script at `91812fc` (2026-10-31) gives 475 attributes,
-  454 without a reason, 818 entries and 615 cast-lint entries (75 %). Not measured: how many casts in code that has no allow
+  the proportion is the stable number. The same script at `91812fc` (2026-10-31) gave 475 attributes,
+  454 without a reason, 818 entries and 615 cast-lint entries (75 %), and at `9d8bb1c` (run 2026-11-22) 484
+  attributes, 463 without a reason, 830 entries and 624 cast-lint entries (75 %). Not measured: how many casts in code that has no allow
   today the workspace allow would silence.
 - **Mirroring the model files.** `publish-model.yml` was run (run 39469063446, from the
   previous branch): the release `models-v2.4` holds `birdnet-v24.onnx` (54,068,648 bytes),
@@ -579,7 +586,9 @@ it says otherwise.
    languages; birdnet-go has 15 interface locales.
 4. **The classifier runs on 2 threads and no setting changes that (A-7).** Medium, small.
 5. **The V3.0 privacy default (section 2) and voice-activity detection (G-13).**
-6. **92 of 108 settings need a restart (P-7).** Low. They say so; hot reload is not built.
+6. **92 of 108 settings need a restart (P-7).** Low. They say so; hot reload is not built. Recounted 2026-11-22
+   from `admin/settings/applies.rs`: `APPLIES` holds 74 entries (58 Restart, 12 Now, 3 Soon, 1 RecordOnly) and
+   `every()` adds the 34 `EXTRA_SETTINGS`, all Restart.
 7. **Smaller gaps:** weather on a detection (A-6), per-species actions (A-22), the public
    address is an environment variable only (A-25; `IMAGE_PROVIDER` and the Flickr keys *are*
    browser settings now), no certificate upload or generate page (P-22), the data-volume check
@@ -589,7 +598,7 @@ it says otherwise.
     call site), TD-3 (the boot journal records a detection count it could not read as 0),
     TD-4 (the Capture tab's duplicate guard; the wizard logs and says nothing), TD-5 (RTSP
     credentials on ffmpeg's command line; a way around it is proven with `concat` and
-    `tools/rtsp-probe`, not built), TD-6 (ten page partials routed and never linked); TD-8 (the clock check reads "cannot tell" as "recovered"); TD-1 (a failed read inside the station-health evaluator ends an alert) and TD-7 (protected clips) are closed. Counts in that file were rechecked on 2026-10-21 where a command could.
+    `tools/rtsp-probe`, not built), TD-6 (ten page partials routed and never linked); TD-8 (the clock check reads "cannot tell" as "recovered"); TD-9 (a detection's comments are addressed by date, time and species, added in `b5f8b8d`); TD-1 (a failed read inside the station-health evaluator ends an alert) and TD-7 (protected clips) are closed. Counts in that file were rechecked on 2026-10-21 where a command could.
 9. **Public pages that scan the whole history are still slow one at a time**, and an
     unescaped reflection can still inject non-script markup (the CSP nonce goes only onto
     sealed tags and any other `<script` is rewritten to text; an `hx-post` attribute is a
@@ -599,10 +608,11 @@ it says otherwise.
 10. **`--doctor` reports a config value outside its range as a warning, not a refusal**
     (`START_CRITICAL` holds four names), so a bad number leaves a station running on a value
     the daemon cannot use. Whether some should stop the start is a decision.
-11. **Workflows that have not run as a whole:** `release.yml` (read against a real toolchain
-    and fixed; not executed), the new `docs.yml` tag and browser gates, the `fuzz.yml` pull-request
-    path. The release SemVer check accepts build metadata (`+…`), which a Docker tag cannot
-    carry (read from the regular expression, not run).
+11. **The release SemVer check accepts build metadata (`+…`)**, which a Docker tag cannot
+    carry (read from the regular expression, not run). The workflows this item once listed as never run have run
+    (read 2026-11-22 with `actions_list`): `release.yml` on the moved `v0.19.0` tag (run 41311659073, success, the
+    release published), `docs.yml` on that tag (41311659076, success; which of its steps ran was not read), and
+    `fuzz.yml` on 41 pull requests.
 12. **Floating pins:** every `uses:` line is commit-pinned (133 of 133, counted); the
     `ubuntu:24.04` container `install-smoke.yml` starts with `docker run` is a tag, and
     `taiki-e/install-action` and `EmbarkStudios/cargo-deny-action` choose their own tool builds.
@@ -654,10 +664,9 @@ it says otherwise.
 24. **The view modules' unit tests run in no workflow.** Low to medium. `tools/visual-qa/unit/*.test.mjs` (`node
     unit/<name>.test.mjs`, `tools/visual-qa/README.md`) are run by hand; `a11y.yml` does not call them, and its time budget was
     not measured with them.
-25. **axe-core 4.14.0 will flag the top bar's home link when the lockfile moves.** Low until then. `.topnav-brand` has
-    `aria-label="BirdNet-Behavior home"` and visible text "BirdNet Behavior": 4.14.0 reports `label-content-name-mismatch`
-    (84 nodes across `axe.mjs`); 4.11.4 and 4.13.0, which the lockfile pins, report none (the probe in section 4). The markup
-    is not this branch's and was not changed; making the accessible name begin with the visible words would clear it.
+25. ~~axe-core 4.14.0 will flag the top bar's home link when the lockfile moves.~~ **Fixed** in `924de5b`: the
+    lockfile pins axe-core 4.14.0 (`tools/visual-qa/package-lock.json`) and `.topnav-brand`'s accessible name now
+    begins with its visible words, `aria-label="BirdNet Behavior home"` (`templates/layout.html:65`; read 2026-11-22).
 26. **`cls.mjs` lists three routes over 0.1** (it fails only with `--fail`, which no workflow passes): 90 page loads, total 0.752;
     dashboard 0.197 (`div.bnb-skel-bars` 0.155), species-detail-unheard 0.195, species-detail 0.135. Low. Whether this branch
     moved them is section 4's last unverified item.
@@ -724,13 +733,15 @@ it says otherwise.
     what an intermittent failure looks like. The other stubs that answer a redirect send the client to another origin, so
     they never reuse a connection. **Not changed:** the product's reaction to a reset (it logs it), because reusing a
     connection the peer has closed is an ordinary HTTP/1.1 race and a retry would be a feature, not a fix.
-36. **The mutation workflow's budget gate is red on its schedule.** Medium (it makes `Mutation testing` red on `main`
-    without any mutant surviving). See the paragraph under section 1: six shards use 86 to 101 % of their `timeout-minutes`.
-    Either raise the budgets in `.github/workflows/mutation.yml` (and run `python3 scripts/check-ci-config.py
-    --update-observed`) or split `inference/model.rs`, the detections glob and `validate.rs` into more shards. The
-    change touches `.github/workflows/**`, so its pull request runs the whole matrix: budget a few hours, and keep it
-    out of any pull request that is meant to be small. Check 4 needs `GITHUB_TOKEN` to read run history, so it cannot be
-    reproduced from this container.
+36. **The mutation workflow's budget gate was red on its schedule.** Medium (it made `Mutation testing` red on `main`
+    without any mutant surviving). Section 1 has the five checks the 2026-11-16 run failed. WP-00 raised the three
+    budgets that had room under `check-ci-config.py`'s 120-minute ceiling, for all shards of each row as earlier
+    raises did (`civil.rs` 100 → 110, `inference/model.rs` 60 → 70, `validate.rs` 50 → 60), split
+    `src/daemon/*.rs`, already at the ceiling, from 10 shards to 12, and set `ci.yml`'s `test` annotation to the
+    median the check measured. The rows' own comments carry the arithmetic. Not verifiable here: check 4 and the
+    annotation check read run history through `GITHUB_TOKEN`, so whether the next scheduled run is green is known
+    only when it runs; a re-sharded row runs its first jobs on a foreign cache (see `civil.rs`'s comment), so the
+    twelve daemon shards may need one more window before their numbers settle.
 
 37. **The release workflow's macOS leg was on an image GitHub retires on 2026-11-02.** High for the release; handled in #276
     (merged 2026-10-31 23:54 UTC). The `aarch64-apple-darwin` row of `build` ran on `macos-14`. GitHub fails every job on that
@@ -832,27 +843,20 @@ it says otherwise.
 
 ## 6. Where to start
 
-**Releasing 0.19.0** (`RELEASING.md` is the procedure and its pre-release checklist is the list to tick). The bump is
-merged (#275, #276). `v0.19.0` exists on GitHub at `f54e8ab` and is to be **moved**; no GitHub Release exists for it.
+**Start at `docs/audit-2026-11/README.md`**: one work package per pull request, in its order. WP-00 (the Clippy fix,
+the mutation budgets, this file's corrections) is done; its "Item zero" line has the commit.
 
-1. **Merge the pull request that carries this file** when every check on its last head is green.
-2. **Move the tag** (the maintainer's choice over `v0.19.1`; nothing was published under it except the container image):
-   `git push origin --delete v0.19.0`, then `git tag -d v0.19.0`, then `git fetch origin`, then `git tag -a v0.19.0 -m
-   "Release v0.19.0" <the merge commit of that pull request>` and `git push origin v0.19.0`. Name the commit: `git tag -a`
-   with none tags whatever is checked out. Check the result with `git ls-remote --tags origin 'v0.19.0*'`: the peeled line
-   (`^{}`) must be that commit. Consequences: Release, Docker and Docs run again; Docker pushes `:0.19.0`, `:0.19`, `:0` and `:latest`
-   over the first push and signs them again, and whoever pulled `:0.19.0` or `:latest` since 2026-11-01 09:50 UTC has the build
-   with the `sel` bug; there is no first GitHub Release to delete.
-3. Read the Release run: this time `Package and attest` attests, `Publish GitHub Release` and `Verify the published Release`
-   run, and the macOS job's summary has the `minos` line (item 37). Read the Docker and Docs runs as well (section 5, item 1
-   for what to look for in Docs).
-4. The date in `CHANGELOG.md` and `CITATION.cff` is 2026-10-31 and the tag lands later; `validate` checks the heading's form and
-   the CITATION version, not that the date is today's, so leaving it costs nothing but a day's accuracy.
-5. **After the tag**, in a small follow-up pull request: `README.md` line 32 names `v0.17.1` as the latest release
-   and several features carry an *(unreleased)* mark that 0.18.0 or 0.18.1 already shipped (line 131 says `v0.17.1`
-   installs the V3.0 preview). They are true or false only once the tag exists, which is why they are not in the
-   release pull request. Also confirm `scripts/gen-cli-help.sh` leaves `docs/book/_generated/cli-help.txt`
-   unchanged (CI's `build` job checks it).
+**0.19.0 is released** (read 2026-11-22): the pull request that fixed `sel` merged (#277, `ec6f71e`); `v0.19.0` was
+moved to that commit (`git ls-remote --tags origin 'v0.19.0*'`); its Release run (41311659073) and Docs run
+(41311659076) succeeded and the GitHub Release was published at 14:33 UTC on 2026-11-01. Not read: the attestation of
+the release assets and the macOS job's `minos` line. The date in `CHANGELOG.md` and `CITATION.cff` stays 2026-10-31,
+a day before the tag; `validate` checks the heading's form and the CITATION version, not the date.
+
+**Still open from the release:** `README.md` line 32 names `v0.17.1` as the latest release, and the README measures
+what is *(unreleased)* against it (`grep -n 'v0\.17\.1\|unreleased' README.md`: lines 32, 42, 44, 56, 117, 129, 131,
+182, 184 to 187, 244, 288 on 2026-11-22). Each mark needs checking against the changelog sections of 0.18.0, 0.18.1
+and 0.19.0 before it is removed or kept. (The other half of the old step,
+`docs/book/_generated/cli-help.txt`, is current: CI's "Check generated CLI help is current" passed on `9d8bb1c`.)
 
 **Maintainer decisions and settings still open** (this release changes none): the settings in section 1
 (private vulnerability reporting, the five labels, topics, `protect-main`); publishing to crates.io by hand in two

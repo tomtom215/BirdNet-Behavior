@@ -4,8 +4,13 @@ These are the items from the [parity audit](../../CHANGELOG.md) that cannot be
 started without committing to an architecture. Each is weeks of work and each
 forecloses options once begun, so they are written down here rather than built.
 
-Nothing in this file is implemented; one *precondition* has since landed, and
-Proposal 3 says so where it matters. Each section says what the thing is, what
+When this was written nothing in it was implemented. Since then (read 2026-11-22):
+Proposal 1 has largely shipped as `G-10` Stages 1–5 in
+[`FEATURE_GAP_ANALYSIS.md`](../FEATURE_GAP_ANALYSIS.md) (the classifier registry
+`inference/registry.rs`, the merge `detection/merge.rs`, the model catalogue
+`birdnet-integrations/src/model_catalog.rs` and the `detection_model_scores` table);
+Proposal 2, MySQL, was declined (`G-31` there); Proposals 3 to 5 are not built, and
+one *precondition* of Proposal 3 has landed, which that section says where it matters. Each section says what the thing is, what
 it would cost, what it would rule out, and — where there is one — the cheaper
 partial that captures most of the value.
 

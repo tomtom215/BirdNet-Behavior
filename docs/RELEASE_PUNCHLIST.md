@@ -4,8 +4,9 @@
 > `claude/gallant-feynman-bJs95` integration branch, which no longer exists, at a point
 > long before the current tree (`Cargo.toml` `workspace.package.version`).
 > Every O-01…O-26 item and every P1/P2 item below has shipped, and so have P3-1…P3-5;
-> what remains open is P3-4's migration-missing stub (deliberately out of scope) and the
-> three minor P3-5 follow-ups listed under that item. Two of its own statements are simply
+> what remains open is the three minor P3-5 follow-ups listed under that item. P3-4's
+> migration-missing stub ("Forecast model pending") is gone: the card is computed now
+> (`card_content` in `routes/pages/migration.rs`, read 2026-11-22). Two of its own statements are simply
 > wrong today and are corrected in place below: the branch model, and the "there is no CI
 > on this repo" note — the repo has fifteen workflows today, and
 > `.github/workflows/README.md` says what each does and which checks a pull request

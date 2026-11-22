@@ -717,7 +717,10 @@ the same way (`git ls-remote --tags origin`).
 
   **Still open after this run:**
 
-  - **The upgrade path has never been executed.** No one has run
+  - *No longer true as written (read 2026-11-22): `.github/workflows/upgrade.yml` installs
+    the most recent published releases under real systemd and upgrades them in place with
+    the tree's `install.sh`; its run on `9d8bb1c` (43311161254) succeeded. An upgrade from
+    0.11.0 itself is not among the releases it installs.* **The upgrade path has never been executed.** No one has run
     `install.sh update` from a released 0.11.0 station to this build. Every
     existing operator takes that path, and it carries the unit rewrite, two
     `--doctor` exit-code changes, `/admin` closing, and the new admin-login
@@ -742,7 +745,9 @@ the same way (`git ls-remote --tags origin`).
     sealed box in summer will throttle. Measured, not bounded.
   - **The multi-distro package layer is container-tested only** (Debian,
     Fedora, Arch, openSUSE), all amd64. No real non-Debian box, no aarch64.
-  - **0.75 is a judgement, not a measurement.** The out-of-the-box minimum
+  - *Superseded (read 2026-11-22): the default is 0.70 again, BirdNET-Pi's value
+    (`DEFAULT_CONFIDENCE_THRESHOLD`, `crates/birdnet-core/src/config.rs`); it is still
+    unmeasured against a labelled recording.* **0.75 is a judgement, not a measurement.** The out-of-the-box minimum
     confidence was raised from BirdNET-Pi's 0.70 on the reasoning that a new
     station's log should read as realistic rather than padded with marginal
     IDs. What has *not* been done is measuring precision and recall at 0.70 vs
@@ -764,7 +769,8 @@ the same way (`git ls-remote --tags origin`).
 
     Two items are carried forward rather than done:
 
-    * **MQTT / Home Assistant discovery — still CLI/env only, no settings
+    * *Done since (read 2026-11-22): the settings page has a "Home Assistant & MQTT"
+      group (`Group::Mqtt`, `routes/admin/settings/extra.rs`).* **MQTT / Home Assistant discovery — still CLI/env only, no settings
       section.** Nothing under `crates/birdnet-web/src/routes/admin/settings/`
       mentions MQTT. The command palette (`routes/pages/cmdk.rs`) now sends the
       search term "mqtt" to `/station/alerts#notifications`, which explains the
@@ -798,7 +804,8 @@ the same way (`git ls-remote --tags origin`).
     says so.
 - **Long-duration soak.** The soak suite bounds memory growth over minutes, not
   days. "A full season unattended" remains the target, not a measurement.
-- **The Docker image built end to end here.** S-01 is measured at every level
+- *Done since (read 2026-11-22): `docker.yml` builds the image on every push to `main`; its
+  run on `9d8bb1c` (43311161241) succeeded.* **The Docker image built end to end here.** S-01 is measured at every level
   that does not need a container: DuckDB refuses the exact bytes the Dockerfile
   embedded, `--verify-extension` fails with the network both up and down, and the
   offline load succeeds once the pin is corrected. What was **not** done in this
