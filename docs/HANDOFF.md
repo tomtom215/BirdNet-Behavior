@@ -12,6 +12,31 @@ findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.
 this document against the tree and GitHub; work package WP-00 corrected the header, sections 1, 2, 5 and 6 from it,
 re-running each command named below on 2026-11-22.
 
+**2026-11-23: WP-03 is done, on branch `claude/serene-newton-p4ay8h`** (code `54859c7`; docs, checklist and this
+entry in the commit after it). All three findings closed and one added. ACC-02: each analysed file's filters return a
+`FilterTally` (windows masked for a voice or a noise; species detections removed by privacy, noise, corroboration, the
+range filter and the operator's lists, each once, by the first stage), exported as new reasons of
+`birdnet_detections_dropped_total` and a new `birdnet_windows_masked_total`, and kept per day, source and reason in the
+new table `filter_discards` (migration 60). ACC-01: a species the range model scores under `SF_THRESH` is filed in the
+quarantine as `below_sf_thresh` with its score (`sf_probability`) when it clears the station's confidence bar, and
+counted under `occurrence` either way; list exclusions and unscored species are counted and not queued. RES-28: with
+`RAW_AUDIO_KEEP_EVERY` set, a segment whose speech the human-sound rule masked is drained without a kept copy
+(`SpeechMarks`, shared by the daemon and the stream drain). New ACC-21 (done): the manual's review-queue table named one
+of the queue's reasons. Each gate, and the mutant that turned it red, is in the commit message of `54859c7` and in
+`checklist.json`. Verified on `54859c7` with `scripts/preflight.sh --tests`: 19 of its 20 gates ok (fmt, typos,
+machete, installer drift, cargo-deny, cargo-audit, OSV, clippy at all three feature sets, rustdoc, both builds, CLI
+help, book links, licence notices, doc tests, unit tests, integration tests); the all-features suite failed on "No
+space left on device" at a link, and `cargo test --workspace --all-features`, rerun alone after `rm -rf target` and with
+`~/.duckdb` moved aside, exited 0 (317 `test result:` lines, 6 608 passed, 0 failed, 10 ignored). MSRV was not run.
+Browser gates on a fresh screenshot fixture (`--features analytics`, new `BNB_FIXTURE_DIR`): `axe.mjs` (both viewports) "0 total violation(s)", `layout.mjs` "Graded 360 page states" with no findings, `qa.mjs` (STRICT) "0 pages with issues". The
+changed settings help text and the six changed manual pages were screenshotted at 1280x900 and 390x844 in light and
+dark and looked at (no page wider than the screen; the metrics table scrolls in its own box on a phone, as before); the
+review-queue table was shortened after the phone screenshot showed a column several screens tall. **Not verified:** any
+real model or audio (the tiny fixtures only); how many "Unlikely here" rows a real station writes a day (there is no
+per-species cap; if the queue floods, a cap is the audit's suggested answer); the run-loop call sites of
+`ThroughputObserver::filtered`, which need the real model to reach (the observer and the tally are each gated);
+`filter_discards` is written and read by tests only, no page shows it. **Next:** WP-04.
+
 **2026-11-23: WP-02 is done except MMP-25, on branch `claude/zealous-dirac-l0vnko`** (commits `275e97d`, `8962d6c`,
 `94cb461`). The maintainer decided three questions, recorded in `checklist.json`: a second classifier's species the range
 model does not score are held back unless whitelisted (MMP-03); a non-finite human score from any classifier still masks
@@ -886,8 +911,8 @@ it says otherwise.
 
 **Start at `docs/audit-2026-11/README.md`**: one work package per pull request, in its order. WP-00 (the Clippy fix,
 the mutation budgets, this file's corrections) is done; its "Item zero" line has the commit. WP-01 is done but for MMP-21's
-later items (see the 2026-11-23 paragraph at the top); WP-02 is done but for MMP-25 (its paragraph at the top); the next
-package is WP-03.
+later items (see the 2026-11-23 paragraph at the top); WP-02 is done but for MMP-25 (its paragraph at the top); WP-03 is
+done (its paragraph at the top); the next package is WP-04.
 
 **0.19.0 is released** (read 2026-11-22): the pull request that fixed `sel` merged (#277, `ec6f71e`); `v0.19.0` was
 moved to that commit (`git ls-remote --tags origin 'v0.19.0*'`); its Release run (41311659073) and Docs run

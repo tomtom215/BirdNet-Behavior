@@ -13,7 +13,7 @@ These are two different quality-control surfaces; it helps to keep them straight
 
 | Aspect | [Quarantine](../admin/settings.md) | Detection reviews |
 |---|---|---|
-| **What it holds** | Detections held back for a reason you may disagree with: under a stricter per-species threshold, out of range here this week (*Unlikely here this time of year*, with the range model's score), a day bird at night, a recording made before the clock was set, or flagged by hand | Detections already admitted to the log |
+| **What it holds** | Detections held back from the log, each with its reason | Detections already admitted to the log |
 | **Effect** | Gates rows *out* of `detections` until you approve them | A non-destructive annotation; nothing is moved or deleted |
 | **Verdict** | Approve / Reject / Delete | Confirm / Reject (reversible) |
 | **Use it to** | Vet uncertain rare birds before they count | Audit the ID quality of detections that already count |
@@ -23,6 +23,11 @@ These are two different quality-control surfaces; it helps to keep them straight
 A *rejected* review flags a likely misidentification for your own records — it
 does **not** remove the detection. Quarantine is the tool for keeping a dubious
 record out of the log entirely.
+
+A detection is held in quarantine for one of five reasons, each named beside it in the queue: it is under a
+stricter threshold you set for its species; the range model says it is *unlikely here this time of year* (its
+score is shown, so a vagrant can be approved); it is a day bird heard in the middle of the night; it was recorded
+before the station's clock was set; or someone flagged it by hand.
 
 ## The triage queue (`/detection-reviews`)
 

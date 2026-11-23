@@ -318,6 +318,16 @@ BirdNET-Analyzer that comes from general knowledge, not from this repository, an
 - Acceptance gate: part of ACC-03's golden.
 - Effort folded into ACC-03.
 
+
+### ACC-21: The manual's review-queue table said quarantine holds only per-species threshold misses
+- Severity: low — Kind: stale documentation — NEW, added 2026-11-23 by the session that implemented WP-03 (not
+  part of the audit of `9d8bb1c`)
+- Evidence: `docs/book/guide/reviews.md`, "Reviews vs. quarantine", said the queue holds "Detections that *failed* a
+  stricter per-species threshold", while the processor already quarantined a day bird at night
+  (`implausible_hour`) and a recording made before the clock was set (`implausible_clock`), and ACC-01 adds out of
+  range. Status: VERIFIED-BY-READING against `src/daemon/processor.rs`.
+- Change: the cell says the queue holds detections held back, each with its reason, and a paragraph below the table
+  names the five reasons (`54859c7` and the WP-03 follow-up commit).
 ## Numerical notes (no finding)
 - Mono mixdown, resampling and confidence are f32. The resampler's delay arithmetic is in integers and f64, and its `wanted` length uses integer `div_ceil` (`resample.rs:113-125, 136-137`).
 - Softmax normalisation is accumulated in f64 (`model.rs:944-969`).
