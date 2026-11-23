@@ -402,8 +402,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:88",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "8962d6c: SpeciesFilter::know_vocabulary + filter_species_of align the occurrence model onto each classifier's vocabulary by name (Alignment rules); a species it does not score is admitted only if whitelisted (maintainer decision 2026-11-23: drop unless whitelisted); an include list binds on every vocabulary unless it matches none on the station; its warning is once per list change. Gates in detection/daemon/process.rs, run first on the unfixed code: a_species_only_a_second_classifier_knows_is_range_filtered (audit gate; Turdus merula at 0.047 was emitted), a_species_the_geomodel_cannot_score_is_dropped_unless_whitelisted and an_include_list_binds_on_a_second_classifier_that_lacks_its_species, all red; counterparts without_coordinates_every_classifier_s_species_is_a_candidate and an_include_list_matching_no_classifier_is_still_ignored green before and after. The include-list probe the audit asked for is the last of those red gates. Not done: the web explainer (MMP-25). Not measured: the cost of a second alignment on a Pi."
   },
   {
    "id": "MMP-04",
@@ -414,8 +414,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:109",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Not disproven: closed by the maintainer's decision of 2026-11-23 to keep storing non-taxon classes (BirdNET-Pi parity: scripts/utils/analysis.py at 88985a3 stores any label over CONFIDENCE that passes the lists). No code change. The path the finding describes is real. Consequence of MMP-03 (8962d6c): Perch's sound classes are second-classifier names the occurrence model does not score, so on a station with a location and a range model they are now held back unless whitelisted; without either they are stored as before. Count correction: perch-v2.csv has 198 rows whose scientific name has no space, not 200. The real-audio probe (rows above a 0.35 Perch bar) was not run."
   },
   {
    "id": "MMP-05",
@@ -426,8 +426,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:127",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "275e97d: names_a_human matches the whole word \"human\" or one of privacy::PERCH_HUMAN_CLASSES, Perch's classes under AudioSet \"Human sounds\" (ontology.json read 2026-11-23, SHA-256 9c685f44...d2f15d) and Homo sapiens. Gate tests/perch_speech_is_a_human_class.rs every_perch_speech_class_is_a_human_class red on the unfixed matcher (all 11 of the audit's speech classes missed); counterpart perch_s_human_classes_are_exactly_audioset_s_human_sounds_and_homo_sapiens red (it found MMP-23), v24_s_human_classes_are_unchanged green before and after. The startup warning per routed classifier without human classes was not built: all three bundled vocabularies now have human classes and privacy_can_fire already checks every loaded classifier. The probe (Human_voice rank on real speech) was not run."
   },
   {
    "id": "MMP-06",
@@ -534,8 +534,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:253",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Not disproven: the maintainer decided on 2026-11-23 to keep it as is (any classifier's non-finite human score masks the chunk, failing towards privacy). HANDOFF item 39(b) and docs/book/admin/classifiers.md already describe the cost. No code change."
   },
   {
    "id": "MMP-15",
@@ -846,8 +846,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "03-precision-accuracy.md:294",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Not disproven: closed by the maintainer's decision of 2026-11-23 to keep storing non-taxon classes, as BirdNET-Pi does (see MMP-04). The geomodel-v2 probe was not run."
   },
   {
    "id": "ACC-19",
@@ -2370,6 +2370,42 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:620",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "MMP-23",
+   "title": "The human-class rule reads a cicada as a person",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-02",
+   "phase": 1,
+   "source": "02-multi-model-pipeline.md (MMP-23, added 2026-11-23 by the WP-02 session)",
+   "status": "done",
+   "evidence": "275e97d: whole-word match on \"human\". Found by the MMP-05 counterpart gate, whose run on the unfixed matcher listed Pacarina schumanni among Perch's human classes; unit test a_name_containing_human_inside_a_word_is_not_human."
+  },
+  {
+   "id": "MMP-24",
+   "title": "An include list naming only a second classifier's species leaves the primary unfiltered",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-02",
+   "phase": 1,
+   "source": "02-multi-model-pipeline.md (MMP-24, added 2026-11-23 by the WP-02 session)",
+   "status": "done",
+   "evidence": "8962d6c: include list read against every vocabulary. Gate an_include_list_binds_on_the_primary_that_lacks_its_species red on the unfixed filter."
+  },
+  {
+   "id": "MMP-25",
+   "title": "The range-filter explainer answers for the primary's vocabulary only",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-02",
+   "phase": 1,
+   "source": "02-multi-model-pipeline.md (MMP-25, added 2026-11-23 by the WP-02 session)",
    "status": "open",
    "evidence": ""
   }

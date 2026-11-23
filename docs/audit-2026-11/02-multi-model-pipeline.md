@@ -323,6 +323,32 @@ with Perch v2 (both 32 kHz). The default V2.4 primary (48 kHz) cannot run beside
 - Impact: a 1 GB board that installs Perch and routes a source to it, as the manual describes, records nothing.
 - Change: a declined classifier is dropped from the routes, with a note; a name never declared is kept and still refused.
 
+### MMP-23: The human-class rule reads a cicada as a person
+- Severity: low — Kind: bug — NEW, added 2026-11-23 by the session that implemented WP-02 (not part of the audit of
+  `9d8bb1c`)
+- Evidence: `names_a_human` was a substring match on "human", and Perch's labels carry the cicada *Pacarina
+  schumanni* ("sc**human**ni"), so its index was a human index: a singing cicada could mask its chunk and the chunks
+  beside it. Status: VERIFIED by a test run on the unfixed matcher, which listed `Pacarina schumanni` among Perch's
+  human classes. No other row of the V2.4, V3.0 or Perch label files matches the substring without the word.
+- Change: the match is on the whole word (`275e97d`).
+
+### MMP-24: An include list naming only a second classifier's species leaves the primary unfiltered
+- Severity: medium — Kind: bug — NEW, added 2026-11-23 by the session that implemented WP-02; the mirror of MMP-03's
+  include-list case
+- Evidence: `apply_lists` ignored an include list that resolved to nothing in the vocabulary at hand, so a list naming
+  only Perch species was a typo to the primary, which then admitted every species. Status: VERIFIED by
+  `an_include_list_binds_on_the_primary_that_lacks_its_species`, red on the unfixed filter.
+- Change: an include list is read against every classifier's vocabulary and ignored only if it matches none (`8962d6c`).
+
+### MMP-25: The range-filter explainer answers for the primary's vocabulary only
+- Severity: low — Kind: gap — NEW, added 2026-11-23 by the session that implemented WP-02
+- Evidence: `DaemonOccurrence::load` (`src/daemon/occurrence.rs`) builds its private `SpeciesFilter` from the primary's
+  labels, so `/species/occurrence` lists no second classifier's species, and since `8962d6c` it disagrees with the
+  daemon in one case: an include list naming only a second classifier's species binds on the primary in the daemon and
+  is ignored as matching nothing on the page. Status: VERIFIED-BY-READING; the module doc and the manual now say so.
+- Proposed change: give the explainer every configured classifier's labels (`know_vocabulary`) and answer for their
+  species too. Open.
+
 ## Not examined
 
 - `tools/model-convert/*.py` and `tools/perch-bar/scripts` beyond their listings; the Perch-bar results themselves.
