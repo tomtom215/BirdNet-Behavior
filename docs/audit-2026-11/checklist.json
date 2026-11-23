@@ -415,7 +415,7 @@
    "phase": 1,
    "source": "02-multi-model-pipeline.md:109",
    "status": "done",
-   "evidence": "COMMIT: the maintainer first chose to keep storing non-taxon classes, then on 2026-11-23 asked for the better engineering choice, which is never storing them (data integrity over BirdNET-Pi parity; BirdNET-Pi stores them, scripts/utils/analysis.py at 88985a3). detection::sound_class::SOUND_CLASSES (Perch's 198 no-space rows and V2.4's 8 named sounds, none a V3.0 scientific name) plus names_a_human; process_and_infer_filtered skips them after the chunk filters, which still read them. Gate a_sound_class_is_never_stored_as_a_species red on the unfixed code (all six of Engine, Power tools, Speech, Dog, Human vocal, Homo sapiens stored); counterpart a_watched_sound_class_still_discards_its_chunk green before and after. tests/sound_classes_are_the_label_files_own.rs seen red under two mutants (Rain removed; a misspelt Rainn added). Count correction: perch-v2.csv has 198 no-space rows, not 200. The real-audio probe was not run."
+   "evidence": "94cb461: the maintainer first chose to keep storing non-taxon classes, then on 2026-11-23 asked for the better engineering choice, which is never storing them (data integrity over BirdNET-Pi parity; BirdNET-Pi stores them, scripts/utils/analysis.py at 88985a3). detection::sound_class::SOUND_CLASSES (Perch's 198 no-space rows and V2.4's 8 named sounds, none a V3.0 scientific name) plus names_a_human; process_and_infer_filtered skips them after the chunk filters, which still read them. Gate a_sound_class_is_never_stored_as_a_species red on the unfixed code (all six of Engine, Power tools, Speech, Dog, Human vocal, Homo sapiens stored); counterpart a_watched_sound_class_still_discards_its_chunk green before and after. tests/sound_classes_are_the_label_files_own.rs seen red under two mutants (Rain removed; a misspelt Rainn added). Count correction: perch-v2.csv has 198 no-space rows, not 200. The real-audio probe was not run."
   },
   {
    "id": "MMP-05",
@@ -847,7 +847,7 @@
    "phase": 1,
    "source": "03-precision-accuracy.md:294",
    "status": "done",
-   "evidence": "COMMIT: closed with MMP-04 (same change and gates). The geomodel-v2 probe was not run: the rows are dropped whatever the range filter says."
+   "evidence": "94cb461: closed with MMP-04 (same change and gates). The geomodel-v2 probe was not run: the rows are dropped whatever the range filter says."
   },
   {
    "id": "ACC-19",
