@@ -86,10 +86,16 @@ async fn a_week_that_matches_last_weeks_same_days_is_steady_not_quieter() {
     if done == 0 {
         // It is Monday: nothing is over yet, and nothing is compared.
         assert!(html.contains("just <em>beginning</em>"), "{html}");
-        assert!(
-            !html.contains('%'),
-            "no percentage on a Monday morning: {html}"
-        );
+        // The two forms the page writes a comparison in (`week_words`): "N% quieter|busier
+        // than …" in the lead and "↑|↓ N% vs …" under the count. Not any `%`: the
+        // per-day chart's `<svg width="100%">` is on the page whenever the week has a
+        // detection, and the first Monday this branch ran in CI (2026-11-23) failed on it.
+        for claim in ["% quieter", "% busier", "% vs "] {
+            assert!(
+                !html.contains(claim),
+                "no comparison on a Monday morning ({claim:?}): {html}"
+            );
+        }
         return;
     }
     assert!(
