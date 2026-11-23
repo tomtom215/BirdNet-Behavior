@@ -115,6 +115,15 @@ pub fn run_daemon(
             routes = ?config.model_routes,
             "running more than one classifier"
         );
+        let unrouted = registry.unrouted();
+        if !unrouted.is_empty() {
+            tracing::warn!(
+                classifiers = ?unrouted,
+                "loaded but named by no MODEL_ROUTES entry, so they judge nothing: a source \
+                 without a route gets the primary alone. Name a source for each, as \
+                 MODEL_ROUTES=<source id>:<primary>+<classifier>, or remove it to free its memory"
+            );
+        }
     }
 
     // The primary is what the pipeline below runs on, so this is byte-for-byte
@@ -247,7 +256,7 @@ pub fn run_daemon(
             rank = config.privacy_rank,
             "privacy filter enabled"
         );
-        if !model.has_human_labels() {
+        if !privacy_can_fire(&registry) {
             tracing::warn!(
                 "privacy filter enabled but no label in the loaded model names a human class; \
                  the filter can never fire with this model"
@@ -273,7 +282,7 @@ pub fn run_daemon(
         );
     }
     if chunk_filters.confirmation.enabled() {
-        let overlap = pipeline_config.chunk_overlap_secs;
+        let overlap = effective_overlap_secs(&pipeline_config);
         let chunk_secs = pipeline_config.chunk_duration_secs;
         if chunk_filters
             .confirmation
@@ -649,6 +658,28 @@ fn chunk_filters(config: &DaemonConfig, pipeline_config: &PipelineConfig) -> Chu
     }
 }
 
+/// Whether any loaded classifier names a human class, so the privacy filter
+/// can fire at all (MMP-16).
+///
+/// Any of them, not the primary's: the privacy gate reads the highest human
+/// score any routed classifier reported (`infer_chunk`).
+fn privacy_can_fire(registry: &ClassifierRegistry) -> bool {
+    (0..registry.len())
+        .filter_map(|idx| registry.model(idx))
+        .any(|m| m.model.has_human_labels())
+}
+
+/// How far consecutive chunks overlap as the pipeline will cut them (MMP-16):
+/// the chunk length less the step [`crate::detection::pipeline::chunk_step_samples`]
+/// gives, which is the shortest classifier window when there are several,
+/// not the configured overlap.
+fn effective_overlap_secs(pipeline_config: &PipelineConfig) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    let step_secs = crate::detection::pipeline::chunk_step_samples(pipeline_config) as f32
+        / pipeline_config.target_sample_rate as f32;
+    (pipeline_config.chunk_duration_secs - step_secs).max(0.0)
+}
+
 /// Fit the pipeline's resample rate, input mode and chunk arithmetic to the
 /// loaded classifiers.
 ///
@@ -689,6 +720,20 @@ fn fit_pipeline_to_classifiers(
         );
         pipeline_config.raw_audio_input = raw_mode;
     }
+
+    // A classifier at another rate is fed its own resample of each recording
+    // (MMP-01): one more resample per file and per rate, logged because on a
+    // Pi that is a real cost.
+    let extra_rates = registry.extra_sample_rates();
+    if !extra_rates.is_empty() {
+        tracing::info!(
+            primary_rate = model_sample_rate,
+            extra_rates = ?extra_rates,
+            "classifiers want different sample rates: each recording is resampled once more \
+             per extra rate, from the decoded audio, and each classifier reads its own"
+        );
+    }
+    pipeline_config.extra_sample_rates = extra_rates;
 
     // Adopt the model's recommended chunk length when it differs from the
     // pipeline default. This matters most for V3.0 preview3 (dynamic input
@@ -1030,6 +1075,111 @@ mod tests {
         fit_pipeline_to_classifiers(&mut pipeline_config, &registry);
         assert_eq!(pipeline_config.target_sample_rate, 48_000);
         assert!((pipeline_config.chunk_duration_secs - 3.0).abs() < 1e-4);
+    }
+
+    /// MMP-16: the startup check of whether the confirmation filter can
+    /// reject anything judged the *configured* overlap, while the pipeline
+    /// steps by the shortest classifier window. V2.4 (3 s) beside a 4.5 s
+    /// classifier cuts 4.5 s chunks every 3 s, a 1.5 s overlap with none
+    /// configured, at which `balanced` does reject; the daemon logged that it
+    /// "will not reject anything".
+    #[test]
+    fn the_confirmation_check_reads_the_overlap_the_pipeline_cuts() {
+        use crate::detection::corroboration::ConfirmationLevel;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "longer".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: config.labels_path.clone(),
+                threshold: None,
+                sample_rate: Some(32_000),
+            });
+        let registry = ClassifierRegistry::load(
+            &classifier_specs(&config),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+        let mut fitted = config.pipeline.clone();
+        fit_pipeline_to_classifiers(&mut fitted, &registry);
+        assert!(
+            fitted.chunk_overlap_secs.abs() < 1e-6,
+            "precondition: none configured"
+        );
+        let overlap = effective_overlap_secs(&fitted);
+        assert!(
+            (overlap - 1.5).abs() < 1e-3,
+            "4.5 s chunks every 3 s: {overlap}"
+        );
+        assert!(
+            ConfirmationLevel::Balanced.is_effective_at(overlap, fitted.chunk_duration_secs),
+            "balanced rejects at the overlap the pipeline cuts"
+        );
+
+        // Counterpart: with one classifier the overlap is the configured one,
+        // none or some, so the number above is the step's doing.
+        let single = ClassifierRegistry::load(
+            &classifier_specs(&tiny_config(tmp.path())),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+        for configured in [0.0_f32, 1.0] {
+            let mut alone = config.pipeline.clone();
+            alone.chunk_overlap_secs = configured;
+            fit_pipeline_to_classifiers(&mut alone, &single);
+            let got = effective_overlap_secs(&alone);
+            assert!(
+                (got - configured).abs() < 1e-3,
+                "{configured} configured, {got}"
+            );
+        }
+    }
+
+    /// MMP-16: "no label in the loaded model names a human class" was judged
+    /// on the primary alone, so a station whose second classifier names one
+    /// was told its privacy filter could never fire.
+    #[test]
+    fn the_privacy_check_reads_every_classifier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        let human = tmp.path().join("human.txt");
+        let mut labels: Vec<String> = (0..10).map(|i| format!("Other{i}_Other {i}")).collect();
+        labels.push("Human vocal_Human vocal".to_owned());
+        std::fs::write(&human, labels.join("\n")).unwrap();
+        let alone = ClassifierRegistry::load(
+            &classifier_specs(&config),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+        assert!(
+            !privacy_can_fire(&alone),
+            "precondition: the primary names no human"
+        );
+
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "second".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: human,
+                threshold: None,
+                sample_rate: None,
+            });
+        let both = ClassifierRegistry::load(
+            &classifier_specs(&config),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+        assert!(
+            privacy_can_fire(&both),
+            "the second classifier names a human"
+        );
     }
 
     /// The privacy filter measures a flagged chunk's span with the chunk
@@ -1392,6 +1542,77 @@ mod tests {
         );
         // Counterpart: the operator's exclude list still binds on them.
         assert!(!species.contains("Other1"), "{species:?}");
+    }
+
+    /// MMP-01: the recipe the manual and `--install-model perch-v2` give — a
+    /// 32 kHz second classifier on a station whose primary is the default
+    /// 48 kHz V2.4 — starts the daemon, and both classifiers judge the routed
+    /// source. `run_daemon` returned `Err(DaemonError::Model)` for it, and the
+    /// station recorded nothing while its web page stayed up.
+    #[test]
+    fn a_second_classifier_at_another_rate_does_not_stop_detection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "perch".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: config.labels_path.clone(),
+                threshold: None,
+                sample_rate: Some(32_000),
+            });
+        config.model_routes.insert(
+            "pond".to_owned(),
+            vec!["birdnet".to_owned(), "perch".to_owned()],
+        );
+        let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let r = std::sync::Arc::clone(&reported);
+        config.on_file_analysed = Some(
+            super::super::ThroughputObserver::new(|_| {})
+                .with_model_health(move |h| r.lock().unwrap().clone_from(&h.to_vec())),
+        );
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle =
+            run_daemon(&config, event_tx).expect("a 32 kHz extra beside a 48 kHz primary starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-pond-09:00:00.wav", 6);
+
+        let mut agreement = None;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while agreement.is_none() && Instant::now() < deadline {
+            if let Ok(ev) = event_rx.recv_timeout(Duration::from_millis(200)) {
+                agreement = Some(ev.detection.agreeing_models);
+            }
+        }
+        handle.stop();
+        assert_eq!(
+            agreement,
+            Some(Some(2)),
+            "both classifiers judged the routed source"
+        );
+        let health = reported.lock().unwrap().clone();
+        assert_eq!(health.len(), 2, "{health:?}");
+        assert!(
+            health
+                .iter()
+                .all(|(_, h)| h.windows >= 1 && !h.is_failing()),
+            "each answered its windows: {health:?}"
+        );
+    }
+
+    /// Counterpart to the test above: a primary that will not load still
+    /// stops the daemon at startup, where the journal and `--doctor` show it.
+    #[test]
+    fn a_primary_that_will_not_load_still_stops_the_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tiny_config(tmp.path());
+        std::fs::write(&config.model_path, b"not an onnx file").unwrap();
+        let (event_tx, _event_rx) = mpsc::sync_channel(64);
+        let Err(err) = run_daemon(&config, event_tx) else {
+            panic!("a corrupt primary must be refused");
+        };
+        assert!(matches!(err, DaemonError::Model(_)), "{err:?}");
     }
 
     #[test]

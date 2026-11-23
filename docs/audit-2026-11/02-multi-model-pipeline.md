@@ -313,6 +313,16 @@ with Perch v2 (both 32 kHz). The default V2.4 primary (48 kHz) cannot run beside
   `docs/HANDOFF.md:513-531`).
 - Acceptance gate: each finding's gate above. Effort M in total.
 
+### MMP-22: A route to a classifier the memory plan declined stops all detection
+- Severity: high — Kind: bug — NEW, added 2026-11-23 by the session that implemented WP-01 (not part of the audit of
+  `9d8bb1c`)
+- Evidence: `plan_with` (`src/helpers/models.rs`) declines an extra classifier that does not fit half the memory
+  ceiling, or whose ceiling is unknown, but returned `MODEL_ROUTES` unchanged; `ClassifierRegistry::load` then refused
+  the route as `UnknownRouteTarget`, which stops the daemon. Status: VERIFIED by a test that failed on the unfixed plan
+  (`UnknownRouteTarget { source: "pond", target: "perch", known: ["birdnet"] }`).
+- Impact: a 1 GB board that installs Perch and routes a source to it, as the manual describes, records nothing.
+- Change: a declined classifier is dropped from the routes, with a note; a name never declared is kept and still refused.
+
 ## Not examined
 
 - `tools/model-convert/*.py` and `tools/perch-bar/scripts` beyond their listings; the Perch-bar results themselves.

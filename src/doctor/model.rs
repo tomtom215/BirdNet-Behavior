@@ -48,6 +48,14 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
             }
             out.push(check_identity(&p, &db_path_from_config(config)));
             out.push(check_model_loads(&p, labels_path.as_deref()));
+            if let Some(labels) = labels_path.as_deref() {
+                out.extend(check_classifiers(
+                    config,
+                    &p,
+                    labels,
+                    birdnet_behavioral::memory::detect_ceiling().map(|(mib, _)| mib),
+                ));
+            }
         } else {
             out.push(Check::fail(
                 "ONNX model file",
@@ -168,6 +176,140 @@ fn check_model_loads(model: &Path, labels: Option<&Path>) -> Check {
              the first inference if the widths disagree",
         ),
     }
+}
+
+/// Every classifier the detection daemon would load, and its routes (MMP-02).
+///
+/// Built from the same [`crate::helpers::models::plan`] and
+/// [`birdnet_core::inference::registry::ClassifierRegistry::load`] the daemon
+/// runs, so a route naming a classifier that is not configured, a second
+/// classifier whose file will not load, or two classifiers with one id fail
+/// here before a restart instead of only in the journal after it. A classifier
+/// the plan declined (no memory to spare, no labels) is a warning: the station
+/// runs without it. Nothing is reported for a station with one classifier and
+/// no routes, which `check_model_loads` has already covered.
+///
+/// `ceiling_mib` is the machine's memory ceiling, as the daemon reads it.
+fn check_classifiers(
+    config: Option<&Config>,
+    model: &Path,
+    labels: &Path,
+    ceiling_mib: Option<u64>,
+) -> Vec<Check> {
+    use std::fmt::Write as _;
+    const NAME: &str = "Classifiers";
+    let plan = crate::helpers::models::plan(
+        config,
+        model.to_path_buf(),
+        labels.to_path_buf(),
+        ceiling_mib,
+    );
+    if plan.specs.len() == 1 && plan.routes.is_empty() && plan.notes.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let declined: Vec<&str> = plan
+        .notes
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !n.contains("` admitted: "))
+        .collect();
+    if !declined.is_empty() {
+        out.push(Check::warn(
+            "Classifier plan",
+            declined.join("; "),
+            "the station runs without what is named here; correct the MODEL_* settings it \
+             names, or remove them",
+        ));
+    }
+    let registry = match birdnet_core::inference::registry::ClassifierRegistry::load(
+        &plan.specs,
+        &plan.routes,
+        &birdnet_core::inference::model::ModelConfig {
+            num_threads: 1,
+            ..birdnet_core::inference::model::ModelConfig::default()
+        },
+    ) {
+        Ok(registry) => registry,
+        Err(e) => {
+            out.push(Check::fail(
+                NAME,
+                format!("the detection daemon will refuse to start: {e}"),
+                "correct the MODEL_2_* / MODEL_3_* / MODEL_ROUTES setting it names; until \
+                 then the web interface runs and nothing is detected",
+            ));
+            return out;
+        }
+    };
+    for idx in 1..registry.len() {
+        let Some(m) = registry.model(idx) else {
+            continue;
+        };
+        if let Some(width) = m.model.output_dimension()
+            && width != m.model.label_count()
+        {
+            out.push(Check::fail(
+                NAME,
+                format!(
+                    "classifier `{}` scores {width} classes and its labels file names {}; \
+                     species are assigned by position, so its detections would carry the \
+                     wrong names",
+                    m.id,
+                    m.model.label_count()
+                ),
+                "install the labels file that shipped with that model",
+            ));
+            return out;
+        }
+    }
+    let loaded: Vec<String> = registry
+        .info()
+        .iter()
+        .map(|i| {
+            format!(
+                "{} ({} Hz, {:.1} s windows)",
+                i.id, i.sample_rate, i.window_secs
+            )
+        })
+        .collect();
+    let mut routes: Vec<String> = plan
+        .routes
+        .iter()
+        .map(|(source, targets)| format!("{source} → {}", targets.join("+")))
+        .collect();
+    routes.sort();
+    let mut message = format!("{} classifiers load: {}", loaded.len(), loaded.join(", "));
+    if routes.is_empty() {
+        message.push_str("; no MODEL_ROUTES, so every source is judged by the primary alone");
+    } else {
+        let _ = write!(message, "; routes: {}", routes.join(", "));
+    }
+    let extra = registry.extra_sample_rates();
+    if !extra.is_empty() {
+        let rates: Vec<String> = extra.iter().map(u32::to_string).collect();
+        let _ = write!(
+            message,
+            "; each recording is also resampled to {} Hz",
+            rates.join(" and ")
+        );
+    }
+    let unrouted = registry.unrouted();
+    if unrouted.is_empty() {
+        out.push(Check::pass(NAME, message));
+    } else {
+        let names: Vec<String> = unrouted.iter().map(|id| format!("`{id}`")).collect();
+        out.push(Check::warn(
+            NAME,
+            format!(
+                "{message}. No route names {}, so it is loaded, holds its memory and judges \
+                 nothing",
+                names.join(" or ")
+            ),
+            "name a source for it in MODEL_ROUTES (`<source id>:<primary>+<classifier>`), \
+             or remove its MODEL_n_* settings to free the memory",
+        ));
+    }
+    out
 }
 
 fn check_identity(model: &Path, db_path: &Path) -> Check {
@@ -477,6 +619,166 @@ mod tests {
             checks
                 .iter()
                 .any(|c| c.name.contains("Labels") && c.status == Status::Fail)
+        );
+    }
+
+    /// A station whose config names a primary, a second classifier and
+    /// `extra` further lines, written beside two tiny models in `dir`.
+    fn station(dir: &std::path::Path, extra: &str) -> Config {
+        const TINY_V24: &[u8] =
+            include_bytes!("../../crates/birdnet-core/src/testdata/tiny_v24_test.onnx");
+        let labels = dir.join("labels.txt");
+        std::fs::write(
+            &labels,
+            (0..11)
+                .map(|i| format!("Species{i}_Bird {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        for name in ["birdnet.onnx", "perch.onnx"] {
+            std::fs::write(dir.join(name), TINY_V24).unwrap();
+        }
+        Config::parse(&format!(
+            "MODEL_PATH={d}/birdnet.onnx\nLABELS_PATH={d}/labels.txt\n\
+             MODEL_2_PATH={d}/perch.onnx\nMODEL_2_LABELS={d}/labels.txt\nMODEL_2_ID=perch\n\
+             DB_PATH={d}/birds.db\n{extra}",
+            d = dir.display()
+        ))
+        .unwrap()
+    }
+
+    fn failures(checks: &[Check]) -> Vec<&Check> {
+        checks.iter().filter(|c| c.status == Status::Fail).collect()
+    }
+
+    /// The classifier checks for `config`, on a machine with 8 GiB, so a
+    /// second tiny classifier is always admitted whatever this one has.
+    fn classifier_checks(dir: &std::path::Path, config: &Config) -> Vec<Check> {
+        check_classifiers(
+            Some(config),
+            &dir.join("birdnet.onnx"),
+            &dir.join("labels.txt"),
+            Some(8192),
+        )
+    }
+
+    /// MMP-02: a route naming a classifier that is not configured stops the
+    /// detection daemon at startup, and the registry's own doc says
+    /// "`--doctor` will show it". It did not: the doctor read `MODEL_PATH`
+    /// and `LABELS_PATH` and nothing else.
+    #[test]
+    fn a_route_to_a_classifier_that_does_not_exist_fails_the_doctor() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = station(dir.path(), "MODEL_ROUTES=pond:pecrh\n");
+        let checks = classifier_checks(dir.path(), &config);
+        let failed = failures(&checks);
+        assert!(
+            failed.iter().any(|c| c.message.contains("pecrh")),
+            "no failing check names the mistyped route: {checks:#?}"
+        );
+    }
+
+    /// MMP-02: a second classifier whose file will not load stops the
+    /// detection daemon at startup; the doctor said nothing about it.
+    #[test]
+    fn a_second_classifier_that_will_not_load_fails_the_doctor() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = station(dir.path(), "");
+        std::fs::write(dir.path().join("perch.onnx"), b"not an onnx file").unwrap();
+        let checks = classifier_checks(dir.path(), &config);
+        let failed = failures(&checks);
+        assert!(
+            failed.iter().any(|c| c.message.contains("perch")),
+            "no failing check names the broken classifier: {checks:#?}"
+        );
+    }
+
+    /// Counterpart: Perch beside the default V2.4 (two sample rates) with a
+    /// sound route passes, and says the recording is resampled for it, so the
+    /// gates above are not a check that fails every second classifier.
+    #[test]
+    fn a_sound_second_classifier_at_another_rate_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = station(
+            dir.path(),
+            "MODEL_2_SAMPLE_RATE=32000\nMODEL_ROUTES=pond:birdnet+perch\n",
+        );
+        // Wiring: `check_model`, which `--doctor` runs, includes the check
+        // (whether this machine's memory admits the second classifier or not).
+        assert!(
+            check_model(&cli(), Some(&config))
+                .iter()
+                .any(|c| c.name == "Classifiers"),
+            "the doctor does not run the classifier check"
+        );
+        let checks = classifier_checks(dir.path(), &config);
+        let classifiers: Vec<&Check> = checks.iter().filter(|c| c.name == "Classifiers").collect();
+        assert_eq!(classifiers.len(), 1, "{checks:#?}");
+        assert_eq!(classifiers[0].status, Status::Pass, "{classifiers:#?}");
+        assert!(classifiers[0].message.contains("32000"), "{classifiers:#?}");
+        assert!(classifiers[0].message.contains("perch"), "{classifiers:#?}");
+    }
+
+    /// A second classifier the memory plan declines is a warning naming it,
+    /// not a failure: the station runs without it. Its route falls back
+    /// (MMP-22), so the classifiers that do run still pass.
+    #[test]
+    fn a_second_classifier_declined_for_memory_is_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = station(dir.path(), "MODEL_ROUTES=pond:birdnet+perch\n");
+        let checks = check_classifiers(
+            Some(&config),
+            &dir.path().join("birdnet.onnx"),
+            &dir.path().join("labels.txt"),
+            Some(600),
+        );
+        assert!(failures(&checks).is_empty(), "{checks:#?}");
+        let plan = checks
+            .iter()
+            .find(|c| c.name == "Classifier plan")
+            .unwrap_or_else(|| panic!("no warning names the declined classifier: {checks:#?}"));
+        assert_eq!(plan.status, Status::Warn);
+        assert!(plan.message.contains("`perch` skipped"), "{plan:?}");
+    }
+
+    /// A station with one classifier and no routes gets no classifier check:
+    /// `check_model_loads` has already loaded and checked that model.
+    #[test]
+    fn one_classifier_and_no_routes_adds_no_check() {
+        let dir = tempfile::tempdir().unwrap();
+        station(dir.path(), "");
+        let only = Config::parse(&format!(
+            "MODEL_PATH={d}/birdnet.onnx\nLABELS_PATH={d}/labels.txt\n",
+            d = dir.path().display()
+        ))
+        .unwrap();
+        assert!(classifier_checks(dir.path(), &only).is_empty());
+    }
+
+    /// MMP-12: a second classifier no route names is loaded, holds its memory
+    /// and judges nothing, because a source with no route gets the primary
+    /// alone. The doctor said "loads" and nothing else.
+    #[test]
+    fn a_second_classifier_no_route_names_is_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = station(dir.path(), "");
+        let checks = classifier_checks(dir.path(), &config);
+        let unrouted = checks
+            .iter()
+            .find(|c| c.name == "Classifiers")
+            .unwrap_or_else(|| panic!("no classifier check: {checks:#?}"));
+        assert_eq!(unrouted.status, Status::Warn, "{unrouted:?}");
+        assert!(unrouted.message.contains("`perch`"), "{unrouted:?}");
+
+        // Counterpart: routed, it is not a warning.
+        let config = station(dir.path(), "MODEL_ROUTES=pond:perch\n");
+        let checks = classifier_checks(dir.path(), &config);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name == "Classifiers" && c.status == Status::Pass),
+            "{checks:#?}"
         );
     }
 }

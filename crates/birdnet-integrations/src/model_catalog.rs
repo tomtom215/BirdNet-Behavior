@@ -98,12 +98,12 @@ const UNPINNED_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// configure it with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Use {
-    /// A classifier that can run beside the primary, if it wants the same
-    /// sample rate (`MODEL_2_PATH`, ...).
+    /// A classifier that can run beside the primary (`MODEL_2_PATH`, ...). At
+    /// another sample rate than the primary's, each recording is resampled
+    /// once more for it.
     Classifier,
-    /// A classifier that replaces the primary (`MODEL_PATH`, `LABELS_PATH`). It
-    /// cannot run beside one that wants a different sample rate: a recording is
-    /// resampled once, for every classifier.
+    /// A classifier that replaces the primary (`MODEL_PATH`, `LABELS_PATH`):
+    /// another BirdNET, which would mostly repeat the one it replaces.
     PrimaryReplacement,
     /// A species-occurrence ("range") filter, for `METADATA_MODEL_PATH`.
     RangeFilter,
@@ -209,7 +209,9 @@ pub const CATALOG: &[CatalogEntry] = &[
         usage: Use::Classifier,
         notes: "Materially better than BirdNET in the tropics. Wants 5 s windows \
                 at 32 kHz where BirdNET wants 4.5 s; the two run together, the chunk \
-                cut to the longer window and stepped by the shorter. Set \
+                cut to the longer window and stepped by the shorter. Beside the \
+                48 kHz BirdNET V2.4 each recording is also resampled to 32 kHz for \
+                it, which costs one more resample per recording. Set \
                 MODEL_n_SAMPLE_RATE=32000 — its tensor shape alone cannot say. Its \
                 14 795 classes are not all species: 200 name a kind \
                 of sound (Engine, Vehicle, Animal). Its scores are shares of one \
@@ -245,8 +247,8 @@ pub const CATALOG: &[CatalogEntry] = &[
                 set as BirdNET-Pi sets them, and its labels carry BirdNET-Pi's \
                 English names. 48 kHz, 3 s windows, no calibration: its scores \
                 are raw logits put through SENSITIVITY. Replaces the \
-                BirdNET+ V3.0 classifier rather than running beside it, because the \
-                two want different sample rates. Pair it with birdnet-v24-range-v2.",
+                BirdNET+ V3.0 classifier as the station's primary. Pair it with \
+                birdnet-v24-range-v2.",
     },
     CatalogEntry {
         id: "birdnet-v24-range-v2",

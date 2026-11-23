@@ -165,15 +165,6 @@ pub enum RegistryError {
         /// Why.
         why: String,
     },
-    /// A classifier needs audio prepared differently from the primary.
-    IncompatibleInput {
-        /// Which classifier.
-        id: String,
-        /// What it needs.
-        wants: InputSpec,
-        /// What the primary needs, and therefore what the pipeline prepares.
-        primary: InputSpec,
-    },
     /// A route names a classifier that was never declared.
     UnknownRouteTarget {
         /// The source whose route is wrong.
@@ -202,15 +193,6 @@ impl fmt::Display for RegistryError {
                 "two classifiers are both called `{id}`; a route naming it could mean either"
             ),
             Self::Load { id, why } => write!(f, "classifier `{id}` could not be loaded: {why}"),
-            Self::IncompatibleInput { id, wants, primary } => write!(
-                f,
-                "classifier `{id}` wants {} Hz and the primary wants {} Hz. Refusing to start. \
-                 A recording is decoded and resampled once, and resampling it twice would \
-                 double the most expensive step in the pipeline on the boards this runs on — \
-                 with no rate that is correct for both. Differing *window lengths* are fine; \
-                 it is the rate that cannot be reconciled",
-                wants.sample_rate, primary.sample_rate,
-            ),
             Self::UnknownRouteTarget {
                 source,
                 target,
@@ -311,29 +293,14 @@ impl ClassifierRegistry {
             });
         }
 
-        // Every classifier must want audio at the **same rate**. Differing
-        // window lengths are fine and handled by the chunk arithmetic (see
-        // `window_bounds`); differing rates are not, because the pipeline
-        // resamples a recording once and doing it twice would double that work
-        // on a board where it is already the expensive part — and there is no
-        // principled rate to pick that is right for both.
-        //
-        // Window differences used to be refused here too, while Stage 4's
-        // question — what a merged detection means when two classifiers judged
-        // different spans — was open. It is answered now: the chunk is cut to
-        // the longest window, the step is the shortest, each classifier reads
-        // its own window from the shared chunk start, and agreement means both
-        // reported a species from audio beginning at the same instant.
-        let primary_spec = models[0].spec;
-        for m in models.iter().skip(1) {
-            if m.spec.sample_rate != primary_spec.sample_rate {
-                return Err(RegistryError::IncompatibleInput {
-                    id: m.id.clone(),
-                    wants: m.spec,
-                    primary: primary_spec,
-                });
-            }
-        }
+        // Classifiers may want different sample rates and different windows
+        // (MMP-01). The pipeline resamples a recording once per distinct rate
+        // from the decoded audio (see `extra_sample_rates`), cuts every
+        // classifier's window from the same instant, and steps by the
+        // shortest window; agreement means two classifiers reported a species
+        // from audio beginning at the same instant. Refusing a rate mismatch
+        // here stopped all detection on the default V2.4 station that added
+        // Perch, the pairing the manual recommends.
 
         // Resolved here, once, so a typo cannot survive into the loop.
         let mut resolved: HashMap<String, Vec<usize>> = HashMap::new();
@@ -468,22 +435,76 @@ impl ClassifierRegistry {
     }
 
     /// The longest and shortest window any loaded classifier wants, in
-    /// samples (`G-10` Stage 4).
+    /// samples **at the primary's rate** (`G-10` Stage 4).
     ///
     /// The chunk is cut to the longest and stepped by the shortest. That pair
     /// is what keeps every classifier's coverage at least what it would be
     /// running alone: stepping by the longest would leave a shorter-window
     /// model a blind spot at the tail of every chunk, which nothing would
     /// report — see [`crate::detection::pipeline::PipelineConfig::chunk_step_secs`].
+    ///
+    /// A classifier at another rate (MMP-01) has its window converted to the
+    /// primary's samples, because that is the rate the chunk is cut at: the
+    /// longest is rounded up, so the chunk contains every window, and the
+    /// shortest down, so the step leaves no gap. Both are exact for every
+    /// model in the catalogue (3 s, 4.5 s and 5 s at 32 or 48 kHz).
     #[must_use]
     pub fn window_bounds(&self) -> (usize, usize) {
-        let mut longest = self.models[0].spec.window_samples;
-        let mut shortest = longest;
+        let primary_rate = u64::from(self.models[0].spec.sample_rate);
+        let at_primary_rate = |m: &RegisteredModel, round_up: bool| {
+            let rate = u64::from(m.spec.sample_rate).max(1);
+            let scaled = m.spec.window_samples as u64 * primary_rate;
+            let samples = if round_up {
+                scaled.div_ceil(rate)
+            } else {
+                scaled / rate
+            };
+            usize::try_from(samples).unwrap_or(usize::MAX)
+        };
+        let mut longest = at_primary_rate(&self.models[0], true);
+        let mut shortest = at_primary_rate(&self.models[0], false);
         for m in &self.models {
-            longest = longest.max(m.spec.window_samples);
-            shortest = shortest.min(m.spec.window_samples);
+            longest = longest.max(at_primary_rate(m, true));
+            shortest = shortest.min(at_primary_rate(m, false));
         }
         (longest, shortest)
+    }
+
+    /// The extra classifiers no route names (MMP-12), in load order.
+    ///
+    /// A source without a route gets the primary alone, so one of these is
+    /// loaded, holds its memory and judges nothing. Not refused — an operator
+    /// may load one before routing a source to it — but said at startup and
+    /// by `--doctor`, because otherwise it looks like a classifier that has
+    /// heard nothing yet.
+    #[must_use]
+    pub fn unrouted(&self) -> Vec<&str> {
+        (1..self.models.len())
+            .filter(|idx| !self.routes.values().any(|r| r.contains(idx)))
+            .map(|idx| self.models[idx].id.as_str())
+            .collect()
+    }
+
+    /// Every sample rate a loaded classifier wants other than the primary's,
+    /// ascending and without repeats (MMP-01).
+    ///
+    /// The pipeline resamples each recording once per rate here, from the
+    /// decoded audio rather than from the primary's copy, so a 32 kHz
+    /// classifier beside a 48 kHz primary is fed exactly what it would be fed
+    /// as a station's only classifier. Empty when every classifier shares the
+    /// primary's rate, which leaves the pipeline as it always was.
+    #[must_use]
+    pub fn extra_sample_rates(&self) -> Vec<u32> {
+        let primary = self.models[0].spec.sample_rate;
+        let mut rates: Vec<u32> = self
+            .models
+            .iter()
+            .map(|m| m.spec.sample_rate)
+            .filter(|&r| r != primary)
+            .collect();
+        rates.sort_unstable();
+        rates.dedup();
+        rates
     }
 
     /// Every classifier's id, in load order.
@@ -758,47 +779,78 @@ mod tests {
         assert_eq!(reg.specs().len(), 1);
     }
 
-    /// **A differing sample rate is the one thing that cannot be
-    /// reconciled.** A recording is decoded and resampled once; resampling it
-    /// twice would double the most expensive step in the pipeline on the
-    /// boards this runs on, and there is no rate that is right for both.
+    /// **A classifier wanting another sample rate loads beside the primary**
+    /// (MMP-01). BirdNET V2.4, the default primary, wants 48 kHz and Perch v2
+    /// wants 32 kHz; `--install-model perch-v2` and the manual both tell the
+    /// operator to add one beside the other. The registry refused the pair,
+    /// which stopped the detection daemon while the web page stayed up.
     ///
-    /// This gate used to cover differing *windows* as well. It no longer
-    /// does, because the chunk arithmetic answers that case — the chunk is cut
-    /// to the longest window and stepped by the shortest, so every classifier
-    /// reads its own window from a shared start with no coverage gap. The
-    /// refusal narrowed to what actually cannot be handled.
-    ///
-    /// Observed failing with the rate comparison removed from `load`: the
-    /// registry accepted a 48 kHz classifier beside a 32 kHz one, and one of
-    /// them would have been fed audio resampled for the other.
+    /// The window bounds are in the primary's samples, because they size the
+    /// chunk the pipeline cuts at the primary's rate: the 144 000-sample tiny
+    /// model declared at 32 kHz is 4.5 s, which is 216 000 samples at 48 kHz.
     #[test]
-    fn a_classifier_wanting_a_different_sample_rate_is_refused_at_startup() {
+    fn a_classifier_wanting_another_sample_rate_loads_beside_the_primary() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let primary = spec(dir.path(), "birdnet", TINY_V30, None);
-        // The tiny V2.4 fixture is 48 kHz where V3.0 is 32 kHz.
-        let other = spec(dir.path(), "perch", TINY_V24, None);
+        let primary = spec(dir.path(), "birdnet", TINY_V24, None);
+        let mut perch = spec(dir.path(), "perch", TINY_V24, None);
+        perch.sample_rate = Some(32_000);
 
-        let err =
-            ClassifierRegistry::load(&[primary, other], &no_routes(), &ModelConfig::default())
-                .expect_err("a classifier needing a different rate must be refused");
-        match &err {
-            RegistryError::IncompatibleInput { id, wants, primary } => {
-                assert_eq!(id, "perch");
-                assert_ne!(wants.sample_rate, primary.sample_rate);
-            }
-            other => panic!("wrong error: {other:?}"),
-        }
-        let msg = err.to_string();
-        assert!(msg.contains("Refusing to start"), "{msg}");
-        assert!(
-            msg.contains("resampling it twice"),
-            "the reason must be legible: {msg}"
+        let reg =
+            ClassifierRegistry::load(&[primary, perch], &no_routes(), &ModelConfig::default())
+                .expect("a 32 kHz classifier beside a 48 kHz primary must load");
+        let rates: Vec<u32> = reg.specs().iter().map(|(_, s)| s.sample_rate).collect();
+        assert_eq!(rates, vec![48_000, 32_000], "each keeps its own rate");
+        assert_eq!(
+            reg.window_bounds(),
+            (216_000, 144_000),
+            "4.5 s and 3 s, in samples at the primary's 48 kHz"
         );
-        assert!(
-            msg.contains("window lengths* are fine"),
-            "it must not imply windows are the problem: {msg}"
-        );
+        assert_eq!(reg.extra_sample_rates(), vec![32_000]);
+    }
+
+    /// MMP-12: an extra classifier that no route names is reported, and one
+    /// a route names is not.
+    #[test]
+    fn an_extra_classifier_no_route_names_is_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = [
+            spec(dir.path(), "birdnet", TINY_V24, None),
+            spec(dir.path(), "perch", TINY_V24, None),
+            spec(dir.path(), "bats", TINY_V24, None),
+        ];
+        let reg =
+            ClassifierRegistry::load(&specs, &no_routes(), &ModelConfig::default()).expect("loads");
+        assert_eq!(reg.unrouted(), vec!["perch", "bats"]);
+
+        let routes: HashMap<String, Vec<String>> = [(
+            "pond".to_owned(),
+            vec!["birdnet".to_owned(), "bats".to_owned()],
+        )]
+        .into();
+        let reg =
+            ClassifierRegistry::load(&specs, &routes, &ModelConfig::default()).expect("loads");
+        assert_eq!(reg.unrouted(), vec!["perch"], "the primary is never listed");
+    }
+
+    /// Counterpart: classifiers sharing the primary's rate ask the pipeline
+    /// for no second copy of the audio, so a one-rate station resamples once,
+    /// as it always did — whichever order the rates are declared in.
+    #[test]
+    fn one_rate_asks_for_no_second_resample() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = spec(dir.path(), "birdnet", TINY_V30, None);
+        let b = spec(dir.path(), "second", TINY_V30, None);
+        let reg = ClassifierRegistry::load(&[a, b], &no_routes(), &ModelConfig::default())
+            .expect("loads");
+        assert!(reg.extra_sample_rates().is_empty());
+
+        // A 32 kHz primary with a 48 kHz extra: the extra rate is the 48.
+        let a = spec(dir.path(), "v3", TINY_V30, None);
+        let b = spec(dir.path(), "v24", TINY_V24, None);
+        let reg = ClassifierRegistry::load(&[a, b], &no_routes(), &ModelConfig::default())
+            .expect("loads");
+        assert_eq!(reg.extra_sample_rates(), vec![48_000]);
+        assert_eq!(reg.window_bounds(), (96_000, 96_000), "3 s each, at 32 kHz");
     }
 
     /// **Differing windows at the same rate are accepted**, which is the whole

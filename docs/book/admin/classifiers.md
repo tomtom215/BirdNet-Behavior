@@ -71,10 +71,10 @@ What it can install:
 
 | id | what | it replaces or joins |
 |---|---|---|
-| `birdnet-v3` | BirdNET+ V3.0 preview, 32 kHz, 4.5 s windows: an explicit choice for a new station (it was the default up to v0.17.1) | the primary; it cannot run beside V2.4, which wants 48 kHz |
-| `birdnet-v24` | BirdNET V2.4, the network BirdNET-Pi and birdnet-go run (48 kHz, 3 s windows), with the label file written by the binary itself (below). The default for a new station | **replaces** the primary: it cannot run beside V3.0, because a recording is resampled once and the two want different rates |
+| `birdnet-v3` | BirdNET+ V3.0 preview, 32 kHz, 4.5 s windows: an explicit choice for a new station (it was the default up to v0.17.1) | the primary |
+| `birdnet-v24` | BirdNET V2.4, the network BirdNET-Pi and birdnet-go run (48 kHz, 3 s windows), with the label file written by the binary itself (below). The default for a new station | **replaces** the primary |
 | `birdnet-v24-range-v2` | the V2.4 species-occurrence filter, v2 (BirdNET-Pi's default is v1, which is not hosted as ONNX and so is not in the catalogue) | `METADATA_MODEL_PATH`, with V2.4 only |
-| `perch-v2` | Google Perch v2 | runs **beside** the primary |
+| `perch-v2` | Google Perch v2 (32 kHz, 5 s windows) | runs **beside** the primary, at its own sample rate (below) |
 
 The installers do this for you on a new station (V2.4 and its range filter). To make an older station report what BirdNET-Pi would, install `birdnet-v24` and `birdnet-v24-range-v2` and follow [Same audio, same detections](../guides/parity.md).
 
@@ -175,6 +175,8 @@ Two rules here exist because a station runs unattended for months:
 - **A source you do not name gets the primary classifier**, never nothing. Silence must not be reachable by forgetting to write a line.
 - **A route naming a classifier you have not configured stops the station at startup**, where the journal and `--doctor` will show it. Accepting `pond:pecrh` and discovering at runtime that the pond routes to nothing would cost months of recordings from that microphone, and the station would look identical to one having a quiet season.
 
+A classifier you configured but that is not running — the memory rule below declined it — is not a typo: a route naming it falls back to the other classifiers the route names, or to the primary, and the journal says so. A classifier that loads but that no route names judges nothing and still holds its memory; the start-up log and `--doctor` warn about it. `--doctor` loads every configured classifier and route the way the station will, in its *Classifiers* check, so a route typo or a second model that will not load fails there before a restart.
+
 ## What the station does with two opinions
 
 Each classifier is judged against its own threshold, and the results are combined per chunk:
@@ -228,9 +230,15 @@ extra_inference_ratio=1.1111112
 
 One consequence worth knowing when you read detection times: a detection carries the **chunk's** span, not its own classifier's. A shorter-window classifier's detection can therefore show an end time up to half a second later than the audio it actually read. The recorded span always contains that audio, so a clip cut from it contains the detection. With one classifier the two are identical.
 
-## What the station refuses, and why
+## Sample rates: Perch beside BirdNET V2.4
 
-**A different sample rate.** Every classifier must want audio at the same rate. A recording is decoded and resampled once; resampling it twice would double the most expensive step in the pipeline on the boards this runs on, and there is no rate that is correct for both. The station says so at startup and names both rates rather than starting and feeding one of them audio prepared for the other. Differing *window lengths* are fine — that is what the chunking above is for.
+Classifiers need not want the same sample rate. Perch wants 32 kHz and BirdNET V2.4, the default primary, wants 48 kHz. Each recording is decoded once and resampled once per rate a classifier wants, from the decoded audio: the 32 kHz copy Perch reads beside V2.4 is, sample for sample, the copy it would read as the station's only classifier. Every classifier's window starts at the same instant, so the chunking above holds across rates: beside V2.4's 3 s, a chunk is 5 s long and advances 3 s.
+
+What this costs: one more resample of every recording per extra rate, and a second copy of each chunk's audio while the recording is analysed. The daemon logs the rates at startup (`classifiers want different sample rates`). Neither cost has been measured on a Raspberry Pi. Station Health's **Models** section times each classifier's windows on your station, which shows whether the pair keeps up, but that time does not include the resampling.
+
+Up to 0.19.0 the station refused to start with classifiers at two rates, which stopped all detection on a V2.4 station that added Perch as this page described.
+
+## What the station refuses, and why
 
 **More classifiers than the machine can hold.** All classifiers together may use at most **half** the machine's effective memory ceiling — the cgroup limit if there is one, otherwise physical memory — counting each model's file size plus a 256 MiB working-set allowance. On a 1 GB board that budget is 512 MiB, which one BirdNET model already fills, so a second is skipped and the arithmetic goes in the journal. A machine that will not report its memory gets one classifier, because "unknown" must not be read as "plenty".
 

@@ -149,6 +149,10 @@ session on its own.
    dropped with a loud warning and detection continues. Resampling a second rate for the second
    model is a separate, larger change with a memory and time cost nobody has measured on a Pi
    (MMP-13).
+   **Decided 2026-11-23 by the maintainer: resample.** An extra classifier at another rate runs on
+   its own resample of each recording (WP-01, `af8bb36`); a second model file that will not load
+   still stops the daemon at startup, and `--doctor` now fails on it beforehand. The Pi cost is
+   still unmeasured (MMP-13).
 4. **Storing non-detections and sub-threshold scores (RES-04).** It is what calibration and occupancy
    work need, and it multiplies the database's size. Recommended: a per-window summary table that is
    off by default and on in a "research" profile.

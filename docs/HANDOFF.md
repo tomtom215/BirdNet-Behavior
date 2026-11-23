@@ -12,6 +12,22 @@ findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.
 this document against the tree and GitHub; work package WP-00 corrected the header, sections 1, 2, 5 and 6 from it,
 re-running each command named below on 2026-11-22.
 
+**2026-11-23: WP-01 is done except MMP-21, on branch `claude/gallant-hypatia-dnjbxf`** (commits `af8bb36`, `7167866`,
+`5d4c0bd`; not merged when this was written). The maintainer chose decision 3 of the audit README: an extra classifier
+at another sample rate runs on its own resample of each recording, so Perch beside the default V2.4 works; a second
+model file that will not load still stops the daemon. `--doctor` now loads every configured classifier and route
+(*Classifiers* check). A new defect, MMP-22 (a route to a classifier the memory plan declined stopped detection), was
+found and fixed. Each finding's gate, and how it was seen failing, is in `checklist.json` and the commit messages.
+Verified on `5d4c0bd` with `scripts/preflight.sh --tests`: 19 of its 20 gates ok (fmt, typos, machete,
+installer drift, cargo-deny, cargo-audit, OSV, clippy at all three feature sets, rustdoc, both builds, CLI help, book
+links, licence notices, doc tests, unit tests, integration tests); the all-features suite failed only on links that hit
+"No space left on device", and `cargo test --workspace --all-features`, rerun alone after `cargo clean -p` of the
+workspace crates, exited 0 (315 `test result:` lines, 6 583 passed, 0 failed, 10 ignored). MSRV was not run. **Not verified:** the cost of the second resample, on any hardware (MMP-13 is the place
+to measure it); a real Perch model beside real V2.4 (only the tiny fixtures ran); the startup WARN for an unrouted
+classifier, which no test captures; the browser gates, since no page's markup changed (the new doctor check renders
+on `/admin/doctor` only when extra classifiers are configured, which the screenshot fixture is not; its text was read
+from `--doctor` output instead). **Next:** WP-02.
+
 **State on 2026-11-22.**
 
 - **The latest published release is v0.19.0**, published 2026-11-01 14:33 UTC; the one before is v0.18.1
@@ -853,7 +869,8 @@ it says otherwise.
 ## 6. Where to start
 
 **Start at `docs/audit-2026-11/README.md`**: one work package per pull request, in its order. WP-00 (the Clippy fix,
-the mutation budgets, this file's corrections) is done; its "Item zero" line has the commit.
+the mutation budgets, this file's corrections) is done; its "Item zero" line has the commit. WP-01 is done but for MMP-21's
+later items (see the 2026-11-23 paragraph at the top); the next package is WP-02.
 
 **0.19.0 is released** (read 2026-11-22): the pull request that fixed `sel` merged (#277, `ec6f71e`); `v0.19.0` was
 moved to that commit (`git ls-remote --tags origin 'v0.19.0*'`); its Release run (41311659073) and Docs run

@@ -14,7 +14,7 @@ use std::fmt;
 use std::path::Path;
 
 use ort::session::Session;
-use ort::value::{Tensor, ValueType};
+use ort::value::{Tensor, TensorElementType, ValueType};
 
 use crate::detection::answers::ClassScore;
 use crate::detection::privacy::names_a_human;
@@ -145,6 +145,15 @@ fn extract_input_shape(session: &Session) -> Result<Vec<usize>, InferenceError> 
         .ok_or_else(|| InferenceError::Shape("model has no inputs".into()))?;
 
     match input.dtype() {
+        // The station builds and reads `f32` tensors only (MMP-18). Any other
+        // element type loads and then fails every window, so it is refused
+        // here, where the journal and `--doctor` show it.
+        ValueType::Tensor { ty, .. } if *ty != TensorElementType::Float32 => {
+            Err(InferenceError::Shape(format!(
+                "the model's input is {ty}, and this station feeds f32 only; use the \
+                 model's FP32 build"
+            )))
+        }
         ValueType::Tensor { shape, .. } => Ok(shape.iter().copied().map(dim_to_usize).collect()),
         other => Err(InferenceError::Shape(format!(
             "expected Tensor input, got {other:?}"
@@ -221,7 +230,7 @@ impl BirdNetModel {
 
         let human_indices = human_indices(&labels);
         let class_index = class_index(&labels);
-        Ok(Self {
+        let model = Self {
             session,
             labels,
             config,
@@ -234,7 +243,9 @@ impl BirdNetModel {
             class_index,
             human_indices,
             noise_indices: Vec::new(),
-        })
+        };
+        model.refuse_non_f32_class_output()?;
+        Ok(model)
     }
 
     /// Load an ONNX model from in-memory bytes.
@@ -256,7 +267,7 @@ impl BirdNetModel {
 
         let human_indices = human_indices(&labels);
         let class_index = class_index(&labels);
-        Ok(Self {
+        let model = Self {
             session,
             labels,
             config,
@@ -269,7 +280,9 @@ impl BirdNetModel {
             class_index,
             human_indices,
             noise_indices: Vec::new(),
-        })
+        };
+        model.refuse_non_f32_class_output()?;
+        Ok(model)
     }
 
     /// Whether to emit the one-shot model/label count-mismatch warning.
@@ -622,8 +635,14 @@ impl BirdNetModel {
         let copy_len = audio.len().min(expected_len);
         padded[..copy_len].copy_from_slice(&audio[..copy_len]);
 
-        Tensor::<f32>::from_array(([1usize, expected_len], padded))
-            .map_err(|e| InferenceError::Shape(e.to_string()))
+        // The declared rank (MMP-18): `[1, 1, N]` is fed as such, not as
+        // `[1, N]`, which ONNX Runtime refuses on every window.
+        let shape = if matches!(self.input_shape.as_slice(), [_, 1, _]) {
+            vec![1usize, 1, expected_len]
+        } else {
+            vec![1usize, expected_len]
+        };
+        Tensor::<f32>::from_array((shape, padded)).map_err(|e| InferenceError::Shape(e.to_string()))
     }
 
     /// Get the model's expected input shape.
@@ -782,6 +801,24 @@ impl BirdNetModel {
                 (o.name().to_owned(), width)
             })
             .collect()
+    }
+
+    /// Refuse a model whose class scores are not `f32` (MMP-18): they are
+    /// read with `try_extract_tensor::<f32>`, which fails on every window.
+    fn refuse_non_f32_class_output(&self) -> Result<(), InferenceError> {
+        let outputs = self.session.outputs();
+        match outputs
+            .get(self.class_output())
+            .map(ort::value::Outlet::dtype)
+        {
+            Some(ValueType::Tensor { ty, .. }) if *ty != TensorElementType::Float32 => {
+                Err(InferenceError::Shape(format!(
+                    "the model's class scores are {ty}, and this station reads f32 only; use \
+                     the model's FP32 build"
+                )))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Which output carries the class scores. See [`class_output_index`].
@@ -2016,6 +2053,102 @@ mod tests {
             !m.expects_raw_audio(),
             "a model declaring a mel input must not be sent the waveform"
         );
+    }
+
+    /// The two fixtures for MMP-18, each 11 classes whose scores are the
+    /// input's first 11 values (`Reshape` to `[1, 96 000]`, then `Slice`):
+    /// `tiny_rank3_test.onnx` declares a `[1, 1, 96 000]` float input, and
+    /// `tiny_fp16_test.onnx` a `[1, 96 000]` float16 input and output. Made
+    /// with onnx 1.23.2:
+    ///
+    /// ```text
+    /// import numpy as np, onnx
+    /// from onnx import helper, TensorProto, numpy_helper
+    /// def save(name, elem, in_shape):
+    ///     inp = helper.make_tensor_value_info("input", elem, in_shape)
+    ///     out = helper.make_tensor_value_info("predictions", elem, [1, 11])
+    ///     c = lambda n, v: numpy_helper.from_array(np.array(v, dtype=np.int64), name=n)
+    ///     nodes = [helper.make_node("Reshape", ["input", "shape"], ["flat"]),
+    ///              helper.make_node("Slice", ["flat", "starts", "ends", "axes"], ["predictions"])]
+    ///     g = helper.make_graph(nodes, name, [inp], [out], initializer=[
+    ///         c("shape", [1, 96000]), c("starts", [0]), c("ends", [11]), c("axes", [1])])
+    ///     m = helper.make_model(g, producer_name="birdnet-test",
+    ///                           opset_imports=[helper.make_opsetid("", 18)])
+    ///     m.ir_version = 8
+    ///     onnx.checker.check_model(m)
+    ///     onnx.save(m, f"crates/birdnet-core/src/testdata/{name}.onnx")
+    /// save("tiny_rank3_test", TensorProto.FLOAT, [1, 1, 96000])
+    /// save("tiny_fp16_test", TensorProto.FLOAT16, [1, 96000])
+    /// ```
+    ///
+    /// `tiny_fp16_out_test.onnx` is the float-input graph with a
+    /// `Cast(to=FLOAT16)` after the `Slice`, and a float16 `predictions`.
+    fn eleven_labels() -> super::LabelSet {
+        let labels: Vec<String> = (0..11).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        super::LabelSet::parse(&labels.join("\n")).expect("labels")
+    }
+
+    /// MMP-18: a model whose input is `[1, 1, N]` passes the shape code
+    /// (`expected_input_length` accepts it) and was then handed a `[1, N]`
+    /// tensor, which ONNX Runtime refused on every window ("Invalid rank for
+    /// input: input Got: 2 Expected: 3"), so a model that loaded cleanly
+    /// became a failing classifier at its first recording.
+    #[test]
+    fn a_rank_three_waveform_model_is_fed_a_rank_three_tensor() {
+        let mut m = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_rank3_test.onnx"),
+            eleven_labels(),
+            super::ModelConfig {
+                confidence_threshold: 0.5,
+                ..super::ModelConfig::default()
+            },
+        )
+        .expect("the rank-3 fixture loads");
+        let mut audio = vec![0.0_f32; 96_000];
+        audio[0] = 0.9;
+        let p = m
+            .predict_chunk(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+            .expect("a [1, 1, N] model answers a window");
+        assert_eq!(p.detections.len(), 1, "{:?}", p.detections);
+        assert_eq!(p.detections[0].scientific_name, "Sp0");
+        assert!(
+            (p.detections[0].confidence - 0.9).abs() < 1e-6,
+            "{:?}",
+            p.detections
+        );
+    }
+
+    /// MMP-18: a model with float16 input or output loaded, then failed every
+    /// window ("Unexpected input data type. Actual: (tensor(float)), expected:
+    /// (tensor(float16))"). The station feeds and reads `f32` only, so such a
+    /// model is refused when it is loaded, where the journal and `--doctor`
+    /// say so, not reported as a classifier that fails at run time.
+    #[test]
+    fn a_model_with_float16_input_is_refused_when_loaded() {
+        let err = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_fp16_test.onnx"),
+            eleven_labels(),
+            super::ModelConfig::default(),
+        )
+        .expect_err("a float16 model must be refused at load");
+        let msg = err.to_string();
+        assert!(msg.contains("input is f16") && msg.contains("f32"), "{msg}");
+    }
+
+    /// MMP-18, the output half: float input and float16 class scores. The
+    /// scores are read as `f32`, which failed every window ("cannot extract
+    /// logits"). Observed failing with `refuse_non_f32_class_output`'s call
+    /// removed from `load_from_bytes`: the model loaded.
+    #[test]
+    fn a_model_with_float16_scores_is_refused_when_loaded() {
+        let err = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_fp16_out_test.onnx"),
+            eleven_labels(),
+            super::ModelConfig::default(),
+        )
+        .expect_err("float16 scores must be refused at load");
+        let msg = err.to_string();
+        assert!(msg.contains("class scores are f16"), "{msg}");
     }
 
     #[test]

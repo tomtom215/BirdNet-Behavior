@@ -201,6 +201,7 @@ fn infer_chunk(
     // order. Their kept scores are those of the *last* window they ran, so a
     // classifier that failed this one must never be asked what it scored.
     let mut windows: Vec<(usize, bool)> = Vec::with_capacity(route.len());
+    let primary_rate = registry.primary().spec.sample_rate;
 
     for &idx in route {
         let Some(registered) = registry.model_mut(idx) else {
@@ -210,9 +211,29 @@ fn infer_chunk(
         };
         let model_id = registered.id.clone();
         let own_threshold = registered.own_threshold;
+        // The primary's copy, or the copy the pipeline prepared at this
+        // classifier's own rate (MMP-01). The pipeline prepares one per rate
+        // the registry reports, so a missing copy means a pipeline built
+        // without them: that is this classifier failing the window, said out
+        // loud, never fed audio at another rate.
+        let rate = registered.spec.sample_rate;
+        let input = if rate == primary_rate {
+            Some(chunk.spectrogram.data.as_slice())
+        } else {
+            chunk.samples_at(rate)
+        };
+        let Some(input) = input else {
+            let e = crate::inference::model::InferenceError::Shape(format!(
+                "no audio was prepared at {rate} Hz for classifier `{model_id}`"
+            ));
+            record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
+            first_error.get_or_insert(e);
+            windows.push((idx, false));
+            continue;
+        };
         let inference_started = Instant::now();
         let prediction = match registered.model.predict_chunk(
-            &chunk.spectrogram.data,
+            input,
             &chunk.recording.date,
             &chunk.recording.time,
             chunk.start_secs,
@@ -334,83 +355,6 @@ fn attach_answers(
     for detection in detections {
         detection.model_scores = answers_for(&outcomes, &detection.scientific_name);
     }
-}
-
-/// `correlation_id`, if non-empty, is stamped on every event emitted for
-/// this file and surfaced in every log line — see [`DetectionEvent::correlation_id`].
-///
-/// # Errors
-///
-/// Returns `DaemonError` if any stage fails.
-#[allow(clippy::cast_possible_truncation)]
-pub fn process_and_infer(
-    path: &Path,
-    pipeline_config: &PipelineConfig,
-    registry: &mut ClassifierRegistry,
-    route: &[usize],
-    correlation_id: &str,
-) -> Result<Vec<DetectionEvent>, DaemonError> {
-    let start = Instant::now();
-
-    let chunks = pipeline::process_file(path, pipeline_config)?;
-    let pipeline_elapsed = start.elapsed();
-
-    tracing::debug!(
-        correlation_id,
-        file = %path.display(),
-        chunks = chunks.len(),
-        pipeline_ms = pipeline_elapsed.as_millis(),
-        "audio pipeline complete"
-    );
-
-    let mut events = Vec::new();
-
-    for chunk in &chunks {
-        let infer_start = Instant::now();
-
-        let detections = infer_chunk(
-            registry,
-            route,
-            chunk,
-            geomodel_week(&chunk.recording.date, path),
-        )?
-        .detections;
-
-        let infer_elapsed = infer_start.elapsed();
-        let total_ms = start.elapsed().as_millis() as u64;
-
-        for detection in detections {
-            tracing::info!(
-                correlation_id,
-                species = %detection.common_name,
-                confidence = format!("{:.1}%", detection.confidence * 100.0),
-                chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
-                infer_ms = infer_elapsed.as_millis(),
-                "detection"
-            );
-
-            events.push(DetectionEvent {
-                detection,
-                source_file: path.to_path_buf(),
-                latency_ms: total_ms,
-                correlation_id: correlation_id.to_owned(),
-                lease: None,
-            });
-        }
-    }
-
-    let total = start.elapsed();
-    // DEBUG, not INFO: one of the two per-file lines OB-15 measured at 92 % of
-    // the journal's volume; the counter carries the count.
-    tracing::debug!(
-        correlation_id,
-        file = %path.display(),
-        detections = events.len(),
-        total_ms = total.as_millis(),
-        "file processing complete"
-    );
-
-    Ok(events)
 }
 
 /// Process a single audio file with privacy and species occurrence filters.
@@ -760,6 +704,7 @@ mod tests {
             )
             .unwrap(),
             silent: false,
+            at_rates: Vec::new(),
         }
     }
 
@@ -836,6 +781,80 @@ mod tests {
         assert!(!health[0].1.is_failing());
         assert_eq!(health[0].1.consecutive_failures, 0);
         assert!(health[0].1.last_success_at.is_some());
+    }
+
+    /// MMP-01: a classifier at another rate than the primary's is handed the
+    /// chunk's copy at its own rate, never the primary's samples.
+    ///
+    /// The tiny V3.0 model (32 kHz, from its shape) reads its input's first
+    /// values as its scores, so what it reports says which buffer it was
+    /// given. Observed failing with `infer_chunk` handing every classifier
+    /// `chunk.spectrogram.data`: the 32 kHz classifier scored the primary's
+    /// head, -5, and reported nothing.
+    #[test]
+    fn a_classifier_at_another_rate_reads_its_own_copy() {
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let labels = tmp.path().join("labels.txt");
+        std::fs::write(
+            &labels,
+            (0..11)
+                .map(|i| format!("Species{i} bird_Bird {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let spec = |id: &str, bytes: &[u8]| {
+            let path = tmp.path().join(format!("{id}.onnx"));
+            std::fs::write(&path, bytes).unwrap();
+            ModelSpec {
+                id: id.to_owned(),
+                model_path: path,
+                labels_path: labels.clone(),
+                threshold: Some(0.5),
+                sample_rate: None,
+            }
+        };
+        let mut registry = ClassifierRegistry::load(
+            &[spec("birdnet", TINY_V24), spec("v3", TINY_V30)],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("a 48 kHz primary and a 32 kHz extra load together");
+        assert_eq!(registry.extra_sample_rates(), vec![32_000], "precondition");
+
+        // The primary's copy scores everything far below either bar; the
+        // 32 kHz copy scores Species0 at 0.9.
+        let mut chunk = chunk_of(144_000);
+        chunk.spectrogram.data.fill(-5.0);
+        let mut at_32k = vec![0.0_f32; 96_000];
+        at_32k[0] = 0.9;
+        chunk.at_rates = vec![(32_000, at_32k)];
+
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).expect("both answer");
+        let s0 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species0 bird")
+            .unwrap_or_else(|| panic!("the 32 kHz copy was not read: {:?}", out.detections));
+        assert_eq!(s0.model_id.as_deref(), Some("v3"));
+        assert!((s0.confidence - 0.9).abs() < 1e-6, "{s0:?}");
+        assert_eq!(out.detections.len(), 1, "{:?}", out.detections);
+
+        // Counterpart: a chunk with no copy at that rate is that classifier's
+        // failed window, said in its health; the primary still answers.
+        chunk.at_rates.clear();
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).expect("the primary answers");
+        assert!(out.detections.is_empty(), "{:?}", out.detections);
+        let health = registry.health();
+        assert_eq!(health[1].1.consecutive_failures, 1, "{:?}", health[1]);
+        assert_eq!(health[0].1.consecutive_failures, 0, "{:?}", health[0]);
     }
 
     /// A full 144 000-value window whose first values are `head`: both tiny

@@ -28,7 +28,7 @@ use crate::inference::model::{InferenceError, ModelConfig};
 mod process;
 mod run;
 
-pub use process::{process_and_infer, process_and_infer_filtered, process_file_pipeline_only};
+pub use process::{process_and_infer_filtered, process_file_pipeline_only};
 pub use run::run_daemon;
 
 /// Errors from the detection daemon.

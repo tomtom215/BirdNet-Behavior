@@ -136,6 +136,14 @@ pub struct PipelineConfig {
     /// (`[1, 144_000]` = 128 mel bands × 1125 frames); V3.0 models perform
     /// their own internal feature extraction from the raw waveform.
     pub raw_audio_input: bool,
+    /// Further sample rates to prepare every chunk at, for classifiers that
+    /// want a rate other than [`Self::target_sample_rate`] (MMP-01).
+    ///
+    /// Each rate costs one more resample of the whole recording, from the
+    /// decoded audio, and one more copy of every chunk's samples: the copies
+    /// are in [`PreparedChunk::at_rates`]. Empty, the default, is the
+    /// single-rate pipeline unchanged.
+    pub extra_sample_rates: Vec<u32>,
 }
 
 impl Default for PipelineConfig {
@@ -149,6 +157,7 @@ impl Default for PipelineConfig {
             chunk_step_secs: None,
             confidence_threshold: 0.25,
             raw_audio_input: false,
+            extra_sample_rates: Vec::new(),
         }
     }
 }
@@ -172,6 +181,28 @@ pub struct PreparedChunk {
     /// the station would otherwise count as a damaged classifier and tell its
     /// owner to replace the model file. [`is_constant`] says what is meant.
     pub silent: bool,
+    /// The same span of audio as a waveform at each of
+    /// [`PipelineConfig::extra_sample_rates`], as `(rate, samples)` (MMP-01).
+    ///
+    /// Cut from the recording resampled once to that rate, starting at the
+    /// sample nearest [`Self::start_secs`] and as long as the chunk, padded
+    /// with zeros as the primary's copy is. Empty when every classifier shares
+    /// the primary's rate.
+    pub at_rates: Vec<(u32, Vec<f32>)>,
+}
+
+impl PreparedChunk {
+    /// This chunk's waveform at `rate`, if the pipeline prepared one: one of
+    /// [`Self::at_rates`]. The primary's own copy is
+    /// [`Self::spectrogram`], which the caller reads when `rate` is the
+    /// primary's.
+    #[must_use]
+    pub fn samples_at(&self, rate: u32) -> Option<&[f32]> {
+        self.at_rates
+            .iter()
+            .find(|(r, _)| *r == rate)
+            .map(|(_, samples)| samples.as_slice())
+    }
 }
 
 /// Whether every sample is the same value, the test behind
@@ -264,6 +295,20 @@ pub fn process_file(
 
     // Resample to target rate
     let samples = resample::resample(&audio.samples, audio.sample_rate, config.target_sample_rate)?;
+    // And once more per rate another classifier wants, from the decoded audio
+    // rather than from `samples`, so that classifier is fed what it would be
+    // fed as the only one (MMP-01).
+    let extra: Vec<(u32, Vec<f32>)> = config
+        .extra_sample_rates
+        .iter()
+        .filter(|&&rate| rate != config.target_sample_rate)
+        .map(|&rate| {
+            Ok((
+                rate,
+                resample::resample(&audio.samples, audio.sample_rate, rate)?,
+            ))
+        })
+        .collect::<Result<_, PipelineError>>()?;
 
     // Split into chunks
     let chunk_samples = (config.chunk_duration_secs * config.target_sample_rate as f32) as usize;
@@ -304,16 +349,54 @@ pub fn process_file(
             )?
         };
 
+        let at_rates = extra
+            .iter()
+            .map(|(rate, samples)| {
+                (
+                    *rate,
+                    cut_at_rate(
+                        samples,
+                        pos,
+                        chunk_samples,
+                        config.target_sample_rate,
+                        *rate,
+                    ),
+                )
+            })
+            .collect();
+
         chunks.push(PreparedChunk {
             spectrogram,
             start_secs,
             end_secs,
             recording: recording.clone(),
             silent,
+            at_rates,
         });
     }
 
     Ok(chunks)
+}
+
+/// The span `[pos, pos + len)` of a recording at `from` hertz, cut from the
+/// same recording resampled to `to` hertz and zero-padded to the span's length
+/// at that rate.
+///
+/// Start and length are scaled in integer arithmetic, rounded to the nearest
+/// sample: exact for every chunk start and length the catalogue's models give
+/// (3 s, 4.5 s and 5 s steps at 32 and 48 kHz).
+fn cut_at_rate(samples: &[f32], pos: usize, len: usize, from: u32, to: u32) -> Vec<f32> {
+    let scale = |n: usize| {
+        let from = u64::from(from).max(1);
+        let n = (n as u64 * u64::from(to) + from / 2) / from;
+        usize::try_from(n).unwrap_or(usize::MAX)
+    };
+    let start = scale(pos).min(samples.len());
+    let want = scale(len);
+    let end = start.saturating_add(want).min(samples.len());
+    let mut out = samples[start..end].to_vec();
+    out.resize(want, 0.0);
+    out
 }
 
 /// How far apart consecutive chunks start, in samples.
