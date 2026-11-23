@@ -2132,7 +2132,7 @@ mod tests {
         )
         .expect_err("a float16 model must be refused at load");
         let msg = err.to_string();
-        assert!(msg.contains("f16") && msg.contains("f32"), "{msg}");
+        assert!(msg.contains("input is f16") && msg.contains("f32"), "{msg}");
     }
 
     /// MMP-18, the output half: float input and float16 class scores. The
