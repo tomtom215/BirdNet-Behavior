@@ -304,6 +304,35 @@ pub struct SpeciesFilter {
     config: SpeciesFilterConfig,
     cache_key: Option<CacheKey>,
     cache_result: Option<HashSet<String>>,
+    /// The species the metadata model scores, in its output order: its own
+    /// label file, or the classifier's when the two are indexed alike. What
+    /// another classifier's vocabulary is aligned onto (MMP-03). `None`
+    /// without a model.
+    meta_vocabulary: Option<LabelSet>,
+    /// The operator's alias map the primary was aligned with, kept for the
+    /// other classifiers' alignments.
+    aliases: HashMap<String, String>,
+    /// Every classifier vocabulary on the station, from
+    /// [`Self::know_vocabulary`].
+    vocabularies: Vec<Vocabulary>,
+    /// Whether the include list names a species in any known vocabulary.
+    /// When it does, it binds on every vocabulary; when it names none it is
+    /// read as a typo and ignored everywhere. Recomputed when the lists or
+    /// the vocabularies change.
+    include_binds_on_station: bool,
+    /// Whether an include list that binds nowhere has been warned about since
+    /// the lists last changed: once, not on every file.
+    warned_unbound_include: std::sync::atomic::AtomicBool,
+}
+
+/// One classifier's vocabulary, as the occurrence filter sees it.
+struct Vocabulary {
+    id: String,
+    labels: LabelSet,
+    /// The metadata model's outputs onto these labels, built on first use.
+    alignment: Option<Alignment>,
+    cache_key: Option<CacheKey>,
+    cache_result: Option<HashSet<String>>,
 }
 
 impl fmt::Debug for SpeciesFilter {
@@ -322,7 +351,7 @@ impl fmt::Debug for SpeciesFilter {
 
 impl SpeciesFilter {
     /// Create a species filter without a metadata model (no filtering).
-    pub const fn new_passthrough(config: SpeciesFilterConfig) -> Self {
+    pub fn new_passthrough(config: SpeciesFilterConfig) -> Self {
         Self {
             session: None,
             alignment: None,
@@ -330,6 +359,11 @@ impl SpeciesFilter {
             config,
             cache_key: None,
             cache_result: None,
+            meta_vocabulary: None,
+            aliases: HashMap::new(),
+            vocabularies: Vec::new(),
+            include_binds_on_station: false,
+            warned_unbound_include: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -428,7 +462,10 @@ impl SpeciesFilter {
             )));
         }
 
-        let alignment = meta_labels.map(|meta| Alignment::build(&meta, classifier, aliases));
+        let alignment = meta_labels
+            .as_ref()
+            .map(|meta| Alignment::build(meta, classifier, aliases));
+        let meta_vocabulary = meta_labels.unwrap_or_else(|| classifier.clone());
 
         if let Some(stats) = alignment.as_ref().map(Alignment::stats) {
             tracing::info!(
@@ -458,6 +495,11 @@ impl SpeciesFilter {
             config,
             cache_key: None,
             cache_result: None,
+            meta_vocabulary: Some(meta_vocabulary),
+            aliases: aliases.clone(),
+            vocabularies: Vec::new(),
+            include_binds_on_station: false,
+            warned_unbound_include: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -520,7 +562,7 @@ impl SpeciesFilter {
             self.alignment.is_some(),
         )?;
 
-        let result = self.passing_species(&probabilities, labels);
+        let result = self.passing_species(&probabilities, labels, self.alignment.as_ref());
 
         tracing::debug!(
             lat,
@@ -573,7 +615,7 @@ impl SpeciesFilter {
             self.expected_width,
             self.alignment.is_some(),
         )?;
-        let admitted = self.passing_species(&probabilities, labels);
+        let admitted = self.passing_species(&probabilities, labels, self.alignment.as_ref());
 
         let mut scores = Vec::with_capacity(probabilities.len());
         for (index, &probability) in probabilities.iter().enumerate() {
@@ -611,7 +653,15 @@ impl SpeciesFilter {
     /// and the operator's lists: what [`Self::filter_species`] returns, from the
     /// probabilities alone. Separate so the order of those three steps can be
     /// tested without a model file.
-    fn passing_species(&self, probabilities: &[f32], labels: &LabelSet) -> HashSet<String> {
+    ///
+    /// `alignment` maps the model's outputs onto `labels`; `None` reads them
+    /// by index, for a model indexed like the primary's labels.
+    fn passing_species(
+        &self,
+        probabilities: &[f32],
+        labels: &LabelSet,
+        alignment: Option<&Alignment>,
+    ) -> HashSet<String> {
         // Collect species above threshold.
         //
         // Which list the index refers to depends on how the model was loaded.
@@ -632,7 +682,7 @@ impl SpeciesFilter {
             if prob < self.config.sf_thresh {
                 continue;
             }
-            match self.alignment.as_ref() {
+            match alignment {
                 Some(alignment) => {
                     if let Some(name) = alignment.classifier_name(i) {
                         passing.insert(name.to_owned());
@@ -658,9 +708,8 @@ impl SpeciesFilter {
     /// Every species in `labels` the operator's lists allow, with no
     /// occurrence model.
     ///
-    /// For a classifier whose vocabulary the geomodel was never trained on:
-    /// the lists are an explicit instruction and bind on every species, while
-    /// the geomodel can only judge the names it scores.
+    /// What the daemon falls back to when the metadata model fails at run time:
+    /// the lists are an explicit instruction and still bind.
     #[must_use]
     pub fn allowed_by_lists(&self, labels: &LabelSet) -> HashSet<String> {
         self.apply_lists(all_scientific_names(labels), labels)
@@ -681,14 +730,23 @@ impl SpeciesFilter {
         // list at all. Otherwise a single typo — a name matching no label —
         // would silently suppress *every* species on the station, which is the
         // most destructive possible reading of an operator's typo.
+        //
+        // "Matches nothing" is judged on the station, not on one vocabulary
+        // (MMP-03): a list naming only species another classifier knows is
+        // not a typo, and binds here too, leaving this vocabulary nothing.
         if !self.config.include_list.is_empty() {
             let include = resolve_to_scientific(self.config.include_list.iter(), labels);
-            if include.is_empty() {
-                tracing::warn!(
-                    entries = self.config.include_list.len(),
-                    "species include list matches no known species; ignoring it rather than \
-                     suppressing every detection"
-                );
+            if include.is_empty() && !self.include_binds_on_station {
+                if !self
+                    .warned_unbound_include
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    tracing::warn!(
+                        entries = self.config.include_list.len(),
+                        "species include list matches no known species; ignoring it rather than \
+                         suppressing every detection"
+                    );
+                }
             } else {
                 species.retain(|s| include.contains(s));
             }
@@ -714,6 +772,9 @@ impl SpeciesFilter {
         self.config.include_list = lists.include;
         self.config.exclude_list = lists.exclude;
         self.config.whitelist = lists.whitelist.into_iter().collect();
+        self.include_binds_on_station = self.include_binds_somewhere();
+        self.warned_unbound_include
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.invalidate_cache();
     }
 
@@ -730,15 +791,135 @@ impl SpeciesFilter {
     /// Update the species frequency threshold.
     pub fn set_sf_thresh(&mut self, thresh: f32) {
         self.config.sf_thresh = thresh;
-        // Invalidate cache when threshold changes
-        self.cache_key = None;
-        self.cache_result = None;
+        self.invalidate_cache();
     }
 
     /// Invalidate the cached filter result.
     pub fn invalidate_cache(&mut self) {
         self.cache_key = None;
         self.cache_result = None;
+        for vocabulary in &mut self.vocabularies {
+            vocabulary.cache_key = None;
+            vocabulary.cache_result = None;
+        }
+    }
+
+    /// Tell the filter about a classifier vocabulary the station runs, so
+    /// [`Self::filter_species_of`] can judge its species and an include list
+    /// is read against the whole station (MMP-03).
+    ///
+    /// Cheap to repeat: a vocabulary already known under `id` with as many
+    /// labels is left alone, so the daemon calls this for every classifier on
+    /// every file rather than tracking whether it has.
+    pub fn know_vocabulary(&mut self, id: &str, labels: &LabelSet) {
+        if self
+            .vocabularies
+            .iter()
+            .any(|v| v.id == id && v.labels.len() == labels.len())
+        {
+            return;
+        }
+        self.vocabularies.retain(|v| v.id != id);
+        self.vocabularies.push(Vocabulary {
+            id: id.to_owned(),
+            labels: labels.clone(),
+            alignment: None,
+            cache_key: None,
+            cache_result: None,
+        });
+        self.include_binds_on_station = self.include_binds_somewhere();
+        self.invalidate_cache();
+    }
+
+    /// [`Self::filter_species`] for the vocabulary known as `id`: its species
+    /// the operator's lists allow and, with a location and a metadata model,
+    /// that the model admits here this week.
+    ///
+    /// The model is read by name through the same rules as the primary's
+    /// (scientific name, then common name and epithet, then the operator's
+    /// aliases), aligned onto this vocabulary once, on first use. A species the
+    /// model does not score is not admitted unless whitelisted, as the
+    /// primary's own unscored species are not (maintainer's decision,
+    /// 2026-11-23): with the occurrence filter running, a frog the model has
+    /// never heard of has no evidence that it occurs here.
+    ///
+    /// # Errors
+    ///
+    /// [`InferenceError::Shape`] for an `id` [`Self::know_vocabulary`] was
+    /// never given, and whatever the metadata model fails with.
+    pub fn filter_species_of(
+        &mut self,
+        id: &str,
+        location: Option<(f64, f64)>,
+        week: u32,
+    ) -> Result<HashSet<String>, InferenceError> {
+        let Some(at) = self.vocabularies.iter().position(|v| v.id == id) else {
+            return Err(InferenceError::Shape(format!(
+                "the occurrence filter was not told about classifier `{id}`"
+            )));
+        };
+        let (Some((lat, lon)), Some(session), Some(meta)) = (
+            location,
+            self.session.as_mut(),
+            self.meta_vocabulary.as_ref(),
+        ) else {
+            let labels = &self.vocabularies[at].labels;
+            return Ok(self.apply_lists(all_scientific_names(labels), labels));
+        };
+
+        let key = CacheKey::new(lat, lon, week);
+        let vocabulary = &mut self.vocabularies[at];
+        if vocabulary.cache_key.as_ref() == Some(&key)
+            && let Some(cached) = vocabulary.cache_result.as_ref()
+        {
+            return Ok(cached.clone());
+        }
+        if vocabulary.alignment.is_none() {
+            let alignment = Alignment::build(meta, &vocabulary.labels, &self.aliases);
+            let stats = alignment.stats();
+            tracing::info!(
+                classifier = id,
+                classifier_species = stats.classifier_species,
+                scored_by_occurrence_model =
+                    stats.classifier_species - stats.classifier_unreachable,
+                not_scored = stats.classifier_unreachable,
+                "occurrence filter applied to this classifier's species by name; the ones it does \
+                 not score are admitted only if whitelisted"
+            );
+            vocabulary.alignment = Some(alignment);
+        }
+
+        let probabilities = occurrence_probabilities(
+            session,
+            lat,
+            lon,
+            week,
+            self.expected_width,
+            self.alignment.is_some(),
+        )?;
+        let vocabulary = &self.vocabularies[at];
+        let result = self.passing_species(
+            &probabilities,
+            &vocabulary.labels,
+            vocabulary.alignment.as_ref(),
+        );
+        let vocabulary = &mut self.vocabularies[at];
+        vocabulary.cache_key = Some(key);
+        vocabulary.cache_result = Some(result.clone());
+        Ok(result)
+    }
+
+    /// Whether the include list names a species in any known vocabulary.
+    fn include_binds_somewhere(&self) -> bool {
+        !self.config.include_list.is_empty()
+            && self.vocabularies.iter().any(|v| {
+                v.labels.iter().any(|label| {
+                    self.config
+                        .include_list
+                        .iter()
+                        .any(|entry| matches_species(entry, label))
+                })
+            })
     }
 }
 
@@ -1035,8 +1216,11 @@ mod tests {
             include_list: own(include),
             exclude_list: own(exclude),
         };
-        SpeciesFilter::new_passthrough(config)
-            .passing_species(&[0.9, 0.9, 0.01, 0.9], &test_labels())
+        SpeciesFilter::new_passthrough(config).passing_species(
+            &[0.9, 0.9, 0.01, 0.9],
+            &test_labels(),
+            None,
+        )
     }
 
     #[test]
@@ -1084,7 +1268,7 @@ mod tests {
         let scores = [0.9, 0.9, 0.01, 0.9];
         assert!(
             !filter
-                .passing_species(&scores, &labels)
+                .passing_species(&scores, &labels, None)
                 .contains("Parus major")
         );
         filter.set_lists(SpeciesLists {
@@ -1093,13 +1277,13 @@ mod tests {
         });
         assert!(
             filter
-                .passing_species(&scores, &labels)
+                .passing_species(&scores, &labels, None)
                 .contains("Parus major")
         );
         filter.set_lists(SpeciesLists::default());
         assert!(
             !filter
-                .passing_species(&scores, &labels)
+                .passing_species(&scores, &labels, None)
                 .contains("Parus major"),
             "an emptied whitelist is a cleared one"
         );

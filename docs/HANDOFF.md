@@ -12,8 +12,23 @@ findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.
 this document against the tree and GitHub; work package WP-00 corrected the header, sections 1, 2, 5 and 6 from it,
 re-running each command named below on 2026-11-22.
 
+**2026-11-23: WP-02 is done except MMP-25, on branch `claude/zealous-dirac-l0vnko`** (commits `275e97d`, `8962d6c`,
+`94cb461`). The maintainer decided three questions, recorded in `checklist.json`: a second classifier's species the range
+model does not score are held back unless whitelisted (MMP-03); a non-finite human score from any classifier still masks
+the chunk (MMP-14, so item 39(b) below is closed); and sounds are not stored as species. On the last the first answer was
+"keep storing", changed when the maintainer asked for the better engineering choice (MMP-04, ACC-18). What changed:
+Perch's speech and other human sounds are human classes (MMP-05), the "human" match is a whole word (new MMP-23: a
+cicada matched), every classifier's species go through the range filter by name, an *Allow* list binds on every
+classifier unless it matches none (new MMP-24, the primary-side mirror), and `Dog`, `Engine`, `Speech` and the rest
+are read by the noise and privacy rules and never stored. New and open: MMP-25, the range-filter page answers for the
+primary's species only. Each gate, and how it was seen failing, is in the commit messages and `checklist.json`.
+Verified on `f029080` with `scripts/preflight.sh --tests`: 19 of its 20 gates ok (fmt, typos, machete, installer drift, cargo-deny, cargo-audit, OSV, clippy at all three feature sets, rustdoc, both builds, CLI help, book links, licence notices, doc tests, unit tests, integration tests); the all-features suite failed on "No space left on device" (an LLVM write), and `cargo test --workspace --all-features`, rerun alone after `rm -rf target`, exited 0 (317 `test result:` lines, 6 598 passed, 0 failed, 10 ignored). MSRV was not run. Browser gates on a fresh screenshot fixture (all-features build): `axe.mjs` (both viewports) "0 total violation(s)", `layout.mjs` "Graded 360 page states" with no findings, `qa.mjs` (STRICT) "0 pages with issues"; no page markup changed, so these say nothing about this change beyond "no regression". The five changed manual pages were rendered and looked at, at 1280x900 and 390x844 in light and dark, with no page wider than the screen (the parity table scrolls in its own box on a phone, as it did). **Not verified:** any real model or real audio (only the tiny fixtures ran; the audit's probes on speech
+and traffic recordings were not run); the cost on a Pi of the extra alignment per classifier (built once, a few hash
+maps over the range model's 12 012 names); how many stored rows BirdNET-Pi parity loses to the sound-class rule (the
+parity studies did not count such rows). **Next:** WP-03.
+
 **2026-11-23: WP-01 is done except MMP-21, on branch `claude/gallant-hypatia-dnjbxf`** (commits `af8bb36`, `7167866`,
-`5d4c0bd`; not merged when this was written). The maintainer chose decision 3 of the audit README: an extra classifier
+`5d4c0bd`; merged to `main` as #289, `cc776e7`, read from `git log` on 2026-11-23). The maintainer chose decision 3 of the audit README: an extra classifier
 at another sample rate runs on its own resample of each recording, so Perch beside the default V2.4 works; a second
 model file that will not load still stops the daemon. `--doctor` now loads every configured classifier and route
 (*Classifiers* check). A new defect, MMP-22 (a route to a classifier the memory plan declined stopped detection), was
@@ -808,8 +823,9 @@ it says otherwise.
     single flipped bit; those still count as failed windows, which is true of the model (the edge was measured on one file
     and may differ in a release); (b) a non-finite human-class score is read as speech by design, so one failing
     classifier makes the privacy filter drop the chunk and its neighbours *whichever classifier heard the bird* (4
-    detections became 1). Whether a non-primary classifier's NaN should count is a decision for the maintainer; the manual
-    now says what it costs. Medium.
+    detections became 1). The maintainer decided on 2026-11-23 to keep it (audit MMP-14): failing towards privacy is the
+    point, and the classifier left to judge may be V3.0, whose human rule masked 0 of 31 speech windows. The manual
+    says what it costs. Closed.
 40. **The station merges by exact scientific name.** 121 of the 644 V3.0 names Perch lacks are the same species under a
     new genus (`docs/data/taxonomy/`), so a bird the two classifiers name differently is two detections with
     `model_agreement` 1. No alias table is applied, because the name keys the species list, history, exports and
@@ -870,7 +886,8 @@ it says otherwise.
 
 **Start at `docs/audit-2026-11/README.md`**: one work package per pull request, in its order. WP-00 (the Clippy fix,
 the mutation budgets, this file's corrections) is done; its "Item zero" line has the commit. WP-01 is done but for MMP-21's
-later items (see the 2026-11-23 paragraph at the top); the next package is WP-02.
+later items (see the 2026-11-23 paragraph at the top); WP-02 is done but for MMP-25 (its paragraph at the top); the next
+package is WP-03.
 
 **0.19.0 is released** (read 2026-11-22): the pull request that fixed `sel` merged (#277, `ec6f71e`); `v0.19.0` was
 moved to that commit (`git ls-remote --tags origin 'v0.19.0*'`); its Release run (41311659073) and Docs run

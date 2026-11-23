@@ -36,11 +36,16 @@ Drop the unusable extra classifier, keep the primary, say so on the page and in 
 
 One list of non-bird and human classes per vocabulary; the location filter applied to every classifier's species.
 
-- [ ] **MMP-03** (high) Species only a secondary classifier knows are never location-filtered, and the include list can silently stop binding for them
-- [ ] **MMP-04** (high, c) Perch's 200 sound classes ("Speech", "Engine", "Crow", "Chirp_and_tweet", …) are recorded, notified and posted as species
-- [ ] **MMP-05** (high, c) The privacy filter does not recognise Perch's speech classes
-- [ ] **MMP-14** (medium, tracked) One classifier's non-finite human score suppresses chunks whichever classifier heard the bird
-- [ ] **ACC-18** (low, c) Non-bird classes can be stored as "species"
+- [x] **MMP-03** (high) Species only a secondary classifier knows are never location-filtered, and the include list can silently stop binding for them
+- [x] **MMP-04** (high, c) Perch's 200 sound classes ("Speech", "Engine", "Crow", "Chirp_and_tweet", …) are recorded, notified and posted as species
+- [x] **MMP-05** (high, c) The privacy filter does not recognise Perch's speech classes
+- [-] **MMP-14** (medium, tracked) One classifier's non-finite human score suppresses chunks whichever classifier heard the bird
+- [x] **ACC-18** (low, c) Non-bird classes can be stored as "species"
+- [x] **MMP-23** (low) The human-class rule reads a cicada as a person (added 2026-11-23, after this file was generated; not in the counts above)
+- [x] **MMP-24** (medium) An include list naming only a second classifier's species leaves the primary unfiltered (added 2026-11-23, likewise)
+- [ ] **MMP-25** (low) The range-filter explainer answers for the primary's vocabulary only (added 2026-11-23, likewise)
+
+`[x]` done, `[-]` closed by the maintainer's decision of 2026-11-23 without a code change (MMP-14); `checklist.json` has the evidence.
 
 ## WP-03 (phase 1): A ledger of everything the filters discard
 

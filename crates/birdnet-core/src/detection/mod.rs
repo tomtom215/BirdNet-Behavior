@@ -11,6 +11,7 @@ pub mod nocturnal;
 pub mod noise;
 pub mod pipeline;
 pub mod privacy;
+pub mod sound_class;
 pub mod types;
 
 /// The two filters that judge a whole chunk rather than one detection.

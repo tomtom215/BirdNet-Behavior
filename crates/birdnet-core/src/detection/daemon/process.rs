@@ -421,10 +421,14 @@ pub fn process_and_infer_filtered(
     // explicit instruction and still apply — gating the whole filter on
     // coordinates, as this used to, meant a station that never set a latitude
     // kept recording every species its operator had asked to suppress.
-    // The primary classifier's labels. The occurrence filter is a BirdNET
-    // geomodel scored against a BirdNET label set; a second classifier with a
-    // different vocabulary is filtered by its own thresholds and lists, not by
-    // a geomodel that has never heard of its labels.
+    // Every classifier's vocabulary, so an include list is read against the
+    // whole station and a second classifier's species can be scored (MMP-03).
+    // A no-op after the first file.
+    for idx in 0..registry.len() {
+        if let Some(m) = registry.model(idx) {
+            species_filter.know_vocabulary(&m.id, m.model.labels());
+        }
+    }
     let primary_labels = registry.primary().model.labels();
     //
     // A metadata model that fails *here*, at run time, falls back to the
@@ -440,21 +444,34 @@ pub fn process_and_infer_filtered(
                 (species_filter.allowed_by_lists(primary_labels), false)
             }
         };
-    // Species only another routed classifier knows: the operator's lists
-    // alone. Every detection used to be checked against the primary's set,
-    // so a species outside BirdNET's vocabulary was dropped whichever model
-    // heard it.
+    // Species only another routed classifier knows, judged in that
+    // classifier's own vocabulary: the occurrence model by name where it
+    // scores the species, nothing where it does not (unless whitelisted), and
+    // the operator's lists (MMP-03). They used to get the lists alone, so a
+    // station with its range filter on recorded extralimital birds, frogs and
+    // insects from Perch unfiltered. A model failing here falls back to the
+    // lists, as it does for the primary.
     let primary_names: std::collections::HashSet<&str> = primary_labels
         .iter()
         .map(|l| l.scientific_name.as_str())
         .collect();
-    let allowed_elsewhere: std::collections::HashSet<String> = route
+    let mut allowed_elsewhere: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for m in route
         .iter()
         .filter(|&&idx| idx != 0)
         .filter_map(|&idx| registry.model(idx))
-        .flat_map(|m| species_filter.allowed_by_lists(m.model.labels()))
-        .filter(|name| !primary_names.contains(name.as_str()))
-        .collect();
+    {
+        let set = species_filter
+            .filter_species_of(&m.id, lat.zip(lon), week)
+            .unwrap_or_else(|e| {
+                report_species_filter_failure(&e);
+                species_filter.allowed_by_lists(m.model.labels())
+            });
+        allowed_elsewhere.extend(
+            set.into_iter()
+                .filter(|name| !primary_names.contains(name.as_str())),
+        );
+    }
     let allowed = |sci: &str| {
         if primary_names.contains(sci) {
             allowed_species.contains(sci)
@@ -476,6 +493,14 @@ pub fn process_and_infer_filtered(
     for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
         for detection in detections {
             if !allowed(&detection.scientific_name) {
+                continue;
+            }
+            // A sound or a person, not a species (MMP-04): it has done its work
+            // in the chunk filters above and is not recorded.
+            if crate::detection::sound_class::is_sound_class(
+                &detection.scientific_name,
+                &detection.common_name,
+            ) {
                 continue;
             }
 
@@ -1096,5 +1121,329 @@ mod tests {
         let health = registry.health();
         assert_eq!(health[0].1.consecutive_failures, 2);
         assert_eq!(health[1].1.consecutive_failures, 1, "not run on the second");
+    }
+
+    // MMP-03: the occurrence filter and the operator's lists over every routed
+    // classifier's species, not only the primary's.
+    //
+    // The station: the tiny V2.4 model as primary, naming eleven species no
+    // geomodel knows ("Species0 bird" …), and the tiny V3.0 model as a second
+    // classifier naming four real species and seven placeholders. The
+    // geomodel is `tiny_meta_test.onnx`, whose scores are fixed whatever the
+    // place: Pica pica 0.90, Parus major 0.10, Corvus corax 0.80, Turdus
+    // merula 0.047, Erithacus rubecula 0.70, against a threshold of 0.5. Both
+    // classifiers report every class (threshold 0, top 100), so what is
+    // emitted is exactly what the filter admits.
+    const SECOND_ONLY: [&str; 4] = [
+        "Turdus merula",   // scored 0.047: the geomodel rejects it here
+        "Corvus corax",    // scored 0.80: the geomodel admits it here
+        "Rana temporaria", // not in the geomodel's vocabulary at all
+        "Bufo bufo",       // not in the geomodel's vocabulary at all
+    ];
+
+    /// The species emitted for one three-second file, by scientific name.
+    fn emitted(
+        location: Option<(f64, f64)>,
+        lists: crate::inference::species_filter::SpeciesFilterConfig,
+    ) -> std::collections::HashSet<String> {
+        emitted_with(
+            &[],
+            &SECOND_ONLY,
+            location,
+            lists,
+            crate::detection::noise::NoiseFilter::new(0.0, Vec::new()),
+        )
+    }
+
+    /// [`emitted`], with the first of the primary's names replaced by
+    /// `primary`, the second classifier's first names by `second`, and a noise
+    /// filter.
+    fn emitted_with(
+        primary: &[&str],
+        second: &[&str],
+        location: Option<(f64, f64)>,
+        lists: crate::inference::species_filter::SpeciesFilterConfig,
+        noise: crate::detection::noise::NoiseFilter,
+    ) -> std::collections::HashSet<String> {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::privacy::PrivacyFilter;
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        const TINY_META: &[u8] = include_bytes!("../../testdata/tiny_meta_test.onnx");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let primary_names: Vec<String> = primary
+            .iter()
+            .map(|n| format!("{n}_{n}"))
+            .chain((primary.len()..11).map(|i| format!("Species{i} bird_Bird {i}")))
+            .collect();
+        let second_names: Vec<String> = second
+            .iter()
+            .map(|n| format!("{n}_{n}"))
+            .chain((second.len()..11).map(|i| format!("Placeholder{i} sp_Placeholder {i}")))
+            .collect();
+        std::fs::write(dir.join("labels.txt"), primary_names.join("\n")).unwrap();
+        std::fs::write(dir.join("labels_second.txt"), second_names.join("\n")).unwrap();
+        std::fs::write(dir.join("v24.onnx"), TINY_V24).unwrap();
+        std::fs::write(dir.join("v30.onnx"), TINY_V30).unwrap();
+        std::fs::write(dir.join("meta.onnx"), TINY_META).unwrap();
+        let spec = |id: &str, model: &str, labels: &str, rate| ModelSpec {
+            id: id.to_owned(),
+            model_path: dir.join(model),
+            labels_path: dir.join(labels),
+            threshold: None,
+            sample_rate: rate,
+        };
+        let mut registry = ClassifierRegistry::load(
+            &[
+                spec("birdnet", "v24.onnx", "labels.txt", None),
+                spec("second", "v30.onnx", "labels_second.txt", Some(48_000)),
+            ],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                top_n: 100,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("both tiny classifiers load");
+
+        let meta = LabelSet::from_entries(
+            [
+                ("Pica pica", "Eurasian Magpie"),
+                ("Parus major", "Great Tit"),
+                ("Corvus corax", "Common Raven"),
+                ("Turdus merula", "Eurasian Blackbird"),
+                ("Erithacus rubecula", "European Robin"),
+            ]
+            .iter()
+            .map(|(s, c)| ((*s).to_owned(), (*c).to_owned()))
+            .collect(),
+        );
+        let mut species_filter = SpeciesFilter::load_with_vocabulary(
+            &dir.join("meta.onnx"),
+            Some(meta),
+            registry.primary().model.labels(),
+            &std::collections::HashMap::new(),
+            crate::inference::species_filter::SpeciesFilterConfig {
+                sf_thresh: 0.5,
+                ..lists
+            },
+        )
+        .expect("the tiny geomodel loads");
+
+        let wav = dir.join("2026-05-19-birdnet-09:00:00.wav");
+        let wav_spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, wav_spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * 3 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise,
+            confirmation: ConfirmationLevel::Off,
+        };
+        let pipeline_config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            ..PipelineConfig::default()
+        };
+        let events = process_and_infer_filtered(
+            &wav,
+            &pipeline_config,
+            &mut registry,
+            &[0, 1],
+            &filters,
+            &mut species_filter,
+            None,
+            location.map(|l| l.0),
+            location.map(|l| l.1),
+            "",
+        )
+        .expect("the file is processed");
+        events
+            .into_iter()
+            .map(|e| e.detection.scientific_name)
+            .collect()
+    }
+
+    const BERLIN: Option<(f64, f64)> = Some((52.52, 13.405));
+
+    fn no_lists() -> crate::inference::species_filter::SpeciesFilterConfig {
+        crate::inference::species_filter::SpeciesFilterConfig::default()
+    }
+
+    fn primary_species(set: &std::collections::HashSet<String>) -> usize {
+        set.iter().filter(|n| n.starts_with("Species")).count()
+    }
+
+    /// The audit's gate: a species only the second classifier knows, which
+    /// the geomodel scores below the threshold here, is not emitted. The
+    /// counterpart in the same run: one it scores above the threshold is.
+    #[test]
+    fn a_species_only_a_second_classifier_knows_is_range_filtered() {
+        let got = emitted(BERLIN, no_lists());
+        assert!(
+            !got.contains("Turdus merula"),
+            "the geomodel scored it 0.047 against a bar of 0.5: {got:?}"
+        );
+        assert!(
+            got.contains("Corvus corax"),
+            "scored 0.80, so admitted: {got:?}"
+        );
+    }
+
+    /// The maintainer's decision of 2026-11-23: a second classifier's species
+    /// the geomodel has no score for is dropped while the occurrence filter is
+    /// running, as the primary's own unscored species are, and the whitelist
+    /// lets it in.
+    #[test]
+    fn a_species_the_geomodel_cannot_score_is_dropped_unless_whitelisted() {
+        let got = emitted(
+            BERLIN,
+            crate::inference::species_filter::SpeciesFilterConfig {
+                whitelist: std::iter::once("Bufo bufo".to_owned()).collect(),
+                ..no_lists()
+            },
+        );
+        assert!(!got.contains("Rana temporaria"), "{got:?}");
+        assert!(got.contains("Bufo bufo"), "whitelisted: {got:?}");
+    }
+
+    /// Without coordinates the geomodel cannot run, and every species of
+    /// every classifier is a candidate: the precondition for the list tests
+    /// below, which would otherwise pass on a station that emitted nothing.
+    #[test]
+    fn without_coordinates_every_classifier_s_species_is_a_candidate() {
+        let got = emitted(None, no_lists());
+        assert_eq!(primary_species(&got), 11, "{got:?}");
+        for name in SECOND_ONLY {
+            assert!(got.contains(name), "{name}: {got:?}");
+        }
+    }
+
+    /// An include list binds on every classifier: one that names only a
+    /// primary species leaves the second classifier nothing to report. It
+    /// used to be ignored there, as a typo, because it matched nothing in that
+    /// classifier's vocabulary.
+    #[test]
+    fn an_include_list_binds_on_a_second_classifier_that_lacks_its_species() {
+        let got = emitted(
+            None,
+            crate::inference::species_filter::SpeciesFilterConfig {
+                include_list: vec!["Species0 bird".to_owned()],
+                ..no_lists()
+            },
+        );
+        assert_eq!(
+            got,
+            std::collections::HashSet::from(["Species0 bird".to_owned()])
+        );
+    }
+
+    /// MMP-24, the mirror: an include list naming only a second classifier's
+    /// species binds on the primary too.
+    #[test]
+    fn an_include_list_binds_on_the_primary_that_lacks_its_species() {
+        let got = emitted(
+            None,
+            crate::inference::species_filter::SpeciesFilterConfig {
+                include_list: vec!["Corvus corax".to_owned()],
+                ..no_lists()
+            },
+        );
+        assert_eq!(
+            got,
+            std::collections::HashSet::from(["Corvus corax".to_owned()])
+        );
+    }
+
+    /// The counterpart: an include list that matches nothing on the station is
+    /// still read as a typo, and ignored everywhere.
+    #[test]
+    fn an_include_list_matching_no_classifier_is_still_ignored() {
+        let got = emitted(
+            None,
+            crate::inference::species_filter::SpeciesFilterConfig {
+                include_list: vec!["Turdus merulaa".to_owned()],
+                ..no_lists()
+            },
+        );
+        assert_eq!(primary_species(&got), 11, "{got:?}");
+        assert!(got.contains("Rana temporaria"), "{got:?}");
+    }
+
+    // A label that names a sound rather than a taxon is never stored as a
+    // species (MMP-04, ACC-18; the maintainer's decision of 2026-11-23,
+    // revised to "never store"). V2.4's (`Engine`, `Power tools`), Perch's
+    // (`Speech`, `Dog`) and the human classes of all three (`Human vocal`,
+    // `Homo sapiens`). No location, so the range filter cannot be what drops
+    // them.
+    const SOUNDS: [&str; 6] = [
+        "Engine",
+        "Power tools",
+        "Speech",
+        "Dog",
+        "Human vocal",
+        "Homo sapiens",
+    ];
+
+    #[test]
+    fn a_sound_class_is_never_stored_as_a_species() {
+        use crate::detection::noise::NoiseFilter;
+        let got = emitted_with(
+            &SOUNDS[..3],
+            &SOUNDS[3..],
+            None,
+            no_lists(),
+            NoiseFilter::new(0.0, Vec::new()),
+        );
+        let stored: Vec<&str> = SOUNDS
+            .iter()
+            .copied()
+            .filter(|s| got.contains(*s))
+            .collect();
+        assert!(stored.is_empty(), "stored as species: {stored:?}");
+        // The counterpart in the same run: the species beside them are kept.
+        assert!(got.contains("Species3 bird"), "{got:?}");
+        assert!(got.contains("Placeholder3 sp"), "{got:?}");
+    }
+
+    /// The classes still drive the chunk filters: a watched `Dog` discards its
+    /// chunk, which here is the whole file. Green before the change too; it
+    /// holds the drop after the filters, where it does not blind them.
+    #[test]
+    fn a_watched_sound_class_still_discards_its_chunk() {
+        use crate::detection::noise::NoiseFilter;
+        let heard = emitted_with(
+            &["Dog"],
+            &[],
+            None,
+            no_lists(),
+            NoiseFilter::new(0.0, Vec::new()),
+        );
+        assert!(heard.contains("Species1 bird"), "precondition: {heard:?}");
+        let barked = emitted_with(
+            &["Dog"],
+            &[],
+            None,
+            no_lists(),
+            NoiseFilter::new(0.01, vec!["Dog".to_owned()]),
+        );
+        assert!(barked.is_empty(), "{barked:?}");
     }
 }

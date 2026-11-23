@@ -17,7 +17,11 @@
 //! one model run and one decision function with the `filter_species` the daemon
 //! calls (`the_scores_an_operator_is_shown_are_the_decision_the_station_makes`
 //! holds that on the real models), so the answer is the station's own decision,
-//! not a second opinion.
+//! not a second opinion — for the primary classifier's species. It is built
+//! from the primary's labels alone, so species only another classifier knows
+//! are not in it, and an include list naming only such species, which the
+//! daemon applies to the primary too (MMP-03), is read here as matching
+//! nothing and ignored (MMP-25).
 //!
 //! The alternative — sharing the daemon's filter behind a lock — would put a
 //! mutex into the per-file hot path of the detection loop for the sake of a

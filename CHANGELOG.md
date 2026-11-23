@@ -98,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A sound is no longer stored as a species (MMP-04, ACC-18).** BirdNET V2.4's `Dog`, `Engine`, `Siren`, `Gun`,
+  `Fireworks`, `Power tools`, `Noise`, `Environmental` and its three `Human` classes, Perch's 198 sound classes
+  (`Speech`, `Engine`, `Crow`, `Rain`, …) and the human classes of every classifier were recorded, notified and
+  posted to BirdWeather as species when they cleared the bar. They are now read by the noise filter and the
+  human-sound rule and then discarded. This departs from BirdNET-Pi, which stores them; rows already stored are
+  left as they are.
 - **The bundled `behavioral` extension moves to v0.11.0.** The DuckDB community registry now serves v0.11.0 under
   the same `v2.0.0` path, and `crates/birdnet-behavioral/extension_pins.rs` pinned v0.10.1, so the build refused the
   file (CI's "Tests (x86_64)" went red on this pull request with "does not pin", before and independently of any
@@ -131,6 +137,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
+  such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
+  exclude lists only, so a station with its occurrence filter on recorded them wherever it was. Each classifier's
+  species are now looked up in the occurrence model by name, through the same matching rules as the primary's.
+  One the model has no score for is held back while the filter is running unless it is on the *Always allowed*
+  list, as the primary's own unscored species already were (the maintainer's decision). An *Allow* list now binds
+  on every classifier, and is ignored as a typo only when it matches no classifier's species; before, a list that
+  matched nothing in one classifier's vocabulary was ignored for that classifier alone (and the warning about it
+  is now logged once per list change, not on every file).
+- **The privacy filter did not recognise Perch's speech (MMP-05).** A label was a human class only if it contained
+  "human", which in Perch's vocabulary is two of its classes; `Speech`, `Conversation`, the three speaker classes,
+  `Shout`, `Laughter`, `Singing` and *Homo sapiens* were not, so on a source routed to Perch alone the human-sound
+  rule could hardly fire. Perch's human classes are now every class the AudioSet ontology places under *Human
+  sounds* (36 named in `privacy::PERCH_HUMAN_CLASSES`, two more matched by name) and *Homo sapiens*. The match on
+  "human" is now on the whole word: as a substring it read the cicada *Pacarina schumanni* as a person (MMP-23).
+  V2.4's three human classes and V3.0's two are unchanged, and a test holds all three label files to the rule.
 - **Perch beside the default BirdNET V2.4 stopped all detection (MMP-01).** The registry refused classifiers
   that want different sample rates, and the refusal stopped the detection daemon while the web interface stayed
   up; `--install-model perch-v2` and the manual both described exactly that pairing. Each recording is now
