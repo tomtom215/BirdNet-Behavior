@@ -379,7 +379,7 @@ pub fn process_and_infer_filtered(
     lat: Option<f64>,
     lon: Option<f64>,
     correlation_id: &str,
-) -> Result<Vec<DetectionEvent>, DaemonError> {
+) -> Result<super::FilteredFile, DaemonError> {
     let start = Instant::now();
 
     let chunks = pipeline::process_file(path, pipeline_config)?;
@@ -411,7 +411,8 @@ pub fn process_and_infer_filtered(
     // corroboration — which needs to know where each chunk sits in the
     // recording to tell which chunks are neighbours.
     let starts: Vec<f32> = chunks.iter().map(|c| c.start_secs).collect();
-    let filtered_predictions = chunk_filters.apply(&starts, &all_predictions);
+    let (filtered_predictions, mut tally) = chunk_filters.apply_tallied(&starts, &all_predictions);
+    tally.date = chunks.first().map_or_default(|c| c.recording.date.clone());
 
     // Build the allowed species set from the species filter.
     //
@@ -492,9 +493,6 @@ pub fn process_and_infer_filtered(
 
     for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
         for detection in detections {
-            if !allowed(&detection.scientific_name) {
-                continue;
-            }
             // A sound or a person, not a species (MMP-04): it has done its work
             // in the chunk filters above and is not recorded.
             if crate::detection::sound_class::is_sound_class(
@@ -503,17 +501,42 @@ pub fn process_and_infer_filtered(
             ) {
                 continue;
             }
+            // Held back here is counted, and an out-of-range bird the model
+            // scored goes to the "Unlikely here" quarantine with that score
+            // (ACC-01): a vagrant is the record most worth having, and it
+            // vanished without a trace at any confidence. The operator's lists
+            // are an instruction and are only counted; a species the model
+            // does not score is held back as the maintainer decided (MMP-03).
+            let mut out_of_range = None;
+            if !allowed(&detection.scientific_name) {
+                match species_filter.rejection(&detection.scientific_name) {
+                    crate::inference::species_filter::Rejection::Lists => {
+                        tally.species_list_detections += 1;
+                        continue;
+                    }
+                    crate::inference::species_filter::Rejection::Unscored => {
+                        tally.occurrence_detections += 1;
+                        continue;
+                    }
+                    crate::inference::species_filter::Rejection::Score(p) => {
+                        tally.occurrence_detections += 1;
+                        out_of_range = Some(p);
+                    }
+                }
+            }
 
             // Apply per-species confidence threshold (checked in event_processor instead)
             // The daemon produces raw events; threshold filtering is done downstream.
 
-            tracing::info!(
-                correlation_id,
-                species = %detection.common_name,
-                confidence = format!("{:.1}%", detection.confidence * 100.0),
-                chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
-                "detection (filtered)"
-            );
+            if out_of_range.is_none() {
+                tracing::info!(
+                    correlation_id,
+                    species = %detection.common_name,
+                    confidence = format!("{:.1}%", detection.confidence * 100.0),
+                    chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
+                    "detection (filtered)"
+                );
+            }
 
             events.push(DetectionEvent {
                 detection: detection.clone(),
@@ -521,6 +544,7 @@ pub fn process_and_infer_filtered(
                 latency_ms: total_ms,
                 correlation_id: correlation_id.to_owned(),
                 lease: None,
+                out_of_range,
             });
         }
     }
@@ -531,7 +555,7 @@ pub fn process_and_infer_filtered(
     tracing::debug!(
         correlation_id,
         file = %path.display(),
-        detections = events.len(),
+        detections = events.iter().filter(|e| e.out_of_range.is_none()).count(),
         total_ms = total.as_millis(),
         privacy = chunk_filters.privacy.is_enabled(),
         noise = chunk_filters.noise.is_enabled(),
@@ -540,7 +564,7 @@ pub fn process_and_infer_filtered(
         "filtered file processing complete"
     );
 
-    Ok(events)
+    Ok(super::FilteredFile { events, tally })
 }
 
 #[cfg(test)]
@@ -652,7 +676,8 @@ mod tests {
             Some(13.0),
             "",
         )
-        .expect("a failing metadata model must not fail the file");
+        .expect("a failing metadata model must not fail the file")
+        .events;
         assert!(!events.is_empty(), "threshold 0 reports every species");
         assert!(
             events
@@ -1165,6 +1190,23 @@ mod tests {
         lists: crate::inference::species_filter::SpeciesFilterConfig,
         noise: crate::detection::noise::NoiseFilter,
     ) -> std::collections::HashSet<String> {
+        analysed_with(primary, second, location, lists, noise)
+            .events
+            .into_iter()
+            .filter(|e| e.out_of_range.is_none())
+            .map(|e| e.detection.scientific_name)
+            .collect()
+    }
+
+    /// The whole of what the daemon makes of the one file [`emitted_with`]
+    /// stages: detections, out-of-range records and the discard tally.
+    fn analysed_with(
+        primary: &[&str],
+        second: &[&str],
+        location: Option<(f64, f64)>,
+        lists: crate::inference::species_filter::SpeciesFilterConfig,
+        noise: crate::detection::noise::NoiseFilter,
+    ) -> super::super::FilteredFile {
         use crate::detection::corroboration::ConfirmationLevel;
         use crate::detection::privacy::PrivacyFilter;
         use crate::inference::labels::LabelSet;
@@ -1262,7 +1304,7 @@ mod tests {
             chunk_duration_secs: 3.0,
             ..PipelineConfig::default()
         };
-        let events = process_and_infer_filtered(
+        process_and_infer_filtered(
             &wav,
             &pipeline_config,
             &mut registry,
@@ -1274,11 +1316,7 @@ mod tests {
             location.map(|l| l.1),
             "",
         )
-        .expect("the file is processed");
-        events
-            .into_iter()
-            .map(|e| e.detection.scientific_name)
-            .collect()
+        .expect("the file is processed")
     }
 
     const BERLIN: Option<(f64, f64)> = Some((52.52, 13.405));
@@ -1289,6 +1327,79 @@ mod tests {
 
     fn primary_species(set: &std::collections::HashSet<String>) -> usize {
         set.iter().filter(|n| n.starts_with("Species")).count()
+    }
+
+    /// ACC-01: a species the geomodel scores under the threshold here leaves
+    /// the daemon as an out-of-range record carrying that score, for the
+    /// "Unlikely here" quarantine, and is counted. It used to vanish.
+    /// Counterparts in the same run: an admitted species is an ordinary
+    /// detection, and species the geomodel does not score are counted and
+    /// sent nowhere (the maintainer's decision on MMP-03).
+    #[test]
+    fn an_out_of_range_species_is_sent_for_quarantine_with_its_score() {
+        let file = analysed_with(
+            &["Turdus merula", "Pica pica"],
+            &[],
+            BERLIN,
+            no_lists(),
+            crate::detection::noise::NoiseFilter::new(0.0, Vec::new()),
+        );
+        let named = |sci: &str| {
+            file.events
+                .iter()
+                .filter(|e| e.detection.scientific_name == sci)
+                .collect::<Vec<_>>()
+        };
+        let blackbird = named("Turdus merula");
+        assert_eq!(blackbird.len(), 1, "{:?}", file.events);
+        let p = blackbird[0].out_of_range.expect("sent as out of range");
+        assert!((p - 0.047).abs() < 1e-3, "the score that rejected it: {p}");
+        let magpie = named("Pica pica");
+        assert_eq!(magpie.len(), 1);
+        assert_eq!(
+            magpie[0].out_of_range, None,
+            "admitted, an ordinary detection"
+        );
+        assert_eq!(
+            file.events.len(),
+            2,
+            "the unscored placeholders are sent nowhere: {:?}",
+            file.events
+        );
+        // One window; the blackbird, nine unscored primary names and eleven
+        // unscored second-classifier names.
+        assert_eq!(file.tally.windows, 1);
+        assert_eq!(
+            file.tally.occurrence_detections,
+            1 + 9 + 11,
+            "{:?}",
+            file.tally
+        );
+        assert_eq!(file.tally.species_list_detections, 0);
+        assert_eq!(file.tally.date, "2026-05-19");
+    }
+
+    /// The counterpart on the operator's side: an excluded species is counted
+    /// under the lists and is not sent for quarantine, whatever its score.
+    #[test]
+    fn an_excluded_species_is_counted_and_never_quarantined() {
+        let file = analysed_with(
+            &["Turdus merula", "Pica pica"],
+            &[],
+            BERLIN,
+            crate::inference::species_filter::SpeciesFilterConfig {
+                exclude_list: vec!["Turdus merula".to_owned(), "Pica pica".to_owned()],
+                ..no_lists()
+            },
+            crate::detection::noise::NoiseFilter::new(0.0, Vec::new()),
+        );
+        assert!(
+            file.events.is_empty(),
+            "excluded species went somewhere: {:?}",
+            file.events
+        );
+        assert_eq!(file.tally.species_list_detections, 2, "{:?}", file.tally);
+        assert_eq!(file.tally.occurrence_detections, 9 + 11);
     }
 
     /// The audit's gate: a species only the second classifier knows, which

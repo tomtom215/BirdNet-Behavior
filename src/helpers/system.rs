@@ -118,6 +118,8 @@ pub fn start_disk_manager(
     let raw_keep = (raw_keep_every > 0).then(|| RawKeep {
         dir: state.recording_dir().join(RAW_KEEP_SUBDIR),
         every: raw_keep_every,
+        // RES-28: what the daemon's human-sound rule masked is not kept.
+        speech: crate::daemon::speech_marks().clone(),
     });
     if let Some(policy) = &raw_keep {
         tracing::info!(

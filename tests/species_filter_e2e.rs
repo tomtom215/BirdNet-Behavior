@@ -304,6 +304,7 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
 
     Some(
         events
+            .events
             .into_iter()
             .map(|e| e.detection.common_name)
             .collect(),

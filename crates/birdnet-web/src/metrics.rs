@@ -187,11 +187,20 @@ pub struct MetricsRegistry {
     /// station is recording without knowing what day it is: NTP has not
     /// reached it, and **nothing it records in this state can be filed**).
     ///
-    /// This comment used to name `quality` and `occurrence` instead, and
-    /// explain what a spike in each would mean. Neither label is ever emitted
-    /// in production — both appear only in this file's own tests — so both
-    /// readings it taught were unavailable. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`.
+    /// And, counted by the daemon as each file's filters run (ACC-02):
+    /// `privacy` (removed for a human voice in or next to its window),
+    /// `noise` (a watched noise class), `corroboration` (heard too few times
+    /// nearby), `occurrence` (out of range here this week, or not scored by
+    /// the occurrence model; the scored ones above the station's bar are in
+    /// the review queue as "Unlikely here"), and `species_list` (the
+    /// operator's include or exclude list). These are counted at the floor
+    /// the classifier runs at, so some would have gone for `confidence` had
+    /// they got that far; each discard is counted once, by the first filter
+    /// that removed it. `quality` appears only in this file's own tests.
     detections_dropped: RwLock<HashMap<String, AtomicU64>>,
+    /// Analysis windows a filter masked whole, by reason (`privacy`, `noise`;
+    /// ACC-02): audio the station listened to and did not judge.
+    windows_masked: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes the supervisor has restarted, per source.
     /// Audio files the detection pipeline finished analysing, by source.
     ///
@@ -300,6 +309,7 @@ impl MetricsRegistry {
             mqtt_disconnected_since: AtomicU64::new(0),
             mqtt_last_error: RwLock::new(None),
             detections_dropped: RwLock::new(HashMap::new()),
+            windows_masked: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
             audio_analysed_ms: RwLock::new(HashMap::new()),
             segments_dropped: RwLock::new(HashMap::new()),
@@ -365,6 +375,23 @@ impl MetricsRegistry {
     /// label cardinality cannot grow with traffic.
     pub fn inc_detection_dropped(&self, reason: &str) {
         Self::bump(&self.detections_dropped, reason);
+    }
+
+    /// Record `n` classifications the daemon's filters discarded for
+    /// `reason` (ACC-02). Zero records nothing, so a reason no file has
+    /// triggered stays absent.
+    pub fn add_detections_dropped(&self, reason: &str, n: u64) {
+        if n > 0 {
+            Self::add(&self.detections_dropped, reason, n);
+        }
+    }
+
+    /// Record `n` analysis windows masked whole for `reason` (ACC-02). Zero
+    /// records nothing.
+    pub fn add_windows_masked(&self, reason: &str, n: u64) {
+        if n > 0 {
+            Self::add(&self.windows_masked, reason, n);
+        }
     }
 
     /// Record that the pipeline finished analysing one audio file.
@@ -828,6 +855,7 @@ impl MetricsRegistry {
             clock_synced: self.clock_synced(),
             mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
+            windows_masked: Self::read_map(&self.windows_masked),
             files_analysed: Self::read_map(&self.files_analysed),
             audio_analysed_ms: Self::read_map(&self.audio_analysed_ms),
             segments_dropped: Self::read_map(&self.segments_dropped),
@@ -905,6 +933,8 @@ pub struct MetricsSnapshot {
     pub mqtt_connected: Option<bool>,
     /// Discarded classifications by reason.
     pub detections_dropped: Vec<(String, u64)>,
+    /// Analysis windows masked whole, by reason.
+    pub windows_masked: Vec<(String, u64)>,
     /// Audio files the pipeline finished analysing, per source.
     pub files_analysed: Vec<(String, u64)>,
     /// Audio analysed, in milliseconds, per source.
@@ -1159,6 +1189,16 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         let _ = writeln!(
             out,
             "birdnet_detections_dropped_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    out.push_str("# HELP birdnet_windows_masked_total Analysis windows a filter masked whole (audio listened to and not judged), by reason.\n");
+    out.push_str("# TYPE birdnet_windows_masked_total counter\n");
+    for (reason, count) in &snap.windows_masked {
+        let _ = writeln!(
+            out,
+            "birdnet_windows_masked_total{{reason=\"{}\"}} {count}",
             escape_label(reason)
         );
     }
@@ -1809,6 +1849,27 @@ mod operational_metrics_tests {
             out.contains(r#"birdnet_detections_dropped_total{reason="quarantine"} 1"#),
             "{out}"
         );
+    }
+
+    /// ACC-02: the daemon's filter discards reach the exposition by reason,
+    /// and masked windows have their own series; a zero adds no series.
+    #[test]
+    fn filter_discards_and_masked_windows_are_exported() {
+        let out = rendered(|r| {
+            r.add_detections_dropped("privacy", 3);
+            r.add_detections_dropped("privacy", 2);
+            r.add_detections_dropped("noise", 0);
+            r.add_windows_masked("privacy", 4);
+        });
+        assert!(
+            out.contains(r#"birdnet_detections_dropped_total{reason="privacy"} 5"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_windows_masked_total{reason="privacy"} 4"#),
+            "{out}"
+        );
+        assert!(!out.contains(r#"reason="noise""#), "{out}");
     }
 
     /// A restart and a stall are different diagnoses: a stall that keeps

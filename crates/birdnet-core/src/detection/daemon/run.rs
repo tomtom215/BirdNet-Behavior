@@ -583,7 +583,7 @@ pub fn run_daemon(
                     observer.model_health(&registry.health());
                 }
                 match outcome {
-                    Ok(events) => {
+                    Ok(file) => {
                         // Counted here and not before the call: this says
                         // "analysed", and a file the pipeline failed on was
                         // not. The counter is the only thing that separates a
@@ -591,8 +591,9 @@ pub fn run_daemon(
                         // running, so it must mean exactly one thing.
                         if let Some(observer) = throughput.as_ref() {
                             observer.analysed(&path);
+                            observer.filtered(&path, &file.tally);
                         }
-                        for mut event in events {
+                        for mut event in file.events {
                             event.lease.clone_from(&lease);
                             if event_tx.send(event).is_err() {
                                 tracing::warn!(
@@ -918,11 +919,12 @@ fn process_existing_files(
             observer.model_health(&registry.health());
         }
         match outcome {
-            Ok(events) => {
+            Ok(file) => {
                 if let Some(observer) = throughput {
                     observer.analysed(&path);
+                    observer.filtered(&path, &file.tally);
                 }
-                for mut event in events {
+                for mut event in file.events {
                     event.lease.clone_from(&lease);
                     // Surface a closed receiver instead of swallowing it: with
                     // the prior `let _ =` a consumer that dropped mid-backlog

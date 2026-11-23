@@ -256,6 +256,40 @@ fn occurrence_probabilities(
     Ok(probabilities)
 }
 
+/// Why the station held a species back (ACC-01): see
+/// [`SpeciesFilter::rejection`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rejection {
+    /// The operator's include or exclude list: an instruction, not a doubt.
+    Lists,
+    /// The occurrence model's probability that it occurs here this week,
+    /// under the threshold.
+    Score(f32),
+    /// The occurrence model does not score it, and it is not whitelisted.
+    Unscored,
+}
+
+/// Each score by the classifier's own scientific name, through `alignment`
+/// where the model has its own vocabulary and by index otherwise; outputs the
+/// classifier cannot emit are left out.
+fn named_scores(
+    probabilities: &[f32],
+    labels: &LabelSet,
+    alignment: Option<&Alignment>,
+) -> Vec<(String, f32)> {
+    probabilities
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &p)| {
+            let name = alignment.map_or_else(
+                || labels.get(i).map(|l| l.scientific_name.clone()),
+                |alignment| alignment.classifier_name(i).map(str::to_owned),
+            );
+            name.map(|n| (n, p))
+        })
+        .collect()
+}
+
 /// One species' score from the occurrence model, for one place and week.
 ///
 /// What [`SpeciesFilter::occurrence_scores`] returns: the answer to "why is this
@@ -304,6 +338,10 @@ pub struct SpeciesFilter {
     config: SpeciesFilterConfig,
     cache_key: Option<CacheKey>,
     cache_result: Option<HashSet<String>>,
+    /// The occurrence model's last scores, by the classifiers' own scientific
+    /// names, for the place and week they were made for: what
+    /// [`Self::rejection`] reports a rejected species' score from (ACC-01).
+    scores: Option<(CacheKey, HashMap<String, f32>)>,
     /// The species the metadata model scores, in its output order: its own
     /// label file, or the classifier's when the two are indexed alike. What
     /// another classifier's vocabulary is aligned onto (MMP-03). `None`
@@ -359,6 +397,7 @@ impl SpeciesFilter {
             config,
             cache_key: None,
             cache_result: None,
+            scores: None,
             meta_vocabulary: None,
             aliases: HashMap::new(),
             vocabularies: Vec::new(),
@@ -495,6 +534,7 @@ impl SpeciesFilter {
             config,
             cache_key: None,
             cache_result: None,
+            scores: None,
             meta_vocabulary: Some(meta_vocabulary),
             aliases: aliases.clone(),
             vocabularies: Vec::new(),
@@ -563,6 +603,10 @@ impl SpeciesFilter {
         )?;
 
         let result = self.passing_species(&probabilities, labels, self.alignment.as_ref());
+        self.remember_scores(
+            &key,
+            named_scores(&probabilities, labels, self.alignment.as_ref()),
+        );
 
         tracing::debug!(
             lat,
@@ -903,10 +947,53 @@ impl SpeciesFilter {
             &vocabulary.labels,
             vocabulary.alignment.as_ref(),
         );
+        let scored = named_scores(
+            &probabilities,
+            &vocabulary.labels,
+            vocabulary.alignment.as_ref(),
+        );
+        self.remember_scores(&key, scored);
         let vocabulary = &mut self.vocabularies[at];
         vocabulary.cache_key = Some(key);
         vocabulary.cache_result = Some(result.clone());
         Ok(result)
+    }
+
+    /// Keep one vocabulary's scores for `key`, beside the others' for the same
+    /// place and week; scores for another key are forgotten.
+    fn remember_scores(&mut self, key: &CacheKey, scored: Vec<(String, f32)>) {
+        match self.scores.as_mut() {
+            Some((at, map)) if at == key => map.extend(scored),
+            _ => self.scores = Some((key.clone(), scored.into_iter().collect())),
+        }
+    }
+
+    /// Why a species the station did not admit was held back (ACC-01).
+    ///
+    /// Asked about a species the last [`Self::filter_species`] or
+    /// [`Self::filter_species_of`] left out, for the same file: the operator's
+    /// include or exclude list, or the occurrence model's score for the place
+    /// and week it last ran for, or no score at all (a species the model does
+    /// not know, held back unless whitelisted). A name no known vocabulary
+    /// holds is judged by the lists against no labels, which can only match
+    /// it by scientific name.
+    #[must_use]
+    pub fn rejection(&self, scientific_name: &str) -> Rejection {
+        let empty = LabelSet::from_entries(Vec::new());
+        let labels = self
+            .vocabularies
+            .iter()
+            .map(|v| &v.labels)
+            .find(|labels| labels.find_by_scientific_name(scientific_name).is_some())
+            .unwrap_or(&empty);
+        let alone = std::iter::once(scientific_name.to_owned()).collect();
+        if self.apply_lists(alone, labels).is_empty() {
+            return Rejection::Lists;
+        }
+        self.scores
+            .as_ref()
+            .and_then(|(_, map)| map.get(scientific_name))
+            .map_or(Rejection::Unscored, |&p| Rejection::Score(p))
     }
 
     /// Whether the include list names a species in any known vocabulary.

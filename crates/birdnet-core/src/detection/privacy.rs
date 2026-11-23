@@ -119,6 +119,21 @@ impl PrivacyFilter {
         by_score || by_rank
     }
 
+    /// Which chunks this filter masks: every chunk a human was heard in, and
+    /// its neighbours. All `false` when the filter is off.
+    ///
+    /// The windows [`Self::filter_predictions`] empties, whether or not they
+    /// held a detection: what is counted as audio masked for a voice (ACC-02).
+    #[must_use]
+    pub fn masked_windows(&self, chunks: &[ChunkPrediction]) -> Vec<bool> {
+        if !self.is_enabled() {
+            return vec![false; chunks.len()];
+        }
+        // First pass: which chunks contain a human. Second: their neighbours.
+        let flagged: Vec<bool> = chunks.iter().map(|chunk| self.flags(chunk)).collect();
+        expand_adjacent(&flagged)
+    }
+
     /// Suppress every chunk whose human score reaches the threshold, and the
     /// chunks adjacent to it.
     ///
@@ -131,9 +146,7 @@ impl PrivacyFilter {
             return detections().collect();
         }
 
-        // First pass: which chunks contain a human. Second: their neighbours.
-        let flagged: Vec<bool> = chunks.iter().map(|chunk| self.flags(chunk)).collect();
-        let flagged = expand_adjacent(&flagged);
+        let flagged = self.masked_windows(chunks);
 
         detections()
             .zip(flagged)

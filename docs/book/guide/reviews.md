@@ -13,7 +13,7 @@ These are two different quality-control surfaces; it helps to keep them straight
 
 | Aspect | [Quarantine](../admin/settings.md) | Detection reviews |
 |---|---|---|
-| **What it holds** | Detections that *failed* a stricter per-species threshold | Detections already admitted to the log |
+| **What it holds** | Detections held back for a reason you may disagree with: under a stricter per-species threshold, out of range here this week (*Unlikely here this time of year*, with the range model's score), a day bird at night, a recording made before the clock was set, or flagged by hand | Detections already admitted to the log |
 | **Effect** | Gates rows *out* of `detections` until you approve them | A non-destructive annotation; nothing is moved or deleted |
 | **Verdict** | Approve / Reject / Delete | Confirm / Reject (reversible) |
 | **Use it to** | Vet uncertain rare birds before they count | Audit the ID quality of detections that already count |

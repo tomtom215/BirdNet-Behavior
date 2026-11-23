@@ -1,13 +1,15 @@
 //! Quarantine CRUD queries.
 //!
-//! The quarantine table holds detections that failed a per-species confidence
-//! threshold (or were flagged manually) for manual review before admission
-//! into the main detections table.
+//! The quarantine table holds detections held back for review before admission
+//! into the main detections table: those under a per-species confidence
+//! threshold, out of range here this week (the occurrence model scored them
+//! under `SF_THRESH`; ACC-01), a day bird at night, a recording made before
+//! the clock was set, or flagged manually.
 //!
 //! # Workflow
 //!
 //! 1. **Insert** — daemon calls [`insert_quarantine`] when a detection passes the
-//!    global threshold but fails a stricter per-species threshold.
+//!    global threshold and one of the reasons above holds it back.
 //! 2. **Review** — the web UI lists pending items via [`list_quarantine`].
 //! 3. **Approve** — [`approve_quarantine`] copies the row into `detections` and
 //!    marks it `reviewed = 1, approved = 1` atomically within a transaction.

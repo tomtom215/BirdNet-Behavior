@@ -149,6 +149,63 @@ fn throughput_observer(
                 let metrics = state.metrics();
                 move |info| metrics.set_model_info(info)
             })
+            // What each file's filters discarded, by reason (ACC-02): the
+            // counters, and the day's tally per source in `filter_discards`.
+            .with_filtered({
+                let state = state.clone();
+                move |path, tally| record_discards(&state, path, tally)
+            })
+}
+
+/// The segments whose speech the human-sound rule masked (RES-28): marked
+/// here as each file is analysed, read by the stream drain, which keeps no
+/// raw copy of them. One set for the process, because the daemon and the disk
+/// manager are started apart.
+pub fn speech_marks() -> &'static birdnet_core::audio::capture::SpeechMarks {
+    static MARKS: std::sync::OnceLock<birdnet_core::audio::capture::SpeechMarks> =
+        std::sync::OnceLock::new();
+    MARKS.get_or_init(birdnet_core::audio::capture::SpeechMarks::default)
+}
+
+/// Count and keep what the filters discarded from one analysed file (ACC-02),
+/// and mark it for the raw keep if speech was masked in it (RES-28).
+fn record_discards(
+    state: &birdnet_web::state::AppState,
+    path: &std::path::Path,
+    tally: &birdnet_core::detection::FilterTally,
+) {
+    if tally.privacy_windows > 0 {
+        speech_marks().mark(path);
+    }
+    if !tally.discarded_anything() {
+        return;
+    }
+    let metrics = state.metrics();
+    let rows = tally.by_reason();
+    for (reason, windows, detections) in rows {
+        metrics.add_windows_masked(reason, windows);
+        metrics.add_detections_dropped(reason, detections);
+    }
+    if tally.date.is_empty() {
+        return;
+    }
+    let source = crate::daemon::disposition::derive_source_label(path);
+    let written = state.with_ingest_db(|conn| {
+        for (reason, windows, detections) in rows {
+            birdnet_db::sqlite::add_discards(
+                conn,
+                &tally.date,
+                &source,
+                reason,
+                windows,
+                detections,
+            )?;
+        }
+        Ok::<(), birdnet_db::sqlite::DbError>(())
+    });
+    if let Some(Err(e)) = written {
+        tracing::warn!(error = %e, file = %path.display(), "could not record the filters' discards");
+    }
 }
 
 /// Whether the board is at the limit the shed policy backs off at: the CPU
@@ -694,6 +751,81 @@ mod liveness_mirror_tests {
 
 #[cfg(test)]
 mod tests {
+    /// ACC-02's exposition gate: a file whose privacy rule masked windows and
+    /// removed detections reaches `birdnet_detections_dropped_total` and
+    /// `birdnet_windows_masked_total` under `reason="privacy"`, and the day's
+    /// tally for its source is kept. Nothing called the metric with
+    /// `privacy` before. Counterpart: a file nothing was discarded from
+    /// writes no series and no row.
+    #[test]
+    fn a_file_s_privacy_discards_are_exported_and_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let observer = super::throughput_observer(&state);
+        let clean = birdnet_core::detection::FilterTally {
+            date: "2026-05-19".to_owned(),
+            windows: 5,
+            ..Default::default()
+        };
+        observer.filtered(
+            std::path::Path::new("/s/2026-05-19-birdnet-09:00:00.wav"),
+            &clean,
+        );
+        let snap = state.metrics().snapshot();
+        assert!(snap.detections_dropped.is_empty() && snap.windows_masked.is_empty());
+
+        let voiced = birdnet_core::detection::FilterTally {
+            privacy_windows: 3,
+            privacy_detections: 2,
+            occurrence_detections: 1,
+            ..clean
+        };
+        observer.filtered(
+            std::path::Path::new("/s/2026-05-19-birdnet-cam1-09:00:15.wav"),
+            &voiced,
+        );
+        let out = birdnet_web::metrics::render_runtime_metrics(&state.metrics().snapshot());
+        assert!(
+            out.contains(r#"birdnet_detections_dropped_total{reason="privacy"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_windows_masked_total{reason="privacy"} 3"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_detections_dropped_total{reason="occurrence"} 1"#),
+            "{out}"
+        );
+        // RES-28: the voiced segment is marked for the raw keep; the clean
+        // one is not.
+        assert!(
+            super::speech_marks()
+                .take(std::ffi::OsStr::new("2026-05-19-birdnet-cam1-09:00:15.wav"))
+        );
+        assert!(
+            !super::speech_marks().take(std::ffi::OsStr::new("2026-05-19-birdnet-09:00:00.wav"))
+        );
+        let rows = state
+            .with_db(|c| birdnet_db::sqlite::discards_on(c, "2026-05-19"))
+            .unwrap();
+        let got: Vec<(&str, &str, u64, u64)> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.source.as_str(),
+                    r.reason.as_str(),
+                    r.windows,
+                    r.detections,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![("cam1", "occurrence", 0, 1), ("cam1", "privacy", 3, 2)]
+        );
+    }
+
     use super::*;
 
     /// The shed policy's thermal input, as a table.

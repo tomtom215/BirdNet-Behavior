@@ -1,6 +1,6 @@
 //! Disk manager for automatic disk usage monitoring and purging.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -50,6 +50,70 @@ pub struct RawKeep {
     pub dir: PathBuf,
     /// Keep one aged segment in this many, in capture order; `1` keeps all.
     pub every: u32,
+    /// Segments the human-sound rule masked speech in, which are drained and
+    /// never kept (RES-28).
+    pub speech: SpeechMarks,
+}
+
+/// Stream segments the human-sound rule masked speech in (RES-28).
+///
+/// Shared between the daemon, which marks a segment when the rule masks any
+/// window of it, and the stream drain, which keeps no raw copy of a marked
+/// segment. The keep copied a segment verbatim, so a station that masks speech from
+/// analysis still wrote the conversation to its data disk. A mark is spent
+/// when the drain removes its segment, and marks for segments gone by any
+/// other route are forgotten at the end of each drain, so the set holds at
+/// most the segments still in the stream directory. Above [`Self::CAP`] the
+/// set is emptied, which bounds it on a station whose drain never runs; the
+/// cost is that a few segments marked just before may be kept.
+///
+/// Equal when shared: two handles are the same set or different ones.
+#[derive(Debug, Clone, Default)]
+pub struct SpeechMarks(Arc<std::sync::Mutex<std::collections::HashSet<std::ffi::OsString>>>);
+
+impl PartialEq for SpeechMarks {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SpeechMarks {}
+
+impl SpeechMarks {
+    /// Marks held at most: about seventeen hours of 15 s segments, far past
+    /// any stream retention.
+    pub const CAP: usize = 4096;
+
+    /// Mark the segment at `path` as holding speech.
+    pub fn mark(&self, path: &Path) {
+        let Some(name) = path.file_name() else {
+            return;
+        };
+        if let Ok(mut set) = self.0.lock() {
+            if set.len() >= Self::CAP {
+                set.clear();
+            }
+            set.insert(name.to_owned());
+        }
+    }
+
+    /// Whether the segment named `name` was marked, spending the mark.
+    pub fn take(&self, name: &std::ffi::OsStr) -> bool {
+        self.0.lock().is_ok_and(|mut set| set.remove(name))
+    }
+
+    /// Forget the marks of segments no longer in `dir`.
+    pub fn forget_missing(&self, dir: &Path) {
+        if let Ok(mut set) = self.0.lock() {
+            set.retain(|name| dir.join(name).exists());
+        }
+    }
+
+    /// Whether no segment is marked.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.lock().map_or(true, |set| set.is_empty())
+    }
 }
 
 /// What to do when the disk reaches the purge threshold.
