@@ -131,6 +131,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Perch beside the default BirdNET V2.4 stopped all detection (MMP-01).** The registry refused classifiers
+  that want different sample rates, and the refusal stopped the detection daemon while the web interface stayed
+  up; `--install-model perch-v2` and the manual both described exactly that pairing. Each recording is now
+  resampled once more for every extra rate, from the decoded audio, so a 32 kHz classifier beside the 48 kHz
+  primary reads the same samples it would read alone (a test compares them sample for sample on the bundled
+  recording). The cost, one more resample per recording and a second copy of each chunk, has not been measured
+  on a Raspberry Pi. A second classifier whose file will not load still stops the daemon at startup.
+- **A route to a classifier the memory plan declined stopped all detection (MMP-22).** On a board without the
+  memory for a second classifier, `MODEL_ROUTES` naming it was read as a route to a classifier that does not
+  exist. Such a route now falls back to the classifiers that did load, and the log says so; a route naming a
+  classifier that was never configured is still refused, as a typo.
+- **`--doctor` checks every classifier and route (MMP-02).** It read `MODEL_PATH` and `LABELS_PATH` only,
+  although the code and the manual said a mistyped route would show there. A *Classifiers* check now loads what
+  the daemon would load: a route to an unknown classifier, a second classifier that will not load or whose
+  labels do not match it, fails; a classifier the memory plan declined is a warning.
+- **A loaded classifier that no route names is reported (MMP-12)**, at startup and by `--doctor`: it holds its
+  memory and judges nothing, because a source without a route gets the primary alone.
+- **Two startup diagnostics described the primary, or the configured overlap (MMP-16).** "The privacy filter
+  can never fire" now considers every classifier's labels, and "the repeat-confirmation filter will not reject
+  anything" reads the overlap the pipeline actually cuts (beside a second classifier it steps by the shortest
+  window), not the configured one.
+- **A model with float16 input or scores, or a `[1, 1, N]` input, loaded and then failed every window
+  (MMP-18).** The first two are refused when loaded, naming the type; the third is fed a tensor of its declared
+  rank.
+
 - **A review reached every detection that shared its date, time and species.** Two microphones that hear one
   bird in the same second make two detections that differ only in their clip, and a verdict was written to
   both: rejecting the one you listened to also withdrew from every count, species total and share link a
@@ -215,6 +240,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nor failed, the log says why once every ten minutes, and a NaN or infinite sample is never mistaken for
   silence. Found by dropping two 30 s silent files through the real models. `docs/book/admin/classifiers.md`
   now says what a failed window costs the other classifiers.
+
+### Removed
+
+- **`birdnet_core::detection::daemon::process_and_infer` (MMP-19).** It ran inference with none of the privacy,
+  noise, confirmation or occurrence filters, and nothing called it; `process_and_infer_filtered` is the entry
+  point.
 
 ## [0.19.0] - 2026-10-31
 

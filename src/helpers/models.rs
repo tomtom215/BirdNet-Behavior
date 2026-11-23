@@ -256,12 +256,44 @@ pub fn plan_with(
         }
     }
 
-    let (routes, bad) =
+    let (mut routes, bad) =
         get("MODEL_ROUTES").map_or_else(|| (HashMap::new(), Vec::new()), |raw| parse_routes(&raw));
     for entry in bad {
         notes.push(format!(
             "MODEL_ROUTES entry `{entry}` could not be read (expected `source:model` or \
              `source:model+model`); that source falls back to the primary classifier"
+        ));
+    }
+
+    // A classifier that was declared but not admitted above is not a typo, so
+    // a route naming it must not reach the registry, which refuses an unknown
+    // route target and with it the whole station (MMP-22). Its sources keep
+    // the classifiers that did load, or fall back to the primary. A name that
+    // was never declared stays, so the registry still refuses the typo.
+    let declined: Vec<String> = EXTRA_MODEL_KEYS
+        .iter()
+        .filter(|keys| get(keys.path_key).is_some())
+        .map(|keys| get(keys.id_key).unwrap_or_else(|| keys.default_id.to_owned()))
+        .filter(|id| specs.iter().all(|s| s.id != *id))
+        .collect();
+    let mut sources: Vec<&String> = routes.keys().collect();
+    sources.sort();
+    let mut dropped = Vec::new();
+    for source in sources {
+        for id in &declined {
+            if routes[source].contains(id) {
+                dropped.push((source.clone(), id.clone()));
+            }
+        }
+    }
+    for (source, id) in dropped {
+        if let Some(targets) = routes.get_mut(&source) {
+            targets.retain(|t| *t != id);
+        }
+        notes.push(format!(
+            "MODEL_ROUTES sends `{source}` to classifier `{id}`, which is not running (see \
+             above); `{source}` is judged by the other classifiers its route names, or by the \
+             primary"
         ));
     }
 
@@ -573,6 +605,71 @@ mod tests {
         let p = primary_plan(&[("MODEL_SAMPLE_RATE", "32000")]);
         assert_eq!(p.specs[0].sample_rate, Some(32_000));
         assert!(p.notes.is_empty(), "{:?}", p.notes);
+    }
+
+    /// MMP-22: a classifier the plan declines for memory is still named by
+    /// the operator's routes, and the registry read that as a route to a
+    /// classifier that does not exist and refused to start: a 1 GB board that
+    /// added Perch and routed a microphone to it, as the manual describes,
+    /// detected nothing. The declined classifier's routes fall back to the
+    /// classifiers that did load, and the note says so.
+    #[test]
+    fn a_route_to_a_classifier_declined_for_memory_does_not_stop_detection() {
+        const TINY_V24: &[u8] =
+            include_bytes!("../../crates/birdnet-core/src/testdata/tiny_v24_test.onnx");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let labels = dir.path().join("labels.txt");
+        std::fs::write(
+            &labels,
+            (0..11)
+                .map(|i| format!("Sp{i}_Bird {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .expect("labels");
+        let primary = dir.path().join("p.onnx");
+        let second = dir.path().join("perch.onnx");
+        std::fs::write(&primary, TINY_V24).expect("primary");
+        std::fs::write(&second, TINY_V24).expect("second");
+        let s = settings(&[
+            ("MODEL_2_PATH", second.display().to_string()),
+            ("MODEL_2_LABELS", labels.display().to_string()),
+            ("MODEL_2_ID", "perch".to_owned()),
+            ("MODEL_ROUTES", "pond:birdnet+perch,garden:pecrh".to_owned()),
+        ]);
+        // 600 MiB: a budget of 300, which the primary's 256 MiB allowance
+        // leaves no room in for a second.
+        let p = plan_with(&|k| s.get(k).cloned(), primary, labels, Some(600));
+        assert_eq!(
+            p.specs.len(),
+            1,
+            "precondition: perch declined: {:?}",
+            p.notes
+        );
+
+        let mut routes = p.routes.clone();
+        routes.remove("garden");
+        let registry = birdnet_core::inference::registry::ClassifierRegistry::load(
+            &p.specs,
+            &routes,
+            &birdnet_core::inference::model::ModelConfig::default(),
+        );
+        assert!(
+            registry.is_ok(),
+            "a route to a declined classifier stopped the station: {:?}",
+            registry.err()
+        );
+        assert_eq!(p.routes.get("pond"), Some(&vec!["birdnet".to_owned()]));
+        assert!(
+            p.notes
+                .iter()
+                .any(|n| n.contains("pond") && n.contains("perch")),
+            "{:?}",
+            p.notes
+        );
+        // Counterpart: a typo, naming nothing that was declared, is kept, so
+        // the registry still refuses it at startup.
+        assert_eq!(p.routes.get("garden"), Some(&vec!["pecrh".to_owned()]));
     }
 
     /// The extra classifiers read their threshold through the same rule.
