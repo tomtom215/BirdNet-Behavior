@@ -74,8 +74,7 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
         let reason = entry
             .reason
             .as_deref()
-            .map(super::super::pages::escape_html)
-            .unwrap_or_default();
+            .map_or_default(super::super::pages::escape_html);
         let at = super::super::pages::escape_html(&entry.blacklisted_at);
         write!(
             rows,

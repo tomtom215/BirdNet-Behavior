@@ -215,11 +215,7 @@ impl<'ast> Visit<'ast> for Visitor<'_> {
                     .collect::<Vec<_>>()
                     .join(" ");
                 def.fields.push(Field {
-                    name: f
-                        .ident
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_default(),
+                    name: f.ident.as_ref().map_or_default(ToString::to_string),
                     ty: text_of(&self.lines, f.ty.span()).replace(' ', ""),
                     serde,
                 });
@@ -259,8 +255,7 @@ impl Visitor<'_> {
                     let inner = args
                         .first()
                         .and_then(last_segment)
-                        .map(|(n, _)| n)
-                        .unwrap_or_default();
+                        .map_or_default(|(n, _)| n);
                     self.out.handlers.push(Handler {
                         file: self.file.to_string(),
                         func: sig.ident.to_string(),

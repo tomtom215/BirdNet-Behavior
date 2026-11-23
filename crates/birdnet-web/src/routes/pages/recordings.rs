@@ -137,7 +137,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
         review a batch at once.</p>";
 
     let chips = filter_chips(filter, search.as_deref());
-    let search_val = search.as_deref().map(escape_html).unwrap_or_default();
+    let search_val = search.as_deref().map_or_default(escape_html);
     let controls = format!(
         r#"<div class="rc-controls">
   {chips}
@@ -367,9 +367,7 @@ fn render_clips_block(
 
     let shown = offset + u32::try_from(rows.len()).unwrap_or(0);
     if i64::from(shown) < total {
-        let search_param = search
-            .map(|s| format!("&q={}", simple_url_encode(s)))
-            .unwrap_or_default();
+        let search_param = search.map_or_default(|s| format!("&q={}", simple_url_encode(s)));
         let _ = write!(
             html,
             r#"<button class="bnb-btn ghost rc-more" hx-get="/pages/recordings-clips?filter={tok}&offset={shown}{search_param}" hx-target="this" hx-swap="outerHTML">Show more ({remaining})</button>"#,
@@ -430,8 +428,7 @@ fn render_clip_row(
     let dur = d
         .duration_secs
         .filter(|s| *s > 0.0)
-        .map(|s| format!(r#"<span class="rc-dur">{}</span>"#, fmt_clip_duration(s)))
-        .unwrap_or_default();
+        .map_or_default(|s| format!(r#"<span class="rc-dur">{}</span>"#, fmt_clip_duration(s)));
 
     // "first ever" / "rare" badge — the same exact-instant signal the Today
     // feed-row shows: this clip *is* the species' first-ever detection, either
@@ -528,9 +525,7 @@ pub(super) fn lock_button(row: &crate::state::RowRef, locked: bool) -> String {
 /// The four filter chips as bookmarkable links (the active one carries
 /// `aria-current`). "All" is the canonical bare path; the rest add `?filter=`.
 fn filter_chips(active: RecordingsFilter, search: Option<&str>) -> String {
-    let search_param = search
-        .map(|s| format!("&q={}", simple_url_encode(s)))
-        .unwrap_or_default();
+    let search_param = search.map_or_default(|s| format!("&q={}", simple_url_encode(s)));
     let mut out = String::from(r#"<div class="rc-chips">"#);
     for (filter, label) in [
         (RecordingsFilter::All, "All clips"),
@@ -565,8 +560,7 @@ fn filter_chips(active: RecordingsFilter, search: Option<&str>) -> String {
 pub(super) fn base_name(file: &str) -> String {
     Path::new(file)
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .map_or_default(|n| n.to_string_lossy().into_owned())
 }
 
 // ── Live view ──────────────────────────────────────────────────────────────

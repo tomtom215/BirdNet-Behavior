@@ -606,7 +606,7 @@ static SEARCH_SELECT_SCRIPT: crate::seal::Sealed =
 
 /// The filter form plus the results container.
 fn render_page(p: &SearchParams, sources: &[String]) -> String {
-    let val = |v: Option<&String>| present(v).map(escape_html).unwrap_or_default();
+    let val = |v: Option<&String>| present(v).map_or_default(escape_html);
     let (q, species, from, to) = (
         val(p.q.as_ref()),
         val(p.species.as_ref()),
@@ -767,8 +767,7 @@ fn render_results(
             .source
             .as_deref()
             .filter(|s| !s.is_empty())
-            .map(|s| format!("<span class=\"sr-source\">{}</span>", escape_html(s)))
-            .unwrap_or_default();
+            .map_or_default(|s| format!("<span class=\"sr-source\">{}</span>", escape_html(s)));
         let _ = write!(
             html,
             "<li class=\"sr-item\">\

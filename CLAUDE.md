@@ -329,7 +329,13 @@ Corollaries, each learned the same way:
   `libbirdnet_web-<hash>.rlib` (about 190 MB), and 21 of them held 5.3 GB.
   `find target/debug/deps -maxdepth 1 -type f \( -name 'libbirdnet_*.rlib' -o
   -name 'libbirdnet_*.rmeta' \) -mmin +75 -delete` between runs gives it back
-  and cargo rebuilds what it needs. The same four tests failed again in one
+  and cargo rebuilds what it needs. Cargo 1.100.0 has no `target/debug/deps`:
+  each unit is a directory `target/debug/build/<package>/<hash>/`, and
+  `scripts/preflight.sh --tests` alone filled 56 GB there, 35 GB of it
+  `birdnet-web`, and failed its last two test gates on a full disk. Delete
+  stale ones with `find target/debug/build/<package> -mindepth 1 -maxdepth 1
+  -type d -mmin +45 -exec rm -rf {} +`; when the bulk is from the current
+  run, `rm -rf target` and rerun the gates that failed, one at a time. The same four tests failed again in one
   full run, with about 0.7 GB reported free, and passed three reruns at 5.5 GB;
   a link step in that run died with "linking with `cc` failed" at 8 KB free.
   Rerun at a healthy `df` before suspecting the code.

@@ -279,12 +279,8 @@ impl HaDiscovery {
         icon: Option<&str>,
         unit: Option<&str>,
     ) -> String {
-        let icon_field = icon
-            .map(|i| format!(",\n  \"icon\": \"{i}\""))
-            .unwrap_or_default();
-        let unit_field = unit
-            .map(|u| format!(",\n  \"unit_of_measurement\": \"{u}\""))
-            .unwrap_or_default();
+        let icon_field = icon.map_or_default(|i| format!(",\n  \"icon\": \"{i}\""));
+        let unit_field = unit.map_or_default(|u| format!(",\n  \"unit_of_measurement\": \"{u}\""));
 
         format!(
             r#"{{

@@ -1028,16 +1028,13 @@ async fn run_phenology_query(
             // DuckDB knows a statement's columns only once it has run: asking
             // the prepared statement first panics ("The statement was not
             // executed yet"), which this handler used to report as "no store".
-            let names: Vec<String> = rows
-                .as_ref()
-                .map(|executed| {
-                    executed
-                        .column_names()
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            let names: Vec<String> = rows.as_ref().map_or_default(|executed| {
+                executed
+                    .column_names()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            });
             let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let mut obj = serde_json::Map::new();

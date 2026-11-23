@@ -1602,8 +1602,7 @@ async fn restart_source(
     else {
         let labels: Vec<&str> = known
             .as_ref()
-            .map(|s| s.sources.iter().map(|src| src.label.as_str()).collect())
-            .unwrap_or_default();
+            .map_or_default(|s| s.sources.iter().map(|src| src.label.as_str()).collect());
         return (
             StatusCode::NOT_FOUND,
             Json(json!({

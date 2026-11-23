@@ -476,8 +476,7 @@ impl InFlight {
     pub fn claim(&self, path: &std::path::Path) -> InFlightGuard {
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         if let Ok(mut set) = self.0.lock() {
             set.insert(name.clone());
         }
@@ -492,8 +491,7 @@ impl InFlight {
     pub fn names(&self) -> Vec<String> {
         self.0
             .lock()
-            .map(|set| set.iter().cloned().collect())
-            .unwrap_or_default()
+            .map_or_default(|set| set.iter().cloned().collect())
     }
 }
 

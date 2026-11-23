@@ -147,8 +147,7 @@ fn render_feed_row(
             |f| {
                 let basename = std::path::Path::new(f)
                     .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+                    .map_or_default(|n| n.to_string_lossy().to_string());
                 let safe = escape_html(&basename);
                 format!(
                     r#"<button type="button" class="x-fplay" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="Play clip">▶</button>"#
@@ -247,17 +246,15 @@ fn render_best_row(
         .file_name
         .as_deref()
         .filter(|f| !f.is_empty())
-        .map(|f| {
+        .map_or_default(|f| {
             let basename = std::path::Path::new(f)
                 .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+                .map_or_default(|n| n.to_string_lossy().to_string());
             let safe = escape_html(&basename);
             format!(
                 r#"<button type="button" class="x-play" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="Play clip">▶</button>"#
             )
-        })
-        .unwrap_or_default();
+        });
     // `{:.2}` here printed `0.99` on the front page, under a heading reading
     // "Today · Highest confidence" — the bare decimal on an unnamed scale that
     // the rest of this release replaced with a percentage everywhere else.
@@ -342,8 +339,7 @@ pub(super) async fn top_species_partial(
                 let color = crate::routes::pages::atoms::species_color(com_name);
                 let spark = sparklines
                     .get(com_name)
-                    .map(|data| sparkline(data, 56.0, 16.0, Some(&color)))
-                    .unwrap_or_default();
+                    .map_or_default(|data| sparkline(data, 56.0, 16.0, Some(&color)));
                 // Banding code under the name (not the scientific name) — the
                 // rail teaches the codes the rest of the UI speaks (v3 spine).
                 let _ = write!(
@@ -426,8 +422,7 @@ pub(super) async fn species_list_partial(
                 let color = species_color(&s.com_name);
                 let spark = sparklines
                     .get(&s.com_name)
-                    .map(|data| sparkline(data, 84.0, 22.0, Some(&color)))
-                    .unwrap_or_default();
+                    .map_or_default(|data| sparkline(data, 84.0, 22.0, Some(&color)));
                 let _ = write!(
                     html,
                     r#"<tr><td class="mono dp-rank">{rank}</td><td><div class="dp-cell">{avatar}<div class="dp-min0"><div class="dp-name-strong"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
@@ -588,11 +583,10 @@ pub(super) async fn most_recent_partial(
         .file_name
         .as_deref()
         .filter(|f| !f.is_empty())
-        .map(|f| {
+        .map_or_default(|f| {
             let basename = std::path::Path::new(f)
                 .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+                .map_or_default(|n| n.to_string_lossy().to_string());
             let safe_b = escape_html(&basename);
             format!(
                 "<audio controls preload=\"metadata\" \
@@ -600,8 +594,7 @@ pub(super) async fn most_recent_partial(
                   <source src=\"/api/v2/recordings/{safe_b}\" type=\"audio/wav\">\
                 </audio>",
             )
-        })
-        .unwrap_or_default();
+        });
 
     let html = format!(
         "<div class=\"dp-recent\">\

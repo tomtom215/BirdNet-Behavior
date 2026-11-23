@@ -41,8 +41,7 @@ pub fn plain_body(detection: &DetectionEmail) -> String {
     let url_line = detection
         .detection_url
         .as_deref()
-        .map(|u| format!("\nView detection: {u}\n"))
-        .unwrap_or_default();
+        .map_or_default(|u| format!("\nView detection: {u}\n"));
 
     format!(
         "Bird Detection Alert — {station}\n\
@@ -88,26 +87,22 @@ pub fn html_body(detection: &DetectionEmail) -> String {
         "#f87171"
     };
 
-    let url_block = detection
-        .detection_url
-        .as_deref()
-        .map(|u| {
-            // Escape the URL for the HTML attribute context. Every other
-            // interpolated field above is escaped; the URL was the lone
-            // hold-out. Today `detection_url` is app-generated, but escaping
-            // here makes the template robust to any future caller and matches
-            // the discipline used throughout.
-            let u_esc = escape(u);
-            format!(
-                r#"<tr><td colspan="2" style="padding:12px 0 0;">
+    let url_block = detection.detection_url.as_deref().map_or_default(|u| {
+        // Escape the URL for the HTML attribute context. Every other
+        // interpolated field above is escaped; the URL was the lone
+        // hold-out. Today `detection_url` is app-generated, but escaping
+        // here makes the template robust to any future caller and matches
+        // the discipline used throughout.
+        let u_esc = escape(u);
+        format!(
+            r#"<tr><td colspan="2" style="padding:12px 0 0;">
                   <a href="{u_esc}" style="display:inline-block;padding:8px 20px;
                      background:#0ea5e9;color:#fff;border-radius:6px;
                      text-decoration:none;font-weight:600;font-size:14px;">
                     View Detection →
                   </a></td></tr>"#
-            )
-        })
-        .unwrap_or_default();
+        )
+    });
 
     format!(
         r#"<!DOCTYPE html>

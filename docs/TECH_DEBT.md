@@ -35,12 +35,12 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   count writes `detections: 0` into the journal. The next start compares itself
   to that, so a database that comes back with its three years of records is not
   seen to have come back, and one that loses them later is compared with a
-  baseline of nothing. `BootRecord::detections` is a `u64`, so there is no way to
-  write "unknown".
+  baseline of nothing. `BootRecord::detections` is a plain `i64` (`birdnet-web/src/boot_journal.rs`), so there
+  is no way to write "unknown".
 * **Evidence:** PROVEN by reading `record_boot` and `birdnet_web::boot_journal`.
 * **Why it is open:** it is a start-up edge (the database has to open and then
   fail one `COUNT(*)`), and the fix changes the persisted journal's schema
-  (`Option<u64>`) and `record`'s comparison, which want their own compatibility
+  (`Option<i64>`) and `record`'s comparison, which want their own compatibility
   tests against journals written by earlier versions.
 
 ## TD-4 The Capture tab's duplicate guard reads an unreadable source list as empty; the wizard logs it and says nothing

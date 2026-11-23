@@ -27,8 +27,7 @@ const PAGE: i64 = 5_000;
 
 fn settings_of(conn: &rusqlite::Connection) -> std::collections::HashMap<String, String> {
     birdnet_db::settings::list(conn, None)
-        .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect())
-        .unwrap_or_default()
+        .map_or_default(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect())
 }
 
 const fn order(v: Verdict) -> u8 {
@@ -131,8 +130,7 @@ pub fn run_import_conf(cli: &Cli, config: Option<&birdnet_core::config::Config>)
     // Read-only for the preview, so asking cannot create or migrate anything.
     let current =
         rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map(|c| settings_of(&c))
-            .unwrap_or_default();
+            .map_or_default(|c| settings_of(&c));
     let prepared = prepare(&bundle, &current, &data_dir);
     print_prepared(&prepared);
 

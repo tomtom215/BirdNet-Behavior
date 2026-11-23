@@ -75,6 +75,13 @@ struct Sampler {
 static SAMPLER: std::sync::LazyLock<std::sync::Mutex<Option<Sampler>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`sample`] was entered on this thread. Per thread, so
+    /// tests running in parallel cannot move another test's count.
+    static SAMPLE_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Sample current system metrics.
 ///
 /// # Why this does not sleep any more
@@ -111,6 +118,8 @@ static SAMPLER: std::sync::LazyLock<std::sync::Mutex<Option<Sampler>>> =
 /// recovers from a poisoned lock rather than propagating it — a wedged system
 /// readout must not take the health page down.
 pub fn sample() -> SystemSnapshot {
+    #[cfg(test)]
+    SAMPLE_ENTRIES.with(|n| n.set(n.get() + 1));
     let mut guard = SAMPLER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -640,19 +649,37 @@ mod tests {
     /// Reading only the temperature must not go through the CPU sampler at all.
     ///
     /// Two call sites want exactly this, and both used to reach it through
-    /// `sample()`. This runs *before* any warm-up in its own process would
-    /// help — a `cargo test` process may schedule it first — so a regression to
-    /// `sample().cpu_temp_celsius` shows up here as the full first-call wait.
+    /// `sample()`, paying its first-call 200 ms wait and a full CPU and memory
+    /// refresh. A regression to `sample().cpu_temp_celsius` enters `sample()`,
+    /// and this counts the entries on this thread.
+    ///
+    /// It used to assert that the call took less than `MIN_CPU_DELTA`. That
+    /// also asserted that the host's sensor files answer within 200 ms, which
+    /// no code here controls: on GitHub's runners the hwmon/thermal reads have
+    /// taken 1.5 s in `cargo-llvm-cov` (`d979403`, and twice on `0019295`),
+    /// with nothing in `cpu_temperature()` or sysinfo 0.40.1's Linux component
+    /// code that waits. What the count does not see: a `cpu_temperature()` that
+    /// built its own `System` and slept without calling `sample()`.
     #[test]
-    fn cpu_temperature_alone_never_waits() {
-        let started = std::time::Instant::now();
+    fn cpu_temperature_alone_never_enters_the_sampler() {
+        let before = SAMPLE_ENTRIES.with(std::cell::Cell::get);
         let _ = cpu_temperature();
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed < MIN_CPU_DELTA,
-            "reading a temperature took {elapsed:?} — it went through the CPU \
-             delta sampler"
+        let after = SAMPLE_ENTRIES.with(std::cell::Cell::get);
+        assert_eq!(
+            after, before,
+            "reading a temperature went through the CPU delta sampler"
         );
+    }
+
+    /// The counterpart: the count does move when the sampler is entered, so
+    /// the test above passes because `cpu_temperature()` stays out, not
+    /// because nothing is ever counted.
+    #[test]
+    fn the_sampler_count_sees_a_sample() {
+        let before = SAMPLE_ENTRIES.with(std::cell::Cell::get);
+        let _ = sample();
+        let after = SAMPLE_ENTRIES.with(std::cell::Cell::get);
+        assert_eq!(after, before + 1, "sample() was entered once");
     }
 
     #[test]

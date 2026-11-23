@@ -4,9 +4,19 @@
 # and says what would let it go. An expired entry stops waiving, so the job goes red
 # again on the day it is due rather than the waiver outliving what it was written for.
 
-# No waivers at present.
-#
-# The last one, GHSA-qwgh-2vcv-g2f7 (block_buffer 0.10.4, waived until 2026-12-01 by #272), was
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-03-01
+reason = """
+chrono is unmaintained (informational; no vulnerability, no patched version). No workspace crate
+depends on it: it comes only through duckdb 1.20000 -> arrow 60.1 (arrow-arith, arrow-array,
+arrow-cast), and on 2026-11-22 the newest arrow-array and arrow-cast (60.2.0) still require
+chrono ^0.4.40 non-optionally, as does duckdb 1.20001.0 require arrow ^60 (crates.io API).
+Lift it when an arrow release DuckDB accepts drops chrono (the advisory recommends jiff or time).
+Mirrored in .cargo/audit.toml (no expiry) and deny.toml; this date is the one that goes red.
+"""
+
+# The previous waiver, GHSA-qwgh-2vcv-g2f7 (block_buffer 0.10.4, waived until 2026-12-01 by #272), was
 # removed on 2026-10-31. The advisory's record, last modified 2026-10-30, now lists block_buffer
 # 0.11.0 up to 0.12.1 as affected; this lockfile holds 0.10.4 and 0.12.1, so nothing matched and
 # `scripts/osv-check.py` reported no advisory for any of the 649 locked packages. If the record

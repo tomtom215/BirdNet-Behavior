@@ -721,14 +721,13 @@ fn check_flapping(state: &AppState, out: &mut Findings) {
     let sources: Vec<(String, u32, bool)> = state
         .capture_status()
         .map(|h| birdnet_core::audio::capture::read_capture_status(&h))
-        .map(|status| {
+        .map_or_default(|status| {
             status
                 .sources
                 .into_iter()
                 .map(|s| (s.label, s.restarts_last_hour, s.flapping))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     out.extend(flapping_conditions(&sources));
 }
 

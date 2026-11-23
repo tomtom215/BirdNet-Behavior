@@ -272,7 +272,7 @@ fn hour_bucket(time: &str) -> String {
 }
 
 fn format_coordinate(value: Option<f64>) -> String {
-    value.map(|v| v.to_string()).unwrap_or_default()
+    value.map_or_default(|v| v.to_string())
 }
 
 /// One checklist record per species per hour, in eBird Record Format column

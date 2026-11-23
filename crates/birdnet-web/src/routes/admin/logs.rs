@@ -96,8 +96,7 @@ impl LogBroadcaster {
     pub fn recent(&self, n: usize) -> Vec<LogLine> {
         self.recent
             .lock()
-            .map(|buf| buf.iter().rev().take(n).cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
+            .map_or_default(|buf| buf.iter().rev().take(n).cloned().collect::<Vec<_>>())
             .into_iter()
             .rev()
             .collect()

@@ -394,8 +394,7 @@ pub fn streamgraph(
     for (n, &d) in cols_to_label.iter().enumerate() {
         let label = end_date
             .and_then(|e| kit::civil_label(e, d as i64 - (days as i64 - 1)))
-            .map(|(s, _)| s)
-            .unwrap_or_default();
+            .map_or_default(|(s, _)| s);
         if label.is_empty() {
             continue;
         }
@@ -1162,12 +1161,11 @@ mod tests {
             let v: Vec<f64> = s
                 .split_once("viewBox=\"")
                 .and_then(|(_, r)| r.split_once('"'))
-                .map(|(v, _)| {
+                .map_or_default(|(v, _)| {
                     v.split_whitespace()
                         .filter_map(|t| t.parse().ok())
                         .collect()
-                })
-                .unwrap_or_default();
+                });
             (v[2], v[3])
         };
         let ((ww, wh), (nw, nh)) = (vb(wide), vb(narrow));

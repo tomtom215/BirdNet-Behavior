@@ -120,23 +120,18 @@ impl Toast {
         };
         let timeout = self
             .timeout_ms
-            .map(|m| format!(r#" data-timeout-ms="{m}""#))
-            .unwrap_or_default();
+            .map_or_default(|m| format!(r#" data-timeout-ms="{m}""#));
         let role = match self.kind {
             Kind::Error => "alert",
             _ => "status",
         };
-        let action = self
-            .action
-            .as_ref()
-            .map(|(href, label)| {
-                format!(
-                    r#"<a class="bnb-toast__action" href="{}">{}</a>"#,
-                    escape_html(href),
-                    escape_html(label),
-                )
-            })
-            .unwrap_or_default();
+        let action = self.action.as_ref().map_or_default(|(href, label)| {
+            format!(
+                r#"<a class="bnb-toast__action" href="{}">{}</a>"#,
+                escape_html(href),
+                escape_html(label),
+            )
+        });
         format!(
             r#"<div class="bnb-toast bnb-rise" role="{role}" data-kind="{kind}"{sticky}{timeout}>
   <span class="bnb-toast__dot" aria-hidden="true"></span>

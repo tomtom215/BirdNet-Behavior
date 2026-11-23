@@ -635,6 +635,13 @@ mod liveness_mirror_tests {
 
     const TICK: Duration = Duration::from_millis(10);
 
+    /// Eight ticks. Both tests run on a paused clock (`start_paused`), which
+    /// the runtime advances only when every task is idle, so the mirror always
+    /// takes each tick that falls inside this sleep before the test resumes.
+    /// On the real clock it did not: under load the test thread could be
+    /// starved past both the mirror's first tick and this sleep, the runtime
+    /// then woke both in one turn, and the test was polled first and read the
+    /// flag the mirror had not yet cleared (`Tests (x86_64)` on `fa59a8d`).
     async fn settle() {
         tokio::time::sleep(TICK * 8).await;
     }
@@ -646,7 +653,7 @@ mod liveness_mirror_tests {
     /// Observed failing with the mirror's `store(false)` removed: the
     /// transition assertion reports `the daemon exited but the health flag
     /// still says running`.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_health_flag_follows_the_loop_thread_down_and_not_before() {
         let source = Arc::new(AtomicBool::new(true));
         let target = Arc::new(AtomicBool::new(true));
@@ -674,7 +681,7 @@ mod liveness_mirror_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_daemon_that_never_came_up_is_reported_at_the_first_tick() {
         let source = Arc::new(AtomicBool::new(false));
         let target = Arc::new(AtomicBool::new(true));

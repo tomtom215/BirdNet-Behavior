@@ -165,8 +165,7 @@ impl WikipediaClient {
                 .and_then(|m| m.get(key))
                 .and_then(|v| v.get("value"))
                 .and_then(serde_json::Value::as_str)
-                .map(strip_html)
-                .unwrap_or_default()
+                .map_or_default(strip_html)
         };
         let refuse = |why: &str| ImageError::NotFound(format!("{file_name}: {why}"));
 

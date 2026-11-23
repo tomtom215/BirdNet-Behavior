@@ -10,10 +10,17 @@
 # resolver picks it up, the corresponding entry should be removed from
 # BOTH this file and deny.toml.
 #
-# Current state: **no advisory ignores**. The last remaining ignore
-# (RUSTSEC-2026-0097 against rand 0.8.5) was dropped after `cargo update
-# --precise rand@0.8.6` landed in the lockfile; 0.8.6 carries the
-# unsoundness fix.
+# Current state: one ignore. RUSTSEC-2026-0543 ("chrono is unmaintained",
+# informational, no patched version) reaches the lockfile only through
+# duckdb -> arrow 60 (arrow-arith, arrow-array, arrow-cast), which require
+# chrono non-optionally in their newest release (60.2.0, read 2026-11-22);
+# no workspace crate depends on it. This file takes no expiry, so the same
+# waiver in osv-scanner.toml carries one (2027-03-01) and that job goes red
+# on the day. deny.toml carries it too (CI's cargo-deny reports it).
+# Lift it from all three files when an arrow release DuckDB accepts drops chrono.
+#
+# The previous ignore (RUSTSEC-2026-0097 against rand 0.8.5) was dropped after
+# `cargo update --precise rand@0.8.6` landed in the lockfile.
 
 [advisories]
-ignore = []
+ignore = ["RUSTSEC-2026-0543"]

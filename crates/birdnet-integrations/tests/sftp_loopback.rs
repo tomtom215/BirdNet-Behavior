@@ -187,16 +187,12 @@ fn start_server() -> Option<Server> {
         std::fs::read_to_string(&log).unwrap_or_default(),
         {
             let _ = child.kill();
-            child
-                .stderr
-                .take()
-                .map(|mut e| {
-                    use std::io::Read as _;
-                    let mut s = String::new();
-                    let _ = e.read_to_string(&mut s);
-                    s
-                })
-                .unwrap_or_default()
+            child.stderr.take().map_or_default(|mut e| {
+                use std::io::Read as _;
+                let mut s = String::new();
+                let _ = e.read_to_string(&mut s);
+                s
+            })
         }
     );
 

@@ -28,14 +28,10 @@ impl Default for HourlyActivity {
 impl QueryPlan for HourlyActivity {
     fn sql(&self) -> String {
         let window = super::last_days(self.lookback_days);
-        let species_filter = self
-            .species
-            .as_deref()
-            .map(|s| {
-                let esc = s.replace('\'', "''");
-                format!("AND Com_Name = '{esc}'")
-            })
-            .unwrap_or_default();
+        let species_filter = self.species.as_deref().map_or_default(|s| {
+            let esc = s.replace('\'', "''");
+            format!("AND Com_Name = '{esc}'")
+        });
         format!(
             "SELECT
     strftime(time_bucket(INTERVAL 1 HOUR, detection_timestamp), '%Y-%m-%d %H:%M:%S') AS window_start,
@@ -74,14 +70,10 @@ impl Default for DailyActivity {
 impl QueryPlan for DailyActivity {
     fn sql(&self) -> String {
         let window = super::last_days(self.lookback_days);
-        let species_filter = self
-            .species
-            .as_deref()
-            .map(|s| {
-                let esc = s.replace('\'', "''");
-                format!("AND Com_Name = '{esc}'")
-            })
-            .unwrap_or_default();
+        let species_filter = self.species.as_deref().map_or_default(|s| {
+            let esc = s.replace('\'', "''");
+            format!("AND Com_Name = '{esc}'")
+        });
         format!(
             "SELECT
     strftime(detection_date, '%Y-%m-%d') AS window_start,
@@ -171,8 +163,7 @@ impl QueryPlan for HourlyHeatmap {
         let species_filter = self
             .species
             .as_deref()
-            .map(|s| format!("AND Com_Name = '{}'", s.replace('\'', "''")))
-            .unwrap_or_default();
+            .map_or_default(|s| format!("AND Com_Name = '{}'", s.replace('\'', "''")));
         format!(
             "WITH windowed AS (
     SELECT * FROM detections_ts

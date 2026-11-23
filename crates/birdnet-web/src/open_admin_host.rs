@@ -46,9 +46,7 @@ const LAN_SUFFIXES: &[&str] = &[
 fn allowed_from_env() -> &'static [String] {
     static ALLOWED: OnceLock<Vec<String>> = OnceLock::new();
     ALLOWED.get_or_init(|| {
-        std::env::var("BIRDNET_ALLOWED_HOSTS")
-            .map(|v| parse_allowed(&v))
-            .unwrap_or_default()
+        std::env::var("BIRDNET_ALLOWED_HOSTS").map_or_default(|v| parse_allowed(&v))
     })
 }
 

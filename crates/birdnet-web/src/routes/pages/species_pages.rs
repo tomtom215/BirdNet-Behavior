@@ -225,7 +225,7 @@ fn controls(view: &str, filter: &str, search: Option<&str>, taxon: Option<&Taxon
         let _ = write!(
             seg,
             r#"<a class="sp-seg-link{active}" href="/species?view={key}{tail}"{cur}>{label}</a>"#,
-            tail = taxon.map(TaxonFilter::query_tail).unwrap_or_default(),
+            tail = taxon.map_or_default(TaxonFilter::query_tail),
         );
     }
     seg.push_str("</div>");
@@ -240,11 +240,11 @@ fn controls(view: &str, filter: &str, search: Option<&str>, taxon: Option<&Taxon
             let _ = write!(
                 c,
                 r#"<a class="sp-chip{active}" href="/species?view={view}&amp;filter={key}{tail}">{label}</a>"#,
-                tail = taxon.map(TaxonFilter::query_tail).unwrap_or_default(),
+                tail = taxon.map_or_default(TaxonFilter::query_tail),
             );
         }
         c.push_str("</div>");
-        let val = search.map(escape_html).unwrap_or_default();
+        let val = search.map_or_default(escape_html);
         // The taxonomy filter rides along as hidden fields, or searching from
         // inside "only the woodpeckers" would quietly drop the woodpeckers.
         let keep = taxon.map_or_else(String::new, |t| {
@@ -373,8 +373,7 @@ fn list_view(
         let color = species_color(&s.com_name);
         let spark = sparks
             .get(&s.com_name)
-            .map(|d| sparkline(d, 84.0, 22.0, Some(&color)))
-            .unwrap_or_default();
+            .map_or_default(|d| sparkline(d, 84.0, 22.0, Some(&color)));
         let enc = simple_url_encode(&s.com_name);
         let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(

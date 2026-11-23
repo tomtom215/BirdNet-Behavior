@@ -392,8 +392,7 @@ fn render_pager(view: QueueView) -> String {
     }
     let status_q = view
         .status
-        .map(|s| format!("status={}&", s.as_str()))
-        .unwrap_or_default();
+        .map_or_default(|s| format!("status={}&", s.as_str()));
     let mut out = String::from(r#"<nav class="dr-pager" aria-label="Verdict history pages">"#);
     if has_newer {
         let prev = offset.saturating_sub(per_page).max(0);

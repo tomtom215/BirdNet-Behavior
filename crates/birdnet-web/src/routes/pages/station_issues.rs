@@ -541,10 +541,9 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
         Ok::<_, String>((enabled.len(), names, queued, recorded_integrity(conn)))
     });
     let (disk, scratch) = pinned_or(state, || disks_cached(state.db_path()));
-    let capture = state
-        .capture_status()
-        .map(|handle| birdnet_core::audio::capture::read_capture_status(&handle).sources)
-        .unwrap_or_default();
+    let capture = state.capture_status().map_or_default(|handle| {
+        birdnet_core::audio::capture::read_capture_status(&handle).sources
+    });
     let failing: Vec<String> = state
         .metrics()
         .model_health()

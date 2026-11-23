@@ -272,9 +272,7 @@ fn version_tuple(version: &str) -> Option<(u64, u64, u64)> {
 /// the record could be written; a journal that cannot be written is reported
 /// through the second and the station still starts.
 pub fn record(path: &Path, now: &BootRecord) -> (Vec<Anomaly>, std::io::Result<()>) {
-    let anomalies = read(path)
-        .map(|previous| compare(&previous, now))
-        .unwrap_or_default();
+    let anomalies = read(path).map_or_default(|previous| compare(&previous, now));
     let written = write(path, now);
     (anomalies, written)
 }

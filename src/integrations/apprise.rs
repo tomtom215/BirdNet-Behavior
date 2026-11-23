@@ -174,20 +174,17 @@ pub fn create_apprise_client(
 
     let species_watchlist = config
         .and_then(|c| c.get("APPRISE_WATCHLIST"))
-        .map(parse_species_list)
-        .unwrap_or_default();
+        .map_or_default(parse_species_list);
 
     // Dual-filter: exclude list from config file OR CLI --notify-species-exclude.
     let species_notify_exclude = {
         let from_config = config
             .and_then(|c| c.get("APPRISE_WATCHLIST_EXCLUDE"))
-            .map(parse_species_list)
-            .unwrap_or_default();
+            .map_or_default(parse_species_list);
         let from_cli = cli
             .notify_species_exclude
             .as_deref()
-            .map(parse_species_list)
-            .unwrap_or_default();
+            .map_or_default(parse_species_list);
         // Merge both sources; dedup not strictly necessary but keeps it clean.
         let mut merged = from_config;
         for s in from_cli {

@@ -41,9 +41,8 @@ fn short(name: &str) -> String {
 fn headline(a: &Answers, names: &[String]) -> Option<String> {
     let n = a.species.len();
     let mut best: Option<(usize, usize, i64)> = None;
-    for i in 0..n {
-        for j in 0..n {
-            let v = a.exchanges[i][j];
+    for (i, row) in a.exchanges.iter().enumerate().take(n) {
+        for (j, &v) in row.iter().enumerate().take(n) {
             if i != j && v >= MIN_EXCHANGES && best.is_none_or(|(_, _, b)| v > b) {
                 best = Some((i, j, v));
             }

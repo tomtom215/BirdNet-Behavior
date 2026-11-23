@@ -1651,7 +1651,7 @@ pub(super) fn event_processor(
         {
             let notifier = std::sync::Arc::clone(notifier);
             let alert = birdnet_integrations::email::DetectionEmail {
-                common_name: shown_name.clone(),
+                common_name: shown_name,
                 scientific_name: detection.scientific_name.clone(),
                 confidence: f64::from(detection.confidence),
                 date: detection.date.clone(),
@@ -1731,7 +1731,7 @@ pub(super) fn event_processor(
             let client = Arc::clone(mqtt_client);
             let species = detection.common_name.clone();
             let log_state = state.clone();
-            let log_subject = subject.clone();
+            let log_subject = subject;
             rt_handle.spawn_blocking(move || match client.publish_detection(&payload) {
                 Ok(()) => record_notification(
                     &log_state,

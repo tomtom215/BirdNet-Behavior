@@ -22,9 +22,18 @@ yanked = "deny"
 # 0098, 0099, 0104), aws-lc-rs 1.16.1 → 1.17.0 carrying aws-lc-sys
 # 0.38.0 → 0.41.0 (0044, 0048), tar 0.4.44 → 0.4.46 (0067, 0068), and
 # now rand 0.8.5 → 0.8.6 (0097 — the last remaining ignore from PR #49).
-# The list is intentionally empty; any new ignore must come with a
-# justification and a follow-up plan.
-ignore = []
+# Any new ignore must come with a justification and a follow-up plan.
+ignore = [
+    # chrono is unmaintained (informational, no patched version). No workspace
+    # crate depends on it: it comes only through duckdb -> arrow 60
+    # (arrow-arith, arrow-array, arrow-cast), whose newest release (60.2.0,
+    # read 2026-11-22) still requires it. Mirrored in .cargo/audit.toml and in
+    # osv-scanner.toml, whose ignoreUntil (2027-03-01) is the expiry that goes
+    # red. Lift all three when an arrow release DuckDB accepts drops chrono.
+    # CI's cargo-deny (cargo-deny-action) reports this advisory; cargo-deny
+    # 0.22.0 run locally does not, so locally this entry may read as unused.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; transitive via duckdb -> arrow 60, no chrono-free arrow release" },
+]
 
 # ── Licenses ──────────────────────────────────────────────────────────────────
 # Curated allow-list of OSI-approved permissive licenses that are compatible

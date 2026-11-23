@@ -479,7 +479,7 @@ fn webhook_auth_from_form(
     header_name: Option<&str>,
 ) -> Option<WebhookAuth> {
     let value = value.map(str::trim).filter(|v| !v.is_empty())?;
-    match kind.map(str::trim).unwrap_or_default() {
+    match kind.map_or_default(str::trim) {
         "bearer" => Some(WebhookAuth::Bearer(value.to_string())),
         "basic" => {
             let (user, password) = value.split_once(':')?;

@@ -823,8 +823,7 @@ mod tests {
                 }
                 body = axum::body::to_bytes(resp.into_body(), usize::MAX)
                     .await
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
-                    .unwrap_or_default();
+                    .map_or_default(|b| String::from_utf8_lossy(&b).into_owned());
                 break;
             }
 

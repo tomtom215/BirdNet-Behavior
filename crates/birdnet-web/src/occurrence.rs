@@ -369,7 +369,7 @@ impl FixedOccurrence {
     /// The weeks asked about so far, in order.
     #[must_use]
     pub fn weeks_asked(&self) -> Vec<u32> {
-        self.asked.lock().map(|g| g.clone()).unwrap_or_default()
+        self.asked.lock().map_or_default(|g| g.clone())
     }
 }
 

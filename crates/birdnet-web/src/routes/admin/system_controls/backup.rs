@@ -271,7 +271,7 @@ pub(super) async fn full_backup(
         // unlinked file keeps the bytes readable for exactly as long as the
         // download needs them and not one byte longer, with no timer to guess at.
         let file = std::fs::File::open(&tmp).map_err(|e| format!("failed to open backup: {e}"))?;
-        let size = file.metadata().map(|m| m.len()).unwrap_or_default();
+        let size = file.metadata().map_or_default(|m| m.len());
         drop(cleanup);
         Ok((file, size))
     })

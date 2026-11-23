@@ -323,15 +323,12 @@ fn render_quarantine_row(
     let time = crate::display::clock(&row.time);
     let reason_label =
         escape_html(birdnet_db::sqlite::QuarantineReason::from_db_str(&row.reason).label());
-    let sf_info = row
-        .sf_probability
-        .map(|p| {
-            format!(
-                "<div class=\"qz-sf\">{:.0}% likely here this week</div>",
-                p * 100.0
-            )
-        })
-        .unwrap_or_default();
+    let sf_info = row.sf_probability.map_or_default(|p| {
+        format!(
+            "<div class=\"qz-sf\">{:.0}% likely here this week</div>",
+            p * 100.0
+        )
+    });
     let enc_species = simple_url_encode(&row.com_name);
     let status = if row.reviewed {
         if row.approved {
@@ -447,21 +444,17 @@ fn row_share_button(token: &str) -> String {
 
 /// Render an inline `<audio>` player for a quarantine row's source recording, if any.
 fn row_audio_player(file_name: Option<&str>) -> String {
-    file_name
-        .filter(|f| !f.is_empty())
-        .map(|f| {
-            let basename = std::path::Path::new(f)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let safe = escape_html(&basename);
-            format!(
-                "<audio controls preload=\"none\" class=\"qz-audio\">\
+    file_name.filter(|f| !f.is_empty()).map_or_default(|f| {
+        let basename = std::path::Path::new(f)
+            .file_name()
+            .map_or_default(|n| n.to_string_lossy().to_string());
+        let safe = escape_html(&basename);
+        format!(
+            "<audio controls preload=\"none\" class=\"qz-audio\">\
                   <source src=\"/api/v2/recordings/{safe}\" type=\"audio/wav\">\
                   </audio>",
-            )
-        })
-        .unwrap_or_default()
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------

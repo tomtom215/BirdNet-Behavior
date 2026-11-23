@@ -285,8 +285,7 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
 
     let basename = std::path::Path::new(fname)
         .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().to_string());
     let safe = escape_html(&basename);
     format!(
         r#"<div class="bnb-card pad">

@@ -425,6 +425,9 @@ rusqlite.workspace = true
 birdnet-migrate.workspace = true
 
 [dev-dependencies]
+# `test-util` for `#[tokio::test(start_paused = true)]` (the liveness mirror's
+# tests in src/daemon/mod.rs): a paused clock instead of wall-clock sleeps.
+tokio = { workspace = true, features = ["test-util"] }
 hound.workspace = true
 tempfile.workspace = true
 # The V2.4 range-filter parity test hashes the species list it gets, as

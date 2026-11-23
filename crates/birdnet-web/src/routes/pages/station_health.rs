@@ -173,8 +173,7 @@ async fn gather(state: &AppState) -> Snapshot {
         // Live capture-supervisor health, when a supervisor is publishing it.
         let capture = state
             .capture_status()
-            .map(|handle| read_capture_status(&handle).sources)
-            .unwrap_or_default();
+            .map_or_default(|handle| read_capture_status(&handle).sources);
 
         let (acoustic, acoustic_failed) =
             match state.with_read_db(|conn| birdnet_db::audio_levels::drift_by_source(conn, 7, 30))

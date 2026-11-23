@@ -518,11 +518,13 @@ pub fn validation_result(
             };
 
             // Species breakdown table
-            let date_range_html = migration_report
-                .date_range
-                .as_ref()
-                .map(|(start, end)| format!("<p><strong>Date range:</strong> {start} → {end}</p>"))
-                .unwrap_or_default();
+            let date_range_html =
+                migration_report
+                    .date_range
+                    .as_ref()
+                    .map_or_default(|(start, end)| {
+                        format!("<p><strong>Date range:</strong> {start} → {end}</p>")
+                    });
 
             // Both, not one or the other. This was an `if / else if`, so a file
             // with missing dates *and* duplicates reported only the dates.
