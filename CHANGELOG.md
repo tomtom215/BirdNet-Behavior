@@ -98,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A sound is no longer stored as a species (MMP-04, ACC-18).** BirdNET V2.4's `Dog`, `Engine`, `Siren`, `Gun`,
+  `Fireworks`, `Power tools`, `Noise`, `Environmental` and its three `Human` classes, Perch's 198 sound classes
+  (`Speech`, `Engine`, `Crow`, `Rain`, …) and the human classes of every classifier were recorded, notified and
+  posted to BirdWeather as species when they cleared the bar. They are now read by the noise filter and the
+  human-sound rule and then discarded. This departs from BirdNET-Pi, which stores them; rows already stored are
+  left as they are.
 - **The bundled `behavioral` extension moves to v0.11.0.** The DuckDB community registry now serves v0.11.0 under
   the same `v2.0.0` path, and `crates/birdnet-behavioral/extension_pins.rs` pinned v0.10.1, so the build refused the
   file (CI's "Tests (x86_64)" went red on this pull request with "does not pin", before and independently of any

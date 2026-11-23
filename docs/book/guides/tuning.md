@@ -128,7 +128,10 @@ BirdNET's label set is not birds only — it carries `Dog`, `Siren`, `Engine`,
 `Fireworks`, `Power tools`, `Gun`, `Environmental` and `Noise`, because the
 training data contains them. A dog barking near the microphone is broadband
 enough that the classifier does not answer `Dog` and stop: it also produces
-confident-looking scores for whatever species the bark most resembles. Because
+confident-looking scores for whatever species the bark most resembles. (The
+labels themselves, `Dog` and the rest, are never stored as species; they are
+read only by this filter and the human-sound rule. The same holds for Perch's
+sound classes, such as `Speech`, `Engine` and `Rain`.) Because
 the barking is regular — same dog, same garden, every evening — the phantom
 accumulates until it looks like a resident.
 

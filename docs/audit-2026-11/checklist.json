@@ -414,8 +414,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:109",
-   "status": "rejected",
-   "evidence": "Not disproven: closed by the maintainer's decision of 2026-11-23 to keep storing non-taxon classes (BirdNET-Pi parity: scripts/utils/analysis.py at 88985a3 stores any label over CONFIDENCE that passes the lists). No code change. The path the finding describes is real. Consequence of MMP-03 (8962d6c): Perch's sound classes are second-classifier names the occurrence model does not score, so on a station with a location and a range model they are now held back unless whitelisted; without either they are stored as before. Count correction: perch-v2.csv has 198 rows whose scientific name has no space, not 200. The real-audio probe (rows above a 0.35 Perch bar) was not run."
+   "status": "done",
+   "evidence": "COMMIT: the maintainer first chose to keep storing non-taxon classes, then on 2026-11-23 asked for the better engineering choice, which is never storing them (data integrity over BirdNET-Pi parity; BirdNET-Pi stores them, scripts/utils/analysis.py at 88985a3). detection::sound_class::SOUND_CLASSES (Perch's 198 no-space rows and V2.4's 8 named sounds, none a V3.0 scientific name) plus names_a_human; process_and_infer_filtered skips them after the chunk filters, which still read them. Gate a_sound_class_is_never_stored_as_a_species red on the unfixed code (all six of Engine, Power tools, Speech, Dog, Human vocal, Homo sapiens stored); counterpart a_watched_sound_class_still_discards_its_chunk green before and after. tests/sound_classes_are_the_label_files_own.rs seen red under two mutants (Rain removed; a misspelt Rainn added). Count correction: perch-v2.csv has 198 no-space rows, not 200. The real-audio probe was not run."
   },
   {
    "id": "MMP-05",
@@ -846,8 +846,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "03-precision-accuracy.md:294",
-   "status": "rejected",
-   "evidence": "Not disproven: closed by the maintainer's decision of 2026-11-23 to keep storing non-taxon classes, as BirdNET-Pi does (see MMP-04). The geomodel-v2 probe was not run."
+   "status": "done",
+   "evidence": "COMMIT: closed with MMP-04 (same change and gates). The geomodel-v2 probe was not run: the rows are dropped whatever the range filter says."
   },
   {
    "id": "ACC-19",

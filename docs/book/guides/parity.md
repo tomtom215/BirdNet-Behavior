@@ -83,7 +83,7 @@ The one extra row is a robin in a 44.1 kHz recording: BirdNET-Pi's score for tha
 
 Before the resampler fix described below, the first set stored 11 of those 12: a borderline great tit in the 44.1 kHz clip (BirdNET-Pi 0.7113, here 0.6564) was missing.
 
-**What is stored differently, whatever the audio.** The `Confidence` column holds the score as computed (`0.9122954607`); BirdNET-Pi rounds to four places (`0.912`, in its own test). The `Week` column holds this project's 48-week-year week (7 where BirdNET-Pi writes the ISO week 8, 18 where it writes 20, 12 where it writes 13), because that is the week the range filter is asked about; it is not an ISO week, so a query that groups imported and native rows by week mixes two calendars.
+**What is stored differently, whatever the audio.** The `Confidence` column holds the score as computed (`0.9122954607`); BirdNET-Pi rounds to four places (`0.912`, in its own test). The `Week` column holds this project's 48-week-year week (7 where BirdNET-Pi writes the ISO week 8, 18 where it writes 20, 12 where it writes 13), because that is the week the range filter is asked about; it is not an ISO week, so a query that groups imported and native rows by week mixes two calendars. And a label that names a sound or a person (`Dog`, `Engine`, `Siren`, `Gun`, `Fireworks`, `Power tools`, `Noise`, `Environmental` and the three `Human` classes) is never stored as a species here; BirdNET-Pi stores one that clears the bar and passes its lists (`scripts/utils/analysis.py` at `88985a3`). These labels still drive the human-sound rule and the noise filter. Neither study above counted such rows, so how often the two now differ on this is not measured.
 
 ### Stage by stage
 
@@ -133,6 +133,7 @@ With the defaults above, a default station still differs from BirdNET-Pi's in th
 | **Week asked of the range filter** | ISO week 1 to 53, raw | 48-week year (four per month) | 48-week year |
 | **No location set** | passes 0.0, 0.0 (or -1, -1) to the model | filter skipped | filter off; every species passes. An explicit 0.0, 0.0 is used as given: the magpie recording stores nothing, as in BirdNET-Pi |
 | **Human sounds** | any human class in the top 10 masks the window and its neighbours | the human detection alone is dropped; filter on | BirdNET-Pi's rule, on by default (`PRIVACY_RANK` 10) |
+| **Sound labels** (`Dog`, `Engine`, `Human vocal`, …) | stored like a species | not checked (its human classes are dropped, row above) | not stored as species; still read by the noise and human-sound rules |
 | **Rows** | every window that clears the bar | merged over 15 s, adaptive threshold on by default | every window that clears the bar; the duplicate, corroboration and adaptive-threshold features are off by default |
 | **Stored confidence / week** | 4 decimals / ISO week | 2 decimals / none | full precision / 48-week-year week |
 | **Time of a row** | the file name's time plus the window's start | the wall clock when the result is made | as BirdNET-Pi |

@@ -495,6 +495,14 @@ pub fn process_and_infer_filtered(
             if !allowed(&detection.scientific_name) {
                 continue;
             }
+            // A sound or a person, not a species (MMP-04): it has done its work
+            // in the chunk filters above and is not recorded.
+            if crate::detection::sound_class::is_sound_class(
+                &detection.scientific_name,
+                &detection.common_name,
+            ) {
+                continue;
+            }
 
             // Apply per-species confidence threshold (checked in event_processor instead)
             // The daemon produces raw events; threshold filtering is done downstream.
@@ -1138,8 +1146,26 @@ mod tests {
         location: Option<(f64, f64)>,
         lists: crate::inference::species_filter::SpeciesFilterConfig,
     ) -> std::collections::HashSet<String> {
+        emitted_with(
+            &[],
+            &SECOND_ONLY,
+            location,
+            lists,
+            crate::detection::noise::NoiseFilter::new(0.0, Vec::new()),
+        )
+    }
+
+    /// [`emitted`], with the first of the primary's names replaced by
+    /// `primary`, the second classifier's first names by `second`, and a noise
+    /// filter.
+    fn emitted_with(
+        primary: &[&str],
+        second: &[&str],
+        location: Option<(f64, f64)>,
+        lists: crate::inference::species_filter::SpeciesFilterConfig,
+        noise: crate::detection::noise::NoiseFilter,
+    ) -> std::collections::HashSet<String> {
         use crate::detection::corroboration::ConfirmationLevel;
-        use crate::detection::noise::NoiseFilter;
         use crate::detection::privacy::PrivacyFilter;
         use crate::inference::labels::LabelSet;
         use crate::inference::model::ModelConfig;
@@ -1150,13 +1176,15 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        let primary_names: Vec<String> = (0..11)
-            .map(|i| format!("Species{i} bird_Bird {i}"))
-            .collect();
-        let second_names: Vec<String> = SECOND_ONLY
+        let primary_names: Vec<String> = primary
             .iter()
             .map(|n| format!("{n}_{n}"))
-            .chain((4..11).map(|i| format!("Placeholder{i} sp_Placeholder {i}")))
+            .chain((primary.len()..11).map(|i| format!("Species{i} bird_Bird {i}")))
+            .collect();
+        let second_names: Vec<String> = second
+            .iter()
+            .map(|n| format!("{n}_{n}"))
+            .chain((second.len()..11).map(|i| format!("Placeholder{i} sp_Placeholder {i}")))
             .collect();
         std::fs::write(dir.join("labels.txt"), primary_names.join("\n")).unwrap();
         std::fs::write(dir.join("labels_second.txt"), second_names.join("\n")).unwrap();
@@ -1225,7 +1253,7 @@ mod tests {
 
         let filters = ChunkFilters {
             privacy: PrivacyFilter::new(0.0),
-            noise: NoiseFilter::new(0.0, Vec::new()),
+            noise,
             confirmation: ConfirmationLevel::Off,
         };
         let pipeline_config = PipelineConfig {
@@ -1357,5 +1385,65 @@ mod tests {
         );
         assert_eq!(primary_species(&got), 11, "{got:?}");
         assert!(got.contains("Rana temporaria"), "{got:?}");
+    }
+
+    // A label that names a sound rather than a taxon is never stored as a
+    // species (MMP-04, ACC-18; the maintainer's decision of 2026-11-23,
+    // revised to "never store"). V2.4's (`Engine`, `Power tools`), Perch's
+    // (`Speech`, `Dog`) and the human classes of all three (`Human vocal`,
+    // `Homo sapiens`). No location, so the range filter cannot be what drops
+    // them.
+    const SOUNDS: [&str; 6] = [
+        "Engine",
+        "Power tools",
+        "Speech",
+        "Dog",
+        "Human vocal",
+        "Homo sapiens",
+    ];
+
+    #[test]
+    fn a_sound_class_is_never_stored_as_a_species() {
+        use crate::detection::noise::NoiseFilter;
+        let got = emitted_with(
+            &SOUNDS[..3],
+            &SOUNDS[3..],
+            None,
+            no_lists(),
+            NoiseFilter::new(0.0, Vec::new()),
+        );
+        let stored: Vec<&str> = SOUNDS
+            .iter()
+            .copied()
+            .filter(|s| got.contains(*s))
+            .collect();
+        assert!(stored.is_empty(), "stored as species: {stored:?}");
+        // The counterpart in the same run: the species beside them are kept.
+        assert!(got.contains("Species3 bird"), "{got:?}");
+        assert!(got.contains("Placeholder3 sp"), "{got:?}");
+    }
+
+    /// The classes still drive the chunk filters: a watched `Dog` discards its
+    /// chunk, which here is the whole file. Green before the change too; it
+    /// holds the drop after the filters, where it does not blind them.
+    #[test]
+    fn a_watched_sound_class_still_discards_its_chunk() {
+        use crate::detection::noise::NoiseFilter;
+        let heard = emitted_with(
+            &["Dog"],
+            &[],
+            None,
+            no_lists(),
+            NoiseFilter::new(0.0, Vec::new()),
+        );
+        assert!(heard.contains("Species1 bird"), "precondition: {heard:?}");
+        let barked = emitted_with(
+            &["Dog"],
+            &[],
+            None,
+            no_lists(),
+            NoiseFilter::new(0.01, vec!["Dog".to_owned()]),
+        );
+        assert!(barked.is_empty(), "{barked:?}");
     }
 }
