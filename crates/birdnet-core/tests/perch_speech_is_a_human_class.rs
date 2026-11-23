@@ -1,7 +1,7 @@
 //! MMP-05: the privacy filter must recognise Perch v2's speech classes.
 //!
 //! The human-sound rule reads a classifier's human classes from its labels
-//! through [`names_a_human`]. Perch v2's vocabulary carries AudioSet's sound
+//! through [`names_a_human`]. Perch v2's vocabulary carries `AudioSet`'s sound
 //! classes, whose speech rows (`Speech`, `Conversation`, …) do not contain the
 //! word "human", so a source routed to Perch alone had a privacy filter that
 //! could only fire on two of them. These tests hold the matcher to the label
@@ -57,7 +57,7 @@ fn every_perch_speech_class_is_a_human_class() {
 }
 
 /// The counterpart: the rule is a list, not "everything Perch is unsure of".
-/// Exactly the AudioSet "Human sounds" classes and *Homo sapiens* are human;
+/// Exactly the `AudioSet` "Human sounds" classes and *Homo sapiens* are human;
 /// no bird, frog or other sound class is.
 #[test]
 fn perch_s_human_classes_are_exactly_audioset_s_human_sounds_and_homo_sapiens() {

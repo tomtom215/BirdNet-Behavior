@@ -131,6 +131,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
+  such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
+  exclude lists only, so a station with its occurrence filter on recorded them wherever it was. Each classifier's
+  species are now looked up in the occurrence model by name, through the same matching rules as the primary's.
+  One the model has no score for is held back while the filter is running unless it is on the *Always allowed*
+  list, as the primary's own unscored species already were (the maintainer's decision). An *Allow* list now binds
+  on every classifier, and is ignored as a typo only when it matches no classifier's species; before, a list that
+  matched nothing in one classifier's vocabulary was ignored for that classifier alone (and the warning about it
+  is now logged once per list change, not on every file).
 - **The privacy filter did not recognise Perch's speech (MMP-05).** A label was a human class only if it contained
   "human", which in Perch's vocabulary is two of its classes; `Speech`, `Conversation`, the three speaker classes,
   `Shout`, `Laughter`, `Singing` and *Homo sapiens* were not, so on a source routed to Perch alone the human-sound

@@ -201,10 +201,12 @@ impl PrivacyFilter {
 }
 
 /// Perch v2's human classes whose names do not contain the word "human"
-/// (MMP-05): every class of its vocabulary that the AudioSet ontology places
+/// (MMP-05).
+///
+/// Every class of its vocabulary that the `AudioSet` ontology places
 /// under *Human sounds* (`github.com/audioset/ontology`, `ontology.json`, read
 /// 2026-11-23, SHA-256 `9c685f44…d2f15d`), and *Homo sapiens*. Perch spells
-/// them as AudioSet does, with `_` for spaces and `_and_` for commas.
+/// them as `AudioSet` does, with `_` for spaces and `_and_` for commas.
 ///
 /// The breadth follows V2.4's, whose three human classes are vocal, non-vocal
 /// and whistling: a cough, footsteps or clapping are a person at the
