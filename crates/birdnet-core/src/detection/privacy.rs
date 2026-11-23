@@ -200,18 +200,78 @@ impl PrivacyFilter {
     }
 }
 
+/// Perch v2's human classes whose names do not contain the word "human"
+/// (MMP-05): every class of its vocabulary that the AudioSet ontology places
+/// under *Human sounds* (`github.com/audioset/ontology`, `ontology.json`, read
+/// 2026-11-23, SHA-256 `9c685f44…d2f15d`), and *Homo sapiens*. Perch spells
+/// them as AudioSet does, with `_` for spaces and `_and_` for commas.
+///
+/// The breadth follows V2.4's, whose three human classes are vocal, non-vocal
+/// and whistling: a cough, footsteps or clapping are a person at the
+/// microphone as surely as speech is. `Human_voice` and `Human_group_actions`
+/// are matched by the word rule and are not repeated here.
+pub const PERCH_HUMAN_CLASSES: &[&str] = &[
+    "Applause",
+    "Breathing",
+    "Burping_and_eructation",
+    "Chatter",
+    "Cheering",
+    "Chewing_and_mastication",
+    "Child_speech_and_kid_speaking",
+    "Chuckle_and_chortle",
+    "Clapping",
+    "Conversation",
+    "Cough",
+    "Crowd",
+    "Crying_and_sobbing",
+    "Fart",
+    "Female_singing",
+    "Female_speech_and_woman_speaking",
+    "Finger_snapping",
+    "Gasp",
+    "Giggle",
+    "Hands",
+    "Homo sapiens",
+    "Laughter",
+    "Male_singing",
+    "Male_speech_and_man_speaking",
+    "Respiratory_sounds",
+    "Run",
+    "Screaming",
+    "Shout",
+    "Sigh",
+    "Singing",
+    "Sneeze",
+    "Speech",
+    "Speech_synthesizer",
+    "Walk_and_footsteps",
+    "Whispering",
+    "Yell",
+];
+
 /// Whether a label names a human class.
 ///
-/// A substring match on either name, case-insensitively: the V2.4 label set
-/// spells its three human classes `Human_Human vocal`, `Human non-vocal_Human
-/// non-vocal` and `Human whistling_Human whistling`, and the V3 CSV keeps the
-/// same words. The rule is deliberately not one an operator can extend — see
-/// the noise filter for why a substring rule cannot be handed out.
+/// Two rules, case-insensitively. Either name has the whole word "human"
+/// (split on anything that is not a letter): V2.4's `Human vocal`, `Human
+/// non-vocal` and `Human whistle`, V3.0's `Homo sapiens;human` and `Homo
+/// Sapiens;Human vocal`, Perch's `Human_voice`. A whole word and not a
+/// substring, because Perch carries the cicada *Pacarina schumanni* (MMP-23).
+/// Or the scientific name is one of [`PERCH_HUMAN_CLASSES`], Perch's speech,
+/// singing and other human sounds, which never say "human". The rule is
+/// deliberately not one an operator can extend — see the noise filter for why
+/// a substring rule cannot be handed out.
 #[must_use]
 pub fn names_a_human(scientific_name: &str, common_name: &str) -> bool {
-    let sci = scientific_name.to_lowercase();
-    let com = common_name.to_lowercase();
-    sci.contains("human") || com.contains("human")
+    let has_word = |name: &str| {
+        name.split(|c: char| !c.is_alphabetic())
+            .any(|word| word.eq_ignore_ascii_case("human"))
+    };
+    let sci = scientific_name.trim();
+    has_word(sci)
+        || has_word(common_name)
+        || PERCH_HUMAN_CLASSES
+            .iter()
+            .any(|class| class.eq_ignore_ascii_case(sci))
 }
 
 /// Expand boolean flags to include adjacent indices (i-1 and i+1).
@@ -418,6 +478,15 @@ mod tests {
         assert!(names_a_human("Human non-vocal", "Human non-vocal"));
         assert!(names_a_human("Human whistling", "Human whistling"));
         assert!(!names_a_human("Turdus merula", "Eurasian Blackbird"));
+    }
+
+    /// MMP-23: "human" inside another word is not a human class. Observed
+    /// failing with the substring rule, which read this cicada as speech.
+    #[test]
+    fn a_name_containing_human_inside_a_word_is_not_human() {
+        assert!(!names_a_human("Pacarina schumanni", "Pacarina schumanni"));
+        assert!(names_a_human("Human_voice", "Human_voice"));
+        assert!(names_a_human("speech", "Speech"));
     }
 
     #[test]

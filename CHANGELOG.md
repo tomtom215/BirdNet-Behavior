@@ -131,6 +131,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The privacy filter did not recognise Perch's speech (MMP-05).** A label was a human class only if it contained
+  "human", which in Perch's vocabulary is two of its classes; `Speech`, `Conversation`, the three speaker classes,
+  `Shout`, `Laughter`, `Singing` and *Homo sapiens* were not, so on a source routed to Perch alone the human-sound
+  rule could hardly fire. Perch's human classes are now every class the AudioSet ontology places under *Human
+  sounds* (36 named in `privacy::PERCH_HUMAN_CLASSES`, two more matched by name) and *Homo sapiens*. The match on
+  "human" is now on the whole word: as a substring it read the cicada *Pacarina schumanni* as a person (MMP-23).
+  V2.4's three human classes and V3.0's two are unchanged, and a test holds all three label files to the rule.
 - **Perch beside the default BirdNET V2.4 stopped all detection (MMP-01).** The registry refused classifiers
   that want different sample rates, and the refusal stopped the detection daemon while the web interface stayed
   up; `--install-model perch-v2` and the manual both described exactly that pairing. Each recording is now
