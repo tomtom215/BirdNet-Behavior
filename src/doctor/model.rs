@@ -278,7 +278,7 @@ fn check_classifiers(
         .map(|(source, targets)| format!("{source} → {}", targets.join("+")))
         .collect();
     routes.sort();
-    let mut message = format!("{} load: {}", loaded.len(), loaded.join(", "));
+    let mut message = format!("{} classifiers load: {}", loaded.len(), loaded.join(", "));
     if routes.is_empty() {
         message.push_str("; no MODEL_ROUTES, so every source is judged by the primary alone");
     } else {

@@ -30,6 +30,7 @@ Drop the unusable extra classifier, keep the primary, say so on the page and in 
 - [ ] **MMP-16** (low) Startup diagnostics describe the primary, or the configured overlap, not what runs
 - [ ] **MMP-18** (low, c) FP16/INT8-I/O and rank-3 models are accepted by the shape code but would fail at run time
 - [ ] **MMP-19** (low) Public `process_and_infer` skips every filter and has no caller
+- [ ] **MMP-22** (high) A route to a classifier the memory plan declined stops all detection (added 2026-11-23, after this file was generated; not in the counts above)
 
 ## WP-02 (phase 1): Non-bird classes, the human-sound rule and the range filter across classifiers
 

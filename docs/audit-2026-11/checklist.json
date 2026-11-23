@@ -378,8 +378,8 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:49",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "af8bb36: by maintainer decision 3 (2026-11-23: resample, not drop) an extra classifier at another rate runs on its own resample of each recording. Gates: registry a_classifier_wanting_another_sample_rate_loads_beside_the_primary and run a_second_classifier_at_another_rate_does_not_stop_detection (red on 9d8bb1c-era code: IncompatibleInput / DaemonError::Model); tests/a_classifier_at_another_rate_hears_what_it_would_alone.rs (sample-for-sample, red under two mutants); process a_classifier_at_another_rate_reads_its_own_copy. Part (b) of the proposal (refuse MODEL_2 instructions on a 48 kHz primary) is moot: the pairing now works. A corrupt extra model still refuses at startup (the drop option was not chosen); --doctor now fails on it beforehand (MMP-02). Resample cost not measured on a Pi."
   },
   {
    "id": "MMP-02",
@@ -390,8 +390,8 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:72",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "7167866: Classifiers check in src/doctor/model.rs runs plan + ClassifierRegistry::load. Gates a_route_to_a_classifier_that_does_not_exist_fails_the_doctor and a_second_classifier_that_will_not_load_fails_the_doctor, red through check_model on the unfixed doctor. The audit gate's second case (V2.4 + MODEL_2_SAMPLE_RATE=32000 must fail) is inverted by decision 3: it now passes and says the recording is resampled (a_sound_second_classifier_at_another_rate_passes). Planned-but-not-loaded classifiers are not shown on the Models board (not built)."
   },
   {
    "id": "MMP-03",
@@ -510,8 +510,8 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:230",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "af8bb36 (ClassifierRegistry::unrouted, startup WARN; the log line is not test-captured) + 7167866 (doctor warning; a_second_classifier_no_route_names_is_a_warning red against a Pass). The proposed `*:perch` wildcard route was not built."
   },
   {
    "id": "MMP-13",
@@ -558,8 +558,8 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:260",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "af8bb36: privacy_can_fire reads every classifier; effective_overlap_secs reads the fitted step. the_privacy_check_reads_every_classifier and the_confirmation_check_reads_the_overlap_the_pipeline_cuts, both red against helpers holding the old arithmetic."
   },
   {
    "id": "MMP-17",
@@ -582,8 +582,8 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:279",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "af8bb36: probe confirmed the conjecture (both fixtures loaded, then failed predict_chunk: \"Invalid rank for input ... Got: 2 Expected: 3\"; \"Unexpected input data type ... expected: (tensor(float16))\"). Tensor now takes the declared [1,1,N] rank; non-f32 input or class output refused at load. Gates a_rank_three_waveform_model_is_fed_a_rank_three_tensor, a_model_with_float16_input_is_refused_when_loaded (red on unfixed code), a_model_with_float16_scores_is_refused_when_loaded (red with the output check removed)."
   },
   {
    "id": "MMP-19",
@@ -594,8 +594,8 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:287",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "af8bb36: removed with its re-export; grep found no caller in src, crates, tests or docs before removal. No behavioural gate applies to a deletion; the build and grep are the check."
   },
   {
    "id": "MMP-20",
@@ -618,8 +618,20 @@
    "work_package": "WP-01",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:300",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "WP-01 part done (af8bb36, 7167866): a second classifier at another rate leaving the primary running is gated, as are doctor and route cases. Remaining: the MMP-03 to MMP-08 gates (WP-02 onward); any two-real-model run in CI. A corrupt extra model still stops the daemon by decision, so \"an extra classifier's failure leaves the primary running\" holds for the rate case only."
+  },
+  {
+   "id": "MMP-22",
+   "title": "A route to a classifier the memory plan declined stops all detection",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-01",
+   "phase": 1,
+   "source": "02-multi-model-pipeline.md (MMP-22, added 2026-11-23 by the WP-01 session)",
+   "status": "done",
+   "evidence": "7167866: plan_with drops a declined classifier from MODEL_ROUTES with a note; a never-declared name is kept and still refused. a_route_to_a_classifier_declined_for_memory_does_not_stop_detection red on the unfixed plan: UnknownRouteTarget { source: \"pond\", target: \"perch\", known: [\"birdnet\"] }."
   },
   {
    "id": "ACC-01",
