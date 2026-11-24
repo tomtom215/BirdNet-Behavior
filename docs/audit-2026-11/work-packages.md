@@ -122,18 +122,20 @@ Calls across segment boundaries, dropped tails, timestamp precision, RTSP delay,
 
 A bar per classifier scale; dynamic thresholds that cannot feed themselves; the shared model cut; the night list; the capture high-pass in the parity study.
 
-- [ ] **ACC-04** (medium, c) One low per-species threshold, or dynamic thresholds, changes the evidence every other species is judged on
-- [ ] **ACC-05** (medium, tracked) Dynamic thresholds can reinforce a systematic confuser down to 0.25 within half an hour
+- [x] **ACC-04** (medium, c) One low per-species threshold, or dynamic thresholds, changes the evidence every other species is judged on
+- [x] **ACC-05** (medium, tracked) Dynamic thresholds can reinforce a systematic confuser down to 0.25 within half an hour
 - [ ] **ACC-06** (medium, c) The default capture high-pass (120 Hz) and DC block change the model's input and are outside every parity measurement
-- [ ] **ACC-11** (medium) The night filter's genus list omits well-known nocturnal singers
-- [ ] **MMP-06** (medium) One confidence bar is applied to scores on different scales, and adding a classifier can quarantine a detection the primary alone accepts
-- [ ] **MMP-07** (medium) With dynamic thresholds on, a classifier's "own bar" in the merge is the dynamic floor, not the station's threshold
+- [x] **ACC-11** (medium) The night filter's genus list omits well-known nocturnal singers
+- [x] **MMP-06** (medium) One confidence bar is applied to scores on different scales, and adding a classifier can quarantine a detection the primary alone accepts
+- [x] **MMP-07** (medium) With dynamic thresholds on, a classifier's "own bar" in the merge is the dynamic floor, not the station's threshold
 - [ ] **MMP-09** (medium, tracked) Exact-scientific-name merge splits renamed species into two rows with no agreement
-- [ ] **MMP-11** (medium, c) Output scale and sample rate are inferred from input length, with no override for the scale
+- [x] **MMP-11** (medium, c) Output scale and sample rate are inferred from input length, with no override for the scale
 - [ ] **MMP-15** (medium, tracked) Perch's bar is measured, not validated on station audio
-- [ ] **ACC-14** (low) No warning when a source cannot carry the band the model listens to
-- [ ] **ACC-15** (low) Sigmoid without logit clipping; an unverified claim about BirdNET-Analyzer
-- [ ] **MMP-10** (low, c) A merged row's common name follows whichever classifier won
+- [x] **ACC-14** (low) No warning when a source cannot carry the band the model listens to
+- [~] **ACC-15** (low) Sigmoid without logit clipping; an unverified claim about BirdNET-Analyzer
+- [x] **MMP-10** (low, c) A merged row's common name follows whichever classifier won
+
+`[x]` done, `[~]` rejected on evidence (ACC-15: BirdNET-Pi does not clip); ACC-06, MMP-09 and MMP-15 are in progress (two need the maintainer, one needs station audio). `checklist.json` and `status/WP-08.md` have the evidence.
 
 ## WP-09 (phase 2): A validation protocol and honest confidence wording
 

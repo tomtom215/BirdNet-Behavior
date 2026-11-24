@@ -65,7 +65,8 @@ pub(super) struct DaylightFilter {
 impl DaylightFilter {
     /// A filter for a station at `location`.
     ///
-    /// `location` of `None`, or a non-positive `margin_mins`, disables it.
+    /// `location` of `None`, or a negative `margin_mins`, disables it; a
+    /// margin of zero is enabled and quarantines from sunset to sunrise.
     pub(super) const fn new(
         location: Option<Location>,
         margin_mins: i64,

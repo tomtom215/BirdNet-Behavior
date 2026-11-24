@@ -56,6 +56,7 @@ fn parity_dump() {
             confidence_threshold: 0.0,
             top_n: 10,
             num_threads: 2,
+            output_scale: None,
         },
     )
     .unwrap();

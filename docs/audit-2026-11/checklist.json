@@ -438,8 +438,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:147",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "22b8752: when the merge winner is not accepted, another classifier's own answer that is accepted becomes the detection; gate a_second_classifier_cannot_quarantine_what_the_first_accepts failed (1 quarantined). Not done: per-(classifier, species) thresholds."
   },
   {
    "id": "MMP-07",
@@ -450,8 +450,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:166",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "2b606f1: classifiers are loaded at the station bar and run at the dynamic floor; gate classifiers_are_loaded_at_the_station_bar_not_the_dynamic_floor failed (loaded at 0.3)."
   },
   {
    "id": "MMP-08",
@@ -474,8 +474,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:198",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs the maintainer's decision on which scientific name a stored detection carries when V3.0 and Perch name one species differently (HANDOFF item 40); not answered in README."
   },
   {
    "id": "MMP-10",
@@ -486,8 +486,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:208",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b70da56: probe found 1569 of 10916 shared V3.0/Perch species with different common names; merged detections take the primary's name. Gates in merge.rs and process.rs seen failing."
   },
   {
    "id": "MMP-11",
@@ -498,8 +498,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:218",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6707302: MODEL_n_OUTPUT_SCALE / MODEL_OUTPUT_SCALE; 144000 is an explicit Logit shape; an unrecognised shape without a declared scale is refused at load and by --doctor. Gates seen failing (Logit by elimination)."
   },
   {
    "id": "MMP-12",
@@ -546,8 +546,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:257",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: validating the Perch bar needs annotated recordings from a real station, which this environment does not have (HANDOFF item 41)."
   },
   {
    "id": "MMP-16",
@@ -678,8 +678,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:93",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "8b10293: the model ranks and cuts only candidates the station could store (StorableBars via ThresholdFloor); corroboration sees only those. Gates a_storable_species_is_not_cut_by_classes_the_station_would_drop and neighbours_under_the_storable_bar_do_not_corroborate seen failing on the old cut. Not done: the occurrence filter before top_n (out-of-range birds above their bar are storable as quarantine rows and still take slots)."
   },
   {
    "id": "ACC-05",
@@ -690,8 +690,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:115",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "880d8fb: default dynamic-threshold floor 0.25 -> 0.50; gate half_an_hour_of_confirmations_leaves_a_default_station_at_or_above_one_half failed at 0.25. Not done: confirmations from distinct recordings (the tracker clock is processing time, so the rule would change nothing), pacing by day (a design change), level history and review-reset (P-11)."
   },
   {
    "id": "ACC-06",
@@ -702,8 +702,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:138",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Measured (0defce7, docs/book/guides/parity.md): with the default 5 Hz + 120 Hz capture filters, V2.4 top-10 logits on the magpie clip differ from BirdNET-Pi by median 1.21, max 3.63 (control without filters: max 0.077). Open question for the maintainer: default the capture filters off for parity, or keep them and the documented cost? The gate (the v24_matches comparison after EqChain::from_pipeline_flags(true, true)) fails today and is not committed; see status/WP-08.md."
   },
   {
    "id": "ACC-07",
@@ -762,8 +762,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:223",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6079e20: nine night-singing genera added; gate the_night_singers_are_classified_as_nocturnal failed (Luscinia megarhynchos Unknown). Turdus, Catharus, Tringa and Charadrius left out on the module's flight-call policy, held by a counterpart."
   },
   {
    "id": "ACC-12",
@@ -798,8 +798,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:250",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "d046f6b: audio::band::band_warning, warned once per source at its first analysed recording, from the ffmpeg banner for cameras, and by --doctor for microphones. Not done: the source rate on analysis_runs (needs a migration)."
   },
   {
    "id": "ACC-15",
@@ -810,8 +810,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:261",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "BirdNET-Pi at 88985a3 (scripts/utils/models.py) computes 1/(1+exp(-sens*logits)) with no clip, as compute_confidence does; clipping would break the parity the gate claims. The doc's Analyzer claim was wrong and is corrected in 0defce7 (Analyzer 1.5.1 clips at +-15; 2.0.0+ uses a bias shift and +-20)."
   },
   {
    "id": "ACC-16",
