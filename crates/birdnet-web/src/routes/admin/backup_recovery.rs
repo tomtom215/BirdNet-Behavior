@@ -64,10 +64,73 @@ struct DataFacts {
     snapshot_bytes: u64,
     /// When the scheduled backup + VACUUM job last completed.
     scheduled_last_run: ScheduledRun,
+    /// What the station keeps and when, as the operator set it (UIR-14).
+    policy: Policy,
     /// Filesystem holding the database and recordings.
     disk_used_pct: Option<f64>,
     disk_available_bytes: u64,
     now_unix: u64,
+}
+
+/// The retention policy in force: the backup cadence the operator chose, how
+/// many snapshots are kept, and when old clips are deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Policy {
+    backup: birdnet_db::sqlite::BackupSchedule,
+    /// The disk-full purge level, in percent of the disk.
+    purge_at_pct: u8,
+    /// `FULL_DISK=keep`: a full disk stops recording rather than deleting clips.
+    keep_when_full: bool,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            backup: birdnet_db::sqlite::BackupSchedule::default(),
+            purge_at_pct: DEFAULT_PURGE_AT_PCT,
+            keep_when_full: false,
+        }
+    }
+}
+
+/// The purge level a station that set none uses: the settings form's default,
+/// which is the daemon's (`DEFAULT_PURGE_THRESHOLD` in the binary).
+const DEFAULT_PURGE_AT_PCT: u8 = 95;
+
+/// Read the policy the way the station layers it: a value saved on the
+/// settings page wins over the configuration file, and a key in neither is the
+/// default. A value out of range is the default, as the daemon treats it. An
+/// environment variable or command-line flag that overrides these is not
+/// visible to the web process and is not reflected here.
+fn read_policy(state: &AppState) -> Policy {
+    let file = state
+        .config_path()
+        .and_then(|p| birdnet_core::config::Config::load_from(p).ok());
+    let value = |setting: &str, config_key: &str| -> Option<String> {
+        state
+            .with_read_db(|c| birdnet_db::settings::get(c, setting).ok())
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                file.as_ref()
+                    .and_then(|f| f.get(config_key))
+                    .map(ToOwned::to_owned)
+            })
+    };
+    let mut policy = Policy::default();
+    if let Some(raw) = value("backup_schedule", "BACKUP_SCHEDULE")
+        && let Ok(schedule) = birdnet_db::sqlite::BackupSchedule::parse(&raw)
+    {
+        policy.backup = schedule;
+    }
+    if let Some(pct) = value("purge_threshold", "DISK_PURGE_THRESHOLD")
+        .and_then(|raw| raw.trim().parse::<u8>().ok())
+        .filter(|p| (1..=100).contains(p))
+    {
+        policy.purge_at_pct = pct;
+    }
+    policy.keep_when_full = value("full_disk_action", "FULL_DISK")
+        .is_some_and(|raw| raw.trim().eq_ignore_ascii_case("keep"));
+    policy
 }
 
 /// What the station knows about the scheduled backup's last run.
@@ -85,6 +148,16 @@ enum ScheduledRun {
     At(i64),
     /// The record could not be read.
     Unknown,
+}
+
+/// How many clips are in the station's recordings folder, and their size.
+///
+/// The one reading of it: the Data tab and the System page each counted their
+/// own folder, and System's was the database's, so it read "0 audio files"
+/// beside a Data tab listing twenty clips (UIR-15). `None` when the folder
+/// cannot be read.
+pub(crate) fn recordings_on_disk(state: &AppState) -> Option<(u32, u64)> {
+    birdnet_core::audio::capture::recording_stats(&state.recording_dir()).ok()
 }
 
 /// Read the real state of the station's data. Blocking; callers already run
@@ -110,8 +183,7 @@ fn gather(state: &AppState) -> DataFacts {
     };
     let db_bytes = file_len(db_path) + file_len(&sidecar("-wal")) + file_len(&sidecar("-shm"));
 
-    let (recordings_count, recordings_bytes) =
-        birdnet_core::audio::capture::recording_stats(&state.recording_dir()).unwrap_or((0, 0));
+    let (recordings_count, recordings_bytes) = recordings_on_disk(state).unwrap_or((0, 0));
 
     let mut snapshots: Vec<Snapshot> = std::fs::read_dir(&backup_dir)
         .into_iter()
@@ -155,6 +227,7 @@ fn gather(state: &AppState) -> DataFacts {
         snapshots,
         snapshot_bytes,
         scheduled_last_run,
+        policy: read_policy(state),
         disk_used_pct,
         disk_available_bytes,
         now_unix: std::time::SystemTime::now()
@@ -260,6 +333,11 @@ fn render_body(f: &DataFacts) -> String {
         )
     };
 
+    let backups_every = match f.policy.backup {
+        birdnet_db::sqlite::BackupSchedule::Weekly => "every 7 days",
+        birdnet_db::sqlite::BackupSchedule::Daily => "every day",
+    };
+
     // ── Stat strip — all four measured ────────────────────────────────────
     let newest = f.snapshots.first();
     let (last_value, last_sub) = newest.map_or_else(
@@ -286,7 +364,7 @@ fn render_body(f: &DataFacts) -> String {
             "scheduled backup {}",
             until(
                 i64::try_from(f.now_unix).unwrap_or(i64::MAX),
-                last + birdnet_db::sqlite::BACKUP_VACUUM_INTERVAL_SECS,
+                last + f.policy.backup.interval_secs(),
             )
         ),
         ScheduledRun::Unknown => "the last scheduled run could not be read".to_string(),
@@ -355,11 +433,13 @@ fn render_body(f: &DataFacts) -> String {
 
     // ── Snapshot list — the real files, or an honest empty state ──────────
     let snapshots = if f.snapshots.is_empty() {
-        r#"<div class="bnb-card pad bkr-mt">
+        format!(
+            r#"<div class="bnb-card pad bkr-mt">
   <div class="section-header"><div><div class="bnb-eyebrow">History</div><h2 class="sh-h">Snapshots</h2></div></div>
-  <p class="bnb-meta">No snapshots yet. The station takes one automatically every 7 days, and keeps the most recent 14. Use <b>Snapshot the database</b> above to take one now.</p>
-</div>"#
-            .to_string()
+  <p class="bnb-meta">No snapshots yet. The station takes one automatically {backups_every}, and keeps the most recent {kept}. Use <b>Snapshot the database</b> above to take one now.</p>
+</div>"#,
+            kept = birdnet_db::sqlite::BACKUP_RETENTION,
+        )
     } else {
         let mut rows = String::new();
         for (i, s) in f.snapshots.iter().enumerate() {
@@ -392,7 +472,7 @@ fn render_body(f: &DataFacts) -> String {
         }
         format!(
             r#"<div class="bnb-card pad bkr-mt">
-  <div class="section-header"><div><div class="bnb-eyebrow">History</div><h2 class="sh-h">Snapshots</h2></div><span class="bnb-pill moss">automatic · every 7 days</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">History</div><h2 class="sh-h">Snapshots</h2></div><span class="bnb-pill moss">automatic · {backups_every}</span></div>
   {rows}
 </div>"#
         )
@@ -482,16 +562,24 @@ fn render_body(f: &DataFacts) -> String {
     );
 
     // ── Retention — the values actually in force ──────────────────────────
-    let retention = r#"<div class="bnb-card pad bkr-mt">
+    let purge = if f.policy.keep_when_full {
+        "never (a full disk stops recording instead)".to_owned()
+    } else {
+        format!("when the disk is {} % full", f.policy.purge_at_pct)
+    };
+    let retention = format!(
+        r#"<div class="bnb-card pad bkr-mt">
   <div class="section-header"><div><div class="bnb-eyebrow">Policy</div><h3>Retention</h3></div></div>
   <div class="bkr-retention">
-    <div><div class="bnb-meta">Automatic snapshots</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">every 7 days</span></div></div>
-    <div><div class="bnb-meta">Snapshots kept</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">14</span></div></div>
-    <div><div class="bnb-meta">Clips purged at</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">DISK_PURGE_THRESHOLD</span></div></div>
+    <div><div class="bnb-meta">Automatic snapshots</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">{backups_every}</span></div></div>
+    <div><div class="bnb-meta">Snapshots kept</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">{kept}</span></div></div>
+    <div><div class="bnb-meta">Oldest clips deleted</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">{purge}</span></div></div>
     <div><div class="bnb-meta">Locked clips</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">never purged</span></div></div>
   </div>
-  <p class="bnb-meta bkr-note-mt">Purge and per-species limits are set in the station config (<span class="mono">DISK_PURGE_THRESHOLD</span>, <span class="mono">MAX_FILES_SPECIES</span>). Lock a clip from <a href="/recordings">Recordings</a> to keep it regardless.</p>
-</div>"#;
+  <p class="bnb-meta bkr-note-mt">The backup schedule is set below; the purge level and the per-species limit are on <a href="/station/settings">General</a>. Lock a clip from <a href="/recordings">Recordings</a> to keep it regardless.</p>
+</div>"#,
+        kept = birdnet_db::sqlite::BACKUP_RETENTION,
+    );
 
     // ── Danger zone — only the two destructive endpoints that exist ───────
     let danger = r##"<div class="bnb-card pad bkr-mt bkr-danger">
@@ -597,6 +685,7 @@ mod tests {
             ],
             snapshot_bytes: 8_294_304,
             scheduled_last_run: ScheduledRun::At(1_773_532_800),
+            policy: Policy::default(),
             disk_used_pct: Some(61.4),
             disk_available_bytes: 12_884_901_888,
             now_unix: 1_773_619_200, // one day after the newest snapshot
@@ -814,5 +903,78 @@ mod tests {
         });
         assert!(!html.contains("<script>"), "snapshot names must be escaped");
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    /// A station whose owner chose daily backups and an 80 % purge level, set
+    /// from the settings page, which is where both are offered.
+    fn station_with_daily_backups_and_purge_at_80() -> AppState {
+        use birdnet_db::settings::{SettingsCategory, set};
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        set(&conn, "backup_schedule", "daily", SettingsCategory::System).expect("schedule");
+        set(&conn, "purge_threshold", "80", SettingsCategory::System).expect("purge");
+        AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+    }
+
+    /// UIR-14: the Retention card, captioned "the values actually in force",
+    /// printed three literals — "every 7 days", "14" and the key name
+    /// `DISK_PURGE_THRESHOLD` where its value belongs. A station on daily
+    /// backups was told weekly, and nobody was told the purge level.
+    #[test]
+    fn the_retention_card_shows_the_schedule_and_purge_level_in_force() {
+        let html = backups_body(&station_with_daily_backups_and_purge_at_80());
+        let card = html
+            .split("<h3>Retention</h3>")
+            .nth(1)
+            .and_then(|rest| rest.split("Danger zone").next())
+            .expect("the Retention card renders");
+        assert!(card.contains("every day"), "daily backups shown as: {card}");
+        assert!(!card.contains("every 7 days"), "{card}");
+        assert!(card.contains("80"), "the purge level is not shown: {card}");
+        assert!(
+            !card.contains("DISK_PURGE_THRESHOLD"),
+            "a setting's name printed where its value belongs: {card}"
+        );
+        // The Snapshots card carried its own copy of the weekly literal.
+        assert!(
+            !html.contains("every 7 days"),
+            "weekly claimed elsewhere: {html}"
+        );
+    }
+
+    /// UIR-14: the next scheduled backup was always the last run plus seven
+    /// days, so a daily station that backed up two hours ago read "in 6 d".
+    #[test]
+    fn the_next_backup_follows_the_chosen_schedule() {
+        let state = station_with_daily_backups_and_purge_at_80();
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_secs(),
+        )
+        .expect("fits");
+        state
+            .with_db(|c| {
+                birdnet_db::sqlite::record_run(c, birdnet_db::sqlite::JOB_BACKUP_VACUUM, now - 7200)
+            })
+            .expect("record the last run");
+        let html = backups_body(&state);
+        assert!(
+            html.contains("scheduled backup in 21 h") || html.contains("scheduled backup in 22 h"),
+            "a daily backup taken two hours ago is next due in about 22 h: {html}"
+        );
+    }
+
+    /// The counterpart: a station that chose nothing is weekly and purges at
+    /// the built-in 95 %.
+    #[test]
+    fn a_station_that_chose_nothing_shows_the_defaults() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        let html = backups_body(&AppState::from_connection(conn, ":memory:".into()));
+        let card = html.split("<h3>Retention</h3>").nth(1).expect("card");
+        assert!(card.contains("every 7 days"), "{card}");
+        assert!(card.contains("95"), "{card}");
     }
 }

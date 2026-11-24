@@ -74,9 +74,9 @@ pub use insights::{
     species_range_summary,
 };
 pub use maintenance::{
-    BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,
-    JOB_INTEGRITY_CHECK, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOBS, JobSpec,
-    JobStatus, due_state, job_statuses, last_run_result, last_run_unix, record_run,
+    BACKUP_RETENTION, BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason,
+    JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP,
+    JOBS, JobSpec, JobStatus, due_state, job_statuses, last_run_result, last_run_unix, record_run,
     record_run_result,
 };
 pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details, table_sizes};

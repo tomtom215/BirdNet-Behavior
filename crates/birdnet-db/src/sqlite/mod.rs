@@ -38,11 +38,12 @@ pub use queries::imports::{
     imported_detection_count, list_import_batches, remove_import_batch,
 };
 pub use queries::maintenance::{
-    AUDIT_RETENTION_DAYS, BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS,
-    DueReason, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_OFFSITE_BACKUP,
-    JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT, JOBS, JobSpec,
-    JobStatus, NOTIFICATION_RETENTION_DAYS, QUARANTINE_RETENTION_DAYS, SOUND_LEVEL_RETENTION_DAYS,
-    due_state, job_statuses, last_run_result, last_run_unix, record_run, record_run_result,
+    AUDIT_RETENTION_DAYS, BACKUP_RETENTION, BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule,
+    DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION,
+    JOB_OFFSITE_BACKUP, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
+    JOBS, JobSpec, JobStatus, NOTIFICATION_RETENTION_DAYS, QUARANTINE_RETENTION_DAYS,
+    SOUND_LEVEL_RETENTION_DAYS, due_state, job_statuses, last_run_result, last_run_unix,
+    record_run, record_run_result,
 };
 pub use queries::model_scores::{
     DetectionModelScore, DetectionModelSummary, ModelLead, ModelScore, ModelScoreState,
