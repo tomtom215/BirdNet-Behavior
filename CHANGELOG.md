@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A classifier's output scale can be declared (MMP-11).** `MODEL_OUTPUT_SCALE` and `MODEL_n_OUTPUT_SCALE`
+  (`logit`, `probability` or `softmax`) say how a model's scores become confidences. The three shipped models
+  are recognised by their input shape and need nothing.
+- **A source too narrow for the birds is reported (ACC-14).** A source whose band stops below 12 kHz (sampled
+  below 24 kHz, as some network cameras are) is warned about once in the journal: at its first analysed
+  recording, or when ffmpeg states a camera's rate. `--doctor` warns for such a microphone.
+
 - **A ledger of what the filters discard (WP-03 of the 2026-11 audit).** The human-sound rule, the noise
   filter, corroboration, the range filter and the operator's species lists each count what they remove:
   `birdnet_detections_dropped_total` gains the reasons `privacy`, `noise`, `corroboration`, `occurrence` and
@@ -112,6 +119,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A model of an unrecognised input shape is refused until its output scale is declared (MMP-11).** It was read
+  as BirdNET V2.4's logits, so a new model could get confidences that mean nothing with no other symptom. The
+  journal and `--doctor` name the key to set.
+- **The dynamic-threshold floor defaults to 0.50 (ACC-05).** It was 0.25, which three confirmations a cooldown
+  apart reached in half an hour. A station that set `BIRDNET_DYNAMIC_THRESHOLD_MIN` keeps its value.
+- **One lowered species no longer changes what every other species is judged on (ACC-04).** The classifier
+  ranks and cuts to its top ten only the candidates the station could store, each against its own species' bar,
+  so a species set to 0.3 no longer lets classes the station would drop push out one it would keep, or count as
+  corroboration. A species with a raised threshold is no longer quarantined below the station's bar because
+  another species was lowered.
+
 - **Kept raw audio leaves out speech.** With `RAW_AUDIO_KEEP_EVERY` set, a segment in which the human-sound
   rule masked speech is drained without a copy being kept, so the share kept can fall a little under one in N.
   A segment drained before it was analysed, or any segment with the rule off, is kept as before.
@@ -159,7 +177,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes silence (−91 dB on ffmpeg 6.1) without an error. A camera's channel count is not known until its
   stream is open, so the pick now lays the input out as stereo first, and a mono stream is heard by either
   pick.
-
+- **A second classifier could quarantine what the first accepted (MMP-06).** A per-species threshold judged
+  whichever classifier won the merge, on that classifier's scale. When the winner's score is not accepted,
+  another classifier's own answer that is accepted now becomes the detection, with its score.
+- **With dynamic thresholds on, a classifier's own bar was the floor (MMP-07).** Classifiers are loaded at the
+  station's threshold and still run at the floor, so the Models board, the merge and each answer's "below its
+  own bar" use the threshold acceptance uses.
+- **A detection's common name followed whichever classifier won (MMP-10).** V3.0 and Perch name 1 569 shared
+  species differently; a merged detection now takes the primary classifier's name.
+- **The night filter quarantined nightingales (ACC-11).** Nine genera that sing or call through the night
+  (nightingales, grasshopper and reed warblers, mockingbirds, quail, curlews, loons, geese) are now known
+  night callers.
 - **Shedding no longer silences one source (MSC-01, WP-04 of the 2026-11 audit).** While inference is behind or
   the board is hot, the daemon analyses one segment in two. It used to alternate over each sweep's list sorted by
   name, so on a two-microphone station the second source lost every segment while the first lost none, and a lone

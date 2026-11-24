@@ -47,7 +47,20 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
                 )),
             }
             out.push(check_identity(&p, &db_path_from_config(config)));
-            out.push(check_model_loads(&p, labels_path.as_deref()));
+            let (loads, derived_rate) = load_and_check_model(
+                &p,
+                labels_path.as_deref(),
+                crate::helpers::models::primary_output_scale(config),
+            );
+            out.push(loads);
+            // ACC-14: the primary's rate, declared or derived, against each
+            // local source's.
+            if let (Some(rate), Some(rows)) = (
+                crate::helpers::models::primary_sample_rate(config).or(derived_rate),
+                super::audio::database_sources(config),
+            ) {
+                out.extend(super::audio::source_band_checks(&rows, rate));
+            }
             if let Some(labels) = labels_path.as_deref() {
                 out.extend(check_classifiers(
                     config,
@@ -107,17 +120,31 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 /// is what tells a matched pair from a mispaired one — species are assigned
 /// positionally, so a mispaired station names every bird wrong and looks,
 /// in its logs, like a classifier having a bad day.
-fn check_model_loads(model: &Path, labels: Option<&Path>) -> Check {
+///
+/// `output_scale` is the primary's declared `MODEL_OUTPUT_SCALE`, so the load
+/// here is the daemon's: a model whose shape needs one loads when it is set,
+/// and is refused, naming the key, when it is not (MMP-11).
+///
+/// Also returns the sample rate the loaded model's shape implies (`None` when
+/// it did not load), for the source band check (ACC-14).
+fn load_and_check_model(
+    model: &Path,
+    labels: Option<&Path>,
+    output_scale: Option<birdnet_core::inference::model::OutputScale>,
+) -> (Check, Option<u32>) {
     const NAME: &str = "Model integrity";
     let label_set = match labels {
         Some(path) if path.exists() => {
             match birdnet_core::inference::labels::LabelSet::load(path) {
                 Ok(set) => Some(set),
                 Err(e) => {
-                    return Check::fail(
-                        NAME,
-                        format!("{} could not be read as a labels file: {e}", path.display()),
-                        "the labels file ships alongside the model; re-run `install.sh`",
+                    return (
+                        Check::fail(
+                            NAME,
+                            format!("{} could not be read as a labels file: {e}", path.display()),
+                            "the labels file ships alongside the model; re-run `install.sh`",
+                        ),
+                        None,
                     );
                 }
             }
@@ -133,24 +160,43 @@ fn check_model_loads(model: &Path, labels: Option<&Path>) -> Check {
             .unwrap_or_else(|| birdnet_core::inference::labels::LabelSet::from_entries(Vec::new())),
         birdnet_core::inference::model::ModelConfig {
             num_threads: 1,
+            output_scale,
             ..birdnet_core::inference::model::ModelConfig::default()
         },
     );
     let loaded = match loaded {
         Ok(m) => m,
-        Err(e) => {
-            return Check::fail(
-                NAME,
-                format!(
-                    "{} is not a model ONNX Runtime can load ({e}); a truncated or corrupt \
-                     download passes the size check and fails here",
-                    model.display()
+        Err(e @ birdnet_core::inference::model::InferenceError::UndeclaredOutputScale(_)) => {
+            return (
+                Check::fail(
+                    NAME,
+                    format!(
+                        "{} loads, and the detection daemon will refuse it: {e}",
+                        model.display()
+                    ),
+                    "set MODEL_OUTPUT_SCALE to the scale the model's documentation gives \
+                 (logit, probability or softmax), or install a model this station knows",
                 ),
-                "delete the file and let the entrypoint or `install.sh` download it again",
+                None,
+            );
+        }
+        Err(e) => {
+            return (
+                Check::fail(
+                    NAME,
+                    format!(
+                        "{} is not a model ONNX Runtime can load ({e}); a truncated or corrupt \
+                         download passes the size check and fails here",
+                        model.display()
+                    ),
+                    "delete the file and let the entrypoint or `install.sh` download it again",
+                ),
+                None,
             );
         }
     };
-    match (loaded.output_dimension(), label_count) {
+    let rate = loaded.infer_sample_rate();
+    let check = match (loaded.output_dimension(), label_count) {
         (Some(width), Some(labels)) if width != labels => Check::fail(
             NAME,
             format!(
@@ -175,7 +221,18 @@ fn check_model_loads(model: &Path, labels: Option<&Path>) -> Check {
             "nothing, unless detections carry unexpected names; the daemon warns once at \
              the first inference if the widths disagree",
         ),
-    }
+    };
+    (check, Some(rate))
+}
+
+/// [`load_and_check_model`]'s check alone, as the tests read it.
+#[cfg(test)]
+fn check_model_loads(
+    model: &Path,
+    labels: Option<&Path>,
+    output_scale: Option<birdnet_core::inference::model::OutputScale>,
+) -> Check {
+    load_and_check_model(model, labels, output_scale).0
 }
 
 /// Every classifier the detection daemon would load, and its routes (MMP-02).
@@ -450,11 +507,11 @@ mod tests {
         let model = dir.path().join("model.onnx");
         std::fs::write(&model, TINY_V30_MODEL).unwrap();
 
-        let matched = check_model_loads(&model, Some(&labels_file(dir.path(), 11)));
+        let matched = check_model_loads(&model, Some(&labels_file(dir.path(), 11)), None);
         assert_eq!(matched.status, Status::Pass, "{matched:?}");
         assert!(matched.message.contains("11 classes"), "{matched:?}");
 
-        let mispaired = check_model_loads(&model, Some(&labels_file(dir.path(), 12)));
+        let mispaired = check_model_loads(&model, Some(&labels_file(dir.path(), 12)), None);
         assert_eq!(mispaired.status, Status::Fail, "{mispaired:?}");
         assert!(
             mispaired.message.contains("scores 11 classes")
@@ -467,23 +524,56 @@ mod tests {
         // anywhere past the first megabyte); loading it can.
         let truncated = dir.path().join("truncated.onnx");
         std::fs::write(&truncated, &TINY_V30_MODEL[..TINY_V30_MODEL.len() / 2]).unwrap();
-        let cut = check_model_loads(&truncated, Some(&labels_file(dir.path(), 11)));
+        let cut = check_model_loads(&truncated, Some(&labels_file(dir.path(), 11)), None);
         assert_eq!(cut.status, Status::Fail, "{cut:?}");
         assert!(cut.message.contains("not a model"), "{cut:?}");
 
         // The 3 MB stand-in the row describes: past the size check, not a model.
         let stand_in = dir.path().join("stand-in.onnx");
         std::fs::write(&stand_in, vec![0u8; 3_000_000]).unwrap();
-        let garbage = check_model_loads(&stand_in, Some(&labels_file(dir.path(), 11)));
+        let garbage = check_model_loads(&stand_in, Some(&labels_file(dir.path(), 11)), None);
         assert_eq!(garbage.status, Status::Fail, "{garbage:?}");
         assert!(garbage.message.contains("not a model"), "{garbage:?}");
 
-        let unchecked = check_model_loads(&model, None);
+        let unchecked = check_model_loads(&model, None, None);
         assert_eq!(unchecked.status, Status::Pass, "{unchecked:?}");
         assert!(
             unchecked.message.contains("no labels file"),
             "{unchecked:?}"
         );
+    }
+
+    /// MMP-11 in `--doctor`: a primary whose input shape has no known output
+    /// scale fails, naming `MODEL_OUTPUT_SCALE` rather than calling the file
+    /// corrupt; with the scale declared, the same file passes.
+    #[test]
+    fn the_doctor_names_the_output_scale_a_model_of_unknown_shape_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("mel.onnx");
+        std::fs::write(
+            &model,
+            include_bytes!("../../crates/birdnet-core/src/testdata/tiny_mel_test.onnx"),
+        )
+        .unwrap();
+        let labels = labels_file(dir.path(), 4);
+
+        let undeclared = check_model_loads(&model, Some(&labels), None);
+        assert_eq!(undeclared.status, Status::Fail, "{undeclared:?}");
+        assert!(
+            undeclared.message.contains("MODEL_OUTPUT_SCALE"),
+            "{undeclared:?}"
+        );
+        assert!(
+            !undeclared.message.contains("corrupt"),
+            "a model of unknown shape is not a corrupt download: {undeclared:?}"
+        );
+
+        let declared = check_model_loads(
+            &model,
+            Some(&labels),
+            Some(birdnet_core::inference::model::OutputScale::Logit),
+        );
+        assert_eq!(declared.status, Status::Pass, "{declared:?}");
     }
 
     fn fixture_run(model_sha256: &str) -> birdnet_db::sqlite::NewAnalysisRun<'_> {

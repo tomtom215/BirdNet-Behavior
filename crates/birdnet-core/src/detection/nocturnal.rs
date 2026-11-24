@@ -175,6 +175,19 @@ const NOCTURNAL_GENERA: &[&str] = &[
     "procellaria",
     // ── Kiwi ──
     "apteryx",
+    // ── Songbirds that sing on territory through the night (audit ACC-11) ──
+    // Not the migrants' flight calls (thrushes, waders; see the module docs):
+    // these are heard at 01:00 from a bird that is not going anywhere.
+    "luscinia",     // nightingales
+    "locustella",   // grasshopper and river warblers reel after dark
+    "acrocephalus", // sedge, reed and marsh warblers
+    "mimus",        // mockingbirds, unmated males especially
+    // ── Others whose calls carry through the night (audit ACC-11) ──
+    "coturnix", // quail call from dusk into the night
+    "numenius", // curlews on the breeding grounds
+    "gavia",    // loons
+    "anser",    // geese at the roost and on the move
+    "branta",
     // ── Others long established as night-callers ──
     "aramus",     // Limpkin
     "nyctanassa", // Yellow-crowned Night Heron (also above; harmless duplicate)
@@ -302,6 +315,46 @@ mod tests {
                 NightVerdict::Nocturnal,
                 "{sci} was not classified as a night caller"
             );
+        }
+    }
+
+    /// Birds that *sing or call on territory* through the night (audit ACC-11),
+    /// as distinct from the migrants' flight calls the module leaves out on
+    /// purpose. A nightingale at 01:00 was quarantined on any station that
+    /// turned the filter on.
+    #[test]
+    fn the_night_singers_are_classified_as_nocturnal() {
+        for sci in [
+            "Luscinia megarhynchos",  // nightingale
+            "Locustella naevia",      // grasshopper warbler
+            "Acrocephalus palustris", // marsh warbler
+            "Mimus polyglottos",      // mockingbird
+            "Coturnix coturnix",      // quail
+            "Numenius arquata",       // curlew
+            "Gavia immer",            // loon
+            "Anser anser",            // goose
+            "Branta canadensis",      // goose
+        ] {
+            assert_eq!(
+                verdict(sci),
+                NightVerdict::Nocturnal,
+                "{sci} was not classified as a night caller"
+            );
+        }
+    }
+
+    /// Counterpart: the genera heard at night mostly as nocturnal flight calls
+    /// stay out, as the module's "Nocturnal flight calls" section says. Adding
+    /// them would admit every thrush and wader at 02:30.
+    #[test]
+    fn flight_call_migrants_are_left_to_the_operator() {
+        for sci in [
+            "Turdus philomelos",
+            "Catharus ustulatus",
+            "Tringa totanus",
+            "Charadrius hiaticula",
+        ] {
+            assert_eq!(verdict(sci), NightVerdict::Unknown, "{sci}");
         }
     }
 

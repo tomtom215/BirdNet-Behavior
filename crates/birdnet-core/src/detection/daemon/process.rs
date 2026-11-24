@@ -289,6 +289,17 @@ fn infer_chunk(
     }
 
     let mut detections = crate::detection::merge::merge_verdicts(&verdicts);
+    // One name per species on the station, the primary's (MMP-10). Only a
+    // station that ran more than one classifier on this chunk can differ.
+    if verdicts.len() > 1 {
+        let primary = registry.primary().model.labels();
+        crate::detection::merge::name_as_primary(&mut detections, |sci| {
+            primary
+                .iter()
+                .find(|l| l.scientific_name == sci)
+                .map(|l| l.common_name.as_str())
+        });
+    }
     attach_answers(registry, &windows, chunk.start_secs, &mut detections);
     Ok(ChunkPrediction {
         detections,
@@ -382,7 +393,7 @@ pub fn process_and_infer_filtered(
 ) -> Result<super::FilteredFile, DaemonError> {
     let start = Instant::now();
 
-    let chunks = pipeline::process_file(path, pipeline_config)?;
+    let (chunks, source_rate_hz) = pipeline::process_file_with_source_rate(path, pipeline_config)?;
     let pipeline_elapsed = start.elapsed();
 
     tracing::debug!(
@@ -564,7 +575,11 @@ pub fn process_and_infer_filtered(
         "filtered file processing complete"
     );
 
-    Ok(super::FilteredFile { events, tally })
+    Ok(super::FilteredFile {
+        events,
+        tally,
+        source_rate_hz,
+    })
 }
 
 #[cfg(test)]
@@ -725,6 +740,7 @@ mod tests {
             labels_path: labels_path.to_path_buf(),
             threshold,
             sample_rate: rate,
+            output_scale: None,
         };
         ClassifierRegistry::load(
             &[
@@ -866,6 +882,7 @@ mod tests {
                 labels_path: labels.clone(),
                 threshold: Some(0.5),
                 sample_rate: None,
+                output_scale: None,
             }
         };
         let mut registry = ClassifierRegistry::load(
@@ -905,6 +922,65 @@ mod tests {
         let health = registry.health();
         assert_eq!(health[1].1.consecutive_failures, 1, "{:?}", health[1]);
         assert_eq!(health[0].1.consecutive_failures, 0, "{:?}", health[0]);
+    }
+
+    /// MMP-10 through two real ONNX sessions: the extra classifier wins the
+    /// chunk, and the row is named as the primary's label file names the
+    /// species, not as the winner's.
+    #[test]
+    fn a_detection_the_extra_classifier_wins_is_named_by_the_primary() {
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = |id: &str, bytes: &[u8], name: &str| {
+            let path = tmp.path().join(format!("{id}.onnx"));
+            std::fs::write(&path, bytes).unwrap();
+            let labels = tmp.path().join(format!("{id}.txt"));
+            std::fs::write(
+                &labels,
+                (0..11)
+                    .map(|i| format!("Species{i} bird_{name} {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            ModelSpec {
+                id: id.to_owned(),
+                model_path: path,
+                labels_path: labels,
+                threshold: Some(0.5),
+                sample_rate: None,
+                output_scale: None,
+            }
+        };
+        let mut registry = ClassifierRegistry::load(
+            &[
+                spec("birdnet", TINY_V24, "Primary name"),
+                spec("v3", TINY_V30, "Other name"),
+            ],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("both load");
+        let mut chunk = chunk_of(144_000);
+        chunk.spectrogram.data.fill(-5.0);
+        let mut at_32k = vec![0.0_f32; 96_000];
+        at_32k[0] = 0.9;
+        chunk.at_rates = vec![(32_000, at_32k)];
+
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).expect("both answer");
+        let s0 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species0 bird")
+            .unwrap_or_else(|| panic!("{:?}", out.detections));
+        assert_eq!(s0.model_id.as_deref(), Some("v3"), "precondition: v3 won");
+        assert_eq!(s0.common_name, "Primary name 0");
     }
 
     /// A full 144 000-value window whose first values are `head`: both tiny
@@ -1239,6 +1315,7 @@ mod tests {
             labels_path: dir.join(labels),
             threshold: None,
             sample_rate: rate,
+            output_scale: None,
         };
         let mut registry = ClassifierRegistry::load(
             &[
@@ -1556,5 +1633,181 @@ mod tests {
             NoiseFilter::new(0.01, vec!["Dog".to_owned()]),
         );
         assert!(barked.is_empty(), "{barked:?}");
+    }
+
+    // ── ACC-04: only what the station could store is ranked and cut ────
+
+    /// The tiny V3.0 classifier alone, loaded at `station` as the daemon loads
+    /// its primary, its 11 classes named `Species0 bird` to `Species10 bird`.
+    /// It reads the first 11 values of its window as their scores.
+    fn one_classifier(station: f32) -> ClassifierRegistry {
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::{BirdNetModel, ModelConfig};
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let labels = LabelSet::from_entries(
+            (0..11)
+                .map(|i| (format!("Species{i} bird"), format!("Bird {i}")))
+                .collect(),
+        );
+        let model = BirdNetModel::load_from_bytes(
+            TINY_V30,
+            labels,
+            ModelConfig {
+                confidence_threshold: station,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("the tiny V3.0 model loads");
+        ClassifierRegistry::single("birdnet", model)
+    }
+
+    /// A V3.0 window starting at `start_secs` whose classes score `head`.
+    fn scored(head: &[f32], start_secs: f32) -> PreparedChunk {
+        let mut chunk = chunk_of(96_000);
+        chunk.spectrogram.data.fill(0.0);
+        chunk.spectrogram.data[..head.len()].copy_from_slice(head);
+        chunk.start_secs = start_secs;
+        chunk.end_secs = start_secs + 3.0;
+        chunk
+    }
+
+    /// What the processor publishes for a station bar of `station` and the
+    /// per-species `overrides`, applied as the inference loop applies it before
+    /// every file: the floor is the lowest threshold in force.
+    fn publish(registry: &mut ClassifierRegistry, station: f32, overrides: &[(&str, f32)]) {
+        use crate::detection::daemon::{
+            SpeciesBar, StorableBars, ThresholdFloor, apply_threshold_floor, loaded_thresholds,
+        };
+        let floor = overrides.iter().fold(station, |low, &(_, t)| low.min(t));
+        let published = ThresholdFloor::new(floor);
+        published.publish_bars(StorableBars {
+            station,
+            species: overrides
+                .iter()
+                .map(|&(name, t)| {
+                    (
+                        name.to_owned(),
+                        SpeciesBar {
+                            threshold: Some(f64::from(t)),
+                            adjustment: None,
+                        },
+                    )
+                })
+                .collect(),
+        });
+        let base = loaded_thresholds(registry);
+        apply_threshold_floor(registry, &base, Some(&published));
+        assert!(
+            (registry.primary().model.config().confidence_threshold - floor).abs() < f32::EPSILON,
+            "precondition: the model runs at the floor"
+        );
+    }
+
+    fn names(detections: &[crate::detection::types::Detection]) -> Vec<&str> {
+        detections
+            .iter()
+            .map(|d| d.scientific_name.as_str())
+            .collect()
+    }
+
+    /// ACC-04's first gate. One species lowered to 0.4 under a 0.7 station
+    /// drops the model's cut to 0.4 for every class. Ten classes at 0.5, which
+    /// the station drops (no override, under 0.7), then filled the ten top-N
+    /// slots, and the one class it would store — 0.45, over its own 0.4 — was
+    /// truncated away inside the model.
+    #[test]
+    fn a_storable_species_is_not_cut_by_classes_the_station_would_drop() {
+        let mut registry = one_classifier(0.7);
+        publish(&mut registry, 0.7, &[("Species10 bird", 0.4)]);
+        let mut head = [0.5_f32; 11];
+        head[10] = 0.45;
+        let out = infer_chunk(&mut registry, &[0], &scored(&head, 0.0), 20).expect("answers");
+        let got = names(&out.detections);
+        assert!(
+            got.contains(&"Species10 bird"),
+            "the storable species was truncated away: {got:?}"
+        );
+        assert_eq!(got, ["Species10 bird"], "only what the station can store");
+    }
+
+    /// ACC-04's second gate. At `strict` a species must be carried by its
+    /// neighbours; neighbours that carry it only under the bar it is stored at
+    /// are not evidence, because the station drops them. They were counted,
+    /// since the model emitted every class over the floor another species set.
+    /// The counterparts, in the same run: a species carried over its bar in
+    /// every window is kept, and so is one carried over its own lowered bar.
+    #[test]
+    fn neighbours_under_the_storable_bar_do_not_corroborate() {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::noise::NoiseFilter;
+        use crate::detection::privacy::PrivacyFilter;
+        let mut registry = one_classifier(0.7);
+        publish(&mut registry, 0.7, &[("Species10 bird", 0.4)]);
+        // Species0: 0.5 / 0.8 / 0.5 — over 0.7 only in the middle window.
+        // Species1: 0.8 in all three. Species10: 0.45 / 0.8 / 0.45, its bar 0.4.
+        let window = |s0: f32, s10: f32| {
+            let mut head = [0.0_f32; 11];
+            head[0] = s0;
+            head[1] = 0.8;
+            head[10] = s10;
+            head
+        };
+        let starts = [0.0_f32, 3.0, 6.0];
+        let heads = [window(0.5, 0.45), window(0.8, 0.8), window(0.5, 0.45)];
+        let predictions: Vec<ChunkPrediction> = starts
+            .iter()
+            .zip(&heads)
+            .map(|(&start, head)| {
+                infer_chunk(&mut registry, &[0], &scored(head, start), 20).expect("answers")
+            })
+            .collect();
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::new(0.0, Vec::new()),
+            confirmation: ConfirmationLevel::Strict,
+        };
+        let kept = filters.apply(&starts, &predictions);
+        let kept: Vec<Vec<&str>> = kept.iter().map(|chunk| names(chunk)).collect();
+        assert!(
+            kept.iter().all(|chunk| !chunk.contains(&"Species0 bird")),
+            "corroborated by neighbours the station drops: {kept:?}"
+        );
+        assert!(
+            kept.iter().all(|chunk| chunk.contains(&"Species1 bird")),
+            "counterpart: a species over its bar throughout is kept: {kept:?}"
+        );
+        assert!(
+            kept.iter().all(|chunk| chunk.contains(&"Species10 bird")),
+            "counterpart: neighbours over a lowered bar still count: {kept:?}"
+        );
+    }
+
+    /// ACC-04's counterpart: with no per-species bar, the storable bar is the
+    /// floor, and the cut is the one the model made before the bars existed —
+    /// the same candidates in the same order, top-N included (BirdNET-Pi's
+    /// top-10-then-threshold equals threshold-then-top-10 when one bar
+    /// applies). Two windows: eleven classes at or over 0.7, ties and the
+    /// boundary included, so the top-N cut binds; and one with half under.
+    #[test]
+    fn with_no_species_bar_the_cut_is_unchanged() {
+        let heads: [[f32; 11]; 2] = [
+            [0.9, 0.75, 0.75, 0.71, 0.7, 0.8, 0.95, 0.8, 0.72, 0.85, 0.7],
+            [0.1, 0.69, 0.7, 0.99, 0.3, 0.71, 0.0, 0.7, 0.5, 0.8, 0.65],
+        ];
+        let cut = |registry: &mut ClassifierRegistry, head: &[f32]| -> Vec<(String, u32)> {
+            infer_chunk(registry, &[0], &scored(head, 0.0), 20)
+                .expect("answers")
+                .detections
+                .into_iter()
+                .map(|d| (d.scientific_name, d.confidence.to_bits()))
+                .collect()
+        };
+        let mut before = one_classifier(0.7);
+        let mut after = one_classifier(0.7);
+        publish(&mut after, 0.7, &[]);
+        for head in &heads {
+            assert_eq!(cut(&mut after, head), cut(&mut before, head), "{head:?}");
+        }
+        assert_eq!(cut(&mut after, &heads[0]).len(), 10, "the top-N cut binds");
     }
 }

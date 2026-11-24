@@ -38,9 +38,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use birdnet_core::config::Config;
+use birdnet_core::inference::model::OutputScale;
 use birdnet_core::inference::registry::{MAX_MODELS, ModelSpec, model_size_mib, parse_routes};
 
-/// The four settings that declare one extra classifier.
+/// The settings that declare one extra classifier.
 struct ExtraModelKeys {
     /// Its ONNX file.
     path_key: &'static str,
@@ -52,6 +53,8 @@ struct ExtraModelKeys {
     threshold_key: &'static str,
     /// The sample rate it wants, when the shape cannot say.
     sample_rate_key: &'static str,
+    /// How its output becomes a confidence, when the shape cannot say.
+    output_scale_key: &'static str,
     /// The name used when `id` is not given.
     default_id: &'static str,
 }
@@ -71,6 +74,7 @@ const EXTRA_MODEL_KEYS: &[ExtraModelKeys] = &[
         id_key: "MODEL_2_ID",
         threshold_key: "MODEL_2_THRESHOLD",
         sample_rate_key: "MODEL_2_SAMPLE_RATE",
+        output_scale_key: "MODEL_2_OUTPUT_SCALE",
         default_id: "model2",
     },
     ExtraModelKeys {
@@ -79,6 +83,7 @@ const EXTRA_MODEL_KEYS: &[ExtraModelKeys] = &[
         id_key: "MODEL_3_ID",
         threshold_key: "MODEL_3_THRESHOLD",
         sample_rate_key: "MODEL_3_SAMPLE_RATE",
+        output_scale_key: "MODEL_3_OUTPUT_SCALE",
         default_id: "model3",
     },
 ];
@@ -98,15 +103,18 @@ const _: () = assert!(EXTRA_MODEL_KEYS.len() + 1 == MAX_MODELS);
 pub const MODEL_ENV_KEYS: &[&str] = &[
     "BIRDNET_MODEL_2_ID",
     "BIRDNET_MODEL_2_LABELS",
+    "BIRDNET_MODEL_2_OUTPUT_SCALE",
     "BIRDNET_MODEL_2_PATH",
     "BIRDNET_MODEL_2_SAMPLE_RATE",
     "BIRDNET_MODEL_2_THRESHOLD",
     "BIRDNET_MODEL_3_ID",
     "BIRDNET_MODEL_3_LABELS",
+    "BIRDNET_MODEL_3_OUTPUT_SCALE",
     "BIRDNET_MODEL_3_PATH",
     "BIRDNET_MODEL_3_SAMPLE_RATE",
     "BIRDNET_MODEL_3_THRESHOLD",
     "BIRDNET_MODEL_ID",
+    "BIRDNET_MODEL_OUTPUT_SCALE",
     "BIRDNET_MODEL_ROUTES",
     "BIRDNET_MODEL_SAMPLE_RATE",
     "BIRDNET_MODEL_THRESHOLD",
@@ -154,16 +162,45 @@ pub fn plan(
     ceiling_mib: Option<u64>,
 ) -> ModelPlan {
     plan_with(
-        &|key: &str| {
-            std::env::var(format!("BIRDNET_{key}"))
-                .ok()
-                .or_else(|| config.and_then(|c| c.get(key).map(str::to_owned)))
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty())
-        },
+        &|key: &str| setting(config, key),
         primary_model,
         primary_labels,
         ceiling_mib,
+    )
+}
+
+/// One classifier setting as [`plan`] reads it: `BIRDNET_<key>` from the
+/// environment, else `<key>` from the configuration file, trimmed, and absent
+/// when empty.
+fn setting(config: Option<&Config>, key: &str) -> Option<String> {
+    std::env::var(format!("BIRDNET_{key}"))
+        .ok()
+        .or_else(|| config.and_then(|c| c.get(key).map(str::to_owned)))
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+}
+
+/// The primary classifier's declared sample rate (`MODEL_SAMPLE_RATE`), read
+/// as [`plan`] reads it, for `--doctor`'s source band check. A value that is
+/// not a rate is `None` here; [`plan`] is what notes it.
+#[must_use]
+pub fn primary_sample_rate(config: Option<&Config>) -> Option<u32> {
+    model_sample_rate(
+        &|key: &str| setting(config, key),
+        "MODEL_SAMPLE_RATE",
+        &mut Vec::new(),
+    )
+}
+
+/// The primary classifier's declared output scale (`MODEL_OUTPUT_SCALE`), read
+/// as [`plan`] reads it, for `--doctor`'s load of the primary alone. A value
+/// that is not a scale is `None` here; [`plan`] is what notes it.
+#[must_use]
+pub fn primary_output_scale(config: Option<&Config>) -> Option<OutputScale> {
+    model_output_scale(
+        &|key: &str| setting(config, key),
+        "MODEL_OUTPUT_SCALE",
+        &mut Vec::new(),
     )
 }
 
@@ -188,6 +225,7 @@ pub fn plan_with(
         labels_path: primary_labels,
         threshold: model_threshold(get, "MODEL_THRESHOLD", &mut notes),
         sample_rate: model_sample_rate(get, "MODEL_SAMPLE_RATE", &mut notes),
+        output_scale: model_output_scale(get, "MODEL_OUTPUT_SCALE", &mut notes),
     }];
 
     // Budget in MiB for every classifier together, or `None` when the machine
@@ -251,6 +289,7 @@ pub fn plan_with(
                     labels_path: PathBuf::from(labels),
                     threshold: model_threshold(get, keys.threshold_key, &mut notes),
                     sample_rate: model_sample_rate(get, keys.sample_rate_key, &mut notes),
+                    output_scale: model_output_scale(get, keys.output_scale_key, &mut notes),
                 });
             }
         }
@@ -388,6 +427,30 @@ fn model_sample_rate(
     }
 }
 
+/// Read a per-classifier declared output scale (MMP-11), refusing what cannot
+/// be one.
+///
+/// `logit`, `probability` or `softmax` ([`OutputScale::parse`]). Anything else
+/// is refused with a note naming the key, and the scale is then derived from
+/// the model's input shape as if nothing had been declared, which for a shape
+/// the station does not recognise means the classifier is refused at load
+/// with a message naming the same key.
+fn model_output_scale(
+    get: &dyn Fn(&str) -> Option<String>,
+    key: &str,
+    notes: &mut Vec<String>,
+) -> Option<OutputScale> {
+    let raw = get(key)?;
+    let scale = OutputScale::parse(&raw);
+    if scale.is_none() {
+        notes.push(format!(
+            "{key}={raw} is not an output scale (logit, probability or softmax); ignoring it, \
+             so that classifier's scale is derived from its input shape"
+        ));
+    }
+    scale
+}
+
 /// Where `--install-model` puts what it installs, and where the setup page's
 /// install lands.
 ///
@@ -523,7 +586,7 @@ fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) 
 
 #[cfg(test)]
 mod tests {
-    use super::{CLASSIFIER_SHARE_DENOMINATOR, PER_MODEL_WORKING_SET_MIB, plan_with};
+    use super::{CLASSIFIER_SHARE_DENOMINATOR, OutputScale, PER_MODEL_WORKING_SET_MIB, plan_with};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -605,6 +668,26 @@ mod tests {
         let p = primary_plan(&[("MODEL_SAMPLE_RATE", "32000")]);
         assert_eq!(p.specs[0].sample_rate, Some(32_000));
         assert!(p.notes.is_empty(), "{:?}", p.notes);
+    }
+
+    /// MMP-11: `MODEL_OUTPUT_SCALE` reaches the primary's spec, and a value
+    /// that is not a scale is refused with a note naming it rather than read
+    /// as one.
+    #[test]
+    fn a_declared_output_scale_reaches_the_primary_and_nonsense_is_named() {
+        let p = primary_plan(&[("MODEL_OUTPUT_SCALE", "softmax")]);
+        assert_eq!(p.specs[0].output_scale, Some(OutputScale::Softmax));
+        assert!(p.notes.is_empty(), "{:?}", p.notes);
+        let p = primary_plan(&[("MODEL_OUTPUT_SCALE", "sigmod")]);
+        assert_eq!(p.specs[0].output_scale, None);
+        assert!(
+            p.notes
+                .iter()
+                .any(|n| n.contains("MODEL_OUTPUT_SCALE=sigmod")),
+            "{:?}",
+            p.notes
+        );
+        assert_eq!(primary_plan(&[]).specs[0].output_scale, None);
     }
 
     /// MMP-22: a classifier the plan declines for memory is still named by
@@ -695,6 +778,28 @@ mod tests {
         assert_eq!(p.specs[1].sample_rate, None);
         assert!(p.notes.iter().any(|n| n.contains("MODEL_2_THRESHOLD=75")));
         assert!(p.notes.iter().any(|n| n.contains("MODEL_2_SAMPLE_RATE=0")));
+    }
+
+    /// `MODEL_2_OUTPUT_SCALE` reaches the second classifier's spec (MMP-11).
+    #[test]
+    fn a_second_classifiers_declared_output_scale_reaches_its_spec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let primary = model_of(dir.path(), "p.onnx", 1);
+        let second = model_of(dir.path(), "s.onnx", 1);
+        let s = settings(&[
+            ("MODEL_2_PATH", second.display().to_string()),
+            ("MODEL_2_LABELS", "s.txt".to_owned()),
+            ("MODEL_2_OUTPUT_SCALE", "Probability".to_owned()),
+        ]);
+        let p = plan_with(
+            &|k| s.get(k).cloned(),
+            primary,
+            PathBuf::from("p.txt"),
+            Some(8192),
+        );
+        assert_eq!(p.specs.len(), 2, "{:?}", p.notes);
+        assert_eq!(p.specs[0].output_scale, None);
+        assert_eq!(p.specs[1].output_scale, Some(OutputScale::Probability));
     }
 
     /// **The station is always in the plan.** Whatever the memory says, the
@@ -907,6 +1012,7 @@ mod tests {
             "BIRDNET_MODEL_THRESHOLD".to_owned(),
             "BIRDNET_MODEL_ROUTES".to_owned(),
             "BIRDNET_MODEL_SAMPLE_RATE".to_owned(),
+            "BIRDNET_MODEL_OUTPUT_SCALE".to_owned(),
         ];
         for k in EXTRA_MODEL_KEYS {
             for name in [
@@ -915,6 +1021,7 @@ mod tests {
                 k.id_key,
                 k.threshold_key,
                 k.sample_rate_key,
+                k.output_scale_key,
             ] {
                 expected.push(format!("BIRDNET_{name}"));
             }

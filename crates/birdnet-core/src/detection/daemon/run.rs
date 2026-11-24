@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::audio::band::{BandWarning, BandWatch};
 use crate::audio::capture::is_audio_file;
 use crate::detection::pipeline::{self, PipelineConfig};
 use crate::detection::privacy::PrivacyFilter;
@@ -33,8 +34,8 @@ const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
 
 /// Every classifier the daemon loads, primary first.
 ///
-/// The primary's id, threshold and rate are the operator's (`MODEL_ID`,
-/// `MODEL_THRESHOLD`, `MODEL_SAMPLE_RATE`). They were resolved by the plan and
+/// The primary's id, threshold, rate and output scale are the operator's
+/// (`MODEL_ID`, `MODEL_THRESHOLD`, `MODEL_SAMPLE_RATE`, `MODEL_OUTPUT_SCALE`). They were resolved by the plan and
 /// then replaced here with `birdnet` and two `None`s, so a route naming the
 /// primary by its configured id stopped the daemon, and the other two did
 /// nothing at all.
@@ -48,6 +49,9 @@ fn classifier_specs(config: &DaemonConfig) -> Vec<crate::inference::registry::Mo
         // `None` derives the rate from the model's shape, which is right for
         // the BirdNET shapes that derivation was built from.
         sample_rate: config.primary_sample_rate,
+        // `None` derives the scale from the shape, and refuses a shape it
+        // does not recognise (MMP-11).
+        output_scale: config.primary_output_scale,
     });
     specs.extend(config.extra_models.iter().cloned());
     specs
@@ -384,6 +388,8 @@ pub fn run_daemon(
         // ffmpeg/RTSP segment isn't decoded mid-write (which fails with
         // "unexpected end of file" and reprocesses the same growing file).
         let mut pending = PendingFiles::new();
+        // One band verdict per source (ACC-14): see `band_check`.
+        let mut band_watch = BandWatch::default();
 
         if process_existing {
             super::apply_threshold_floor(
@@ -401,6 +407,7 @@ pub fn run_daemon(
                 throughput.as_ref(),
                 in_flight.as_ref(),
                 &mut pending,
+                &mut band_watch,
                 lat,
                 lon,
                 &event_tx,
@@ -585,6 +592,7 @@ pub fn run_daemon(
                 }
                 match outcome {
                     Ok(file) => {
+                        warn_if_narrow(&mut band_watch, &registry, &route, &path, &file);
                         // Counted here and not before the call: this says
                         // "analysed", and a file the pipeline failed on was
                         // not. The counter is the only thing that separates a
@@ -799,12 +807,60 @@ fn fit_pipeline_to_classifiers(
 /// source with no route. Before this every segment got the default, whatever
 /// its source, and no route ever applied.
 fn route_for_segment(registry: &ClassifierRegistry, path: &Path) -> Vec<usize> {
-    let source = path
-        .file_name()
+    registry.route_for(segment_source(path).as_deref())
+}
+
+/// The source id a segment's file name carries, if any.
+fn segment_source(path: &Path) -> Option<String> {
+    path.file_name()
         .and_then(|n| n.to_str())
         .and_then(crate::detection::types::RecordingFile::parse)
-        .and_then(|f| f.rtsp_id);
-    registry.route_for(source.as_deref())
+        .and_then(|f| f.rtsp_id)
+}
+
+/// Whether a segment's source cannot carry the band its classifiers listen to
+/// (ACC-14), judged once per source and rate.
+///
+/// Here, at the first decoded recording of each source, and not when capture
+/// starts: capture does not know the classifiers' rates (the registry is loaded
+/// on this thread), and the decoded rate is what actually reached them,
+/// including a microphone the capture layer fell back to another rate for. The
+/// source is the segment's id as [`route_for_segment`] reads it (`default` for
+/// a name with none), and the classifier rate is the highest among those the
+/// route sends it to: the widest band any of them listens to.
+///
+/// An RTSP stream cannot be judged here. ffmpeg resamples it to 48 kHz before
+/// writing the segment, so its recordings decode at 48 kHz whatever the camera
+/// sends; the capture layer reads the camera's own rate from ffmpeg instead.
+fn band_check(
+    watch: &mut BandWatch,
+    registry: &ClassifierRegistry,
+    route: &[usize],
+    path: &Path,
+    source_rate_hz: u32,
+) -> Option<(String, BandWarning)> {
+    let model_rate = route
+        .iter()
+        .filter_map(|&idx| registry.model(idx))
+        .map(|m| m.spec.sample_rate)
+        .max()?;
+    let source = segment_source(path).unwrap_or_else(|| "default".to_owned());
+    watch
+        .first_look(&source, source_rate_hz, model_rate)
+        .map(|w| (source, w))
+}
+
+/// [`band_check`], logged.
+fn warn_if_narrow(
+    watch: &mut BandWatch,
+    registry: &ClassifierRegistry,
+    route: &[usize],
+    path: &Path,
+    file: &super::FilteredFile,
+) {
+    if let Some((source, warning)) = band_check(watch, registry, route, path, file.source_rate_hz) {
+        tracing::warn!(source = %source, "{warning}");
+    }
 }
 
 /// Say what a stopping daemon leaves unanalysed (`PIPE8b`).
@@ -861,6 +917,7 @@ fn process_existing_files(
     throughput: Option<&super::ThroughputObserver>,
     in_flight: Option<&super::InFlight>,
     pending: &mut PendingFiles,
+    band_watch: &mut BandWatch,
     lat: Option<f64>,
     lon: Option<f64>,
     event_tx: &mpsc::SyncSender<DetectionEvent>,
@@ -921,6 +978,7 @@ fn process_existing_files(
         }
         match outcome {
             Ok(file) => {
+                warn_if_narrow(band_watch, registry, &route, &path, &file);
                 if let Some(observer) = throughput {
                     observer.analysed(&path);
                     observer.filtered(&path, &file.tally);
@@ -984,6 +1042,7 @@ mod tests {
             primary_id: "birdnet".to_owned(),
             primary_threshold: None,
             primary_sample_rate: None,
+            primary_output_scale: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
@@ -1035,6 +1094,36 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::sync_channel(64);
         let handle = run_daemon(&config, event_tx).expect("a route to the configured primary");
         handle.stop();
+    }
+
+    /// ACC-14 at the call site: a source whose recordings decode at 16 kHz is
+    /// reported once, by its id, against the 48 kHz the tiny V2.4-shaped
+    /// classifier listens at; a 48 kHz source is not reported; and a source
+    /// already judged is not judged again.
+    #[test]
+    fn a_narrow_source_is_reported_once_at_its_first_recording() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tiny_config(tmp.path());
+        let registry = ClassifierRegistry::load(
+            &classifier_specs(&config),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+        let cam = Path::new("/recs/2026-05-19-birdnet-cam1-09:00:00.wav");
+        let mic = Path::new("/recs/2026-05-19-birdnet-09:00:00.wav");
+        let route = route_for_segment(&registry, cam);
+        let mut watch = BandWatch::default();
+
+        let (source, warning) =
+            band_check(&mut watch, &registry, &route, cam, 16_000).expect("a 16 kHz camera");
+        assert_eq!(source, "cam1");
+        assert_eq!(warning.model_rate_hz, 48_000);
+        assert!(band_check(&mut watch, &registry, &route, cam, 16_000).is_none());
+        assert!(band_check(&mut watch, &registry, &route, mic, 48_000).is_none());
+        let (source, _) =
+            band_check(&mut watch, &registry, &route, mic, 8_000).expect("an 8 kHz microphone");
+        assert_eq!(source, "default");
     }
 
     /// A declared `MODEL_SAMPLE_RATE` has to reach the pipeline, not only the
@@ -1099,6 +1188,7 @@ mod tests {
                 labels_path: config.labels_path.clone(),
                 threshold: None,
                 sample_rate: Some(32_000),
+                output_scale: None,
             });
         let registry = ClassifierRegistry::load(
             &classifier_specs(&config),
@@ -1172,6 +1262,7 @@ mod tests {
                 labels_path: human,
                 threshold: None,
                 sample_rate: None,
+                output_scale: None,
             });
         let both = ClassifierRegistry::load(
             &classifier_specs(&config),
@@ -1440,6 +1531,7 @@ mod tests {
                 labels_path: config.labels_path.clone(),
                 threshold: None,
                 sample_rate: None,
+                output_scale: None,
             });
         config.model_routes.insert(
             "pond".to_owned(),
@@ -1513,6 +1605,7 @@ mod tests {
                 labels_path: other_labels,
                 threshold: None,
                 sample_rate: None,
+                output_scale: None,
             });
         config.model_routes.insert(
             "pond".to_owned(),
@@ -1565,6 +1658,7 @@ mod tests {
                 labels_path: config.labels_path.clone(),
                 threshold: None,
                 sample_rate: Some(32_000),
+                output_scale: None,
             });
         config.model_routes.insert(
             "pond".to_owned(),
