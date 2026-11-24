@@ -585,6 +585,129 @@ mod tests {
         );
     }
 
+    /// The 30 days the audit rendered: Saturday held five times, Thursday four, one Monday and
+    /// one Tuesday off. Saturday has the most detections in all (163), Thursday the most per
+    /// listened day (159 / 4 = 39.75).
+    fn audit_month() -> (Vec<HeatmapCell>, [u32; 7]) {
+        let totals = [145, 81, 99, 147, 159, 156, 163];
+        let cells = totals
+            .iter()
+            .enumerate()
+            .map(|(d, n)| HeatmapCell {
+                dow: u8::try_from(d).unwrap(),
+                hour: 7,
+                count: *n,
+            })
+            .collect();
+        (cells, [4, 3, 3, 4, 4, 5, 5])
+    }
+
+    /// The weekday margin's printed values and its bars' lengths, Sunday first.
+    fn margin(svg: &str) -> (Vec<f64>, Vec<f64>) {
+        let svg = svg.split("</svg>").next().unwrap();
+        let values: Vec<f64> = svg
+            .split(r#"<text class="mono ck-annot""#)
+            .skip(1)
+            .map(|frag| {
+                let v = frag.split_once('>').unwrap().1.split('<').next().unwrap();
+                v.parse().unwrap_or(f64::NAN)
+            })
+            .collect();
+        // The weekday bars are the horizontal ones, which all start at the margin's x.
+        let marg_x = 46.0 + 24.0 * 31.0 + 10.0;
+        let bars: Vec<f64> = svg
+            .split(r#"<path class="ck-fill ck-cother" d="M"#)
+            .skip(1)
+            .filter_map(|frag| {
+                let (x, rest) = frag.split_once(',')?;
+                let x: f64 = x.parse().ok()?;
+                if (x - marg_x).abs() > 0.01 {
+                    return None;
+                }
+                // `M x,y L xa,y Q xr,…`: the bar's right end is the Q's x.
+                let xr: f64 = rest.split_once('Q')?.1.split(',').next()?.parse().ok()?;
+                Some(xr - x)
+            })
+            .collect();
+        (values, bars)
+    }
+
+    fn argmax(v: &[f64]) -> usize {
+        v.iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1).then(b.0.cmp(&a.0)))
+            .unwrap()
+            .0
+    }
+
+    /// The weekday the sentence names is the one the margin draws longest and prints highest.
+    ///
+    /// The sentence averaged per listened day and the margin drew totals, so on the audit's
+    /// month it named Thursday beside a margin whose longest bar was Saturday's.
+    #[test]
+    fn the_weekday_the_sentence_names_is_the_one_the_margin_draws_busiest() {
+        let (cells, occ) = audit_month();
+        let sentence =
+            crate::routes::pages::insight::weekday_sentence(&weekday_counts(&cells), occ, 30)
+                .expect("a sentence");
+        let named = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ]
+        .iter()
+        .position(|d| sentence.contains(d))
+        .expect("the sentence names a weekday");
+        let svg = render_heatmap_svg(&cells, occ, true, 30, None);
+        let (values, bars) = margin(&svg);
+        assert_eq!(values.len(), 7, "{svg}");
+        assert_eq!(bars.len(), 7, "{svg}");
+        assert_eq!(
+            argmax(&values),
+            named,
+            "the sentence ({sentence}) names one weekday and the margin prints another highest: {values:?}"
+        );
+        assert_eq!(
+            argmax(&bars),
+            named,
+            "the sentence ({sentence}) names one weekday and the margin draws another longest: {bars:?}"
+        );
+    }
+
+    /// Counterpart: the margin says how many days each average is over, a weekday the station
+    /// was off for still reads "off", and where totals and averages agree (every weekday held
+    /// as often) the busiest by total is still the one named and drawn.
+    #[test]
+    fn the_margin_says_how_many_days_and_keeps_off_and_the_plain_case() {
+        let (cells, occ) = audit_month();
+        let svg = render_heatmap_svg(&cells, occ, true, 30, None);
+        for n in ["4 days", "3 days", "5 days"] {
+            assert!(svg.contains(&format!(">{n}</text>")), "{n}: {svg}");
+        }
+        assert!(
+            svg.contains(">a day</text>"),
+            "the margin names its unit: {svg}"
+        );
+
+        let mut off = occ;
+        off[1] = 0;
+        let svg = render_heatmap_svg(&cells, off, true, 30, None);
+        assert!(margin(&svg).0[1].is_nan(), "Monday reads off: {svg}");
+        assert!(svg.contains(">off</text>"), "{svg}");
+
+        let even = [4; 7];
+        let sentence =
+            crate::routes::pages::insight::weekday_sentence(&weekday_counts(&cells), even, 28)
+                .expect("a sentence");
+        assert!(sentence.contains("Saturday"), "{sentence}");
+        let (values, bars) = margin(&render_heatmap_svg(&cells, even, true, 28, None));
+        assert_eq!((argmax(&values), argmax(&bars)), (6, 6), "{values:?}");
+    }
+
     #[test]
     fn render_hourly_bars_empty() {
         let html = render_hourly_bars(&[], None, 7);

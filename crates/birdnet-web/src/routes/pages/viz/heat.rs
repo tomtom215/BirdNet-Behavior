@@ -122,12 +122,17 @@ pub struct HourByWeekday<'a> {
 }
 
 /// The activity grid: hour of day across, weekday down, a rounded cell each, with the
-/// totals for each weekday (right) and each hour (below) as small bars, the busiest cell
-/// ringed and named, and the colour scale printed under it.
+/// average a listened day for each weekday (right, with how many days it is over) and the
+/// total for each hour (below) as small bars, the busiest cell ringed and named, and the
+/// colour scale printed under it.
 ///
 /// The colour is the *average per day* in that slot (the total divided by how many such
 /// days were listened to), so a 90-day window, which holds thirteen of one weekday and
-/// twelve of another, does not make the first look busier for having more days in it.
+/// twelve of another, does not make the first look busier for having more days in it. The
+/// weekday margin is in the same unit, and so is the sentence above the grid
+/// (`insight::weekday_sentence`): it used to draw totals, so a weekday that had more days in
+/// the window, or lost fewer to an outage, drew the longest bar beside a sentence that named
+/// another.
 #[must_use]
 #[allow(clippy::too_many_lines, clippy::needless_range_loop)]
 pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
@@ -155,11 +160,22 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         .max_by(|a, b| avg(a.0, a.1).total_cmp(&avg(b.0, b.1)).then(b.cmp(a)))
         .unwrap_or((0, 0));
 
-    let row_tot: Vec<i64> = (0..7).map(|d| o.counts[d].iter().sum()).collect();
+    // The weekday margin: detections per listened day of that name, the unit of the colour and of
+    // the sentence. A weekday with no days in the window has none.
+    let row_avg: Vec<f64> = (0..7)
+        .map(|d| {
+            let tot: i64 = o.counts[d].iter().sum();
+            if o.occurrences[d] == 0 {
+                0.0
+            } else {
+                tot as f64 / f64::from(o.occurrences[d])
+            }
+        })
+        .collect();
     let col_tot: Vec<i64> = (0..24)
         .map(|h| (0..7).map(|d| o.counts[d][h]).sum())
         .collect();
-    let row_max = row_tot.iter().copied().max().unwrap_or(1).max(1);
+    let row_max = row_avg.iter().copied().fold(0.0_f64, f64::max);
     let col_max = col_tot.iter().copied().max().unwrap_or(1).max(1);
 
     let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 28.0_f64);
@@ -181,7 +197,7 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     );
     svg.push_str(&svg_a11y(
         "Activity by hour and day of the week",
-        "A grid of the average detections in each hour of each day of the week, with the total for each day and each hour beside it.",
+        "A grid of the average detections in each hour of each day of the week, with the average a listened day for each day of the week and the total for each hour beside it.",
     ));
     if o.occurrences.contains(&0) {
         let _ = write!(svg, "<defs>{}</defs>", kit::nodata_pattern(&g));
@@ -193,6 +209,11 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         kit::halo_gradients(&format!("{g}-hg"), &steps)
     );
 
+    // The margin's unit, over its column.
+    let _ = write!(
+        svg,
+        r#"<text class="ck-lbl" x="{marg_x:.1}" y="12" font-size="10">a day</text>"#
+    );
     for hh in (0..24).step_by(3) {
         let _ = write!(
             svg,
@@ -281,26 +302,40 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
                 r#"<rect class="ck-hit" x="{x0:.1}" y="{y0:.1}" width="{cw:.1}" height="{ch:.1}" data-ck-i="{idx}" data-tip="{tip}"/>"#,
             );
         }
-        // The weekday's total, as a bar and a number.
-        let bw = row_tot[d] as f64 / row_max as f64 * 34.0;
-        if row_tot[d] > 0 {
+        // The weekday's average a listened day, as a bar and a number, and under them how many
+        // days it is the average of.
+        let bw = if row_max > 0.0 {
+            row_avg[d] / row_max * 34.0
+        } else {
+            0.0
+        };
+        if row_avg[d] > 0.0 {
             let _ = write!(
                 svg,
                 r#"<path class="ck-fill ck-cother" d="{p}"/>"#,
-                p = kit::hbar_path(marg_x, y0 + 7.0, bw.max(1.5), ch - 14.0, 3.0),
+                p = kit::hbar_path(marg_x, y0 + 4.0, bw.max(1.5), 11.0, 3.0),
             );
         }
         let _ = write!(
             svg,
             r#"<text class="mono ck-annot" x="{x:.1}" y="{y:.1}" font-size="10">{t}</text>"#,
             x = marg_x + bw.max(1.5) + 5.0,
-            y = y0 + ch / 2.0 + 3.5,
+            y = y0 + 13.0,
             t = if o.occurrences[d] == 0 && o.coverage_known {
                 "off".to_string()
             } else {
-                kit::compact(row_tot[d] as f64)
+                kit::compact(row_avg[d])
             },
         );
+        if o.occurrences[d] > 0 {
+            let _ = write!(
+                svg,
+                r#"<text class="ck-lbl" x="{marg_x:.1}" y="{y:.1}" font-size="9">{n} {days}</text>"#,
+                y = y0 + ch - 3.0,
+                n = o.occurrences[d],
+                days = if o.occurrences[d] == 1 { "day" } else { "days" },
+            );
+        }
     }
     svg.push_str(&halos);
     svg.push_str(&marks);
