@@ -118,11 +118,26 @@ pub fn no_co_signal() -> String {
     )
 }
 
-/// Empty state shown on the quarantine page when there are no rare-bird
-/// detections awaiting review.
+/// Empty state shown on the quarantine page when nothing is held for review.
+///
+/// It names what the queue holds from the reasons the daemon files a held
+/// detection under, so the two cannot drift. It used to promise that
+/// "detections above 0.95 confidence skip this queue", a rule that has never
+/// existed (UIC-15).
 pub fn no_rare_yet() -> String {
+    let reasons = birdnet_db::sqlite::ALL_QUARANTINE_REASONS
+        .iter()
+        .map(|r| {
+            let label = r.label();
+            let mut chars = label.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_lowercase().chain(chars).collect::<String>()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     format!(
-        r#"{SHELL_OPEN}<svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true"><circle cx="60" cy="40" r="26" fill="var(--moss-soft)" stroke="var(--moss)" stroke-width="0.8"/><path d="M48,40 L56,48 L74,30" fill="none" stroke="var(--moss-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><p class="display es-h">Nothing waiting for review.</p><p class="bnb-meta es-sub">All rare-bird flags are confirmed or dismissed. Detections above 0.95 confidence skip this queue automatically.</p>{SHELL_CLOSE}"#,
+        r#"{SHELL_OPEN}<svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true"><circle cx="60" cy="40" r="26" fill="var(--moss-soft)" stroke="var(--moss)" stroke-width="0.8"/><path d="M48,40 L56,48 L74,30" fill="none" stroke="var(--moss-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><p class="display es-h">Nothing waiting for review.</p><p class="bnb-meta es-sub">Nothing is held back right now. A detection waits here when it is one of these: {reasons}.</p>{SHELL_CLOSE}"#,
     )
 }
 
@@ -195,5 +210,22 @@ mod tests {
         assert!(opens_a_heading("<div><h1>T</h1></div>"));
         assert!(!opens_a_heading(r#"<p class="x">T</p>"#));
         assert!(!opens_a_heading("<hr><header>T</header><html>"));
+    }
+
+    /// UIC-15: the empty review queue said "Detections above 0.95 confidence
+    /// skip this queue automatically". No such rule exists — nothing in the
+    /// daemon lets a confident detection past a quarantine reason — and the
+    /// queue holds more than rare-bird flags. The empty state now names what
+    /// the queue actually holds, from the same enum the daemon files them under.
+    #[test]
+    fn the_empty_review_queue_names_every_reason_a_detection_is_held() {
+        let html = no_rare_yet().to_lowercase();
+        for reason in birdnet_db::sqlite::ALL_QUARANTINE_REASONS {
+            assert!(
+                html.contains(&reason.label().to_lowercase()),
+                "the empty queue does not name {reason:?} ({}): {html}",
+                reason.label()
+            );
+        }
     }
 }
