@@ -67,11 +67,12 @@ pub struct MigrationWindow {
     pub departure_late_doy: f64,
 }
 
-/// Weekly relative abundance index.
+/// Weekly relative detection index (named "abundance" for compatibility).
 ///
-/// Expresses how common a species is in a given ISO week relative to
-/// its peak week (which has an index of 1.0).  Values approaching 0
-/// indicate near-absence; 1.0 is peak abundance.
+/// A species' detections in a given ISO week relative to its peak week
+/// (which has an index of 1.0). It counts detections, not birds, and is not
+/// corrected for recording effort: a week with half the listening reads as
+/// half as active. `phenology::abundance` has the effort-corrected rate.
 #[derive(Debug, Clone, Serialize)]
 pub struct WeeklyAbundance {
     /// Species common name.
@@ -82,7 +83,7 @@ pub struct WeeklyAbundance {
     pub iso_week: u32,
     /// Raw detection count for this week.
     pub detection_count: u32,
-    /// Relative abundance index \[0.0, 1.0\].
+    /// Relative detection index \[0.0, 1.0\].
     ///
     /// `detection_count / peak_week_count` across all weeks for this
     /// species in this year.

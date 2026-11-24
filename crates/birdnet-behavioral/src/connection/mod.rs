@@ -667,6 +667,20 @@ impl AnalyticsDb {
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN detected_at_utc BIGINT;");
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN run_id BIGINT;");
         conn.execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
+        // The listening record, filled by `sync_recording_effort`. Created
+        // here as well so that a store whose effort copy has not run, or
+        // failed, still answers the queries that read it: the phenology timing
+        // query reads it for its effort-gap flag, and without the table it
+        // failed to bind and took the arrival dates down with it. An empty
+        // table reads as "no listening recorded", which those queries report
+        // as unknown rather than as a gap.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS recording_effort (
+                date VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                seconds DOUBLE NOT NULL
+            );",
+        )?;
         Ok(Self {
             conn,
             path: path.to_path_buf(),

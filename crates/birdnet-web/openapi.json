@@ -4726,8 +4726,8 @@
         "tags": [
           "analytics"
         ],
-        "summary": "Effort-corrected abundance",
-        "description": "Detections per hour of listening, per species per ISO week. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's station time is its longest single source, not the sum across sources, so a two-microphone station is not read as half a one-microphone station. Species-weeks with fewer than `min_detections` detections are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "summary": "Detection rate (detections per listened hour)",
+        "description": "Detection rate: detections per listened hour, per species per ISO week, with a 95% Poisson interval. It is a vocal-activity rate, not an abundance: it counts detections, which move with a species' call rate, loudness and detectability as well as with its numbers, so compare a species with itself across weeks and years, not with another species. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's listening is the sum of every source's time, because detections are per source (each stream that hears a bird records it): the rate is detections per source-hour, so two co-located microphones that each log the same bird read the same rate as one microphone logging it once. Sources are pooled, not reported separately. A week with recorded listening in which a species was not detected is a row with `raw_count` 0 and a rate of 0, not a missing row; the species filled in are the one named by `species`, or every species detected in that ISO year. A week with neither listening nor a detection has no row. `rate_ci_lower` and `rate_ci_upper` are the exact (Garwood) 95% Poisson interval for `effort_count` over `effort_hours` (Byar's approximation above 100 detections); detections of one bird are clustered, so read it as the least the uncertainty can be. With `min_detections` above 1, rows with fewer detections, zero rows included, are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
         "operationId": "analyticsAbundance",
         "parameters": [
           {
@@ -4754,7 +4754,7 @@
             "name": "min_detections",
             "in": "query",
             "required": false,
-            "description": "Smallest number of detections a species-week needs to be reported.",
+            "description": "Smallest number of detections a species-week needs to be reported. Above 1 it also drops the zero rows of listened weeks.",
             "schema": {
               "type": "integer",
               "format": "int32",
@@ -4765,7 +4765,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One row per species per ISO week.",
+            "description": "One row per species per ISO week with a detection or with recorded listening.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4784,7 +4784,9 @@
                           "raw_count",
                           "effort_count",
                           "effort_hours",
-                          "detections_per_hour"
+                          "detections_per_hour",
+                          "rate_ci_lower",
+                          "rate_ci_upper"
                         ],
                         "properties": {
                           "species": {
@@ -4798,7 +4800,7 @@
                           },
                           "raw_count": {
                             "type": "integer",
-                            "description": "Every detection that week."
+                            "description": "Every detection that week; 0 on a listened week with none."
                           },
                           "effort_count": {
                             "type": "integer",
@@ -4809,14 +4811,28 @@
                               "number",
                               "null"
                             ],
-                            "description": "Station time recorded on those days, in hours; null when the week has none."
+                            "description": "Listening recorded on those days, summed over sources, in hours; null when the week has none."
                           },
                           "detections_per_hour": {
                             "type": [
                               "number",
                               "null"
                             ],
-                            "description": "`effort_count` over `effort_hours`, to four decimals; null when there is no effort to divide by."
+                            "description": "`effort_count` over `effort_hours`, to four decimals: detections per listened hour; 0 for a listened week with no detections, null when there is no effort to divide by."
+                          },
+                          "rate_ci_lower": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Lower bound of the exact 95% Poisson interval on the rate, to four decimals; 0 for a week with no detections, null when there is no effort to divide by."
+                          },
+                          "rate_ci_upper": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Upper bound of the exact 95% Poisson interval on the rate, to four decimals; above 0 even for a week with no detections, null when there is no effort to divide by."
                           }
                         }
                       }
@@ -4855,7 +4871,7 @@
           "analytics"
         ],
         "summary": "Species phenology: first and last detection per year",
-        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. `first_detection` and `last_detection` are the extremes, so one stray (or false) detection moves them; `arrival_q05` and `departure_q95` are the 5th and 95th percentiles of the distinct days the species was detected that year (an actual detection day; with twenty or fewer detection days the 5th percentile is the first day, and with nineteen or fewer the 95th is the last). `effort_gap_before_arrival` is true when any of the 14 days before `arrival_q05` has no recorded listening, false when all of them have some, and null when the station's listening record begins after it. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
         "operationId": "analyticsPhenology",
         "parameters": [
           {
@@ -4927,7 +4943,12 @@
                           "first_doy",
                           "last_doy",
                           "presence_days",
-                          "detected_days"
+                          "detected_days",
+                          "arrival_q05",
+                          "arrival_q05_doy",
+                          "departure_q95",
+                          "departure_q95_doy",
+                          "effort_gap_before_arrival"
                         ],
                         "properties": {
                           "species": {
@@ -4967,6 +4988,35 @@
                           "detected_days": {
                             "type": "integer",
                             "description": "Distinct days it was detected."
+                          },
+                          "arrival_q05": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "5th percentile of the distinct days it was detected that year: an arrival a single stray detection does not move."
+                          },
+                          "arrival_q05_doy": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `arrival_q05` falls on."
+                          },
+                          "departure_q95": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "95th percentile of the distinct days it was detected that year."
+                          },
+                          "departure_q95_doy": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `departure_q95` falls on."
+                          },
+                          "effort_gap_before_arrival": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "Whether a day in the 14 before `arrival_q05` has no recorded listening, so the arrival may only be the first day the station could hear it; null when the listening record begins after `arrival_q05`."
                           }
                         }
                       }

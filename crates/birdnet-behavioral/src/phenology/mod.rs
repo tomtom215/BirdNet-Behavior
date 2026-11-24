@@ -3,8 +3,10 @@
 //! Phenology is the scientific study of cyclic and seasonal natural
 //! phenomena — in ornithology, this covers:
 //!
-//! - **Migration timing:** First/last detection dates, arrival windows.
-//! - **Abundance indices:** How detection frequency varies through the year.
+//! - **Migration timing:** First/last and 5th/95th-percentile detection
+//!   dates, whether listening was recorded before an arrival, arrival windows.
+//! - **Activity indices:** How detection frequency, and the detection rate per
+//!   listened hour, vary through the year. Detections, not birds.
 //! - **Inter-annual trends:** Year-over-year changes in species presence.
 //!
 //! ## SQL target
