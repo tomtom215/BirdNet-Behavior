@@ -26,10 +26,11 @@ pub mod types;
 pub use connection::{DbError, open_connection, open_or_create, open_readonly, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::detection_reviews::{
-    Detached, DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
-    detached_review_count, detection_clips, detection_review_counts, detection_review_total,
-    detection_reviews_page, dismiss_detached_review, get_detection_review,
-    recent_detection_reviews, rejected_detection_count, set_detection_review,
+    Detached, DetectionReview, ReviewEvent, ReviewStatus, Reviewer, UnreviewedDetection,
+    clear_detection_review, clear_detection_review_by, detached_review_count, detection_clips,
+    detection_review_counts, detection_review_total, detection_reviews_page,
+    dismiss_detached_review, get_detection_review, recent_detection_reviews,
+    rejected_detection_count, review_history, set_detection_review, set_detection_review_by,
     unreviewed_recent_detections,
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
