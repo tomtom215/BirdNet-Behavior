@@ -69,8 +69,9 @@ wrong answer at plenty of sites. A station beside a motorway wants a steeper
 cut than one filter section gives. A station with mains hum wants a *notch* at
 50 or 60 Hz — a high-pass cannot remove hum without also removing everything
 below it, including the low end of a grouse, a bittern or an owl.
-The high-pass also moves the model's scores for every species: with it on, a
-station's confidences are not BirdNET-Pi's for the same audio (measured in
+The high-pass also moves the model's scores, not only for low-pitched birds:
+with it on, a station's confidences are not BirdNET-Pi's for the same audio
+(measured on one recording in
 [Same audio, same detections](../guides/parity.md)).
 
 The **Equaliser** field takes a chain of filter stages. Type one and the
