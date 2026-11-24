@@ -490,12 +490,24 @@ fn an_emulated_mixer_has_no_db_and_a_huge_range() {
     assert_eq!(level.raw, Some((65536, 0, 65536)));
 }
 
+/// N14-03: `amixer` prints ALSA's minus infinity (`SND_CTL_TLV_DB_GAIN_MUTE`) as
+/// `-99999.99dB`. That is a control passing nothing, not a control with no dB reading, and it
+/// is graded silent: it was read as no dB and graded "too low" by its percentage, which a
+/// second control in range then excused.
 #[test]
-fn alsas_minus_infinity_is_no_db() {
+fn alsas_minus_infinity_is_silence_not_no_db() {
     let text = "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Limits: Capture 0 - 31\n  Front Left: Capture 0 [0%] [-99999.99dB] [on]\n";
     let level = only(text);
-    assert_eq!(level.db, None);
+    assert_eq!(level.db, Some(f32::NEG_INFINITY));
     assert_eq!(level.percent, 0);
+    assert_eq!(assess(&level), Advice::Silent);
+    // The counterpart: the bottom of a range that is a real gain stays "too low", and a switch
+    // that is off is still "muted" first.
+    assert_eq!(
+        assess(&only(&text.replace("[-99999.99dB]", "[-16.50dB]"))),
+        Advice::TooLow
+    );
+    assert_eq!(assess(&only(&text.replace("[on]", "[off]"))), Advice::Muted);
 }
 
 /// Several capture controls (`Mic` and `Capture` both) are all returned: the signal passes
