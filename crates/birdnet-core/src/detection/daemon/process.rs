@@ -736,6 +736,7 @@ mod tests {
             labels_path: labels_path.to_path_buf(),
             threshold,
             sample_rate: rate,
+            output_scale: None,
         };
         ClassifierRegistry::load(
             &[
@@ -877,6 +878,7 @@ mod tests {
                 labels_path: labels.clone(),
                 threshold: Some(0.5),
                 sample_rate: None,
+                output_scale: None,
             }
         };
         let mut registry = ClassifierRegistry::load(
@@ -1308,6 +1310,7 @@ mod tests {
             labels_path: dir.join(labels),
             threshold: None,
             sample_rate: rate,
+            output_scale: None,
         };
         let mut registry = ClassifierRegistry::load(
             &[

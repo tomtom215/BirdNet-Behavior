@@ -279,6 +279,7 @@ fn split_plan(
         labels_path: labels_path.to_path_buf(),
         threshold: None,
         sample_rate: None,
+        output_scale: None,
     });
     (primary, specs.collect(), thresholds)
 }
@@ -550,11 +551,12 @@ pub fn start_detection_daemon(
         model_path,
         labels_path,
         // The primary is built by the daemon from `model_path`/`labels_path`
-        // above and the plan's three settings for it below.
+        // above and the plan's four settings for it below.
         extra_models,
         primary_id: primary.id,
         primary_threshold: primary.threshold,
         primary_sample_rate: primary.sample_rate,
+        primary_output_scale: primary.output_scale,
         model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
         model: build_model_config(sensitivity, load_confidence),

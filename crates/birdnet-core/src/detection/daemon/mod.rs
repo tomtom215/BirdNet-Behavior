@@ -676,6 +676,10 @@ pub struct DaemonConfig {
     /// The primary's declared sample rate (`MODEL_SAMPLE_RATE`), or `None` to
     /// derive it from the model's input shape.
     pub primary_sample_rate: Option<u32>,
+    /// The primary's declared output scale (`MODEL_OUTPUT_SCALE`), or `None`
+    /// to derive it from the model's input shape, which refuses a shape it
+    /// does not recognise (MMP-11).
+    pub primary_output_scale: Option<crate::inference::model::OutputScale>,
     /// Which classifiers judge which audio source, by source id.
     ///
     /// A source absent from this map is judged by the primary classifier —
@@ -1057,6 +1061,7 @@ mod tests {
             primary_id: "birdnet".to_owned(),
             primary_threshold: None,
             primary_sample_rate: None,
+            primary_output_scale: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),

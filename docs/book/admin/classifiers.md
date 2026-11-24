@@ -104,6 +104,7 @@ Up to **three** classifiers total. The primary is always loaded and is whatever 
 MODEL_ID=birdnet
 MODEL_THRESHOLD=
 MODEL_SAMPLE_RATE=
+MODEL_OUTPUT_SCALE=
 
 # The second classifier. Each needs its OWN labels file. (<model dir> is
 # /data/model in Docker and <data dir>/models on bare metal.)
@@ -112,6 +113,7 @@ MODEL_2_LABELS=<model dir>/perch-v2_labels.csv
 MODEL_2_ID=perch
 MODEL_2_THRESHOLD=0.35
 MODEL_2_SAMPLE_RATE=32000
+MODEL_2_OUTPUT_SCALE=
 
 # A third, if you have one.
 MODEL_3_PATH=
@@ -119,11 +121,14 @@ MODEL_3_LABELS=
 MODEL_3_ID=
 MODEL_3_THRESHOLD=
 MODEL_3_SAMPLE_RATE=
+MODEL_3_OUTPUT_SCALE=
 ```
 
 Every key also exists as `BIRDNET_MODEL_2_PATH` and so on in the environment; see `.env.example`.
 
 **`MODEL_n_SAMPLE_RATE` is not optional for Perch.** Its tensor declares `[-1, 160000]`, which is 5 s at 32 kHz and equally 3⅓ s at 48 kHz — nothing in the shape distinguishes them, so it has to be told. BirdNET's own shapes are unambiguous, and the station derives those for itself.
+
+**`MODEL_n_OUTPUT_SCALE`** (and `MODEL_OUTPUT_SCALE` for the primary) says how a classifier's scores become confidences: `logit` (through a sigmoid and `SENSITIVITY`, as BirdNET V2.4's are), `probability` (already one, as BirdNET+ V3.0's are) or `softmax` (a share of one softmax over every class, as Perch's are; see below). Leave it unset for those three models: the station recognises their input shapes and knows the answer. A model of any other shape is **refused at start-up** until this is set, and the journal and `--doctor` name the key; reading an unknown model's scores the wrong way would give it confidences that mean nothing, with no other symptom. Take the value from the model's own documentation. When it is set, it wins over the shape.
 
 **`MODEL_n_THRESHOLD`** (and `MODEL_THRESHOLD` for the primary) holds that classifier's detections to its own confidence bar, whether it is below the station's or above it. Leave it unset to use the station's. A per-species threshold still overrides either.
 

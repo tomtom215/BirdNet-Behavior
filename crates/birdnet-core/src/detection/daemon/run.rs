@@ -33,8 +33,8 @@ const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
 
 /// Every classifier the daemon loads, primary first.
 ///
-/// The primary's id, threshold and rate are the operator's (`MODEL_ID`,
-/// `MODEL_THRESHOLD`, `MODEL_SAMPLE_RATE`). They were resolved by the plan and
+/// The primary's id, threshold, rate and output scale are the operator's
+/// (`MODEL_ID`, `MODEL_THRESHOLD`, `MODEL_SAMPLE_RATE`, `MODEL_OUTPUT_SCALE`). They were resolved by the plan and
 /// then replaced here with `birdnet` and two `None`s, so a route naming the
 /// primary by its configured id stopped the daemon, and the other two did
 /// nothing at all.
@@ -48,6 +48,9 @@ fn classifier_specs(config: &DaemonConfig) -> Vec<crate::inference::registry::Mo
         // `None` derives the rate from the model's shape, which is right for
         // the BirdNET shapes that derivation was built from.
         sample_rate: config.primary_sample_rate,
+        // `None` derives the scale from the shape, and refuses a shape it
+        // does not recognise (MMP-11).
+        output_scale: config.primary_output_scale,
     });
     specs.extend(config.extra_models.iter().cloned());
     specs
@@ -983,6 +986,7 @@ mod tests {
             primary_id: "birdnet".to_owned(),
             primary_threshold: None,
             primary_sample_rate: None,
+            primary_output_scale: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
@@ -1098,6 +1102,7 @@ mod tests {
                 labels_path: config.labels_path.clone(),
                 threshold: None,
                 sample_rate: Some(32_000),
+                output_scale: None,
             });
         let registry = ClassifierRegistry::load(
             &classifier_specs(&config),
@@ -1171,6 +1176,7 @@ mod tests {
                 labels_path: human,
                 threshold: None,
                 sample_rate: None,
+                output_scale: None,
             });
         let both = ClassifierRegistry::load(
             &classifier_specs(&config),
@@ -1439,6 +1445,7 @@ mod tests {
                 labels_path: config.labels_path.clone(),
                 threshold: None,
                 sample_rate: None,
+                output_scale: None,
             });
         config.model_routes.insert(
             "pond".to_owned(),
@@ -1512,6 +1519,7 @@ mod tests {
                 labels_path: other_labels,
                 threshold: None,
                 sample_rate: None,
+                output_scale: None,
             });
         config.model_routes.insert(
             "pond".to_owned(),
@@ -1564,6 +1572,7 @@ mod tests {
                 labels_path: config.labels_path.clone(),
                 threshold: None,
                 sample_rate: Some(32_000),
+                output_scale: None,
             });
         config.model_routes.insert(
             "pond".to_owned(),
