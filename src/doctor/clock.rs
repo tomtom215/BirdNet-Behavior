@@ -275,7 +275,7 @@ fn timezone_mismatch_check(
                 format!(
                     "{system} (this machine's clock, {zoneinfo}, now {now}) is within \
                      {SOLAR_OFFSET_TOLERANCE_HOURS} hours of the station's longitude \
-                     ({lon:.2}); the setup wizard has not recorded the station's zone, so \
+                     ({lon:.1}); the setup wizard has not recorded the station's zone, so \
                      a wrong zone closer than that cannot be seen",
                     now = utc_offset_label(offset_secs),
                 ),
@@ -407,7 +407,7 @@ fn location_offset_check(
         "Timezone",
         format!(
             "this machine's clock is set to {system} ({now}), but the station's location \
-             ({latitude:.2}, {longitude:.2}) is near {solar}: the clock runs about {hours} \
+             ({latitude:.1}, {longitude:.1}) is near {solar}: the clock runs about {hours} \
              hours {direction} the station's day, so every detection is filed at the wrong \
              hour",
             now = utc_offset_label(offset_secs),
