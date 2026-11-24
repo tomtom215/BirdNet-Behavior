@@ -289,6 +289,17 @@ fn infer_chunk(
     }
 
     let mut detections = crate::detection::merge::merge_verdicts(&verdicts);
+    // One name per species on the station, the primary's (MMP-10). Only a
+    // station that ran more than one classifier on this chunk can differ.
+    if verdicts.len() > 1 {
+        let primary = registry.primary().model.labels();
+        crate::detection::merge::name_as_primary(&mut detections, |sci| {
+            primary
+                .iter()
+                .find(|l| l.scientific_name == sci)
+                .map(|l| l.common_name.as_str())
+        });
+    }
     attach_answers(registry, &windows, chunk.start_secs, &mut detections);
     Ok(ChunkPrediction {
         detections,
@@ -905,6 +916,64 @@ mod tests {
         let health = registry.health();
         assert_eq!(health[1].1.consecutive_failures, 1, "{:?}", health[1]);
         assert_eq!(health[0].1.consecutive_failures, 0, "{:?}", health[0]);
+    }
+
+    /// MMP-10 through two real ONNX sessions: the extra classifier wins the
+    /// chunk, and the row is named as the primary's label file names the
+    /// species, not as the winner's.
+    #[test]
+    fn a_detection_the_extra_classifier_wins_is_named_by_the_primary() {
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = |id: &str, bytes: &[u8], name: &str| {
+            let path = tmp.path().join(format!("{id}.onnx"));
+            std::fs::write(&path, bytes).unwrap();
+            let labels = tmp.path().join(format!("{id}.txt"));
+            std::fs::write(
+                &labels,
+                (0..11)
+                    .map(|i| format!("Species{i} bird_{name} {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            ModelSpec {
+                id: id.to_owned(),
+                model_path: path,
+                labels_path: labels,
+                threshold: Some(0.5),
+                sample_rate: None,
+            }
+        };
+        let mut registry = ClassifierRegistry::load(
+            &[
+                spec("birdnet", TINY_V24, "Primary name"),
+                spec("v3", TINY_V30, "Other name"),
+            ],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("both load");
+        let mut chunk = chunk_of(144_000);
+        chunk.spectrogram.data.fill(-5.0);
+        let mut at_32k = vec![0.0_f32; 96_000];
+        at_32k[0] = 0.9;
+        chunk.at_rates = vec![(32_000, at_32k)];
+
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).expect("both answer");
+        let s0 = out
+            .detections
+            .iter()
+            .find(|d| d.scientific_name == "Species0 bird")
+            .unwrap_or_else(|| panic!("{:?}", out.detections));
+        assert_eq!(s0.model_id.as_deref(), Some("v3"), "precondition: v3 won");
+        assert_eq!(s0.common_name, "Primary name 0");
     }
 
     /// A full 144 000-value window whose first values are `head`: both tiny

@@ -176,9 +176,35 @@ pub fn merge_verdicts(verdicts: &[ModelVerdict]) -> Vec<Detection> {
     merged
 }
 
+/// Name every merged detection the way the station's primary classifier names
+/// its species, where the primary knows it (audit MMP-10).
+///
+/// The merge keeps the winning classifier's whole detection, common name
+/// included, and classifiers name species from different checklists: V3.0's
+/// labels and Perch's (which are V2.4's) disagree on the English name of 1 569
+/// of the 10 916 species both know, `Common Reed Warbler` against `Eurasian
+/// Reed Warbler` among them. So one bird's rows were named by whichever
+/// classifier won the chunk, and a view grouping by common name split them.
+///
+/// `primary_name_of` answers the primary's common name for an exact scientific
+/// name. A species the primary does not know keeps the winner's name: there is
+/// no other.
+pub fn name_as_primary<'a>(
+    detections: &mut [Detection],
+    primary_name_of: impl Fn(&str) -> Option<&'a str>,
+) {
+    for detection in detections {
+        if let Some(name) = primary_name_of(&detection.scientific_name)
+            && name != detection.common_name
+        {
+            name.clone_into(&mut detection.common_name);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ModelVerdict, merge_verdicts};
+    use super::{ModelVerdict, merge_verdicts, name_as_primary};
     use crate::detection::types::Detection;
 
     fn det(sci: &str, confidence: f32) -> Detection {
@@ -208,6 +234,35 @@ mod tests {
             detections: dets,
             threshold,
         }
+    }
+
+    /// Audit MMP-10: Perch wins the chunk with its own English name for a bird
+    /// the primary (V3.0) calls something else; the row carries the primary's.
+    #[test]
+    fn a_merged_detection_is_named_as_the_primary_names_it() {
+        let mut from_v3 = det("Acrocephalus scirpaceus", 0.60);
+        from_v3.common_name = "Common Reed Warbler".to_owned();
+        let mut from_perch = det("Acrocephalus scirpaceus", 0.90);
+        from_perch.common_name = "Eurasian Reed Warbler".to_owned();
+        let mut merged = merge_verdicts(&[
+            verdict("v3", vec![from_v3]),
+            verdict("perch", vec![from_perch, det("Gavia immer", 0.8)]),
+        ]);
+        assert_eq!(merged[0].model_id.as_deref(), Some("perch"), "precondition");
+        name_as_primary(&mut merged, |sci| {
+            (sci == "Acrocephalus scirpaceus").then_some("Common Reed Warbler")
+        });
+        let warbler = merged
+            .iter()
+            .find(|d| d.scientific_name == "Acrocephalus scirpaceus")
+            .unwrap();
+        assert_eq!(warbler.common_name, "Common Reed Warbler");
+        // Counterpart: a species the primary does not know keeps its name.
+        let loon = merged
+            .iter()
+            .find(|d| d.scientific_name == "Gavia immer")
+            .unwrap();
+        assert_eq!(loon.common_name, "Common Gavia immer");
     }
 
     /// **Every station today runs one classifier**, and for those this must be
