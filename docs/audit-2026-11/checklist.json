@@ -2504,6 +2504,54 @@
    "source": "docs/audit-2026-11/status/WP-06.md",
    "status": "open",
    "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading."
+  },
+  {
+   "id": "N05-01",
+   "title": "The Trends anomaly table is cut off on the right on a 390 px phone",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+  },
+  {
+   "id": "N05-02",
+   "title": "Migration's \"Earliest vs last year\" is built from first detections: one false positive moves it, and it is effort-blind but for a partly-recorded check",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+  },
+  {
+   "id": "N05-03",
+   "title": "templates/migration.html calls a weekly count ridgeline \"weekly per-species abundance\", and docs/architecture 07, 08 and 13 still say \"effort-corrected abundance\" / \"abundance index\"",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+  },
+  {
+   "id": "N05-04",
+   "title": "The Patterns weekday sentence ignores weekdays with fewer than 3 listened days while the margin draws them, so the two can still disagree after an outage-heavy month",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
   }
  ]
 }
