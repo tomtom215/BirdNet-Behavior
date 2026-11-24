@@ -222,8 +222,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "01-multi-source-capture.md:110",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "MSC-10",
@@ -714,8 +714,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "03-precision-accuracy.md:154",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "ACC-08",
@@ -786,8 +786,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "03-precision-accuracy.md:242",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "ACC-14",
@@ -1170,8 +1170,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:170",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIR-04",
@@ -1182,8 +1182,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:184",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIR-05",
@@ -1206,8 +1206,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:211",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIR-07",
@@ -1254,8 +1254,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:261",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIR-11",
@@ -1626,8 +1626,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "06-ui-code-charts-ia.md:225",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIC-05",
@@ -1722,8 +1722,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:337",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIC-13",
@@ -1914,8 +1914,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:525",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIC-29",
@@ -2058,8 +2058,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "07-research-grade.md:255",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "RES-07",
@@ -2082,8 +2082,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:295",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "RES-09",
@@ -2094,8 +2094,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:311",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "RES-10",
@@ -2106,8 +2106,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:325",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "RES-11",
@@ -2310,8 +2310,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "07-research-grade.md:571",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "RES-28",
@@ -2406,8 +2406,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md (MMP-25, added 2026-11-23 by the WP-02 session)",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "ACC-21",
@@ -2430,8 +2430,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "docs/TECH_DEBT.md TD-9 (narrowed by 0052bbf); found while fixing MSC-05",
-   "status": "open",
-   "evidence": "Reviews follow a relabel through a trigger; detection_comments has none, so a comment keyed by (date, time, sci_name, file_name) is orphaned when sci_name changes. Read, not tested."
+   "status": "in_progress",
+   "evidence": "Reviews follow a relabel through a trigger; detection_comments has none, so a comment keyed by (date, time, sci_name, file_name) is orphaned when sci_name changes. Read, not tested. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "UIR-38",
@@ -2442,8 +2442,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "seen in a render while fixing UIC-03",
-   "status": "open",
-   "evidence": "The table on the Trends page's anomaly card has no scroll wrapper; at 390 px the Type column's words are cut off at the card edge. Present before WP-05; the partial-day label widens the cell. Seen in a screenshot by the session that did UIC-03, not measured."
+   "status": "in_progress",
+   "evidence": "The table on the Trends page's anomaly card has no scroll wrapper; at 390 px the Type column's words are cut off at the card edge. Present before WP-05; the partial-day label widens the cell. Seen in a screenshot by the session that did UIC-03, not measured. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N14-01",
@@ -2454,8 +2454,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-14.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+   "status": "in_progress",
+   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N14-02",
@@ -2466,8 +2466,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-14.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+   "status": "in_progress",
+   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N14-03",
@@ -2478,8 +2478,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-14.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+   "status": "in_progress",
+   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N06-01",
@@ -2490,8 +2490,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-06.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading."
+   "status": "in_progress",
+   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N06-02",
@@ -2514,8 +2514,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "status": "in_progress",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N05-02",
@@ -2538,8 +2538,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "status": "in_progress",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   },
   {
    "id": "N05-04",
@@ -2550,8 +2550,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "status": "in_progress",
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since. Claimed 2026-11-24 by the audit batch pull request (branch claude/affectionate-turing-jfz87i)."
   }
  ]
 }
