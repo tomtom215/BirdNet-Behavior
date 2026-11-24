@@ -159,6 +159,9 @@ export const ROUTES = [
   ['kiosk-night', '/kiosk?night=1'],
   // Every footer links here; the fixture seeds credited photographs, one uncredited one and a plate.
   ['credits', '/system/credits'],
+  // Every footer links here too. No gate visited it, and every entry stopped at its first
+  // line with its Markdown printed raw (UIR-07).
+  ['changelog', '/system/changelog'],
 
   // ── Admin pages that have not folded into a Station tab yet ────────────
   ['admin', '/admin'],

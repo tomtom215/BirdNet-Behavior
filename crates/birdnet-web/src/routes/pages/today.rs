@@ -951,7 +951,11 @@ fn empty_day_message(search: Option<&str>, filter: TodayFilter) -> String {
 async fn today_partial(
     State(state): State<AppState>,
     Query(params): Query<TodayParams>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    // Delete and the lock toggle post to routes behind the sign-in; a visitor
+    // was shown both and answered with a redirect to the login page (UIC-24).
+    let manage = crate::session::looks_signed_in(&headers);
     let today = today_date_string();
     let limit = params.limit.unwrap_or(40).min(200);
     let offset = params.offset.unwrap_or(0);
@@ -990,7 +994,7 @@ async fn today_partial(
             }
 
             for d in &detections {
-                render_detection_card(&mut html, d, &locked, names_state.names(), floor);
+                render_detection_card(&mut html, d, &locked, names_state.names(), floor, manage);
             }
 
             // "Load more" button if there are more results. It replaces
@@ -1211,12 +1215,16 @@ fn day_stack(
 /// every card used to carry the same "Lock" button, so a locked clip offered
 /// to be locked again, could not be unlocked here, and a detection with no
 /// clip offered a lock that protected nothing (M9).
+///
+/// `manage` is whether the reader looks signed in: the lock toggle and Delete
+/// are drawn only then, since both post to routes behind the sign-in.
 fn render_detection_card(
     html: &mut String,
     d: &birdnet_db::sqlite::DetectionRow,
     locked: &std::collections::HashSet<String>,
     names: &birdnet_core::i18n::NameLocalizer,
     floor: f64,
+    manage: bool,
 ) {
     // The link and the detail URL carry the stored name; only what is *drawn*
     // is in the station's language.
@@ -1243,7 +1251,7 @@ fn render_detection_card(
     let lock = d
         .file_name
         .as_deref()
-        .filter(|f| !f.is_empty())
+        .filter(|f| manage && !f.is_empty())
         .map_or_default(|f| {
             let is_locked = locked.contains(&super::recordings::base_name(f));
             super::recordings::lock_button(&crate::state::RowRef::from(d), is_locked)
@@ -1262,6 +1270,11 @@ fn render_detection_card(
     // date, time and name, and a link without it opens whichever comes first.
     let file_enc = simple_url_encode(d.file_name.as_deref().unwrap_or_default());
     let row_vals = super::recordings::row_vals(&crate::state::RowRef::from(d));
+    let delete = if manage {
+        delete_button(&row_vals, &com_name, &time)
+    } else {
+        String::new()
+    };
 
     let _ = write!(
         html,
@@ -1277,8 +1290,15 @@ fn render_detection_card(
          {audio}\
          </div>\
          <div class=\"tdl-card-actions\">\
-         {lock}\
-         <button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
+         {lock}{delete}\
+         </div></div>",
+    );
+}
+
+/// The Delete control for one Today row.
+fn delete_button(row_vals: &str, com_name: &str, time: &str) -> String {
+    format!(
+        "<button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
          hx-vals='{row_vals}' \
          hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
          hx-confirm=\"Delete detection of {com_name} at {time}?\" \
@@ -1288,9 +1308,8 @@ fn render_detection_card(
          data-confirm-body=\"Delete detection of {com_name} at {time}?\" \
          data-confirm-confirm-label=\"Delete\" \
          data-confirm-style=\"danger\" \
-         title=\"Delete this detection\">Delete</button>\
-         </div></div>",
-    );
+         title=\"Delete this detection\">Delete</button>"
+    )
 }
 
 /// Re-render trigger returned by the mutating endpoints: reloads the full-day
@@ -1732,5 +1751,61 @@ mod tests {
         let html = signal_card("", None);
         assert!(html.contains("input · none"));
         assert!(!html.contains("48 kHz"));
+    }
+
+    /// Today's list as `cookie` sees it, on a station with one detection today
+    /// that has a clip.
+    async fn todays_list_as(cookie: Option<String>) -> String {
+        use tower::ServiceExt as _;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) \
+             VALUES (?1, '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'blackbird.mp3')",
+            [super::super::today_date_string()],
+        )
+        .unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let mut req = axum::http::Request::get("/pages/today-list");
+        if let Some(c) = cookie {
+            req = req.header(axum::http::header::COOKIE, c);
+        }
+        let resp = router()
+            .with_state(state)
+            .oneshot(req.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    /// UIC-24: every Today row drew Delete and the lock toggle for anyone,
+    /// though both posts answer a visitor with a redirect to the login page.
+    #[tokio::test]
+    async fn a_visitor_is_not_offered_delete_or_lock() {
+        let html = todays_list_as(None).await;
+        assert!(
+            html.contains("Eurasian Blackbird"),
+            "the fixture row renders: {html}"
+        );
+        assert!(
+            !html.contains("/pages/today-delete"),
+            "Delete offered to a visitor: {html}"
+        );
+        assert!(
+            !html.contains("recordings-lock"),
+            "the lock toggle offered to a visitor: {html}"
+        );
+    }
+
+    /// The counterpart: a signed-in owner still has both.
+    #[tokio::test]
+    async fn a_signed_in_owner_is_offered_delete_and_lock() {
+        let token = crate::session::issue_token(&crate::session::generate_session_id(), 60_000);
+        let html = todays_list_as(Some(format!("{}={token}", crate::session::COOKIE_NAME))).await;
+        assert!(html.contains("/pages/today-delete"), "{html}");
+        assert!(html.contains("recordings-lock"), "{html}");
     }
 }

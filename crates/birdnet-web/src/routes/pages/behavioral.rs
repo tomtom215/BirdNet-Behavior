@@ -35,9 +35,6 @@ pub fn router() -> Router<AppState> {
         .route("/pages/analytics-config", get(analytics_config_partial))
 }
 
-/// The analytics status pill both How tabs carry at the right of their heading.
-const STATUS_PILL: &str = r#"<div class="bnb-card pad an-status" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML"><div class="value">--</div><div class="label">Analytics Status</div></div>"#;
-
 /// The "Visits" tab (`?tab=behavior`): how long the birds sing in one go and who keeps coming
 /// back, rendered for embedding by `homes::patterns`. The engine's ordered questions are on the
 /// "Sequences" tab beside it.
@@ -48,7 +45,7 @@ pub(super) fn content() -> String {
         title: "How your birds <em>behave</em>",
         lead: "The research tier: every term explained in plain English.",
         lede: "These come from the behavioural analytics engine; you never need them to enjoy your station, but they're here when you're curious. This tab is about visits: how long the birds sing in one go, and who keeps coming back. Who follows whom is on <a href=\"/patterns?tab=sequences\">Sequences</a>.",
-        aside: STATUS_PILL,
+        aside: "",
     });
     let gap = birdnet_behavioral::types::SessionizeParams::default()
         .gap_minutes
@@ -68,7 +65,7 @@ pub(super) fn sequences_content() -> String {
         title: "Who follows <em>whom</em>",
         lead: "The order things happen in.",
         lede: "Who opens your dawn and how fast the chorus builds, which bird is heard next, and who answers whom. These come from the behavioural analytics engine; you never need them to enjoy your station. How long the birds sing in one go is on <a href=\"/patterns?tab=behavior\">Visits</a>.",
-        aside: STATUS_PILL,
+        aside: "",
     });
     ANALYTICS_SEQUENCES_HTML.replace("{{page_head}}", &head)
 }
@@ -521,7 +518,7 @@ fn render_retention(
     }
     html.push_str("</table></div>");
     html.push_str(
-        r#"<div class="ck-scale rt-key"><span class="ck-steps" aria-hidden="true"><i class="ck-sw ck-m1"></i><i class="ck-sw ck-m2"></i><i class="ck-sw ck-m3"></i><i class="ck-sw ck-m4"></i><i class="ck-sw ck-m5"></i><i class="ck-sw ck-m6"></i><i class="ck-sw ck-m7"></i></span><span class="bnb-meta">0% to 100% of the days a species was heard that it was heard again that much later.</span></div>"#,
+        r#"<div class="ck-scale rt-key"><span class="ck-steps" aria-hidden="true"><i class="ck-sw ck-m1"></i><i class="ck-sw ck-m2"></i><i class="ck-sw ck-m3"></i><i class="ck-sw ck-m4"></i><i class="ck-sw ck-m5"></i><i class="ck-sw ck-m6"></i><i class="ck-sw ck-m7"></i></span><span class="bnb-meta">0% to 100% of the days a species was heard that it was heard again within that time.</span></div>"#,
     );
     html
 }
@@ -1334,7 +1331,6 @@ async fn analytics_config_partial(
 ) -> impl axum::response::IntoResponse {
     let compiled = cfg!(feature = "analytics");
     let configured = state.has_analytics();
-    let db_path = escape_html(&state.db_path().display().to_string());
     let version = env!("CARGO_PKG_VERSION");
 
     // Pull the live extension status from the AnalyticsDb when one is open. The
@@ -1367,7 +1363,6 @@ async fn analytics_config_partial(
 
     let mut html = format!(
         r#"<table class="bh-config-table"><tr><td class="bh-key">Version</td><td>{version}</td></tr>
-<tr><td class="bh-key">SQLite Database</td><td><code>{db_path}</code></td></tr>
 <tr><td class="bh-key">Analytics Compiled</td><td>{compiled}</td></tr>
 <tr><td class="bh-key">Analytics Active</td><td>{configured}</td></tr>"#,
     );

@@ -570,8 +570,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "02-multi-model-pipeline.md:268",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: model.rs header, InputSpec normalisation note, model_catalog birdnet-v3 notes, docs/architecture/06-ml-inference.md (pipeline.rs:132-138 with ACC-16)."
   },
   {
    "id": "MMP-18",
@@ -822,8 +822,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "03-precision-accuracy.md:273",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: PipelineConfig::confidence_threshold removed; pipeline.rs raw_audio_input docs and mel comment, quality/mod.rs, corroboration.rs and docs/architecture/05-audio-pipeline.md corrected. The ACC-05 and ACC-11 doc numbers are left to those findings' packages. The proposed phrase-grep gate was not written (Tier B)."
   },
   {
    "id": "ACC-17",
@@ -1218,8 +1218,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:221",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "c402c7f: continuation lines join their bullet, **/* render, UTF-8 is copied whole (it was pushed byte by byte). Gates a_wrapped_bold_bullet_renders_whole_and_bold and non_ascii_text_survives_rendering red on the old parser. /system/changelog added to qa.mjs ROUTES (972c6da); axe, layout and qa pass on it locally. Older releases are not collapsed (the proposal's third part)."
   },
   {
    "id": "UIR-08",
@@ -1290,8 +1290,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:297",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: capture_note(None) is 'Recordings are read from the station's watch folder.'"
   },
   {
    "id": "UIR-14",
@@ -1302,8 +1302,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:305",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "d613365: the Retention card, the Snapshots pill and the empty Snapshots message print the backup schedule, purge level (or FULL_DISK=keep) and BACKUP_RETENTION in force; next backup follows the schedule. Gates the_retention_card_shows_the_schedule_and_purge_level_in_force and the_next_backup_follows_the_chosen_schedule (red on the old card: 'every 7 days', 'in 6 d'). 972c6da: the backup-schedule help no longer points at the tab it is on. 5d445cb: a policy that cannot be read says so instead of printing the defaults (gate a_policy_that_could_not_be_read_is_not_shown_as_the_defaults, red before; found by the read-default sweep). 'first automatic backup due shortly' beside a manual snapshot is left: it is true (the scheduled job has not run)."
   },
   {
    "id": "UIR-15",
@@ -1314,8 +1314,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:316",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "d613365: the System page counted the database's folder; both pages now read backup_recovery::recordings_on_disk (gate the_system_page_counts_the_recordings_folder_not_the_database_folder, red before). 972c6da: host vs service uptime labelled. Remaining: the fold of /admin/* into Station tabs (DESIGN_BRIEF Known problems 6, effort L), the CPU figures sampled separately on Health/System/Overview, and the Admin Doctor's dead end."
   },
   {
    "id": "UIR-16",
@@ -1326,8 +1326,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:333",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: the same question as UIC-06 (rename the sixth nav item back to 'Station', or a Health summary on Today's 'Your station' card)."
   },
   {
    "id": "UIR-17",
@@ -1338,8 +1338,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:345",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "972c6da: engine status and configuration moved to Health; 'structured INFO entry' gone. Remaining: the species page's '--metadata-labels' remedy (removed in 972c6da and restored in 12d778d, because web_api_species requires the note to name what supplies the code and the browser offers no equivalent), BirdNET-Pi key names ending every Capture hint (needs a 'for BirdNET-Pi users' disclosure design), CADDY_PWD on Access, sudo install.sh on Admin System, and the deny-list test."
   },
   {
    "id": "UIR-18",
@@ -1446,8 +1446,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:444",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started. The species page's seven cards are independent HTMX partials, so one 'Not heard here yet' panel needs the page shell to read the species' count before drawing; a structural change left for a later pass."
   },
   {
    "id": "UIR-27",
@@ -1518,8 +1518,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:507",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "972c6da: 'structured INFO entry' replaced; the '%Owl%' was the screenshot fixture's own SQL-LIKE pattern (fixed to '*Owl*'), not product copy. Remaining: the 'Tell me when' card with the rules engine as Advanced, a design not built here."
   },
   {
    "id": "UIR-33",
@@ -1554,8 +1554,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:538",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "972c6da: the quarantine introduction says what Reject and Delete do (neither deletes a recording, so the proposed 'Delete recording' label would be untrue). Question for the maintainer: an inbox badge in the header and one review page with two tabs (with UIC-07 and UIC-30)?"
   },
   {
    "id": "UIR-36",
@@ -1638,8 +1638,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:242",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "972c6da: TD-6 lists the six orphans (today-relabel, confidence-chart, activity-heatmap, life-accumulation, ts-heatmap, /player/{filename}). Deleting or linking them is the decision TD-6 records as the maintainer's ('what the interface promises'); the orphan-scan test was not written."
   },
   {
    "id": "UIC-06",
@@ -1650,8 +1650,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:259",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs the maintainer. nav.rs records renaming 'Station' to 'Settings' as deliberate ('people looking to configure it went hunting for Settings'); the finding asks to reverse it or to move a Health summary to Today. Which?"
   },
   {
    "id": "UIC-07",
@@ -1662,8 +1662,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:271",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "8ea9f8a: Trends' duplicate 'Activity sessions' card and /pages/ts-sessions removed; gate only_visits_has_an_activity_sessions_card red before. Remaining, an IA decision for the maintainer with UIC-30 and UIR-35: one Review page for quarantine and detection reviews, and the header search's label."
   },
   {
    "id": "UIC-08",
@@ -1686,8 +1686,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:304",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: depends on UIC-08 (figure links that reproduce their range and tab, WP-17)."
   },
   {
    "id": "UIC-10",
@@ -1746,8 +1746,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:356",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: the engine card and status pill moved from Visits/Sequences to an 'Analytics engine' section on Settings → Health; the SQLite path row removed from /pages/analytics-config."
   },
   {
    "id": "UIC-15",
@@ -1758,8 +1758,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:367",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "01c5d3a: the empty review queue's '0.95 confidence skip this queue' (no such rule) replaced by the reasons from ALL_QUARANTINE_REASONS; gate the_empty_review_queue_names_every_reason_a_detection_is_held red on the old text. 972c6da: the rest of the table (Unusual days, Kinds of birds, How unusual (z), Each bird scaled to its own busiest hour, Days heard together, Return visits); window_funnel was already only in Method. The proposed banned-terms copy test was not written (Tier B)."
   },
   {
    "id": "UIC-16",
@@ -1770,8 +1770,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:387",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: lede and key say 'heard again within' (retention_sql counts 'within N days', not 'the next day')."
   },
   {
    "id": "UIC-17",
@@ -1818,8 +1818,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:432",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: templates/_empty_states.html deleted, with its inline_style_guard exemption and the empty_states.rs mention."
   },
   {
    "id": "UIC-21",
@@ -1866,8 +1866,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:466",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ec92989: Today rows draw Delete and the lock toggle only when session::looks_signed_in. Gate a_visitor_is_not_offered_delete_or_lock red on the old renderer; counterpart a_signed_in_owner_is_offered_delete_and_lock."
   },
   {
    "id": "UIC-25",
@@ -1938,8 +1938,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:546",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs the maintainer. A station-wide Birder/Researcher depth preference is an IA decision (insights-and-organisation §3 rejected a per-page switch). Adopt the two-depth model?"
   },
   {
    "id": "UIC-31",
@@ -1986,8 +1986,8 @@
    "work_package": "WP-16",
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:608",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "972c6da: dawn_chorus.rs, homes/mod.rs and pages/mod.rs module docs; the hourly chart's empty text no longer says 'today'."
   },
   {
    "id": "RES-01",

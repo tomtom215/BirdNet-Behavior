@@ -1,7 +1,8 @@
 //! Dawn-chorus page + partials.
 //!
 //! Mounts:
-//!   GET /analytics/dawn-chorus          full page
+//!   (the page itself is the Dawn chorus tab of /patterns; the old
+//!   /analytics/dawn-chorus answers with a 308 to /patterns?tab=dawn)
 //!   GET /pages/dawn-polar               stacked polar ribbon SVG
 //!   GET /pages/dawn-list                right-rail per-species strips
 //!
@@ -66,7 +67,7 @@ pub(super) fn content() -> String {
         .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
     let moon_badge = super::overlays::moon_badge(now_secs);
     let pills = format!(
-        r#"<div class="pill-row dc-pills"><span class="bnb-pill">Last 60 days</span><span class="bnb-pill">Per-species normalized</span>{moon_badge}<a class="bnb-pill" href="/patterns?tab=migration">Phenology →</a></div>"#
+        r#"<div class="pill-row dc-pills"><span class="bnb-pill">Last 60 days</span><span class="bnb-pill">Each bird scaled to its own busiest hour</span>{moon_badge}<a class="bnb-pill" href="/patterns?tab=migration">Phenology →</a></div>"#
     );
     let head = super::frame::page_head(&super::frame::Head {
         eyebrow: "Patterns",

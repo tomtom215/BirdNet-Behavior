@@ -8,8 +8,7 @@
 //! `/pages/ts-heatmap`              | Hour-of-day detection heatmap            |
 //! `/pages/ts-daily`                | Daily trend with 7-day moving average    |
 //! `/pages/ts-diversity`            | Shannon diversity + species richness     |
-//! `/pages/ts-sessions`             | Today's activity sessions                |
-//! `/pages/ts-anomalies`            | Anomaly detection table                  |
+//! `/pages/ts-anomalies`            | Unusual days (anomaly) table             |
 //! `/pages/ts-peak`                 | Top busiest 15-minute windows            |
 
 use axum::extract::State;
@@ -36,7 +35,6 @@ pub fn router() -> Router<AppState> {
         .route("/pages/ts-heatmap", get(ts_heatmap_partial))
         .route("/pages/ts-daily", get(ts_daily_partial))
         .route("/pages/ts-diversity", get(ts_diversity_partial))
-        .route("/pages/ts-sessions", get(ts_sessions_partial))
         .route("/pages/ts-anomalies", get(ts_anomaly_partial))
         .route("/pages/ts-peak", get(ts_peak_partial))
 }
@@ -180,44 +178,6 @@ async fn ts_diversity_partial(State(state): State<AppState>) -> impl axum::respo
 #[cfg(not(feature = "analytics"))]
 async fn ts_diversity_partial(State(_): State<AppState>) -> impl axum::response::IntoResponse {
     ts_unavailable("diversity")
-}
-
-// ---------------------------------------------------------------------------
-// Activity sessions partial
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "analytics")]
-fn compute_ts_sessions(state: &AppState) -> Option<String> {
-    let params = birdnet_timeseries::types::params::SessionParams {
-        gap_minutes: 30,
-        date_filter: None,
-        lookback_days: 3,
-        limit: 50,
-    };
-    match state.with_timeseries_read(|ts| ts.activity_sessions(&params)) {
-        Some(Ok(rows)) => Some(render_sessions_table(&rows)),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "analytics")]
-async fn ts_sessions_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("activity sessions");
-    }
-    let html = cached_fragment(
-        &state,
-        "ts-sessions".to_string(),
-        TS_FALLBACK,
-        compute_ts_sessions,
-    )
-    .await;
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn ts_sessions_partial(State(_): State<AppState>) -> impl axum::response::IntoResponse {
-    ts_unavailable("activity sessions")
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +437,7 @@ fn render_diversity_table(
     );
     html.push_str(TABLE_OPEN);
     html.push_str(
-        r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
+        r"<table><thead><tr><th>Date</th><th>Kinds of birds</th><th>Diversity (Shannon H′)</th><th>Balance (0–1)</th></tr></thead><tbody>",
     );
     for row in shown {
         let h = shannon_cell(row.shannon_h);
@@ -494,30 +454,6 @@ fn render_diversity_table(
         );
     }
     html.push_str("</tbody></table></div></details>");
-    html
-}
-
-#[cfg(feature = "analytics")]
-fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]) -> String {
-    if rows.is_empty() {
-        return r#"<p class="tsd-muted">No activity sessions found.</p>"#.to_string();
-    }
-    let mut html = String::from(
-        r"<table><thead><tr><th>Start</th><th>Duration</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
-    );
-    // Rows arrive oldest-first; the card shows the latest twenty, newest at
-    // the top (ANA12). `take(20)` alone showed the oldest of the window.
-    for row in rows.iter().rev().take(20) {
-        let _ = write!(
-            html,
-            r"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>",
-            escape_html(&row.session_start),
-            row.duration_minutes,
-            row.detection_count,
-            row.species_count
-        );
-    }
-    html.push_str("</tbody></table>");
     html
 }
 
@@ -540,20 +476,20 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
     };
     if anomalous.is_empty() {
         return format!(
-            r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>{left_out}"#
+            r#"<p class="tsd-ok">✓ No unusual days in the last 90 days.</p>{left_out}"#
         );
     }
     let mut html = String::from(
-        r"<table><thead><tr><th>Date</th><th>Detections</th><th>Z-Score</th><th>Type</th></tr></thead><tbody>",
+        r"<table><thead><tr><th>Date</th><th>Detections</th><th>How unusual (z)</th><th>Busier or quieter</th></tr></thead><tbody>",
     );
     for row in &anomalous {
         let z = row
             .z_score
             .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
-        let cls = if row.anomaly_flag == "high" {
-            "high"
+        let (cls, said) = if row.anomaly_flag == "high" {
+            ("high", "busier")
         } else {
-            "low"
+            ("low", "quieter")
         };
         // A judged day that was not recorded in full: its count is real, and
         // so is the gap in it.
@@ -568,7 +504,7 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
             r#"<tr><td>{d}</td><td>{c}</td><td>{z}</td><td><span class="conf {cls}">{f}</span>{partial}</td></tr>"#,
             d = escape_html(&row.date),
             c = row.detections,
-            f = escape_html(&row.anomaly_flag),
+            f = said,
         );
     }
     html.push_str("</tbody></table>");
@@ -636,7 +572,6 @@ pub fn prewarm(state: &AppState) {
     let fragments = [
         ("ts-daily", compute_ts_daily(state)),
         ("ts-diversity", compute_ts_diversity(state)),
-        ("ts-sessions", compute_ts_sessions(state)),
         ("ts-anomalies", compute_ts_anomaly(state)),
         ("ts-peak", compute_ts_peak(state)),
     ];
@@ -715,7 +650,7 @@ mod tests {
         ]);
         assert!(!html.contains("2026-05-01"), "{html}");
         assert!(!html.contains("<table>"), "{html}");
-        assert!(html.contains("No anomalies"), "{html}");
+        assert!(html.contains("No unusual days"), "{html}");
         assert!(
             html.contains("2 days the station recorded less than half its usual day of"),
             "{html}"
@@ -736,31 +671,29 @@ mod tests {
         let html = super::render_anomaly_table(&[anomaly("2026-05-04", "high", Some(14.0))]);
         assert!(html.contains("partial day, 14 h recorded"), "{html}");
     }
+}
 
-    /// ANA12: the sessions card shows the newest sessions, newest first.
+/// UIC-07: one figure per name across the Patterns tabs.
+#[cfg(test)]
+mod one_name_per_figure {
+    const TRENDS: &str = include_str!("../../../templates/timeseries.html");
+    const VISITS: &str = include_str!("../../../templates/analytics.html");
+
+    /// Trends and Visits each had a card titled "Activity sessions", drawn by
+    /// two engines (`birdnet-timeseries` and `birdnet-behavioral`'s
+    /// `sessionize`), which can count the same days differently under the one
+    /// name. Visits owns sessions; Trends' card is gone.
     #[test]
-    fn the_sessions_card_shows_the_newest_first() {
-        let rows: Vec<_> = (0..25)
-            .map(|i| birdnet_timeseries::types::results::SessionRow {
-                session_id: i,
-                date: "2026-05-01".into(),
-                session_start: format!("2026-05-01 {i:02}:00:00"),
-                session_end: String::new(),
-                detection_count: 1,
-                species_count: 1,
-                duration_minutes: 0,
-                max_internal_gap_minutes: None,
-            })
-            .collect();
-        let html = super::render_sessions_table(&rows);
-        let newest = html
-            .find("2026-05-01 24:00:00")
-            .expect("the newest is shown");
-        let next = html.find("2026-05-01 23:00:00").expect("and the next");
-        assert!(newest < next, "newest first");
+    fn only_visits_has_an_activity_sessions_card() {
         assert!(
-            !html.contains("2026-05-01 00:00:00"),
-            "the oldest falls off"
+            !TRENDS.contains(">Activity sessions</h2>"),
+            "Trends still draws its own Activity sessions card"
         );
+        assert!(
+            !TRENDS.contains("/pages/ts-sessions"),
+            "Trends still loads the sessions partial"
+        );
+        // The counterpart: Visits keeps the card.
+        assert!(VISITS.contains("Activity sessions"));
     }
 }

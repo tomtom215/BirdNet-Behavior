@@ -186,8 +186,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_sha256: Some("8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"),
         sample_rate: 32_000,
         usage: Use::Classifier,
-        notes: "The station's default classifier. Reports a dynamic input shape, \
-                which resolves to 4.5 s windows at 32 kHz.",
+        notes: "Preview release. Reports a dynamic input shape, which resolves \
+                to 4.5 s windows at 32 kHz.",
     },
     CatalogEntry {
         id: "perch-v2",

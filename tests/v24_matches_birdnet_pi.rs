@@ -86,7 +86,6 @@ fn v24_reproduces_birdnet_pi_on_the_magpie_recording() {
         target_sample_rate: model.infer_sample_rate(),
         raw_audio_input: model.expects_raw_audio(),
         chunk_duration_secs: model.recommended_chunk_secs(),
-        confidence_threshold: 0.0,
         ..PipelineConfig::default()
     };
     let chunks = process_file(&staged, &cfg).expect("pipeline");

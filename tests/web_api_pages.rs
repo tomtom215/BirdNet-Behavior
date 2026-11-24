@@ -421,7 +421,7 @@ async fn analytics_page_returns_html() {
     // each card carries a sentence-case eyebrow + a plain-English headline.
     assert!(html.contains("Activity sessions"));
     assert!(html.contains("Bursts of singing"));
-    assert!(html.contains("Species retention"));
+    assert!(html.contains("Return visits"));
     assert!(html.contains("Who keeps coming back"));
     // The ordered questions moved to the Sequences tab beside it: this tab says so, and does not
     // carry their cards.
@@ -462,7 +462,6 @@ async fn the_sequences_tab_holds_the_ordered_questions() {
         ),
         ("Neighbouring species", "/pages/analytics-next"),
         ("Who answers whom", "/pages/analytics-answers"),
-        ("The analytics engine", "/pages/analytics-config"),
     ] {
         assert!(html.contains(card), "{card}");
         assert!(
@@ -473,6 +472,8 @@ async fn the_sequences_tab_holds_the_ordered_questions() {
     // The visit cards are on the other tab, once each; and the bar marks this one.
     assert!(!html.contains("Bursts of singing"));
     assert!(!html.contains("Who keeps coming back"));
+    // The engine's diagnostics moved to Settings → Health (UIC-14).
+    assert!(!html.contains("/pages/analytics-config"));
     assert_eq!(html.matches("bnb-subtab active").count(), 1);
     assert!(html.contains(r#"href="/patterns?tab=behavior""#));
 }
@@ -573,7 +574,9 @@ async fn htmx_analytics_config_partial() {
     let html = String::from_utf8_lossy(&body);
 
     assert!(html.contains("Version"));
-    assert!(html.contains("SQLite Database"));
+    // The partial is public, and printed the database's absolute path (UIC-14).
+    assert!(!html.contains("SQLite Database"), "{html}");
+    assert!(html.contains("Analytics Active"), "{html}");
 }
 
 #[tokio::test]

@@ -401,9 +401,9 @@ fn render_companion_table(
 <thead>
   <tr>
     <th>Companion Species</th>
-    <th>Shared Days</th>
-    <th>Avg Confidence</th>
-    <th>Co-occurrence</th>
+    <th>Days heard together</th>
+    <th>How sure (average)</th>
+    <th>Against the most</th>
   </tr>
 </thead>
 <tbody>",

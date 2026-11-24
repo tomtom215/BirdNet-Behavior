@@ -127,14 +127,14 @@ pub struct PipelineConfig {
     /// The recorded span always *contains* the audio heard, so a clip cut from
     /// it contains the detection. With one classifier the two are identical.
     pub chunk_step_secs: Option<f32>,
-    /// Minimum confidence threshold for reporting.
-    pub confidence_threshold: f32,
     /// Feed raw audio samples directly to the model instead of a mel spectrogram.
     ///
-    /// Set automatically by the daemon when a V3.0-style model is detected
-    /// (input shape `[1, 96_000]`). V2.4 models expect a mel spectrogram
-    /// (`[1, 144_000]` = 128 mel bands × 1125 frames); V3.0 models perform
-    /// their own internal feature extraction from the raw waveform.
+    /// Set by the daemon from the loaded classifier's input spec
+    /// (`InputSpec::is_waveform`). Every bundled classifier is a waveform
+    /// model: BirdNET V2.4 takes `[1, 144_000]` (3 s at 48 kHz) and V3.0 and
+    /// Perch take their own rate's samples, and each computes its features
+    /// inside the network. The mel path is kept for a model whose input is a
+    /// spectrogram.
     pub raw_audio_input: bool,
     /// Further sample rates to prepare every chunk at, for classifiers that
     /// want a rate other than [`Self::target_sample_rate`] (MMP-01).
@@ -155,7 +155,6 @@ impl Default for PipelineConfig {
             chunk_duration_secs: 3.0,
             chunk_overlap_secs: 0.0,
             chunk_step_secs: None,
-            confidence_threshold: 0.25,
             raw_audio_input: false,
             extra_sample_rates: Vec::new(),
         }
@@ -347,9 +346,10 @@ pub fn process_file_with_source_rate(
         // Judged on the padded chunk, which is what a model would be handed.
         let silent = is_constant(&chunk_data);
 
-        // V3.0 models (raw_audio_input=true) take the raw waveform directly.
-        // Store as a "1 × N" MelSpectrogram so the rest of the pipeline is unchanged.
-        // V2.4 models compute a proper mel spectrogram.
+        // A waveform model (raw_audio_input=true, every bundled classifier)
+        // takes the samples directly; they are stored as a "1 × N"
+        // MelSpectrogram so the rest of the pipeline is unchanged. A model
+        // whose input is a spectrogram is given one computed here.
         let spectrogram = if config.raw_audio_input {
             let n = chunk_data.len();
             MelSpectrogram {
@@ -599,7 +599,6 @@ mod tests {
         let config = PipelineConfig::default();
         assert_eq!(config.target_sample_rate, 48000);
         assert!((config.chunk_duration_secs - 3.0).abs() < f32::EPSILON);
-        assert!((config.confidence_threshold - 0.25).abs() < f32::EPSILON);
     }
 
     /// `is_constant` is exact: one sample that differs is enough to give the
