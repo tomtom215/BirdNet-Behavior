@@ -179,6 +179,10 @@ The rest of the export family (`detections/export/raven`, the per-clip Raven and
 
 `GET /api/v2/analysis-runs?limit=` lists the station's analysis runs, newest first (`limit` defaults to 50, at most 500), as `{"runs": [...]}`, and `GET /api/v2/analysis-runs/{id}` returns one (or `404`). A run is one detection-daemon start: it records the SHA-256 of the model and labels it analysed with and the settings in force, and carries `detections`, the number of rows that name it. A detection row's `run_id` points at one of these; the exports resolve it to the model's name and checksum, and this is where the rest (when the run started, the label count, the geomodel) is read.
 
+`GET /api/v2/effort?from=YYYY-MM-DD&to=YYYY-MM-DD&grain=day|hour` returns how long the station listened, as `{"grain": ..., "rows": [...]}`: per source and local date (the default) or local hour, the seconds of audio the detection pipeline analysed (`seconds_analysed`), and the segments it analysed, the shed policy skipped (`segments_shed`) and lost before analysis (`segments_dropped`). It counts analysed audio, not how long a source looked alive, so it is the denominator for a rate. Hours exist from migration 61 onward; earlier days have daily totals only, with null segment counts. At most 366 days a request.
+
+`GET /api/v2/effort/history?sci_name=&from=&to=` is one species' detection history: one row per local hour with `detected` 1 (detected that hour), 0 (audio analysed that hour, species not detected) or null (nothing analysed, so nothing can be said), and the hour's `seconds_analysed`. An hour the station was off is null, not 0.
+
 ### Languages
 
 `GET /api/v2/languages` lists the languages species common names can be shown in, as `{"languages": [{"code", "name", "native_name", "active", "coverage"}], "count", "active"}`. `coverage` is `{"named", "of"}`, how many of the installed classifier's species the language names, and `null` for English and when no classifier label file was available to count against. See [Species Names in Your Language](../admin/species-names.md).

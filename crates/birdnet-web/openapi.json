@@ -8267,6 +8267,220 @@
           }
         }
       }
+    },
+    "/effort": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Listening effort",
+        "description": "Audio the detection pipeline analysed, per source, by local date or local hour (migration 61 onward for hours), with the segments the shed policy skipped and those lost before analysis. This is the denominator for any rate: it counts what was analysed, not how long a source looked alive.",
+        "operationId": "getEffort",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First local date, YYYY-MM-DD.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last local date, YYYY-MM-DD; at most 366 days after from.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "description": "`day` (default) or `hour`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "hour"
+              ],
+              "default": "day"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "grain": {
+                      "type": "string",
+                      "enum": [
+                        "day",
+                        "hour"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string"
+                          },
+                          "hour": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 23
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "seconds_analysed": {
+                            "type": "number"
+                          },
+                          "segments_analysed": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "segments_shed": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "segments_dropped": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "source",
+                          "seconds_analysed"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "grain",
+                    "rows"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed or too long range, or an unknown grain."
+          }
+        }
+      }
+    },
+    "/effort/history": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "A species' detection history by hour",
+        "description": "One row per local hour of the range: `detected` is 1 if the species was detected that hour, 0 if the station analysed audio that hour and did not detect it, and null if it analysed nothing (so nothing can be said). Hours known only from a daily total (before migration 61) are null.",
+        "operationId": "getEffortHistory",
+        "parameters": [
+          {
+            "name": "sci_name",
+            "in": "query",
+            "required": true,
+            "description": "Scientific name, as in detections.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First local date, YYYY-MM-DD.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last local date, YYYY-MM-DD; at most 366 days after from.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The occasions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "occasions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string"
+                          },
+                          "hour": {
+                            "type": "integer"
+                          },
+                          "seconds_analysed": {
+                            "type": "number"
+                          },
+                          "detected": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "enum": [
+                              0,
+                              1,
+                              null
+                            ]
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "hour",
+                          "seconds_analysed",
+                          "detected"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "occasions"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed or too long range, or no species."
+          }
+        }
+      }
     }
   },
   "components": {
