@@ -45,6 +45,10 @@ pub enum CaptureSource {
         /// Stream identifier for filenames and metrics when more than one
         /// local microphone is configured. `None` for a lone local mic.
         stream_id: Option<String>,
+        /// Which channel to keep, if the operator picked one: ffmpeg selects
+        /// it with a `pan` filter instead of averaging the two (MSC-11), and
+        /// the segments are mono. `channels` is not passed as `-ac` then.
+        channel_pick: Option<super::tee::ChannelPick>,
     },
     /// RTSP stream via `ffmpeg`.
     Rtsp {
@@ -56,6 +60,10 @@ pub enum CaptureSource {
         transport: RtspTransport,
         /// Which of the camera's tracks to set up.
         media_mode: RtspMediaMode,
+        /// Which channel of a stereo stream to keep, if the operator picked
+        /// one: selected with a `pan` filter in place of the `-ac 1` average
+        /// (MSC-11).
+        channel_pick: Option<super::tee::ChannelPick>,
     },
 }
 
@@ -84,24 +92,28 @@ impl std::fmt::Debug for CaptureSource {
                 sample_rate,
                 channels,
                 stream_id,
+                channel_pick,
             } => f
                 .debug_struct("PipeWire")
                 .field("device", device)
                 .field("sample_rate", sample_rate)
                 .field("channels", channels)
                 .field("stream_id", stream_id)
+                .field("channel_pick", channel_pick)
                 .finish(),
             Self::Rtsp {
                 url,
                 stream_id,
                 transport,
                 media_mode,
+                channel_pick,
             } => f
                 .debug_struct("Rtsp")
                 .field("url", &crate::config::redact::redact_url_credentials(url))
                 .field("stream_id", stream_id)
                 .field("transport", transport)
                 .field("media_mode", media_mode)
+                .field("channel_pick", channel_pick)
                 .finish(),
         }
     }
@@ -503,6 +515,7 @@ mod tests {
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
             media_mode: RtspMediaMode::AudioOnly,
+            channel_pick: None,
         };
         let shown = format!("{src:?}");
         assert!(!shown.contains("hunter2"), "{shown}");
@@ -723,6 +736,7 @@ mod tests {
             sample_rate: 48_000,
             channels: 1,
             stream_id: Some("src_pw".into()),
+            channel_pick: None,
         };
         assert_eq!(pw.label(), "src_pw");
 
@@ -731,6 +745,7 @@ mod tests {
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
             media_mode: RtspMediaMode::Full,
+            channel_pick: None,
         };
         assert_eq!(rtsp.label(), "RTSP_1");
     }

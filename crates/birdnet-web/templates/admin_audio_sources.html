@@ -87,6 +87,18 @@
                 <option value="32000">32 000 Hz</option>
               </select>
             </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="lt-channels">Channels</label>
+              <select id="lt-channels" name="channels">
+                <option value="mono" selected>mono</option>
+                <option value="left">left only</option>
+                <option value="right">right only</option>
+                <option value="stereo">stereo (both, averaged)</option>
+              </select>
+              <span class="hint">For a two-capsule microphone, left or right
+                keeps one capsule; averaging two a few centimetres apart cancels
+                some frequencies.</span>
+            </div>
           </div>
 
           <div class="bnb-form-actions">
@@ -170,6 +182,15 @@
               </select>
               <span class="hint">Audio only leaves the camera's few video slots free.
                 A camera that sends no audio then fails to connect.</span>
+            </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="rt-channels">Channels</label>
+              <select id="rt-channels" name="channels">
+                <option value="mono" selected>mono (both averaged)</option>
+                <option value="left">left only</option>
+                <option value="right">right only</option>
+                <option value="stereo">stereo (both, averaged)</option>
+              </select>
             </div>
           </div>
 

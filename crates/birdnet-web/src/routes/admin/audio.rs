@@ -28,7 +28,7 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 
 use birdnet_db::audio_sources::{
-    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
+    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, Channels, NewAudioSource,
     PipelineFlags, RtspMediaMode, RtspTransport, SourceKind,
 };
 
@@ -297,6 +297,10 @@ struct CreateForm {
     /// `full` or `audio`: which of a camera's tracks to request.
     #[serde(default)]
     media_mode: Option<String>,
+    /// `mono`, `left`, `right` or `stereo`: which of the device's channels
+    /// analysis hears (MSC-11). Absent leaves the stored value alone.
+    #[serde(default)]
+    channels: Option<String>,
     /// Start of the per-source quiet window, `HH:MM` in the station's **local**
     /// time. Empty (with `quiet_end` also empty) clears the window.
     #[serde(default)]
@@ -374,6 +378,47 @@ impl ToggleSet {
             rtsp_keepalive: self.rtsp_keepalive,
         }
     }
+}
+
+/// The submitted channel pick: `None` when the form does not carry the
+/// control (leave the stored value alone), an error for anything that is not
+/// one of the four the table holds.
+fn parse_channels(raw: Option<&str>) -> Result<Option<Channels>, &'static str> {
+    raw.map_or(Ok(None), |s| {
+        s.trim()
+            .parse::<Channels>()
+            .map(Some)
+            .map_err(|_| "Channels must be mono, left, right or stereo.")
+    })
+}
+
+/// The channel-pick control, shared by the edit form; the add forms carry
+/// the same options in their templates.
+fn render_channels_field(row: &AudioSource) -> String {
+    let sel = |c: Channels| if row.channels == c { " selected" } else { "" };
+    format!(
+        r#"<div class="aud-edit-channels">
+      <span class="bnb-eyebrow">Channels</span>
+      <span class="aud-edit-pair">
+        <label class="sr-only" for="ch-{id}">Channels analysed</label>
+        <select id="ch-{id}" name="channels">
+          <option value="mono"{mono}>mono</option>
+          <option value="left"{left}>left only</option>
+          <option value="right"{right}>right only</option>
+          <option value="stereo"{stereo}>stereo (both, averaged)</option>
+        </select>
+      </span>
+      <p class="hint">What analysis hears from a two-channel microphone or camera.
+        <em>Left only</em> or <em>right only</em> keeps one capsule intact; averaging two
+        capsules a few centimetres apart cancels some frequencies.
+        <code>birdnet-behavior --channel-report</code> says which is better here.</p>
+    </div>"#,
+        id = escape_html(&row.id),
+        mono = sel(Channels::Mono),
+        left = sel(Channels::Left),
+        right = sel(Channels::Right),
+        stereo = sel(Channels::Stereo),
+    )
 }
 
 /// What the form's two quiet-window fields mean together.
@@ -563,6 +608,14 @@ async fn create(
                     }
                     Err(_) => return validation_response("Unknown RTSP media mode."),
                 }
+            }
+            match parse_channels(form.channels.as_deref()) {
+                Ok(Some(c)) => {
+                    new.channels = c;
+                    patch.channels = Some(c);
+                }
+                Ok(None) => {}
+                Err(msg) => return validation_response(msg),
             }
             if let Some(toggles) = ToggleSet::from_form(
                 form.pipeline_present.as_deref(),
@@ -994,6 +1047,10 @@ async fn update(
                     Ok(m) => patch.media_mode = Some(m),
                     Err(_) => return validation_response("Unknown RTSP media mode."),
                 }
+            }
+            match parse_channels(form.channels.as_deref()) {
+                Ok(c) => patch.channels = c,
+                Err(msg) => return validation_response(msg),
             }
             if let Some(toggles) = ToggleSet::from_form(
                 form.pipeline_present.as_deref(),
@@ -1433,6 +1490,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         <code>sunrise-15</code>) follows the season, which is usually what you mean.
         Leave both blank for none.</p>
     </div>
+    {channels_field}
     {rtsp_fields}
     <div class="aud-edit-pipeline">
       <input type="hidden" name="pipeline_present" value="1">
@@ -1488,6 +1546,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
         eq_chain = escape_html(&row.eq_chain),
+        channels_field = render_channels_field(row),
         high_pass_checked = high_pass_checked,
         dc_removal_checked = dc_removal_checked,
         agc_checked = agc_checked,
@@ -1540,10 +1599,13 @@ fn render_rtsp_fields(row: &AudioSource) -> String {
 /// plausible-looking constant.
 pub(crate) fn detail_for(s: &AudioSource) -> String {
     let rate_khz = f64::from(s.sample_rate) / 1000.0;
+    // The depth capture records, not the row's `bit_depth` column: every
+    // backend writes 16-bit samples (`arecord -f S16_LE`, ffmpeg
+    // `pcm_s16le`), and the column defaults to 24, so printing it claimed
+    // 24-bit audio that was never recorded (MSC-11).
     let mut out = format!(
-        "{rate_khz:.1} kHz · {channels} · {bit}-bit",
+        "{rate_khz:.1} kHz · {channels} · {RECORDED_BIT_DEPTH}-bit",
         channels = s.channels.as_str(),
-        bit = s.bit_depth,
     );
     // Stereo is the one channel setting that can quietly cost detections, so
     // it says so where the operator chose it. Both channels are kept and the
@@ -1588,6 +1650,9 @@ pub(crate) fn detail_for(s: &AudioSource) -> String {
     }
     out
 }
+
+/// The sample depth every capture backend records at. See [`detail_for`].
+const RECORDED_BIT_DEPTH: u8 = 16;
 
 fn meta_for(s: &AudioSource) -> String {
     s.disabled_at.as_ref().map_or_else(
@@ -1854,6 +1919,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         }
@@ -2285,6 +2351,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         };
@@ -2379,6 +2446,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         };
@@ -2485,6 +2553,78 @@ mod tests {
         assert_ne!(active[0].id, "src_old");
         let old = state.with_db(|c| c.get("src_old")).unwrap().unwrap();
         assert!(old.disabled_at.is_some(), "the removed row stays removed");
+    }
+
+    /// MSC-11: the channel pick is set on the add form, shown and changed on
+    /// the edit form, and stored — it used to be reachable only through SQL,
+    /// while the start-up warning told the operator to "set the source to
+    /// Left or Right".
+    #[tokio::test]
+    async fn the_channel_pick_is_set_on_the_form_and_changed_on_the_edit_form() {
+        let (_d, state) = fixture();
+        let mut form = eq_form("usb-alsa", "plughw:4,0");
+        form.channels = Some("left".to_string());
+        let res = create(State(state.clone()), actor(&state), HtmxForm(form)).await;
+        assert!(res.headers().get("hx-reswap").is_none(), "added");
+        let row = state.with_db(AudioSourceStore::list).unwrap().remove(0);
+        assert_eq!(row.channels, Channels::Left);
+
+        let edit = render_edit_form(&row);
+        assert!(
+            edit.contains(r#"name="channels""#),
+            "the edit form offers it"
+        );
+        assert!(
+            edit.contains(r#"<option value="left" selected>"#),
+            "with the stored pick selected"
+        );
+
+        let mut change = eq_form("usb-alsa", "plughw:4,0");
+        change.channels = Some("right".to_string());
+        let res = update(
+            State(state.clone()),
+            actor(&state),
+            Path(row.id.clone()),
+            HtmxForm(change),
+        )
+        .await;
+        assert!(res.headers().get("hx-reswap").is_none(), "saved");
+        let row = state.with_db(|c| c.get(&row.id)).unwrap().unwrap();
+        assert_eq!(row.channels, Channels::Right);
+
+        // Absent leaves it alone; nonsense is refused and changes nothing.
+        let res = update(
+            State(state.clone()),
+            actor(&state),
+            Path(row.id.clone()),
+            HtmxForm(eq_form("usb-alsa", "plughw:4,0")),
+        )
+        .await;
+        assert!(res.headers().get("hx-reswap").is_none(), "saved");
+        let mut bad = eq_form("usb-alsa", "plughw:4,0");
+        bad.channels = Some("both".to_string());
+        let res = update(
+            State(state.clone()),
+            actor(&state),
+            Path(row.id.clone()),
+            HtmxForm(bad),
+        )
+        .await;
+        assert_refused(&res);
+        let row = state.with_db(|c| c.get(&row.id)).unwrap().unwrap();
+        assert_eq!(row.channels, Channels::Right);
+    }
+
+    /// MSC-11: capture records 16-bit samples whatever the row's `bit_depth`
+    /// column says (24 by default), so the page shows the depth recorded.
+    #[test]
+    fn the_detail_line_shows_the_depth_actually_recorded() {
+        let (_d, state) = fixture();
+        let row = insert_one(&state, "src_u", SourceKind::UsbAlsa, "hw:1,0");
+        assert_eq!(row.bit_depth, 24, "precondition: the stored default");
+        let detail = detail_for(&row);
+        assert!(detail.contains("16-bit"), "{detail}");
+        assert!(!detail.contains("24-bit"), "{detail}");
     }
 
     /// The counterpart: genuinely different hardware is still accepted.

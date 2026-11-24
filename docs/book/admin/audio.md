@@ -57,9 +57,10 @@ Open a source's **edit** panel to change:
 - **Quiet window** — an optional per-source pause in the **station's local time**, each end a clock time (`22:00`) or a solar anchor (`sunset`, `sunset+30`, `sunrise-15`), e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
 - **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, and (network streams only) a 10-second read timeout that ends a stream which stops sending, so it is restarted.
 - **Equaliser** — a filter chain of your own, when the toggles are not the right shape. See below.
+- **Channels** — mono, left only, right only, or stereo (both, averaged); see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below. Also on the add forms.
 - **Camera stream** (RTSP sources only) — the **transport** (auto / TCP / UDP — auto is TCP, the NAT-robust choice; force UDP only for a camera that needs it) and the **tracks requested** (see [Audio-only cameras](#audio-only-cameras)).
 
-**Sample rate** (48 or 44.1 kHz) is chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
+**Sample rate** (48 or 44.1 kHz) is chosen when the source is **added**. Per-source **gain** is stored with the source and shown in its detail line, but is **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds. Every source records **16-bit** samples, and the detail line says so; the row's `bit_depth` column is not read by capture.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
@@ -178,10 +179,13 @@ would each hand the model. Run it while birds are actually singing: the
 cancellation is direction-dependent, so ambient noise alone can look benign on a
 microphone that loses badly on real song.
 
-Act on the answer by setting the source's channel pick — `left` or `right`
-takes one capsule intact instead of averaging two. There is not yet a UI
-control for it: set the `channels` column of the source's `audio_sources` row
-(`mono` / `left` / `right` / `stereo`) directly and restart the service.
+Act on the answer by setting the source's **Channels** control — on its edit
+panel, or on the add form — to *left only* or *right only*, which takes one
+capsule intact instead of averaging two, and restart the service. It applies to
+every kind of source: a USB microphone keeps the channel as it is captured, and
+a PipeWire microphone or a camera stream has ffmpeg keep it (a `pan` filter in
+place of the averaging downmix). A camera or PipeWire source that turns out to
+send only one channel is heard with either pick, about 3 dB quieter.
 
 > This matters most for exactly the deployments that can least afford it: a
 > sealed enclosure nobody opens for a season. A station losing 66 dB to its own

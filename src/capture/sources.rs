@@ -336,6 +336,10 @@ fn audio_source_to_capture_source(
             sample_rate: row.sample_rate,
             channels,
             stream_id: Some(row.id.clone()),
+            // ffmpeg keeps the picked channel with a `pan` (MSC-11); this used
+            // to be dropped, so a Left/Right row recorded stereo and the
+            // decoder averaged it — the comb filter the pick exists to avoid.
+            channel_pick,
         },
         SourceKind::Rtsp => CaptureSource::Rtsp {
             url: row.device_id.clone(),
@@ -345,6 +349,10 @@ fn audio_source_to_capture_source(
             // camera could never be captured.
             transport: map_rtsp_transport(row.rtsp_transport),
             media_mode: map_media_mode(row.media_mode),
+            // A pick replaces the `-ac 1` average with a `pan` (MSC-11).
+            // Mono and Stereo both stay `-ac 1`: the stream is analysed mono
+            // either way, as it always was.
+            channel_pick,
         },
     }
 }
@@ -410,6 +418,7 @@ pub(super) fn resolve_sources(
                     // admin UI is where TCP/UDP is chosen per source.
                     transport: RtspTransport::Auto,
                     media_mode: RtspMediaMode::Full,
+                    channel_pick: None,
                 }
             })
             .collect()
@@ -424,6 +433,7 @@ pub(super) fn resolve_sources(
             device,
             channels: 1,
             stream_id: None,
+            channel_pick: None,
         }];
         srcs.extend(rtsp_sources(rtsp_urls, true));
         srcs
@@ -1021,6 +1031,46 @@ mod tests {
             resolve(Channels::Mono),
             resolve(Channels::Right),
             "Right must not be a synonym for Mono"
+        );
+    }
+
+    /// MSC-11: a PipeWire or RTSP row's Left/Right reaches the capture source
+    /// as a pick; it used to be dropped here, so PipeWire opened two channels
+    /// and the decoder averaged them, and RTSP was always averaged by `-ac 1`.
+    #[test]
+    fn pipewire_and_rtsp_rows_carry_their_channel_pick() {
+        use birdnet_db::audio_sources::Channels;
+        let pick = |kind: SourceKind, device: &str, channels: Channels| {
+            let mut r = row("src_x", kind, device);
+            r.channels = channels;
+            let mut idx = 0;
+            match audio_source_to_capture_source(&r, false, &mut idx) {
+                CaptureSource::PipeWire { channel_pick, .. }
+                | CaptureSource::Rtsp { channel_pick, .. } => channel_pick,
+                other @ CaptureSource::Microphone { .. } => panic!("unexpected {other:?}"),
+            }
+        };
+        let picks: Vec<_> = [
+            (SourceKind::PipeWire, "alsa_input.usb", Channels::Left),
+            (SourceKind::PipeWire, "alsa_input.usb", Channels::Right),
+            (SourceKind::Rtsp, "rtsp://cam/s", Channels::Left),
+            (SourceKind::Rtsp, "rtsp://cam/s", Channels::Right),
+            (SourceKind::PipeWire, "alsa_input.usb", Channels::Mono),
+            (SourceKind::Rtsp, "rtsp://cam/s", Channels::Stereo),
+        ]
+        .into_iter()
+        .map(|(k, d, c)| pick(k, d, c))
+        .collect();
+        assert_eq!(
+            picks,
+            [
+                Some(ChannelPick::Left),
+                Some(ChannelPick::Right),
+                Some(ChannelPick::Left),
+                Some(ChannelPick::Right),
+                None,
+                None,
+            ]
         );
     }
 

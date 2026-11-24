@@ -408,8 +408,42 @@ fn apply_audio_filters(
     pipeline: crate::audio::capture::types::AudioPipeline,
     eq: &crate::audio::eq::EqChain,
 ) {
-    if let Some(chain) = audio_filter_chain(gain_db, pipeline, eq) {
-        cmd.arg("-af").arg(chain);
+    apply_picked_audio_filters(cmd, None, gain_db, pipeline, eq);
+}
+
+/// The ffmpeg filters that keep one channel of a stereo input as mono.
+///
+/// `pan=mono|c0=c1` alone on a **mono** input does not fail: it measured
+/// −91 dB (silence) on ffmpeg 6.1.1, so a Right pick on a camera that sends
+/// mono would record nothing with no error anywhere. `aformat` first makes the
+/// input stereo — a stereo input passes untouched, and a mono one is copied
+/// to both channels (3 dB down, measured −21.1 against −18.1 dBFS) — so either
+/// pick always hears something.
+#[must_use]
+pub const fn channel_pick_filter(pick: tee::ChannelPick) -> &'static str {
+    match pick {
+        tee::ChannelPick::Left => "aformat=channel_layouts=stereo,pan=mono|c0=c0",
+        tee::ChannelPick::Right => "aformat=channel_layouts=stereo,pan=mono|c0=c1",
+    }
+}
+
+/// [`apply_audio_filters`] with a channel pick first in the chain: ffmpeg
+/// honours only the last `-af`, so the pick has to share the one chain, and it
+/// goes first so every later stage works on the channel that is kept.
+fn apply_picked_audio_filters(
+    cmd: &mut Command,
+    pick: Option<tee::ChannelPick>,
+    gain_db: f32,
+    pipeline: crate::audio::capture::types::AudioPipeline,
+    eq: &crate::audio::eq::EqChain,
+) {
+    let stages: Vec<String> = pick
+        .map(|p| channel_pick_filter(p).to_owned())
+        .into_iter()
+        .chain(audio_filter_chain(gain_db, pipeline, eq))
+        .collect();
+    if !stages.is_empty() {
+        cmd.arg("-af").arg(stages.join(","));
     }
 }
 
@@ -664,11 +698,32 @@ pub fn detect_pipewire_or_pulseaudio() -> bool {
 ///
 /// Returns `CaptureError` if `ffmpeg` cannot be started.
 pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
+    let (mut cmd, pulse_device) = pipewire_command(config)?;
+    let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
+    drain_capture_stderr(&mut child, pulse_device);
+
+    tracing::info!(
+        device = pulse_device,
+        gain_db = config.gain_db,
+        "started PipeWire/PulseAudio capture via ffmpeg pulse"
+    );
+    Ok(CaptureProcess {
+        child,
+        source: config.source.clone(),
+        tee: None,
+    })
+}
+
+/// The ffmpeg command a `PipeWire`/`PulseAudio` source is captured with, and
+/// the pulse device it opens — built apart from the spawn so the argument
+/// list can be checked.
+fn pipewire_command(config: &RecordingConfig) -> Result<(Command, &str), CaptureError> {
     let CaptureSource::PipeWire {
         ref device,
         sample_rate,
         channels,
         ref stream_id,
+        channel_pick,
     } = config.source
     else {
         return Err(CaptureError::Config("expected PipeWire source".into()));
@@ -691,33 +746,27 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         .arg("-i")
         .arg(pulse_device)
         .arg("-ar")
-        .arg(sample_rate.to_string())
-        .arg("-ac")
-        .arg(channels.to_string());
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
-    let mut child = cmd
-        .arg("-f")
+        .arg(sample_rate.to_string());
+    // With a pick, the `pan` makes the output mono and `-ac` would only be
+    // the average the pick exists to avoid; without one, the row's count.
+    if channel_pick.is_none() {
+        cmd.arg("-ac").arg(channels.to_string());
+    }
+    apply_picked_audio_filters(
+        &mut cmd,
+        channel_pick,
+        config.gain_db,
+        config.pipeline,
+        &config.eq_chain,
+    );
+    cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
         .arg(config.segment_duration_secs.to_string())
         .arg("-strftime")
         .arg("1")
-        .arg(output_path.to_string_lossy().as_ref())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    drain_capture_stderr(&mut child, pulse_device);
-
-    tracing::info!(
-        device = pulse_device,
-        gain_db = config.gain_db,
-        "started PipeWire/PulseAudio capture via ffmpeg pulse"
-    );
-    Ok(CaptureProcess {
-        child,
-        source: config.source.clone(),
-        tee: None,
-    })
+        .arg(output_path.to_string_lossy().as_ref());
+    Ok((cmd, pulse_device))
 }
 
 /// Start an audio capture process for an RTSP stream via `ffmpeg`.
@@ -751,6 +800,7 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
         ref stream_id,
         transport,
         media_mode,
+        channel_pick,
     } = config.source
     else {
         return Err(CaptureError::Config("expected RTSP source".into()));
@@ -782,10 +832,20 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
     .arg("-acodec")
     .arg("pcm_s16le")
     .arg("-ar")
-    .arg("48000")
-    .arg("-ac")
-    .arg("1");
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
+    .arg("48000");
+    // Mono either way: `-ac 1` averages the camera's channels, and a pick's
+    // `pan` keeps one of them instead — so with a pick, no `-ac`, which would
+    // otherwise downmix before the filter ever saw two channels.
+    if channel_pick.is_none() {
+        cmd.arg("-ac").arg("1");
+    }
+    apply_picked_audio_filters(
+        &mut cmd,
+        channel_pick,
+        config.gain_db,
+        config.pipeline,
+        &config.eq_chain,
+    );
     cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
@@ -909,6 +969,7 @@ mod capture_failure_classification {
 mod tests {
     use super::super::types::{AudioFormat, LocalOffset, RtspMediaMode, RtspTransport};
     use super::*;
+    use crate::audio::capture::ChannelPick;
     use crate::audio::capture::types::AudioPipeline;
     use std::path::PathBuf;
 
@@ -963,6 +1024,7 @@ mod tests {
                     stream_id: "RTSP_1".into(),
                     transport: RtspTransport::Auto,
                     media_mode: mode,
+                    channel_pick: None,
                 },
                 output_dir: std::env::temp_dir(),
                 segment_duration_secs: 15,
@@ -1005,6 +1067,7 @@ mod tests {
                 stream_id: "RTSP_1".into(),
                 transport: RtspTransport::Udp,
                 media_mode: RtspMediaMode::AudioOnly,
+                channel_pick: None,
             },
             output_dir: std::env::temp_dir(),
             segment_duration_secs: 15,
@@ -1022,6 +1085,92 @@ mod tests {
         cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// The ffmpeg argv for `source` (`PipeWire` or RTSP) at +6 dB gain, so a
+    /// pick has another filter to share the one `-af` with.
+    fn picked_args(source: CaptureSource) -> Vec<String> {
+        let config = RecordingConfig {
+            source,
+            output_dir: std::env::temp_dir(),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+            gain_db: 6.0,
+            pipeline: crate::audio::capture::types::AudioPipeline::none(),
+            eq_chain: crate::audio::eq::EqChain::default(),
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
+        };
+        let cmd = match &config.source {
+            CaptureSource::PipeWire { .. } => pipewire_command(&config).expect("command").0,
+            _ => rtsp_command(&config).expect("command").0,
+        };
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn pipewire(pick: Option<ChannelPick>) -> CaptureSource {
+        CaptureSource::PipeWire {
+            device: String::new(),
+            sample_rate: 48_000,
+            channels: if pick.is_some() { 2 } else { 1 },
+            stream_id: Some("src_pw".into()),
+            channel_pick: pick,
+        }
+    }
+
+    fn camera(pick: Option<ChannelPick>) -> CaptureSource {
+        CaptureSource::Rtsp {
+            url: "rtsp://cam.local/s".into(),
+            stream_id: "src_cam".into(),
+            transport: RtspTransport::Tcp,
+            media_mode: RtspMediaMode::Full,
+            channel_pick: pick,
+        }
+    }
+
+    /// The single `-af` chain of an argv, and every `-ac` value in it.
+    fn filters_and_ac(args: &[String]) -> (Vec<&str>, Vec<&str>) {
+        let after = |flag: &str| -> Vec<&str> {
+            args.windows(2)
+                .filter(|w| w[0] == flag)
+                .map(|w| w[1].as_str())
+                .collect()
+        };
+        (after("-af"), after("-ac"))
+    }
+
+    /// MSC-11: a Left or Right pick on a `PipeWire` or RTSP source reaches
+    /// ffmpeg as a `pan` that keeps that channel, first in the one `-af`
+    /// chain, in place of the `-ac` that averages the two.
+    #[test]
+    fn a_channel_pick_reaches_ffmpeg_as_a_pan_filter() {
+        let mut wrong = Vec::new();
+        for (what, source, keep) in [
+            ("PipeWire Left", pipewire(Some(ChannelPick::Left)), "c0"),
+            ("PipeWire Right", pipewire(Some(ChannelPick::Right)), "c1"),
+            ("RTSP Left", camera(Some(ChannelPick::Left)), "c0"),
+            ("RTSP Right", camera(Some(ChannelPick::Right)), "c1"),
+        ] {
+            let args = picked_args(source);
+            let (af, ac) = filters_and_ac(&args);
+            let want = format!("aformat=channel_layouts=stereo,pan=mono|c0={keep},volume=6.00dB");
+            if af != [want.as_str()] || !ac.is_empty() {
+                wrong.push(format!("{what}: -af {af:?} -ac {ac:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The counterpart: with no pick nothing is panned, and the channel
+    /// count is passed as before.
+    #[test]
+    fn without_a_pick_the_channel_count_is_passed_as_before() {
+        let args = picked_args(pipewire(None));
+        assert_eq!(filters_and_ac(&args), (vec!["volume=6.00dB"], vec!["1"]));
+        let args = picked_args(camera(None));
+        assert_eq!(filters_and_ac(&args), (vec!["volume=6.00dB"], vec!["1"]));
     }
 
     /// The options before `-i`.
@@ -1094,6 +1243,7 @@ mod tests {
             stream_id: "cam1".into(),
             transport: RtspTransport::Auto,
             media_mode: RtspMediaMode::Full,
+            channel_pick: None,
         };
         assert_eq!(required_tool(&src), "ffmpeg");
     }
@@ -1618,5 +1768,47 @@ volume=6.00dB,dynaudnorm=f=500:g=15"
             "ffmpeg rejected the filter chain `{chain}`:\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// The peak level, in dBFS, of `input` (an ffmpeg lavfi graph) through
+    /// `filter`, from `volumedetect`.
+    fn peak_db(input: &str, filter: &str) -> f64 {
+        let out = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-nostats", "-f", "lavfi", "-i", input])
+            .args(["-t", "0.5", "-af", &format!("{filter},volumedetect")])
+            .args(["-f", "null", "-"])
+            .output()
+            .expect("spawn ffmpeg");
+        let log = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "ffmpeg failed on `{filter}`:\n{log}");
+        log.lines()
+            .find_map(|l| l.split("max_volume:").nth(1))
+            .and_then(|v| v.trim().trim_end_matches("dB").trim().parse().ok())
+            .unwrap_or_else(|| panic!("no max_volume in:\n{log}"))
+    }
+
+    /// MSC-11: the pick keeps the channel it names. A tone on the left only:
+    /// Left hears it and Right does not. And on a mono input both picks hear
+    /// it — a bare `pan=mono|c0=c1` there is silent, which is why the chain
+    /// makes the input stereo first.
+    #[test]
+    fn a_pick_keeps_the_channel_it_names() {
+        use crate::audio::capture::ChannelPick;
+        if !is_tool_available("ffmpeg") {
+            eprintln!("ffmpeg not installed — channel-pick check skipped");
+            return;
+        }
+        let left_only = "sine=f=1000:r=48000,aformat=channel_layouts=mono[a];\
+                         anullsrc=r=48000:cl=mono[b];[a][b]join=inputs=2:channel_layout=stereo";
+        let left = peak_db(left_only, channel_pick_filter(ChannelPick::Left));
+        let right = peak_db(left_only, channel_pick_filter(ChannelPick::Right));
+        assert!(left > -30.0, "Left keeps the tone: {left} dB");
+        assert!(right < -80.0, "Right drops it: {right} dB");
+
+        let mono = "sine=f=1000:r=48000";
+        for pick in [ChannelPick::Left, ChannelPick::Right] {
+            let db = peak_db(mono, channel_pick_filter(pick));
+            assert!(db > -30.0, "{pick:?} on a mono input: {db} dB");
+        }
     }
 }
