@@ -130,7 +130,7 @@ const fn kind_css(kind: SourceKind) -> &'static str {
 /// page's first-run checklist printed an unlabelled one whole: an anonymous
 /// visitor to a password-protected station was handed the camera's password.
 /// The host is enough to tell two cameras apart.
-pub(crate) fn public_name(s: &AudioSource) -> String {
+pub fn public_name(s: &AudioSource) -> String {
     if let Some(label) = &s.label {
         return label.clone();
     }

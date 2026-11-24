@@ -218,6 +218,7 @@ mod tests {
             listen_url: None,
             image_url: None,
             station_url: None,
+            source: None,
         }
     }
 

@@ -40,6 +40,11 @@ pub struct WsDetectionEvent {
     /// `true` when this is the first time this species has been detected today.
     #[serde(default)]
     pub is_new_today: bool,
+    /// Which source heard it, as public pages name a source (its label, its
+    /// device, or a stream's host — never a stream URL's credentials), or
+    /// `null` when unknown.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// Shared broadcast channel for detection events.
@@ -223,6 +228,7 @@ mod tests {
             start: 3.0,
             stop: 6.0,
             is_new_today: false,
+            source: None,
         };
         broadcast.send(&event); // Should not panic
         assert_eq!(broadcast.client_count(), 0);
@@ -244,6 +250,7 @@ mod tests {
             start: 0.0,
             stop: 3.0,
             is_new_today: false,
+            source: None,
         };
 
         broadcast.send(&event);
@@ -282,6 +289,7 @@ mod tests {
             start: 6.0,
             stop: 9.0,
             is_new_today: true,
+            source: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"event\":\"detection\""));

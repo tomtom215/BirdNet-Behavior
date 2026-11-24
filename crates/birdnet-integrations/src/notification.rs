@@ -61,6 +61,9 @@ pub struct NotificationContext {
     pub image_url: Option<String>,
     /// URL of the station web interface.
     pub station_url: Option<String>,
+    /// Which source heard it (`$source`), as public pages name a source; `None`
+    /// renders as nothing.
+    pub source: Option<String>,
 }
 
 impl NotificationContext {
@@ -100,7 +103,8 @@ impl NotificationContext {
 /// Templates use `BirdNET-Pi`-compatible `$variable` syntax:
 /// `$sciname`, `$comname`, `$confidence`, `$confidencepct`, `$listenurl`,
 /// `$friendlyurl`, `$date`, `$time`, `$week`, `$latitude`, `$longitude`,
-/// `$cutoff`, `$sens`, `$overlap`, `$flickrimage`/`$image`, `$reason`.
+/// `$cutoff`, `$sens`, `$overlap`, `$flickrimage`/`$image`, `$reason`, and
+/// `$source` (which microphone or camera heard it; not a `BirdNET-Pi` variable).
 #[derive(Debug, Clone)]
 pub struct NotificationTemplate {
     /// Title template string.
@@ -220,6 +224,7 @@ fn substitute(template: &str, ctx: &NotificationContext) -> String {
         .replace("$latitude", &coordinate(ctx.latitude))
         .replace("$longitude", &coordinate(ctx.longitude))
         .replace("$reason", &ctx.reason)
+        .replace("$source", ctx.source.as_deref().unwrap_or(""))
         .replace("$listenurl", listen)
         .replace("$friendlyurl", &friendly)
         .replace("$flickrimage", image)
@@ -552,6 +557,7 @@ mod tests {
             listen_url: Some("http://localhost:8502/listen/123".to_string()),
             image_url: Some("http://example.com/robin.jpg".to_string()),
             station_url: Some("http://localhost:8502".to_string()),
+            source: None,
         }
     }
 

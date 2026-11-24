@@ -55,6 +55,7 @@ moved over from a BirdNET-Pi station keeps working:
 | `$date`, `$time`, `$week` | The detection's local date, time, and ISO week |
 | `$latitude`, `$longitude` | The station's coordinates to six places; nothing at all when the station has none |
 | `$reason` | Why this detection notified: `detection`, `first time today`, or `only seen N times in last 7d` — whichever the trigger mode found |
+| `$source` | Which microphone or camera heard it: the source's label, or its device, or a camera's host and port (never the password in a stream address). Not a BirdNET-Pi variable |
 | `$cutoff`, `$sens`, `$overlap` | The confidence bar this detection cleared, and the sensitivity and overlap the station was running with |
 | `$listenurl` | The detection's own page, with its clip and spectrogram |
 | `$friendlyurl` | The same address as a Markdown link, `[Listen here](…)` |
