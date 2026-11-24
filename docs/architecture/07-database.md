@@ -301,7 +301,7 @@ Analytics queries are split across two crates:
 | Sessionization | `birdnet-behavioral::queries` | Activity sessions with configurable gap |
 | Retention / funnel | `birdnet-behavioral::queries` | Resident vs. migrant classification, dawn chorus sequences |
 | Phenology timing | `birdnet-behavioral::phenology::timing` | Migration windows, first / last detection, year-over-year trend |
-| Weekly abundance | `birdnet-behavioral::phenology::abundance` | Normalised abundance index and peak weeks |
+| Weekly detections | `birdnet-behavioral::phenology::abundance` | Weekly detection counts as a share of the peak week (not corrected for listening), detections per listened hour with a Poisson interval, and peak weeks |
 
 ## Cross-Compilation Notes
 

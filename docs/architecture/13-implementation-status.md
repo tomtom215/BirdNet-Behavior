@@ -124,7 +124,7 @@
 | Queries | `queries.rs` | Sessionize, retention, funnel, next-species SQL builders |
 | Connection | `connection/` | File-backed DuckDB, sync from SQLite, query execution |
 | Phenology timing | `phenology/timing.rs` | Migration timing percentiles, first detection, inter-annual trend |
-| Phenology abundance | `phenology/abundance.rs` | Weekly abundance index, peak weeks, monthly totals, species richness |
+| Phenology detections | `phenology/abundance.rs` | Weekly detection index (count over the peak week, not corrected for listening), detections per listened hour, peak weeks, monthly totals, species richness |
 
 ### birdnet-timeseries
 
