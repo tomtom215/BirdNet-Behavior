@@ -2215,6 +2215,34 @@ mod tests {
         assert_eq!(on.apply_resets(&state), 0, "the requests were consumed");
     }
 
+    /// A reset that forgets a level marks the bars for republishing, even after
+    /// they were last taken clean (ACC-04's `changed`): with `&=` in place of
+    /// `|=`, a reset after the last publish left the model cutting that species
+    /// at its forgotten, lower bar until something else changed. Counterpart: a
+    /// reset that forgets nothing changes nothing.
+    #[test]
+    fn a_reset_that_forgets_a_level_marks_the_bars_changed() {
+        use birdnet_core::detection::dynamic_threshold::Reset;
+        let (_tmp, state) = dyn_state(true);
+        let mut on = DynamicThresholdState::new(tracker_with(true), &state);
+        let now = crate::daemon::disposition::epoch_ms();
+        on.confirm("Turdus merula", 0.95, now, &state);
+        assert!(on.take_changed(), "precondition: learning marks a change");
+        assert!(!on.take_changed(), "precondition: taking it clears it");
+
+        on.handle.request(Reset::Species("Never heard".to_owned()));
+        assert_eq!(on.apply_resets(&state), 0);
+        assert!(
+            !on.take_changed(),
+            "a reset that forgot nothing changed nothing"
+        );
+
+        on.handle
+            .request(Reset::Species("Turdus merula".to_owned()));
+        assert_eq!(on.apply_resets(&state), 1);
+        assert!(on.take_changed(), "a forgotten level must be republished");
+    }
+
     /// `confirm` learns only when the feature is on, and only from a detection
     /// confident enough to trigger.
     ///
