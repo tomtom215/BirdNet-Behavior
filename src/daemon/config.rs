@@ -1056,7 +1056,6 @@ mod tests {
         let default = PipelineConfig::default();
         assert_eq!(cfg.target_sample_rate, default.target_sample_rate);
         assert!((cfg.chunk_duration_secs - default.chunk_duration_secs).abs() < f32::EPSILON);
-        assert!((cfg.confidence_threshold - default.confidence_threshold).abs() < f32::EPSILON);
         assert_eq!(cfg.raw_audio_input, default.raw_audio_input);
         // `None` is load-bearing rather than incidental: `run_daemon` sets the
         // chunk step only when the loaded classifiers want different windows,

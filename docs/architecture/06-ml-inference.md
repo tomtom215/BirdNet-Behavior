@@ -30,7 +30,8 @@ Audio chunk (f32, model sample rate)
         ▼
     Raw logits (f32 vector, thousands of entries)
         │
-    sigmoid(sensitivity * logits)   ← only when the model emits logits;
+    sigmoid(slope × logits)          ← slope = clamp(2 − sensitivity, 0.5, 1.5);
+        │                              only when the model emits logits;
         │                              V3.0 preview outputs are already
         │                              probabilities and pass straight through
     Top-N species with confidence scores
@@ -110,11 +111,12 @@ impl BirdNetModel {
 }
 ```
 
-The daemon owns the model by value on its single detection thread
-(`detection/daemon/run.rs`: `let mut model = BirdNetModel::load(…)`) and
-passes `&mut BirdNetModel` into per-file processing (`daemon/process.rs`).
-There is no `Arc` around it and no concurrent inference: files are
-inferred one at a time.
+The daemon owns its classifiers by value on its single detection thread
+(`detection/daemon/run.rs`: `let mut registry = ClassifierRegistry::load(…)`,
+a primary model and any extra ones) and passes `&mut ClassifierRegistry` into
+per-file processing (`detection/daemon/process.rs`). There is no `Arc` around
+it and no concurrent inference: files are inferred one at a time, each by
+the classifiers its source is routed to, one after another.
 
 ## Validation
 

@@ -101,12 +101,20 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   dropped stream are untested through `concat`. That is a change to the capture
   path with its own gates, not an edit to find in a debt sweep.
 
-## TD-6 Ten more page partials are routed and nothing links to them
+## TD-6 Fifteen page partials and one page are routed and nothing links to them
 
 * **Where:** `/pages/disk-status` (`routes/pages/health.rs`), `/pages/history-dates`
   (`history.rs`), `/pages/today-lock` and `/pages/today-unlock` (`today.rs`), and
   `/pages/stats`, `/pages/hero-status`, `/pages/species-list`, `/pages/hourly-chart`,
   `/pages/daily-chart` and `/pages/most-recent` (`routes/pages/dashboard/mod.rs`).
+  Added 2026-11-24 from the audit's UIC-05: `/pages/today-relabel` (`today.rs`, a
+  write behind the sign-in with no control that posts to it), `/pages/confidence-chart`
+  and `/pages/activity-heatmap` (`dashboard/mod.rs`), `/pages/life-accumulation`
+  (`life_list.rs`), `/pages/ts-heatmap` (`timeseries_dash.rs`, which says it keeps
+  the route though the page no longer loads it), and the full page
+  `/player/{filename}` (`audio_player.rs`), which no page links to but the manual's
+  web API reference documents. `/pages/ts-sessions` was on that list and was deleted
+  with the Trends card that loaded it (UIC-07).
 * **How it was found:** the one the previous hand-off named,
   `/pages/quarantine-pending-count`, was deleted (no nav entry ever called it, and
   the Quarantine page and the Today strip show the same number). A scan for every

@@ -1132,7 +1132,7 @@ fn ebird_link(code: Option<&str>, shown_name: &str) -> String {
     code.map_or_else(
         || {
             format!(
-                r#"<p class="spp-muted-sm">No eBird link for <em>{}</em>: this station was set up without the range model that carries eBird's species codes. For whoever set it up: <code>--metadata-labels</code> supplies them.</p>"#,
+                r#"<p class="spp-muted-sm">No eBird link for <em>{}</em>: this station was set up without the range model that carries eBird's species codes.</p>"#,
                 escape_html(shown_name),
             )
         },
@@ -1340,7 +1340,7 @@ async fn species_companions_partial(
                 );
             }
             let mut html = String::from(
-                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
+                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Days heard together</th></tr></thead><tbody>",
             );
             for c in &companions {
                 let enc = simple_url_encode(&c.companion);

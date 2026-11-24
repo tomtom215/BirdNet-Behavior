@@ -20,7 +20,7 @@ pub(crate) fn render_hourly_chart(id: &str, hours: &[birdnet_db::sqlite::HourlyC
     }
 
     if counts.iter().all(|&c| c == 0) {
-        return r#"<p class="cht-empty">No detections today yet.</p>"#.to_string();
+        return r#"<p class="cht-empty">No detections to show by hour.</p>"#.to_string();
     }
     super::viz::bars::hourly(&super::viz::bars::Hourly {
         id,
@@ -234,7 +234,9 @@ mod tests {
     #[test]
     fn hourly_chart_empty() {
         let r = render_hourly_chart("t", &[]);
-        assert!(r.contains("No detections today"));
+        assert!(r.contains("No detections to show by hour"), "{r}");
+        // The chart also draws a species' hours and a past day's (UIC-34).
+        assert!(!r.contains("today"), "{r}");
     }
 
     #[test]

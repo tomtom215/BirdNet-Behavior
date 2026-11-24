@@ -13,7 +13,7 @@
     </div>
 
     <div class="bnb-card pad fig">
-        <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 30 days · against the 30 before</div><h2 class="sh-h">Species richness</h2></div></div>
+        <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 30 days · against the 30 before</div><h2 class="sh-h">Kinds of birds per day</h2></div></div>
         <div class="ts-slot" hx-get="/pages/ts-diversity"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -56,14 +56,15 @@
   </div>
 
   <div class="bnb-card pad fig tsh-row">
-      <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>90 days · z &gt; 2.0</div><h2 class="sh-h">Anomaly detection</h2></div></div>
+      <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>last 90 days</div><h2 class="sh-h">Unusual days</h2></div></div>
       <p class="tsh-card-lede">
-          Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
+          Days much busier or much quieter than the 30 days before them: more than two standard
+          deviations from those days' average. "How unusual" is that distance (z).
       </p>
       <div hx-get="/pages/ts-anomalies"
            hx-trigger="toggle from:closest details once, intersect once"
            hx-swap="innerHTML">
-          <span class="htmx-indicator">Detecting anomalies…</span>
+          <span class="htmx-indicator">Looking for unusual days…</span>
       </div>
   </div>
 

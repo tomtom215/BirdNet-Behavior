@@ -18,10 +18,10 @@
     <!-- Retention: full width, because a half-width card on a tab of its own leaves the other half empty
          and squeezes the ledger until a hundred per cent breaks over two lines. -->
     <div class="bnb-card pad fig bh-wide">
-        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Species retention</div>
+        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Return visits</div>
         <h2 class="an-card-h3">Who keeps coming back</h2>
         <p class="bnb-meta an-card-lede">
-            Of the days a species appeared, how often it returned the <b>next</b> day.
+            Of the days a species was heard, how often it was heard again within a day, a week or a month.
             High = a regular; low = a passer-through.
         </p>
         <div hx-get="/pages/analytics-retention" hx-trigger="load" hx-swap="innerHTML">
@@ -29,15 +29,4 @@
         </div>
     </div>
 
-    <!-- Engine configuration -->
-    <div class="bnb-card pad fig bh-wide">
-        <div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>Configuration</div>
-        <h2 class="an-card-h3">The analytics engine</h2>
-        <p class="bnb-meta an-card-lede">
-            Where these numbers come from, and the time windows used to compute them.
-        </p>
-        <div hx-get="/pages/analytics-config" hx-trigger="load" hx-swap="innerHTML">
-            <p class="an-loading">Loading config...</p>
-        </div>
-    </div>
 </div>

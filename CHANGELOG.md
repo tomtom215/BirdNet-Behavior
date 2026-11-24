@@ -154,6 +154,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Data tab printed literals as "the values actually in force" (UIR-14).** Retention said "every 7 days",
+  "14" and the key name `DISK_PURGE_THRESHOLD`, and the Snapshots card said "every 7 days" twice more, on a
+  station that had chosen daily backups. It now shows the backup schedule, the purge level (or that a full disk
+  stops recording, with `FULL_DISK=keep`) and the number of snapshots the maintenance loop keeps, and the next
+  scheduled backup follows the chosen schedule rather than always the last run plus seven days.
+- **The System page counted recordings in the wrong folder (UIR-15).** It read "0 audio files" beside a Data tab
+  listing twenty clips; both now count the recordings folder. Its uptime is labelled the computer's, and the
+  service panel's the service's.
+- **The empty review queue promised that detections above 0.95 confidence skip it (UIC-15).** No such rule
+  exists. It now lists the reasons a detection is held back, and the quarantine page's introduction names all of
+  them and says what Reject and Delete each do (neither deletes a recording).
+- **The changelog page cut every entry at its first line (UIR-07)**, printed `**bold**` as asterisks and
+  garbled every character outside ASCII. Entries are whole, emphasis renders, and the page is in the browser gates.
+- **Today offered Delete and the clip lock to visitors (UIC-24)**, who were sent to the login page on use. Both
+  are drawn for a signed-in owner only.
+- **Wording on the pages a birder reads (UIC-15, UIC-16, UIR-13, UIR-17, UIC-34).** Trends says "Unusual days",
+  "Kinds of birds" and "How unusual (z)" rather than "Anomaly detection", "Richness" and "Z-Score"; the
+  retention card says "heard again within" a day, a week or a month (it said "the next day" over a table of six
+  intervals); the Capture tab's watch-folder note is a sentence when the folder is unknown; the analytics
+  engine's status and versions moved from the foot of Visits and Sequences to Settings → Health, without the
+  database's file path; an empty hourly chart no longer says "today" on a species or a past day.
 - **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
   such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
   exclude lists only, so a station with its occurrence filter on recorded them wherever it was. Each classifier's
@@ -282,6 +303,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Trends' "Activity sessions" card and `/pages/ts-sessions` (UIC-07).** A second engine drew a card under the
+  same name as the Visits tab's; Visits keeps it. `/api/v2/timeseries/sessions` is unchanged.
+- **`PipelineConfig::confidence_threshold` (ACC-16)**, a third confidence threshold that nothing read, and
+  `templates/_empty_states.html` (UIC-20), a template nothing served.
 - **`birdnet_core::detection::daemon::process_and_infer` (MMP-19).** It ran inference with none of the privacy,
   noise, confirmation or occurrence filters, and nothing called it; `process_and_infer_filtered` is the entry
   point.

@@ -344,7 +344,7 @@ async fn render_status_partial(state: &AppState) -> String {
 
             format!(
                 r#"<p class="res-head">
-                  {cores} cores · uptime {uptime}
+                  {cores} cores · computer up {uptime}
                 </p>
                 <div class="meter-row">
                   <span class="meter-label sm">CPU</span>

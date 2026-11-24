@@ -393,7 +393,7 @@ fn render(s: &Snapshot) -> String {
          streams, the hardware, and the pipeline behind them. This is the screen to check from \
          the field. {help}</p>{banner}<h2 class=\"st-h3\">Audio sources</h2>{sources}\
          {models}<h2 class=\"st-h3\">Vitals</h2>{vitals}{acoustic}<h2 class=\"st-h3\">Pipeline</h2>{pipeline}\
-         <h2 class=\"st-h3\">Diagnostics</h2>{checks}",
+         <h2 class=\"st-h3\">Diagnostics</h2>{checks}{engine}",
         help = super::help::help_link(super::help::Topic::AdminSystem),
         banner = status_banner(s),
         sources = source_panel(s),
@@ -402,8 +402,19 @@ fn render(s: &Snapshot) -> String {
         acoustic = acoustic_panel(s),
         pipeline = pipeline_row(s),
         checks = diagnostics(s),
+        engine = ANALYTICS_ENGINE,
     )
 }
+
+/// The behavioural analytics engine's status and versions, loaded after the
+/// page. It was a card at the foot of the Visits and Sequences tabs, with a
+/// status pill at their head, both written for whoever maintains the station
+/// (UIC-14, UIR-17); it is diagnostics, and this is the diagnostics page.
+const ANALYTICS_ENGINE: &str = "<h2 class=\"st-h3\">Analytics engine</h2>\
+     <div class=\"bnb-card pad\">\
+     <div hx-get=\"/pages/analytics-status\" hx-trigger=\"load\" hx-swap=\"innerHTML\"></div>\
+     <div hx-get=\"/pages/analytics-config\" hx-trigger=\"load\" hx-swap=\"innerHTML\"></div>\
+     </div>";
 
 /// The facts the shared issue list reads, from this snapshot.
 fn facts(s: &Snapshot) -> super::station_issues::Facts<'_> {

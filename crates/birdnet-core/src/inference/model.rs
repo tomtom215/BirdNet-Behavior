@@ -6,7 +6,9 @@
 //! The inference pipeline:
 //! 1. Accept raw audio f32 samples (already resampled to model sample rate)
 //! 2. Feed into ONNX Runtime session
-//! 3. Apply sigmoid with sensitivity adjustment
+//! 3. Map the output to a confidence: a sensitivity-scaled sigmoid for a
+//!    model that emits logits (BirdNET V2.4), the output as it is for one that
+//!    emits probabilities (V3.0); see `Scoring`
 //! 4. Return top-N species above confidence threshold
 
 use std::collections::HashMap;
@@ -1089,6 +1091,11 @@ pub struct InputSpec {
     /// mel happens afterwards.
     pub window_samples: usize,
     /// What the tensor holds.
+    ///
+    /// There is no normalisation field because there is no normalisation:
+    /// every model is fed mono samples (channels averaged in
+    /// `audio::decode`) as f32 in [-1, 1], as decoded, and nothing rescales
+    /// their amplitude on the way to the model.
     pub format: InputFormat,
 }
 

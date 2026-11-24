@@ -1,7 +1,7 @@
 //! Hand-rolled SVG empty states.
 //!
 //! Drop-in: import this module from any page partial. Each function returns
-//! an HTML string that matches `_empty_states.html` template entries.
+//! the empty state's HTML string.
 //!
 //! ```rust,ignore
 //! use crate::routes::pages::empty_states;

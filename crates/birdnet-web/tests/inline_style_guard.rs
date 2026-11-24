@@ -17,10 +17,10 @@
 
 use std::path::{Path, PathBuf};
 
-/// Files excluded from the scan. `_empty_states.html` is a never-served design
-/// reference (its live counterpart is `pages/empty_states.rs`); it ships no
-/// markup to a browser, so its inline styles are out of CSP scope.
-const EXCLUDE: &[&str] = &["templates/_empty_states.html"];
+/// Files excluded from the scan, by path from the crate root. Empty: the one
+/// entry, `templates/_empty_states.html`, was a never-served design reference
+/// and has been deleted (UIC-20).
+const EXCLUDE: &[&str] = &[];
 
 /// Scan one file, returning each inline-style occurrence as `(line, payload)`.
 ///

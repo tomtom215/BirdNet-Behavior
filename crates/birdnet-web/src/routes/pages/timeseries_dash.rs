@@ -8,7 +8,7 @@
 //! `/pages/ts-heatmap`              | Hour-of-day detection heatmap            |
 //! `/pages/ts-daily`                | Daily trend with 7-day moving average    |
 //! `/pages/ts-diversity`            | Shannon diversity + species richness     |
-//! `/pages/ts-anomalies`            | Anomaly detection table                  |
+//! `/pages/ts-anomalies`            | Unusual days (anomaly) table             |
 //! `/pages/ts-peak`                 | Top busiest 15-minute windows            |
 
 use axum::extract::State;
@@ -437,7 +437,7 @@ fn render_diversity_table(
     );
     html.push_str(TABLE_OPEN);
     html.push_str(
-        r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
+        r"<table><thead><tr><th>Date</th><th>Kinds of birds</th><th>Diversity (Shannon H′)</th><th>Balance (0–1)</th></tr></thead><tbody>",
     );
     for row in shown {
         let h = shannon_cell(row.shannon_h);
@@ -461,26 +461,26 @@ fn render_diversity_table(
 fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow]) -> String {
     let anomalous: Vec<_> = rows.iter().filter(|r| r.anomaly_flag != "normal").collect();
     if anomalous.is_empty() {
-        return r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>"#.to_string();
+        return r#"<p class="tsd-ok">✓ No unusual days in the last 90 days.</p>"#.to_string();
     }
     let mut html = String::from(
-        r"<table><thead><tr><th>Date</th><th>Detections</th><th>Z-Score</th><th>Type</th></tr></thead><tbody>",
+        r"<table><thead><tr><th>Date</th><th>Detections</th><th>How unusual (z)</th><th>Busier or quieter</th></tr></thead><tbody>",
     );
     for row in &anomalous {
         let z = row
             .z_score
             .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
-        let cls = if row.anomaly_flag == "high" {
-            "high"
+        let (cls, said) = if row.anomaly_flag == "high" {
+            ("high", "busier")
         } else {
-            "low"
+            ("low", "quieter")
         };
         let _ = write!(
             html,
             r#"<tr><td>{d}</td><td>{c}</td><td>{z}</td><td><span class="conf {cls}">{f}</span></td></tr>"#,
             d = escape_html(&row.date),
             c = row.detections,
-            f = escape_html(&row.anomaly_flag),
+            f = said,
         );
     }
     html.push_str("</tbody></table>");

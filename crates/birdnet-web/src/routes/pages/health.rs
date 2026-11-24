@@ -219,7 +219,7 @@ async fn analytics_status_partial(
     // does not match the bundled DuckDB.
     let hint = if configured {
         "DuckDB analytics database connected. Behavioral insights (sessions, retention, \
-         next-species) additionally require the duckdb-behavioral extension — see the cards below."
+         next-species) additionally require the duckdb-behavioral extension — see the table below."
     } else if compiled {
         // This tile sits on the health page, which is read by the person who
         // owns the station rather than the one who compiles it. A start-up
