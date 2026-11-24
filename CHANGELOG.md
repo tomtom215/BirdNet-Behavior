@@ -154,6 +154,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mono camera set to "left only" or "right only" recorded silence (MSC-11 follow-up).** The channel pick
+  reached ffmpeg as `pan=mono|c0=c1`, which on a one-channel stream names a channel that does not exist and
+  writes silence (−91 dB on ffmpeg 6.1) without an error. A camera's channel count is not known until its
+  stream is open, so the pick now lays the input out as stereo first, and a mono stream is heard by either
+  pick.
+
 - **Shedding no longer silences one source (MSC-01, WP-04 of the 2026-11 audit).** While inference is behind or
   the board is hot, the daemon analyses one segment in two. It used to alternate over each sweep's list sorted by
   name, so on a two-microphone station the second source lost every segment while the first lost none, and a lone

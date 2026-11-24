@@ -420,9 +420,13 @@ fn apply_audio_filters_picking(
     pipeline: crate::audio::capture::types::AudioPipeline,
     eq: &crate::audio::eq::EqChain,
 ) {
+    // `aformat` first: a camera's channel count is unknown until its stream
+    // is open, and `pan` naming `c1` of a mono input writes silence (−91 dB on
+    // ffmpeg 6.1) without an error. Laid out as stereo, a mono input gives
+    // both picks its one channel.
     let pan = pick.map(|pick| match pick {
-        tee::ChannelPick::Left => "pan=mono|c0=c0",
-        tee::ChannelPick::Right => "pan=mono|c0=c1",
+        tee::ChannelPick::Left => "aformat=channel_layouts=stereo,pan=mono|c0=c0",
+        tee::ChannelPick::Right => "aformat=channel_layouts=stereo,pan=mono|c0=c1",
     });
     let chain = match (pan, audio_filter_chain(gain_db, pipeline, eq)) {
         (Some(pan), Some(rest)) => Some(format!("{pan},{rest}")),
@@ -1080,6 +1084,56 @@ mod tests {
         Some(args[at + 1].as_str())
     }
 
+    /// A camera set to "right only" whose stream is mono must still be heard.
+    /// `pan=mono|c0=c1` on a one-channel input names a channel that does not
+    /// exist, and ffmpeg 6.1 writes silence for it (−91 dB) with no error; the
+    /// camera's channel count is not known until its stream is opened, so the
+    /// chain must hold for both. Runs the filter `rtsp_command` builds through
+    /// the installed ffmpeg on a mono and on a stereo tone.
+    #[test]
+    fn a_picked_channel_of_a_mono_stream_is_not_silence() {
+        if !is_tool_available("ffmpeg") {
+            eprintln!("ffmpeg not installed — channel-pick level check skipped");
+            return;
+        }
+        let config = config_for(
+            CaptureSource::Rtsp {
+                url: "rtsp://cam.local/live".into(),
+                stream_id: "src_cam".into(),
+                transport: RtspTransport::Auto,
+                media_mode: RtspMediaMode::Full,
+                channel_pick: Some(tee::ChannelPick::Right),
+            },
+            0.0,
+        );
+        let args = args_of(&rtsp_command(&config).expect("command").0);
+        let chain = filter_of(&args).expect("a filter").to_owned();
+        for layout in ["mono", "stereo"] {
+            let out = std::process::Command::new("ffmpeg")
+                .args(["-hide_banner", "-nostats", "-f", "lavfi", "-i"])
+                .arg(format!(
+                    "sine=frequency=1000:duration=1,aformat=channel_layouts={layout}"
+                ))
+                .args(["-ac", "1", "-af"])
+                .arg(format!("{chain},volumedetect"))
+                .args(["-f", "null", "-"])
+                .output()
+                .expect("spawn ffmpeg");
+            let log = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "ffmpeg rejected `{chain}`:\n{log}");
+            let mean: f64 = log
+                .split("mean_volume: ")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| panic!("no mean_volume in:\n{log}"));
+            assert!(
+                mean > -60.0,
+                "a {layout} stream with the right channel picked records {mean} dB through `{chain}`"
+            );
+        }
+    }
+
     /// MSC-11. A camera or `PipeWire` source set to one channel is captured
     /// as that channel, not as the average of both.
     #[test]
@@ -1102,7 +1156,10 @@ mod tests {
                 .0,
         );
         let chain = filter_of(&right).expect("a filter");
-        assert!(chain.starts_with("pan=mono|c0=c1,"), "{chain}");
+        assert!(
+            chain.starts_with("aformat=channel_layouts=stereo,pan=mono|c0=c1,"),
+            "{chain}"
+        );
         assert!(chain.contains("volume="), "the gain stage is kept: {chain}");
 
         let pipewire = |pick, channels| {
@@ -1122,7 +1179,10 @@ mod tests {
                 .expect("command")
                 .0,
         );
-        assert_eq!(filter_of(&left), Some("pan=mono|c0=c0"));
+        assert_eq!(
+            filter_of(&left),
+            Some("aformat=channel_layouts=stereo,pan=mono|c0=c0")
+        );
         let ac = left.iter().position(|a| a == "-ac").expect("-ac");
         assert_eq!(
             left[ac + 1],
