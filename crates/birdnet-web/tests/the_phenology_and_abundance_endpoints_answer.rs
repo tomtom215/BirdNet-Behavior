@@ -151,6 +151,9 @@ async fn abundance_answers_instead_of_reporting_no_store() {
     assert_eq!(w10["effort_count"], 2, "{w10}");
     assert_eq!(w10["effort_hours"], 2.0, "{w10}");
     assert_eq!(w10["detections_per_hour"], 1.0, "{w10}");
+    // Exact 95% Poisson bounds for two detections, over two hours.
+    assert_eq!(w10["detections_per_hour_lower95"], 0.1211, "{w10}");
+    assert_eq!(w10["detections_per_hour_upper95"], 3.6123, "{w10}");
     let w11 = week(11);
     assert_eq!(w11["raw_count"], 1, "{w11}");
     assert!(

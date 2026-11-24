@@ -39,7 +39,7 @@ pub fn router() -> Router<AppState> {
         .route("/analytics/status", get(analytics_status))
 }
 
-/// Query for the effort-corrected abundance and phenology endpoints.
+/// Query for the detection-rate (`/analytics/abundance`) and phenology endpoints.
 #[derive(Deserialize)]
 #[allow(dead_code)]
 struct PhenologyQuery {
@@ -216,7 +216,7 @@ async fn abundance(
     State(_state): State<AppState>,
     Query(_query): Query<PhenologyQuery>,
 ) -> (StatusCode, Json<Value>) {
-    unavailable("effort-corrected abundance")
+    unavailable("detection rate (detections per listened hour)")
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -946,7 +946,11 @@ async fn previous_species(
 /// "the analytics dashboards are broken" could not be told apart from a healthy
 /// one here, which is why that report arrived with no detail attached. The
 /// fields below are the ones that differ.
-/// Detections per hour of listening, per species per week.
+/// Detection rate: detections per listened hour, per species per week.
+///
+/// Served at `/analytics/abundance` under the JSON key `abundance` for
+/// compatibility, but it is a rate of *detections*, not an abundance of birds:
+/// one bird singing for an hour makes many detections.
 ///
 /// The analytic a raw count cannot substitute for. A detection count is a
 /// numerator over a denominator nobody was recording: a solar window is six
@@ -957,7 +961,12 @@ async fn previous_species(
 /// makes a between-season or between-year comparison mean anything.
 ///
 /// `effort_hours` is returned beside `detections_per_hour` so a week with little
-/// or no listening is visible as such rather than as a wild rate.
+/// or no listening is visible as such rather than as a wild rate. A listened
+/// week in which a reported species was not detected is a row with a rate of 0,
+/// not a missing row, and every rate carries an exact 95 % Poisson interval
+/// (`detections_per_hour_lower95`, `detections_per_hour_upper95`) that covers
+/// counting noise only — detections are clustered, so the real uncertainty is
+/// wider. `effort_corrected_abundance_sql` documents both.
 #[cfg(feature = "analytics")]
 async fn abundance(
     State(state): State<AppState>,

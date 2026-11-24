@@ -4726,8 +4726,8 @@
         "tags": [
           "analytics"
         ],
-        "summary": "Effort-corrected abundance",
-        "description": "Detections per hour of listening, per species per ISO week. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's station time is its longest single source, not the sum across sources, so a two-microphone station is not read as half a one-microphone station. Species-weeks with fewer than `min_detections` detections are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "summary": "Detection rate: detections per listened hour",
+        "description": "Detection rate, per species per ISO week: detections per hour the station was listening. This is a rate of detections, not an abundance of birds: one bird singing for an hour makes many detections, and how often a species is detected depends on how loud, how close and how recognisable it is as much as on how many there are. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's station time is its longest single source, not the sum across sources, so a two-microphone station is not read as half a one-microphone station. Every species reported also gets a row for every week of the year that has recorded effort and no detection of it: `raw_count` 0 and a rate of 0, with an upper bound above 0. A week without effort has no row unless the species was detected in it. `detections_per_hour_lower95` and `detections_per_hour_upper95` are an exact (Garwood) 95% Poisson interval on `effort_count`, divided by `effort_hours`. It describes counting noise only, under the assumption that detections arrive independently at a constant rate over the listened hours. Detections are not independent (a bird that sings once usually sings again, and analysis windows can overlap), so the true uncertainty is wider than this interval; it also does not cover misidentification, the detection threshold, or error in the recorded effort. Species-weeks with fewer than `min_detections` detections are left out, and are not turned into zeros. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
         "operationId": "analyticsAbundance",
         "parameters": [
           {
@@ -4765,7 +4765,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One row per species per ISO week.",
+            "description": "One row per species per ISO week: every week it was detected in, and every week with recorded effort in which it was not.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4784,7 +4784,9 @@
                           "raw_count",
                           "effort_count",
                           "effort_hours",
-                          "detections_per_hour"
+                          "detections_per_hour",
+                          "detections_per_hour_lower95",
+                          "detections_per_hour_upper95"
                         ],
                         "properties": {
                           "species": {
@@ -4798,7 +4800,7 @@
                           },
                           "raw_count": {
                             "type": "integer",
-                            "description": "Every detection that week."
+                            "description": "Every detection that week; 0 on a week with recorded effort and no detection."
                           },
                           "effort_count": {
                             "type": "integer",
@@ -4816,7 +4818,21 @@
                               "number",
                               "null"
                             ],
-                            "description": "`effort_count` over `effort_hours`, to four decimals; null when there is no effort to divide by."
+                            "description": "Detection rate: `effort_count` over `effort_hours`, to four decimals; 0 on a listened week with no detection; null when there is no effort to divide by. Detections per listened hour, not an abundance."
+                          },
+                          "detections_per_hour_lower95": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Lower end of the exact (Garwood) 95% Poisson interval on `effort_count`, divided by `effort_hours`, to four decimals; null when there is no effort. Counting noise only: detections are not independent, so the real uncertainty is wider."
+                          },
+                          "detections_per_hour_upper95": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "Upper end of the exact (Garwood) 95% Poisson interval on `effort_count`, divided by `effort_hours`, to four decimals; null when there is no effort. Counting noise only: detections are not independent, so the real uncertainty is wider."
                           }
                         }
                       }
