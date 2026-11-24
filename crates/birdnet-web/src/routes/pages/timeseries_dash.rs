@@ -523,9 +523,25 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
 
 #[cfg(feature = "analytics")]
 fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow]) -> String {
-    let anomalous: Vec<_> = rows.iter().filter(|r| r.anomaly_flag != "normal").collect();
+    // Only a judged day can be an anomaly. A day the station recorded less
+    // than half of (`unlistened`) was not judged; every flag other than `high`
+    // and `low` used to be drawn as a row, and an outage was drawn as "low".
+    let anomalous: Vec<_> = rows
+        .iter()
+        .filter(|r| matches!(r.anomaly_flag.as_str(), "high" | "low"))
+        .collect();
+    let unlistened = rows.iter().filter(|r| !r.listened).count();
+    let left_out = match unlistened {
+        0 => String::new(),
+        1 => r#"<p class="tsd-muted">1 day the station recorded less than half of is left out, and is not part of any baseline.</p>"#.to_string(),
+        n => format!(
+            r#"<p class="tsd-muted">{n} days the station recorded less than half of are left out, and are not part of any baseline.</p>"#
+        ),
+    };
     if anomalous.is_empty() {
-        return r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>"#.to_string();
+        return format!(
+            r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>{left_out}"#
+        );
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>Z-Score</th><th>Type</th></tr></thead><tbody>",
@@ -539,15 +555,24 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
         } else {
             "low"
         };
+        // A judged day that was not recorded in full: its count is real, and
+        // so is the gap in it.
+        let partial = match (row.partial_effort, row.effort_hours) {
+            (true, Some(h)) => {
+                format!(r#" <span class="tsd-muted">partial day, {h:.0} h recorded</span>"#)
+            }
+            _ => String::new(),
+        };
         let _ = write!(
             html,
-            r#"<tr><td>{d}</td><td>{c}</td><td>{z}</td><td><span class="conf {cls}">{f}</span></td></tr>"#,
+            r#"<tr><td>{d}</td><td>{c}</td><td>{z}</td><td><span class="conf {cls}">{f}</span>{partial}</td></tr>"#,
             d = escape_html(&row.date),
             c = row.detections,
             f = escape_html(&row.anomaly_flag),
         );
     }
     html.push_str("</tbody></table>");
+    html.push_str(&left_out);
     html
 }
 
@@ -658,6 +683,58 @@ mod tests {
         // Counterparts: an ordinary value and a missing one are unchanged.
         assert_eq!(super::shannon_cell(Some(std::f64::consts::LN_2)), "0.693");
         assert_eq!(super::shannon_cell(None), "—");
+    }
+
+    fn anomaly(
+        date: &str,
+        flag: &str,
+        hours: Option<f64>,
+    ) -> birdnet_timeseries::types::results::AnomalyRow {
+        let listened = flag != "unlistened";
+        birdnet_timeseries::types::results::AnomalyRow {
+            date: date.into(),
+            detections: if listened { 40 } else { 0 },
+            rolling_mean: Some(10.0),
+            rolling_stddev: Some(1.0),
+            z_score: listened.then_some(30.0),
+            anomaly_flag: flag.into(),
+            effort_hours: hours,
+            listened,
+            partial_effort: listened && hours.is_some_and(|h| h < 23.0),
+        }
+    }
+
+    /// UIC-03: a day left out for want of recording is not drawn as an
+    /// anomaly row, and the card says how many were left out.
+    #[test]
+    fn an_unlistened_day_is_not_an_anomaly_row() {
+        let html = super::render_anomaly_table(&[
+            anomaly("2026-05-01", "unlistened", Some(0.0)),
+            anomaly("2026-05-02", "unlistened", Some(2.0)),
+            anomaly("2026-05-03", "normal", Some(24.0)),
+        ]);
+        assert!(!html.contains("2026-05-01"), "{html}");
+        assert!(!html.contains("<table>"), "{html}");
+        assert!(html.contains("No anomalies"), "{html}");
+        assert!(
+            html.contains("2 days the station recorded less than half of"),
+            "{html}"
+        );
+        // Counterpart: a judged outlier beside them is still a row.
+        let html = super::render_anomaly_table(&[
+            anomaly("2026-05-01", "unlistened", Some(0.0)),
+            anomaly("2026-05-04", "high", Some(24.0)),
+        ]);
+        assert!(html.contains("<td>2026-05-04</td>"), "{html}");
+        assert!(!html.contains("2026-05-01"), "{html}");
+        assert!(!html.contains("partial day"), "{html}");
+    }
+
+    /// A judged day the station recorded only part of carries the label.
+    #[test]
+    fn a_partial_day_anomaly_is_labelled() {
+        let html = super::render_anomaly_table(&[anomaly("2026-05-04", "high", Some(14.0))]);
+        assert!(html.contains("partial day, 14 h recorded"), "{html}");
     }
 
     /// ANA12: the sessions card shows the newest sessions, newest first.
