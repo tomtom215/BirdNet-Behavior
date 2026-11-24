@@ -952,6 +952,7 @@ mod tests {
                 labels_path: labels,
                 threshold: Some(0.5),
                 sample_rate: None,
+                output_scale: None,
             }
         };
         let mut registry = ClassifierRegistry::load(
