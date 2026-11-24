@@ -43,29 +43,26 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   (`Option<i64>`) and `record`'s comparison, which want their own compatibility
   tests against journals written by earlier versions.
 
-## TD-4 The Capture tab's duplicate guard reads an unreadable source list as empty; the wizard logs it and says nothing
+## TD-4 The setup wizard logs an unreadable source list and says nothing
 
-* **Where:** `crates/birdnet-web/src/routes/admin/audio.rs` (`create`: the check
-  that refuses to add the same source twice, `.with_read_db(AudioSourceStore::list)
-  .unwrap_or_default()`) and `crates/birdnet-web/src/routes/pages/onboarding.rs`
-  (`add_source`).
-* **What it does:** `create` reads the list with `.unwrap_or_default()`, so a list
-  that could not be read passes the "already configured" check and the insert is
-  attempted; on a database that cannot be read the insert fails too, so the cost is
-  a duplicate only if the read fails and the write succeeds. The wizard no longer
-  treats the list as empty: `add_source` matches on the read, logs "could not read
-  the audio sources; the microphone was not added" at `error` and returns, but it
-  returns `()`, so the page the person sees does not say that nothing was added.
-  The other sites this entry first listed (`sources_body`, `listen_default`,
-  `count_oobs`, `listen_default_id`) were rewritten by the setup-wizard change and no
-  longer default their errors.
+* **Where:** `crates/birdnet-web/src/routes/pages/onboarding.rs` (`add_source`).
+* **What it does:** the wizard does not treat the list as empty: `add_source`
+  matches on the read, logs "could not read the audio sources; the microphone was
+  not added" at `error` and returns, but it returns `()`, so the page the person
+  sees does not say that nothing was added.
+  The Capture tab's duplicate guard (`create` in
+  `crates/birdnet-web/src/routes/admin/audio.rs`), which this entry also listed,
+  read the list with `.unwrap_or_default()`; since MSC-10 it is
+  `refuse_if_configured`, which refuses the add when the list cannot be read, and
+  `an_unreadable_source_list_refuses_the_add` holds it. The other sites this entry
+  first listed (`sources_body`, `listen_default`, `count_oobs`,
+  `listen_default_id`) were rewritten by the setup-wizard change and no longer
+  default their errors.
 * **Evidence:** read at the cited places on 2026-10-21; the rows of class
-  `tracked:TD-4` in `tests/data/read_default_sweep.tsv` (lines 33 and 134 to 137)
-  are what the sweep still reports, and I did not re-classify the four wizard rows
-  after the rewrite.
-* **Why it is open:** the guard's cost is a duplicate row in a corner case, and the
-  wizard's fix is a message on a page that has just been rewritten; neither was part
-  of the change that found them.
+  `tracked:TD-4` in `tests/data/read_default_sweep.tsv` are what the sweep still
+  reports, and I did not re-classify the four wizard rows after the rewrite.
+* **Why it is open:** the wizard's fix is a message on a page that has just been
+  rewritten, and was not part of the change that found it.
 
 ## TD-5 RTSP credentials are on ffmpeg's command line
 

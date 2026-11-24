@@ -30,7 +30,7 @@ handled	crates/birdnet-web/src/routes/admin/accounts.rs	remove_user	match-err	ma
 handled	crates/birdnet-web/src/routes/admin/accounts.rs	revoke_others_handler	match-err	match state.with_read_db(|conn| -> Result<String, AccountsError> { let sessions = conn.list_sessions(user_id)?
 handled	crates/birdnet-web/src/routes/admin/accounts.rs	revoke_session_handler	match-err	match state.with_read_db(|conn| -> Result<String, AccountsError> { let sessions = conn.list_sessions(request_u
 handled	crates/birdnet-web/src/routes/admin/accounts.rs	set_password	match-err	match state.with_db(|conn| conn.revoke_others(id, &request_user.session_id)) { Err .. }
-tracked:TD-4	crates/birdnet-web/src/routes/admin/audio.rs	create	unwrap_or_default	state .with_read_db(AudioSourceStore::list) .unwrap_or_default()
+handled	crates/birdnet-web/src/routes/admin/audio.rs	refuse_if_configured	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/audio.rs	eq_preview	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/audio.rs	listen_default	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/audio.rs	probe	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }

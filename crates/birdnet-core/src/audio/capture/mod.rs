@@ -14,6 +14,7 @@
 //! | `segment` | Rotating WAV segment writer used by the tee |
 //! | `live` | `LiveTap` / `LiveAudioHub` — the capture→web live-audio seam |
 //! | `disk` | `DiskUsage`, `disk_usage`, `recording_stats`, `cleanup_old_recordings` |
+//! | `identity` | Which physical device a configured device string names |
 //! | `tmpfs` | `TmpfsConfig`, `TmpfsError`, tmpfs mount/unmount helpers |
 //! | `status` | `CaptureStatus` — the supervisor→web per-source health seam |
 //! | `control` | `CaptureControlHandle` — the web→supervisor restart-request seam |
@@ -21,6 +22,7 @@
 pub mod alsa;
 pub mod control;
 pub mod disk;
+pub mod identity;
 pub mod live;
 pub mod manager;
 pub mod probe;

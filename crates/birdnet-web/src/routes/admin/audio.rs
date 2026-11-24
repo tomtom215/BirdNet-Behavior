@@ -519,15 +519,8 @@ async fn create(
             // enforces uniqueness on the synthetic `id` (freshly generated here), so
             // without this an operator who can't tell the save registered just clicks
             // "Save" again and silently ends up with the same mic/stream listed twice.
-            let already_configured = state
-                .with_read_db(AudioSourceStore::list)
-                .unwrap_or_default()
-                .iter()
-                .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
-            if already_configured {
-                return validation_response(&format!(
-                    "“{device_id}” is already configured — see the list below."
-                ));
+            if let Some(refusal) = refuse_if_configured(state, kind, &device_id, None) {
+                return refusal;
             }
 
             let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
@@ -847,6 +840,13 @@ async fn update(
                         };
                         if let Err(msg) = check_stream_url(row.kind, &device_id) {
                             return validation_response(&msg);
+                        }
+                        // MSC-10: pointing this source at another source's device
+                        // is the same duplicate as adding that device twice.
+                        if let Some(refusal) =
+                            refuse_if_configured(state, row.kind, &device_id, Some(&row.id))
+                        {
+                            return refusal;
                         }
                     }
                     Ok(None) => return not_found_row(&id),
@@ -1536,6 +1536,79 @@ fn check_stream_url(kind: SourceKind, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The text of `/proc/asound/cards`, which [`device_key`] resolves ALSA card
+/// names through.
+///
+/// Empty when the file cannot be read (no sound subsystem, not Linux). That is
+/// a decision, not a default that hides one: with no cards text a card *name*
+/// resolves to nothing and keys as itself, so `plughw:CARD=PRO,DEV=0` still
+/// matches `hw:CARD=PRO,DEV=0`, and is never taken for some other card.
+fn asound_cards() -> String {
+    let path = std::path::Path::new(birdnet_core::audio::capture::alsa::PROC_ASOUND).join("cards");
+    // Deliberately defaulted (see above): an empty text widens no match.
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// The physical device a source's `device_id` names (MSC-10), as a string two
+/// spellings of one device share. See `birdnet_core::audio::capture::identity`
+/// for the rules. A `PipeWire` node name is compared as written.
+pub(crate) fn device_key(kind: SourceKind, device_id: &str, cards: &str) -> String {
+    use birdnet_core::audio::capture::identity::{alsa_device_key, stream_url_key};
+    match kind {
+        SourceKind::UsbAlsa => alsa_device_key(device_id, cards),
+        SourceKind::Rtsp => format!("stream:{}", stream_url_key(device_id)),
+        SourceKind::PipeWire => format!("pipewire:{}", device_id.trim()),
+    }
+}
+
+/// The first of `rows` (other than `except`) that names the same physical
+/// device as `device_id`.
+pub(crate) fn same_device<'a>(
+    rows: &'a [AudioSource],
+    kind: SourceKind,
+    device_id: &str,
+    except: Option<&str>,
+    cards: &str,
+) -> Option<&'a AudioSource> {
+    let wanted = device_key(kind, device_id, cards);
+    rows.iter().find(|s| {
+        Some(s.id.as_str()) != except
+            && s.kind == kind
+            && device_key(s.kind, &s.device_id, cards) == wanted
+    })
+}
+
+/// The refusal to answer when `device_id` is already an active source's
+/// device, or when the sources cannot be read to tell.
+///
+/// A failed read refuses: it used to be `unwrap_or_default()`, which read as
+/// "this station has no sources" and waved every duplicate through (TD-4).
+fn refuse_if_configured(
+    state: &AppState,
+    kind: SourceKind,
+    device_id: &str,
+    except: Option<&str>,
+) -> Option<Response> {
+    let rows = match state.with_read_db(AudioSourceStore::list) {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(error = %e, "audio_sources list failed before the duplicate check");
+            return Some(internal_response(
+                "Could not read the configured sources to check this one is not already among \
+                 them, so nothing was saved.",
+            ));
+        }
+    };
+    let existing = same_device(&rows, kind, device_id, except, &asound_cards())?;
+    let name = existing
+        .label
+        .clone()
+        .unwrap_or_else(|| shown_device(existing));
+    Some(validation_response(&format!(
+        "That device is already configured as “{name}” — see the list below."
+    )))
+}
+
 fn validation_response(message: &str) -> Response {
     toast::not_applied(&Toast::warn(message))
 }
@@ -2204,6 +2277,132 @@ mod tests {
         assert_refused(&second);
         let count = state.with_db(AudioSourceStore::list).unwrap().len();
         assert_eq!(count, 1, "only one row persisted");
+    }
+
+    /// MSC-10: one physical device under another spelling is the same device.
+    /// `hw:` and `plughw:` open the same card; a camera address with its
+    /// credentials, its default port and a trailing `/` is the same camera.
+    #[tokio::test]
+    async fn create_rejects_the_same_device_under_another_spelling() {
+        let (_d, state) = fixture();
+        for (kind, first, again) in [
+            ("usb-alsa", "plughw:1,0", "hw:1,0"),
+            (
+                "rtsp",
+                "rtsp://cam.local/live",
+                "rtsp://user:pw@CAM.local:554/live/",
+            ),
+        ] {
+            let ok = create(
+                State(state.clone()),
+                actor(&state),
+                HtmxForm(eq_form(kind, first)),
+            )
+            .await;
+            assert_eq!(ok.status(), StatusCode::OK, "{first} is added");
+            assert!(ok.headers().get("hx-reswap").is_none(), "{first} is added");
+            let again_res = create(
+                State(state.clone()),
+                actor(&state),
+                HtmxForm(eq_form(kind, again)),
+            )
+            .await;
+            assert_refused(&again_res);
+        }
+        let devices: Vec<String> = state
+            .with_db(AudioSourceStore::list)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.device_id)
+            .collect();
+        assert_eq!(devices, ["plughw:1,0", "rtsp://cam.local/live"]);
+    }
+
+    /// The counterpart: genuinely different hardware is still accepted.
+    #[tokio::test]
+    async fn create_accepts_different_devices() {
+        let (_d, state) = fixture();
+        for (kind, device) in [
+            ("usb-alsa", "hw:1,0"),
+            ("usb-alsa", "hw:2,0"),
+            ("rtsp", "rtsp://cam.local/live"),
+            ("rtsp", "rtsp://cam2.local/live"),
+        ] {
+            let res = create(
+                State(state.clone()),
+                actor(&state),
+                HtmxForm(eq_form(kind, device)),
+            )
+            .await;
+            assert!(
+                res.headers().get("hx-reswap").is_none(),
+                "{device} is added"
+            );
+        }
+        assert_eq!(state.with_db(AudioSourceStore::list).unwrap().len(), 4);
+    }
+
+    /// MSC-10: an edit that points B at A's device is the same duplicate as
+    /// adding it twice, and was not checked at all.
+    #[tokio::test]
+    async fn update_rejects_moving_a_source_onto_another_sources_device() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0");
+        insert_one(&state, "src_b", SourceKind::UsbAlsa, "plughw:2,0");
+        let res = update(
+            State(state.clone()),
+            actor(&state),
+            Path("src_b".to_string()),
+            HtmxForm(eq_form("usb-alsa", "hw:1,0")),
+        )
+        .await;
+        assert_refused(&res);
+        let b = state.with_db(|c| c.get("src_b")).unwrap().unwrap();
+        assert_eq!(b.device_id, "plughw:2,0", "B keeps its own device");
+
+        // Saving B with its own device (any spelling) is not a duplicate of itself.
+        let res = update(
+            State(state.clone()),
+            actor(&state),
+            Path("src_b".to_string()),
+            HtmxForm(eq_form("usb-alsa", "hw:2,0")),
+        )
+        .await;
+        assert!(res.headers().get("hx-reswap").is_none(), "B re-saved");
+    }
+
+    /// MSC-10 / TD-4: when the existing sources cannot be read, nothing says
+    /// the device is not already configured, so the add is refused rather
+    /// than waved through as if the station had no sources.
+    #[tokio::test]
+    async fn an_unreadable_source_list_refuses_the_add() {
+        let (_d, state) = fixture();
+        // A row `list()` cannot decode (a BLOB label): the insert below would
+        // still succeed, so only the duplicate check can refuse it.
+        state
+            .with_db(|c| {
+                c.execute(
+                    "INSERT INTO audio_sources (id, kind, device_id, label)
+                     VALUES ('src_bad', 'usb-alsa', 'plughw:1,0', X'00')",
+                    [],
+                )
+            })
+            .unwrap();
+        assert!(
+            state.with_db(AudioSourceStore::list).is_err(),
+            "precondition"
+        );
+        let res = create(
+            State(state.clone()),
+            actor(&state),
+            HtmxForm(eq_form("usb-alsa", "plughw:1,0")),
+        )
+        .await;
+        assert_refused(&res);
+        let n: i64 = state
+            .with_db(|c| c.query_row("SELECT COUNT(*) FROM audio_sources", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(n, 1, "nothing was added");
     }
 
     #[tokio::test]
