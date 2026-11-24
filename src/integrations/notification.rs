@@ -8,7 +8,7 @@ use crate::helpers::resolve;
 /// Takes `config` — which the settings overlay has already layered the admin UI
 /// onto — so the Notifications page's trigger mode and species lists actually
 /// govern what gets sent. Reading `cli.notify_trigger` alone meant the clap
-/// default (`each`) always won and the dropdown was decorative.
+/// default (then `each`) always won and the dropdown was decorative.
 pub fn create_notification_filter(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -224,15 +224,31 @@ mod tests {
 
     // ── create_notification_filter ─────────────────────────────────────
 
+    /// OOB-12: a station that sets no trigger anywhere runs on the shared
+    /// default, the wizard's recommended `new-species` (it was `each`).
     #[test]
-    fn filter_uses_each_detection_trigger_by_default() {
+    fn filter_uses_the_shared_default_trigger_when_nothing_is_set() {
         use birdnet_integrations::notification::TriggerMode;
         let cli = default_cli();
         let f = create_notification_filter(&cli, None);
-        assert_eq!(f.trigger, TriggerMode::EachDetection);
+        assert_eq!(
+            f.trigger,
+            TriggerMode::parse(birdnet_core::config::DEFAULT_NOTIFY_TRIGGER)
+        );
+        assert_eq!(f.trigger, TriggerMode::NewSpecies);
         // No species filter → allow everything.
         assert!(f.species_filter.is_allowed("Pica pica"));
         assert!(f.species_filter.is_allowed("Corvus corax"));
+    }
+
+    /// The flag's default is the constant the settings form and the wizard
+    /// read, not a literal of its own.
+    #[test]
+    fn the_notify_trigger_flag_defaults_to_the_shared_constant() {
+        assert_eq!(
+            default_cli().notify_trigger,
+            birdnet_core::config::DEFAULT_NOTIFY_TRIGGER
+        );
     }
 
     #[test]

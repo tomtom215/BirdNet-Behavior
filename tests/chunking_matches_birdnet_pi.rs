@@ -136,7 +136,6 @@ fn config(overlap: f32) -> PipelineConfig {
         raw_audio_input: true,
         chunk_duration_secs: 3.0,
         chunk_overlap_secs: overlap,
-        confidence_threshold: 0.0,
         ..PipelineConfig::default()
     }
 }

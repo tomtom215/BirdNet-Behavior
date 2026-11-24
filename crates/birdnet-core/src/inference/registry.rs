@@ -40,7 +40,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::inference::labels::LabelSet;
-use crate::inference::model::{BirdNetModel, InputSpec, ModelConfig};
+use crate::inference::model::{BirdNetModel, InputSpec, ModelConfig, OutputScale};
 
 /// How many classifiers a station may run at once.
 ///
@@ -83,6 +83,15 @@ pub struct ModelSpec {
     /// `None` keeps the derivation, which remains right for the BirdNET
     /// shapes it was built from.
     pub sample_rate: Option<u32>,
+    /// How this classifier's raw output becomes a confidence, when declared
+    /// (`MODEL_OUTPUT_SCALE`, `MODEL_n_OUTPUT_SCALE`; MMP-11).
+    ///
+    /// `None` derives it from the input shape, which recognises V2.4's
+    /// `144 000`, V3.0's `96 000` or dynamic shape and Perch's `160 000`, and
+    /// refuses to load anything else: reading an unknown model's output under
+    /// the wrong function gives it confidences that mean nothing, with no
+    /// symptom. A declared scale wins over the shape.
+    pub output_scale: Option<OutputScale>,
 }
 
 /// What a loaded classifier is, as the station can state it without running it:
@@ -269,6 +278,11 @@ impl ClassifierRegistry {
             let mut config = model_config.clone();
             if let Some(threshold) = spec.threshold {
                 config.confidence_threshold = threshold;
+            }
+            // The same for a declared output scale: the model reads it at
+            // load, and refuses an unrecognised shape that has none.
+            if spec.output_scale.is_some() {
+                config.output_scale = spec.output_scale;
             }
             let own_threshold = config.confidence_threshold;
             let model = BirdNetModel::load(&spec.model_path, labels, config).map_err(|e| {
@@ -581,7 +595,7 @@ mod tests {
     use super::{
         ClassifierRegistry, MAX_MODELS, ModelSpec, RegistryError, model_size_mib, parse_routes,
     };
-    use crate::inference::model::ModelConfig;
+    use crate::inference::model::{ModelConfig, OutputScale};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -601,6 +615,7 @@ mod tests {
             labels_path,
             threshold,
             sample_rate: None,
+            output_scale: None,
         }
     }
 
@@ -953,6 +968,40 @@ mod tests {
             "got {}",
             declared.primary().spec.window_secs()
         );
+    }
+
+    /// **MMP-11, as the daemon and `--doctor` see it.** A classifier whose
+    /// input shape has no known scale is refused at startup, under its own id
+    /// and naming the setting to declare; with `MODEL_n_OUTPUT_SCALE` set it
+    /// loads under the declared scale.
+    #[test]
+    fn a_classifier_of_an_unknown_shape_loads_only_with_a_declared_scale() {
+        const TINY_MEL: &[u8] = include_bytes!("../testdata/tiny_mel_test.onnx");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let primary = spec(dir.path(), "birdnet", TINY_V24, None);
+        let mut odd = spec(dir.path(), "odd", TINY_MEL, None);
+
+        let err = ClassifierRegistry::load(
+            &[primary.clone(), odd.clone()],
+            &no_routes(),
+            &ModelConfig::default(),
+        )
+        .expect_err("an unknown shape with no declared scale must be refused");
+        match &err {
+            RegistryError::Load { id, why } => {
+                assert_eq!(id, "odd");
+                assert!(why.contains("MODEL_n_OUTPUT_SCALE"), "{why}");
+            }
+            other => panic!("expected a load error, got {other:?}"),
+        }
+
+        odd.output_scale = Some(OutputScale::Probability);
+        let reg = ClassifierRegistry::load(&[primary, odd], &no_routes(), &ModelConfig::default())
+            .expect("a declared scale makes it loadable");
+        let model = &reg.model(1).expect("the second classifier").model;
+        assert_eq!(model.output_scale(), OutputScale::Probability);
+        // The declaration is that classifier's: the primary keeps its own.
+        assert_eq!(reg.primary().model.output_scale(), OutputScale::Logit);
     }
 
     /// `own_threshold` is the bar the merge judges a verdict against, so it is

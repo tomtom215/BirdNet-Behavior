@@ -64,9 +64,12 @@ reads each configured microphone's capture gain this way, with a deadline on eve
 | above the cap | above either | warning, with a command that reaches it |
 | at the maximum | 100% on a control with a hardware range | warning |
 | capture switched off | the control's capture switch is off | warning |
+| near the bottom of its range | capture is on, but the control is under **10%**, or under **-10 dB** of hardware gain | warning, telling you to turn the gain up |
 | not read | no `amixer` or `pactl`, no sound server, a fixed-gain device | skipped, with the reason |
 
 A finding here is at most a warning. A warning makes `--doctor` exit 1 (a failure exits 2); the service's start gate (`--doctor-gate`) is stopped only by failures of the checks it names, and this is not one, so a mixer setting can never stop the station starting. The cap is the lesser of 75% and +18 dB of hardware gain; the evidence for it is **low** (three devices with public tables, one design judgement), so it flags the extremes and cannot tell you that a level in range is right. For a PulseAudio source with no hardware control, 100% is unity and the doctor warns only above it.
+
+The floor is the same kind of guard rail from the other end. It is for a control left at or next to the bottom of its range, where a fresh install or a replugged USB microphone can leave it with capture switched on and almost nothing let through: on the USB codec above, 10% is the bottom two steps (0 dB and +1.5 dB); on the WM8960, the dB rule flags the bottom ten steps, -17.25 to -10.5 dB. It does not say a modest level is wrong (see the reference recording under *Check what actually arrives*, which peaks at -32.6 dB and is identified correctly). With several capture controls the gains add, so one at the bottom, such as a boost at 0 dB, is not flagged while another is in range. For a PulseAudio source with no hardware control only the percentage counts, and 10% there is -60 dB.
 
 ## Setting it, and why the station does not
 
@@ -109,7 +112,7 @@ The image has `amixer` but not `pactl`, and the container shares the host's `/de
 ## What is not established
 
 - **Hardware.** No reading here comes from a sound card. The USB and HAT figures are published or taken from kernel tables; the HiFiBerry post is a vendor forum.
-- **The cap.** 75% and +18 dB are a judgement. No source gives a universal limit.
+- **The cap and the floor.** 75% and +18 dB, and 10% and -10 dB, are judgements. No source gives a universal limit at either end.
 - **BirdNET's sensitivity to level** in either direction, and to automatic gain control, are unmeasured.
 - **macOS.** `input volume of (get volume settings)` is documented by Apple for the default input device; nothing else about macOS input levels was checked, and the doctor does not read it.
 - **Network streams** have no operating-system level to read.

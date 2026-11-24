@@ -655,7 +655,11 @@ pub struct Cli {
     /// Notification trigger: "each", "new-species", "new-species-daily", or "off";
     /// several may be listed, separated by commas ("each,new-species").
     /// `BirdNET-Pi`'s three `APPRISE_NOTIFY_*` switches are this list.
-    #[arg(long, default_value = "each", env = "BIRDNET_NOTIFY_TRIGGER")]
+    #[arg(
+        long,
+        default_value = birdnet_core::config::DEFAULT_NOTIFY_TRIGGER,
+        env = "BIRDNET_NOTIFY_TRIGGER"
+    )]
     pub notify_trigger: String,
 
     /// Species to exclude from notifications (comma-separated scientific names).

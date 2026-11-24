@@ -48,8 +48,9 @@ use std::time::Duration;
 use birdnet_integrations::offsite::OffsiteConfig;
 
 use birdnet_db::sqlite::{
-    BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM,
-    JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
+    BACKUP_RETENTION, BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS,
+    JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP,
+    JOB_SUMMARY_AUDIT,
 };
 
 /// Daily integrity-check cadence.
@@ -60,9 +61,6 @@ const INTEGRITY_CHECK_INTERVAL: Duration = Duration::from_secs(DAILY_INTERVAL_SE
 
 /// Weekly VACUUM cadence.
 const VACUUM_INTERVAL: Duration = Duration::from_secs(BACKUP_VACUUM_INTERVAL_SECS.unsigned_abs());
-
-/// How many backup files to retain in the backup directory.
-const BACKUP_RETENTION: usize = 14;
 
 /// Wait this long after boot before the first maintenance tick. Avoids
 /// piling onto the startup CPU spike (model load + WAL replay + axum

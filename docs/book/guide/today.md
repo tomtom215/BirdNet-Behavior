@@ -22,7 +22,10 @@ been heard recently — never a fake waveform. A row of pills carries the
 recording state, current weather, sunrise/sunset, and your station's name and
 coordinates. If the station cannot read its list of audio sources, the
 recording pill says the state is **unknown** rather than claiming there is no
-microphone.
+microphone. On a station with more than one source, the pill is green only when
+every source is recording; when some have stopped it turns amber and says how
+many, for example **recording · 1 of 3 sources**, and links to Station health,
+which names the ones that stopped.
 
 **The day's picture has two views**, chosen above it and remembered on this device. *By the hour* is the
 hour-by-hour columns: each column is stacked by who was heard (the day's eight most heard in their own colours,
@@ -37,7 +40,12 @@ press Enter to open the recording. Without a location set, the sky is plain rath
 [review queue](./reviews.md), or an **outage** warning when capture has gone
 quiet during daylight. When all is well and quiet, it's absent entirely. If the
 station cannot read the review queue, the strip says so instead of staying
-absent, because absent is how "nothing is waiting" looks.
+absent, because absent is how "nothing is waiting" looks. Two notices stay in
+the strip for as long as their cause does: one when the station has no
+location set ("Your station does not know where it is"), because without one it
+may name birds that don't live near you, and one when the system reports that
+its clock is not synchronised with a time server, because new detections may
+then be filed at the wrong time.
 
 **3 · The shape of the day.** The **day strip** plots the whole day on one
 24-hour timeline — an hourly histogram of how busy each hour was, an amber
@@ -84,8 +92,8 @@ checklist in the headline cannot be hidden by accident.
 ## First run
 
 A brand-new station — one that has never heard a bird — shows a friendly
-"getting ready" checklist in place of the live signal (microphone detected,
-model loaded, disk headroom, listening…) plus illustrated empty states, so the
+"getting ready" checklist in place of the live signal (admin password,
+location, microphone recording, model loaded, disk headroom, listening…) plus illustrated empty states, so the
 very first hour is an activation moment rather than a blank page. The page
 comes alive the moment the first call lands.
 

@@ -230,7 +230,7 @@ pub(super) async fn service_status() -> Html<String> {
         r#"<table class="ctl-table">
           <tr><td class="ctl-k">Version</td><td class="ctl-v-strong">v{version}</td></tr>
           <tr><td class="ctl-k">PID</td><td>{pid}</td></tr>
-          <tr><td class="ctl-k">Uptime</td><td>{uptime_str}</td></tr>
+          <tr><td class="ctl-k">Service running for</td><td>{uptime_str}</td></tr>
           <tr><td class="ctl-k">Memory (RSS)</td><td>{memory_mb:.1} MB</td></tr>
           <tr><td class="ctl-k">systemd service</td><td>{systemd_badge}</td></tr>
         </table>"#

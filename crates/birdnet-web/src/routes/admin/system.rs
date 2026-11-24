@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use axum::{Router, routing::get};
 
-use birdnet_core::audio::capture::{disk_usage, recording_stats};
+use birdnet_core::audio::capture::disk_usage;
 use birdnet_db::resilience::backup_database;
 
 use crate::routes::pages::toast::{self, Toast};
@@ -254,6 +254,7 @@ async fn system_status_partial(State(state): State<AppState>) -> Html<String> {
 #[allow(clippy::too_many_lines)]
 async fn render_status_partial(state: &AppState) -> String {
     let db_path = state.db_path().to_path_buf();
+    let state = state.clone();
 
     let (disk_html, rec_html) = tokio::task::spawn_blocking(move || {
         // Disk usage for DB directory
@@ -295,21 +296,18 @@ async fn render_status_partial(state: &AppState) -> String {
             },
         );
 
-        // Recording stats (use parent directory of db as proxy)
-        let rec_html = db_path
-            .parent()
-            .and_then(|p| recording_stats(p).ok())
-            .map_or_else(
-                || r#"<p class="muted-note">Recording stats unavailable</p>"#.to_string(),
-                |(count, size)| {
-                    format!(
-                        r#"<p class="res-line">
+        // The recordings folder, read the way the Data tab reads it.
+        let rec_html = super::backup_recovery::recordings_on_disk(&state).map_or_else(
+            || r#"<p class="muted-note">Recording stats unavailable</p>"#.to_string(),
+            |(count, size)| {
+                format!(
+                    r#"<p class="res-line">
                           {count} audio files · {size} total
                         </p>"#,
-                        size = format_bytes(size),
-                    )
-                },
-            );
+                    size = format_bytes(size),
+                )
+            },
+        );
 
         (disk_html, rec_html)
     })
@@ -346,7 +344,7 @@ async fn render_status_partial(state: &AppState) -> String {
 
             format!(
                 r#"<p class="res-head">
-                  {cores} cores · uptime {uptime}
+                  {cores} cores · computer up {uptime}
                 </p>
                 <div class="meter-row">
                   <span class="meter-label sm">CPU</span>
@@ -481,5 +479,32 @@ mod tests {
     #[test]
     fn format_bytes_small() {
         assert_eq!(format_bytes(512), "512 B");
+    }
+
+    /// UIR-15: the System page and the Data tab counted recordings in two
+    /// different folders. System looked in the database's folder "as a proxy"
+    /// and read "0 audio files · 0 B" on a station whose Data tab listed 20
+    /// clips. Here the two folders differ, as they do on an installed station,
+    /// and the System page has to count the recordings folder.
+    #[tokio::test]
+    async fn the_system_page_counts_the_recordings_folder_not_the_database_folder() {
+        let db_dir = tempfile::tempdir().expect("db dir");
+        let rec_dir = tempfile::tempdir().expect("recordings dir");
+        for name in ["a.wav", "b.mp3"] {
+            std::fs::write(rec_dir.path().join(name), [0_u8; 100]).expect("write clip");
+        }
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        let state = AppState::from_connection(conn, db_dir.path().join("birds.db"))
+            .with_recording_dir(rec_dir.path().to_path_buf());
+        // The precondition the test depends on: the database's folder holds
+        // no recordings, so a count taken there cannot be 2.
+        assert_ne!(db_dir.path(), rec_dir.path());
+
+        let html = render_status_partial(&state).await;
+        assert!(
+            html.contains("2 audio files"),
+            "the System page must count the recordings folder: {html}"
+        );
     }
 }

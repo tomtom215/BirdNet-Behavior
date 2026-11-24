@@ -28,7 +28,7 @@ RTSP / PipeWire → ffmpeg -f segment ─────────→ WAV files i
                                             │
                     rubato resample → target sample rate
                                             │
-                    mel spectrogram (pure Rust realfft)
+                    3 s windows of samples (every bundled model takes the waveform)
                                             │
                     ort inference → species + confidence scores
                                             │
@@ -103,9 +103,12 @@ Implemented in `crates/birdnet-core/src/audio/resample.rs`.
 
 Implemented in `crates/birdnet-core/src/audio/spectrogram/`.
 
-The mel spectrogram must produce output numerically equivalent to
-`librosa.melspectrogram()`, since BirdNET models were trained on
-librosa-generated features.
+No bundled classifier is fed a spectrogram. BirdNET V2.4, the BirdNET+ V3.0
+preview and Perch v2 all take windows of samples and compute their features
+inside the network (`InputSpec::is_waveform`, read by the daemon in
+`detection/daemon/run.rs`). The mel code draws the spectrograms on detection
+pages and the live view, and would feed a model whose input is a spectrogram;
+it follows librosa's conventions (HTK mel scale, Slaney normalisation).
 
 ### Implementation
 
@@ -133,9 +136,10 @@ power:        2.0 (power spectrogram)
 
 ### Validation
 
-The mel implementation is covered by unit tests that compare against
-reference spectrograms generated from librosa on identical WAV inputs.
-Matching tolerance is `1e-4`.
+No test compares this code with librosa's output. The unit tests in
+`audio/spectrogram.rs` and `audio/spectrogram/` check the Hann window, the
+mel/Hz round trip, the filterbank's shape, that the default parameters are
+librosa's, and the spectrogram of a sine wave.
 
 ### Key implementation notes
 

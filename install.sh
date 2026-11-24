@@ -1807,6 +1807,7 @@ download_model_v24() {
 
     info "Installing the BirdNET V2.4 model (${MODEL_SIZE_HINT} FP32 ONNX) + labels with ${BINARY_NAME} --install-model…"
     info "  The binary checks each file's sha256 and size before it keeps it."
+    info "  BirdNET is licensed CC BY-NC-SA 4.0: free to use, but not for commercial purposes."
 
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
@@ -2191,8 +2192,8 @@ ${lat_line}
 ${lon_line}
 # RECORDING_SCHEDULE=all-day   # all-day | solar | fixed:HH:MM-HH:MM
 #                              # solar records sunrise-to-sunset and needs the
-#                              # coordinates above. Fixed hours are evaluated in
-#                              # UTC, not local time. Also settable in the web UI
+#                              # coordinates above. Fixed hours are in the
+#                              # station's local time. Also settable in the web UI
 #                              # under Settings -> Capture -> Location & Recording Schedule.
 
 # --- Detection ---
@@ -2710,6 +2711,83 @@ parse_coords() {
         }'
 }
 
+# Compare the machine's UTC offset with the one the station's longitude implies
+# (longitude / 15 hours), and print a warning when they are more than 3.5 hours
+# apart (exit 0), or nothing (exit 1).
+#
+#   timezone_location_mismatch <lat> <lon> <offset as date +%z prints it> <zone name>
+#
+# The installer never reads or sets the time zone, and capture names every
+# recording from the machine's local time — so a Pi left on Raspberry Pi OS's
+# default Europe/London (or UTC) in Ohio files its dawn chorus at noon, and
+# every hour-of-day chart is wrong without a word said. A location typed here
+# gives the wizard nothing to look a zone up from, so this prompt is the one
+# place that can notice.
+#
+# The margin is the doctor's (SOLAR_OFFSET_TOLERANCE_HOURS in
+# src/doctor/clock.rs, which says why): some correct zones sit 3 hours from the
+# sun with summer time on top — western Alaska, western China on Beijing time,
+# Galicia on Central European time — and those must not be told they are
+# wrong. Half-hour zones need no special case against the unrounded offset,
+# and the gap is taken the short way round the clock, so Kiribati's UTC+14 at
+# 157 W is 0.5 hours out, not 24.5.
+timezone_location_mismatch() {
+    awk -v lat="$1" -v lon="$2" -v off="$3" -v zone="$4" '
+        function rnd(x) { return x < 0 ? -int(-x + 0.5) : int(x + 0.5) }
+        function label(h,   s, a, m) {
+            s = h < 0 ? "-" : "+"; a = h < 0 ? -h : h
+            m = rnd((a - int(a)) * 60)
+            return m ? sprintf("UTC%s%d:%02d", s, int(a), m) : sprintf("UTC%s%d", s, int(a))
+        }
+        BEGIN {
+            if (off !~ /^[-+][0-9][0-9][0-9][0-9]$/) exit 1
+            if (lon !~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ || lon + 0 < -180 || lon + 0 > 180) exit 1
+            clock = (substr(off, 2, 2) + substr(off, 4, 2) / 60) * (substr(off, 1, 1) == "-" ? -1 : 1)
+            gap = (clock - lon / 15) % 24
+            if (gap < 0) gap += 24
+            if (gap > 12) gap -= 24
+            if (gap <= 3.5 && gap >= -3.5) exit 1
+            hours = rnd(gap < 0 ? -gap : gap)
+            # Not inline in the printf: a bare > there is output redirection.
+            way = gap > 0 ? "ahead of" : "behind"
+            printf "This machine'"'"'s clock is set to %s (%s), but the location %s, %s is near %s.\n", \
+                zone, label(clock), lat, lon, label(rnd(lon / 15))
+            printf "  The clock runs about %d hours %s the station'"'"'s day, so detections would be filed at the wrong hours.\n", \
+                hours, way
+            print "  Fix: sudo timedatectl set-timezone <Area/City>   (timedatectl list-timezones lists them),"
+            print "  then sudo systemctl restart birdnet-behavior. A station kept on UTC on purpose can ignore this."
+            exit 0
+        }'
+}
+
+# The machine's time-zone name, for the warning above: what timedatectl says,
+# else /etc/timezone, else the /etc/localtime link; "UTC" when none says.
+host_timezone_name() {
+    local tz=""
+    if command -v timedatectl >/dev/null 2>&1; then
+        tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+    fi
+    if [ -z "${tz}" ] && [ -r /etc/timezone ]; then
+        tz="$(head -n 1 /etc/timezone 2>/dev/null || true)"
+    fi
+    if [ -z "${tz}" ] && [ -L /etc/localtime ]; then
+        tz="$(readlink /etc/localtime 2>/dev/null || true)"
+        tz="${tz##*/zoneinfo/}"
+    fi
+    echo "${tz:-UTC}"
+}
+
+# Warn (never stop) when this machine's time zone is far from the coordinates
+# just entered. A warning only: the station works, its times are shifted, and
+# only the operator knows which of the two is wrong.
+warn_if_timezone_mismatches_location() {
+    local msg line
+    msg="$(timezone_location_mismatch "$1" "$2" "$(date +%z)" "$(host_timezone_name)")" || return 0
+    while IFS= read -r line; do
+        warn "${line}"
+    done <<<"${msg}"
+}
+
 # Generate a strong, shell/URL-friendly random password.
 #
 # Neither branch may end in a consumer that stops reading early. The fallback
@@ -2764,7 +2842,8 @@ ensure_admin_password() {
 # interactive we ask the operator directly (so a non-technical user gets a
 # working station without hand-editing a file); otherwise we keep the historical
 # behaviour — silently auto-detect ALSA and leave location for the config file.
-# The config file always remains editable and is the source of truth afterwards.
+# The config file always remains editable, but once the station has started, a
+# setting saved in the web UI takes precedence over the same key in the file.
 prompt_station_settings() {
     # Re-install / upgrade: the config already exists and is the user's own —
     # never re-prompt or overwrite their settings.
@@ -2787,14 +2866,22 @@ prompt_station_settings() {
     printf '\n  Audio source\n' >/dev/tty
     if [ -n "${candidate}" ]; then
         arecord -l 2>/dev/null | grep '^card' | sed 's/^/    /' >/dev/tty || true
-        yesno "  Use detected ALSA device '${candidate}'?" y && ALSA_CARD_VALUE="${candidate}"
+        # Ask by the name on the box (`arecord -l` prints it in brackets), not
+        # by the ALSA address the station stores. The id is the part between
+        # `CARD=` and the comma of what detect_first_audio_device returns.
+        local card_id card_name
+        card_id="${candidate#plughw:CARD=}"
+        card_id="${card_id%%,*}"
+        card_name="$(arecord -l 2>/dev/null \
+            | sed -n "/^card [0-9]*: ${card_id} \[/{s/^card [0-9]*: ${card_id} \[\([^]]*\)\].*/\1/p;q;}" || true)"
+        yesno "  Use the microphone '${card_name:-${candidate}}'?" y && ALSA_CARD_VALUE="${candidate}"
     else
-        printf '  No ALSA capture device detected.\n' >/dev/tty
+        printf '  No microphone found.\n' >/dev/tty
     fi
     if [ -z "${ALSA_CARD_VALUE}" ]; then
         local audio_in
         while :; do
-            audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
+            audio_in="$(ask "  Paste a camera's stream address (starts with rtsp://), or press Enter and choose a microphone in the browser later" "")"
             case "${audio_in}" in
                 '')
                     break ;;
@@ -2818,7 +2905,7 @@ prompt_station_settings() {
     elif [ -n "${RTSP_URL_VALUE}" ]; then
         success "Audio source: RTSP ${RTSP_URL_VALUE}"
     else
-        warn "No audio source set — add ALSA_CARD or RTSP_URL to ${CONFIG_FILE} later."
+        warn "No microphone chosen yet — choose one in the dashboard under Settings → Capture."
     fi
 
     # ---- Station location ----
@@ -2828,7 +2915,7 @@ prompt_station_settings() {
     # single [WARN] line that scrolled away behind the model download —
     # the operator answered the question, the station recorded no location, and
     # nothing said so again until the species filter silently stayed off.
-    printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty
+    printf '\n  Where is the microphone? (so the station names only birds that live near you)\n' >/dev/tty
     printf '  Tip: right-click your spot on https://openstreetmap.org and read off the coordinates.\n' >/dev/tty
     printf '  Paste both at once (49.4521, 8.6724) or enter them one at a time.\n' >/dev/tty
     printf '  A decimal comma (49,4521) is fine.\n' >/dev/tty
@@ -2859,6 +2946,7 @@ prompt_station_settings() {
                 LATITUDE_VALUE="${coords%% *}"
                 LONGITUDE_VALUE="${coords##* }"
                 success "Location: ${LATITUDE_VALUE}, ${LONGITUDE_VALUE}"
+                warn_if_timezone_mismatches_location "${LATITUDE_VALUE}" "${LONGITUDE_VALUE}"
                 break
                 ;;
             *)
@@ -2872,7 +2960,7 @@ prompt_station_settings() {
     printf '  The dashboard is reachable from other devices on your network. Viewing is\n' >/dev/tty
     printf '  open; the admin panel (settings, software update) is protected by a password.\n' >/dev/tty
     local pw1 pw2
-    pw1="$(ask_secret "  Set an admin password now (Enter to auto-generate one)")"
+    pw1="$(ask_secret "  Choose a password for changing settings (or press Enter to have one made for you)")"
     if [ -n "${pw1}" ]; then
         pw2="$(ask_secret "  Confirm password")"
         if [ "${pw1}" = "${pw2}" ]; then
@@ -3442,8 +3530,8 @@ print_admin_login() {
         echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
         echo -e "      username:  ${BOLD}admin${RESET}"
         echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
-        echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
-        echo    "      Save it now — it is not shown again."
+        echo    "      Write it down now: it is not shown again. Forgotten it later? See"
+        echo    "      'Forgotten the password?' on the dashboard's sign-in page."
         return 0
     fi
     if [ -n "${CADDY_PWD_VALUE}" ]; then
@@ -3526,8 +3614,10 @@ print_summary() {
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
     echo -e "  ${BOLD}Model:${RESET}   ${CLASSIFIER_SUMMARY:-${CLASSIFIER_NAME:-unknown}}"
-    echo    "           A new install takes --classifier birdnet-v24 or birdnet-v3; this station keeps what"
-    echo    "           ${CONFIG_FILE} names. How to move one on purpose: ${CLASSIFIER_GUIDE_URL}"
+    if [ "${MODE}" = "update" ]; then
+        echo    "           This station keeps the model ${CONFIG_FILE} names."
+        echo    "           How to move to another one on purpose: ${CLASSIFIER_GUIDE_URL}"
+    fi
     # Lead with the IP address: it works for every device on the LAN. The mDNS
     # `.local` name is friendlier but NOT universal — some phones and networks
     # don't resolve it — so it is shown as a clearly-secondary convenience, never
@@ -3544,9 +3634,8 @@ print_summary() {
         # fallback) so it's clear why no birds are showing up.
         if ! config_has_audio_source; then
             echo
-            echo "  No audio source yet, so no birds will be detected. Open the dashboard"
-            echo "  and add one under Settings → Capture (/admin/audio) — or set ALSA_CARD / RTSP_URL"
-            echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
+            echo "  No microphone yet, so no birds will be detected. Open the dashboard,"
+            echo "  go to Settings → Capture, and choose your microphone or add a camera."
         fi
         # Live and listening, but with no coordinates the species filter cannot
         # run — so the station reports birds from the wrong continent and looks
@@ -3574,7 +3663,7 @@ print_summary() {
 
     print_admin_login
     echo
-    echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
+    echo "  For troubleshooting, the station's log:  sudo journalctl -u birdnet-behavior -f"
     echo
 }
 

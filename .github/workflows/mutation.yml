@@ -91,6 +91,8 @@ on:
       - ".github/workflows/**"
       # The pip hashes the config job installs from.
       - "tools/ci/requirements-ci.txt"
+      # The ffmpeg the shards test against (the `ffmpeg` job's cache key).
+      - "tools/ci/build-ffmpeg.sh"
   pull_request:
     branches: ["main", "master"]
     paths:
@@ -108,6 +110,8 @@ on:
       - ".github/workflows/**"
       # The pip hashes the config job installs from.
       - "tools/ci/requirements-ci.txt"
+      # The ffmpeg the shards test against (the `ffmpeg` job's cache key).
+      - "tools/ci/build-ffmpeg.sh"
   schedule:
     # Mondays at 09:00 UTC.
     - cron: "0 9 * * 1"
@@ -182,9 +186,32 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/check-ci-config.py
 
+  # The ffmpeg the shards' tests run against, built once and cached. Every shard
+  # used to `apt-get install ffmpeg` from the runner's mirror; on 2026-11-24 the
+  # mirror served it at a few kB/s and every shard of two pull requests timed out
+  # in that step without running a mutant. This job builds it only when
+  # tools/ci/build-ffmpeg.sh changes (the cache key is that file's hash), and the
+  # shards restore the result. See the script for what is built and why.
+  ffmpeg:
+    name: ffmpeg (built once, cached)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore the cached ffmpeg
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bnb-ffmpeg
+          key: ${{ runner.os }}-bnb-ffmpeg-${{ hashFiles('tools/ci/build-ffmpeg.sh') }}
+      - name: Build ffmpeg
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: tools/ci/build-ffmpeg.sh "$HOME/.cache/bnb-ffmpeg"
+
   mutants:
     name: cargo-mutants on ${{ matrix.label }}
     runs-on: ubuntu-24.04
+    needs: ffmpeg
     # Matrix-driven so the slow binary-crate shards get a longer budget. The
     # binary-crate shards (the binary's own src/daemon/ + src/capture/* modules)
     # relink the statically-bundled DuckDB per mutant, so the larger files are
@@ -702,30 +729,27 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
 
-      - name: Install ffmpeg
+      - name: Restore ffmpeg
         # The extractor.rs tests for the format-conversion / freq-shift
         # branches skip themselves when neither ffmpeg nor sox is on
         # PATH. We need the tests to actually run during mutation testing
         # (so the surviving-mutant count for those branches stays at 0),
-        # so install ffmpeg unconditionally.
-        #
-        # Bounded, and quick to give up on a stalled mirror. In `main`'s five latest
-        # runs (2026-10-19 to 10-26) 19 of the 172 shard jobs spent 5 minutes or more
-        # here, 16 of them 15 or more (up to 35.7), all on 10-25 and 10-26, against a
-        # median of 0.3. The log of one (detections [1/8], run 40320382733) shows
-        # azure.archive.ubuntu.com going quiet for 2.5 to 4 minutes at a time in the
-        # middle of the download, then `Ign:`. The `CI config` job reported nine rows at
-        # 78% to 101% of their budget, six of them cancelled at it; every one had a stalled
-        # install in the run it was measured on, and where its mutation step finished that
-        # step took no longer than usual. The install spent the budget, not the mutants.
-        # A 20 s timeout with three retries gives up on a stalled connection sooner, and
-        # the step limit stops a bad mirror from taking the whole shard budget: the job
-        # fails here, by name, instead.
-        timeout-minutes: 15
+        # so ffmpeg is always present: the binary the `ffmpeg` job built and
+        # cached, restored here by the same key. A miss fails the step by name
+        # rather than letting those tests skip. This step used to be an
+        # `apt-get install` from the runner's mirror, bounded at 15 minutes
+        # because a stalled mirror (2026-10-25 and 10-26, and again 11-24,
+        # when it timed out every shard) spent the shard's budget here.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bnb-ffmpeg
+          key: ${{ runner.os }}-bnb-ffmpeg-${{ hashFiles('tools/ci/build-ffmpeg.sh') }}
+          fail-on-cache-miss: true
+
+      - name: Put ffmpeg on PATH
         run: |
-          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-          sudo apt-get "${apt_opts[@]}" update
-          sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg
+          echo "$HOME/.cache/bnb-ffmpeg/bin" >> "$GITHUB_PATH"
+          "$HOME/.cache/bnb-ffmpeg/bin/ffmpeg" -hide_banner -version | head -1
 
       - name: Run mutation testing on ${{ matrix.file }}
         # `--file` restricts mutation to one source file at a time so each

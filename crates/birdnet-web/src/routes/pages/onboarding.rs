@@ -59,7 +59,9 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 
 use birdnet_core::audio::capture::alsa::CaptureDevice;
-use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, NewAudioSource, SourceKind};
+use birdnet_db::audio_sources::{
+    AudioSource, AudioSourceStore, NewAudioSource, SourceKind, device_identity,
+};
 use birdnet_db::settings::{self, SettingsCategory};
 
 use crate::routes::admin::audio::{detail_for, kind_label};
@@ -162,14 +164,16 @@ impl Prefill {
                 // card that matches the stored value is chosen by comparing them.
                 &birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD.to_string(),
             )?,
-            notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER)?,
+            // The station's own default, which the card marked "recommended"
+            // offers: the wizard preselects what a station with no trigger
+            // already runs on (OOB-12).
+            notify_trigger: get(
+                "notify_trigger",
+                birdnet_core::config::DEFAULT_NOTIFY_TRIGGER,
+            )?,
         })
     }
 }
-
-/// The wizard's recommended notification trigger, used only when the station
-/// has none set.
-const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 
 async fn onboarding_page(State(state): State<AppState>, req: Request) -> Response {
     state
@@ -658,7 +662,7 @@ fn render_mic_body(
         "manual",
         "⌨",
         "A microphone by its device name",
-        "For a sound card the list above does not show, written the way ALSA names it, like plughw:CARD=Device,DEV=0.",
+        "Only if your microphone is missing from the list above. Typing its name is for experts: it looks like plughw:CARD=Device,DEV=0.",
         false,
         None,
     ));
@@ -734,7 +738,7 @@ fn mic_notice(error: &str) -> Option<&'static str> {
             "That stream address was not accepted. It has to start with rtsp://, http://, https://, rtmp://, udp:// or srt://. Nothing was saved.",
         ),
         "mic-device" => Some(
-            "That device name was not accepted. A sound card is written like plughw:CARD=Device,DEV=0 or plughw:2,0. Nothing was saved.",
+            "That device name was not accepted, and nothing was saved. Pick the microphone from the list instead; a typed name looks like plughw:CARD=Device,DEV=0 or plughw:2,0.",
         ),
         _ => None,
     }
@@ -1241,10 +1245,12 @@ fn add_source(conn: &rusqlite::Connection, kind: SourceKind, device: &str, label
             return;
         }
     };
-    if existing
-        .iter()
-        .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device)
-    {
+    // Compared as devices, as the Capture tab compares them (MSC-10).
+    let cards = crate::routes::admin::audio::alsa_cards();
+    let identity = device_identity(kind, device, cards.as_deref());
+    if existing.iter().any(|s| {
+        s.kind == kind && device_identity(s.kind, &s.device_id, cards.as_deref()) == identity
+    }) {
         return;
     }
     let mut new =
@@ -1297,7 +1303,7 @@ async fn mic_test(HtmxForm(form): HtmxForm<MicTestForm>) -> Response {
             "ok": true,
             "rms_dbfs": (level.rms_dbfs * 10.0).round() / 10.0,
             "peak_dbfs": (level.peak_dbfs * 10.0).round() / 10.0,
-            "message": level_message(level.rms_dbfs),
+            "message": level_message(level.rms_dbfs, level.peak_dbfs),
         }),
         Ok(Err(message)) => serde_json::json!({ "ok": false, "message": message }),
         Err(e) => {
@@ -1323,11 +1329,22 @@ struct MicTestForm {
     device: String,
 }
 
-/// What a level means, in a sentence. The cut-offs are judgement, not
+/// A peak at or above this, in dBFS, is graded as clipping. One dB short of full
+/// scale rather than at it, because a 16-bit sample's positive limit is 32 767
+/// (a hair under 0 dBFS) and a converter driven into its rails often stops a
+/// fraction short of them; a recording that reaches -1 dBFS is in any case one
+/// louder call away from losing samples for good.
+const CLIPPING_PEAK_DBFS: f64 = -1.0;
+
+/// What a level means, in a sentence. The RMS cut-offs are judgement, not
 /// calibration: they separate "nothing arrived" from "something did", and say
-/// nothing about whether the microphone is good.
-fn level_message(rms_dbfs: f64) -> &'static str {
-    if rms_dbfs <= -80.0 {
+/// nothing about whether the microphone is good. The peak is judged first:
+/// a clipped sample cannot be recovered by any later setting, whatever the
+/// average level was.
+fn level_message(rms_dbfs: f64, peak_dbfs: f64) -> &'static str {
+    if peak_dbfs >= CLIPPING_PEAK_DBFS {
+        "Clipping — turn the gain down. The loudest sound reached full scale, and a clipped recording cannot be repaired."
+    } else if rms_dbfs <= -80.0 {
         "Silent. Check the microphone is plugged in and not muted."
     } else if rms_dbfs <= -60.0 {
         "Very quiet. Normal in a quiet room; it is picking something up."
@@ -1705,6 +1722,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       <h1 class="ob-h">The bird-identifying model.</h1>
       <p class="ob-p ob-mb-18">This is the part that recognises songs and calls. It is a file the station downloads once, about 84&nbsp;MB, and checks against a fingerprint before using it. You can carry on with the other steps while it downloads.</p>
       <div class="bnb-card pad" data-cls-host>{{model_panel}}</div>
+      <p class="bnb-meta ob-mt-6">BirdNET is licensed CC BY-NC-SA 4.0: free to use, but not for commercial purposes.</p>
       {{setup_script}}
     </section>
 
@@ -2347,6 +2365,64 @@ static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 mod tests {
     use super::*;
 
+    /// A peak at or above -1 dBFS is clipping, whatever the RMS says (OOB-05): the
+    /// test computed the peak and never judged it, so a microphone driven into
+    /// full scale was told "Loud" or "Picking up sound".
+    #[test]
+    fn a_peak_at_full_scale_is_called_clipping() {
+        for (rms, peak) in [(-20.0, 0.0), (-45.0, -0.5), (-35.0, -1.0), (-70.0, 0.0)] {
+            let message = level_message(rms, peak);
+            assert!(
+                message.starts_with("Clipping — turn the gain down"),
+                "rms {rms} dBFS, peak {peak} dBFS: {message}"
+            );
+        }
+    }
+
+    /// The counterpart: a peak under -1 dBFS is not clipping, and the RMS grades
+    /// are what they were.
+    #[test]
+    fn a_peak_under_minus_one_dbfs_is_graded_by_its_rms() {
+        for (rms, peak, expected) in [
+            (-20.0, -6.0, "Loud"),
+            (-40.0, -1.1, "Picking up sound."),
+            (-65.0, -30.0, "Very quiet"),
+            (-95.0, -90.0, "Silent"),
+        ] {
+            let message = level_message(rms, peak);
+            assert!(
+                message.starts_with(expected) && !message.contains("lipping"),
+                "rms {rms} dBFS, peak {peak} dBFS: {message}"
+            );
+        }
+    }
+
+    /// MSC-10, the wizard's path. A device the station already has, under
+    /// another spelling, is not added a second time; a different device is.
+    #[test]
+    fn the_wizard_does_not_add_one_device_twice() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        add_source(&conn, SourceKind::UsbAlsa, "plughw:1,0", None);
+        add_source(&conn, SourceKind::UsbAlsa, "hw:1,0", None);
+        add_source(&conn, SourceKind::Rtsp, "rtsp://cam.local/live", None);
+        add_source(
+            &conn,
+            SourceKind::Rtsp,
+            "rtsp://user:pw@cam.local:554/live/",
+            None,
+        );
+        let devices: Vec<String> = AudioSourceStore::list(&conn)
+            .expect("list")
+            .into_iter()
+            .map(|s| s.device_id)
+            .collect();
+        assert_eq!(devices.len(), 2, "{devices:?}");
+        // Counterpart: another card is another source.
+        add_source(&conn, SourceKind::UsbAlsa, "plughw:2,0", None);
+        assert_eq!(AudioSourceStore::list(&conn).expect("list").len(), 3);
+    }
+
     /// The microphone test records only from a card the station listed: a device
     /// string that is not in the list is refused (nothing reaches `arecord`), one
     /// that is in the list is returned as the list spelled it.
@@ -2672,6 +2748,45 @@ mod tests {
             "unknown key was dropped"
         );
     }
+    /// OOB-12: the card the wizard preselects for a station with no trigger
+    /// set is the trigger such a station runs on. The wizard preselected
+    /// `new-species` ("recommended") while the daemon's `--notify-trigger`
+    /// and the settings form fell back to `each`, so an installer-configured
+    /// station that never saw the wizard was sent every detection. The daemon
+    /// and the form read the shared constant (held to it by the root crate's
+    /// `every_form_default_is_what_the_station_runs_on` and
+    /// `the_notify_trigger_flag_defaults_to_the_shared_constant`); this holds
+    /// the wizard's rendered value to it, from a database with no row.
+    #[test]
+    fn the_wizards_preselected_trigger_is_the_stations_default() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let prefill = Prefill::load(&conn).expect("a fresh database prefills");
+        let html = render_page(&parts("", ""), &prefill, PasswordStep::default());
+        let marker = r#"id="ob-notify" value=""#;
+        let at = html
+            .find(marker)
+            .expect("the wizard renders its trigger field")
+            + marker.len();
+        let shown = &html[at..at + html[at..].find('"').expect("closing quote")];
+        assert_eq!(
+            shown,
+            birdnet_core::config::DEFAULT_NOTIFY_TRIGGER,
+            "the wizard preselects {shown:?} for a station with no trigger, which runs on \
+             {:?}",
+            birdnet_core::config::DEFAULT_NOTIFY_TRIGGER
+        );
+        // The preselected value is a card the page offers, and it is the one
+        // marked recommended.
+        let card = format!(r#"data-radio="notify" data-value="{shown}""#);
+        let card_at = html.find(&card).expect("the default is one of the cards");
+        let card_end = card_at + html[card_at..].find("</label>").unwrap();
+        assert!(
+            html[card_at..card_end].contains("recommended"),
+            "the default card is not the recommended one"
+        );
+    }
+
     /// A camera address is `rtsp://user:password@host/…`, and the wizard adds a
     /// stream without a label, so the address is the card's heading and the
     /// summary's name. Neither may print the password; both keep the host.

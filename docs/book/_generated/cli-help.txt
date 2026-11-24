@@ -414,7 +414,7 @@ Options:
           Notification trigger: "each", "new-species", "new-species-daily", or "off"; several may be listed, separated by commas ("each,new-species"). `BirdNET-Pi`'s three `APPRISE_NOTIFY_*` switches are this list
 
           [env: BIRDNET_NOTIFY_TRIGGER=]
-          [default: each]
+          [default: new-species]
 
       --notify-species-exclude <NOTIFY_SPECIES_EXCLUDE>
           Species to exclude from notifications (comma-separated scientific names)

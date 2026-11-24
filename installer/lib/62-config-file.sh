@@ -216,8 +216,8 @@ ${lat_line}
 ${lon_line}
 # RECORDING_SCHEDULE=all-day   # all-day | solar | fixed:HH:MM-HH:MM
 #                              # solar records sunrise-to-sunset and needs the
-#                              # coordinates above. Fixed hours are evaluated in
-#                              # UTC, not local time. Also settable in the web UI
+#                              # coordinates above. Fixed hours are in the
+#                              # station's local time. Also settable in the web UI
 #                              # under Settings -> Capture -> Location & Recording Schedule.
 
 # --- Detection ---

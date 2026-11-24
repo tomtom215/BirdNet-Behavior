@@ -53,6 +53,9 @@ async fn station_health_line_partial(
                 r#"<span class="bnb-pill"><span class="bnb-dot"></span> recording state unknown · couldn't read the sources</span>"#
                     .to_string()
             }
+            (super::today::CaptureState::Partial { up, of }, _) => format!(
+                r#"<a class="bnb-pill dawn" href="/station"><span class="bnb-dot live"></span> recording · {up} of {of} sources</a>"#
+            ),
             (_, Ok(Some(last))) => {
                 format!(
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> stopped · {last}</span>"#
@@ -219,7 +222,7 @@ async fn analytics_status_partial(
     // does not match the bundled DuckDB.
     let hint = if configured {
         "DuckDB analytics database connected. Behavioral insights (sessions, retention, \
-         next-species) additionally require the duckdb-behavioral extension — see the cards below."
+         next-species) additionally require the duckdb-behavioral extension — see the table below."
     } else if compiled {
         // This tile sits on the health page, which is read by the person who
         // owns the station rather than the one who compiles it. A start-up

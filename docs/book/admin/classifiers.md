@@ -104,6 +104,7 @@ Up to **three** classifiers total. The primary is always loaded and is whatever 
 MODEL_ID=birdnet
 MODEL_THRESHOLD=
 MODEL_SAMPLE_RATE=
+MODEL_OUTPUT_SCALE=
 
 # The second classifier. Each needs its OWN labels file. (<model dir> is
 # /data/model in Docker and <data dir>/models on bare metal.)
@@ -112,6 +113,7 @@ MODEL_2_LABELS=<model dir>/perch-v2_labels.csv
 MODEL_2_ID=perch
 MODEL_2_THRESHOLD=0.35
 MODEL_2_SAMPLE_RATE=32000
+MODEL_2_OUTPUT_SCALE=
 
 # A third, if you have one.
 MODEL_3_PATH=
@@ -119,11 +121,14 @@ MODEL_3_LABELS=
 MODEL_3_ID=
 MODEL_3_THRESHOLD=
 MODEL_3_SAMPLE_RATE=
+MODEL_3_OUTPUT_SCALE=
 ```
 
 Every key also exists as `BIRDNET_MODEL_2_PATH` and so on in the environment; see `.env.example`.
 
 **`MODEL_n_SAMPLE_RATE` is not optional for Perch.** Its tensor declares `[-1, 160000]`, which is 5 s at 32 kHz and equally 3⅓ s at 48 kHz — nothing in the shape distinguishes them, so it has to be told. BirdNET's own shapes are unambiguous, and the station derives those for itself.
+
+**`MODEL_n_OUTPUT_SCALE`** (and `MODEL_OUTPUT_SCALE` for the primary) says how a classifier's scores become confidences: `logit` (through a sigmoid and `SENSITIVITY`, as BirdNET V2.4's are), `probability` (already one, as BirdNET+ V3.0's are) or `softmax` (a share of one softmax over every class, as Perch's are; see below). Leave it unset for those three models: the station recognises their input shapes and knows the answer. A model of any other shape is **refused at start-up** until this is set, and the journal and `--doctor` name the key; reading an unknown model's scores the wrong way would give it confidences that mean nothing, with no other symptom. Take the value from the model's own documentation. When it is set, it wins over the shape.
 
 **`MODEL_n_THRESHOLD`** (and `MODEL_THRESHOLD` for the primary) holds that classifier's detections to its own confidence bar, whether it is below the station's or above it. Leave it unset to use the station's. A per-species threshold still overrides either.
 
@@ -199,7 +204,7 @@ Each classifier is judged against its own threshold, and the results are combine
 >
 > **Two bars.** An answer is judged against *its classifier's* bar. The station then applies its own cutoff to the detection (a per-species setting, a dynamic threshold), kept on the row as `Cutoff`. They usually agree. When an answer met its own classifier's bar but not the station's, the card says so, so "heard it" is never read as "the station accepted it".
 >
-> Limits. A classifier reports at most its ten highest species per window, so in a very busy window it can have *heard* a species (its score at or above its bar, in the scores) without having been counted in `model_agreement`; the scores are the more exact of the two. And species are matched by scientific name as each classifier's labels write it: a name one model spells differently is a different species to the merge and to these rows alike. How much that matters can be counted from the label files the catalogue installs: 10,916 of V3.0's 11,560 scientific names (94.4%) also appear, spelled the same, in Perch's list, and 6,325 of V2.4's 6,522 (97.0%) in V3.0's. The other 644 of V3.0's names are not in Perch's list, and 469 of those are in a genus Perch does list, so some may be one species under two taxonomies' names (that was not checked name by name). For those species the card says "has no class for this species" about the classifier that knows it only by the other name, which is accurate about the label file and may not be about the bird. The detection page names a detection by its date, time and common name and shows the first match, as the review and comment features do; where two sources share all three it shows one of them, with that detection's own answers.
+> Limits. A classifier reports at most its ten highest species per window, so in a very busy window it can have *heard* a species (its score at or above its bar, in the scores) without having been counted in `model_agreement`; the scores are the more exact of the two. And species are matched by scientific name as each classifier's labels write it: a name one model spells differently is a different species to the merge and to these rows alike. How much that matters can be counted from the label files the catalogue installs: 10,916 of V3.0's 11,560 scientific names (94.4%) also appear, spelled the same, in Perch's list, and 6,325 of V2.4's 6,522 (97.0%) in V3.0's. The other 644 of V3.0's names are not in Perch's list, and 469 of those are in a genus Perch does list, so some may be one species under two taxonomies' names (that was not checked name by name). For those species the card says "has no class for this species" about the classifier that knows it only by the other name, which is accurate about the label file and may not be about the bird. The detection page names a detection by its date, time and common name and shows the first match unless the link also names its clip; where two sources share all three it shows one of them, with that detection's own answers, review and comments.
 
 ## When a classifier fails a window
 

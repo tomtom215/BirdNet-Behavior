@@ -10,6 +10,7 @@
 //! in each ISO 266 third-octave band, kept as a series. The two are easy to
 //! confuse and answer different questions — see that module's own header.
 
+pub mod band;
 pub mod biquad;
 pub mod capture;
 pub mod decode;

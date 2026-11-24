@@ -190,6 +190,7 @@ fn approving_a_quarantined_detection_admits_it_to_the_olap_copy() {
                     cutoff: None,
                     sensitivity: None,
                     overlap: None,
+                    source: None,
                 },
             )
         })

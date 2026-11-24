@@ -205,7 +205,8 @@ pub const DEFAULT_SHED_BACKLOG_ABOVE: usize = 40;
 /// measured. The policy is deliberately simple and stated here so an operator
 /// can predict it: while the queue is deeper than `backlog_above`, or while
 /// the thermal signal says the board is at its limit, every second ready
-/// segment in capture order is skipped, reported through
+/// segment of each source, in that source's capture order, is skipped
+/// ([`Shedder`]), reported through
 /// [`ThroughputObserver::shed`] with its reason, and left for the stream
 /// drain (and the raw-audio keep, R-4) like any other analysed segment. The
 /// queue then drains at twice the rate it would otherwise, the skipped audio
@@ -261,26 +262,49 @@ impl ShedPolicy {
     }
 }
 
-/// Split a sweep's ready segments under a shed: in capture order (the file
-/// name carries it), the first, third, fifth … are analysed and the rest shed.
-#[must_use]
-pub fn shed_split(mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    ready.sort();
-    let mut analyse = Vec::new();
-    let mut shed = Vec::new();
-    for (i, path) in ready.into_iter().enumerate() {
-        if i % 2 == 0 {
-            analyse.push(path);
-        } else {
-            shed.push(path);
+/// Which ready segments a shed analyses: every second segment *of each
+/// source*, in that source's capture order, counted across sweeps.
+///
+/// The alternation is per source and outlives the sweep (MSC-01). Splitting
+/// each sweep's list on its own position did neither: every source starts
+/// its segments in the same supervisor tick, so a sweep typically holds one
+/// segment per source, sorted by name, and the second source in the list was
+/// the one shed every time, while a lone source settling one segment per
+/// sweep was never shed at all. The source is the stream id in the file name
+/// ([`crate::detection::types::RecordingFile`]); id-less and unparseable names share
+/// one count.
+#[derive(Debug, Default)]
+pub struct Shedder {
+    seen: std::collections::HashMap<String, u64>,
+}
+
+impl Shedder {
+    /// Split one sweep's ready segments into (analyse, shed).
+    pub fn split(&mut self, mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        ready.sort();
+        let mut analyse = Vec::new();
+        let mut shed = Vec::new();
+        for path in ready {
+            let source = path
+                .to_str()
+                .and_then(crate::detection::types::RecordingFile::parse)
+                .and_then(|f| f.rtsp_id)
+                .unwrap_or_default();
+            let seen = self.seen.entry(source).or_insert(0);
+            if seen.is_multiple_of(2) {
+                analyse.push(path);
+            } else {
+                shed.push(path);
+            }
+            *seen += 1;
         }
+        (analyse, shed)
     }
-    (analyse, shed)
 }
 
 #[cfg(test)]
 mod shed_tests {
-    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, shed_split};
+    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, Shedder};
     use std::path::PathBuf;
 
     /// PR-2. The decision is backlog first, thermal second, nothing when the
@@ -312,13 +336,13 @@ mod shed_tests {
     /// Every second segment in capture order, whatever order the sweep
     /// yielded them in.
     #[test]
-    fn shed_split_analyses_every_second_segment_in_capture_order() {
+    fn shedder_analyses_every_second_segment_in_capture_order() {
         let names = ["06:00:45", "06:00:00", "06:00:30", "06:00:15", "06:01:00"];
         let ready: Vec<PathBuf> = names
             .iter()
             .map(|t| PathBuf::from(format!("/s/2026-03-14-birdnet-{t}.wav")))
             .collect();
-        let (analyse, shed) = shed_split(ready);
+        let (analyse, shed) = Shedder::default().split(ready);
         let stem = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(
             analyse.iter().map(stem).collect::<Vec<_>>(),
@@ -335,7 +359,58 @@ mod shed_tests {
                 "2026-03-14-birdnet-06:00:45.wav"
             ]
         );
-        assert_eq!(shed_split(Vec::new()), (Vec::new(), Vec::new()));
+        assert_eq!(
+            Shedder::default().split(Vec::new()),
+            (Vec::new(), Vec::new())
+        );
+    }
+
+    /// Ten sweeps, each holding `sources`' segments closed at the same
+    /// second, through the daemon's shedder; analysed count per source.
+    fn analysed_over_sweeps(sources: &[&str]) -> Vec<usize> {
+        let mut shedder = Shedder::default();
+        let mut analysed = vec![0; sources.len()];
+        for sweep in 0..10 {
+            let ready: Vec<PathBuf> = sources
+                .iter()
+                .map(|id| PathBuf::from(format!("/s/2026-03-14-birdnet-{id}-06:{sweep:02}:00.wav")))
+                .collect();
+            let (analyse, _) = shedder.split(ready);
+            for path in analyse {
+                let name = path.to_string_lossy().into_owned();
+                for (i, id) in sources.iter().enumerate() {
+                    if name.contains(&format!("-birdnet-{id}-")) {
+                        analysed[i] += 1;
+                    }
+                }
+            }
+        }
+        analysed
+    }
+
+    /// MSC-01. Two sources closing segments in the same sweep each keep
+    /// about half their segments; neither is the one always shed.
+    #[test]
+    fn shedding_is_fair_across_sources() {
+        let analysed = analysed_over_sweeps(&["src_a", "src_b"]);
+        for (id, n) in ["src_a", "src_b"].iter().zip(&analysed) {
+            assert!(
+                (4..=6).contains(n),
+                "{id} had {n} of 10 segments analysed under shedding: {analysed:?}"
+            );
+        }
+        let three = analysed_over_sweeps(&["src_a", "src_b", "src_c"]);
+        assert!(
+            three.iter().all(|n| (4..=6).contains(n)),
+            "three sources: {three:?}"
+        );
+    }
+
+    /// MSC-01, counterpart. One source that settles one segment per sweep
+    /// still has every second segment shed.
+    #[test]
+    fn shedding_one_source_alone_sheds_every_second_segment() {
+        assert_eq!(analysed_over_sweeps(&["src_a"]), vec![5]);
     }
 }
 
@@ -676,6 +751,10 @@ pub struct DaemonConfig {
     /// The primary's declared sample rate (`MODEL_SAMPLE_RATE`), or `None` to
     /// derive it from the model's input shape.
     pub primary_sample_rate: Option<u32>,
+    /// The primary's declared output scale (`MODEL_OUTPUT_SCALE`), or `None`
+    /// to derive it from the model's input shape, which refuses a shape it
+    /// does not recognise (MMP-11).
+    pub primary_output_scale: Option<crate::inference::model::OutputScale>,
     /// Which classifiers judge which audio source, by source id.
     ///
     /// A source absent from this map is judged by the primary classifier —
@@ -756,7 +835,8 @@ pub struct DaemonConfig {
     pub threshold_floor: Option<Arc<ThresholdFloor>>,
 }
 
-/// The lowest confidence any species may currently be recorded at.
+/// The lowest confidence any species may currently be recorded at, and the
+/// bar each species is actually stored at.
 ///
 /// # Why the inference loop needs to know
 ///
@@ -773,30 +853,117 @@ pub struct DaemonConfig {
 /// ([`apply_threshold_floor`]). Everything above the floor is still decided by
 /// the processor, per species, exactly as before — the floor only stops the
 /// model from deciding first.
+///
+/// # Why the floor alone is not enough (ACC-04)
+///
+/// The floor is one number for every class. Lowering one owl to 0.3 lowered
+/// the cut for all of them, so classes the station would drop took the model's
+/// top-N slots ahead of a species it would store, and counted as corroborating
+/// neighbours for every species; with dynamic thresholds on, the whole station
+/// ran at their floor. The processor therefore also publishes
+/// [`StorableBars`], and each classifier holds every species to its own bar
+/// before ranking ([`crate::inference::model::SpeciesBars`]). Until the
+/// processor first publishes them, the model cuts at the floor alone.
 #[derive(Debug)]
-pub struct ThresholdFloor(std::sync::atomic::AtomicU32);
+pub struct ThresholdFloor {
+    floor: std::sync::atomic::AtomicU32,
+    bars: std::sync::RwLock<Option<Arc<StorableBars>>>,
+}
 
 impl ThresholdFloor {
-    /// A floor starting at `value`.
+    /// A floor starting at `value`, with no storable bars published.
     #[must_use]
     pub const fn new(value: f32) -> Self {
-        Self(std::sync::atomic::AtomicU32::new(value.to_bits()))
+        Self {
+            floor: std::sync::atomic::AtomicU32::new(value.to_bits()),
+            bars: std::sync::RwLock::new(None),
+        }
     }
 
     /// The floor now.
     #[must_use]
     pub fn get(&self) -> f32 {
-        f32::from_bits(self.0.load(Ordering::Relaxed))
+        f32::from_bits(self.floor.load(Ordering::Relaxed))
     }
 
     /// Move the floor.
     pub fn set(&self, value: f32) {
-        self.0.store(value.to_bits(), Ordering::Relaxed);
+        self.floor.store(value.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The storable bars last published, if any.
+    #[must_use]
+    pub fn bars(&self) -> Option<Arc<StorableBars>> {
+        self.bars
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Publish the bars the next file is cut at.
+    pub fn publish_bars(&self, bars: StorableBars) {
+        *self
+            .bars
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(bars));
+    }
+}
+
+/// What the processor would store a candidate at, species by species: the
+/// inputs of its `decide_disposition`, for the model to cut at (ACC-04).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StorableBars {
+    /// The station's confidence threshold: the bar for a species with neither
+    /// an override nor a learned adjustment, on a classifier with no
+    /// threshold of its own.
+    pub station: f32,
+    /// Every species with an operator override or a live dynamic adjustment.
+    pub species: std::collections::HashMap<String, SpeciesBar>,
+}
+
+/// One species' entry in [`StorableBars`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpeciesBar {
+    /// The operator's per-species threshold, if one is set.
+    pub threshold: Option<f64>,
+    /// The dynamic-threshold adjustment in force for it, if any.
+    pub adjustment: Option<crate::detection::dynamic_threshold::Adjustment>,
+}
+
+impl StorableBars {
+    /// The bars one classifier's candidates are held to. `own` is that
+    /// classifier's own threshold, which replaces the station's for it, as
+    /// the processor's floor does for the detections it names.
+    ///
+    /// A species with an override is stored at any confidence that reaches the
+    /// processor (accepted at or above the override, quarantined below it), so
+    /// its bar is the lower of the override and the classifier's bar: the
+    /// quarantine keeps what the station would have seen with no other species
+    /// lowered, and no more. Every other species is held to the classifier's
+    /// bar. Each is adjusted as the processor adjusts it.
+    #[must_use]
+    pub fn for_classifier(&self, own: Option<f32>) -> crate::inference::model::SpeciesBars {
+        let base = f64::from(own.unwrap_or(self.station));
+        let by_species = self
+            .species
+            .iter()
+            .map(|(name, entry)| {
+                let adjust = |t: f64| entry.adjustment.map_or(t, |a| a.apply(t));
+                let held = entry
+                    .threshold
+                    .map_or_else(|| adjust(base), |t| adjust(t).min(adjust(base)));
+                (name.clone(), held)
+            })
+            .collect();
+        crate::inference::model::SpeciesBars::new(base, by_species)
     }
 }
 
 /// Run each classifier at the lower of its own threshold (`base[i]`, what it
 /// was loaded with) and the shared floor. A no-op without a floor.
+///
+/// Each species is also held to the bar the station would store it at, once
+/// the processor has published one ([`StorableBars`]).
 pub fn apply_threshold_floor(
     registry: &mut crate::inference::registry::ClassifierRegistry,
     base: &[f32],
@@ -805,10 +972,15 @@ pub fn apply_threshold_floor(
     let Some(floor) = floor else {
         return;
     };
+    let bars = floor.bars();
     let floor = floor.get();
     for (idx, &own) in base.iter().enumerate() {
         if let Some(registered) = registry.model_mut(idx) {
             registered.model.set_confidence_threshold(own.min(floor));
+            let held = bars
+                .as_ref()
+                .map(|b| b.for_classifier(registered.threshold));
+            registered.model.set_storable_bars(held);
         }
     }
 }
@@ -860,6 +1032,9 @@ pub struct FilteredFile {
     pub events: Vec<DetectionEvent>,
     /// The discards, by reason.
     pub tally: crate::detection::FilterTally,
+    /// The sample rate the recording was decoded at, before any resampling:
+    /// the band its source carried (ACC-14).
+    pub source_rate_hz: u32,
 }
 
 /// Handle for controlling a running daemon.
@@ -964,6 +1139,7 @@ mod tests {
             primary_id: "birdnet".to_owned(),
             primary_threshold: None,
             primary_sample_rate: None,
+            primary_output_scale: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
@@ -1121,5 +1297,50 @@ mod tests {
         let cloned = event.clone();
         drop(event);
         assert_eq!(cloned.correlation_id, "e-12345-0001");
+    }
+
+    // ─── Storable bars (ACC-04) ───────────────────────────────────────────
+
+    /// Each species' bar, as the processor would judge it: the station's for
+    /// a species with nothing set, the lower of its override and the station's
+    /// for one with an override, each adjusted where a level is learned; a
+    /// classifier's own threshold replaces the station's for that classifier.
+    #[test]
+    fn a_species_is_held_to_the_bar_the_processor_would_store_it_at() {
+        use crate::detection::dynamic_threshold::Adjustment;
+        let halved = Adjustment {
+            multiplier: 0.5,
+            floor: 0.25,
+        };
+        let entry = |threshold, adjustment| SpeciesBar {
+            threshold,
+            adjustment,
+        };
+        let bars = StorableBars {
+            station: 0.7,
+            species: [
+                ("lowered", entry(Some(0.4), None)),
+                ("raised", entry(Some(0.9), None)),
+                ("learned", entry(None, Some(halved))),
+                ("both", entry(Some(0.6), Some(halved))),
+            ]
+            .into_iter()
+            .map(|(n, b)| (n.to_owned(), b))
+            .collect(),
+        };
+        let station = f64::from(0.7_f32);
+        let at = bars.for_classifier(None);
+        assert!((at.bar_for("lowered") - 0.4).abs() < 1e-12);
+        assert!((at.bar_for("raised") - station).abs() < 1e-12);
+        assert!((at.bar_for("learned") - station * 0.5).abs() < 1e-12);
+        assert!((at.bar_for("both") - 0.3).abs() < 1e-12);
+        assert!((at.bar_for("anything else") - station).abs() < 1e-12);
+
+        let own = f64::from(0.5_f32);
+        let at = bars.for_classifier(Some(0.5));
+        assert!((at.bar_for("anything else") - own).abs() < 1e-12);
+        assert!((at.bar_for("raised") - own).abs() < 1e-12);
+        assert!((at.bar_for("lowered") - 0.4).abs() < 1e-12);
+        assert!((at.bar_for("learned") - 0.25).abs() < 1e-12, "floored");
     }
 }

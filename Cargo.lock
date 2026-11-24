@@ -683,6 +683,7 @@ dependencies = [
  "birdnet-behavioral",
  "birdnet-core",
  "duckdb",
+ "rusqlite",
  "serde",
  "tempfile",
 ]

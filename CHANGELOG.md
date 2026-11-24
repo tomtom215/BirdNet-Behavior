@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept `?source=`. Defaults stay pooled, as before. **The first start after upgrading back-fills the column:** the
   drift repair sees every day with a known source as changed and rebuilds it, as one full analytics rebuild on a
   station with more than 60 such days.
+- **Today says what the first screen used to hide (WP-14 of the 2026-11 audit).** A standing notice under
+  the hero when the station has no location ("Your station does not know where it is"), and another when the
+  system reports its clock is not synchronised with a time server; both stay for as long as their cause does,
+  with or without detections. The first-run checklist gains a Location row, and says **Silent — check the
+  microphone isn't muted** when the capture is up but the acoustic-health sampler's noise floor for this hour
+  or the last is at digital silence (-90 dBFS or below).
+- **A classifier's output scale can be declared (MMP-11).** `MODEL_OUTPUT_SCALE` and `MODEL_n_OUTPUT_SCALE`
+  (`logit`, `probability` or `softmax`) say how a model's scores become confidences. The three shipped models
+  are recognised by their input shape and need nothing.
+- **A source too narrow for the birds is reported (ACC-14).** A source whose band stops below 12 kHz (sampled
+  below 24 kHz, as some network cameras are) is warned about once in the journal: at its first analysed
+  recording, or when ffmpeg states a camera's rate. `--doctor` warns for such a microphone.
+
 - **A ledger of what the filters discard (WP-03 of the 2026-11 audit).** The human-sound rule, the noise
   filter, corroboration, the range filter and the operator's species lists each count what they remove:
   `birdnet_detections_dropped_total` gains the reasons `privacy`, `noise`, `corroboration`, `occurrence` and
@@ -121,6 +134,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Notification trigger default is `new-species` everywhere (OOB-12).** The setup wizard recommended it while
+  the daemon and the settings form defaulted to `each` (every detection). One constant,
+  `DEFAULT_NOTIFY_TRIGGER`, now feeds all three. **A station that never chose a trigger changes on upgrade:**
+  with no Notification Trigger saved, no `APPRISE_TRIGGER` and no `BIRDNET_NOTIFY_TRIGGER`, it was notified
+  about every detection and now is notified only about a species with fewer than five detections this
+  week. Set the trigger
+  to "Every detection" (`each`) under Settings → Alerts to keep the old behaviour. Stations that finished the
+  wizard, and BirdNET-Pi imports, have the setting saved and do not change.
+- **Recording state counts every source (UIR-11).** One source of three up drew a green "recording" pill and a
+  ticked checklist row beside a header reading "Source stopped". The hero pill and the station-health line now
+  read **recording · 1 of 3 sources** in amber, linked to Station health, and the checklist names the sources
+  that stopped.
+- **Plain words on the first-run path (OOB-15, OOB-16, UIR-12).** Installer prompts name the microphone as
+  `arecord -l` prints it, and the location, password and summary lines drop the config-file jargon; the wizard
+  keeps device names as the expert option; a "Device or resource busy" mic test says the station is already
+  using the microphone; the Capture tab's "not available in this process" now points at Station health. The
+  installer's V2.4 step and the wizard's Model step state the model's CC BY-NC-SA 4.0 licence (OOB-19).
+- **A model of an unrecognised input shape is refused until its output scale is declared (MMP-11).** It was read
+  as BirdNET V2.4's logits, so a new model could get confidences that mean nothing with no other symptom. The
+  journal and `--doctor` name the key to set.
+- **The dynamic-threshold floor defaults to 0.50 (ACC-05).** It was 0.25, which three confirmations a cooldown
+  apart reached in half an hour. A station that set `BIRDNET_DYNAMIC_THRESHOLD_MIN` keeps its value.
+- **One lowered species no longer changes what every other species is judged on (ACC-04).** The classifier
+  ranks and cuts to its top ten only the candidates the station could store, each against its own species' bar,
+  so a species set to 0.3 no longer lets classes the station would drop push out one it would keep, or count as
+  corroboration. A species with a raised threshold is no longer quarantined below the station's bar because
+  another species was lowered.
+
 - **Kept raw audio leaves out speech.** With `RAW_AUDIO_KEEP_EVERY` set, a segment in which the human-sound
   rule masked speech is drained without a copy being kept, so the share kept can fall a little under one in N.
   A segment drained before it was analysed, or any segment with the rule off, is kept as before.
@@ -163,6 +204,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--doctor` and the installer warn about a time zone far from the station (OOB-06).** A Pi left on
+  Europe/London in Ohio passed whenever the setup wizard had not recorded a zone, and filed every detection at
+  the wrong hour. Both now compare the machine's UTC offset with the station's longitude and warn when they are
+  more than 3½ hours apart (correct zones reach about 3.1 hours from the sun, e.g. western China on
+  Asia/Shanghai or Nome in summer), naming the zone and the `timedatectl set-timezone` / `TZ=` fix.
+- **`--doctor` grades a capture gain near the bottom of its range (OOB-05).** Under 10 % or -10 dB a card that
+  is switched on now warns "turn the gain up" instead of passing; it used to grade only muted, above the cap and
+  at the maximum. The setup wizard's two-second microphone test calls a peak at or above -1 dBFS clipping, where
+  it judged the RMS alone.
+- **Fixed recording hours are local time, and now say so (OOB-04).** The settings hint and the generated
+  config said fixed hours were UTC; the scheduler has always used the station's local time.
+- **Setup documentation described controls that do not exist (OOB-11).** The quick-start's IP look-up is
+  ipapi.co, not ipwho.is; there is no "restrict to this device" prompt; ffmpeg is installed on every station;
+  the wizard has no place-name search; there is no level meter on the Audio settings page (hardware.md now
+  gives the -12 to -6 dB target that `field/input-level.md` sources).
+- **A mono camera set to "left only" or "right only" recorded silence (MSC-11 follow-up).** The channel pick
+  reached ffmpeg as `pan=mono|c0=c1`, which on a one-channel stream names a channel that does not exist and
+  writes silence (−91 dB on ffmpeg 6.1) without an error. A camera's channel count is not known until its
+  stream is open, so the pick now lays the input out as stereo first, and a mono stream is heard by either
+  pick.
+- **A second classifier could quarantine what the first accepted (MMP-06).** A per-species threshold judged
+  whichever classifier won the merge, on that classifier's scale. When the winner's score is not accepted,
+  another classifier's own answer that is accepted now becomes the detection, with its score.
+- **With dynamic thresholds on, a classifier's own bar was the floor (MMP-07).** Classifiers are loaded at the
+  station's threshold and still run at the floor, so the Models board, the merge and each answer's "below its
+  own bar" use the threshold acceptance uses.
+- **A detection's common name followed whichever classifier won (MMP-10).** V3.0 and Perch name 1 569 shared
+  species differently; a merged detection now takes the primary classifier's name.
+- **The night filter quarantined nightingales (ACC-11).** Nine genera that sing or call through the night
+  (nightingales, grasshopper and reed warblers, mockingbirds, quail, curlews, loons, geese) are now known
+  night callers.
+- **Shedding no longer silences one source (MSC-01, WP-04 of the 2026-11 audit).** While inference is behind or
+  the board is hot, the daemon analyses one segment in two. It used to alternate over each sweep's list sorted by
+  name, so on a two-microphone station the second source lost every segment while the first lost none, and a lone
+  source that settled one segment per sweep was never shed at all. The alternation is now kept per source across
+  sweeps.
+- **A quarantined detection belongs to one recording and keeps its source (MSC-04).** Two sources holding back
+  one species in the same second were one quarantine row, the second dropped without a word, and an approved
+  row was stored with no source. Migration 61 keys `quarantine` by recording and adds `source`; approval copies
+  it. Rows quarantined before the upgrade still approve without a source. An approved detection still has no
+  playable clip once the stream directory has dropped its segment.
+- **A comment is about one detection (MSC-05).** Comments were keyed by date, time and species, so a note on one
+  microphone's detection appeared on another's of the same second. Migration 62 adds the clip; an older comment
+  that could mean more than one detection is shown on each, marked as possibly about another source's.
+- **One device cannot be two sources (MSC-10).** The Capture page compared device strings, so `hw:1,0` beside
+  `plughw:1,0`, or a camera address with and without its password, were accepted as two sources, and an edit
+  was not checked at all. Spellings of one card and device, and of one camera, are now compared as one, on add and
+  on edit; a failed read refuses instead of assuming no clash.
+- **Channels can be chosen, and a pick reaches PipeWire and cameras (MSC-11).** *Channels analysed* (mono, left,
+  right, both averaged) is on the add and edit forms; it was settable only in SQLite, while the start-up warning
+  told operators to set it. A PipeWire source or a camera set to one channel now keeps that channel through
+  ffmpeg's `pan` filter instead of averaging both. A source's detail line shows 16-bit, which is what every
+  source is recorded at, not the stored 24, and 48 kHz for a network stream, which is what it is resampled to.
+- **Removed sources stay removed (MSC-12).** Removing every source and restarting re-created one from the config
+  file's `ALSA_CARD` or `RTSP_URL`, or recorded from it under a label no row had. Once the source table has held a
+  row, it alone decides what is recorded; with none active, nothing is, and the journal says why.
+- **Re-adding a removed device brings back its source (MSC-13, in part).** It used to get a new id, splitting its
+  detections and losing its classifier route. Changing an existing source's device still continues the same
+  history under the same id.
+- **A source id containing `-` (MSC-17).** The stall check let `cam` claim `cam-2`'s recordings, and clip names
+  cut such an id at its first dash.
+- **"Also heard by" says when it could not check (MSC-20).** A failed read of the other sources' detections
+  showed no card, which reads as "no other source heard it"; it now shows that the read failed.
+- **Listening effort is the audio the station analysed (RES-01, MSC-16, WP-05 of the 2026-11 audit).** The ledger
+  every rate divides by credited five minutes to each source whose capture was up, so audio shed under a
+  thermal limit or left in a backlog counted as listening, and it was stamped with the clock's date. It now
+  credits each analysed recording's length to the date and hour the audio was recorded in. Days before the
+  upgrade keep the uptime they were credited with. Uptime is still sampled, by the hour, beside it, and the
+  detection deadman still measures uptime.
+- **Effort by the hour, and a detection history (RES-02).** Migration 63 adds `recording_effort_hourly`.
+  `GET /api/v2/effort/export` downloads it, and `GET /api/v2/detections/export/history` gives one species' history
+  by hour or day: `1`, `0`, or `NA` where the station did not listen, so an outage is never written as an
+  absence.
+- **The effort-corrected detection rate divides by every source's listening (MSC-03, RES-03).**
+  `/api/v2/analytics/abundance` divided all sources' detections by the longest single source's hours, so a
+  two-microphone station reported twice the rate of a one-microphone station for the same birds. The rate is
+  now detections per source-hour.
+- **A listened week without the bird is a rate of 0 (RES-15).** `/api/v2/analytics/abundance` is described as
+  what it is, a detection rate (detections per listened hour). A week the station listened to without
+  detecting a species is now a row with rate 0 rather than no row, and every week carries an exact 95 % Poisson
+  interval (`rate_ci_lower`, `rate_ci_upper`).
+- **Arrival dates that one stray detection does not move (RES-19).** `/api/v2/analytics/phenology` adds
+  `arrival_q05` and `departure_q95` (5th and 95th percentiles of the days the species was detected) and
+  `effort_gap_before_arrival`, which marks an arrival with a day of no recorded listening in the 14 days before.
+- **An outage is not a quiet day on the Trends page (RES-14, UIC-03).** The moving average and anomaly detection
+  read the recording ledger. A day recorded for less than half the station's usual day is left out of every
+  baseline, its 7-day average is blank, and it is never a "low" anomaly. The usual day is the median of the
+  station's days with any audio, so a station on a recording schedule is judged against its own window.
+  `trend`, `anomalies` and `year-over-year` gain effort fields. Richness, Shannon diversity and quiet-day
+  windows are not yet effort-aware.
+- **Year in review counts the days the station listened (UIC-01).** "Days of listening", and the daily average,
+  used the days something was detected. They now use the recording ledger; with no ledger the page says "days
+  with a detection".
+- **The weekday bars agree with the weekday sentence (UIR-02).** The margin beside the hour-by-weekday grid drew
+  each weekday's total while the sentence compared averages per listened day, so the bar named a different day
+  from the sentence. The bars now draw detections per listened day.
+- **The weekly report says when last week was partly off (UIR-08).** An outage in the week before made "a loud
+  week, +315 %". Where either week lost days, the comparison is per day listened and names the days lost.
+- **The Data tab printed literals as "the values actually in force" (UIR-14).** Retention said "every 7 days",
+  "14" and the key name `DISK_PURGE_THRESHOLD`, and the Snapshots card said "every 7 days" twice more, on a
+  station that had chosen daily backups. It now shows the backup schedule, the purge level (or that a full disk
+  stops recording, with `FULL_DISK=keep`) and the number of snapshots the maintenance loop keeps, and the next
+  scheduled backup follows the chosen schedule rather than always the last run plus seven days.
+- **The System page counted recordings in the wrong folder (UIR-15).** It read "0 audio files" beside a Data tab
+  listing twenty clips; both now count the recordings folder. Its uptime is labelled the computer's, and the
+  service panel's the service's.
+- **The empty review queue promised that detections above 0.95 confidence skip it (UIC-15).** No such rule
+  exists. It now lists the reasons a detection is held back, and the quarantine page's introduction names all of
+  them and says what Reject and Delete each do (neither deletes a recording).
+- **The changelog page cut every entry at its first line (UIR-07)**, printed `**bold**` as asterisks and
+  garbled every character outside ASCII. Entries are whole, emphasis renders, and the page is in the browser gates.
+- **Today offered Delete and the clip lock to visitors (UIC-24)**, who were sent to the login page on use. Both
+  are drawn for a signed-in owner only.
+- **Wording on the pages a birder reads (UIC-15, UIC-16, UIR-13, UIR-17, UIC-34).** Trends says "Unusual days",
+  "Kinds of birds" and "How unusual (z)" rather than "Anomaly detection", "Richness" and "Z-Score"; the
+  retention card says "heard again within" a day, a week or a month (it said "the next day" over a table of six
+  intervals); the Capture tab's watch-folder note is a sentence when the folder is unknown; the analytics
+  engine's status and versions moved from the foot of Visits and Sequences to Settings → Health, without the
+  database's file path; an empty hourly chart no longer says "today" on a species or a past day.
 - **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
   such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
   exclude lists only, so a station with its occurrence filter on recorded them wherever it was. Each classifier's
@@ -291,6 +451,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Trends' "Activity sessions" card and `/pages/ts-sessions` (UIC-07).** A second engine drew a card under the
+  same name as the Visits tab's; Visits keeps it. `/api/v2/timeseries/sessions` is unchanged.
+- **`PipelineConfig::confidence_threshold` (ACC-16)**, a third confidence threshold that nothing read, and
+  `templates/_empty_states.html` (UIC-20), a template nothing served.
 - **`birdnet_core::detection::daemon::process_and_infer` (MMP-19).** It ran inference with none of the privacy,
   noise, confirmation or occurrence filters, and nothing called it; `process_and_infer_filtered` is the entry
   point.

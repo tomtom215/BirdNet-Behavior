@@ -4,7 +4,8 @@
 //! The station records 16-bit integers, so a level set too high clips for good
 //! and no later setting brings the lost samples back. This module turns what
 //! `amixer` (ALSA) and `pactl` (PulseAudio, and PipeWire through
-//! `pipewire-pulse`) print into one description, and grades it against a cap.
+//! `pipewire-pulse`) print into one description, and grades it against a cap
+//! and, at the other end, a floor.
 //! It runs nothing and changes nothing: the caller runs the tools, under a
 //! deadline, and passes their output here. See
 //! `docs/book/field/input-level.md` for what the numbers mean and where each
@@ -27,8 +28,9 @@
 //!   observed on hardware.
 //! * The cap below ([`CAP_PERCENT`], [`CAP_HARDWARE_DB`]) is a guard rail from
 //!   a design judgement, not a published recommendation, and not an acoustic
-//!   optimum. The measured signal (peak below full scale, no clipped samples)
-//!   is what decides a level; see the manual page.
+//!   optimum. So is the floor ([`FLOOR_PERCENT`], [`FLOOR_HARDWARE_DB`]).
+//!   The measured signal (peak below full scale, no clipped samples) is what
+//!   decides a level; see the manual page.
 
 use serde_json::Value;
 
@@ -42,6 +44,37 @@ pub const CAP_PERCENT: u32 = 75;
 /// one USB codec and the one HAT codec whose tables are public, which is where
 /// the two figures were chosen to agree.
 pub const CAP_HARDWARE_DB: f32 = 18.0;
+
+/// The position, as a percentage, under which a capture control is graded as
+/// too low ([`Advice::TooLow`]). A guard rail like the cap, from the other end.
+///
+/// It is meant to catch a control left at or next to the bottom of its range,
+/// which is where a fresh image, an `alsactl init` or a re-plugged USB device
+/// can leave it, and where the capture switch can be on while almost nothing
+/// is let through. It is deliberately not a judgement that a modest level is
+/// wrong: the manual's reference recording peaks at -32.6 dBFS and is
+/// identified correctly, and the measured signal, not the mixer, decides.
+/// On the readings this module has, 10% is step 1.6 of 16 on the published
+/// USB codec (its bottom two steps, 0 dB and +1.5 dB, which is no
+/// amplification of a microphone at all), and step 3.1 of 31 on the published
+/// Intel HDA codec, still 12 dB below its own 0 dB. For a PulseAudio or
+/// PipeWire source the percentage is cubic, so 10% is -60 dB: a software
+/// volume there divides the signal by a thousand, leaving a 16-bit capture
+/// about six bits.
+pub const FLOOR_PERCENT: u32 = 10;
+
+/// The hardware gain, in dB, under which a capture control is graded as too
+/// low: 10 dB of attenuation below the hardware's own 0 dB.
+///
+/// The bottom of a capture range is not always 0 dB: the Intel HDA codec in
+/// the fixtures starts at -16.5 dB and the Raspberry Pi HATs' WM8960 at
+/// -17.25 dB, where 10% of the range is still about -13 dB. A control
+/// attenuating the microphone before the converter by more than 10 dB is set
+/// to throw away signal the station cannot recover, which is what this floor
+/// flags. Like [`CAP_HARDWARE_DB`], a judgement, not a published figure; on
+/// the WM8960 it flags steps 0 to 9 of 63 (up to 14%), where the percentage
+/// alone would flag 0 to 6.
+pub const FLOOR_HARDWARE_DB: f32 = -10.0;
 
 /// Which sound system a reading came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +121,10 @@ pub enum Advice {
     AboveCap,
     /// At the control's maximum.
     AtMaximum,
+    /// Capture is switched on but the control is at or next to the bottom of
+    /// its range: under [`FLOOR_PERCENT`], or under [`FLOOR_HARDWARE_DB`] of
+    /// hardware gain. The remedy is to turn the gain up.
+    TooLow,
 }
 
 /// Why a tool's output could not be read as a level.
@@ -116,7 +153,12 @@ impl std::fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-/// Grade a reading against the cap.
+/// Grade a reading against the cap and the floor.
+///
+/// Muted outranks everything, and over the cap outranks under the floor: a
+/// control can be over the percentage cap and under the dB floor at once on a
+/// codec whose range is all attenuation, and clipping is the loss that cannot
+/// be undone.
 #[must_use]
 pub fn assess(level: &InputLevel) -> Advice {
     if level.muted == Some(true) {
@@ -130,10 +172,20 @@ pub fn assess(level: &InputLevel) -> Advice {
                 Some((value, lo, hi)) if hi > lo => value >= hi,
                 _ => false,
             };
+            // The same at the bottom: step 409 of 4 095 prints as 10%.
+            let under_floor = match level.raw {
+                Some((value, lo, hi)) if hi > lo => {
+                    (i128::from(value) - i128::from(lo)) * 100
+                        < i128::from(FLOOR_PERCENT) * (i128::from(hi) - i128::from(lo))
+                }
+                _ => level.percent < FLOOR_PERCENT,
+            };
             if at_maximum {
                 Advice::AtMaximum
             } else if level.percent > CAP_PERCENT || level.db.is_some_and(|d| d > CAP_HARDWARE_DB) {
                 Advice::AboveCap
+            } else if under_floor || level.db.is_some_and(|d| d < FLOOR_HARDWARE_DB) {
+                Advice::TooLow
             } else {
                 Advice::Ok
             }
@@ -147,15 +199,23 @@ pub fn assess(level: &InputLevel) -> Advice {
                 || level.hardware_db.is_some_and(|d| d > CAP_HARDWARE_DB)
             {
                 Advice::AboveCap
+            } else if level.percent < FLOOR_PERCENT
+                || level.hardware_db.is_some_and(|d| d < FLOOR_HARDWARE_DB)
+            {
+                Advice::TooLow
             } else {
                 Advice::Ok
             }
         }
         // A software volume: 100% is unity, and anything above it amplifies the
         // digital signal, which is how a 16-bit capture is pushed into clipping.
+        // Below it the volume attenuates, and only the percentage is a floor: there
+        // is no hardware gain to read, and the cubic scale puts 10% at -60 dB.
         Backend::Pulse => {
             if level.percent > 100 {
                 Advice::AboveCap
+            } else if level.percent < FLOOR_PERCENT {
+                Advice::TooLow
             } else {
                 Advice::Ok
             }

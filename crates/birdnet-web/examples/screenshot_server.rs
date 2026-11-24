@@ -1069,7 +1069,7 @@ fn seed_notifications(conn: &Connection, today_days: i64) {
 fn seed_alert_rules(conn: &Connection) {
     let _ = conn.execute(
         "INSERT INTO alert_rules (name, enabled, species_pattern, confidence_min, confidence_max, hour_start, hour_end, days_of_week, action_type, action_webhook_url)
-         VALUES ('Rare bird webhook', 1, '%Owl%', 0.7, 1.0, NULL, NULL, NULL, 'webhook', 'https://example.com/hooks/rare')",
+         VALUES ('Rare bird webhook', 1, '*Owl*', 0.7, 1.0, NULL, NULL, NULL, 'webhook', 'https://example.com/hooks/rare')",
         [],
     );
     let _ = conn.execute(

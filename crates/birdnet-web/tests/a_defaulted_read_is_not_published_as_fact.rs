@@ -425,8 +425,20 @@ async fn the_review_nudge_does_not_vanish_when_the_queue_could_not_be_read() {
     let (_, body) = get(&station(&[], one_pending_review), uri).await;
     assert!(body.contains("waiting for your eye"), "{body}");
     assert!(!body.contains("couldn't load"), "{body}");
-    let (_, body) = get(&station(&[], nothing), uri).await;
+    // With a location: a station without one carries the standing location
+    // notice in this strip (OOB-02), which is not about the queue.
+    let (_, body) = get(&station(&[], located), uri).await;
     assert!(body.trim().is_empty(), "{body}");
+}
+
+fn located(conn: &rusqlite::Connection) {
+    conn.execute(
+        "INSERT INTO settings (key, value, category, updated_at) VALUES
+         ('latitude', '51.5', 'location', datetime('now')),
+         ('longitude', '-0.1', 'location', datetime('now'))",
+        [],
+    )
+    .expect("seed location");
 }
 
 /// `NoSource` says "no microphone configured" in the colour of a fault. A

@@ -123,11 +123,13 @@ fn build_page_html(active_filter: &str) -> String {
   <div class=\"bnb-eyebrow qz-eyebrow\"><span>Review</span>{help_link}</div>\
   <h1 class=\"display qz-h1\">Rare bird quarantine</h1>\
   <p class=\"qz-lede\">\
-    Some detections are held back until you have had a look: either the bird is \
-    unlikely here at this time of year, or the model was not sure enough for a \
-    species you asked to be strict about. Approve one to add it to your records; \
-    reject or delete it to discard. To confirm or reject detections already in \
-    your records, use <a href=\"/detection-reviews\">Detection reviews</a>.\
+    Some detections are held back until you have had a look: the bird is unlikely \
+    here at this time of year, the model was not sure enough for a species you asked \
+    to be strict about, a day bird was heard at night, or the station's clock was \
+    not set when it recorded. Approve one to add it to your records. Reject keeps \
+    the entry, marked as not this bird, under <b>Rejected</b>; Delete removes the \
+    entry from this list for good. Neither button deletes a recording. To confirm \
+    or reject detections already in your records, use <a href=\"/detection-reviews\">Detection reviews</a>.\
   </p>\
 </div>\
 <div id=\"quarantine-stats\" \
@@ -397,6 +399,7 @@ fn row_action_buttons(id: i64, filter_param: &str, com_name: &str) -> String {
           <button hx-post=\"/pages/quarantine-reject\" \
             hx-vals='{{\"id\":{id},\"filter\":\"{filter_param}\"}}' \
             hx-target=\"{target}\" hx-swap=\"innerHTML\" \
+            title=\"Not this bird: keep the entry, marked rejected\" \
             class=\"qz-btn reject\">\
             Reject\
           </button>\

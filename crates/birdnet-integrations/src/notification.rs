@@ -257,7 +257,9 @@ pub struct TriggerSet {
 /// Notification trigger modes controlling when notifications are sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerMode {
-    /// Send on every detection (default, existing behavior).
+    /// Send on every detection. Also what an unrecognised word parses as; the
+    /// station's default when nothing is set is
+    /// `birdnet_core::config::DEFAULT_NOTIFY_TRIGGER` (`new-species`).
     EachDetection,
     /// Send when a species has fewer than 5 detections this week.
     NewSpecies,

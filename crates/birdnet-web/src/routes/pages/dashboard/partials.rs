@@ -93,8 +93,8 @@ pub(super) const fn yard_state(
         CaptureState::Down => YardState::NotRecording,
         CaptureState::Unreadable => YardState::Unknown,
         CaptureState::Unknown => YardState::Starting,
-        CaptureState::Up if detector_running => YardState::Listening,
-        CaptureState::Up => YardState::DetectorOff,
+        CaptureState::Up | CaptureState::Partial { .. } if detector_running => YardState::Listening,
+        CaptureState::Up | CaptureState::Partial { .. } => YardState::DetectorOff,
     }
 }
 

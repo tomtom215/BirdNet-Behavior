@@ -346,8 +346,13 @@ async fn the_outage_banner_does_not_vanish_when_the_freshness_read_failed() {
         "a strip that is absent when nothing is wrong was absent because it could not look: {body:?}"
     );
 
-    // Counterpart: a working station with nothing wrong is silent.
-    let (_, body) = get(&station_just_started(&[]), uri).await;
+    // Counterpart: a working station with nothing wrong is silent. It has a
+    // location: without one the strip carries the standing location notice
+    // (OOB-02), which is not about freshness.
+    let located = "INSERT INTO settings (key, value, category, updated_at) VALUES \
+                   ('latitude', '51.5', 'location', datetime('now')), \
+                   ('longitude', '-0.1', 'location', datetime('now'))";
+    let (_, body) = get(&station_just_started(&[located]), uri).await;
     assert!(body.trim().is_empty(), "{body:?}");
 }
 

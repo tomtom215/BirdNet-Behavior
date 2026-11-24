@@ -4,9 +4,8 @@
 //!
 //! Every other quality control in this project is *subtractive*: the noise-class
 //! filter discards a chunk a dog barked in, the night filter quarantines a day
-//! bird heard at 03:00, the SNR gate drops audio too poor to judge, the
-//! duplicate-prediction interval collapses one song into one row. Each answers
-//! "is this chunk trustworthy?".
+//! bird heard at 03:00, the duplicate-prediction interval collapses one song
+//! into one row. Each answers "is this chunk trustworthy?".
 //!
 //! None of them asks the question that separates a real bird from a model
 //! artefact better than any of them: **did it happen more than once?**

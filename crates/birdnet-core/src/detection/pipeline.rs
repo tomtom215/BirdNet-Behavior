@@ -127,14 +127,14 @@ pub struct PipelineConfig {
     /// The recorded span always *contains* the audio heard, so a clip cut from
     /// it contains the detection. With one classifier the two are identical.
     pub chunk_step_secs: Option<f32>,
-    /// Minimum confidence threshold for reporting.
-    pub confidence_threshold: f32,
     /// Feed raw audio samples directly to the model instead of a mel spectrogram.
     ///
-    /// Set automatically by the daemon when a V3.0-style model is detected
-    /// (input shape `[1, 96_000]`). V2.4 models expect a mel spectrogram
-    /// (`[1, 144_000]` = 128 mel bands × 1125 frames); V3.0 models perform
-    /// their own internal feature extraction from the raw waveform.
+    /// Set by the daemon from the loaded classifier's input spec
+    /// (`InputSpec::is_waveform`). Every bundled classifier is a waveform
+    /// model: BirdNET V2.4 takes `[1, 144_000]` (3 s at 48 kHz) and V3.0 and
+    /// Perch take their own rate's samples, and each computes its features
+    /// inside the network. The mel path is kept for a model whose input is a
+    /// spectrogram.
     pub raw_audio_input: bool,
     /// Further sample rates to prepare every chunk at, for classifiers that
     /// want a rate other than [`Self::target_sample_rate`] (MMP-01).
@@ -155,7 +155,6 @@ impl Default for PipelineConfig {
             chunk_duration_secs: 3.0,
             chunk_overlap_secs: 0.0,
             chunk_step_secs: None,
-            confidence_threshold: 0.25,
             raw_audio_input: false,
             extra_sample_rates: Vec::new(),
         }
@@ -274,15 +273,31 @@ fn chunk_starts(len: usize, step: usize, min_tail: usize) -> Vec<usize> {
 /// # Errors
 ///
 /// Returns `PipelineError` if any stage of the pipeline fails.
+pub fn process_file(
+    path: &Path,
+    config: &PipelineConfig,
+) -> Result<Vec<PreparedChunk>, PipelineError> {
+    process_file_with_source_rate(path, config).map(|(chunks, _)| chunks)
+}
+
+/// [`process_file`], and the rate the recording was decoded at.
+///
+/// That rate is the one before any resampling: the band the source actually
+/// carried, which the daemon checks against the classifiers'
+/// ([`crate::audio::band`], ACC-14).
+///
+/// # Errors
+///
+/// As [`process_file`].
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
-pub fn process_file(
+pub fn process_file_with_source_rate(
     path: &Path,
     config: &PipelineConfig,
-) -> Result<Vec<PreparedChunk>, PipelineError> {
+) -> Result<(Vec<PreparedChunk>, u32), PipelineError> {
     let recording = RecordingFile::parse(&path.to_string_lossy()).ok_or_else(|| {
         PipelineError::Watch(format!(
             "cannot parse recording filename: {}",
@@ -331,9 +346,10 @@ pub fn process_file(
         // Judged on the padded chunk, which is what a model would be handed.
         let silent = is_constant(&chunk_data);
 
-        // V3.0 models (raw_audio_input=true) take the raw waveform directly.
-        // Store as a "1 × N" MelSpectrogram so the rest of the pipeline is unchanged.
-        // V2.4 models compute a proper mel spectrogram.
+        // A waveform model (raw_audio_input=true, every bundled classifier)
+        // takes the samples directly; they are stored as a "1 × N"
+        // MelSpectrogram so the rest of the pipeline is unchanged. A model
+        // whose input is a spectrogram is given one computed here.
         let spectrogram = if config.raw_audio_input {
             let n = chunk_data.len();
             MelSpectrogram {
@@ -375,7 +391,7 @@ pub fn process_file(
         });
     }
 
-    Ok(chunks)
+    Ok((chunks, audio.sample_rate))
 }
 
 /// The span `[pos, pos + len)` of a recording at `from` hertz, cut from the
@@ -583,7 +599,6 @@ mod tests {
         let config = PipelineConfig::default();
         assert_eq!(config.target_sample_rate, 48000);
         assert!((config.chunk_duration_secs - 3.0).abs() < f32::EPSILON);
-        assert!((config.confidence_threshold - 0.25).abs() < f32::EPSILON);
     }
 
     /// `is_constant` is exact: one sample that differs is enough to give the
@@ -615,6 +630,34 @@ mod tests {
             &config,
         );
         assert!(result.is_err());
+    }
+
+    /// ACC-14's seam: the rate reported is the recording's own, not the rate
+    /// it was resampled to, or a 16 kHz source would look like a 48 kHz one.
+    #[test]
+    fn the_source_rate_is_the_recording_s_not_the_target_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..16_000 * 3 {
+            w.write_sample(i16::try_from(i % 200).unwrap()).unwrap();
+        }
+        w.finalize().unwrap();
+        let config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            ..PipelineConfig::default()
+        };
+        let (chunks, rate) = super::process_file_with_source_rate(&wav, &config).unwrap();
+        assert_eq!(rate, 16_000);
+        assert!(!chunks.is_empty());
     }
 }
 

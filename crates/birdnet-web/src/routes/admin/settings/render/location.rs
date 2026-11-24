@@ -53,9 +53,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <datalist id="bnb-schedule-presets">
           <option value="all-day">Record continuously</option>
           <option value="solar">Sunrise to sunset (needs coordinates)</option>
-          <option value="fixed:06:00-20:00">Fixed hours, UTC</option>
+          <option value="fixed:06:00-20:00">Fixed hours, local time</option>
         </datalist>
-        <p class="hint"><code>all-day</code>, <code>solar</code>, or <code>fixed:HH:MM-HH:MM</code>. Fixed hours are evaluated in <strong>UTC</strong>, not local time; solar needs no timezone. Until 0.12.0 this was settable only on the command line (BirdNET-Pi: RECORDING_SCHEDULE)</p>
+        <p class="hint"><code>all-day</code>, <code>solar</code>, or <code>fixed:HH:MM-HH:MM</code>. Fixed hours are in this station's <strong>local time</strong> (its time zone is the machine's, set with <code>timedatectl</code> or <code>TZ</code>); solar follows the sun and needs no time zone. Until 0.12.0 this was settable only on the command line (BirdNET-Pi: RECORDING_SCHEDULE)</p>
       </div>
       <div>
         <label for="night_inhibit">Night Inhibit (suppress recording in darkness)</label>

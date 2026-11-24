@@ -708,6 +708,10 @@ a:hover { text-decoration: underline; }
    pages (desktop and phone). */
 .spp-credit a,
 .spp-source a,
+/* The Capture tab's model panel when the process has no model layout: "Station
+   health lists the models the detector last reported." axe's link-in-text-block
+   caught it on its first run (UIR-12). */
+.cls-detail a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -4326,6 +4330,9 @@ a.dr-row-name  { font-weight: var(--fw-semibold); color: var(--fg); }
    cannot push the card wider than the phone it is read on. */
 .dc-body        { margin: 0.25rem 0 0; white-space: pre-wrap; overflow-wrap: break-word; }
 .dc-empty       { margin: 0.75rem 0 0; }
+/* A comment written before comments named one recording, on a second two
+   sources share: shown on each, and says so. */
+.dc-legacy      { margin: 0.25rem 0 0; font-size: var(--fs-md); }
 .dc-problem     { margin: 0.75rem 0 0; color: var(--danger); }
 .dc-form        { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; align-items: flex-start; }
 .dc-form textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 0.5rem;
@@ -4413,9 +4420,12 @@ input.aud-edit-device { font-size: var(--fs-sm); padding: var(--space-6) var(--s
   margin-top: var(--space-4);
 }
 .aud-edit-quiet .hint { flex-basis: 100%; margin: var(--space-2) 0 0; }
-/* An RTSP row's transport and media mode, on a row of their own like the
-   quiet window. */
-.aud-edit-rtsp {
+/* An RTSP row's transport and media mode, and any row's channel choice, each on
+   a row of their own like the quiet window. Without `grid-column` the channel
+   block was auto-placed in the first column and widened it, which squeezed the
+   label and device fields above to nothing. */
+.aud-edit-rtsp,
+.aud-edit-channels {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
@@ -4423,7 +4433,8 @@ input.aud-edit-device { font-size: var(--fs-sm); padding: var(--space-6) var(--s
   gap: var(--space-8);
   margin-top: var(--space-4);
 }
-.aud-edit-rtsp .hint { flex-basis: 100%; margin: var(--space-2) 0 0; }
+.aud-edit-rtsp .hint,
+.aud-edit-channels .hint { flex-basis: 100%; margin: var(--space-2) 0 0; }
 .aud-edit-pair { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); max-width: 100%; }
 .aud-edit-pair select { max-width: 100%; min-width: 0; }
 input.aud-edit-time {

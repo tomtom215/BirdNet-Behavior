@@ -37,10 +37,18 @@ async fn each_card_shows_its_own_lock_state() {
         );
     });
 
+    // Signed in: the lock toggle is drawn only for a reader who can use it
+    // (UIC-24; a visitor's view is `a_visitor_is_not_offered_delete_or_lock`).
+    let token =
+        birdnet_web::session::issue_token(&birdnet_web::session::generate_session_id(), 60_000);
     let res = build_router(state)
         .oneshot(
             Request::builder()
                 .uri("/pages/today-list")
+                .header(
+                    axum::http::header::COOKIE,
+                    format!("{}={token}", birdnet_web::session::COOKIE_NAME),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

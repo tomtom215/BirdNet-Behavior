@@ -154,11 +154,11 @@ sudo -u "$SVC" birdnet-behavior --check-db
 
 ## Behavioral analytics show "extension required"
 
-On the **Analytics** page, the Activity Sessions, Species Retention and Next Species cards read *"the `duckdb-behavioral` extension is required…"*, and the startup log warns `duckdb-behavioral extension not loaded`.
+On the **Visits** and **Sequences** tabs of Patterns, the *Bursts of singing*, *Who keeps coming back* and *Neighbouring species* cards read *"the `duckdb-behavioral` extension is required…"*, and the startup log warns `duckdb-behavioral extension not loaded`.
 
 Up to v0.9.1 the `duckdb-behavioral` community extension was compiled for a **specific DuckDB version**, and DuckDB refuses to load such a build into any other one. From v0.10.0 it is built on DuckDB's stable C API (`abi: "C_STRUCT"` in `/api/v2/analytics/status`) and loads into any engine whose stable C API is at least the one it was built for (DuckDB 2.0.0 keeps that API at v1.5.6), but the community registry still publishes it only under the DuckDB releases it was built for. A copy of the extension is also embedded in every release binary, and that copy is what a station uses when the cache and the registry cannot supply one.
 
-This is **non-fatal.** Everything that reads SQLite directly — Migration, the Dawn Chorus, the Heatmap, Co-occurrence and the whole Time-series page — keeps working; only the extension-backed sessionize / retention / next-species queries are unavailable. The Analytics status badge says *connected* without claiming behavioral analytics are active.
+This is **non-fatal.** Everything that reads SQLite directly — Migration, the Dawn Chorus, the Heatmap, Co-occurrence and the whole Time-series page — keeps working; only the extension-backed sessionize / retention / next-species queries are unavailable. The *Analytics engine* section at the foot of **Settings → Health** says *Connected* without claiming behavioral analytics are active, and its table says whether the extension loaded.
 
 **Diagnose it in one command.** `--doctor` will not answer this: it deliberately never opens DuckDB (a preflight open could contend with the running service), so it reports whether analytics is *configured*, not whether the extension loads. Use:
 
@@ -229,7 +229,7 @@ sudo -u "$SVC" birdnet-behavior --doctor 2>&1 | grep -i apprise
 The **Send Test Push Notification** button under **Settings → Alerts** uses the values saved on the Settings page, so a passing test means live detections will notify too. Common gotchas:
 
 - `BIRDNET_NOTIFY_CONFIDENCE` defaults to `0.8`; lower it to see anything during testing.
-- `BIRDNET_NOTIFY_TRIGGER` defaults to `each`. `new-species-daily` notifies on the first detection of each species per day, and `new-species` only while a species has fewer than 5 detections this week; use `each` while debugging.
+- `BIRDNET_NOTIFY_TRIGGER` defaults to `new-species`, which notifies only while a species has five or fewer detections in the last seven days, so a common bird stays quiet. `new-species-daily` notifies on the first detection of each species per day; use `each` while debugging.
 - The Apprise URL must be URL-encoded if it contains special characters.
 
 ## Non-Latin species names show as boxes

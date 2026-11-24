@@ -98,6 +98,12 @@ pub const DAILY_INTERVAL_SECS: i64 = 24 * 60 * 60;
 /// Period of the space reclaim, and the default period of the backup.
 pub const BACKUP_VACUUM_INTERVAL_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// How many backup files the station keeps in its backup directory.
+///
+/// Here rather than in the maintenance loop so the Data tab, which prints it,
+/// reads the number the loop prunes to instead of a copy of it (UIR-14).
+pub const BACKUP_RETENTION: usize = 14;
+
 /// How often the station takes a backup.
 ///
 /// The one cadence an operator chooses, because it is the one with a real

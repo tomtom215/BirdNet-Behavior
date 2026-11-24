@@ -1,5 +1,5 @@
 //! Input-level checks: what the operating system says a microphone's capture
-//! gain is, graded against the guide's cap.
+//! gain is, graded against the guide's cap and floor.
 //!
 //! Read-only. The station never changes a mixer: a level set at run time does
 //! not survive a replug or a power cut unless someone with root also stores it,
@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use birdnet_core::audio::capture::alsa::{CardRef, parse_card_ref};
 use birdnet_core::audio::input_level::{
-    Advice, Backend, CAP_HARDWARE_DB, CAP_PERCENT, InputLevel, assess, command_to_reach_cap,
-    default_source, parse_amixer_scontents, parse_pactl_source,
+    Advice, Backend, CAP_HARDWARE_DB, CAP_PERCENT, FLOOR_HARDWARE_DB, FLOOR_PERCENT, InputLevel,
+    assess, command_to_reach_cap, default_source, parse_amixer_scontents, parse_pactl_source,
 };
 use birdnet_core::process::run_with_timeout;
 
@@ -144,16 +144,17 @@ fn describe(level: &InputLevel) -> String {
 const fn severity(advice: Advice) -> u8 {
     match advice {
         Advice::Ok => 0,
-        Advice::AboveCap => 1,
-        Advice::AtMaximum => 2,
-        Advice::Muted => 3,
+        Advice::TooLow => 1,
+        Advice::AboveCap => 2,
+        Advice::AtMaximum => 3,
+        Advice::Muted => 4,
     }
 }
 
 /// The verdict on the controls `amixer -c <card> scontents` printed.
 fn grade_alsa(device: &str, card: &str, scontents: &str) -> Check {
     let levels = parse_amixer_scontents(scontents);
-    let Some(worst) = levels.iter().max_by_key(|l| severity(assess(l))) else {
+    let Some(mut worst) = levels.iter().max_by_key(|l| severity(assess(l))) else {
         return Check::skip(
             NAME,
             format!(
@@ -161,6 +162,14 @@ fn grade_alsa(device: &str, card: &str, scontents: &str) -> Check {
             ),
         );
     };
+    // The gains add, so a control at the bottom of its range (a boost left at
+    // 0 dB) beside one that is in range is not a card that is too low; it is too
+    // low only when no control is in range.
+    if assess(worst) == Advice::TooLow
+        && let Some(fine) = levels.iter().find(|l| assess(l) == Advice::Ok)
+    {
+        worst = fine;
+    }
     let list = levels.iter().map(describe).collect::<Vec<_>>().join("; ");
     let both = if levels.len() > 1 {
         " (their gains add: the signal passes through each)"
@@ -222,6 +231,18 @@ fn verdict(
             ),
             format!(
                 "switch capture on in `{mixer}` (or `amixer sset '<control>' cap`), then see {GUIDE}"
+            ),
+        ),
+        Advice::TooLow => Check::warn(
+            NAME,
+            format!(
+                "{device}: {list}{note}: near the bottom of its range (under the guide's floor of \
+                 {FLOOR_PERCENT}% or {FLOOR_HARDWARE_DB:.0} dB)"
+            ),
+            format!(
+                "quiet and distant calls may not reach the detector at a level this low: turn the gain up \
+                 in `{mixer}`, to no more than the cap of {CAP_PERCENT}% or +{CAP_HARDWARE_DB:.0} dB, then \
+                 check a recording's peak, see {GUIDE}"
             ),
         ),
         advice => {
@@ -328,6 +349,47 @@ mod tests {
         );
         assert!(
             check.message.contains("their gains add"),
+            "{}",
+            check.message
+        );
+    }
+
+    /// A capture control at the bottom of its range with the switch on graded
+    /// `pass` (OOB-05): the doctor had `Muted`, `AboveCap` and `AtMaximum` and no "too
+    /// low", so a USB microphone left at 0% by a re-plug read as fine.
+    #[test]
+    fn a_control_at_the_bottom_of_its_range_is_a_warning_to_turn_the_gain_up() {
+        let bottom = USB.replace("Capture 8 [50%] [11.90dB]", "Capture 0 [0%] [0.00dB]");
+        assert_ne!(bottom, USB, "the fixture has a level to replace");
+        let check = grade_alsa("plughw:1,0", "1", &bottom);
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check.message.contains("near the bottom of its range"),
+            "{}",
+            check.message
+        );
+        let fix = check.remediation.expect("a remedy");
+        assert!(fix.contains("turn the gain up"), "{fix}");
+        assert!(!fix.contains("clips"), "a low level does not clip: {fix}");
+    }
+
+    /// The counterpart: gains add, so a second control at the bottom (a boost at
+    /// 0 dB) beside one that is in range is not "too low"; and two low controls are.
+    #[test]
+    fn a_low_control_beside_one_in_range_passes() {
+        let boost = "Simple mixer control 'Mic Boost',0\n  Capabilities: cvolume\n  Limits: Capture 0 - 3\n  Front Left: Capture 0 [0%] [0.00dB]\n";
+        let check = grade_alsa("plughw:1,0", "1", &format!("{USB}{boost}"));
+        assert_eq!(check.status, Status::Pass, "{check:?}");
+        assert!(
+            check.message.contains("'Mic Boost' at 0%"),
+            "every control is still listed: {}",
+            check.message
+        );
+        let low = USB.replace("Capture 8 [50%] [11.90dB]", "Capture 1 [6%] [1.49dB]");
+        let check = grade_alsa("plughw:1,0", "1", &format!("{low}{boost}"));
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check.message.contains("near the bottom of its range"),
             "{}",
             check.message
         );
