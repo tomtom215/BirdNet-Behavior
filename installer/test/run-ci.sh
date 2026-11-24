@@ -53,6 +53,7 @@ CI_TESTS=(
     rollback-geomodel.sh
     service-owner-preserved.sh
     service-unit.sh
+    timezone-location.sh
     uninstall-paths.sh
 )
 

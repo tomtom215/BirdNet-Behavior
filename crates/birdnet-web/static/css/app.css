@@ -708,6 +708,10 @@ a:hover { text-decoration: underline; }
    pages (desktop and phone). */
 .spp-credit a,
 .spp-source a,
+/* The Capture tab's model panel when the process has no model layout: "Station
+   health lists the models the detector last reported." axe's link-in-text-block
+   caught it on its first run (UIR-12). */
+.cls-detail a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;

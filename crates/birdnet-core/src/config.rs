@@ -42,6 +42,24 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 /// wizard's Accuracy step.
 pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.70;
 
+/// Default notification trigger: `new-species`, a species seen five times or
+/// fewer in the last seven days.
+///
+/// One value for the three places that used to carry their own (OOB-12): the
+/// daemon's `--notify-trigger` default, the settings form's fallback, and the
+/// setup wizard's preselected card, which it labels "recommended". The first
+/// two said `each` while the wizard recommended `new-species`, so a station
+/// set up by the installer (which skips the wizard) that later added a
+/// notification channel under Settings was sent every detection, the mode the
+/// wizard itself describes as hundreds a day at a busy feeder.
+///
+/// It applies to every station with no `notify_trigger` row and no
+/// `APPRISE_TRIGGER` line, because nothing writes the default into the
+/// settings table: the seed at first start copies only a value the config
+/// file carries, and the settings page does not save a field left at what it
+/// showed.
+pub const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
+
 /// Default human-sound privacy rank: ten.
 ///
 /// A window is suppressed, with the windows either side of it, when a human

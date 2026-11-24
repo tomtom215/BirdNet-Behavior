@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Today says what the first screen used to hide (WP-14 of the 2026-11 audit).** A standing notice under
+  the hero when the station has no location ("Your station does not know where it is"), and another when the
+  system reports its clock is not synchronised with a time server; both stay for as long as their cause does,
+  with or without detections. The first-run checklist gains a Location row, and says **Silent — check the
+  microphone isn't muted** when the capture is up but the acoustic-health sampler's noise floor for this hour
+  or the last is at digital silence (-90 dBFS or below).
 - **A classifier's output scale can be declared (MMP-11).** `MODEL_OUTPUT_SCALE` and `MODEL_n_OUTPUT_SCALE`
   (`logit`, `probability` or `softmax`) say how a model's scores become confidences. The three shipped models
   are recognised by their input shape and need nothing.
@@ -119,6 +125,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Notification trigger default is `new-species` everywhere (OOB-12).** The setup wizard recommended it while
+  the daemon and the settings form defaulted to `each` (every detection). One constant,
+  `DEFAULT_NOTIFY_TRIGGER`, now feeds all three. **A station that never chose a trigger changes on upgrade:**
+  with no Notification Trigger saved, no `APPRISE_TRIGGER` and no `BIRDNET_NOTIFY_TRIGGER`, it was notified
+  about every detection and now is notified only about a species with fewer than five detections this
+  week. Set the trigger
+  to "Every detection" (`each`) under Settings → Alerts to keep the old behaviour. Stations that finished the
+  wizard, and BirdNET-Pi imports, have the setting saved and do not change.
+- **Recording state counts every source (UIR-11).** One source of three up drew a green "recording" pill and a
+  ticked checklist row beside a header reading "Source stopped". The hero pill and the station-health line now
+  read **recording · 1 of 3 sources** in amber, linked to Station health, and the checklist names the sources
+  that stopped.
+- **Plain words on the first-run path (OOB-15, OOB-16, UIR-12).** Installer prompts name the microphone as
+  `arecord -l` prints it, and the location, password and summary lines drop the config-file jargon; the wizard
+  keeps device names as the expert option; a "Device or resource busy" mic test says the station is already
+  using the microphone; the Capture tab's "not available in this process" now points at Station health. The
+  installer's V2.4 step and the wizard's Model step state the model's CC BY-NC-SA 4.0 licence (OOB-19).
 - **A model of an unrecognised input shape is refused until its output scale is declared (MMP-11).** It was read
   as BirdNET V2.4's logits, so a new model could get confidences that mean nothing with no other symptom. The
   journal and `--doctor` name the key to set.
@@ -172,6 +195,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--doctor` and the installer warn about a time zone far from the station (OOB-06).** A Pi left on
+  Europe/London in Ohio passed whenever the setup wizard had not recorded a zone, and filed every detection at
+  the wrong hour. Both now compare the machine's UTC offset with the station's longitude and warn when they are
+  more than 3½ hours apart (correct zones reach about 3.1 hours from the sun, e.g. western China on
+  Asia/Shanghai or Nome in summer), naming the zone and the `timedatectl set-timezone` / `TZ=` fix.
+- **`--doctor` grades a capture gain near the bottom of its range (OOB-05).** Under 10 % or -10 dB a card that
+  is switched on now warns "turn the gain up" instead of passing; it used to grade only muted, above the cap and
+  at the maximum. The setup wizard's two-second microphone test calls a peak at or above -1 dBFS clipping, where
+  it judged the RMS alone.
+- **Fixed recording hours are local time, and now say so (OOB-04).** The settings hint and the generated
+  config said fixed hours were UTC; the scheduler has always used the station's local time.
+- **Setup documentation described controls that do not exist (OOB-11).** The quick-start's IP look-up is
+  ipapi.co, not ipwho.is; there is no "restrict to this device" prompt; ffmpeg is installed on every station;
+  the wizard has no place-name search; there is no level meter on the Audio settings page (hardware.md now
+  gives the -12 to -6 dB target that `field/input-level.md` sources).
 - **A mono camera set to "left only" or "right only" recorded silence (MSC-11 follow-up).** The channel pick
   reached ffmpeg as `pan=mono|c0=c1`, which on a one-channel stream names a channel that does not exist and
   writes silence (−91 dB on ffmpeg 6.1) without an error. A camera's channel count is not known until its

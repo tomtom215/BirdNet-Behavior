@@ -214,6 +214,12 @@ impl std::fmt::Display for LevelError {
             Self::NoArecord => f.write_str(
                 "The station cannot record a test: the `arecord` program (package alsa-utils) is not installed.",
             ),
+            // `arecord`'s "audio open error: Device or resource busy": the
+            // station's own capture holds the card, which is the expected
+            // state on a running station, not a fault (OOB-16).
+            Self::Refused(why) if why.to_ascii_lowercase().contains("busy") => f.write_str(
+                "This microphone is already in use by the station, so it cannot be tested here. That is normal: open Listen live to hear it working.",
+            ),
             Self::Refused(why) => write!(
                 f,
                 "The microphone could not be opened ({why}). If the station is already listening with it, it is busy — that is normal, and Listen live will show it working."

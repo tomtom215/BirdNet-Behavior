@@ -34,7 +34,7 @@ on the next restart.
 
 ### When to notify
 
-The **Notification Trigger** is one of: **every detection**; **the first of each species, each day**; **a species seen five times or fewer in a week**; **both of those** (not every detection); or **never**. These are BirdNET-Pi's three switches (`APPRISE_NOTIFY_EACH_DETECTION`, `_NEW_SPECIES_EACH_DAY` and `_NEW_SPECIES`) in every combination that behaves differently: "every detection" already announces everything the other two would. In `birdnet.conf` it is `APPRISE_TRIGGER`, which takes a word or a comma-separated list (`each`, `new-species`, `new-species-daily`, `off`).
+The **Notification Trigger** is one of: **every detection**; **the first of each species, each day**; **a species seen five times or fewer in a week**; **both of those** (not every detection); or **never**. These are BirdNET-Pi's three switches (`APPRISE_NOTIFY_EACH_DETECTION`, `_NEW_SPECIES_EACH_DAY` and `_NEW_SPECIES`) in every combination that behaves differently: "every detection" already announces everything the other two would. In `birdnet.conf` it is `APPRISE_TRIGGER`, which takes a word or a comma-separated list (`each`, `new-species`, `new-species-daily`, `off`). With none set anywhere, the station uses **a species seen five times or fewer in a week** (`new-species`), the setup wizard's recommendation.
 
 When more than one rule matches a detection, **one** message is sent and `$reason` names each of them (`first time today, only seen 3 times in last 7d`); BirdNET-Pi sends one message per rule. A station moved from BirdNET-Pi with all three switches at 0 has the trigger **never**, as it did there. Moving a `birdnet.conf` is covered by [Migrating from BirdNET-Pi](../guides/migration.md).
 

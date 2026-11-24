@@ -521,7 +521,7 @@ pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> C
 /// Returns `None` on any failure — absent database, missing table, unparseable
 /// value. A diagnostic must not turn a database problem into a location
 /// finding: `check_database` owns the database's health.
-fn location_from_settings(config: Option<&Config>) -> Option<(f64, f64)> {
+pub(super) fn location_from_settings(config: Option<&Config>) -> Option<(f64, f64)> {
     let db_path = crate::helpers::db_path_from_config(config);
     if !db_path.exists() {
         return None;

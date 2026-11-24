@@ -276,7 +276,10 @@ station on **UTC** (`sudo timedatectl set-timezone UTC`) and accept that every
 hour-of-day chart is then in UTC rather than in your local morning. That is the
 only configuration in which no local hour ever repeats or vanishes. `--doctor`
 reports the station's offset and how the recording window is interpreted, so
-you can check which convention a station is on without guessing.
+you can check which convention a station is on without guessing. A station more
+than 3½ hours from UTC (the Americas, most of Asia, Australia) that is kept on
+UTC this way gets a Timezone warning that the clock is far from its longitude;
+that warning is expected, and it says so.
 
 ## 7. Watchdog and process supervision
 

@@ -147,11 +147,9 @@ handled	crates/birdnet-web/src/routes/pages/station_health.rs	gather	match-err	m
 omitted	crates/birdnet-web/src/routes/pages/station_issues.rs	recorded_integrity	ok	birdnet_db::sqlite::last_run_result(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK) .ok()
 fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	map_or	birdnet_db::settings::get_or(conn, "onboarding_complete", "false") .map_or(true, |v| v == "true")
 fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	map_or	birdnet_db::sqlite::detection_count(conn).map_or(true, |n| n > 0)
-fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	unwrap_or_default	birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default()
-fail-closed	crates/birdnet-web/src/routes/pages/today.rs	first_run_needs_onboarding	unwrap_or_default	birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default()
 handled	crates/birdnet-web/src/routes/pages/today.rs	live_capture_state	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
 decoration	crates/birdnet-web/src/routes/pages/today.rs	today_daystrip_partial	unwrap_or_default	conn.range(&from, &to).unwrap_or_default()
-handled	crates/birdnet-web/src/routes/pages/today.rs	today_nudge_partial	unwrap_or_else	tokio::task::spawn_blocking(move || { state.with_read_db(|conn| {
+handled	crates/birdnet-web/src/routes/pages/today.rs	today_nudge_partial	unwrap_or_else	tokio::task::spawn_blocking(move || { let clock_synced = state.metrics().clock_synced(); state.with_read_db(|c
 omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default()
 omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default()
 omitted	crates/birdnet-web/src/routes/pages/today.rs	today_pills_partial	unwrap_or_default	conn.range(&from, &to).unwrap_or_default()

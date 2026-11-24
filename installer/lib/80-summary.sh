@@ -42,8 +42,8 @@ print_admin_login() {
         echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
         echo -e "      username:  ${BOLD}admin${RESET}"
         echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
-        echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
-        echo    "      Save it now — it is not shown again."
+        echo    "      Write it down now: it is not shown again. Forgotten it later? See"
+        echo    "      'Forgotten the password?' on the dashboard's sign-in page."
         return 0
     fi
     if [ -n "${CADDY_PWD_VALUE}" ]; then
@@ -126,8 +126,10 @@ print_summary() {
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
     echo -e "  ${BOLD}Model:${RESET}   ${CLASSIFIER_SUMMARY:-${CLASSIFIER_NAME:-unknown}}"
-    echo    "           A new install takes --classifier birdnet-v24 or birdnet-v3; this station keeps what"
-    echo    "           ${CONFIG_FILE} names. How to move one on purpose: ${CLASSIFIER_GUIDE_URL}"
+    if [ "${MODE}" = "update" ]; then
+        echo    "           This station keeps the model ${CONFIG_FILE} names."
+        echo    "           How to move to another one on purpose: ${CLASSIFIER_GUIDE_URL}"
+    fi
     # Lead with the IP address: it works for every device on the LAN. The mDNS
     # `.local` name is friendlier but NOT universal — some phones and networks
     # don't resolve it — so it is shown as a clearly-secondary convenience, never
@@ -144,9 +146,8 @@ print_summary() {
         # fallback) so it's clear why no birds are showing up.
         if ! config_has_audio_source; then
             echo
-            echo "  No audio source yet, so no birds will be detected. Open the dashboard"
-            echo "  and add one under Settings → Capture (/admin/audio) — or set ALSA_CARD / RTSP_URL"
-            echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
+            echo "  No microphone yet, so no birds will be detected. Open the dashboard,"
+            echo "  go to Settings → Capture, and choose your microphone or add a camera."
         fi
         # Live and listening, but with no coordinates the species filter cannot
         # run — so the station reports birds from the wrong continent and looks
@@ -174,6 +175,6 @@ print_summary() {
 
     print_admin_login
     echo
-    echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
+    echo "  For troubleshooting, the station's log:  sudo journalctl -u birdnet-behavior -f"
     echo
 }

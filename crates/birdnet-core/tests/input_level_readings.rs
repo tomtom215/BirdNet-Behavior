@@ -7,8 +7,9 @@
 //! sample by changing the one thing that matters, and says so.
 
 use birdnet_core::audio::input_level::{
-    Advice, Backend, CAP_HARDWARE_DB, CAP_PERCENT, InputLevel, ReadError, assess,
-    command_to_reach_cap, default_source, parse_amixer_scontents, parse_pactl_source,
+    Advice, Backend, CAP_HARDWARE_DB, CAP_PERCENT, FLOOR_HARDWARE_DB, FLOOR_PERCENT, InputLevel,
+    ReadError, assess, command_to_reach_cap, default_source, parse_amixer_scontents,
+    parse_pactl_source,
 };
 
 const PA16: &str = include_str!("data/input_level/pactl_list_sources_pulseaudio_16.1.json");
@@ -147,6 +148,50 @@ fn a_hardware_source_past_100_percent_is_above_the_cap() {
     let level = parse_pactl_source(&hardware_source(150, "10.57 dB"), "virt_mic").expect("listed");
     assert_eq!(level.percent, 150);
     assert_eq!(assess(&level), Advice::AboveCap);
+}
+
+/// A hardware source is too low under 10%, or under -10 dB on the hardware's own 0 dB; over both
+/// it is not. Built from the captured listing as above (base volume -12 dB).
+#[test]
+fn a_hardware_source_near_the_bottom_is_too_low() {
+    let at = |p, db| {
+        let l = parse_pactl_source(&hardware_source(p, db), "virt_mic").expect("listed");
+        assess(&l)
+    };
+    assert_eq!(
+        at(40, "-23.88 dB"),
+        Advice::TooLow,
+        "40% is -23.88 dB, which is -11.88 dB on the hardware's own 0 dB"
+    );
+    assert_eq!(
+        at(50, "-18.06 dB"),
+        Advice::Ok,
+        "-6.06 dB on the hardware's own 0 dB is over the floor"
+    );
+    assert_eq!(
+        at(5, "-78.06 dB"),
+        Advice::TooLow,
+        "5% is under both floors"
+    );
+    assert_eq!(at(60, "-13.31 dB"), Advice::Ok);
+}
+
+/// A software volume is cubic, so only the percentage is a floor: 9% is -62.7 dB, 10% is -60 dB.
+/// A software source at 60% (-13.31 dB) stays Ok, as `a_pulse_source_reads_as_its_loudest_channel`
+/// asserts.
+#[test]
+fn a_software_source_is_too_low_only_under_the_percentage_floor() {
+    let mut level = parse_pactl_source(PA16, "virt_mic").expect("listed");
+    assert!(!level.hardware_controlled);
+    level.percent = FLOOR_PERCENT - 1;
+    level.db = Some(-62.75);
+    assert_eq!(assess(&level), Advice::TooLow);
+    level.percent = FLOOR_PERCENT;
+    level.db = Some(-60.0);
+    assert_eq!(assess(&level), Advice::Ok, "exactly {FLOOR_PERCENT}%");
+    level.percent = 0;
+    level.muted = Some(true);
+    assert_eq!(assess(&level), Advice::Muted, "muted outranks too low");
 }
 
 #[test]
@@ -336,7 +381,8 @@ fn a_switched_off_capture_is_muted_and_beats_the_level() {
 }
 
 /// The published Intel HDA codec: `Mic Boost` is an enumerated control, not a capture volume, and is
-/// left out; `Capture` is at its minimum.
+/// left out; `Capture` is at its minimum, -16.5 dB with the switch on, which is too low (this
+/// assertion read `Advice::Ok` until OOB-05: a control at 0% graded as fine).
 #[test]
 fn an_enumerated_boost_is_not_a_capture_volume() {
     let level = only(HDA);
@@ -344,7 +390,95 @@ fn an_enumerated_boost_is_not_a_capture_volume() {
     assert_eq!(level.percent, 0);
     assert!(near(level.db, -16.5));
     assert_eq!(level.raw, Some((0, 0, 31)));
-    assert_eq!(assess(&level), Advice::Ok);
+    assert_eq!(level.muted, Some(false), "capture is switched on");
+    assert_eq!(
+        assess(&level),
+        Advice::TooLow,
+        "a capture control at the bottom of its range, switched on, is too low"
+    );
+}
+
+/// The floor is "under 10%" or "under -10 dB of hardware gain", on either rule alone, and the raw
+/// step decides the percentage where it is known. Built from the published USB codec (0 to 16,
+/// 0 dB to +23.81 dB, so only the percentage can bind) and the published HDA codec (0 to 31 in
+/// 1.5 dB steps from -16.5 dB, where the dB rule binds first).
+#[test]
+fn an_alsa_control_near_the_bottom_of_its_range_is_too_low() {
+    let usb = |raw: i64, percent: u32, db: &str| {
+        assess(&only(&USB.replace(
+            "Capture 8 [50%] [11.90dB]",
+            &format!("Capture {raw} [{percent}%] [{db}dB]"),
+        )))
+    };
+    assert_eq!(usb(0, 0, "0.00"), Advice::TooLow, "the bottom step");
+    assert_eq!(
+        usb(1, 6, "1.49"),
+        Advice::TooLow,
+        "one step up is 6% of the range"
+    );
+    assert_eq!(
+        usb(2, 13, "2.98"),
+        Advice::Ok,
+        "13% is over the {FLOOR_PERCENT}% floor"
+    );
+    assert_eq!(usb(8, 50, "11.90"), Advice::Ok);
+
+    let hda = |raw: i64, percent: u32, db: &str| {
+        let text = HDA.replace(
+            "Capture 0 [0%] [-16.50dB]",
+            &format!("Capture {raw} [{percent}%] [{db}dB]"),
+        );
+        assert_ne!(text, HDA, "the fixture has a level to replace");
+        assess(&only(&text))
+    };
+    assert_eq!(
+        hda(4, 13, "-10.50"),
+        Advice::TooLow,
+        "over {FLOOR_PERCENT}% but under {FLOOR_HARDWARE_DB} dB"
+    );
+    assert_eq!(
+        hda(5, 16, "-9.00"),
+        Advice::Ok,
+        "over both floors (16% and -9 dB)"
+    );
+    assert_eq!(hda(11, 35, "0.00"), Advice::Ok, "the codec's own 0 dB");
+
+    // Exactly on a floor is not under it.
+    let text = "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Limits: Capture 0 - 100\n  Front Left: Capture 10 [10%] [-10.00dB] [on]\n";
+    assert_eq!(assess(&only(text)), Advice::Ok, "exactly 10% and -10 dB");
+    assert_eq!(
+        assess(&only(&text.replace("Capture 10 [10%]", "Capture 9 [9%]"))),
+        Advice::TooLow,
+        "one step under the percentage floor"
+    );
+    assert_eq!(
+        assess(&only(&text.replace("[-10.00dB]", "[-10.10dB]"))),
+        Advice::TooLow,
+        "just under the dB floor"
+    );
+}
+
+/// `amixer` rounds at the bottom too: step 409 of 4 095 prints as 10%, but is under a tenth of the
+/// range. The raw step decides, as it does for the maximum.
+#[test]
+fn the_raw_step_decides_the_floor_where_it_is_known() {
+    let text = "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Limits: Capture 0 - 4095\n  Front Left: Capture 409 [10%] [on]\n";
+    let level = only(text);
+    assert_eq!((level.percent, level.db), (10, None));
+    assert_eq!(assess(&level), Advice::TooLow, "409 / 4095 is 9.99%");
+    assert_eq!(
+        assess(&only(&text.replace("Capture 409 [", "Capture 410 ["))),
+        Advice::Ok,
+        "410 / 4095 is 10.01%"
+    );
+}
+
+/// A switched-off capture is muted whatever its level: muted outranks too low.
+#[test]
+fn a_switched_off_control_at_the_bottom_is_muted_not_too_low() {
+    let off = HDA.replace("[-16.50dB] [on]", "[-16.50dB] [off]");
+    assert_ne!(off, HDA);
+    assert_eq!(assess(&only(&off)), Advice::Muted);
 }
 
 /// Real `amixer` formatting over an emulated mixer: no dB at all, a range of 65536.
