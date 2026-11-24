@@ -154,6 +154,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Listening effort is the audio the station analysed (RES-01, MSC-16, WP-05 of the 2026-11 audit).** The ledger
+  every rate divides by credited five minutes to each source whose capture was up, so audio shed under a
+  thermal limit or left in a backlog counted as listening, and it was stamped with the clock's date. It now
+  credits each analysed recording's length to the date and hour the audio was recorded in. Days before the
+  upgrade keep the uptime they were credited with. Uptime is still sampled, by the hour, beside it, and the
+  detection deadman still measures uptime.
+- **Effort by the hour, and a detection history (RES-02).** Migration 61 adds `recording_effort_hourly`.
+  `GET /api/v2/effort/export` downloads it, and `GET /api/v2/detections/export/history` gives one species' history
+  by hour or day: `1`, `0`, or `NA` where the station did not listen, so an outage is never written as an
+  absence.
+- **The effort-corrected detection rate divides by every source's listening (MSC-03, RES-03).**
+  `/api/v2/analytics/abundance` divided all sources' detections by the longest single source's hours, so a
+  two-microphone station reported twice the rate of a one-microphone station for the same birds. The rate is
+  now detections per source-hour.
+- **A listened week without the bird is a rate of 0 (RES-15).** `/api/v2/analytics/abundance` is described as
+  what it is, a detection rate (detections per listened hour). A week the station listened to without
+  detecting a species is now a row with rate 0 rather than no row, and every week carries an exact 95 % Poisson
+  interval (`rate_ci_lower`, `rate_ci_upper`).
+- **Arrival dates that one stray detection does not move (RES-19).** `/api/v2/analytics/phenology` adds
+  `arrival_q05` and `departure_q95` (5th and 95th percentiles of the days the species was detected) and
+  `effort_gap_before_arrival`, which marks an arrival with a day of no recorded listening in the 14 days before.
+- **An outage is not a quiet day on the Trends page (RES-14, UIC-03).** The moving average and anomaly detection
+  read the recording ledger. A day recorded for less than half the station's usual day is left out of every
+  baseline, its 7-day average is blank, and it is never a "low" anomaly. The usual day is the median of the
+  station's days with any audio, so a station on a recording schedule is judged against its own window.
+  `trend`, `anomalies` and `year-over-year` gain effort fields. Richness, Shannon diversity and quiet-day
+  windows are not yet effort-aware.
+- **Year in review counts the days the station listened (UIC-01).** "Days of listening", and the daily average,
+  used the days something was detected. They now use the recording ledger; with no ledger the page says "days
+  with a detection".
+- **The weekday bars agree with the weekday sentence (UIR-02).** The margin beside the hour-by-weekday grid drew
+  each weekday's total while the sentence compared averages per listened day, so the bar named a different day
+  from the sentence. The bars now draw detections per listened day.
+- **The weekly report says when last week was partly off (UIR-08).** An outage in the week before made "a loud
+  week, +315 %". Where either week lost days, the comparison is per day listened and names the days lost.
 - **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
   such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
   exclude lists only, so a station with its occurrence filter on recorded them wherever it was. Each classifier's
