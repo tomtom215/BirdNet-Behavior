@@ -218,6 +218,11 @@ struct CommentBody {
     date: String,
     time: String,
     sci_name: String,
+    /// The detection's clip, as on the review, lock and delete endpoints:
+    /// `""` for a detection with none, absent when the caller does not say
+    /// (accepted only if the date, time and name leave one detection).
+    #[serde(default)]
+    file_name: Option<String>,
     body: String,
 }
 
@@ -240,7 +245,13 @@ async fn list_comments(
                 return e;
             }
             let comments = state.with_read_db(|conn| {
-                birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
+                birdnet_db::detection_comments::list(
+                    conn,
+                    &key.date,
+                    &key.time,
+                    &key.sci_name,
+                    key.file_name.as_deref(),
+                )
             });
             match comments {
                 Ok(comments) => (
@@ -272,6 +283,7 @@ async fn add_comment(
                         date: &body.date,
                         time: &body.time,
                         sci_name: &body.sci_name,
+                        file_name: body.file_name.as_deref(),
                         user_id: None,
                         author: API_AUTHOR,
                         body: &body.body,
@@ -336,6 +348,9 @@ fn comment_json(c: &birdnet_db::detection_comments::DetectionComment) -> Value {
         "date": c.date,
         "time": c.time,
         "sci_name": c.sci_name,
+        // `null` for a comment written before comments named a clip, on a
+        // second more than one detection shares: it may be about another one.
+        "file_name": c.file_name,
         "author": c.author,
         "body": c.body,
         "at": c.at,
@@ -348,6 +363,10 @@ fn comment_json(c: &birdnet_db::detection_comments::DetectionComment) -> Value {
 fn comment_error(e: &birdnet_db::detection_comments::CommentError) -> (StatusCode, Json<Value>) {
     match e {
         birdnet_db::detection_comments::CommentError::Invalid(m) => bad_request(m),
+        birdnet_db::detection_comments::CommentError::NoSuchDetection => not_found(),
+        birdnet_db::detection_comments::CommentError::Ambiguous { detections } => {
+            ambiguous(*detections)
+        }
         birdnet_db::detection_comments::CommentError::Sqlite(_) => {
             tracing::warn!(error = %e, "comment API request failed");
             (
