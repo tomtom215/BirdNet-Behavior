@@ -87,11 +87,47 @@ const DOY_EXPR: &str = "CAST(CASE
 ///   so one calendar date is one number in every year; 29 February folds onto
 ///   28 February's day 59, and the ISO dates beside them stay exact)
 /// - `presence_days` (approximate number of days between first and last)
-/// - `detection_count`
+/// - `detection_count`, `detected_days`
+/// - `arrival_q05`, `departure_q95` (ISO 8601 dates) and `arrival_q05_doy`,
+///   `departure_q95_doy` (on the same common-year scale): the 5th and 95th
+///   percentiles of the species' **detection days** that year
+/// - `effort_gap_before_arrival`: whether the station's listening record has a
+///   day with no listening in the 14 days before `arrival_q05`
 ///
 /// A single call can be restricted to one year, but the rows are designed to be
 /// compared across years, which is why the day numbers are projected onto a
 /// common year rather than reported raw.
+///
+/// **Requires:** the `recording_effort` table (`date`, `source`, `seconds`),
+/// which the station's analytics store holds from its first start; it is read
+/// only for `effort_gap_before_arrival`.
+///
+/// # Quantile dates
+///
+/// `first_detection` and `last_detection` are the extremes, so one false
+/// positive in January makes a January "arrival". `arrival_q05` and
+/// `departure_q95` are the discrete 5th and 95th percentiles
+/// (`quantile_disc`, an actual detection day) of the distinct days the species
+/// was detected that year: each day counts once however many detections it
+/// had, so a burst of false positives on one day weighs as one day. Of `n`
+/// detection days `quantile_disc` returns the `ceil(q · n)`-th (probed against
+/// the bundled engine), so they trim a stray day only once there are enough
+/// days to trim from: with twenty or fewer detection days the 5th percentile
+/// is the first day itself, and with nineteen or fewer the 95th is the last.
+/// They are dates of the bulk of the season, not of the first and last bird,
+/// and are later and earlier than those by design. The extremes are kept
+/// beside them for compatibility and because a confirmed early bird is real.
+///
+/// # The effort gap flag
+///
+/// A first detection after a week with the microphone unplugged is the first
+/// the station *could* hear, not the arrival. `effort_gap_before_arrival` is
+/// `true` when any of the 14 days before `arrival_q05` has no recorded
+/// listening (no `recording_effort` row with seconds above zero, summed over
+/// sources), `false` when all 14 have some, and NULL when the listening record
+/// begins after `arrival_q05`: the station did not record its listening then,
+/// so it cannot say. A day with any listening counts as listened; the flag
+/// sees an outage, not a short day.
 pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
     let where_sql = where_clause(&[
         Some(PLACEABLE.to_string()),
@@ -109,22 +145,73 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
                 {DOY_EXPR}                                  AS doy
             FROM detections_ts
             {where_sql}
+        ),
+        timing AS (
+            SELECT
+                Com_Name                                        AS species,
+                year,
+                CAST(MIN(detection_date) AS VARCHAR)            AS first_detection,
+                CAST(MAX(detection_date) AS VARCHAR)            AS last_detection,
+                COUNT(*)                                        AS detection_count,
+                MIN(doy)                                        AS first_doy,
+                MAX(doy)                                        AS last_doy,
+                date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
+                                                                AS presence_days,
+                COUNT(DISTINCT detection_date)                  AS detected_days
+            FROM dated
+            GROUP BY Com_Name, year
+            {having_clause}
+        ),
+        -- One row per detection day: a day of fifty detections is one day.
+        detection_days AS (
+            SELECT DISTINCT Com_Name, year, detection_date, doy FROM dated
+        ),
+        quantiles AS (
+            SELECT
+                Com_Name                                        AS species,
+                year,
+                quantile_disc(detection_date, 0.05)             AS arrival,
+                quantile_disc(doy, 0.05)                        AS arrival_doy,
+                quantile_disc(detection_date, 0.95)             AS departure,
+                quantile_disc(doy, 0.95)                        AS departure_doy
+            FROM detection_days
+            GROUP BY Com_Name, year
+        ),
+        listened_days AS (
+            SELECT TRY_CAST(date AS DATE)                       AS day
+            FROM recording_effort
+            GROUP BY day
+            HAVING day IS NOT NULL AND SUM(seconds) > 0
+        ),
+        effort_record AS (
+            SELECT MIN(TRY_CAST(date AS DATE))                  AS begins
+            FROM recording_effort
+        ),
+        run_up AS (
+            SELECT
+                q.species,
+                q.year,
+                COUNT(l.day)                                    AS listened
+            FROM quantiles q
+            LEFT JOIN listened_days l
+                ON l.day >= q.arrival - 14 AND l.day < q.arrival
+            GROUP BY q.species, q.year
         )
         SELECT
-            Com_Name                                        AS species,
-            year,
-            CAST(MIN(detection_date) AS VARCHAR)            AS first_detection,
-            CAST(MAX(detection_date) AS VARCHAR)            AS last_detection,
-            COUNT(*)                                        AS detection_count,
-            MIN(doy)                                        AS first_doy,
-            MAX(doy)                                        AS last_doy,
-            date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
-                                                            AS presence_days,
-            COUNT(DISTINCT detection_date)                  AS detected_days
-        FROM dated
-        GROUP BY Com_Name, year
-        {having_clause}
-        ORDER BY year DESC, Com_Name
+            t.*,
+            CAST(q.arrival AS VARCHAR)                          AS arrival_q05,
+            q.arrival_doy                                       AS arrival_q05_doy,
+            CAST(q.departure AS VARCHAR)                        AS departure_q95,
+            q.departure_doy                                     AS departure_q95_doy,
+            CASE
+                WHEN r.begins IS NULL OR r.begins > q.arrival THEN NULL
+                ELSE u.listened < 14
+            END                                                 AS effort_gap_before_arrival
+        FROM timing t
+        JOIN quantiles q ON q.species = t.species AND q.year = t.year
+        JOIN run_up u ON u.species = t.species AND u.year = t.year
+        CROSS JOIN effort_record r
+        ORDER BY t.year DESC, t.species
         LIMIT {limit}",
         limit = params.limit,
     )

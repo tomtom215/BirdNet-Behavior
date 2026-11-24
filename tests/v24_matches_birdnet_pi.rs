@@ -70,6 +70,7 @@ fn v24_reproduces_birdnet_pi_on_the_magpie_recording() {
             confidence_threshold: 0.0,
             top_n: 10,
             num_threads: 2,
+            output_scale: None,
         },
     )
     .expect("model");

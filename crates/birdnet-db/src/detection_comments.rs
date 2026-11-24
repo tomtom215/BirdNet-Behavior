@@ -10,8 +10,9 @@
 //!
 //! A comment here is one row per thing said. Many per detection, each carrying
 //! who said it and when, and none of them ever rewritten — the
-//! `detection_comments_are_append_only` trigger in migration 49 aborts every
-//! `UPDATE`, so that holds against a stray `conn.execute` and not only against
+//! `detection_comments_are_append_only` trigger (migration 49; migration 62
+//! added the clip to what it locks) aborts every `UPDATE` of a comment's
+//! content, so that holds against a stray `conn.execute` and not only against
 //! the absence of an update function in this module.
 //!
 //! Deleting stays possible. A comment with a mistake in it, or a person's name,
@@ -20,9 +21,19 @@
 //!
 //! # Identity
 //!
-//! A detection is the `(date, time, sci_name)` triple, the same key
-//! `detection_reviews` and the detail page already use. `detections` has no
-//! primary key of its own to point at.
+//! A detection is `(date, time, sci_name, file_name)`, the key `DetectionKey`
+//! and `detection_reviews` use (migrations 59 and 62): two sources that hear
+//! one bird in one second write two detections that differ only in their clip,
+//! and a comment on one is not a comment on the other. `file_name` is the
+//! detection's `COALESCE(File_Name, '')`, so `""` is a detection with no clip.
+//! `detections` has no primary key of its own to point at.
+//!
+//! A comment with `file_name` NULL was written before comments named a clip,
+//! on a second that more than one detection of the species shares (migration
+//! 62 gave every other legacy comment its clip). Which detection it was about
+//! cannot be told, so [`list`] returns it on each of them, and
+//! [`DetectionComment::file_name`] being `None` is what a reader shows as
+//! "may be about another source's detection".
 
 use std::fmt;
 
@@ -44,6 +55,15 @@ pub enum CommentError {
     Sqlite(rusqlite::Error),
     /// The comment as given could not be stored.
     Invalid(String),
+    /// It named no clip, and no detection has that date, time and name.
+    NoSuchDetection,
+    /// It named no clip, and that date, time and name are shared by this many
+    /// detections (one per source that heard the bird in that second). Nothing
+    /// was written: a comment is never attached by guessing between them.
+    Ambiguous {
+        /// How many detections share the date, time and name.
+        detections: usize,
+    },
 }
 
 impl fmt::Display for CommentError {
@@ -51,6 +71,17 @@ impl fmt::Display for CommentError {
         match self {
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),
             Self::Invalid(m) => write!(f, "{m}"),
+            Self::NoSuchDetection => {
+                write!(
+                    f,
+                    "no detection matches that date, time and scientific name"
+                )
+            }
+            Self::Ambiguous { detections } => write!(
+                f,
+                "{detections} detections share that date, time and scientific name; \
+                 name the one you mean by its file_name"
+            ),
         }
     }
 }
@@ -59,7 +90,7 @@ impl std::error::Error for CommentError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Sqlite(e) => Some(e),
-            Self::Invalid(_) => None,
+            Self::Invalid(_) | Self::NoSuchDetection | Self::Ambiguous { .. } => None,
         }
     }
 }
@@ -81,6 +112,10 @@ pub struct DetectionComment {
     pub time: String,
     /// The detection's scientific name.
     pub sci_name: String,
+    /// The detection's clip (`""` for one with none), or `None` for a legacy
+    /// comment whose second more than one detection shares, which is listed on
+    /// each of them (see the module docs).
+    pub file_name: Option<String>,
     /// The account that wrote it, or `None` once that account is deleted.
     pub user_id: Option<i64>,
     /// The author's name **as it was when the comment was written**, which is
@@ -101,6 +136,10 @@ pub struct NewComment<'a> {
     pub time: &'a str,
     /// The detection's scientific name.
     pub sci_name: &'a str,
+    /// The detection's clip: `Some("")` for a detection with none. `None`
+    /// when the writer did not say, which is accepted only when the date, time
+    /// and name leave exactly one detection; that detection's clip is stored.
+    pub file_name: Option<&'a str>,
     /// The account writing it, if there is one.
     pub user_id: Option<i64>,
     /// The name to record against it.
@@ -117,10 +156,16 @@ pub struct NewComment<'a> {
 /// comment attached to nothing, or signed by nobody, is a row that can never be
 /// read back or answered for.
 ///
+/// A comment is stored against one detection's clip. When `new.file_name` is
+/// `None` the clip is the one the date, time and name leave, if they leave
+/// exactly one.
+///
 /// # Errors
 ///
 /// [`CommentError::Invalid`] for an empty or oversized body or a missing key
-/// field; [`CommentError::Sqlite`] for anything the database refuses.
+/// field; [`CommentError::NoSuchDetection`] or [`CommentError::Ambiguous`]
+/// when no clip was named and the date, time and name do not identify one
+/// detection; [`CommentError::Sqlite`] for anything the database refuses.
 pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionComment, CommentError> {
     let body = new.body.trim();
     let author = new.author.trim();
@@ -147,17 +192,32 @@ pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionCommen
         )));
     }
 
+    let (date, time, sci_name) = (new.date.trim(), new.time.trim(), new.sci_name.trim());
+    let clip = if let Some(clip) = new.file_name {
+        clip.to_owned()
+    } else {
+        let clips = crate::sqlite::detection_clips(conn, date, time, sci_name).map_err(|e| {
+            if let crate::sqlite::DbError::Sqlite(e) = e {
+                CommentError::Sqlite(e)
+            } else {
+                CommentError::Invalid(e.to_string())
+            }
+        })?;
+        match clips.as_slice() {
+            [] => return Err(CommentError::NoSuchDetection),
+            [only] => only.clone().unwrap_or_default(),
+            more => {
+                return Err(CommentError::Ambiguous {
+                    detections: more.len(),
+                });
+            }
+        }
+    };
+
     conn.execute(
-        "INSERT INTO detection_comments (date, time, sci_name, user_id, author, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            new.date.trim(),
-            new.time.trim(),
-            new.sci_name.trim(),
-            new.user_id,
-            author,
-            body
-        ],
+        "INSERT INTO detection_comments (date, time, sci_name, file_name, user_id, author, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![date, time, sci_name, clip, new.user_id, author, body],
     )?;
     let id = conn.last_insert_rowid();
     get(conn, id)?.ok_or_else(|| {
@@ -172,7 +232,7 @@ pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionCommen
 /// [`CommentError::Sqlite`] if the query fails.
 pub fn get(conn: &Connection, id: i64) -> Result<Option<DetectionComment>, CommentError> {
     conn.query_row(
-        "SELECT id, date, time, sci_name, user_id, author, body, at
+        "SELECT id, date, time, sci_name, file_name, user_id, author, body, at
          FROM detection_comments WHERE id = ?1",
         params![id],
         row_to_comment,
@@ -186,6 +246,13 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<DetectionComment>, Comme
 /// A thread reads forward: the reply has to come after the thing it answers, or
 /// the disagreement the table exists to record is unreadable.
 ///
+/// `file_name` names the detection's clip (`Some("")` for one with none); its
+/// thread is the comments written on that clip and the legacy comments whose
+/// clip could not be told (`file_name` NULL; see the module docs), which the
+/// caller can tell apart by [`DetectionComment::file_name`]. `None` lists every
+/// comment on the date, time and name, whichever detection it is about, for a
+/// caller that does not know the clip.
+///
 /// # Errors
 ///
 /// [`CommentError::Sqlite`] if the query fails.
@@ -194,17 +261,19 @@ pub fn list(
     date: &str,
     time: &str,
     sci_name: &str,
+    file_name: Option<&str>,
 ) -> Result<Vec<DetectionComment>, CommentError> {
     let mut stmt = conn.prepare(
-        "SELECT id, date, time, sci_name, user_id, author, body, at
+        "SELECT id, date, time, sci_name, file_name, user_id, author, body, at
          FROM detection_comments
          WHERE date = ?1 AND time = ?2 AND sci_name = ?3
+           AND (?4 IS NULL OR file_name IS NULL OR file_name = ?4)
          ORDER BY id ASC",
     )?;
     // `at` is whole seconds, so two comments posted in the same second share
     // it; `id` is the only monotonic ordering the table has.
     let rows = stmt
-        .query_map(params![date, time, sci_name], row_to_comment)?
+        .query_map(params![date, time, sci_name, file_name], row_to_comment)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -232,10 +301,11 @@ fn row_to_comment(row: &rusqlite::Row<'_>) -> rusqlite::Result<DetectionComment>
         date: row.get(1)?,
         time: row.get(2)?,
         sci_name: row.get(3)?,
-        user_id: row.get(4)?,
-        author: row.get(5)?,
-        body: row.get(6)?,
-        at: row.get(7)?,
+        file_name: row.get(4)?,
+        user_id: row.get(5)?,
+        author: row.get(6)?,
+        body: row.get(7)?,
+        at: row.get(8)?,
     })
 }
 
@@ -251,6 +321,9 @@ mod tests {
     use super::*;
     use crate::migration;
 
+    /// The clip every fixture comment here is written on.
+    const CLIP: &str = "2026-05-01-birdnet-06:00:00.wav";
+
     fn db() -> Connection {
         let conn = Connection::open_in_memory().expect("open");
         migration::migrate(&conn).expect("migrate");
@@ -264,6 +337,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some(CLIP),
                 user_id: None,
                 author,
                 body,
@@ -291,7 +365,14 @@ mod tests {
             "Agreed on length, but the spectrogram is Hairy.",
         );
 
-        let all = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let all = list(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Dryobates villosus",
+            Some(CLIP),
+        )
+        .expect("list");
         assert_eq!(all.len(), 2, "both must survive: {all:?}");
         assert_eq!(
             all[0].author, "ada",
@@ -320,6 +401,7 @@ mod tests {
             ("date", "2020-01-01"),
             ("time", "23:59:59"),
             ("sci_name", "Strix varia"),
+            ("file_name", "another-clip.wav"),
             ("at", "2020-01-01 00:00:00"),
             ("id", "999"),
         ] {
@@ -353,9 +435,15 @@ mod tests {
         assert_eq!(removed.id, c.id);
         assert!(get(&conn, c.id).expect("get").is_none());
         assert!(
-            list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus")
-                .expect("list")
-                .is_empty()
+            list(
+                &conn,
+                "2026-05-01",
+                "06:00:00",
+                "Dryobates villosus",
+                Some(CLIP)
+            )
+            .expect("list")
+            .is_empty()
         );
         assert!(
             delete(&conn, c.id).expect("second delete").is_none(),
@@ -384,6 +472,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some(CLIP),
                 user_id: Some(uid),
                 author: "ada",
                 body: "confirmed against the reference recording",
@@ -414,6 +503,7 @@ mod tests {
                     date: "2026-05-01",
                     time: "06:00:00",
                     sci_name: "Dryobates villosus",
+                    file_name: Some(CLIP),
                     user_id: None,
                     author: "ada",
                     body,
@@ -437,6 +527,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some(CLIP),
                 user_id: None,
                 author: "ada",
                 body: &over,
@@ -478,6 +569,7 @@ mod tests {
                     date,
                     time,
                     sci_name,
+                    file_name: Some(CLIP),
                     user_id: None,
                     author,
                     body: "a real comment",
@@ -504,6 +596,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Strix varia",
+                file_name: Some(CLIP),
                 user_id: None,
                 author: "ada",
                 body: "on the owl",
@@ -516,6 +609,7 @@ mod tests {
                 date: "2026-05-02",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some(CLIP),
                 user_id: None,
                 author: "ada",
                 body: "next day, same bird",
@@ -523,16 +617,151 @@ mod tests {
         )
         .expect("insert");
 
-        let here = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let here = list(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Dryobates villosus",
+            Some(CLIP),
+        )
+        .expect("list");
         assert_eq!(here.len(), 1, "{here:?}");
         assert_eq!(here[0].body, "on the woodpecker");
 
         assert!(
-            list(&conn, "2026-05-01", "07:00:00", "Dryobates villosus")
-                .expect("list")
-                .is_empty(),
+            list(
+                &conn,
+                "2026-05-01",
+                "07:00:00",
+                "Dryobates villosus",
+                Some(CLIP)
+            )
+            .expect("list")
+            .is_empty(),
             "a different time is a different detection"
         );
+    }
+
+    /// Two detections of one species in one second, one per source.
+    fn two_sources(conn: &Connection) {
+        for file in ["garden.wav", "camera.wav"] {
+            conn.execute(
+                "INSERT INTO detections
+                    (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.9, ?1, 0)",
+                [file],
+            )
+            .expect("detection");
+        }
+    }
+
+    fn on(
+        conn: &Connection,
+        file_name: Option<&str>,
+        body: &str,
+    ) -> Result<DetectionComment, CommentError> {
+        insert(
+            conn,
+            &NewComment {
+                date: "2026-05-01",
+                time: "06:00:00",
+                sci_name: "Strix aluco",
+                file_name,
+                user_id: None,
+                author: "ada",
+                body,
+            },
+        )
+    }
+
+    /// MSC-05: a comment on one source's detection is not on the other's,
+    /// though both share a date, a time and a species.
+    #[test]
+    fn a_comment_is_listed_only_against_its_own_clip() {
+        let conn = db();
+        two_sources(&conn);
+        on(&conn, Some("garden.wav"), "the neighbour's dog").expect("insert");
+
+        let garden = list(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Strix aluco",
+            Some("garden.wav"),
+        )
+        .expect("list");
+        assert_eq!(garden.len(), 1, "{garden:?}");
+        assert_eq!(garden[0].file_name.as_deref(), Some("garden.wav"));
+        let camera = list(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Strix aluco",
+            Some("camera.wav"),
+        )
+        .expect("list");
+        assert!(camera.is_empty(), "{camera:?}");
+        assert_eq!(
+            list(&conn, "2026-05-01", "06:00:00", "Strix aluco", None)
+                .expect("list")
+                .len(),
+            1,
+            "a caller that names no clip still sees every comment on the second"
+        );
+    }
+
+    /// A comment that names no clip is stored against the one detection its
+    /// date, time and name leave, and refused, not guessed, when they leave two
+    /// or none.
+    #[test]
+    fn an_unnamed_clip_is_resolved_only_when_one_detection_is_meant() {
+        let conn = db();
+        assert!(matches!(
+            on(&conn, None, "about nothing"),
+            Err(CommentError::NoSuchDetection)
+        ));
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.9, NULL, 0)",
+            [],
+        )
+        .expect("detection");
+        let c = on(&conn, None, "the only one").expect("resolved");
+        assert_eq!(c.file_name.as_deref(), Some(""), "a detection with no clip");
+
+        let conn = db();
+        two_sources(&conn);
+        assert!(matches!(
+            on(&conn, None, "which one?"),
+            Err(CommentError::Ambiguous { detections: 2 })
+        ));
+        assert!(
+            list(&conn, "2026-05-01", "06:00:00", "Strix aluco", None)
+                .expect("list")
+                .is_empty(),
+            "and nothing was written"
+        );
+    }
+
+    /// A legacy comment whose clip could not be told is shown on every
+    /// detection of its second, and says so by its `None` clip.
+    #[test]
+    fn a_legacy_comment_is_listed_on_each_detection_of_its_second() {
+        let conn = db();
+        two_sources(&conn);
+        conn.execute(
+            "INSERT INTO detection_comments (date, time, sci_name, author, body)
+             VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'ada', 'from before')",
+            [],
+        )
+        .expect("legacy");
+        for clip in ["garden.wav", "camera.wav"] {
+            let thread =
+                list(&conn, "2026-05-01", "06:00:00", "Strix aluco", Some(clip)).expect("list");
+            assert_eq!(thread.len(), 1, "{clip}: {thread:?}");
+            assert_eq!(thread[0].file_name, None);
+        }
     }
 
     /// The body is stored trimmed, so the rendered thread does not carry a
@@ -544,7 +773,14 @@ mod tests {
             write(&conn, "  ada  ", "  spaced out \n").body,
             "spaced out"
         );
-        let c = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let c = list(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Dryobates villosus",
+            Some(CLIP),
+        )
+        .expect("list");
         assert_eq!(c[0].author, "ada");
     }
 }

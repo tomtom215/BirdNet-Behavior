@@ -126,8 +126,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:25",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae: Shedder alternates per source (stream id from the file name) with a count that outlives the sweep. Gate shedding_is_fair_across_sources red with the old per-sweep split restored (\"src_a had 10 of 10 segments analysed under shedding: [10, 0]\"); the conjecture held. The old split also never shed a lone source settling one segment per sweep: shedding_one_source_alone_sheds_every_second_segment red on it ([10] vs [5]). Per-source shed counts (birdnet_segments_shed_total{source}) not added."
   },
   {
    "id": "MSC-02",
@@ -150,8 +150,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "01-multi-source-capture.md:46",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "11c6f0d: the day's listening is SUM(seconds) over sources, so the rate is detections per source-hour. Gate a_bird_heard_on_two_microphones_is_one_an_hour_as_on_one red on MAX (left Some(2.0), right Some(1.0)). Two fixtures that encoded the MAX belief (two microphones of effort, one detection row) were changed to one row per microphone; their asserted rates are unchanged. Per-source rates wait for Source in DuckDB (MSC-06)."
   },
   {
    "id": "MSC-04",
@@ -162,8 +162,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:58",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "7bef7b7: migration 61 keys quarantine by (date, time, sci_name, COALESCE(file_name,'')) and adds source; all four QuarantineRecord sites write it; approve_quarantine copies it to detections.Source. Gate two_sources_quarantined_in_one_second_are_two_rows_and_keep_their_source (src/daemon/processor.rs) red on the unfixed code (1 row, not 2). Remaining: an approved detection still has no clip, because quarantine stores the tmpfs segment path the stream drain deletes after 600 s; keeping one needs a retention rule for rejected, deleted and pruned rows. Rows quarantined before migration 61 approve with Source NULL (never recorded)."
   },
   {
    "id": "MSC-05",
@@ -174,8 +174,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:70",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "0052bbf: migration 62 adds detection_comments.file_name, backfilled only where the triple names one clip; list/insert take the clip; an unnamed clip is resolved only when one detection is meant (else 404/409); legacy ambiguous comments are listed on each detection of the second with a note. Gate a_comment_on_one_sources_detection_is_not_listed_on_the_others (crates/birdnet-web/tests/a_comment_names_one_detection.rs) red on the unfixed code."
   },
   {
    "id": "MSC-06",
@@ -234,8 +234,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:119",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "5be0ece + 88528c3: birdnet_db::audio_sources::device_identity (ALSA plugin:card,dev and CARD=/DEV= forms, card names via /proc/asound/cards; URL credentials, port 554, host case, trailing slash); the Capture tab's create and update and the setup wizard's add_source all check; a failed read refuses on the Capture tab. Gates the_same_device_under_another_spelling_is_refused and an_edit_cannot_make_two_sources_one_device red with string equality restored; the_wizard_does_not_add_one_device_twice red on the unfixed wizard (4 rows, not 2). Not done: a USB mic added once as ALSA and once as the PipeWire default is not detected (no card mapping for PipeWire names). The field outcome (EBUSY vs doubled audio) was not probed."
   },
   {
    "id": "MSC-11",
@@ -246,8 +246,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:131",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae + 5be0ece + 017e0a5 (edit-panel layout): Channels analysed on the add and edit forms; PipeWire and network sources carry channel_pick and ffmpeg pan=mono|c0=c0/c1 ahead of the -af chain; the detail line prints RECORDED_BIT_DEPTH (16) and NETWORK_SAMPLE_RATE (48 kHz) for streams. Gates the_channel_picked_on_the_form_is_stored, a_picked_channel_reaches_the_ffmpeg_command and the_summary_line_states_the_audio_recorded red with each fix removed. bit_depth is kept as a column and no longer shown; the \"both, analysed separately\" option is not built. No real stereo device or camera was run."
   },
   {
    "id": "MSC-12",
@@ -258,8 +258,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:140",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae: seed only a table that has never held a row; rows existing with none active records nothing (warning in the journal); source choice moved to choose_capture_sources. Gate removed_sources_stay_removed_across_a_restart red with the old rule restored; counterpart a_never_used_table_is_still_seeded_from_config green both ways."
   },
   {
    "id": "MSC-13",
@@ -270,8 +270,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:149",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "5be0ece: re-adding a device that matches a removed row reinstates that row under its own id (AudioSourceStore::reinstate). Gate re_adding_a_removed_device_restores_its_source red with reinstatement off (new id). Remaining: editing an existing source's device_id still continues one id across two places; the proposed confirmation and audio_source_history table are not built."
   },
   {
    "id": "MSC-14",
@@ -306,8 +306,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "01-multi-source-capture.md:176",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b08a5ee: closed with RES-01 (same change and gate). The processor's set_source_up(true) on each detection is left in place: effort no longer reads the gauge."
   },
   {
    "id": "MSC-17",
@@ -318,8 +318,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:185",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae: filename_matches_stream and build_extraction_filename take the id as everything up to the final -HH:MM:SS. Gates filename_matcher_is_not_fooled_by_a_dashed_sibling_id and extraction_filename_keeps_a_dashed_source_id_whole red on the old code."
   },
   {
    "id": "MSC-18",
@@ -354,8 +354,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:212",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "5be0ece: a failed corroboration read renders an inline fault note in place of the card. Gate a_failed_read_of_the_other_sources_is_reported_as_a_failure (crates/birdnet-web/tests/also_heard_by_says_when_it_could_not_check.rs) red with unwrap_or_default restored. Remaining: the window is still a fixed 30 s; deriving it needs MSC-14's measured inter-source skew."
   },
   {
    "id": "MSC-21",
@@ -438,8 +438,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:147",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "22b8752: when the merge winner is not accepted, another classifier's own answer that is accepted becomes the detection; gate a_second_classifier_cannot_quarantine_what_the_first_accepts failed (1 quarantined). Not done: per-(classifier, species) thresholds."
   },
   {
    "id": "MMP-07",
@@ -450,8 +450,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:166",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "2b606f1: classifiers are loaded at the station bar and run at the dynamic floor; gate classifiers_are_loaded_at_the_station_bar_not_the_dynamic_floor failed (loaded at 0.3)."
   },
   {
    "id": "MMP-08",
@@ -474,8 +474,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:198",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs the maintainer's decision on which scientific name a stored detection carries when V3.0 and Perch name one species differently (HANDOFF item 40); not answered in README."
   },
   {
    "id": "MMP-10",
@@ -486,8 +486,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:208",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b70da56: probe found 1569 of 10916 shared V3.0/Perch species with different common names; merged detections take the primary's name. Gates in merge.rs and process.rs seen failing."
   },
   {
    "id": "MMP-11",
@@ -498,8 +498,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:218",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6707302: MODEL_n_OUTPUT_SCALE / MODEL_OUTPUT_SCALE; 144000 is an explicit Logit shape; an unrecognised shape without a declared scale is refused at load and by --doctor. Gates seen failing (Logit by elimination)."
   },
   {
    "id": "MMP-12",
@@ -546,8 +546,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:257",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: validating the Perch bar needs annotated recordings from a real station, which this environment does not have (HANDOFF item 41)."
   },
   {
    "id": "MMP-16",
@@ -678,8 +678,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:93",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "8b10293: the model ranks and cuts only candidates the station could store (StorableBars via ThresholdFloor); corroboration sees only those. Gates a_storable_species_is_not_cut_by_classes_the_station_would_drop and neighbours_under_the_storable_bar_do_not_corroborate seen failing on the old cut. Not done: the occurrence filter before top_n (out-of-range birds above their bar are storable as quarantine rows and still take slots)."
   },
   {
    "id": "ACC-05",
@@ -690,8 +690,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:115",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "880d8fb: default dynamic-threshold floor 0.25 -> 0.50; gate half_an_hour_of_confirmations_leaves_a_default_station_at_or_above_one_half failed at 0.25. Not done: confirmations from distinct recordings (the tracker clock is processing time, so the rule would change nothing), pacing by day (a design change), level history and review-reset (P-11)."
   },
   {
    "id": "ACC-06",
@@ -702,8 +702,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:138",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Measured (0defce7, docs/book/guides/parity.md): with the default 5 Hz + 120 Hz capture filters, V2.4 top-10 logits on the magpie clip differ from BirdNET-Pi by median 1.21, max 3.63 (control without filters: max 0.077). Open question for the maintainer: default the capture filters off for parity, or keep them and the documented cost? The gate (the v24_matches comparison after EqChain::from_pipeline_flags(true, true)) fails today and is not committed; see status/WP-08.md."
   },
   {
    "id": "ACC-07",
@@ -762,8 +762,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:223",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6079e20: nine night-singing genera added; gate the_night_singers_are_classified_as_nocturnal failed (Luscinia megarhynchos Unknown). Turdus, Catharus, Tringa and Charadrius left out on the module's flight-call policy, held by a counterpart."
   },
   {
    "id": "ACC-12",
@@ -798,8 +798,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:250",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "d046f6b: audio::band::band_warning, warned once per source at its first analysed recording, from the ffmpeg banner for cameras, and by --doctor for microphones. Not done: the source rate on analysis_runs (needs a migration)."
   },
   {
    "id": "ACC-15",
@@ -810,8 +810,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "03-precision-accuracy.md:261",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "BirdNET-Pi at 88985a3 (scripts/utils/models.py) computes 1/(1+exp(-sens*logits)) with no clip, as compute_confidence does; clipping would break the parity the gate claims. The doc's Analyzer claim was wrong and is corrected in 0defce7 (Analyzer 1.5.1 clips at +-15; 2.0.0+ uses a bias shift and +-20)."
   },
   {
    "id": "ACC-16",
@@ -1158,8 +1158,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "05-ui-rendered-walkthrough.md:154",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3228368: the margin draws detections per listened day, labelled /day. Gate the_weekday_the_sentence_names_has_the_longest_margin_bar red on the old margin (left \"Sat\", right \"Thu\"). 7451e67: rendering the page showed the new labels clipped and the caption still saying totals; both fixed and looked at again at 1280 and 390 px."
   },
   {
    "id": "UIR-03",
@@ -1230,8 +1230,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "05-ui-rendered-walkthrough.md:235",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3228368: per-listened-day comparison and the lost days named where either week lost days; \"partly heard\" below half. Gate an_outage_in_the_week_before_is_named_and_divided_out red with the ledger read removed."
   },
   {
    "id": "UIR-09",
@@ -1590,8 +1590,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:171",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3228368 + 7d73d1a: listened days from the ledger; \"days with a detection\" with no ledger. Gate the_days_of_listening_are_the_days_the_station_listened red on the old count. 7d73d1a: an existing test asserted the old no-ledger wording (\"1 days of listening\"); it now expects \"1 day with a detection\" (and the singular is fixed)."
   },
   {
    "id": "UIC-02",
@@ -1614,8 +1614,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:207",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "e2cc9b1 + 6d4d55c: closed with RES-14's trend part. Gate a_three_day_outage_is_not_a_low_anomaly red on the unfixed code (\"an outage day was flagged as a low anomaly\"); page gates an_unlistened_day_is_not_an_anomaly_row and a_partial_day_anomaly_is_labelled."
   },
   {
    "id": "UIC-04",
@@ -1998,8 +1998,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:151",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b08a5ee: each analysed file's length is held by the local date and hour in its name and its source, and written on the five-minute tick to recording_effort and recording_effort_hourly (migration 63; 61 before #298 merged); liveness is kept as seconds_up. Gate effort_is_the_audio_analysed_not_the_time_a_source_was_up red with the old crediting (\"effort credited 300 s for 150 s of analysed audio\"). The deadman reference now counts uptime throughout (the_deadman_reference_counts_uptime_when_nothing_is_analysed red on the old query). Privacy-suppressed and failed windows are not debited: a window masked is still audio analysed."
   },
   {
    "id": "RES-02",
@@ -2010,8 +2010,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:181",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b08a5ee: recording_effort_hourly (the audit's \"or RES-01's hourly table\"); GET /api/v2/effort/export and GET /api/v2/detections/export/history (1/0/NA by hour or day). Gates an_hour_without_effort_is_not_a_zero and a_detection_history_says_na_where_nobody_listened red with the NA rule removed. Sunrise-relative occasions are not offered. Both routes are in openapi.json (b94da56)."
   },
   {
    "id": "RES-03",
@@ -2022,8 +2022,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:200",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "11c6f0d: closed with MSC-03 (same change and gate)."
   },
   {
    "id": "RES-04",
@@ -2154,8 +2154,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:394",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "e2cc9b1 + 6d4d55c: moving average NULL over unlistened days, anomalies exclude them from flag and baseline, year-over-year adds per-listened-day fields, rows carry effort; the floor is half the station's median day with audio (6d4d55c, after the first version's 24-hour floor judged every day of a scheduled station unlistened: a_scheduled_station_is_judged_against_its_own_day red on it). Gate a_week_without_effort_has_no_average_and_no_low_anomaly red on the unfixed code. Remaining: richness, Shannon diversity and QuietDays (gap.rs) are not effort-aware."
   },
   {
    "id": "RES-15",
@@ -2166,8 +2166,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:411",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "34c335f: zero-rate rows for listened species-weeks, exact 95% Garwood interval (rate_ci_lower/upper; Byar above k=100), docs say \"detection rate\". Gate a_listened_week_with_no_detections_is_a_rate_of_zero_with_an_upper_bound red on the unfixed code. weekly_abundance_sql (the relative index) is still not effort-corrected; its doc says so."
   },
   {
    "id": "RES-16",
@@ -2214,8 +2214,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:476",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "58cdcce: arrival_q05/departure_q95 (quantile_disc of detection days) and effort_gap_before_arrival. Gate one_stray_detection_does_not_make_a_january_arrival red on the unfixed code. Confirmed-only or k-days-in-w rules not added."
   },
   {
    "id": "RES-20",
@@ -2420,6 +2420,30 @@
    "source": "docs/book/guide/reviews.md:16 (ACC-21, added 2026-11-23 by the WP-03 session)",
    "status": "done",
    "evidence": "54859c7: the 'What it holds' cell listed only detections that failed a stricter per-species threshold, while the night-time and unset-clock reasons already wrote rows; the table now says 'held back from the log, each with its reason', and a paragraph below it names the five reasons, including the new 'Unlikely here' (a list in the cell made a column several screens tall on a phone, seen in a 390x844 screenshot). Found while correcting the page for ACC-01; documentation only, no gate."
+  },
+  {
+   "id": "MSC-22",
+   "title": "Relabelling a detection leaves its comments under the old species name",
+   "severity": "low",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "WP-04",
+   "phase": 1,
+   "source": "docs/TECH_DEBT.md TD-9 (narrowed by 0052bbf); found while fixing MSC-05",
+   "status": "open",
+   "evidence": "Reviews follow a relabel through a trigger; detection_comments has none, so a comment keyed by (date, time, sci_name, file_name) is orphaned when sci_name changes. Read, not tested."
+  },
+  {
+   "id": "UIR-38",
+   "title": "At 390 px the anomaly table's Type column is cut off at the card edge",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-05",
+   "phase": 1,
+   "source": "seen in a render while fixing UIC-03",
+   "status": "open",
+   "evidence": "The table on the Trends page's anomaly card has no scroll wrapper; at 390 px the Type column's words are cut off at the card edge. Present before WP-05; the partial-day label widens the cell. Seen in a screenshot by the session that did UIC-03, not measured."
   }
  ]
 }

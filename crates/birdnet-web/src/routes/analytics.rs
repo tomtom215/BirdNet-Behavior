@@ -946,7 +946,12 @@ async fn previous_species(
 /// "the analytics dashboards are broken" could not be told apart from a healthy
 /// one here, which is why that report arrived with no detail attached. The
 /// fields below are the ones that differ.
-/// Detections per hour of listening, per species per week.
+/// Detection rate: detections per listened hour, per species per week, with a
+/// 95 % Poisson interval (`rate_ci_lower`, `rate_ci_upper`).
+///
+/// A vocal-activity rate, not an abundance: the route keeps the name it
+/// shipped with. A week the station listened to without detecting a species
+/// is a row with a rate of zero, not a missing row.
 ///
 /// The analytic a raw count cannot substitute for. A detection count is a
 /// numerator over a denominator nobody was recording: a solar window is six
@@ -979,6 +984,13 @@ async fn abundance(
 /// `detected_days`. `presence_days` is a span (last minus first, inclusive), not
 /// an occupancy, which is why `detected_days` (the distinct days with a
 /// detection) comes beside it.
+///
+/// The first and last detection are the extremes, which one stray detection
+/// moves. `arrival_q05` and `departure_q95` are the 5th and 95th percentiles
+/// of the detection days, and `effort_gap_before_arrival` says whether the
+/// station failed to record listening on any of the 14 days before that
+/// arrival (null when its listening record starts later); see
+/// `phenology_timing_sql`.
 ///
 /// A resident or overwintering species reads "arrived 1 January, departed
 /// 31 December" in a calendar-year window; the query that flags those

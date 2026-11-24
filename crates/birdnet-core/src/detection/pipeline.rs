@@ -273,15 +273,31 @@ fn chunk_starts(len: usize, step: usize, min_tail: usize) -> Vec<usize> {
 /// # Errors
 ///
 /// Returns `PipelineError` if any stage of the pipeline fails.
+pub fn process_file(
+    path: &Path,
+    config: &PipelineConfig,
+) -> Result<Vec<PreparedChunk>, PipelineError> {
+    process_file_with_source_rate(path, config).map(|(chunks, _)| chunks)
+}
+
+/// [`process_file`], and the rate the recording was decoded at.
+///
+/// That rate is the one before any resampling: the band the source actually
+/// carried, which the daemon checks against the classifiers'
+/// ([`crate::audio::band`], ACC-14).
+///
+/// # Errors
+///
+/// As [`process_file`].
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
-pub fn process_file(
+pub fn process_file_with_source_rate(
     path: &Path,
     config: &PipelineConfig,
-) -> Result<Vec<PreparedChunk>, PipelineError> {
+) -> Result<(Vec<PreparedChunk>, u32), PipelineError> {
     let recording = RecordingFile::parse(&path.to_string_lossy()).ok_or_else(|| {
         PipelineError::Watch(format!(
             "cannot parse recording filename: {}",
@@ -375,7 +391,7 @@ pub fn process_file(
         });
     }
 
-    Ok(chunks)
+    Ok((chunks, audio.sample_rate))
 }
 
 /// The span `[pos, pos + len)` of a recording at `from` hertz, cut from the
@@ -614,6 +630,34 @@ mod tests {
             &config,
         );
         assert!(result.is_err());
+    }
+
+    /// ACC-14's seam: the rate reported is the recording's own, not the rate
+    /// it was resampled to, or a 16 kHz source would look like a 48 kHz one.
+    #[test]
+    fn the_source_rate_is_the_recording_s_not_the_target_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..16_000 * 3 {
+            w.write_sample(i16::try_from(i % 200).unwrap()).unwrap();
+        }
+        w.finalize().unwrap();
+        let config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            ..PipelineConfig::default()
+        };
+        let (chunks, rate) = super::process_file_with_source_rate(&wav, &config).unwrap();
+        assert_eq!(rate, 16_000);
+        assert!(!chunks.is_empty());
     }
 }
 

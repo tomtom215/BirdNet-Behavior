@@ -69,7 +69,7 @@ async fn detection_detail_page(
     // read rendered "Detection not found" (with a 200), which tells someone
     // following a shared link that the bird was deleted, and a failed verdict
     // read showed a rejected detection as unreviewed. The corroboration list
-    // below is decoration and still defaults.
+    // below is a claim about the other microphones, so its failure is kept too.
     let found = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
             let Some(det) = find_detection(conn, &date2, &time2, &com2, file2.as_deref())? else {
@@ -87,20 +87,28 @@ async fn detection_detail_page(
             // Multi-stream corroboration: other sources that heard this species
             // near the same time. Only meaningful for rows with a known source
             // (historical / imported rows are NULL → no corroboration shown).
-            let corroboration = det.source.as_deref().map_or_else(Vec::new, |src| {
-                birdnet_db::sqlite::concurrent_detections_from_other_sources(
-                    conn,
-                    &det.date,
-                    &det.time,
-                    &det.sci_name,
-                    src,
-                    30.0,
-                    8,
-                )
-                .unwrap_or_default()
-            });
+            // A failed read is `None`, rendered as a failure: an empty list
+            // would say "only this microphone heard it" (MSC-20).
+            let corroboration = det.source.as_deref().map_or_else(
+                || Some(Vec::new()),
+                |src| {
+                    birdnet_db::sqlite::concurrent_detections_from_other_sources(
+                        conn,
+                        &det.date,
+                        &det.time,
+                        &det.sci_name,
+                        src,
+                        30.0,
+                        8,
+                    )
+                    .inspect_err(|e| {
+                        tracing::warn!(error = %e, "detection detail: other sources could not be read");
+                    })
+                    .ok()
+                },
+            );
             let floor = super::confidence::station_floor(conn);
-            // What each classifier said. Unlike the corroboration list this is a
+            // What each classifier said. Like the corroboration list this is a
             // claim about the detection, so a failed read is kept as `None` and
             // rendered as a fault rather than defaulted to "nobody else heard it".
             // Read by the identity the row was stored under (its clip too), so two
@@ -141,7 +149,7 @@ async fn detection_detail_page(
     Ok(render_detail_page(
         &det,
         verdict.as_deref(),
-        &corroboration,
+        corroboration.as_deref(),
         nearby.as_deref(),
         &headers,
         &names,
@@ -181,7 +189,7 @@ fn find_detection(
 fn render_detail_page(
     det: &birdnet_db::sqlite::DetectionRow,
     verdict: Option<&str>,
-    corroboration: &[birdnet_db::sqlite::ConcurrentDetection],
+    corroboration: Option<&[birdnet_db::sqlite::ConcurrentDetection]>,
     nearby: Option<&birdnet_integrations::ebird::Snapshot>,
     headers: &HeaderMap,
     names: &birdnet_core::i18n::NameLocalizer,
@@ -218,8 +226,12 @@ fn render_detail_page(
     // copies an absolute `/r/<token>` URL built from the page's own origin.
     // The thread is a database read the page need not block on, and it is
     // loaded the same way the page's other panels are.
-    let comments =
-        super::detection_comments::thread_placeholder(&det.date, &det.time, &det.sci_name);
+    let comments = super::detection_comments::thread_placeholder(
+        &det.date,
+        &det.time,
+        &det.sci_name,
+        det.file_name.as_deref().unwrap_or_default(),
+    );
 
     let token = crate::routes::share::issue_token_for(&det.date, &det.time, &det.com_name);
     let share_path = format!("/r/{token}");
@@ -313,7 +325,16 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
 /// than noise. Returns an empty string (no card) when nothing corroborates, so
 /// single-mic stations never see it. Non-destructive: it only *reads* rows that
 /// are already stored, and reuses the page's existing card vocabulary.
-fn build_corroboration_section(hits: &[birdnet_db::sqlite::ConcurrentDetection]) -> String {
+///
+/// `None` is a failed read, and says so in place of the card: no card reads as
+/// "no other source heard it", which is a claim the page could not check.
+fn build_corroboration_section(hits: Option<&[birdnet_db::sqlite::ConcurrentDetection]>) -> String {
+    let Some(hits) = hits else {
+        return format!(
+            r#"<div class="bnb-card pad">{}</div>"#,
+            super::error_states::inline("the other sources’ detections of this bird")
+        );
+    };
     if hits.is_empty() {
         return String::new();
     }
@@ -497,7 +518,7 @@ mod tests {
 
     #[test]
     fn corroboration_section_empty_when_no_hits() {
-        assert_eq!(build_corroboration_section(&[]), "");
+        assert_eq!(build_corroboration_section(Some(&[])), "");
     }
 
     #[test]
@@ -507,7 +528,7 @@ mod tests {
             time: "06:00:05".into(),
             confidence: 0.85,
         }];
-        let html = build_corroboration_section(&hits);
+        let html = build_corroboration_section(Some(&hits));
         assert!(html.contains("Also heard by"), "should render the card");
         assert!(
             html.contains("cam2"),

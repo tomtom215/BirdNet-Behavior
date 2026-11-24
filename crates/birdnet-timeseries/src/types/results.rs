@@ -29,10 +29,22 @@ pub struct TrendRow {
     pub daily_detections: i64,
     /// Species richness for this day.
     pub species_richness: i64,
-    /// Smoothed moving average of detection count.
+    /// Smoothed moving average of detection count; `None` unless every day of
+    /// the window is complete and listened.
     pub moving_avg_detections: Option<f64>,
     /// Smoothed moving average of species richness.
     pub moving_avg_species: Option<f64>,
+    /// Hours of audio the `recording_effort` ledger holds for this local date,
+    /// summed over sources; `None` where the ledger says nothing about it (no
+    /// ledger, or a date before its first row).
+    pub effort_hours: Option<f64>,
+    /// Whether the station listened to this day: at least
+    /// [`crate::queries::trend::EFFORT_FLOOR_SHARE`] of its typical day
+    /// recorded, or no ledger record to say otherwise.
+    pub listened: bool,
+    /// A listened day with less than
+    /// [`crate::queries::trend::FULL_DAY_SHARE`] of its typical day recorded.
+    pub partial_effort: bool,
 }
 
 /// A single session window (gap-based grouping).
@@ -108,10 +120,23 @@ pub struct AnomalyRow {
     pub rolling_mean: Option<f64>,
     /// Rolling standard deviation.
     pub rolling_stddev: Option<f64>,
-    /// Z-score: how many SDs above/below the mean.
+    /// Z-score: how many SDs above/below the mean; `None` for a day that is
+    /// not judged.
     pub z_score: Option<f64>,
-    /// `"high"`, `"low"`, or `"normal"`.
+    /// `"high"`, `"low"`, `"normal"`, or `"unlistened"` — a day the station
+    /// recorded too little of to be judged, which is not part of any baseline.
     pub anomaly_flag: String,
+    /// Hours of audio the `recording_effort` ledger holds for this local date,
+    /// summed over sources; `None` where the ledger says nothing about it (no
+    /// ledger, or a date before its first row).
+    pub effort_hours: Option<f64>,
+    /// Whether the station listened to this day: at least
+    /// [`crate::queries::trend::EFFORT_FLOOR_SHARE`] of its typical day
+    /// recorded, or no ledger record to say otherwise.
+    pub listened: bool,
+    /// A listened day with less than
+    /// [`crate::queries::trend::FULL_DAY_SHARE`] of its typical day recorded.
+    pub partial_effort: bool,
 }
 
 /// Year-over-year comparison row.
@@ -123,13 +148,28 @@ pub struct YearOverYearRow {
     pub current_year_count: i64,
     /// Detection count same week last year.
     pub prior_year_count: Option<i64>,
-    /// Absolute delta (current − prior); `None` when the same week last year
-    /// has no detections to compare against.
+    /// Absolute delta (current − prior) of the raw counts; `None` when the
+    /// same week last year predates the station. Not corrected for effort: a
+    /// week of downtime in either year moves it. See `per_listened_day_delta`.
     pub yoy_delta: Option<i64>,
     /// Species count this year.
     pub current_year_species: i64,
     /// Species count prior year.
     pub prior_year_species: Option<i64>,
+    /// Days of this year's span the station listened to (see
+    /// [`crate::queries::trend::YearOverYear`]).
+    pub current_listened_days: i64,
+    /// Days of the prior span the station listened to; `None` when it
+    /// predates the station.
+    pub prior_listened_days: Option<i64>,
+    /// Detections on this year's listened days, per listened day; `None` when
+    /// there were none.
+    pub current_per_listened_day: Option<f64>,
+    /// The same for the prior span.
+    pub prior_per_listened_day: Option<f64>,
+    /// `current_per_listened_day − prior_per_listened_day`: the comparison a
+    /// week of downtime does not move.
+    pub per_listened_day_delta: Option<f64>,
 }
 
 /// Inactivity gap within a day.

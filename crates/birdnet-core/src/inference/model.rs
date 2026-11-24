@@ -34,6 +34,10 @@ pub enum InferenceError {
     Runtime(String),
     /// Label/output shape mismatch.
     Shape(String),
+    /// The model's input shape is none the station recognises and no
+    /// [`OutputScale`] was declared for it, so how its output becomes a
+    /// confidence cannot be known (MMP-11). Carries the shape.
+    UndeclaredOutputScale(Vec<usize>),
 }
 
 impl fmt::Display for InferenceError {
@@ -43,6 +47,14 @@ impl fmt::Display for InferenceError {
             Self::Model(msg) => write!(f, "model error: {msg}"),
             Self::Runtime(msg) => write!(f, "inference runtime error: {msg}"),
             Self::Shape(msg) => write!(f, "shape error: {msg}"),
+            Self::UndeclaredOutputScale(shape) => write!(
+                f,
+                "the model's input shape {shape:?} is not one this station recognises, so \
+                 whether its output is a logit, a probability or a softmax logit cannot be \
+                 told from it; declare it with MODEL_OUTPUT_SCALE (MODEL_n_OUTPUT_SCALE for \
+                 an extra classifier) set to logit, probability or softmax, as the model's \
+                 documentation states"
+            ),
         }
     }
 }
@@ -63,6 +75,11 @@ pub struct ModelConfig {
     pub top_n: usize,
     /// Number of inference threads.
     pub num_threads: usize,
+    /// How the model's raw output becomes a confidence, when the operator
+    /// declared it (`MODEL_OUTPUT_SCALE`, `MODEL_n_OUTPUT_SCALE`). `None`
+    /// derives it from the input shape, which knows the three shapes this
+    /// project ships and refuses any other (see [`resolve_output_scale`]).
+    pub output_scale: Option<OutputScale>,
 }
 
 impl Default for ModelConfig {
@@ -80,7 +97,54 @@ impl Default for ModelConfig {
             confidence_threshold: crate::config::DEFAULT_CONFIDENCE_THRESHOLD,
             top_n: 10,
             num_threads: 2,
+            output_scale: None,
         }
+    }
+}
+
+/// The confidence each species must reach for the station to store it, as
+/// one classifier's detections are judged (ACC-04).
+///
+/// The model runs at the station's *floor* — the lowest bar any species may
+/// be recorded at — so a species whose bar the operator lowered reaches the
+/// processor at all. Without this, every other class is held to that floor
+/// too: they fill the top-N slots ahead of a species the station would store,
+/// and the corroboration filter counts them as neighbours, although the
+/// processor drops every one. With it, a candidate under its own species' bar
+/// is not a detection, so only what the station could store is ranked and
+/// cut to `top_n`.
+///
+/// Compared in `f64`, as the processor compares (`decide_disposition`), so
+/// the two cannot disagree about a score on a boundary.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpeciesBars {
+    default: f64,
+    by_species: HashMap<String, f64>,
+}
+
+impl SpeciesBars {
+    /// `default` for every species not in `by_species`.
+    #[must_use]
+    pub const fn new(default: f64, by_species: HashMap<String, f64>) -> Self {
+        Self {
+            default,
+            by_species,
+        }
+    }
+
+    /// The bar `scientific_name` is held to.
+    #[must_use]
+    pub fn bar_for(&self, scientific_name: &str) -> f64 {
+        self.by_species
+            .get(scientific_name)
+            .copied()
+            .unwrap_or(self.default)
+    }
+
+    /// Whether a candidate at `confidence` could be stored.
+    #[must_use]
+    pub fn admits(&self, scientific_name: &str, confidence: f32) -> bool {
+        f64::from(confidence) >= self.bar_for(scientific_name)
     }
 }
 
@@ -93,7 +157,8 @@ pub struct BirdNetModel {
     /// How this model's raw output becomes a confidence: already a probability
     /// (BirdNET+ V3.0), a logit through a sigmoid and the sensitivity setting
     /// (BirdNET V2.4), or a logit through a softmax over all classes (Perch).
-    /// Set once at load time from the input shape.
+    /// Set once at load time: declared, else from the input shape
+    /// ([`resolve_output_scale`]).
     output_scale: OutputScale,
     /// Latches once the first label-count/output-dimension mismatch has been
     /// logged, so a mispaired model+labels file warns a single time instead of
@@ -124,6 +189,10 @@ pub struct BirdNetModel {
     /// Output indices of the noise classes the noise filter watches (see
     /// [`Self::watch_noise_classes`]). Empty until asked.
     noise_indices: Vec<usize>,
+    /// Each species' storable bar, applied before the top-N cut (see
+    /// [`SpeciesBars`]). `None` — the default, and every caller but the
+    /// daemon — cuts at the confidence threshold alone.
+    storable: Option<SpeciesBars>,
 }
 
 impl fmt::Debug for BirdNetModel {
@@ -201,7 +270,10 @@ impl BirdNetModel {
     ///
     /// # Errors
     ///
-    /// Returns `InferenceError` if the model file is missing or cannot be loaded.
+    /// Returns `InferenceError` if the model file is missing or cannot be loaded,
+    /// or [`InferenceError::UndeclaredOutputScale`] if its input shape is none
+    /// the station knows a scale for and `config.output_scale` declares none
+    /// ([`resolve_output_scale`]).
     pub fn load(
         model_path: &Path,
         labels: LabelSet,
@@ -223,7 +295,7 @@ impl BirdNetModel {
 
         let input_shape = extract_input_shape(&session)?;
 
-        let output_scale = output_scale_of(&input_shape);
+        let output_scale = resolve_output_scale(&input_shape, config.output_scale)?;
         tracing::info!(
             input_shape = ?input_shape,
             output_scale = output_scale.as_str(),
@@ -245,6 +317,7 @@ impl BirdNetModel {
             class_index,
             human_indices,
             noise_indices: Vec::new(),
+            storable: None,
         };
         model.refuse_non_f32_class_output()?;
         Ok(model)
@@ -254,7 +327,8 @@ impl BirdNetModel {
     ///
     /// # Errors
     ///
-    /// Returns `InferenceError` if the model cannot be parsed.
+    /// Returns `InferenceError` if the model cannot be parsed, or for an
+    /// unrecognised input shape with no declared scale, as [`Self::load`].
     pub fn load_from_bytes(
         bytes: &[u8],
         labels: LabelSet,
@@ -265,7 +339,7 @@ impl BirdNetModel {
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
         let input_shape = extract_input_shape(&session)?;
-        let output_scale = output_scale_of(&input_shape);
+        let output_scale = resolve_output_scale(&input_shape, config.output_scale)?;
 
         let human_indices = human_indices(&labels);
         let class_index = class_index(&labels);
@@ -282,6 +356,7 @@ impl BirdNetModel {
             class_index,
             human_indices,
             noise_indices: Vec::new(),
+            storable: None,
         };
         model.refuse_non_f32_class_output()?;
         Ok(model)
@@ -487,8 +562,15 @@ impl BirdNetModel {
                 f32::NAN
             });
 
+            // Held to its species' storable bar as well as the floor, before
+            // the top-N cut below (ACC-04): a class the station would drop
+            // must not take a slot from one it would store.
             if confidence >= self.config.confidence_threshold
                 && let Some(label) = self.labels.get(i)
+                && self
+                    .storable
+                    .as_ref()
+                    .is_none_or(|bars| bars.admits(&label.scientific_name, confidence))
             {
                 detections.push(Detection {
                     date: date.clone(),
@@ -551,7 +633,7 @@ impl BirdNetModel {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Take top-N
+        // Take top-N, of the candidates the station could store.
         detections.truncate(self.config.top_n);
 
         // The human score comes from the same output, before either cut above:
@@ -912,6 +994,12 @@ impl BirdNetModel {
     pub const fn set_confidence_threshold(&mut self, threshold: f32) {
         self.config.confidence_threshold = threshold;
     }
+
+    /// Hold each species to its storable bar before the top-N cut, or to the
+    /// confidence threshold alone with `None`. See [`SpeciesBars`].
+    pub fn set_storable_bars(&mut self, bars: Option<SpeciesBars>) {
+        self.storable = bars;
+    }
 }
 
 /// How a model's raw output is turned into a confidence in `[0, 1]`.
@@ -955,22 +1043,64 @@ impl OutputScale {
             Self::Softmax => "softmax",
         }
     }
+
+    /// Read a declared scale (`MODEL_OUTPUT_SCALE`, `MODEL_n_OUTPUT_SCALE`):
+    /// `logit`, `probability` or `softmax`, in any case. `sigmoid` is also
+    /// accepted for [`Self::Logit`], because it is the name the start-up log
+    /// gives that scale ([`Self::as_str`]). Anything else is `None`.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "logit" | "sigmoid" => Some(Self::Logit),
+            "probability" => Some(Self::Probability),
+            "softmax" => Some(Self::Softmax),
+            _ => None,
+        }
+    }
 }
 
-/// Which [`OutputScale`] a model has, from its input shape.
+/// Which [`OutputScale`] a model's input shape is known to carry, or `None`
+/// for a shape this project has no model of.
 ///
 /// BirdNET+ V3.0 preview models declare a fully-dynamic input shape (`[1]` or
 /// `[1, 1]`) or `96 000` samples (32 kHz × 3 s) and emit calibrated
-/// probabilities. Perch v2 declares `160 000` samples (5 s at 32 kHz). BirdNET
-/// V2.4 (`144 000`, 48 kHz × 3 s) and anything unknown emit logits for a sigmoid:
-/// an unrecognised model is read as the one whose output carries the most
-/// information, rather than lose its signal.
-const fn output_scale_of(input_shape: &[usize]) -> OutputScale {
+/// probabilities. Perch v2 declares `160 000` samples (5 s at 32 kHz) and emits
+/// softmax logits. BirdNET V2.4 declares `144 000` (48 kHz × 3 s) and emits
+/// logits for a sigmoid. That is the whole table: a shape is evidence of a
+/// scale only for the models it was learned from.
+const fn recognised_output_scale(input_shape: &[usize]) -> Option<OutputScale> {
     match input_shape {
-        [_, 96_000] | [_, _, 96_000] | [1] | [1, 1] | [1, 1, 1] => OutputScale::Probability,
-        [_, 160_000] | [_, _, 160_000] => OutputScale::Softmax,
-        _ => OutputScale::Logit,
+        [_, 96_000] | [_, _, 96_000] | [1] | [1, 1] | [1, 1, 1] => Some(OutputScale::Probability),
+        [_, 160_000] | [_, _, 160_000] => Some(OutputScale::Softmax),
+        [_, 144_000] | [_, _, 144_000] => Some(OutputScale::Logit),
+        _ => None,
     }
+}
+
+/// How a model's output becomes a confidence: the declared scale if there is
+/// one, else the one its input shape is known to carry (MMP-11).
+///
+/// This is what [`BirdNetModel::load`] and [`BirdNetModel::load_from_bytes`]
+/// call. A declared scale wins over the shape, because it is the operator's
+/// knowledge of the model and the shape is only a guess at it.
+///
+/// # Errors
+///
+/// [`InferenceError::UndeclaredOutputScale`] for a shape none of
+/// the shipped models (V2.4, V3.0, Perch v2) has, when nothing was declared. Every
+/// shape used to have a scale: anything unknown was read as a V2.4 logit, and
+/// a new model's confidences would have meant nothing with no symptom. Refused
+/// at load, the station stops where the journal and `--doctor` show it, and
+/// the message names the setting. A new model that happens to share a known
+/// shape (a sigmoid-trained 5 s / 32 kHz model has Perch's `160 000`) is still
+/// read by the shape; only a declaration can tell the two apart.
+pub fn resolve_output_scale(
+    input_shape: &[usize],
+    declared: Option<OutputScale>,
+) -> Result<OutputScale, InferenceError> {
+    declared
+        .or_else(|| recognised_output_scale(input_shape))
+        .ok_or_else(|| InferenceError::UndeclaredOutputScale(input_shape.to_vec()))
 }
 
 /// The normaliser of one window's softmax: the largest finite output and the
@@ -1334,9 +1464,14 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 ///   `slope = logit_slope(sensitivity)`, which is `clamp(2 − sensitivity, 0.5, 1.5)`.
 ///
 ///   That is BirdNET-Pi's mapping, line for line (`Nachtzuster/BirdNET-Pi`,
-///   `scripts/utils/models.py`: `max(0.5, min(1.0 - (sens - 1.0), 1.5))`), and
-///   BirdNET-Analyzer's before it, so the same `SENSITIVITY` and the same
-///   audio give the same stored confidence here as there: the default 1.25 is
+///   `scripts/utils/models.py`: `max(0.5, min(1.0 - (sens - 1.0), 1.5))`,
+///   which applies no clip to the logit at `88985a3`), so the same
+///   `SENSITIVITY` and the same audio give the same stored confidence here as
+///   there. BirdNET-Analyzer 1.5.1 has the same slope but clips the logit to
+///   ±15 first; 2.0.0 and later keep the slope at 1, turn the setting into a
+///   shift of the logit (`(sensitivity − 1) × 10`) and clip to ±20
+///   (`flat_sigmoid`, `birdnet_analyzer/model.py`), so a comparison with
+///   Analyzer output must name the release. The default 1.25 is
 ///   a slope of 0.75 (a logit of 3.12 is 0.912, not 0.980). It is **not**
 ///   birdnet-go's, which uses the setting itself as the slope (its default
 ///   1.0); to carry a birdnet-go value across, enter `2 − value`.
@@ -1584,32 +1719,62 @@ mod tests {
     #[test]
     fn v24_emits_raw_logits() {
         // V2.4 fixed-shape model needs sigmoid.
-        assert_eq!(output_scale_of(&[1, 144_000]), OutputScale::Logit);
-        assert_eq!(output_scale_of(&[1, 1, 144_000]), OutputScale::Logit);
+        assert_eq!(
+            recognised_output_scale(&[1, 144_000]),
+            Some(OutputScale::Logit)
+        );
+        assert_eq!(
+            recognised_output_scale(&[1, 1, 144_000]),
+            Some(OutputScale::Logit)
+        );
     }
 
     /// Perch v2's tensor is `[-1, 160000]`: 5 s at 32 kHz. Its head is trained
     /// with a softmax, so it is neither V2.4's sigmoid nor V3.0's probability.
     #[test]
     fn perch_emits_softmax_logits() {
-        assert_eq!(output_scale_of(&[1, 160_000]), OutputScale::Softmax);
-        assert_eq!(output_scale_of(&[1, 1, 160_000]), OutputScale::Softmax);
-        assert_eq!(output_scale_of(&[7, 160_000]), OutputScale::Softmax);
+        assert_eq!(
+            recognised_output_scale(&[1, 160_000]),
+            Some(OutputScale::Softmax)
+        );
+        assert_eq!(
+            recognised_output_scale(&[1, 1, 160_000]),
+            Some(OutputScale::Softmax)
+        );
+        assert_eq!(
+            recognised_output_scale(&[7, 160_000]),
+            Some(OutputScale::Softmax)
+        );
     }
 
     #[test]
     fn v30_fixed_emits_probabilities() {
         // V3.0 fixed shape is already calibrated.
-        assert_eq!(output_scale_of(&[1, 96_000]), OutputScale::Probability);
-        assert_eq!(output_scale_of(&[1, 1, 96_000]), OutputScale::Probability);
+        assert_eq!(
+            recognised_output_scale(&[1, 96_000]),
+            Some(OutputScale::Probability)
+        );
+        assert_eq!(
+            recognised_output_scale(&[1, 1, 96_000]),
+            Some(OutputScale::Probability)
+        );
     }
 
     #[test]
     fn v30_dynamic_emits_probabilities() {
         // V3.0 preview (dynamic) is also already calibrated.
-        assert_eq!(output_scale_of(&[1]), OutputScale::Probability);
-        assert_eq!(output_scale_of(&[1, 1]), OutputScale::Probability);
-        assert_eq!(output_scale_of(&[1, 1, 1]), OutputScale::Probability);
+        assert_eq!(
+            recognised_output_scale(&[1]),
+            Some(OutputScale::Probability)
+        );
+        assert_eq!(
+            recognised_output_scale(&[1, 1]),
+            Some(OutputScale::Probability)
+        );
+        assert_eq!(
+            recognised_output_scale(&[1, 1, 1]),
+            Some(OutputScale::Probability)
+        );
     }
 
     /// The `output_scale=` field of the `model loaded successfully` log line is
@@ -1623,12 +1788,124 @@ mod tests {
         assert_eq!(OutputScale::Softmax.as_str(), "softmax");
     }
 
+    /// **MMP-11.** An input shape the station does not recognise used to be
+    /// read as a V2.4 logit: a 5 s / 32 kHz sigmoid-trained model, or any
+    /// model nobody had seen, got a confidence function chosen by elimination,
+    /// and its scores meant nothing with no symptom. Without a declared scale
+    /// it is now refused, and the refusal names the setting that answers it.
     #[test]
-    fn unknown_shape_defaults_to_logits() {
-        // Belt-and-braces: an unknown future model is assumed to need
-        // sigmoid rather than have us silently lose the confidence signal.
-        assert_eq!(output_scale_of(&[1, 999_999]), OutputScale::Logit);
-        assert_eq!(output_scale_of(&[]), OutputScale::Logit);
+    fn an_unrecognised_shape_without_a_declared_scale_is_refused() {
+        for shape in [
+            &[1, 999_999][..],
+            &[1, 1, 48_000],
+            &[1, 128, 4],
+            &[100_000],
+            &[],
+        ] {
+            let err = resolve_output_scale(shape, None).expect_err(&format!(
+                "{shape:?} must not be given a scale by elimination"
+            ));
+            assert!(
+                matches!(&err, InferenceError::UndeclaredOutputScale(s) if s == shape),
+                "{shape:?}: {err:?}"
+            );
+            let message = err.to_string();
+            assert!(message.contains("MODEL_OUTPUT_SCALE"), "{message}");
+            assert!(message.contains("MODEL_n_OUTPUT_SCALE"), "{message}");
+        }
+    }
+
+    /// The counterpart: the shapes this project ships keep the scales they
+    /// had, with no declaration. V2.4's `144 000` is now recognised by name
+    /// rather than reached as the fallback.
+    #[test]
+    fn the_shapes_this_project_ships_need_no_declaration() {
+        for (shape, want) in [
+            (&[1, 144_000][..], OutputScale::Logit),
+            (&[1, 1, 144_000], OutputScale::Logit),
+            (&[1, 96_000], OutputScale::Probability),
+            (&[1, 1, 96_000], OutputScale::Probability),
+            (&[1], OutputScale::Probability),
+            (&[1, 1], OutputScale::Probability),
+            (&[1, 1, 1], OutputScale::Probability),
+            (&[1, 160_000], OutputScale::Softmax),
+            (&[7, 160_000], OutputScale::Softmax),
+        ] {
+            assert_eq!(
+                resolve_output_scale(shape, None).ok(),
+                Some(want),
+                "{shape:?}"
+            );
+        }
+    }
+
+    /// A declared scale wins over the shape, for a recognised shape as much
+    /// as for an unknown one: the declaration is the operator's knowledge of
+    /// the model, the shape only a guess at it.
+    #[test]
+    fn a_declared_output_scale_wins_over_the_shape() {
+        for declared in [
+            OutputScale::Logit,
+            OutputScale::Probability,
+            OutputScale::Softmax,
+        ] {
+            for shape in [
+                &[1, 999_999][..],
+                &[1, 144_000],
+                &[1, 96_000],
+                &[1, 160_000],
+            ] {
+                assert_eq!(
+                    resolve_output_scale(shape, Some(declared)).ok(),
+                    Some(declared),
+                    "{shape:?} declared {declared:?}"
+                );
+            }
+        }
+    }
+
+    /// The names `MODEL_OUTPUT_SCALE` takes, and the log's name for a logit.
+    #[test]
+    fn a_declared_output_scale_parses_from_its_setting() {
+        assert_eq!(OutputScale::parse("logit"), Some(OutputScale::Logit));
+        assert_eq!(OutputScale::parse(" Sigmoid "), Some(OutputScale::Logit));
+        assert_eq!(
+            OutputScale::parse("PROBABILITY"),
+            Some(OutputScale::Probability)
+        );
+        assert_eq!(OutputScale::parse("softmax"), Some(OutputScale::Softmax));
+        assert_eq!(OutputScale::parse("prob"), None);
+        assert_eq!(OutputScale::parse(""), None);
+    }
+
+    /// The MMP-11 acceptance gate at load: `tiny_mel_test.onnx` declares
+    /// `[1, 128, 4]`, a shape none of the three scales is known for. It loaded
+    /// as a logit; it is refused unless a scale is declared, and loads under
+    /// the declared one when it is.
+    #[test]
+    fn loading_a_model_of_an_unrecognised_shape_needs_a_declared_scale() {
+        let mel: &[u8] = include_bytes!("../testdata/tiny_mel_test.onnx");
+        let labels = || {
+            let names: Vec<String> = (0..4).map(|i| format!("Sp{i}_Bird {i}")).collect();
+            LabelSet::parse(&names.join("\n")).expect("labels")
+        };
+        let refused = BirdNetModel::load_from_bytes(mel, labels(), ModelConfig::default());
+        assert!(
+            matches!(refused, Err(InferenceError::UndeclaredOutputScale(_))),
+            "an unrecognised shape loaded without a declared scale: {:?}",
+            refused.map(|m| m.output_scale())
+        );
+
+        let declared = BirdNetModel::load_from_bytes(
+            mel,
+            labels(),
+            ModelConfig {
+                output_scale: Some(OutputScale::Softmax),
+                ..ModelConfig::default()
+            },
+        )
+        .expect("a declared scale makes it loadable");
+        assert_eq!(declared.output_scale(), OutputScale::Softmax);
     }
 
     #[test]
@@ -2037,10 +2314,15 @@ mod tests {
     fn a_model_declaring_a_mel_input_does_not_expect_raw_audio() {
         let labels: Vec<String> = (0..4).map(|i| format!("Sp{i}_Bird {i}")).collect();
         let set = super::LabelSet::parse(&labels.join("\n")).expect("labels");
+        // Its shape is none the station knows a scale for (MMP-11), so one is
+        // declared; this test is about the input format, not the scale.
         let m = super::BirdNetModel::load_from_bytes(
             include_bytes!("../testdata/tiny_mel_test.onnx"),
             set,
-            super::ModelConfig::default(),
+            super::ModelConfig {
+                output_scale: Some(super::OutputScale::Logit),
+                ..super::ModelConfig::default()
+            },
         )
         .expect("the mel fixture must load");
 
@@ -2358,11 +2640,16 @@ mod tests {
         // Loads a model whose input has a symbolic batch dim
         // (`dim_param = "batch"`). ort reports symbolic dims as `-1`
         // in the extracted shape; `extract_input_shape` must
-        // substitute 1 for any non-positive dim.
+        // substitute 1 for any non-positive dim. It declares `[batch, 1, 11]`,
+        // a shape with no known output scale (MMP-11), so one is declared;
+        // the scale is not what this test is about.
         let m = BirdNetModel::load_from_bytes(
             TINY_DYNAMIC_MODEL,
             tiny_labels(),
-            ModelConfig::default(),
+            ModelConfig {
+                output_scale: Some(OutputScale::Logit),
+                ..ModelConfig::default()
+            },
         )
         .expect("dynamic-shape model loads");
         let shape = m.input_shape();

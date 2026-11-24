@@ -977,6 +977,7 @@ async fn a_share_link_from_the_quarantine_queue_follows_the_review() {
                 cutoff: None,
                 sensitivity: None,
                 overlap: None,
+                source: None,
             };
             birdnet_db::sqlite::insert_quarantine(conn, &record).unwrap();
             conn.query_row("SELECT id FROM quarantine WHERE time = ?1", [time], |r| {

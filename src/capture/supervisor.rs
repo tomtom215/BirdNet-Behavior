@@ -886,6 +886,7 @@ mod tests {
             sample_rate: 48_000,
             channels: 1,
             stream_id: None,
+            channel_pick: None,
         };
         assert_eq!(source_gauge_label(&src), "local");
     }
@@ -911,6 +912,7 @@ mod tests {
             stream_id: "RTSP_2".into(),
             transport: RtspTransport::Auto,
             media_mode: birdnet_core::audio::capture::RtspMediaMode::Full,
+            channel_pick: None,
         };
         assert_eq!(source_gauge_label(&src), "RTSP_2");
     }

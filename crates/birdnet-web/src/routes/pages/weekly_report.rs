@@ -82,8 +82,19 @@ async fn weekly_partial(
                 None
             } else {
                 let last = i64::from(compared_days) - 1;
+                let listened_in = |from: &str| -> Result<Option<u32>, rusqlite::Error> {
+                    let effort =
+                        super::listening::effort_by_date(conn, from, &add_days(from, last))?;
+                    Ok(super::listening::listened_day_count(&effort)
+                        .map(|n| u32::try_from(n).unwrap_or(u32::MAX)))
+                };
+                let listened = match (listened_in(&week_start)?, listened_in(&prev_week_c)?) {
+                    (Some(a), Some(b)) => Some((a, b)),
+                    _ => None,
+                };
                 Some(Comparison {
                     days: compared_days,
+                    listened,
                     this: birdnet_db::sqlite::weekly_detection_count(
                         conn,
                         &week_start,
@@ -410,7 +421,15 @@ pub(super) struct Comparison {
     pub(super) this: i64,
     /// Detections in the same days of the week before.
     pub(super) before: i64,
+    /// Of those days, how many the station listened on this week and the week before,
+    /// from the effort ledger; `None` where the ledger holds nothing for that week, so
+    /// nothing is known (UIR-08).
+    pub(super) listened: Option<(u32, u32)>,
 }
+
+/// Listened days below which the two weeks are too unlike to call one loud or quiet: a
+/// week heard on fewer than half the days of the other.
+const COMPARABLE_SHARE: f64 = 0.5;
 
 /// How many of the week's days are over, and so fair to compare.
 ///
@@ -449,14 +468,58 @@ pub(super) fn week_words(
     is_current: bool,
 ) -> WeekWords {
     let so_far = if is_current { " so far" } else { "" };
-    let delta = compare
-        .filter(|c| c.before > 0)
-        .map(|c| (c.this - c.before) as f64 / c.before as f64 * 100.0)
-        .map(|d| d.round() as i64);
+    // Where either week lost days, the weeks are compared per day the station listened,
+    // and the lost days are named: a raw count made an outage read as "a loud week, +315%".
+    let partial = compare.and_then(|c| {
+        c.listened
+            .filter(|&(this, before)| this < c.days || before < c.days)
+            .map(|l| (c, l))
+    });
+    let delta = match partial {
+        Some((c, (this_days, before_days))) => (this_days > 0 && before_days > 0 && c.before > 0)
+            .then(|| {
+                let now = c.this as f64 / f64::from(this_days);
+                let then = c.before as f64 / f64::from(before_days);
+                (now - then) / then * 100.0
+            }),
+        None => compare
+            .filter(|c| c.before > 0)
+            .map(|c| (c.this - c.before) as f64 / c.before as f64 * 100.0),
+    }
+    .map(|d| d.round() as i64);
+    let comparable = partial
+        .is_none_or(|(_, (a, b))| f64::from(a.min(b)) >= f64::from(a.max(b)) * COMPARABLE_SHARE);
     let against = compare.map_or_else(String::new, |c| match c.days {
         7 => "the week before".to_owned(),
         1 => "the same day last week".to_owned(),
         n => format!("the same {n} days last week"),
+    });
+    let per = if partial.is_some() {
+        " per day listened"
+    } else {
+        ""
+    };
+    let off_note = partial.map_or_else(String::new, |(c, (this_days, before_days))| {
+        let mut notes = Vec::new();
+        if before_days < c.days {
+            notes.push(format!(
+                "the station was off for {} of those {} days {}",
+                c.days - before_days,
+                c.days,
+                if c.days == 7 {
+                    "the week before"
+                } else {
+                    "last week"
+                }
+            ));
+        }
+        if this_days < c.days {
+            notes.push(format!(
+                "it was off for {} of them this week",
+                c.days - this_days
+            ));
+        }
+        format!(" ({})", notes.join(", and "))
     });
     let headline = if total == 0 {
         "A <em>silent</em> week.".to_owned()
@@ -464,6 +527,7 @@ pub(super) fn week_words(
         "A week just <em>beginning</em>.".to_owned()
     } else {
         match delta {
+            _ if !comparable => format!("A <em>partly heard</em> week{so_far}."),
             Some(d) if d >= 10 => format!("A <em>loud</em> week{so_far}."),
             Some(d) if d <= -10 => format!("A <em>quieter</em> week{so_far}."),
             _ => format!("A <em>steady</em> week{so_far}."),
@@ -472,8 +536,9 @@ pub(super) fn week_words(
     let mut lead = format!("<b>{total} detections</b> from <b>{species} species</b>{so_far}");
     if let Some(d) = delta.filter(|d| *d != 0) {
         let word = if d > 0 { "busier" } else { "quieter" };
-        let _ = write!(lead, " — {}% {word} than {against}", d.abs());
+        let _ = write!(lead, " — {}% {word}{per} than {against}", d.abs());
     }
+    lead.push_str(&off_note);
     if new_species > 0 {
         let plural = if new_species == 1 { "bird" } else { "birds" };
         let _ = write!(lead, ", and {new_species} {plural} new to your list");
@@ -482,7 +547,7 @@ pub(super) fn week_words(
     let detail = match delta {
         Some(d) => {
             let arrow = if d >= 0 { "↑" } else { "↓" };
-            format!("{arrow} {}% vs {against}", d.abs())
+            format!("{arrow} {}%{per} vs {against}", d.abs())
         }
         None if is_current => "week in progress".to_owned(),
         None => "first full week".to_owned(),
@@ -688,6 +753,7 @@ mod tests {
             days: 2,
             this: 70,
             before: 75,
+            listened: None,
         };
         let w = week_words(107, 13, 0, Some(&c), true);
         assert_eq!(
@@ -715,6 +781,7 @@ mod tests {
             days: 3,
             this: 40,
             before: 100,
+            listened: None,
         };
         let w = week_words(55, 9, 1, Some(&c), true);
         assert_eq!(w.headline, "A <em>quieter</em> week so far.");
@@ -737,6 +804,7 @@ mod tests {
             days: 7,
             this: 300,
             before: 200,
+            listened: None,
         };
         let w = week_words(300, 20, 0, Some(&c), false);
         assert_eq!(w.headline, "A <em>loud</em> week.");
@@ -763,6 +831,7 @@ mod tests {
             days: 7,
             this: 30,
             before: 0,
+            listened: None,
         };
         let w = week_words(30, 5, 0, Some(&c), false);
         assert_eq!(w.headline, "A <em>steady</em> week.");
@@ -775,6 +844,7 @@ mod tests {
             days: 7,
             this: 0,
             before: 80,
+            listened: None,
         };
         assert_eq!(
             week_words(0, 0, 0, Some(&c), false).headline,
