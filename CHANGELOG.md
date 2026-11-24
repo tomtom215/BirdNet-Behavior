@@ -154,6 +154,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shedding under load dropped one source entirely (MSC-01).** While inference is behind, the daemon
+  analyses one segment in two; the split went by position in each sweep, so with two microphones the second
+  was skipped every time and the first never, and a sweep holding one segment skipped nothing. It now
+  alternates per source, across sweeps.
+- **Held-back detections are kept per source, with their source and their audio (MSC-04).** A second source's
+  detection of the same species in the same second was not stored in the review queue; an approved one had no
+  source and no clip (the queue kept the raw segment, which is deleted after ten minutes). Migration 62.
+- **A comment belongs to the recording it was written on (MSC-05).** A note on one microphone's detection
+  appeared on every other source's detection of that species in that second. Migration 61; the API takes
+  `file_name` as reviews do.
+- **One device is one source (MSC-10, MSC-13).** `hw:1,0` beside `plughw:1,0`, or a camera with its password in
+  the address, was accepted as a second source; an edit could point one source at another's device; and a
+  removed device added again got a new id, splitting its history. Adding it back now restores its old row.
+- **Channels can be chosen on the Capture tab, and cameras and PipeWire honour them (MSC-11).** The detail line
+  says 16-bit, which every source records, and 48 kHz for a camera.
+- **Removing every source stops recording, also after a restart (MSC-12).** The configuration file's
+  microphone or camera came back at the next start.
+- **"Also heard by" says when it could not check (MSC-20)**, instead of showing nothing, which read as "no other
+  source heard it". A source id containing `-` is matched whole (MSC-17).
 - **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
   such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
   exclude lists only, so a station with its occurrence filter on recorded them wherever it was. Each classifier's
