@@ -261,26 +261,48 @@ impl ShedPolicy {
     }
 }
 
-/// Split a sweep's ready segments under a shed: in capture order (the file
-/// name carries it), the first, third, fifth … are analysed and the rest shed.
-#[must_use]
-pub fn shed_split(mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    ready.sort();
-    let mut analyse = Vec::new();
-    let mut shed = Vec::new();
-    for (i, path) in ready.into_iter().enumerate() {
-        if i % 2 == 0 {
-            analyse.push(path);
-        } else {
-            shed.push(path);
+/// Which segments to shed while shedding: every second segment *of each
+/// source*, counted across sweeps.
+///
+/// The split this replaces (`shed_split`) alternated by position within one sweep. Sources that rotate
+/// together settle in the same sweep, and their names sort by source, so the
+/// second source was shed every time and the first never (MSC-01); and a sweep
+/// holding one segment analysed it, so a station whose sweeps each caught one
+/// segment shed nothing at all. The alternation is now per source and outlives
+/// the sweep. A file name without a source id (a single microphone) is one
+/// source of its own.
+#[derive(Debug, Default)]
+pub struct Shedder {
+    /// Per source: whether its next segment is the one to shed.
+    shed_next: std::collections::HashMap<Option<String>, bool>,
+}
+
+impl Shedder {
+    /// Split one sweep's ready segments into those to analyse and those to
+    /// shed, in capture order within each source.
+    #[must_use]
+    pub fn split(&mut self, mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        ready.sort();
+        let mut analyse = Vec::new();
+        let mut shed = Vec::new();
+        for path in ready {
+            let source = crate::detection::types::RecordingFile::parse(&path.to_string_lossy())
+                .and_then(|f| f.rtsp_id);
+            let shed_this = self.shed_next.entry(source).or_insert(false);
+            if *shed_this {
+                shed.push(path);
+            } else {
+                analyse.push(path);
+            }
+            *shed_this = !*shed_this;
         }
+        (analyse, shed)
     }
-    (analyse, shed)
 }
 
 #[cfg(test)]
 mod shed_tests {
-    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, shed_split};
+    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, Shedder};
     use std::path::PathBuf;
 
     /// PR-2. The decision is backlog first, thermal second, nothing when the
@@ -318,7 +340,7 @@ mod shed_tests {
             .iter()
             .map(|t| PathBuf::from(format!("/s/2026-03-14-birdnet-{t}.wav")))
             .collect();
-        let (analyse, shed) = shed_split(ready);
+        let (analyse, shed) = Shedder::default().split(ready);
         let stem = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(
             analyse.iter().map(stem).collect::<Vec<_>>(),
@@ -335,7 +357,64 @@ mod shed_tests {
                 "2026-03-14-birdnet-06:00:45.wav"
             ]
         );
-        assert_eq!(shed_split(Vec::new()), (Vec::new(), Vec::new()));
+        assert_eq!(
+            Shedder::default().split(Vec::new()),
+            (Vec::new(), Vec::new())
+        );
+    }
+
+    /// One sweep's worth of segments, one per source, all closed at `t`.
+    fn sweep(sources: &[&str], minute: u32) -> Vec<PathBuf> {
+        sources
+            .iter()
+            .map(|id| PathBuf::from(format!("/s/2026-03-14-birdnet-{id}-06:{minute:02}:00.wav")))
+            .collect()
+    }
+
+    fn analysed_of(analysed: &[PathBuf], id: &str) -> usize {
+        analysed
+            .iter()
+            .filter(|p| p.to_string_lossy().contains(&format!("-birdnet-{id}-")))
+            .count()
+    }
+
+    /// MSC-01: sources that rotate together settle in one sweep, and the split
+    /// went by position in the sorted sweep, so the second source was shed
+    /// every time and the first never. Each source should lose about half.
+    #[test]
+    fn shedding_is_fair_across_sources() {
+        let mut shedder = Shedder::default();
+        let mut analysed = Vec::new();
+        for minute in 0..10 {
+            let (a, _) = shedder.split(sweep(&["src_a", "src_b"], minute));
+            analysed.extend(a);
+        }
+        for id in ["src_a", "src_b"] {
+            let n = analysed_of(&analysed, id);
+            assert!((4..=6).contains(&n), "{id}: {n} of 10 analysed");
+        }
+        // Three sources: the middle one was the one always shed.
+        let mut shedder = Shedder::default();
+        let mut analysed = Vec::new();
+        for minute in 0..10 {
+            analysed.extend(shedder.split(sweep(&["src_a", "src_b", "src_c"], minute)).0);
+        }
+        for id in ["src_a", "src_b", "src_c"] {
+            let n = analysed_of(&analysed, id);
+            assert!((4..=6).contains(&n), "{id}: {n} of 10 analysed");
+        }
+    }
+
+    /// The counterpart: one source alone still loses every second segment,
+    /// including when each sweep holds a single segment.
+    #[test]
+    fn one_source_alone_still_sheds_every_second_segment() {
+        let mut shedder = Shedder::default();
+        let mut analysed = Vec::new();
+        for minute in 0..10 {
+            analysed.extend(shedder.split(sweep(&["src_a"], minute)).0);
+        }
+        assert_eq!(analysed_of(&analysed, "src_a"), 5);
     }
 }
 
