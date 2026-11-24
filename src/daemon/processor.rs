@@ -707,6 +707,7 @@ pub(super) fn event_processor(
             if !matches!(disposition, DispositionDecision::DropBelowGlobal) {
                 let week_str = detection.week.to_string();
                 let file_str = event.source_file.to_string_lossy();
+                let source_label = derive_source_label(&event.source_file);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
                     date: &detection.date,
                     time: &detection.time,
@@ -736,6 +737,10 @@ pub(super) fn event_processor(
                     ),
                     sensitivity: Some(provenance.sensitivity),
                     overlap: Some(provenance.overlap),
+                    // The source that heard it (MSC-04): approval copies it onto
+                    // the detection, and it is part of what tells two sources'
+                    // rows for one bird in one second apart.
+                    source: Some(&source_label),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -789,6 +794,7 @@ pub(super) fn event_processor(
             );
             let week_str = detection.week.to_string();
             let file_str = event.source_file.to_string_lossy();
+            let source_label = derive_source_label(&event.source_file);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
                 date: &detection.date,
                 time: &detection.time,
@@ -818,6 +824,10 @@ pub(super) fn event_processor(
                 ),
                 sensitivity: Some(provenance.sensitivity),
                 overlap: Some(provenance.overlap),
+                // The source that heard it (MSC-04): approval copies it onto
+                // the detection, and it is part of what tells two sources'
+                // rows for one bird in one second apart.
+                source: Some(&source_label),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -849,6 +859,7 @@ pub(super) fn event_processor(
             );
             let week_str = detection.week.to_string();
             let file_str = event.source_file.to_string_lossy();
+            let source_label = derive_source_label(&event.source_file);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
                 date: &detection.date,
                 time: &detection.time,
@@ -878,6 +889,10 @@ pub(super) fn event_processor(
                 ),
                 sensitivity: Some(provenance.sensitivity),
                 overlap: Some(provenance.overlap),
+                // The source that heard it (MSC-04): approval copies it onto
+                // the detection, and it is part of what tells two sources'
+                // rows for one bird in one second apart.
+                source: Some(&source_label),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -908,6 +923,7 @@ pub(super) fn event_processor(
                 );
                 let week_str = detection.week.to_string();
                 let file_str = event.source_file.to_string_lossy();
+                let source_label = derive_source_label(&event.source_file);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
                     date: &detection.date,
                     time: &detection.time,
@@ -930,6 +946,10 @@ pub(super) fn event_processor(
                     cutoff: Some(threshold),
                     sensitivity: Some(provenance.sensitivity),
                     overlap: Some(provenance.overlap),
+                    // The source that heard it (MSC-04): approval copies it onto
+                    // the detection, and it is part of what tells two sources'
+                    // rows for one bird in one second apart.
+                    source: Some(&source_label),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -3516,6 +3536,15 @@ mod tests {
         state: &birdnet_web::state::AppState,
         detections: Vec<(birdnet_core::detection::types::Detection, &'static str)>,
     ) {
+        drive_from_with(state, detections, HashMap::new()).await;
+    }
+
+    /// [`drive_from`], with per-species confidence thresholds in force.
+    async fn drive_from_with(
+        state: &birdnet_web::state::AppState,
+        detections: Vec<(birdnet_core::detection::types::Detection, &'static str)>,
+        species_thresholds: HashMap<String, f64>,
+    ) {
         use birdnet_core::audio::extraction::ExtractionConfig;
         use birdnet_core::detection::daemon::DetectionEvent;
 
@@ -3556,7 +3585,7 @@ mod tests {
                 filter,
                 template,
                 rt_handle,
-                HashMap::new(),
+                species_thresholds,
                 0.25,
                 extractor,
                 0,
@@ -3779,6 +3808,64 @@ mod tests {
                 ("v3".to_owned(), Some(f64::from(0.42_f32)))
             ],
             "and the lake detection keeps the lake's"
+        );
+    }
+
+    /// MSC-04: two sources holding back one bird in one second are two
+    /// quarantine rows, and approving each yields a detection carrying its own
+    /// source. Before the quarantine key included the file, the second row was
+    /// absorbed by `ON CONFLICT(date, time, sci_name) DO NOTHING`, and an
+    /// approved row was written with `Source` NULL.
+    #[tokio::test(flavor = "current_thread")]
+    async fn two_sources_quarantined_in_one_second_are_two_rows_and_keep_their_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        // 0.95 clears the station's 0.25 and fails this species' own bar.
+        drive_from_with(
+            &state,
+            vec![
+                (magpie(Vec::new()), "2026-05-19-birdnet-pond-09:00:00.wav"),
+                (magpie(Vec::new()), "2026-05-19-birdnet-lake-09:00:00.wav"),
+            ],
+            HashMap::from([("Pica pica".to_owned(), 0.99)]),
+        )
+        .await;
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap()),
+            0,
+            "precondition: both were held back, neither admitted"
+        );
+        let ids: Vec<i64> = state.with_db(|c| {
+            c.prepare("SELECT id FROM quarantine ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        });
+        assert_eq!(
+            ids.len(),
+            2,
+            "each source's quarantined detection must be kept, not absorbed by the other's: {ids:?}"
+        );
+        for id in &ids {
+            let inserted = state
+                .with_db(|c| birdnet_db::sqlite::approve_quarantine(c, *id))
+                .unwrap();
+            assert!(inserted, "approving quarantine row {id} must admit it");
+        }
+        let sources: Vec<Option<String>> = state.with_db(|c| {
+            c.prepare("SELECT Source FROM detections ORDER BY Source")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        });
+        assert_eq!(
+            sources,
+            [Some("lake".to_owned()), Some("pond".to_owned())],
+            "an approved detection keeps the source that heard it"
         );
     }
 

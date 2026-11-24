@@ -2624,6 +2624,76 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (date, source, reason)
         );",
     },
+    Migration {
+        version: 61,
+        description: "Key quarantine by clip, as detections are, and record which source heard it",
+        // MSC-04. `quarantine` was `UNIQUE(date, time, sci_name)` and written with
+        // `ON CONFLICT(date, time, sci_name) DO NOTHING`. Two sources holding back
+        // one bird in one second are two detections that differ only in their
+        // recording, so the second was absorbed without an error and nothing was
+        // logged. And the table had no source, so `approve_quarantine` wrote the
+        // admitted detection with `Source` NULL, which every per-source filter and
+        // the "Also heard by" card read as "unknown or imported".
+        //
+        // The key becomes the one `detections` has used since migration 23, less
+        // `chunk_offset_secs`, which quarantine does not record:
+        // `(date, time, sci_name, COALESCE(file_name, ''))`. It is a unique index
+        // rather than a table constraint because a constraint cannot hold the
+        // `COALESCE`, and the table is rebuilt because the old table-level UNIQUE
+        // cannot be dropped any other way (the same reason migrations 36 and 40
+        // rebuilt it). Every row under the old key is unique under the finer new
+        // one, so the copy loses nothing.
+        //
+        // `source` is NULL for a row quarantined before this migration: the label
+        // was never recorded, and a guess parsed from a path in SQL would be
+        // indistinguishable from a recorded one. Such a row, approved, still
+        // gets `Source` NULL, as it always did.
+        //
+        // The copy names its columns, as migration 40's does, so a column on one
+        // side and not the other fails here instead of shifting values along.
+        up_sql: "CREATE TABLE quarantine_v61 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sf_probability REAL,
+            reason TEXT NOT NULL CHECK(reason IN
+                ('below_sf_thresh','low_confidence','implausible_hour',
+                 'implausible_clock','manual')),
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            approved INTEGER NOT NULL DEFAULT 0,
+            file_name TEXT,
+            lat REAL,
+            lon REAL,
+            week INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            run_id INTEGER REFERENCES analysis_runs(id),
+            cutoff REAL,
+            sens REAL,
+            overlap REAL,
+            source TEXT
+        );
+
+        INSERT INTO quarantine_v61
+            (id, date, time, sci_name, com_name, confidence, sf_probability,
+             reason, reviewed, approved, file_name, lat, lon, week, created_at,
+             run_id, cutoff, sens, overlap)
+        SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
+               reason, reviewed, approved, file_name, lat, lon, week, created_at,
+               run_id, cutoff, sens, overlap
+          FROM quarantine;
+
+        DROP TABLE quarantine;
+        ALTER TABLE quarantine_v61 RENAME TO quarantine;
+
+        CREATE UNIQUE INDEX idx_quarantine_detection
+            ON quarantine(date, time, sci_name, COALESCE(file_name, ''));
+        CREATE INDEX IF NOT EXISTS idx_quarantine_reviewed ON quarantine(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -4292,6 +4362,7 @@ mod tests {
                 cutoff: None,
                 sensitivity: None,
                 overlap: None,
+                source: None,
             };
             crate::sqlite::insert_quarantine(&conn, &record).unwrap();
 
@@ -4465,6 +4536,63 @@ mod tests {
             .unwrap();
         }
         conn
+    }
+
+    /// Migration 61 rebuilds `quarantine`; every row and every value it held
+    /// before survives, the old key's duplicates-by-second become legal, and a
+    /// row whose recording repeats is still refused.
+    #[test]
+    fn migration_61_keeps_every_quarantine_row_and_keys_by_recording() {
+        let conn = memory_db_at_version(60);
+        conn.execute(
+            "INSERT INTO quarantine
+                 (date, time, sci_name, com_name, confidence, sf_probability, reason,
+                  reviewed, approved, file_name, lat, lon, week, cutoff, sens, overlap)
+             VALUES ('2026-03-27', '07:15:30', 'Upupa epops', 'Eurasian Hoopoe', 0.42, 0.61,
+                     'low_confidence', 1, 0, '/tmp/a.wav', 51.5, -0.12, 13, 0.8, 1.25, 0.5)",
+            [],
+        )
+        .unwrap();
+        let before: Vec<String> = conn
+            .prepare("SELECT quote(id)||quote(date)||quote(time)||quote(sci_name)||quote(com_name)||quote(confidence)||quote(sf_probability)||quote(reason)||quote(reviewed)||quote(approved)||quote(file_name)||quote(lat)||quote(lon)||quote(week)||quote(created_at)||quote(run_id)||quote(cutoff)||quote(sens)||quote(overlap) FROM quarantine")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        let m61 = MIGRATIONS.iter().find(|m| m.version == 61).unwrap();
+        conn.execute_batch(m61.up_sql).unwrap();
+
+        let after: Vec<String> = conn
+            .prepare("SELECT quote(id)||quote(date)||quote(time)||quote(sci_name)||quote(com_name)||quote(confidence)||quote(sf_probability)||quote(reason)||quote(reviewed)||quote(approved)||quote(file_name)||quote(lat)||quote(lon)||quote(week)||quote(created_at)||quote(run_id)||quote(cutoff)||quote(sens)||quote(overlap) FROM quarantine")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(before, after, "every value survives the rebuild");
+        let source: Option<String> = conn
+            .query_row("SELECT source FROM quarantine", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            source, None,
+            "a row from before is not given a guessed source"
+        );
+
+        let insert = |file: &str| {
+            conn.execute(
+                "INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, file_name)
+                 VALUES ('2026-03-27', '07:15:30', 'Upupa epops', 'Eurasian Hoopoe', 0.4,
+                         'low_confidence', ?1)",
+                [file],
+            )
+        };
+        insert("/tmp/b.wav").expect("another recording of the same second is its own row");
+        assert!(
+            insert("/tmp/a.wav").is_err(),
+            "the same recording of the same second is still one row"
+        );
     }
 
     fn verdict_at(conn: &Connection, time: &str) -> Option<String> {
