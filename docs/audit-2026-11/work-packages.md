@@ -62,15 +62,17 @@ Count every discard by reason, keep out-of-range detections in the quarantine wi
 
 Shed fairly across sources; key comments and quarantine by source; duplicate-device guard; channel selection; removed sources stay removed.
 
-- [ ] **MSC-01** (high, c) Shedding drops the same source's segment on every sweep
-- [ ] **MSC-04** (medium) A second source's quarantined detection in the same second is discarded; an approved one loses its source and its audio
-- [ ] **MSC-05** (medium) Comments attach to every source's detection of the same species in the same second
-- [ ] **MSC-10** (medium, tracked, c) The same physical microphone or camera can be configured twice
-- [ ] **MSC-11** (medium) Channel selection is unreachable from the UI and ignored for PipeWire and RTSP; `bit_depth` is ignored everywhere
-- [ ] **MSC-12** (medium) Removing every source does not stop capture; a restart resurrects it from config under a different label
-- [ ] **MSC-13** (low) Source identity is the row id, not the device — re-adding splits history, editing a URL merges two places
-- [ ] **MSC-17** (low) Filename-derived source matching is prefix-unsafe for ids containing `-`
-- [ ] **MSC-20** (low) "Also heard by" hides a failed read and uses a fixed 30 s window
+- [x] **MSC-01** (high, c) Shedding drops the same source's segment on every sweep
+- [x] **MSC-04** (medium) A second source's quarantined detection in the same second is discarded; an approved one loses its source and its audio
+- [x] **MSC-05** (medium) Comments attach to every source's detection of the same species in the same second
+- [x] **MSC-10** (medium, tracked, c) The same physical microphone or camera can be configured twice
+- [x] **MSC-11** (medium) Channel selection is unreachable from the UI and ignored for PipeWire and RTSP; `bit_depth` is ignored everywhere
+- [x] **MSC-12** (medium) Removing every source does not stop capture; a restart resurrects it from config under a different label
+- [x] **MSC-13** (low) Source identity is the row id, not the device — re-adding splits history, editing a URL merges two places
+- [x] **MSC-17** (low) Filename-derived source matching is prefix-unsafe for ids containing `-`
+- [x] **MSC-20** (low) "Also heard by" hides a failed read and uses a fixed 30 s window
+
+`[x]` done; what each leaves open is in `checklist.json` and `status/WP-04.md`.
 
 ## WP-05 (phase 1): Effort that is true, hourly and per source, and used as the denominator
 

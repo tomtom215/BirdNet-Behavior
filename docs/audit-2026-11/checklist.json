@@ -126,8 +126,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:25",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "a273acd: Shedder keeps per-source parity across sweeps; gate shedding_is_fair_across_sources failed (source a 10 of 10, b 0) and one_source_alone_sheds_every_second_segment_across_sweeps failed (10 vs 5). Not done: birdnet_segments_shed_total by source."
   },
   {
    "id": "MSC-02",
@@ -162,8 +162,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:58",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "c29e81a (migration 61): quarantine carries source and is keyed by (date, time, sci_name, file_name); approve copies Source. Gate two_sources_quarantine_one_bird_in_one_second_as_two_detections failed (1 row, Source None). Not done: a playable clip for an approved quarantine row (the raw segment is purged after 600 s). Older binaries cannot insert into the rebuilt table (stated in the migration)."
   },
   {
    "id": "MSC-05",
@@ -174,8 +174,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:70",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "52c1fbb (migration 62): comments keyed by clip; legacy comments backfilled only where one detection matches, others shown on every detection of the second and marked. Gate a_comment_on_one_sources_detection_is_not_on_the_others failed (the other source listed the comment)."
   },
   {
    "id": "MSC-06",
@@ -234,8 +234,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:119",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "051793e: sources compared by normalised device (ALSA hw/plughw/CARD forms, RTSP URL without credentials/default port/trailing slash) on create and update; an unreadable list refuses. Three gates failed on old code. Not done: PipeWire default vs ALSA card on the same device."
   },
   {
    "id": "MSC-11",
@@ -246,8 +246,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:131",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "aeab0f1: channels select on add and edit forms; Left/Right reach ffmpeg as aformat+pan for PipeWire and RTSP; the detail line shows the 16-bit actually recorded. Gates failed on old code. Not done: RTSP rate shown as stored (capture is 48 kHz), \"both channels analysed separately\", the manual's admin-audio.png."
   },
   {
    "id": "MSC-12",
@@ -258,8 +258,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:140",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "1afedec: config seeds only a table that never held a row; rows but none active captures nothing (journal warning); an unreadable table captures nothing (error). Gate a_table_whose_sources_were_all_removed_captures_nothing failed (captured src_seed_1)."
   },
   {
    "id": "MSC-13",
@@ -270,8 +270,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:149",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "88c780d: re-adding a removed device re-enables its row (same id). Gate re_adding_a_removed_device_re_enables_its_row failed (new id). Not done: device-change history table and confirmation on a device change."
   },
   {
    "id": "MSC-14",
@@ -318,8 +318,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:185",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "8c9e768, 15c64cc: the stall probe and the clip namer read a dashed source id whole. Gates failed on old code (cam claimed cam-2; clip named cam); two surviving mutants found by CI killed and checked by hand."
   },
   {
    "id": "MSC-18",
@@ -354,8 +354,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:212",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "f719fce: a failed read of other sources renders \"Could not check\" instead of no card. Gate a_failed_check_of_other_sources_says_so failed (rendered \"\"). Not done: the fixed 30 s window waits on MSC-14 (WP-07)."
   },
   {
    "id": "MSC-21",

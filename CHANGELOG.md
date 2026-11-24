@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A channel pick on the Capture forms (MSC-11).** Mono, left only, right only or stereo can be chosen when a
+  source is added or edited; left or right now reaches a PipeWire source or a camera too, as a `pan` filter,
+  instead of averaging the two channels.
+
 - **A ledger of what the filters discard (WP-03 of the 2026-11 audit).** The human-sound rule, the noise
   filter, corroboration, the range filter and the operator's species lists each count what they remove:
   `birdnet_detections_dropped_total` gains the reasons `privacy`, `noise`, `corroboration`, `occurrence` and
@@ -112,6 +116,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The config file only seeds the source list (MSC-12).** Sources are taken from `ALSA_CARD` and `RTSP_URL` when
+  the list has never held a row. With every source removed, the next start captures nothing and says so in the
+  journal, instead of bringing the config file's sources back under other names; a source list that cannot be
+  read at start-up records nothing and logs an error.
+- **Re-adding a removed device brings its source back (MSC-13),** with its id, so its history and classifier
+  routes continue, instead of starting a new source.
+- **Quarantine and comments name the recording (MSC-04, MSC-05; migrations 61 and 62).** A second source's
+  quarantined detection of one species in one second is kept, and an approved one names its source. A comment
+  belongs to one detection; a comment written before this, on a second two sources share, is shown on both
+  and marked. A station downgraded past migration 61 quarantines nothing: take a backup before upgrading.
+
 - **Kept raw audio leaves out speech.** With `RAW_AUDIO_KEEP_EVERY` set, a segment in which the human-sound
   rule masked speech is drained without a copy being kept, so the share kept can fall a little under one in N.
   A segment drained before it was analysed, or any segment with the rule off, is kept as before.
@@ -153,6 +168,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was already at its newest release.
 
 ### Fixed
+
+- **Shedding silenced one source (MSC-01).** Under heat or backlog the station analyses one segment in two; with
+  two sources it analysed one source's and shed the other's every time. It now sheds one in two of each
+  source's segments.
+- **The same microphone or camera could be added twice (MSC-10)** under another spelling (`hw:1,0` and
+  `plughw:1,0`, or a camera URL with credentials or a trailing slash), and an edit could move a source onto
+  another's device. Both are refused, and so is an add when the source list cannot be read.
+- **A source id with a dash (MSC-17)** let another source's stall probe claim its files, and its clips were named
+  for the part before the dash.
+- **"Also heard by" hid a failed check (MSC-20).** The detection page now says it could not check other sources.
+- **A source's bit depth (MSC-11).** The Capture page printed the stored 24-bit; every source records 16-bit.
 
 - **A second classifier's species were never range-filtered (MMP-03).** A species only a second classifier knows,
   such as most of Perch's frogs, insects and mammals and the birds BirdNET does not list, passed the include and
