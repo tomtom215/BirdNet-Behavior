@@ -64,8 +64,9 @@ struct DataFacts {
     snapshot_bytes: u64,
     /// When the scheduled backup + VACUUM job last completed.
     scheduled_last_run: ScheduledRun,
-    /// What the station keeps and when, as the operator set it (UIR-14).
-    policy: Policy,
+    /// What the station keeps and when, as the operator set it (UIR-14);
+    /// `None` when it could not be read.
+    policy: Option<Policy>,
     /// Filesystem holding the database and recordings.
     disk_used_pct: Option<f64>,
     disk_available_bytes: u64,
@@ -102,35 +103,51 @@ const DEFAULT_PURGE_AT_PCT: u8 = 95;
 /// default. A value out of range is the default, as the daemon treats it. An
 /// environment variable or command-line flag that overrides these is not
 /// visible to the web process and is not reflected here.
-fn read_policy(state: &AppState) -> Policy {
-    let file = state
-        .config_path()
-        .and_then(|p| birdnet_core::config::Config::load_from(p).ok());
-    let value = |setting: &str, config_key: &str| -> Option<String> {
-        state
-            .with_read_db(|c| birdnet_db::settings::get(c, setting).ok())
-            .filter(|v| !v.trim().is_empty())
-            .or_else(|| {
-                file.as_ref()
-                    .and_then(|f| f.get(config_key))
-                    .map(ToOwned::to_owned)
-            })
+///
+/// `None` when the settings or the configuration file could not be read: the
+/// card then says so, rather than printing the defaults as the station's
+/// choice.
+fn read_policy(state: &AppState) -> Option<Policy> {
+    let file = match state.config_path() {
+        None => None,
+        Some(p) => match birdnet_core::config::Config::load_from(p) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                tracing::warn!(error = %e, "data tab: the configuration file could not be read");
+                return None;
+            }
+        },
+    };
+    let value = |setting: &str, config_key: &str| -> Option<Option<String>> {
+        let stored = match state.with_read_db(|c| birdnet_db::settings::get(c, setting)) {
+            Ok(v) => Some(v).filter(|v| !v.trim().is_empty()),
+            Err(birdnet_db::settings::SettingsError::NotFound(_)) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, setting, "data tab: a setting could not be read");
+                return None;
+            }
+        };
+        Some(stored.or_else(|| {
+            file.as_ref()
+                .and_then(|f| f.get(config_key))
+                .map(ToOwned::to_owned)
+        }))
     };
     let mut policy = Policy::default();
-    if let Some(raw) = value("backup_schedule", "BACKUP_SCHEDULE")
+    if let Some(raw) = value("backup_schedule", "BACKUP_SCHEDULE")?
         && let Ok(schedule) = birdnet_db::sqlite::BackupSchedule::parse(&raw)
     {
         policy.backup = schedule;
     }
-    if let Some(pct) = value("purge_threshold", "DISK_PURGE_THRESHOLD")
+    if let Some(pct) = value("purge_threshold", "DISK_PURGE_THRESHOLD")?
         .and_then(|raw| raw.trim().parse::<u8>().ok())
         .filter(|p| (1..=100).contains(p))
     {
         policy.purge_at_pct = pct;
     }
-    policy.keep_when_full = value("full_disk_action", "FULL_DISK")
+    policy.keep_when_full = value("full_disk_action", "FULL_DISK")?
         .is_some_and(|raw| raw.trim().eq_ignore_ascii_case("keep"));
-    policy
+    Some(policy)
 }
 
 /// What the station knows about the scheduled backup's last run.
@@ -333,9 +350,11 @@ fn render_body(f: &DataFacts) -> String {
         )
     };
 
-    let backups_every = match f.policy.backup {
-        birdnet_db::sqlite::BackupSchedule::Weekly => "every 7 days",
-        birdnet_db::sqlite::BackupSchedule::Daily => "every day",
+    const UNREAD: &str = "on a schedule that could not be read";
+    let backups_every = match f.policy.map(|p| p.backup) {
+        Some(birdnet_db::sqlite::BackupSchedule::Weekly) => "every 7 days",
+        Some(birdnet_db::sqlite::BackupSchedule::Daily) => "every day",
+        None => UNREAD,
     };
 
     // ── Stat strip — all four measured ────────────────────────────────────
@@ -360,12 +379,17 @@ fn render_body(f: &DataFacts) -> String {
     // week — say that rather than the bare "hasn't happened".
     let next_sub = match f.scheduled_last_run {
         ScheduledRun::Never => "first automatic backup due shortly".to_string(),
-        ScheduledRun::At(last) => format!(
-            "scheduled backup {}",
-            until(
-                i64::try_from(f.now_unix).unwrap_or(i64::MAX),
-                last + f.policy.backup.interval_secs(),
-            )
+        ScheduledRun::At(last) => f.policy.map_or_else(
+            || "the backup schedule could not be read".to_string(),
+            |p| {
+                format!(
+                    "scheduled backup {}",
+                    until(
+                        i64::try_from(f.now_unix).unwrap_or(i64::MAX),
+                        last + p.backup.interval_secs(),
+                    )
+                )
+            },
         ),
         ScheduledRun::Unknown => "the last scheduled run could not be read".to_string(),
     };
@@ -562,10 +586,10 @@ fn render_body(f: &DataFacts) -> String {
     );
 
     // ── Retention — the values actually in force ──────────────────────────
-    let purge = if f.policy.keep_when_full {
-        "never (a full disk stops recording instead)".to_owned()
-    } else {
-        format!("when the disk is {} % full", f.policy.purge_at_pct)
+    let purge = match f.policy {
+        None => "could not be read".to_owned(),
+        Some(p) if p.keep_when_full => "never (a full disk stops recording instead)".to_owned(),
+        Some(p) => format!("when the disk is {} % full", p.purge_at_pct),
     };
     let retention = format!(
         r#"<div class="bnb-card pad bkr-mt">
@@ -685,7 +709,7 @@ mod tests {
             ],
             snapshot_bytes: 8_294_304,
             scheduled_last_run: ScheduledRun::At(1_773_532_800),
-            policy: Policy::default(),
+            policy: Some(Policy::default()),
             disk_used_pct: Some(61.4),
             disk_available_bytes: 12_884_901_888,
             now_unix: 1_773_619_200, // one day after the newest snapshot
@@ -976,5 +1000,20 @@ mod tests {
         let card = html.split("<h3>Retention</h3>").nth(1).expect("card");
         assert!(card.contains("every 7 days"), "{card}");
         assert!(card.contains("95"), "{card}");
+    }
+
+    /// A settings read that failed is not "nothing set": the card said "every
+    /// 7 days" and "95 % full" for a station whose settings could not be read
+    /// (caught by `a_failed_read_is_not_defaulted_into_a_fact`).
+    #[test]
+    fn a_policy_that_could_not_be_read_is_not_shown_as_the_defaults() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute_batch("DROP TABLE settings").expect("drop");
+        let html = backups_body(&AppState::from_connection(conn, ":memory:".into()));
+        let card = html.split("<h3>Retention</h3>").nth(1).expect("card");
+        assert!(!card.contains("every 7 days"), "{card}");
+        assert!(!card.contains("95"), "{card}");
+        assert!(card.contains("could not be read"), "{card}");
     }
 }

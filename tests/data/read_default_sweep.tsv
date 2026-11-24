@@ -39,6 +39,7 @@ handled	crates/birdnet-web/src/routes/admin/audio.rs	row	match-err	match state.w
 handled	crates/birdnet-web/src/routes/admin/audio.rs	update	match-err	match state.with_read_db(|conn| conn.get(&id)) { Err .. }
 task-panic	crates/birdnet-web/src/routes/admin/backup.rs	list_backups	unwrap_or_default	tokio::task::spawn_blocking(move || -> Vec<BackupEntry> { let Ok(rd) = std::fs::read_dir(&dir) else { return V
 handled	crates/birdnet-web/src/routes/admin/backup_recovery.rs	gather	match-err	match state.with_read_db(|conn| { birdnet_db::sqlite::last_run_unix(conn, birdnet_db::sqlite::JOB_BACKUP_VACUU
+handled	crates/birdnet-web/src/routes/admin/backup_recovery.rs	read_policy	match-err	match state.with_read_db(|c| birdnet_db::settings::get(c, setting)) { Err .. }
 handled	crates/birdnet-web/src/routes/admin/doctor.rs	doctor_json	match-err	match tokio::task::spawn_blocking(move || diagnostics.doctor_json()).await { Err .. }
 handled	crates/birdnet-web/src/routes/admin/doctor.rs	doctor_page	match-err	match tokio::task::spawn_blocking(move || Config::load_from(&path)).await { Err .. }
 handled	crates/birdnet-web/src/routes/admin/doctor.rs	doctor_page	ok	tokio::task::spawn_blocking(move || diagnostics.doctor_json()) .await .ok()
