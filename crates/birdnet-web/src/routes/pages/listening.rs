@@ -6,8 +6,9 @@
 //! its microphone was down, and heard nothing because it was not there. A chart that
 //! draws both as a zero tells the owner their yard was silent on the day the power
 //! failed. The `recording_effort` ledger (migration 27) is the station's own account
-//! of how many seconds of audio it captured, per local date and source, so it can say
-//! which.
+//! of how many seconds of audio the detection pipeline analysed, per local date and
+//! source (since migration 61; before it, how long each source's capture was up), so
+//! it can say which.
 //!
 //! It is only ever used to *add* a statement ("not listening"), never to scale or
 //! correct a count, and only where the ledger holds something for the period at all:
@@ -25,7 +26,7 @@ use super::viz::kit;
 /// minute before a power cut did not listen to that day.
 const MIN_LISTENED_SECS: f64 = 60.0;
 
-/// Seconds recorded per local date over `from..=to` (ISO dates), summed over sources.
+/// Seconds analysed per local date over `from..=to` (ISO dates), summed over sources.
 ///
 /// # Errors
 ///
@@ -48,8 +49,8 @@ pub fn effort_by_date(
 /// For each of the `days` ending on `end` (oldest first): was the station listening?
 ///
 /// `None` when the ledger has no row anywhere in the period (unknown, so nothing is
-/// claimed). The last day is never reported as off: the recorder credits on a timer, so
-/// the first minutes of a day have no row yet.
+/// claimed). The last day is never reported as off: the recorder folds what was analysed
+/// on a timer, so the first minutes of a day have no row yet.
 pub fn listened_days(effort: &BTreeMap<String, f64>, end: &str, days: usize) -> Option<Vec<bool>> {
     if effort.is_empty() || days == 0 {
         return None;
