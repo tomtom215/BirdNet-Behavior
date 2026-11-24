@@ -384,6 +384,19 @@ CSV/JSON/eBird export of the full detection history is available from the [Backu
 
 For verification tools: `GET /api/v2/detections/export/raven?from=&to=` is a Raven selection table over every detection with a clip, in BirdNET-Analyzer's column layout with `Begin Path` naming the clip; `GET /api/v2/recordings/{clip}/raven.txt` is one clip's table and `GET /api/v2/recordings/{clip}/labels.txt` the same selections as an Audacity label track. All three read the reviewed set, so a rejected detection is in none of them; a clip no detection names is `404`. See [Export](../admin/backups.md#export) for how each selection is placed.
 
+Effort, for anyone dividing by it. `GET /api/v2/effort/export?from=&to=` is the
+hourly ledger as `effort-by-hour.csv`: per local date, hour and source, the seconds
+of audio the detection pipeline analysed and the seconds the source's capture was up
+(`Date`, `Hour`, `Source`, `Seconds_Analysed`, `Seconds_Up`). Hours are recorded from
+the upgrade that added this ledger on. `GET /api/v2/detections/export/history?sci_name=&from=&to=&grain=hour|day&min_seconds=`
+is one species' detection history, as `detection-history.csv`, one row per hour or
+day (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`). `Detected` is `1`
+when the species was detected, `0` when the station listened and did not detect it,
+and `NA` when no single source analysed at least `min_seconds` of the occasion (by
+default half of it). An hour or a day without effort is `NA`, not `0`. Hours before
+the hourly ledger existed are `NA`. Days read the daily ledger, which counted capture
+uptime until that upgrade. Both take a range of at most 366 days, and read the reviewed set.
+
 ## Changing a station
 
 Ten method-and-path pairs, and they are the only ones in `/api/v2` that change

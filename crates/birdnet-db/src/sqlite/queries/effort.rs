@@ -1,9 +1,11 @@
 //! Recording-effort queries.
 //!
-//! `recording_effort` (migration 27) accumulates seconds of audio actually
-//! captured, keyed `(local date, source)`. `src/integrations/effort.rs` credits
-//! it on a timer while capture is running, so it is the station's own record of
-//! how long it has been listening — independent of whether it heard anything.
+//! `recording_effort` (migration 27) accumulates seconds of audio, keyed
+//! `(local date, source)`. Until migration 61 `src/integrations/effort.rs`
+//! credited it on a timer while a source's capture was up; from migration 61 it
+//! is credited with the audio the detection pipeline analysed, to the date the
+//! audio was recorded on (RES-01). `recording_effort_hourly` (migration 61) holds
+//! the analysed seconds by local hour, beside the seconds each source was up.
 
 use rusqlite::Connection;
 
@@ -44,14 +46,144 @@ pub fn total_recording_seconds(conn: &Connection) -> Result<Option<u64>, DbError
     // clippy rejects it for that reason. `CAST(… AS INTEGER)` truncates toward
     // zero into an i64, which is the conversion actually wanted. `SUM` over no
     // rows is SQL NULL — the "never recorded" case — and survives as `None`.
+    //
+    // Time *up*, not audio analysed: a station whose classifier analyses nothing
+    // is exactly what the deadman is for, and it accumulates no analysed audio.
+    // `recording_effort` held uptime until migration 61 and analysed audio after
+    // it, and every analysed second after it is also in the hourly table's
+    // `seconds_analysed`; so the old ledger, less the analysed audio the hourly
+    // table repeats, plus the hourly uptime, is uptime throughout.
     let secs: Option<i64> = conn.query_row(
-        "SELECT CAST(SUM(seconds) AS INTEGER) FROM recording_effort",
+        "SELECT CASE
+             WHEN NOT EXISTS (SELECT 1 FROM recording_effort)
+              AND NOT EXISTS (SELECT 1 FROM recording_effort_hourly) THEN NULL
+             ELSE CAST(
+                 COALESCE((SELECT SUM(seconds) FROM recording_effort), 0)
+                 - COALESCE((SELECT SUM(seconds_analysed) FROM recording_effort_hourly), 0)
+                 + COALESCE((SELECT SUM(seconds_up) FROM recording_effort_hourly), 0)
+               AS INTEGER)
+           END",
         [],
         |row| row.get(0),
     )?;
     // A negative total cannot arise — the column is credited with elapsed
     // durations — but clamp rather than wrap if one ever did.
     Ok(secs.map(|s| u64::try_from(s).unwrap_or(0)))
+}
+
+/// One row of the hourly effort ledger.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffortHour {
+    /// Local date, `YYYY-MM-DD`.
+    pub date: String,
+    /// Local hour, 0–23.
+    pub hour: u8,
+    /// The source, as `detections.Source` names it.
+    pub source: String,
+    /// Seconds of audio the detection pipeline analysed.
+    pub seconds_analysed: f64,
+    /// Seconds the source's capture was up.
+    pub seconds_up: f64,
+}
+
+/// The hourly ledger over `from..=to` (local dates), oldest first.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn effort_hours(conn: &Connection, from: &str, to: &str) -> Result<Vec<EffortHour>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT date, hour, source, seconds_analysed, seconds_up FROM recording_effort_hourly
+          WHERE date >= ?1 AND date <= ?2 ORDER BY date, hour, source",
+    )?;
+    let rows = stmt
+        .query_map([from, to], |r| {
+            Ok(EffortHour {
+                date: r.get(0)?,
+                hour: r.get(1)?,
+                source: r.get(2)?,
+                seconds_analysed: r.get(3)?,
+                seconds_up: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// One survey occasion of a species' detection history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Occasion {
+    /// Local date, `YYYY-MM-DD`.
+    pub date: String,
+    /// Local hour for an hourly history, `None` for a daily one.
+    pub hour: Option<u8>,
+    /// Audio analysed in the occasion by its best-covered source, in seconds.
+    pub seconds_analysed: f64,
+    /// Detections of the species in the occasion, from `detections_analytic`
+    /// (a detection a reviewer rejected is not counted).
+    pub detections: i64,
+    /// `Some(true)` detected, `Some(false)` listened to and not detected, `None`
+    /// not surveyed: less than `min_seconds` of audio analysed.
+    pub detected: Option<bool>,
+}
+
+/// A species' detection history over `from..=to` (local dates), one occasion a
+/// day or an hour (RES-02).
+///
+/// An occasion is surveyed when one source analysed at least `min_seconds` of it,
+/// by the effort ledger: the best-covered source, not the sum, so two
+/// microphones that each heard half an hour do not make a surveyed hour. Effort
+/// by the hour exists from migration 61, so an hourly history of earlier dates
+/// is all not-surveyed; a daily one reads `recording_effort`, which held capture
+/// uptime before migration 61. Ranges are capped at 366 days by the caller.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_history(
+    conn: &Connection,
+    sci_name: &str,
+    from: &str,
+    to: &str,
+    hourly: bool,
+    min_seconds: f64,
+) -> Result<Vec<Occasion>, DbError> {
+    let sql = if hourly {
+        "WITH RECURSIVE days(d) AS (
+             SELECT date(?2) UNION ALL SELECT date(d, '+1 day') FROM days WHERE d < date(?3)
+         ),
+         hours(h) AS (SELECT 0 UNION ALL SELECT h + 1 FROM hours WHERE h < 23)
+         SELECT d, h,
+                COALESCE((SELECT MAX(seconds_analysed) FROM recording_effort_hourly e
+                           WHERE e.date = d AND e.hour = h), 0),
+                (SELECT COUNT(*) FROM detections_analytic x
+                  WHERE x.Date = d AND CAST(substr(x.Time, 1, 2) AS INTEGER) = h
+                    AND x.Sci_Name = ?1)
+           FROM days, hours ORDER BY d, h"
+    } else {
+        "WITH RECURSIVE days(d) AS (
+             SELECT date(?2) UNION ALL SELECT date(d, '+1 day') FROM days WHERE d < date(?3)
+         )
+         SELECT d, NULL,
+                COALESCE((SELECT MAX(seconds) FROM recording_effort e WHERE e.date = d), 0),
+                (SELECT COUNT(*) FROM detections_analytic x WHERE x.Date = d AND x.Sci_Name = ?1)
+           FROM days ORDER BY d"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params![sci_name, from, to], |r| {
+            let seconds_analysed: f64 = r.get(2)?;
+            let detections: i64 = r.get(3)?;
+            Ok(Occasion {
+                date: r.get(0)?,
+                hour: r.get(1)?,
+                seconds_analysed,
+                detections,
+                detected: (seconds_analysed >= min_seconds).then_some(detections > 0),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -88,6 +220,77 @@ mod tests {
             Some(12_600),
             "one hour plus half an hour plus two hours"
         );
+    }
+
+    /// The deadman's reference is time up, not audio analysed: a station whose
+    /// classifier analyses nothing has listened, by this measure, as long as
+    /// its capture was up, which is what lets the deadman fire on it.
+    #[test]
+    fn the_deadman_reference_counts_uptime_when_nothing_is_analysed() {
+        let conn = conn();
+        conn.execute(
+            "INSERT INTO recording_effort_hourly (date, hour, source, seconds_analysed, seconds_up)
+             VALUES ('2026-09-01', 6, 'local', 0, 3600)",
+            [],
+        )
+        .expect("seed");
+        assert_eq!(total_recording_seconds(&conn).expect("query"), Some(3600));
+        // After an upgrade: an hour of uptime credited the old way, then an hour
+        // up of which half was analysed (in both ledgers).
+        conn.execute(
+            "INSERT INTO recording_effort (date, source, seconds) VALUES
+                 ('2026-08-31', 'local', 3600), ('2026-09-01', 'local', 1800)",
+            [],
+        )
+        .expect("seed");
+        conn.execute(
+            "UPDATE recording_effort_hourly SET seconds_analysed = 1800",
+            [],
+        )
+        .expect("seed");
+        assert_eq!(total_recording_seconds(&conn).expect("query"), Some(7200));
+    }
+
+    /// RES-02. An hourly detection history: a detection is 1, a listened hour
+    /// with none is 0, and an hour the source was down is NA, not 0.
+    #[test]
+    fn an_hour_without_effort_is_not_a_zero() {
+        let conn = conn();
+        for (hour, analysed) in [(4, 3600.0), (5, 0.0), (6, 0.0), (7, 3600.0), (8, 3600.0)] {
+            conn.execute(
+                "INSERT INTO recording_effort_hourly (date, hour, source, seconds_analysed, seconds_up)
+                 VALUES ('2026-05-01', ?1, 'local', ?2, ?2)",
+                rusqlite::params![hour, analysed],
+            )
+            .expect("seed");
+        }
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, Source)
+             VALUES ('2026-05-01', '04:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'a.wav', 'local')",
+            [],
+        )
+        .expect("seed");
+        let h = detection_history(
+            &conn,
+            "Turdus merula",
+            "2026-05-01",
+            "2026-05-01",
+            true,
+            1800.0,
+        )
+        .expect("query");
+        assert_eq!(h.len(), 24);
+        let at = |hour: u8| {
+            h.iter()
+                .find(|o| o.hour == Some(hour))
+                .expect("hour")
+                .detected
+        };
+        assert_eq!(at(4), Some(true));
+        assert_eq!(at(5), None, "the source was down");
+        assert_eq!(at(6), None, "the source was down");
+        assert_eq!(at(7), Some(false), "listened, nothing heard");
+        assert_eq!(at(3), None, "no ledger row at all");
     }
 
     #[test]
