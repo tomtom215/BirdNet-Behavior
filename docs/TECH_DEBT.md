@@ -113,8 +113,8 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   (`life_list.rs`), `/pages/ts-heatmap` (`timeseries_dash.rs`, which says it keeps
   the route though the page no longer loads it), and the full page
   `/player/{filename}` (`audio_player.rs`), which no page links to but the manual's
-  web API reference documents. `/pages/ts-sessions` was on that list and was deleted
-  with the Trends card that loaded it (UIC-07).
+  web API reference documents. (`/pages/ts-sessions`, which the Trends card loaded,
+  was deleted with that card under UIC-07 and is not on this list.)
 * **How it was found:** the one the previous hand-off named,
   `/pages/quarantine-pending-count`, was deleted (no nav entry ever called it, and
   the Quarantine page and the Today strip show the same number). A scan for every

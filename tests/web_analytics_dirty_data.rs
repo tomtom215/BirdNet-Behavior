@@ -126,7 +126,6 @@ async fn timeseries_dashboards_render_despite_unplaceable_rows() {
         "/pages/ts-daily",
         "/pages/ts-diversity",
         "/pages/ts-heatmap",
-        "/pages/ts-sessions",
         "/pages/ts-anomalies",
         "/pages/ts-peak",
     ] {

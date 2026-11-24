@@ -1132,7 +1132,7 @@ fn ebird_link(code: Option<&str>, shown_name: &str) -> String {
     code.map_or_else(
         || {
             format!(
-                r#"<p class="spp-muted-sm">No eBird link for <em>{}</em>: this station was set up without the range model that carries eBird's species codes.</p>"#,
+                r#"<p class="spp-muted-sm">No eBird link for <em>{}</em>: this station was set up without the range model that carries eBird's species codes. For whoever set it up: <code>--metadata-labels</code> supplies them.</p>"#,
                 escape_html(shown_name),
             )
         },
