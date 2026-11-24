@@ -393,26 +393,15 @@ pub(super) fn build_extraction_filename(detection: &Detection, format: &str) -> 
     let date = &detection.date;
     let time = &detection.time;
 
-    // Parse the source file for RTSP ID if present in the detection's
-    // extracted filename, otherwise omit it.
+    // The source's stream id, if the recording's name carries one. Parsed by
+    // the recording-name parser, which takes everything up to the time as the
+    // id, so an id with a `-` in it is kept whole (MSC-17).
     let rtsp_part = detection
         .file_name_extr
         .as_deref()
-        .and_then(|f| {
-            // Attempt to extract RTSP ID from the source filename pattern.
-            let base = f.rsplit('/').next().unwrap_or(f);
-            // Pattern: YYYY-MM-DD-birdnet-RTSP_ID-HH:MM:SS.ext
-            let parts: Vec<&str> = base.splitn(6, '-').collect();
-            if parts.len() >= 6 {
-                // parts[4] could be RTSP ID
-                let candidate = parts[4];
-                if !candidate.contains(':') {
-                    return Some(format!("{candidate}-"));
-                }
-            }
-            None
-        })
-        .unwrap_or_default();
+        .and_then(crate::detection::types::RecordingFile::parse)
+        .and_then(|f| f.rtsp_id)
+        .map_or_else(String::new, |id| format!("{id}-"));
 
     format!("{name_safe}-{conf_pct}-{date}-birdnet-{rtsp_part}{time}.{format}")
 }
@@ -1095,6 +1084,19 @@ mod tests {
         assert_eq!(
             name,
             "Eurasian_Magpie-93-2026-05-19-birdnet-RTSP_2-09:00:00.flac"
+        );
+    }
+
+    /// MSC-17. A source id containing `-` is carried whole into the clip's
+    /// name, not cut at its first dash.
+    #[test]
+    fn extraction_filename_keeps_a_dashed_source_id_whole() {
+        let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        d.file_name_extr =
+            Some("/var/lib/birdnet/2026-05-19-birdnet-back-garden-09:00:00.wav".into());
+        assert_eq!(
+            build_extraction_filename(&d, "flac"),
+            "Eurasian_Magpie-93-2026-05-19-birdnet-back-garden-09:00:00.flac"
         );
     }
 

@@ -53,9 +53,10 @@ Open a source's **edit** panel to change:
 - **Quiet window** — an optional per-source pause in the **station's local time**, each end a clock time (`22:00`) or a solar anchor (`sunset`, `sunset+30`, `sunrise-15`), e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
 - **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, and (network streams only) a 10-second read timeout that ends a stream which stops sending, so it is restarted.
 - **Equaliser** — a filter chain of your own, when the toggles are not the right shape. See below.
+- **Channels analysed** — mono, the left or right channel only, or both averaged; see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below.
 - **Camera stream** (RTSP sources only) — the **transport** (auto / TCP / UDP — auto is TCP, the NAT-robust choice; force UDP only for a camera that needs it) and the **tracks requested** (see [Audio-only cameras](#audio-only-cameras)).
 
-**Sample rate** (48 or 44.1 kHz) is chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
+**Sample rate** is chosen when a microphone is **added**. A network stream is always resampled to 48 kHz, whatever rate its row holds, and its detail line says 48 kHz. Per-source **gain** is stored with the source and shown in its detail line, but is **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds. Every source is recorded at 16 bits: the row's stored bit depth is not read by capture, and the detail line shows the 16 bits recorded.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
@@ -174,15 +175,32 @@ would each hand the model. Run it while birds are actually singing: the
 cancellation is direction-dependent, so ambient noise alone can look benign on a
 microphone that loses badly on real song.
 
-Act on the answer by setting the source's channel pick — `left` or `right`
-takes one capsule intact instead of averaging two. There is not yet a UI
-control for it: set the `channels` column of the source's `audio_sources` row
-(`mono` / `left` / `right` / `stereo`) directly and restart the service.
+Act on the answer by setting the source's **Channels analysed** to **Left
+channel only** or **Right channel only**, on its edit panel or when adding it,
+and restart the service. Either takes one capsule intact instead of averaging
+two. A microphone's channel is kept by the station's own capture; a PipeWire
+source's or a camera's by ffmpeg's `pan` filter.
 
 > This matters most for exactly the deployments that can least afford it: a
 > sealed enclosure nobody opens for a season. A station losing 66 dB to its own
 > downmix looks completely healthy from every gauge, dashboard and alert this
 > project has.
+
+## The same device twice, and removing a source
+
+- **A device that is already a source is refused, however it is written.**
+  `hw:1,0`, `plughw:1,0` and `plughw:CARD=USB,DEV=0` are one device when the
+  system lists `USB` as card 1, and a camera's address is the same camera with
+  or without its password, RTSP's default port 554, a different case in the
+  host name, or a trailing `/`. An edit cannot point one source at another's
+  device either. One case is not caught: a USB microphone added once as an ALSA
+  device and once as the PipeWire default.
+- **Removing every source stops recording.** The station does not fall back to
+  the device in its config file (`ALSA_CARD`, `RTSP_URL`) once sources have been
+  managed here; the journal says so at start-up. Add a source to record again.
+- **Adding a removed device again brings its source back**, with the settings on
+  the form, so its detections, its classifier route and its filters carry on
+  under the same name rather than starting a second history.
 
 ## Adding a camera or stream
 
