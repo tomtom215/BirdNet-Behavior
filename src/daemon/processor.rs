@@ -496,6 +496,70 @@ impl RunProvenance {
     }
 }
 
+/// The detection as the classifier that accepts it saw it (audit MMP-06).
+///
+/// The merge picks one classifier's score per species, and the per-species and
+/// dynamic thresholds then judge that number whatever its scale. A species set
+/// to 0.5 on a station whose V3.0 (bar 0.7) scored 0.65 and whose Perch (bar
+/// 0.35) scored 0.40 went to Perch, which had cleared its own bar, and 0.40 was
+/// quarantined; V3.0 alone would have stored it. So when the winner's score is
+/// not accepted, each other classifier's own answer is judged the same way,
+/// against its own floor, and the first that is accepted, in route order,
+/// becomes the detection: its score, its classifier, its window. The row's
+/// confidence therefore never sits below the cutoff that accepted it.
+///
+/// It does not put per-species thresholds on each classifier's scale: a
+/// species' threshold still judges whichever score it is shown.
+fn judged_by_an_accepting_classifier(
+    mut event: birdnet_core::detection::daemon::DetectionEvent,
+    species_thresholds: &std::collections::HashMap<String, f64>,
+    provenance: &RunProvenance,
+    station: f32,
+    dynamic: Option<&birdnet_core::detection::dynamic_threshold::DynamicThresholds>,
+    now_ms: i64,
+) -> birdnet_core::detection::daemon::DetectionEvent {
+    let detection = &event.detection;
+    let accepted = |model: Option<&str>, score: f32| {
+        matches!(
+            decide_disposition(
+                score,
+                &detection.scientific_name,
+                species_thresholds,
+                provenance.floor_for(model, station),
+                dynamic,
+                now_ms,
+            ),
+            DispositionDecision::Accept { .. }
+        )
+    };
+    if accepted(detection.model_id.as_deref(), detection.confidence) {
+        return event;
+    }
+    let Some((model_id, score, start, stop)) = detection
+        .model_scores
+        .iter()
+        .filter(|a| detection.model_id.as_deref() != Some(a.model_id.as_str()))
+        .find_map(|a| {
+            let score = a.score?;
+            accepted(Some(&a.model_id), score).then(|| {
+                (
+                    a.model_id.clone(),
+                    score,
+                    a.window_start_secs,
+                    a.window_end_secs,
+                )
+            })
+        })
+    else {
+        return event;
+    };
+    event.detection.model_id = Some(model_id);
+    event.detection.confidence = score;
+    event.detection.start = start;
+    event.detection.stop = stop;
+    event
+}
+
 /// What the soundscape upload needs, gathered on the processor thread while
 /// the clip is known to be there: the bytes are read in the upload task.
 struct SoundscapeUpload {
@@ -670,6 +734,14 @@ pub(super) fn event_processor(
         let species_thresholds = species_thresholds.current(&state);
         let now_ms = crate::daemon::disposition::epoch_ms();
 
+        let event = judged_by_an_accepting_classifier(
+            event,
+            species_thresholds,
+            &provenance,
+            global_confidence,
+            dynamic.tracker(),
+            now_ms,
+        );
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
         // The floor for this detection: its classifier's own threshold where
@@ -4692,6 +4764,84 @@ mod tests {
             stored,
             vec!["Pica pica".to_owned(), "Turdus merula".to_owned()]
         );
+    }
+
+    /// Audit MMP-06: adding a classifier must not quarantine what the primary
+    /// alone would have accepted. Pica pica has a 0.5 threshold under a 0.7
+    /// station; V3.0 (no bar of its own, so 0.7) scores it 0.65 and Perch (bar
+    /// 0.35) scores 0.40. Perch cleared its bar and V3.0 did not, so Perch wins
+    /// the merge, and its 0.40 against the species' 0.5 was a quarantine.
+    /// V3.0's own 0.65 is accepted at 0.5, as it is with V3.0 alone; the row
+    /// carries the score and classifier that accepted it, so its confidence
+    /// is never below its cutoff.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_second_classifier_cannot_quarantine_what_the_first_accepts() {
+        let (detections, quarantined) = mmp06_scenario(0.65).await;
+        assert_eq!(quarantined, 0, "the detection was quarantined");
+        assert_eq!(
+            detections,
+            vec![(Some("v3".to_owned()), f64::from(0.65_f32))],
+            "stored as the classifier whose own score accepted it"
+        );
+    }
+
+    /// Counterpart: when no classifier's own score clears the species' bar, the
+    /// quarantine stands, judged on the winner's score as before.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_quarantine_stands_when_no_classifier_clears_the_species_bar() {
+        let (detections, quarantined) = mmp06_scenario(0.45).await;
+        assert!(detections.is_empty(), "{detections:?}");
+        assert_eq!(quarantined, 1);
+    }
+
+    /// Run MMP-06's scenario with V3.0 scoring `v3_score`; returns the stored
+    /// detections as `(model_id, Confidence)` and the quarantine count.
+    async fn mmp06_scenario(v3_score: f32) -> (Vec<(Option<String>, f64)>, i64) {
+        use birdnet_core::detection::types::AnswerState::{BelowBar, Heard};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut provenance = test_provenance(&state);
+        provenance.model_thresholds = HashMap::from([("perch".to_owned(), 0.35)]);
+        let mut event = make_event(
+            "Pica pica",
+            "Eurasian Magpie",
+            0.40,
+            tmp.path().join("none.wav"),
+            "mmp06",
+        );
+        event.detection.model_id = Some("perch".to_owned());
+        event.detection.agreeing_models = Some(1);
+        event.detection.model_scores = vec![
+            answer("v3", BelowBar, Some(v3_score), Some(0.70)),
+            answer("perch", Heard, Some(0.40), Some(0.35)),
+        ];
+        run_processor_dynamic(
+            &state,
+            vec![event],
+            HashMap::from([("Pica pica".to_owned(), 0.5)]),
+            0.7,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            provenance,
+        )
+        .await;
+        state.with_db(|c| {
+            let mut stmt = c
+                .prepare("SELECT model_id, Confidence FROM detections")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let q: i64 = c
+                .query_row("SELECT COUNT(*) FROM quarantine", [], |r| r.get(0))
+                .unwrap();
+            (rows, q)
+        })
     }
 
     fn make_event(
