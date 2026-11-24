@@ -126,8 +126,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:25",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "c1c7a10: Shedder alternates per source across sweeps (shed_split removed). Gate shedding_is_fair_across_sources red before ('src_a: 10 of 10 analysed'). Its counterpart one_source_alone_still_sheds_every_second_segment was also red on the old split (one segment per sweep: nothing shed), a defect the audit did not name. Per-source shed metric (birdnet_segments_shed_total{source}) not added."
   },
   {
    "id": "MSC-02",
@@ -162,8 +162,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:58",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ed1868c: migration 62 rebuilds quarantine with `source` and identity (date, time, sci_name, COALESCE(source,'')); approve copies Source; the daemon extracts a held-back detection's clip (held_clip) at all four quarantine sites. Gate two_sources_quarantined_in_one_second_are_two_rows_each_approved_with_its_source red before (one row, raw segment path). Left: a rejected or deleted entry's clip stays on disk for the disk-full purge."
   },
   {
    "id": "MSC-05",
@@ -174,8 +174,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:70",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "85782ec: migration 61 adds detection_comments.file_name (filled where the second names one detection, NULL otherwise, trigger rebuilt to cover it); page and API key comments by clip; an API comment on a shared second without file_name is a 409. Gate a_comment_stays_on_the_recording_it_was_written_on red before."
   },
   {
    "id": "MSC-06",
@@ -234,8 +234,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:119",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ee7fa11: device_identity compares ALSA card+device (CARD= via /proc/asound/cards) and RTSP without credentials/default port/trailing slash, in create, update and the setup wizard; an unreadable list refuses the add (TD-4's Capture half). Gate the_same_device_spelled_differently_is_refused red before (hw:1,0 accepted after plughw:1,0). PipeWire names compared as written; the PipeWire-vs-ALSA same-card warning is not done."
   },
   {
    "id": "MSC-11",
@@ -246,8 +246,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:131",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "80520c4, bd539bf: channels select on the add forms and the edit panel; PipeWire and RTSP honour Left/Right with an ffmpeg pan filter; the detail line says 16-bit and 48 kHz for a camera. Gates a_camera_set_to_one_channel_keeps_that_channel, a_pipewire_source_set_to_one_channel_writes_that_channel, the_channel_to_analyse_can_be_chosen_from_the_page red before; the_detail_line_says_what_is_recorded red against the old function body. Not done: macOS avfoundation mic pick (dev only); 'both, analysed separately'."
   },
   {
    "id": "MSC-12",
@@ -258,8 +258,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:140",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "de8b445: seeding needs a table that never held a row; all-removed resolves to no sources with a start-up notice. Gate removing_every_source_stops_capture red before ('1 source(s) resurrected'); counterpart a_new_station_is_seeded_from_its_config green throughout."
   },
   {
    "id": "MSC-13",
@@ -270,8 +270,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:149",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "ee7fa11: re-adding a removed device restores its row and id (gate a_removed_device_added_again_keeps_its_id red before). Remaining: an edit that changes a source's device keeps the id with no record (the proposed audio_source_history table and confirmation)."
   },
   {
    "id": "MSC-14",
@@ -318,8 +318,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:185",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "223c6de: filename_matches_stream needs the whole id; build_extraction_filename uses RecordingFile::parse. Gates a_source_id_is_not_matched_as_a_prefix_of_another and extraction_filename_keeps_a_source_id_with_a_dash red before."
   },
   {
    "id": "MSC-18",
@@ -354,8 +354,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:212",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "6cff3da: a failed corroboration read is said on the page (gate a_failed_corroboration_read_says_so red before). Remaining: the fixed 30 s window, which the finding ties to measured clock skew between sources (MSC-14, WP-07)."
   },
   {
    "id": "MSC-21",
