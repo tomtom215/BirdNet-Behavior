@@ -99,6 +99,26 @@ fn is_enabled_but_inert(
     config.enabled && !config.is_effective_at(global_confidence)
 }
 
+/// `(loaded, floor)`: the threshold the classifiers are loaded with, and the
+/// floor they run at.
+///
+/// `loaded` becomes each classifier's "own bar" when it has no
+/// `MODEL_n_THRESHOLD`, and it is the station's: the merge ranks "cleared"
+/// detections by it, the Models board shows it, an answer's "below its own
+/// bar" is judged against it, and acceptance uses the station's too. It was the
+/// dynamic floor, so all three disagreed with acceptance (audit MMP-07).
+/// `floor` is lower with dynamic thresholds on; the processor publishes it as
+/// the [`ThresholdFloor`] and the inference loop lowers every classifier to it
+/// before each file, so the model still runs where a learned species can reach.
+///
+/// [`ThresholdFloor`]: birdnet_core::detection::daemon::ThresholdFloor
+const fn classifier_thresholds(
+    dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig,
+    station: f32,
+) -> (f32, f32) {
+    (station, dynamic.model_floor(station))
+}
+
 /// What the daemon reports about its own throughput (OB-12, PR-1, PR-2),
 /// mapped onto the metrics registry. The source label is derived here
 /// because `derive_source_label` is the one place that knows the convention.
@@ -334,7 +354,7 @@ pub fn start_detection_daemon(
     // feature would be on, configured, and reach zero detections, because the
     // ones it exists to recover were discarded inside the model.
     let dynamic_config = crate::daemon::config::resolve_dynamic_threshold(config);
-    let model_confidence = dynamic_config.model_floor(confidence);
+    let (load_confidence, model_confidence) = classifier_thresholds(dynamic_config, confidence);
     if is_enabled_but_inert(dynamic_config, confidence) {
         tracing::warn!(
             floor = dynamic_config.min,
@@ -537,7 +557,7 @@ pub fn start_detection_daemon(
         primary_sample_rate: primary.sample_rate,
         model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
-        model: build_model_config(sensitivity, model_confidence),
+        model: build_model_config(sensitivity, load_confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
         metadata_labels_path,
@@ -850,6 +870,27 @@ mod tests {
         assert!(thermal_limit_reached(Some(line + 10.0), false));
         assert!(thermal_limit_reached(None, true));
         assert!(thermal_limit_reached(Some(line - 20.0), true));
+    }
+
+    /// Audit MMP-07: with dynamic thresholds on (floor 0.3) under a 0.7
+    /// station, a classifier without a threshold of its own is loaded with the
+    /// station's 0.7, so its "own bar" is the one acceptance applies. The floor
+    /// still reaches the model at run time through `ThresholdFloor`; that half
+    /// is held by `a_lowered_threshold_reaches_a_model_loaded_above_it`
+    /// (`tests/a_lowered_species_threshold_reaches_the_model.rs`).
+    #[test]
+    fn classifiers_are_loaded_at_the_station_bar_not_the_dynamic_floor() {
+        use birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig;
+        let on = DynamicThresholdConfig {
+            enabled: true,
+            trigger: 0.8,
+            min: 0.3,
+            valid_hours: 24,
+        };
+        let (loaded, floor) = classifier_thresholds(on, 0.7);
+        assert!((loaded - 0.7).abs() < f32::EPSILON, "loaded at {loaded}");
+        // Counterpart: the floor the processor publishes is still the low one.
+        assert!((floor - 0.3).abs() < f32::EPSILON, "floor {floor}");
     }
 
     /// The full truth table for the "enabled but inert" warning.
