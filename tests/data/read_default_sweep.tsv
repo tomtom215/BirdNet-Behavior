@@ -208,7 +208,6 @@ handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or	tokio::tas
 handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or_else	birdnet_db::sqlite::seconds_since_last_detection(conn).unwrap_or_else(|e| { tracing::debug!(error = %e, "deadm
 handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or_else	birdnet_db::sqlite::total_recording_seconds(conn).unwrap_or_else(|e| { tracing::debug!(error = %e, "deadman ef
 cache	src/integrations/ebird.rs	poll_loop	ok	tokio::task::spawn_blocking(move || ebird::load(&path)) .await .ok()
-fail-closed	src/integrations/effort.rs	sample_once	unwrap_or_default	AudioSourceStore::list(conn).unwrap_or_default()
 setting-default	src/integrations/email.rs	create_email_notifier	ok	ensure_settings_table(conn).ok()
 setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_cooldown_secs", "300"), "300") .parse::<u64>() .unwrap_or(300)
 setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_min_confidence", "0.80"), "0.80") .parse::<f64>() .unwrap_or(0.80)
@@ -267,3 +266,5 @@ decoration	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	compute_ts_div
 handled	crates/birdnet-web/src/routes/weather.rs	for_detection	match-err	match state.with_read_db(|c| { c.query_row( "SELECT detected_at_utc FROM detections_analytic \ WHERE Date = ?1
 handled	crates/birdnet-web/src/routes/weather.rs	latest	match-err	match state.with_read_db(birdnet_db::weather::WeatherStore::latest) { Err .. }
 omitted	crates/birdnet-web/src/routes/pages/terrain.rs	sun_by_day	let-ok	let Ok(..) = conn.prepare( "SELECT CAST(ROUND((julianday(?1 || ' 12:00:00', 'localtime') \ - julianday(?1 || '
+handled	src/integrations/effort.rs	flush_analysed	match-err	match state.with_db(|conn| credit_analysed(conn, &credits)) { Err .. }
+handled	src/integrations/effort.rs	sample_once	match-err	match state.with_db(|conn| { use birdnet_db::audio_sources::AudioSourceStore; AudioSourceStore::list(conn) }) 
