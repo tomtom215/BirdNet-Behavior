@@ -800,8 +800,13 @@ mod tests {
 #[allow(clippy::struct_excessive_bools)]
 pub struct AudioPipeline {
     /// Attenuate below [`HIGH_PASS_CUTOFF_HZ`] to cut wind rumble and handling
-    /// noise before inference. Nothing `BirdNET` classifies lives down there:
-    /// the model's mel bank starts well above it.
+    /// noise before inference. It is not free: energy below the corner does
+    /// reach the classifier (see [`HIGH_PASS_CUTOFF_HZ`]), so the lowest
+    /// vocalisers — a bittern's boom, pigeons, large owls — are attenuated.
+    /// It also moves the model's scores for everything else: on the bundled
+    /// magpie recording, V2.4's top-10 logits moved a median of 1.2 from
+    /// BirdNET-Pi's with this on, against at most 0.08 with both filters off (see
+    /// `docs/book/guides/parity.md`). On by default; parity needs it off.
     pub high_pass: bool,
     /// Remove any constant offset the capture chain adds. A DC-offset signal
     /// wastes headroom and biases every frame-energy measurement the quality

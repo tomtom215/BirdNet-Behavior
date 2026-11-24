@@ -1327,9 +1327,14 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 ///   `slope = logit_slope(sensitivity)`, which is `clamp(2 − sensitivity, 0.5, 1.5)`.
 ///
 ///   That is BirdNET-Pi's mapping, line for line (`Nachtzuster/BirdNET-Pi`,
-///   `scripts/utils/models.py`: `max(0.5, min(1.0 - (sens - 1.0), 1.5))`), and
-///   BirdNET-Analyzer's before it, so the same `SENSITIVITY` and the same
-///   audio give the same stored confidence here as there: the default 1.25 is
+///   `scripts/utils/models.py`: `max(0.5, min(1.0 - (sens - 1.0), 1.5))`,
+///   which applies no clip to the logit at `88985a3`), so the same
+///   `SENSITIVITY` and the same audio give the same stored confidence here as
+///   there. BirdNET-Analyzer 1.5.1 has the same slope but clips the logit to
+///   ±15 first; 2.0.0 and later keep the slope at 1, turn the setting into a
+///   shift of the logit (`(sensitivity − 1) × 10`) and clip to ±20
+///   (`flat_sigmoid`, `birdnet_analyzer/model.py`), so a comparison with
+///   Analyzer output must name the release. The default 1.25 is
 ///   a slope of 0.75 (a logit of 3.12 is 0.912, not 0.980). It is **not**
 ///   birdnet-go's, which uses the setting itself as the slope (its default
 ///   1.0); to carry a birdnet-go value across, enter `2 − value`.
