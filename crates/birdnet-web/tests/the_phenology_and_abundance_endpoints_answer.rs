@@ -118,6 +118,12 @@ async fn phenology_names_its_columns_and_returns_the_rows() {
     assert_eq!(row["detected_days"], 7, "{row}");
     assert_eq!(row["first_detection"], "2026-03-03", "{row}");
     assert_eq!(row["last_detection"], "2026-03-09", "{row}");
+    // Seven consecutive days is a run, so the robust dates are the same; the
+    // station recorded no listening before 3 March, so the arrival is flagged.
+    assert_eq!(row["arrival_date"], "2026-03-03", "{row}");
+    assert_eq!(row["departure_date"], "2026-03-09", "{row}");
+    assert_eq!(row["effort_days_before_arrival"], 0, "{row}");
+    assert_eq!(row["effort_gap_before_arrival"], true, "{row}");
     assert_eq!(row["year"], 2026, "{row}");
     assert_eq!(
         keys_of(row),

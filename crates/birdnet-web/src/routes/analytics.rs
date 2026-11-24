@@ -989,6 +989,13 @@ async fn abundance(
 /// an occupancy, which is why `detected_days` (the distinct days with a
 /// detection) comes beside it.
 ///
+/// `first_detection` and `last_detection` are the raw extremes, which one false
+/// positive moves by months. `arrival_date` and `departure_date` are the ends of
+/// the first and last run of 3 detection days within 7, and
+/// `effort_gap_before_arrival` / `effort_gap_after_departure` say when the
+/// station was not listening on every one of the 14 days around them, so the
+/// true date may lie in the gap. `phenology_timing_sql` documents the rule.
+///
 /// A resident or overwintering species reads "arrived 1 January, departed
 /// 31 December" in a calendar-year window; the query that flags those
 /// (`year_crossing`) is `migration_window_sql`, which this route does not call.

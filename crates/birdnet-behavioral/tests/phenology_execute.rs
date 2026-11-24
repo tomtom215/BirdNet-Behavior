@@ -53,7 +53,7 @@ fn seeded(year: i32) -> (AnalyticsDb, TempDir) {
     // The effort-corrected query joins the station's recording-effort table.
     db.conn()
         .execute_batch(&format!(
-            "CREATE TABLE recording_effort (date VARCHAR, source VARCHAR, seconds DOUBLE);
+            "CREATE TABLE IF NOT EXISTS recording_effort (date VARCHAR, source VARCHAR, seconds DOUBLE);
              INSERT INTO recording_effort VALUES ('{year:04}-01-03', 'local', 14400.0),
                                                  ('{year:04}-06-11', 'local', 19800.0);"
         ))

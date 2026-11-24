@@ -667,6 +667,19 @@ impl AnalyticsDb {
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN detected_at_utc BIGINT;");
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN run_id BIGINT;");
         conn.execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
+        // Empty until the station's sync copies its effort in, but present from
+        // the start: the phenology timing query reads it to say whether the
+        // station was listening before an arrival, and a store opened before
+        // the first sync (or one whose sync failed) must answer that query
+        // with "no listening recorded" rather than a missing-table error.
+        // Same shape as the copy `sync_recording_effort` makes.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS recording_effort (
+                date VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                seconds DOUBLE NOT NULL
+            );",
+        )?;
         Ok(Self {
             conn,
             path: path.to_path_buf(),

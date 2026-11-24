@@ -1210,7 +1210,8 @@ mod tests {
         let (db, _tmp) = make_db();
         db.conn
             .execute_batch(
-                "CREATE TABLE recording_effort (date VARCHAR NOT NULL, source VARCHAR NOT NULL, \
+                "DROP TABLE IF EXISTS recording_effort; \
+                 CREATE TABLE recording_effort (date VARCHAR NOT NULL, source VARCHAR NOT NULL, \
                  seconds DOUBLE NOT NULL, extra INTEGER NOT NULL); \
                  INSERT INTO recording_effort VALUES ('2024-05-01', 'mic', 3600, 1);",
             )

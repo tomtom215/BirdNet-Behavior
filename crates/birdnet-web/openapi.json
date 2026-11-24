@@ -4871,7 +4871,7 @@
           "analytics"
         ],
         "summary": "Species phenology: first and last detection per year",
-        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. `first_detection` and `last_detection` are the raw extremes, and one false positive moves them by months. `arrival_date` is the first day of the first run of at least 3 detection days within 7 days, and `departure_date` the last day of the last such run; both are null when the species never made such a run that year. `effort_days_before_arrival` counts the days in the 14 before `arrival_date` with recorded listening, and `effort_gap_before_arrival` is true when that is fewer than 14: the station was not listening throughout the fortnight before, so the species may have arrived earlier, unheard. `effort_days_after_departure` and `effort_gap_after_departure` say the same of the 14 days after `departure_date`. A calendar-year window is not a migration window for a resident or an overwintering species. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
         "operationId": "analyticsPhenology",
         "parameters": [
           {
@@ -4943,7 +4943,15 @@
                           "first_doy",
                           "last_doy",
                           "presence_days",
-                          "detected_days"
+                          "detected_days",
+                          "arrival_date",
+                          "departure_date",
+                          "arrival_doy",
+                          "departure_doy",
+                          "effort_days_before_arrival",
+                          "effort_gap_before_arrival",
+                          "effort_days_after_departure",
+                          "effort_gap_after_departure"
                         ],
                         "properties": {
                           "species": {
@@ -4983,6 +4991,72 @@
                           "detected_days": {
                             "type": "integer",
                             "description": "Distinct days it was detected."
+                          },
+                          "arrival_date": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date",
+                            "description": "First day of the first run of at least 3 detection days within 7 days, in this year; null when there is no such run."
+                          },
+                          "departure_date": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date",
+                            "description": "Last day of the last run of at least 3 detection days within 7 days, in this year; null when there is no such run."
+                          },
+                          "arrival_doy": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `arrival_date` falls on."
+                          },
+                          "departure_doy": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `departure_date` falls on."
+                          },
+                          "effort_days_before_arrival": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 0,
+                            "maximum": 14,
+                            "description": "Days among the 14 before `arrival_date` with recorded listening; null when there is no arrival."
+                          },
+                          "effort_gap_before_arrival": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "True when the station was not listening on every one of the 14 days before `arrival_date`, so the arrival may have been earlier; null when there is no arrival."
+                          },
+                          "effort_days_after_departure": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "minimum": 0,
+                            "maximum": 14,
+                            "description": "Days among the 14 after `departure_date` with recorded listening; null when there is no departure."
+                          },
+                          "effort_gap_after_departure": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "True when the station was not listening on every one of the 14 days after `departure_date` (including days still to come), so the species may have stayed later; null when there is no departure."
                           }
                         }
                       }

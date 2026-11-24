@@ -4,6 +4,12 @@
 //! species per year, computes day-of-year values, and derives multi-year
 //! migration windows.
 //!
+//! The first and last detection are raw extremes. [`phenology_timing_sql`]
+//! also reports an arrival and departure that one false positive cannot move
+//! (the ends of a run of detection days) and whether the station was listening
+//! in the fortnight around them. [`migration_window_sql`] still takes its
+//! per-year dates from the raw extremes.
+//!
 //! Every day-of-year this module emits is projected onto a common (non-leap)
 //! year and so runs 1–365. Raw day numbers are not comparable across years —
 //! from 1 March a leap year runs one day ahead of a common one — and these
@@ -33,7 +39,8 @@ const YEAR_EXPR: &str = "CAST(strftime(detection_date, '%Y') AS INTEGER)";
 /// row the view could not parse has no bucket to belong to.
 const PLACEABLE: &str = "detection_date IS NOT NULL";
 
-/// Day-of-year of `date_expr`, projected onto a common (non-leap) year.
+/// Day-of-year of the date expression `date`, projected onto a common
+/// (non-leap) year.
 ///
 /// A raw day-of-year is not comparable between years. From 1 March a leap year
 /// runs one day ahead of a common one — 1 May is the 122nd day of 2024 and the
@@ -67,13 +74,17 @@ const PLACEABLE: &str = "detection_date IS NOT NULL";
 /// agree with the day number of `MIN(date)` and `MAX(date)`, because the
 /// projection is non-decreasing in date — 29 February is the only day that ties
 /// with its neighbour, and it ties with the day before it.
-const DOY_EXPR: &str = "CAST(CASE
-                     WHEN month(detection_date) <= 2
-                       THEN LEAST(dayofyear(detection_date), 59)
+fn doy_expr(date: &str) -> String {
+    format!(
+        "CAST(CASE
+                     WHEN month({date}) <= 2
+                       THEN LEAST(dayofyear({date}), 59)
                      ELSE 60 + date_diff('day',
-                                         make_date(year(detection_date), 3, 1),
-                                         detection_date)
-                   END AS INTEGER)";
+                                         make_date(year({date}), 3, 1),
+                                         {date})
+                   END AS INTEGER)"
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Phenology timing SQL builders
@@ -81,17 +92,66 @@ const DOY_EXPR: &str = "CAST(CASE
 
 /// Build SQL for per-species, per-year phenological timing records.
 ///
-/// Returns one row per (species, year) combination containing:
-/// - `first_detection`, `last_detection` (ISO 8601 dates)
+/// Returns one row per (species, year) combination containing, in this order:
+/// - `species`, `year`
+/// - `first_detection`, `last_detection` (ISO 8601 dates): the raw extremes,
+///   `MIN` and `MAX` of the detection date. One false positive moves them by
+///   months; they are kept because they are what they say, not as the
+///   arrival and departure.
+/// - `detection_count`
 /// - `first_doy`, `last_doy` (day-of-year 1–365, projected onto a common year
 ///   so one calendar date is one number in every year; 29 February folds onto
 ///   28 February's day 59, and the ISO dates beside them stay exact)
-/// - `presence_days` (approximate number of days between first and last)
-/// - `detection_count`
+/// - `presence_days` (days from first to last detection, inclusive: a span)
+/// - `detected_days` (distinct days with a detection)
+/// - `arrival_date`, `departure_date`, `arrival_doy`, `departure_doy`: the
+///   robust dates described below; null when there is no confirmed run
+/// - `effort_days_before_arrival`, `effort_gap_before_arrival`,
+///   `effort_days_after_departure`, `effort_gap_after_departure`
 ///
 /// A single call can be restricted to one year, but the rows are designed to be
 /// compared across years, which is why the day numbers are projected onto a
 /// common year rather than reported raw.
+///
+/// # Arrival and departure
+///
+/// The **arrival** is the first day of the first run of at least
+/// [`CONFIRM_DAYS`] distinct detection days within [`CONFIRM_WINDOW_DAYS`]
+/// consecutive days, starting on a detection day; the **departure** is the last
+/// day of the last such run. Both are within the calendar year of the row.
+///
+/// Why a run rather than a quantile of detection days: a single
+/// misidentification, or a pair of them, does not make three detection days
+/// in a week, so it cannot move the date; a real arrival that is detected on
+/// most days keeps its first day exactly, so on a clean record the arrival is
+/// the date `MIN` gave. A 5th percentile of detection days instead moves with
+/// the length of the stay — 5 % of a 150-day presence is a week after the
+/// first bird — which would bias exactly the comparison between years this
+/// module exists for. The cost is that a species detected less than three days
+/// a week never makes a run and has no arrival (null), and that a stray
+/// detection *inside* a real run's week is counted with it. The thresholds are
+/// constants, not parameters: a station comparing years needs one rule.
+///
+/// # Was the station listening before?
+///
+/// `effort_days_before_arrival` counts the days in the [`EFFORT_LOOKBACK_DAYS`]
+/// days before `arrival_date` (not counting the arrival day) on which
+/// `recording_effort` holds any listening (a day's longest source above zero
+/// seconds). `effort_gap_before_arrival` is true when that is fewer than all
+/// of them: on at least one of those days the station was not recording, so the
+/// species may have arrived then, unheard, and the arrival is an upper bound on
+/// the true date rather than an estimate of it. An arrival on the day a
+/// station came back from an outage is the typical case. The same pair after
+/// `departure_date` says whether the station was listening long enough after
+/// it to have heard the species had it stayed; days that have not happened yet
+/// count as not listened to, so a departure within the last fortnight is
+/// always flagged. Both are null when there is no arrival (or departure). A
+/// day counts as listened to whatever its hours; "any listening" is all the
+/// per-day record can say.
+///
+/// **Requires:** the `recording_effort` table (`date`, `source`, `seconds`),
+/// which [`AnalyticsDb::open`](crate::connection::AnalyticsDb::open) creates
+/// empty and the station's sync fills.
 pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
     let where_sql = where_clause(&[
         Some(PLACEABLE.to_string()),
@@ -99,6 +159,10 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
         year_conditions(params.year_start, params.year_end),
     ]);
     let having_clause = format!("HAVING COUNT(*) >= {}", params.min_detections);
+    let doy = doy_expr("detection_date");
+    let arrival_doy = doy_expr("r.arrival");
+    let departure_doy = doy_expr("r.departure");
+    let ahead = CONFIRM_WINDOW_DAYS - 1;
 
     format!(
         "WITH dated AS (
@@ -106,29 +170,115 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
                 Com_Name,
                 detection_date,
                 {YEAR_EXPR}                                 AS year,
-                {DOY_EXPR}                                  AS doy
+                {doy}                                       AS doy
             FROM detections_ts
             {where_sql}
+        ),
+        timing AS (
+            SELECT
+                Com_Name                                    AS species,
+                year,
+                CAST(MIN(detection_date) AS VARCHAR)        AS first_detection,
+                CAST(MAX(detection_date) AS VARCHAR)        AS last_detection,
+                COUNT(*)                                    AS detection_count,
+                MIN(doy)                                    AS first_doy,
+                MAX(doy)                                    AS last_doy,
+                date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
+                                                            AS presence_days,
+                COUNT(DISTINCT detection_date)              AS detected_days
+            FROM dated
+            GROUP BY Com_Name, year
+            {having_clause}
+        ),
+        detection_days AS (
+            SELECT DISTINCT
+                Com_Name,
+                year,
+                detection_date                              AS day,
+                date_diff('day', DATE '1970-01-01', detection_date) AS n
+            FROM dated
+        ),
+        windowed AS (
+            SELECT
+                Com_Name,
+                year,
+                day,
+                COUNT(*) OVER (PARTITION BY Com_Name, year ORDER BY n
+                               RANGE BETWEEN CURRENT ROW AND {ahead} FOLLOWING)
+                                                            AS days_ahead,
+                COUNT(*) OVER (PARTITION BY Com_Name, year ORDER BY n
+                               RANGE BETWEEN {ahead} PRECEDING AND CURRENT ROW)
+                                                            AS days_behind
+            FROM detection_days
+        ),
+        runs AS (
+            SELECT
+                Com_Name                                    AS species,
+                year,
+                MIN(day) FILTER (WHERE days_ahead >= {k})   AS arrival,
+                MAX(day) FILTER (WHERE days_behind >= {k})  AS departure
+            FROM windowed
+            GROUP BY Com_Name, year
+        ),
+        listened AS (
+            SELECT TRY_CAST(date AS DATE) AS day
+            FROM recording_effort
+            WHERE TRY_CAST(date AS DATE) IS NOT NULL
+            GROUP BY day
+            HAVING MAX(seconds) > 0
+        ),
+        flagged AS (
+            SELECT
+                r.species,
+                r.year,
+                r.arrival,
+                r.departure,
+                CASE WHEN r.arrival IS NOT NULL THEN (
+                    SELECT COUNT(*) FROM listened l
+                    WHERE l.day >= r.arrival - {lookback} AND l.day < r.arrival
+                ) END                                       AS before_days,
+                CASE WHEN r.departure IS NOT NULL THEN (
+                    SELECT COUNT(*) FROM listened l
+                    WHERE l.day > r.departure AND l.day <= r.departure + {lookback}
+                ) END                                       AS after_days
+            FROM runs r
         )
         SELECT
-            Com_Name                                        AS species,
-            year,
-            CAST(MIN(detection_date) AS VARCHAR)            AS first_detection,
-            CAST(MAX(detection_date) AS VARCHAR)            AS last_detection,
-            COUNT(*)                                        AS detection_count,
-            MIN(doy)                                        AS first_doy,
-            MAX(doy)                                        AS last_doy,
-            date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
-                                                            AS presence_days,
-            COUNT(DISTINCT detection_date)                  AS detected_days
-        FROM dated
-        GROUP BY Com_Name, year
-        {having_clause}
-        ORDER BY year DESC, Com_Name
+            t.species,
+            t.year,
+            t.first_detection,
+            t.last_detection,
+            t.detection_count,
+            t.first_doy,
+            t.last_doy,
+            t.presence_days,
+            t.detected_days,
+            CAST(r.arrival AS VARCHAR)                      AS arrival_date,
+            CAST(r.departure AS VARCHAR)                    AS departure_date,
+            {arrival_doy}                                   AS arrival_doy,
+            {departure_doy}                                 AS departure_doy,
+            CAST(r.before_days AS INTEGER)                  AS effort_days_before_arrival,
+            r.before_days < {lookback}                      AS effort_gap_before_arrival,
+            CAST(r.after_days AS INTEGER)                   AS effort_days_after_departure,
+            r.after_days < {lookback}                       AS effort_gap_after_departure
+        FROM timing t
+        JOIN flagged r ON r.species = t.species AND r.year = t.year
+        ORDER BY t.year DESC, t.species
         LIMIT {limit}",
+        k = CONFIRM_DAYS,
+        lookback = EFFORT_LOOKBACK_DAYS,
         limit = params.limit,
     )
 }
+
+/// Distinct detection days a run needs to count as an arrival or departure.
+pub const CONFIRM_DAYS: u32 = 3;
+
+/// The span, in consecutive days, those detection days must fall within.
+pub const CONFIRM_WINDOW_DAYS: u32 = 7;
+
+/// Days before an arrival (and after a departure) checked for listening.
+pub const EFFORT_LOOKBACK_DAYS: u32 = 14;
 
 /// Build SQL to compute multi-year migration windows per species.
 ///
@@ -177,7 +327,7 @@ pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String 
             SELECT
                 Com_Name,
                 {YEAR_EXPR}                                     AS year,
-                {DOY_EXPR}                                      AS doy
+                {doy}                                           AS doy
             FROM detections_ts
             {species_filter}
         ),
@@ -222,6 +372,7 @@ pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String 
         HAVING COUNT(year) >= {min_years}
         ORDER BY arrival_median_doy
         LIMIT {limit}",
+        doy = doy_expr("detection_date"),
         min_det = params.min_detections,
         min_years = min_years,
         limit = params.limit,
@@ -367,8 +518,10 @@ mod tests {
         assert!(sql.contains("Com_Name = 'Eurasian Blackbird'"));
         // The species condition is joined with AND onto the placeable-rows
         // condition rather than each carrying its own keyword, so exactly one
-        // WHERE is emitted however many filters are set.
-        assert_eq!(sql.matches("WHERE").count(), 1, "{sql}");
+        // WHERE is emitted however many filters are set. Counted in the
+        // detections CTE only: the effort lookups further down have their own.
+        let dated = &sql[..sql.find("timing AS").expect("the timing CTE")];
+        assert_eq!(dated.matches("WHERE").count(), 1, "{sql}");
     }
 
     #[test]
