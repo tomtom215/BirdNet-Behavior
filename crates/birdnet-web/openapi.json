@@ -7202,6 +7202,131 @@
         }
       }
     },
+    "/detections/export/history": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export one species' detection history",
+        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when the species was detected, `0` when the station listened and did not detect it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 61. The range is at most 366 days.",
+        "operationId": "exportDetectionHistory",
+        "parameters": [
+          {
+            "name": "sci_name",
+            "in": "query",
+            "required": true,
+            "description": "Scientific name of the species.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First local date (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last local date (YYYY-MM-DD), inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "description": "`hour` or `day` (default `day`).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hour",
+                "day"
+              ]
+            }
+          },
+          {
+            "name": "min_seconds",
+            "in": "query",
+            "required": false,
+            "description": "Audio analysed below which an occasion is `NA`; default half the occasion (1800 for an hour, 43200 for a day).",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The history.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/effort/export": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export the hourly effort ledger",
+        "description": "Per local date, hour and source: the seconds of audio the detection pipeline analysed (`Seconds_Analysed`) and the seconds the source's capture was up (`Seconds_Up`), as CSV (`Date`, `Hour`, `Source`, `Seconds_Analysed`, `Seconds_Up`). Hours are recorded from the upgrade that added the hourly ledger (migration 61) on. The range is at most 366 days.",
+        "operationId": "exportEffortByHour",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First local date (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last local date (YYYY-MM-DD), inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ledger.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
     "/languages": {
       "get": {
         "tags": [
