@@ -82,6 +82,52 @@ impl Default for ModelConfig {
     }
 }
 
+/// The confidence each species must reach for the station to store it, as
+/// one classifier's detections are judged (ACC-04).
+///
+/// The model runs at the station's *floor* — the lowest bar any species may
+/// be recorded at — so a species whose bar the operator lowered reaches the
+/// processor at all. Without this, every other class is held to that floor
+/// too: they fill the top-N slots ahead of a species the station would store,
+/// and the corroboration filter counts them as neighbours, although the
+/// processor drops every one. With it, a candidate under its own species' bar
+/// is not a detection, so only what the station could store is ranked and
+/// cut to `top_n`.
+///
+/// Compared in `f64`, as the processor compares (`decide_disposition`), so
+/// the two cannot disagree about a score on a boundary.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpeciesBars {
+    default: f64,
+    by_species: HashMap<String, f64>,
+}
+
+impl SpeciesBars {
+    /// `default` for every species not in `by_species`.
+    #[must_use]
+    pub const fn new(default: f64, by_species: HashMap<String, f64>) -> Self {
+        Self {
+            default,
+            by_species,
+        }
+    }
+
+    /// The bar `scientific_name` is held to.
+    #[must_use]
+    pub fn bar_for(&self, scientific_name: &str) -> f64 {
+        self.by_species
+            .get(scientific_name)
+            .copied()
+            .unwrap_or(self.default)
+    }
+
+    /// Whether a candidate at `confidence` could be stored.
+    #[must_use]
+    pub fn admits(&self, scientific_name: &str, confidence: f32) -> bool {
+        f64::from(confidence) >= self.bar_for(scientific_name)
+    }
+}
+
 /// A loaded `BirdNET` ONNX model ready for inference.
 pub struct BirdNetModel {
     session: Session,
@@ -122,6 +168,10 @@ pub struct BirdNetModel {
     /// Output indices of the noise classes the noise filter watches (see
     /// [`Self::watch_noise_classes`]). Empty until asked.
     noise_indices: Vec<usize>,
+    /// Each species' storable bar, applied before the top-N cut (see
+    /// [`SpeciesBars`]). `None` — the default, and every caller but the
+    /// daemon — cuts at the confidence threshold alone.
+    storable: Option<SpeciesBars>,
 }
 
 impl fmt::Debug for BirdNetModel {
@@ -243,6 +293,7 @@ impl BirdNetModel {
             class_index,
             human_indices,
             noise_indices: Vec::new(),
+            storable: None,
         };
         model.refuse_non_f32_class_output()?;
         Ok(model)
@@ -280,6 +331,7 @@ impl BirdNetModel {
             class_index,
             human_indices,
             noise_indices: Vec::new(),
+            storable: None,
         };
         model.refuse_non_f32_class_output()?;
         Ok(model)
@@ -485,8 +537,15 @@ impl BirdNetModel {
                 f32::NAN
             });
 
+            // Held to its species' storable bar as well as the floor, before
+            // the top-N cut below (ACC-04): a class the station would drop
+            // must not take a slot from one it would store.
             if confidence >= self.config.confidence_threshold
                 && let Some(label) = self.labels.get(i)
+                && self
+                    .storable
+                    .as_ref()
+                    .is_none_or(|bars| bars.admits(&label.scientific_name, confidence))
             {
                 detections.push(Detection {
                     date: date.clone(),
@@ -549,7 +608,7 @@ impl BirdNetModel {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Take top-N
+        // Take top-N, of the candidates the station could store.
         detections.truncate(self.config.top_n);
 
         // The human score comes from the same output, before either cut above:
@@ -909,6 +968,12 @@ impl BirdNetModel {
     /// Update the confidence threshold.
     pub const fn set_confidence_threshold(&mut self, threshold: f32) {
         self.config.confidence_threshold = threshold;
+    }
+
+    /// Hold each species to its storable bar before the top-N cut, or to the
+    /// confidence threshold alone with `None`. See [`SpeciesBars`].
+    pub fn set_storable_bars(&mut self, bars: Option<SpeciesBars>) {
+        self.storable = bars;
     }
 }
 

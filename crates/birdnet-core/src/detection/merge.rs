@@ -50,8 +50,9 @@ pub struct ModelVerdict {
     pub model_id: String,
     /// What it reported. Filtered by whatever threshold the model ran at,
     /// which is the lower of [`Self::threshold`] and the station's published
-    /// per-species floor — so it can include detections below the model's own
-    /// bar.
+    /// per-species floor, and by each species' storable bar where the
+    /// processor has published one (ACC-04) — so it can include detections
+    /// below the model's own bar, for a species with a lower one.
     pub detections: Vec<Detection>,
     /// The classifier's own bar: its per-model threshold, else the station's.
     /// The downstream processor judges the merged detection against the

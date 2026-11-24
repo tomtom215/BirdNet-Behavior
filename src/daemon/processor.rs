@@ -36,6 +36,9 @@ struct DynamicThresholdState {
     tracker: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
     enabled: bool,
     handle: Arc<birdnet_core::detection::dynamic_threshold::DynamicThresholdHandle>,
+    /// A level was learned or forgotten since [`Self::take_changed`] last
+    /// asked: the inference loop's storable bars are out of date (ACC-04).
+    changed: bool,
 }
 
 impl DynamicThresholdState {
@@ -64,6 +67,7 @@ impl DynamicThresholdState {
                 tracker,
                 enabled,
                 handle,
+                changed: false,
             };
         }
         let now_ms = crate::daemon::disposition::epoch_ms();
@@ -102,6 +106,7 @@ impl DynamicThresholdState {
             tracker,
             enabled,
             handle,
+            changed: true,
         }
     }
 
@@ -134,12 +139,18 @@ impl DynamicThresholdState {
         if self.enabled {
             self.persist(crate::daemon::disposition::epoch_ms(), state);
         }
+        self.changed |= forgotten > 0;
         forgotten
     }
 
     /// The tracker to judge against, or `None` when the feature is off.
     fn tracker(&self) -> Option<&birdnet_core::detection::dynamic_threshold::DynamicThresholds> {
         self.enabled.then_some(&self.tracker)
+    }
+
+    /// Whether a level was learned or forgotten since the last call.
+    const fn take_changed(&mut self) -> bool {
+        std::mem::replace(&mut self.changed, false)
     }
 
     /// Record a detection that survived every gate, persisting on a change.
@@ -160,6 +171,7 @@ impl DynamicThresholdState {
         if !self.enabled || !self.tracker.observe(sci_name, confidence, now_ms) {
             return;
         }
+        self.changed = true;
         self.persist(now_ms, state);
     }
 
@@ -207,15 +219,24 @@ struct ThresholdCache {
     map: std::collections::HashMap<String, f64>,
     refreshed: std::time::Instant,
     floor: Option<PublishedFloor>,
+    /// The dynamic-threshold adjustments in force when last told
+    /// ([`Self::learned`]), published with the thresholds as storable bars.
+    adjustments:
+        std::collections::HashMap<String, birdnet_core::detection::dynamic_threshold::Adjustment>,
 }
 
-/// The inference loop's threshold floor, and the lowest it may ever be set:
-/// the model confidence the station would run at with no per-species
-/// thresholds (the global confidence, or the dynamic-threshold floor).
-pub(super) type PublishedFloor = (
-    std::sync::Arc<birdnet_core::detection::daemon::ThresholdFloor>,
-    f32,
-);
+/// What the processor publishes to the inference loop.
+pub(super) struct PublishedFloor {
+    /// Shared with the inference loop.
+    pub floor: std::sync::Arc<birdnet_core::detection::daemon::ThresholdFloor>,
+    /// The lowest the floor may ever be set: the model confidence the station
+    /// would run at with no per-species thresholds (the global confidence, or
+    /// the dynamic-threshold floor).
+    pub model: f32,
+    /// The station's confidence threshold, which a species with nothing set is
+    /// stored at (ACC-04).
+    pub station: f32,
+}
 
 impl ThresholdCache {
     /// How stale a threshold may get before the next event re-reads it.
@@ -226,11 +247,13 @@ impl ThresholdCache {
             map: initial,
             refreshed: std::time::Instant::now(),
             floor: None,
+            adjustments: std::collections::HashMap::new(),
         }
     }
 
     /// Keep the inference loop's floor at the lowest threshold in force: the
-    /// model's own, or any per-species threshold below it. See
+    /// model's own, or any per-species threshold below it; and each species'
+    /// bar at the one the station would store it at. See
     /// [`birdnet_core::detection::daemon::ThresholdFloor`] for why the model
     /// has to know.
     fn publishing(mut self, floor: Option<PublishedFloor>) -> Self {
@@ -240,9 +263,43 @@ impl ThresholdCache {
     }
 
     fn publish(&self) {
-        if let Some((floor, model)) = &self.floor {
-            floor.set(lowest_threshold(*model, &self.map));
+        if let Some(published) = &self.floor {
+            published
+                .floor
+                .set(lowest_threshold(published.model, &self.map));
+            published.floor.publish_bars(storable_bars(
+                published.station,
+                &self.map,
+                &self.adjustments,
+            ));
         }
+    }
+
+    /// Republish with the adjustments `dynamic` has in force now: called when
+    /// a level is learned or forgotten.
+    ///
+    /// Between a level being learned and this, the inference loop may already
+    /// have cut a file at the species' previous, higher bar — the rest of the
+    /// file that confirmed it, and the one being analysed meanwhile. A level
+    /// that lapses is only republished with the next change or refresh; until
+    /// then its bar is lower than the processor's, which lets a little more
+    /// reach the processor and loses nothing.
+    fn learned(
+        &mut self,
+        dynamic: Option<&birdnet_core::detection::dynamic_threshold::DynamicThresholds>,
+        now_ms: i64,
+    ) {
+        self.adjustments = dynamic.map_or_else(Default::default, |tracker| {
+            tracker
+                .snapshot(now_ms)
+                .into_iter()
+                .filter_map(|(name, _)| {
+                    let adjustment = tracker.adjustment(&name, now_ms)?;
+                    Some((name, adjustment))
+                })
+                .collect()
+        });
+        self.publish();
     }
 
     /// The thresholds to judge the next detection by, refreshed if stale.
@@ -309,6 +366,36 @@ pub(super) fn db_model_scores(
             window_end_secs: Some(f64::from(a.window_end_secs)),
         })
         .collect()
+}
+
+/// What [`decide_disposition`] would store each species at, for the model to
+/// cut at before its top-N (ACC-04): the station's bar, every per-species
+/// threshold, and every learned adjustment.
+pub(super) fn storable_bars(
+    station: f32,
+    thresholds: &std::collections::HashMap<String, f64>,
+    adjustments: &std::collections::HashMap<
+        String,
+        birdnet_core::detection::dynamic_threshold::Adjustment,
+    >,
+) -> birdnet_core::detection::daemon::StorableBars {
+    use birdnet_core::detection::daemon::SpeciesBar;
+    let mut species: std::collections::HashMap<String, SpeciesBar> = thresholds
+        .iter()
+        .map(|(name, &threshold)| {
+            (
+                name.clone(),
+                SpeciesBar {
+                    threshold: Some(threshold),
+                    adjustment: None,
+                },
+            )
+        })
+        .collect();
+    for (name, &adjustment) in adjustments {
+        species.entry(name.clone()).or_default().adjustment = Some(adjustment);
+    }
+    birdnet_core::detection::daemon::StorableBars { station, species }
 }
 
 /// The lowest confidence any species may be recorded at: `model`, or a
@@ -699,13 +786,17 @@ pub(super) fn event_processor(
     threshold_floor: Option<PublishedFloor>,
 ) {
     tracing::debug!("event processor started");
-    let mut species_thresholds =
-        ThresholdCache::new(species_thresholds).publishing(threshold_floor);
+    let mut threshold_cache = ThresholdCache::new(species_thresholds).publishing(threshold_floor);
     // Asked about every detection, so it must not wait on the client: a send
     // holds the client's lock for its whole round trip (see
     // `apprise::Client::gatekeeper`). Taken once, before the first event.
     let apprise_gate = apprise.as_ref().map(|a| a.blocking_lock().gatekeeper());
     let mut dynamic = DynamicThresholdState::new(dynamic, &state);
+    // The levels restored from the last run lower their species' bars before
+    // the first file is cut, not after the first detection (ACC-04).
+    if dynamic.take_changed() {
+        threshold_cache.learned(dynamic.tracker(), crate::daemon::disposition::epoch_ms());
+    }
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
     let mut species_intervals = crate::daemon::duplicate::SpeciesIntervals::load(&state);
     // One post per rule and species per cooldown window; shared with the post
@@ -731,8 +822,11 @@ pub(super) fn event_processor(
             break;
         };
         dynamic.apply_resets(&state);
-        let species_thresholds = species_thresholds.current(&state);
         let now_ms = crate::daemon::disposition::epoch_ms();
+        if dynamic.take_changed() {
+            threshold_cache.learned(dynamic.tracker(), now_ms);
+        }
+        let species_thresholds = threshold_cache.current(&state);
 
         let event = judged_by_an_accepting_classifier(
             event,
@@ -1292,6 +1386,11 @@ pub(super) fn event_processor(
             now_ms,
             &state,
         );
+        // A species that just gained a level is cut at its lowered bar from
+        // the next file the inference loop starts (ACC-04).
+        if dynamic.take_changed() {
+            threshold_cache.learned(dynamic.tracker(), now_ms);
+        }
         // event.latency_ms covers decode + inference; surface as a histogram
         // so the dashboard can flag rising p95s before they catch the eye.
         metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
@@ -2246,7 +2345,11 @@ mod tests {
         let floor = std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(0.75));
         let mut cache =
             ThresholdCache::new(thresholds(&[("Strix aluco", 0.5), ("Pica pica", 0.9)]))
-                .publishing(Some((std::sync::Arc::clone(&floor), 0.75)));
+                .publishing(Some(PublishedFloor {
+                    floor: std::sync::Arc::clone(&floor),
+                    model: 0.75,
+                    station: 0.75,
+                }));
         assert!(
             (floor.get() - 0.5).abs() < f32::EPSILON,
             "floor {}",
@@ -2286,6 +2389,65 @@ mod tests {
                 < f32::EPSILON
         );
         assert!(lowest_threshold(0.75, &thresholds(&[("x", -3.0)])).abs() < f32::EPSILON);
+    }
+
+    /// ACC-04: the bars published for the model to cut at are the bars
+    /// `decide_disposition` stores at. Every candidate it would accept is
+    /// admitted; a species with no override is admitted exactly when it is not
+    /// dropped; one with an override is held to the lower of it and the
+    /// station's bar, not to the floor another species set; and a level is in
+    /// the bars as soon as it is learned, not at the next threshold refresh.
+    #[test]
+    fn the_published_bars_are_the_bars_the_processor_stores_at() {
+        use birdnet_core::detection::daemon::ThresholdFloor;
+        let (_tmp, state) = dyn_state(true);
+        let floor = Arc::new(ThresholdFloor::new(0.7));
+        let map = thresholds(&[
+            ("Strix aluco", 0.4),
+            ("Pica pica", 0.9),
+            ("Sitta europaea", 0.6),
+        ]);
+        let mut cache = ThresholdCache::new(map.clone()).publishing(Some(PublishedFloor {
+            floor: Arc::clone(&floor),
+            model: 0.3,
+            station: 0.7,
+        }));
+        let mut dynamic = DynamicThresholdState::new(tracker_with(true), &state);
+        let now = 1_000;
+        dynamic.confirm("Turdus merula", 0.95, now, &state);
+        dynamic.confirm("Sitta europaea", 0.95, now, &state);
+        assert!(dynamic.take_changed(), "a learned level is a change");
+        assert!(!dynamic.take_changed(), "and is taken once");
+        cache.learned(dynamic.tracker(), now);
+        let bars = floor.bars().expect("published").for_classifier(None);
+
+        for species in [
+            "Strix aluco",
+            "Pica pica",
+            "Sitta europaea",
+            "Turdus merula",
+            "Erithacus rubecula",
+        ] {
+            for step in 0..=100_u8 {
+                let c = f32::from(step) / 100.0;
+                let decision = decide_disposition(c, species, &map, 0.7, dynamic.tracker(), now);
+                let admitted = bars.admits(species, c);
+                if matches!(decision, DispositionDecision::Accept { .. }) {
+                    assert!(admitted, "{species} at {c} is accepted but cut");
+                }
+                if !map.contains_key(species) {
+                    assert_eq!(
+                        admitted,
+                        decision != DispositionDecision::DropBelowGlobal,
+                        "{species} at {c}: {decision:?}"
+                    );
+                }
+            }
+        }
+        assert!(bars.admits("Turdus merula", 0.6), "the learned level is in");
+        assert!(!bars.admits("Erithacus rubecula", 0.6));
+        assert!(!bars.admits("Pica pica", 0.5), "held to the station's bar");
+        assert!(bars.admits("Strix aluco", 0.45));
     }
 
     #[test]

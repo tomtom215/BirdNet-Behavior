@@ -658,7 +658,11 @@ pub fn start_detection_daemon(
                         dynamic_config,
                     ),
                     provenance,
-                    Some((threshold_floor, model_confidence)),
+                    Some(processor::PublishedFloor {
+                        floor: threshold_floor,
+                        model: model_confidence,
+                        station: global_confidence,
+                    }),
                 );
             });
             Some(handle)
