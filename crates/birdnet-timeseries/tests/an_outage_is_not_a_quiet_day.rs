@@ -282,11 +282,39 @@ fn a_day_missing_from_the_ledger_is_not_listened() {
     assert_eq!(flag(&db, &rows, 10), "unlistened", "{rows:?}");
 }
 
+/// A station on a recording schedule (`solar`, `fixed:`, night inhibit) that
+/// records ten hours a day is judged against its own typical day, not a
+/// 24-hour one: its ordinary days are listened to and judged, and only its
+/// outage is left out.
+#[test]
+fn a_scheduled_station_is_judged_against_its_own_day() {
+    const WINDOW: f64 = 10.0 * 3600.0;
+    let off = 14..=16;
+    let (db, _dir) = store(40, |b| if off.contains(&b) { 0 } else { steady(b) });
+    ledger(&db, 40, |b| {
+        Some(if off.contains(&b) { 0.0 } else { WINDOW })
+    });
+    let rows = anomalies(&db);
+    for back in [5, 10, 20, 30] {
+        assert_ne!(
+            flag(&db, &rows, back),
+            "unlistened",
+            "a ten-hour day on a ten-hour schedule is a day listened to: {rows:?}"
+        );
+    }
+    for back in off {
+        assert_eq!(flag(&db, &rows, back), "unlistened", "{rows:?}");
+    }
+}
+
 /// The floor is a line: a day just above it is judged and labelled partial,
 /// one just below it is not judged; a full day is not partial.
 #[test]
 fn the_effort_floor_divides_judged_from_unjudged() {
-    use birdnet_timeseries::queries::trend::{EFFORT_FLOOR_SECS, FULL_DAY_SECS};
+    use birdnet_timeseries::queries::trend::{EFFORT_FLOOR_SHARE, FULL_DAY_SHARE};
+    // Every other day is a whole 24 hours, so that is the typical day.
+    const EFFORT_FLOOR_SECS: f64 = EFFORT_FLOOR_SHARE * FULL_DAY;
+    const FULL_DAY_SECS: f64 = FULL_DAY_SHARE * FULL_DAY;
     let (db, _dir) = store(40, |b| match b {
         10 | 11 => 0,
         _ => steady(b),

@@ -39,11 +39,11 @@ pub struct TrendRow {
     /// ledger, or a date before its first row).
     pub effort_hours: Option<f64>,
     /// Whether the station listened to this day: at least
-    /// [`crate::queries::trend::EFFORT_FLOOR_SECS`] recorded, or no ledger
-    /// record to say otherwise.
+    /// [`crate::queries::trend::EFFORT_FLOOR_SHARE`] of its typical day
+    /// recorded, or no ledger record to say otherwise.
     pub listened: bool,
     /// A listened day with less than
-    /// [`crate::queries::trend::FULL_DAY_SECS`] recorded.
+    /// [`crate::queries::trend::FULL_DAY_SHARE`] of its typical day recorded.
     pub partial_effort: bool,
 }
 
@@ -131,11 +131,11 @@ pub struct AnomalyRow {
     /// ledger, or a date before its first row).
     pub effort_hours: Option<f64>,
     /// Whether the station listened to this day: at least
-    /// [`crate::queries::trend::EFFORT_FLOOR_SECS`] recorded, or no ledger
-    /// record to say otherwise.
+    /// [`crate::queries::trend::EFFORT_FLOOR_SHARE`] of its typical day
+    /// recorded, or no ledger record to say otherwise.
     pub listened: bool,
     /// A listened day with less than
-    /// [`crate::queries::trend::FULL_DAY_SECS`] recorded.
+    /// [`crate::queries::trend::FULL_DAY_SHARE`] of its typical day recorded.
     pub partial_effort: bool,
 }
 

@@ -524,7 +524,7 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
 #[cfg(feature = "analytics")]
 fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow]) -> String {
     // Only a judged day can be an anomaly. A day the station recorded less
-    // than half of (`unlistened`) was not judged; every flag other than `high`
+    // than half its usual day of (`unlistened`) was not judged; every flag other than `high`
     // and `low` used to be drawn as a row, and an outage was drawn as "low".
     let anomalous: Vec<_> = rows
         .iter()
@@ -533,9 +533,9 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
     let unlistened = rows.iter().filter(|r| !r.listened).count();
     let left_out = match unlistened {
         0 => String::new(),
-        1 => r#"<p class="tsd-muted">1 day the station recorded less than half of is left out, and is not part of any baseline.</p>"#.to_string(),
+        1 => r#"<p class="tsd-muted">1 day the station recorded less than half its usual day of is left out, and is not part of any baseline.</p>"#.to_string(),
         n => format!(
-            r#"<p class="tsd-muted">{n} days the station recorded less than half of are left out, and are not part of any baseline.</p>"#
+            r#"<p class="tsd-muted">{n} days the station recorded less than half its usual day of are left out, and are not part of any baseline.</p>"#
         ),
     };
     if anomalous.is_empty() {
@@ -717,7 +717,7 @@ mod tests {
         assert!(!html.contains("<table>"), "{html}");
         assert!(html.contains("No anomalies"), "{html}");
         assert!(
-            html.contains("2 days the station recorded less than half of"),
+            html.contains("2 days the station recorded less than half its usual day of"),
             "{html}"
         );
         // Counterpart: a judged outlier beside them is still a row.

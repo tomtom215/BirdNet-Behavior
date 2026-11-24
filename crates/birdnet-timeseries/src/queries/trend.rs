@@ -6,33 +6,35 @@
 
 use super::QueryPlan;
 
-/// Seconds of recorded audio a local day needs before the trend queries count
-/// it as a day the station listened to: half of a 24-hour day, 43 200 s.
+/// The share of the station's typical day a local date must have recorded to
+/// count as a day the station listened to: half.
 ///
 /// Below it, a day's detections say more about the station than the birds. A
 /// day that lost most of its hours to an outage reads as a collapse, and if it
 /// is judged at all it is judged as a `low` anomaly and then sits in the
-/// baseline the next month is judged against. Half a day is a line, not a
+/// baseline the next month is judged against. Half is a line, not a
 /// measurement: a day above it may still have missed the dawn chorus, and is
-/// labelled partial (see [`FULL_DAY_SECS`]) rather than excluded.
+/// labelled partial (see [`FULL_DAY_SHARE`]) rather than excluded.
 ///
-/// It is a fraction of the clock day, not of the station's recording window,
-/// because these queries cannot see the window: the schedule (`all-day`,
-/// `solar`, `fixed:`) is resolved by the capture supervisor and not recorded
-/// anywhere the analytics store reads. On a station that records only a
-/// window shorter than twelve hours, every day is below the floor.
+/// The typical day is the median of the station's days with any audio in the
+/// ledger, not the clock's 24 hours: the recording schedule (`all-day`,
+/// `solar`, `fixed:`, night inhibit) is resolved by the capture supervisor and
+/// not recorded where the analytics store can read it, and a fraction of 24
+/// hours judged every day of a station recording ten hours a day as not
+/// listened to. A station whose ledger holds only zeros has no typical day,
+/// and none of its days is listened to.
 ///
 /// `recording_effort` holds seconds per date *and source*; a day's effort is
 /// the sum over sources.
-pub const EFFORT_FLOOR_SECS: f64 = 43_200.0;
+pub const EFFORT_FLOOR_SHARE: f64 = 0.5;
 
-/// A listened day with less recorded audio than this is labelled partial:
-/// 23 hours.
+/// A listened day with less of its typical day recorded than this share is
+/// labelled partial: on an all-day station, about 23 hours.
 ///
-/// The ledger is sampled, not integrated — each source is credited five
-/// minutes at a time, and a restart loses up to one interval — so a day a few
-/// minutes short of 86 400 s is a whole day. An hour short is not noise.
-pub const FULL_DAY_SECS: f64 = 82_800.0;
+/// The ledger is credited in five-minute ticks, and a restart loses up to one
+/// of them, so a day a few minutes short of typical is a whole day. An hour
+/// short is not noise.
+pub const FULL_DAY_SHARE: f64 = 0.95;
 
 /// The `effort` and `ledger` CTEs every effort-aware trend query joins.
 ///
@@ -50,14 +52,16 @@ const fn effort_ctes(has_ledger: bool) -> &'static str {
     GROUP BY day
 ),
 ledger AS (
-    SELECT MIN(day) AS first_day FROM effort
+    SELECT MIN(day) AS first_day,
+           MEDIAN(seconds) FILTER (WHERE seconds > 0) AS typical
+    FROM effort
 ),"
     } else {
         "effort AS (
     SELECT * FROM (VALUES (NULL::DATE, NULL::DOUBLE)) t(day, seconds) WHERE false
 ),
 ledger AS (
-    SELECT NULL::DATE AS first_day
+    SELECT NULL::DATE AS first_day, NULL::DOUBLE AS typical
 ),"
     }
 }
@@ -78,15 +82,17 @@ fn effort_seconds(day: &str) -> String {
 }
 
 /// `seconds` (a column holding [`effort_seconds`]) is a day the station
-/// listened to: unknown, or at least [`EFFORT_FLOOR_SECS`].
-fn listened(seconds: &str) -> String {
-    format!("({seconds} IS NULL OR {seconds} >= {EFFORT_FLOOR_SECS:.1})")
+/// listened to: unknown, or at least [`EFFORT_FLOOR_SHARE`] of the typical day
+/// (`typical`, the `ledger` CTE's column of that name).
+fn listened(seconds: &str, typical: &str) -> String {
+    format!("({seconds} IS NULL OR COALESCE({seconds} >= {EFFORT_FLOOR_SHARE} * {typical}, false))")
 }
 
-/// `seconds` is a listened day short of [`FULL_DAY_SECS`].
-fn partial(seconds: &str) -> String {
+/// `seconds` is a listened day short of [`FULL_DAY_SHARE`] of the typical day.
+fn partial(seconds: &str, typical: &str) -> String {
     format!(
-        "COALESCE({seconds} >= {EFFORT_FLOOR_SECS:.1} AND {seconds} < {FULL_DAY_SECS:.1}, false)"
+        "COALESCE({seconds} >= {EFFORT_FLOOR_SHARE} * {typical} \
+         AND {seconds} < {FULL_DAY_SHARE} * {typical}, false)"
     )
 }
 
@@ -98,7 +104,7 @@ fn partial(seconds: &str) -> String {
 /// happened to be in reach.
 ///
 /// "Listened to" is the `recording_effort` ledger's answer: at least
-/// [`EFFORT_FLOOR_SECS`] of audio recorded that local date. A day below it
+/// [`EFFORT_FLOOR_SHARE`] of its typical day of audio recorded that local date. A day below it
 /// keeps its raw count, and its own average and that of every day whose window
 /// holds it are `NULL`. Where the ledger has nothing to say — no
 /// `recording_effort` table, an empty one, or a date before its first row —
@@ -190,8 +196,8 @@ impl QueryPlan for MovingAverage {
         });
         let effort = effort_ctes(self.has_effort_ledger);
         let seconds = effort_seconds("s.detection_date");
-        let listened = listened("effort_seconds");
-        let partial = partial("effort_seconds");
+        let listened = listened("effort_seconds", "typical");
+        let partial = partial("effort_seconds", "typical");
         format!(
             "WITH {effort}
 bounds AS (
@@ -217,7 +223,8 @@ daily AS (
     SELECT
         s.detection_date,
         COALESCE(c.n, 0) AS daily_detections,
-        {seconds} AS effort_seconds
+        {seconds} AS effort_seconds,
+        l.typical AS typical
     FROM spine s
     LEFT JOIN counts c USING (detection_date)
     LEFT JOIN effort e ON e.day = s.detection_date
@@ -263,7 +270,7 @@ ORDER BY detection_date"
 /// Two comparisons per week. The raw one (`yoy_delta`) is detections against
 /// detections over the same span of days, whatever the station was doing on
 /// them. The effort one (`per_listened_day_delta`) is detections per listened
-/// day — the detections on days with at least [`EFFORT_FLOOR_SECS`] of
+/// day — the detections on days with at least [`EFFORT_FLOOR_SHARE`] of its typical day of
 /// recorded audio, over the number of such days — so a week of downtime in
 /// either year is left out of that year's figure rather than read as a
 /// decline. Days the ledger has nothing to say about count as listened, as in
@@ -291,7 +298,7 @@ impl QueryPlan for YearOverYear {
     fn sql(&self) -> String {
         let back = self.weeks.saturating_sub(1);
         let effort = effort_ctes(self.has_effort_ledger);
-        let listened = listened(&effort_seconds("d.day"));
+        let listened = listened(&effort_seconds("d.day"), "l.typical");
         // One row per week, for the `weeks` weeks ending with the one
         // yesterday belongs to (so a Monday does not open on an empty week).
         //
@@ -437,7 +444,7 @@ pub const MIN_BASELINE_DAYS: u32 = 7;
 /// whose earlier days all had the same count, is `normal`: there is no
 /// baseline to be anomalous against.
 ///
-/// A day with less than [`EFFORT_FLOOR_SECS`] of recorded audio is
+/// A day with less than [`EFFORT_FLOOR_SHARE`] of its typical day of recorded audio is
 /// `unlistened`: it is not judged (its `z_score` is `NULL`) and it is left out
 /// of every later day's baseline, so an outage is neither a `low` anomaly
 /// itself nor a run of zeros that widens the next month's deviation. It was
@@ -484,8 +491,8 @@ impl QueryPlan for AnomalyDetection {
         let min_history = window.clamp(1, MIN_BASELINE_DAYS);
         let effort = effort_ctes(self.has_effort_ledger);
         let seconds = effort_seconds("s.detection_date");
-        let listened = listened("effort_seconds");
-        let partial = partial("effort_seconds");
+        let listened = listened("effort_seconds", "typical");
+        let partial = partial("effort_seconds", "typical");
         format!(
             "WITH {effort}
 counts AS (
@@ -507,7 +514,8 @@ daily AS (
     SELECT
         s.detection_date,
         COALESCE(c.n, 0) AS detections,
-        {seconds} AS effort_seconds
+        {seconds} AS effort_seconds,
+        l.typical AS typical
     FROM spine s
     LEFT JOIN counts c USING (detection_date)
     LEFT JOIN effort e ON e.day = s.detection_date
