@@ -1557,6 +1557,10 @@ impl AppState {
                     // side — rather than from the offset in force now.
                     detected_at_utc: instant,
                     run_id: row.run_id,
+                    // `approve_quarantine` writes no `Source` (the quarantine
+                    // table has none), so neither does the mirror: the two
+                    // stores agree on NULL.
+                    source: None,
                 })
             })
         {

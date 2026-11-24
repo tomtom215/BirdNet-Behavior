@@ -117,6 +117,7 @@ impl AnalyticsDb {
                 start_time: row.get(3)?,
                 end_time: row.get(4)?,
                 duration_secs: u64::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
+                source: row.get(6)?,
             })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
@@ -220,12 +221,13 @@ impl AnalyticsDb {
             Ok((
                 row.get::<_, String>(0)?,
                 u32::try_from(row.get::<_, i32>(1)?).unwrap_or(0),
+                row.get::<_, Option<String>>(2)?,
             ))
         })?;
 
         let mut results = Vec::new();
         for row in rows {
-            let (date, steps_completed) = row?;
+            let (date, steps_completed, source) = row?;
             let matched_species = sequence
                 .iter()
                 .take(steps_completed as usize)
@@ -236,6 +238,7 @@ impl AnalyticsDb {
                 steps_completed,
                 total_steps,
                 matched_species,
+                source,
             });
         }
         Ok(results)
@@ -286,6 +289,7 @@ impl AnalyticsDb {
                 date,
                 step_times,
                 species_sequence: sequence.clone(),
+                source: row.get(2)?,
             })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
@@ -337,7 +341,11 @@ impl AnalyticsDb {
             let depths = (0..w.len())
                 .map(|i| row.get::<_, u32>(i + 1))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(types::Assembly { date, depths })
+            Ok(types::Assembly {
+                date,
+                depths,
+                source: row.get(w.len() + 1)?,
+            })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
     }
@@ -372,6 +380,7 @@ impl AnalyticsDb {
                 date: row.get(0)?,
                 matched: row.get(1)?,
                 species_sequence: sequence.clone(),
+                source: row.get(2)?,
             })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
@@ -407,6 +416,7 @@ impl AnalyticsDb {
                 date: row.get(0)?,
                 count: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
                 species_sequence: sequence.clone(),
+                source: row.get(2)?,
             })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
@@ -459,6 +469,7 @@ impl AnalyticsDb {
                 date,
                 step_times,
                 species_sequence: sequence.clone(),
+                source: row.get(2)?,
             })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
@@ -479,8 +490,29 @@ impl AnalyticsDb {
         window_minutes: u32,
         limit: u32,
     ) -> Result<Vec<types::NextSpeciesPrediction>, AnalyticsError> {
+        self.next_species_in(
+            trigger,
+            window_minutes,
+            limit,
+            &types::SourceScope::default(),
+        )
+    }
+
+    /// [`Self::next_species`] over the sources `scope` names, or each source on
+    /// its own (see [`types::SourceScope`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::ExtensionLoad` if the extension is not loaded.
+    pub fn next_species_in(
+        &self,
+        trigger: &str,
+        window_minutes: u32,
+        limit: u32,
+        scope: &types::SourceScope,
+    ) -> Result<Vec<types::NextSpeciesPrediction>, AnalyticsError> {
         self.require_extension()?;
-        let sql = queries::next_species_sql(trigger, window_minutes, limit);
+        let sql = queries::next_species_sql(trigger, window_minutes, limit, scope);
         Ok(self
             .adjacent_species(&sql)?
             .into_iter()
@@ -508,8 +540,29 @@ impl AnalyticsDb {
         window_minutes: u32,
         limit: u32,
     ) -> Result<Vec<types::PreviousSpeciesPrediction>, AnalyticsError> {
+        self.previous_species_in(
+            trigger,
+            window_minutes,
+            limit,
+            &types::SourceScope::default(),
+        )
+    }
+
+    /// [`Self::previous_species`] over the sources `scope` names, or each
+    /// source on its own (see [`types::SourceScope`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::ExtensionLoad` if the extension is not loaded.
+    pub fn previous_species_in(
+        &self,
+        trigger: &str,
+        window_minutes: u32,
+        limit: u32,
+        scope: &types::SourceScope,
+    ) -> Result<Vec<types::PreviousSpeciesPrediction>, AnalyticsError> {
         self.require_extension()?;
-        let sql = queries::previous_species_sql(trigger, window_minutes, limit);
+        let sql = queries::previous_species_sql(trigger, window_minutes, limit, scope);
         Ok(self
             .adjacent_species(&sql)?
             .into_iter()
@@ -600,6 +653,23 @@ impl AnalyticsDb {
         within_minutes: u32,
         top: usize,
     ) -> Result<types::Answers, AnalyticsError> {
+        self.answers_in(from, within_minutes, top, &types::SourceScope::default())
+    }
+
+    /// [`Self::answers`] over the sources `scope` names, or with each source on
+    /// its own so that no bird answers a bird on another source (see
+    /// [`types::SourceScope`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::answers`].
+    pub fn answers_in(
+        &self,
+        from: &str,
+        within_minutes: u32,
+        top: usize,
+        scope: &types::SourceScope,
+    ) -> Result<types::Answers, AnalyticsError> {
         if !is_iso_date(from) {
             return Err(AnalyticsError::InvalidData(format!(
                 "answers needs a YYYY-MM-DD date, got {from:?}"
@@ -614,7 +684,7 @@ impl AnalyticsDb {
         self.require_extension()?;
         let mut stmt = self
             .conn
-            .prepare(&queries::answers_species_sql(from, top))?;
+            .prepare(&queries::answers_species_sql(from, top, scope))?;
         let ranked: Vec<(String, i64)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
@@ -623,7 +693,7 @@ impl AnalyticsDb {
         let heard: Vec<i64> = ranked.iter().map(|r| r.1).collect();
         let mut exchanges = vec![vec![0_i64; n]; n];
         if n >= 2 {
-            let sql = queries::answers_sql(&species, from, within_minutes);
+            let sql = queries::answers_sql(&species, from, within_minutes, scope);
             let flat: Vec<i64> = self.conn.query_row(&sql, [], |row| {
                 (0..n * (n - 1)).map(|k| row.get::<_, i64>(k)).collect()
             })?;
@@ -639,10 +709,11 @@ impl AnalyticsDb {
         let days_heard: i64 = if n == 0 {
             0
         } else {
-            self.conn
-                .query_row(&queries::answers_days_sql(&species, from), [], |row| {
-                    row.get(0)
-                })?
+            self.conn.query_row(
+                &queries::answers_days_sql(&species, from, scope),
+                [],
+                |row| row.get(0),
+            )?
         };
         Ok(types::Answers {
             species,
@@ -806,6 +877,7 @@ mod tests {
             hour_start: 4,
             hour_end: 8,
             since: "2026-01-01".into(),
+            scope: types::SourceScope::default(),
         }
     }
 

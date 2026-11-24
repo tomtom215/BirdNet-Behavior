@@ -4312,6 +4312,9 @@
               "maximum": 10000,
               "default": 100
             }
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4366,6 +4369,9 @@
           },
           {
             "$ref": "#/components/parameters/HourEnd"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4397,6 +4403,9 @@
           },
           {
             "$ref": "#/components/parameters/HourEnd"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4445,6 +4454,9 @@
           },
           {
             "$ref": "#/components/parameters/HourEnd"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4498,6 +4510,9 @@
               "maximum": 12,
               "default": 8
             }
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4529,6 +4544,9 @@
           },
           {
             "$ref": "#/components/parameters/HourEnd"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4560,6 +4578,9 @@
           },
           {
             "$ref": "#/components/parameters/HourEnd"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4591,6 +4612,9 @@
           },
           {
             "$ref": "#/components/parameters/HourEnd"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4639,6 +4663,9 @@
               "maximum": 1000,
               "default": 10
             }
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -4687,6 +4714,9 @@
               "maximum": 1000,
               "default": 10
             }
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           }
         ],
         "responses": {
@@ -8262,6 +8292,13 @@
                         "is_new_today": {
                           "type": "boolean",
                           "description": "First time this species is heard today."
+                        },
+                        "source": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Which source heard it: its label, its device, or a camera's host and port, as the public pages name it (never a stream URL's credentials). null when unknown."
                         }
                       }
                     },

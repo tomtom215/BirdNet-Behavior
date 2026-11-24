@@ -655,7 +655,8 @@ impl AnalyticsDb {
                 import_batch_id BIGINT,
                 review_verdict TEXT,
                 detected_at_utc BIGINT,
-                run_id BIGINT
+                run_id BIGINT,
+                Source TEXT
             );",
         )?;
         // Additive for stores created before provenance existed. DuckDB has no
@@ -666,6 +667,12 @@ impl AnalyticsDb {
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN review_verdict TEXT;");
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN detected_at_utc BIGINT;");
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN run_id BIGINT;");
+        // The capture source (SQLite migration 18), last so the bulk sync's
+        // appender, which writes by position, lines up on a new store and an
+        // upgraded one alike. An upgraded store holds NULL here for every row
+        // it already had; the startup drift repair fills them, because the
+        // source is part of the day fingerprint (`sync::DayFingerprint`).
+        let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN Source TEXT;");
         conn.execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
         // The listening record, filled by `sync_recording_effort`. Created
         // here as well so that a store whose effort copy has not run, or

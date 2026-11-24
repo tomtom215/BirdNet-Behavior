@@ -1175,6 +1175,22 @@ pub(super) fn event_processor(
         // row (so multi-stream detections are attributable) and feeds the
         // per-source liveness gauge below.
         let source_label = derive_source_label(&event.source_file);
+        // What the live feed and a notification call that source (MSC-19): its
+        // label, its device or a stream's host, as public pages name it, so a
+        // stream URL's credentials never reach a phone. A source with no row
+        // (the legacy `local`) or a read that fails is named by its id, which
+        // is still true.
+        let source_name = state
+            .with_read_db(|conn| {
+                use birdnet_db::audio_sources::AudioSourceStore as _;
+                conn.get(&source_label)
+            })
+            .ok()
+            .flatten()
+            .map_or_else(
+                || source_label.clone(),
+                |row| birdnet_web::routes::admin::audio::public_name(&row),
+            );
 
         // Extract the clip FIRST, so the DB row can reference the SAVED CLIP's
         // filename — the flat name the web serves recordings by (`File_Name`) —
@@ -1420,7 +1436,7 @@ pub(super) fn event_processor(
 
         // Also insert into DuckDB analytics (if enabled).
         //
-        // The same twelve columns the bulk sync copies, from the same `record`
+        // The columns the bulk sync copies, from the same `record`
         // that went to SQLite. This used to write six and leave Lat, Lon,
         // Cutoff, Week, Sens and Overlap NULL, so a row written live and the
         // same row rebuilt by a resync were different — including after the
@@ -1445,6 +1461,9 @@ pub(super) fn event_processor(
                 // daylight-saving boundary that fell between the writes.
                 detected_at_utc: record.detected_at_utc,
                 run_id: record.run_id,
+                // The capture source the SQLite row carries, so a behavioural
+                // query can keep this microphone apart from the others (MSC-06).
+                source: record.source,
             };
             let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {
@@ -1618,6 +1637,7 @@ pub(super) fn event_processor(
             start: detection.start,
             stop: detection.stop,
             is_new_today,
+            source: Some(source_name.clone()),
         };
         broadcast.send(&ws_event);
 
@@ -1661,6 +1681,7 @@ pub(super) fn event_processor(
             listen_url: None,
             image_url: None,
             station_url: None,
+            source: Some(source_name),
         };
 
         // What every channel below records about this detection. Built once so a
@@ -3549,6 +3570,175 @@ mod tests {
         let event: serde_json::Value = serde_json::from_str(&event).expect("json");
         assert_eq!(event["common_name"], "Eurasian Magpie");
         assert_eq!(event["display_name"], "Elster");
+    }
+
+    #[tokio::test]
+    async fn a_notification_and_the_live_event_say_which_source_heard_the_bird() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .ok();
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 4096];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let _ = seen_tx.send(String::from_utf8_lossy(&request).into_owned());
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig {
+                cooldown: std::time::Duration::ZERO,
+                ..birdnet_integrations::apprise::NotifyConfig::default()
+            },
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        {
+            use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+            state
+                .with_db(|c| {
+                    let mut pond =
+                        NewAudioSource::defaults("src_pond", SourceKind::Rtsp, "rtsp://cam/1");
+                    pond.label = Some("Pond camera".to_owned());
+                    c.insert(&pond)?;
+                    c.insert(&NewAudioSource::defaults(
+                        "src_gate",
+                        SourceKind::Rtsp,
+                        "rtsp://admin:s3cret@gatecam.lan:554/live",
+                    ))
+                })
+                .unwrap();
+        }
+        let broadcast = state.detection_broadcast();
+        let mut live = broadcast.subscribe();
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("2026-05-19-birdnet-src_pond-09:00:00.wav"),
+                "a",
+            ))
+            .unwrap();
+        let mut gate = make_event(
+            "Strix aluco",
+            "Tawny Owl",
+            0.95,
+            tmp.path().join("2026-05-19-birdnet-src_gate-09:00:05.wav"),
+            "b",
+        );
+        gate.detection.time = "09:00:05".into();
+        event_tx.send(gate).unwrap();
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(apprise),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::new(
+                    "Bird at $source".to_owned(),
+                    "$comname".to_owned(),
+                )
+                .with_station_url(Some("http://birdnet.local:8502".to_owned())),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        let requests = tokio::task::spawn_blocking(move || {
+            let mut got = Vec::new();
+            while let Ok(r) = seen_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                got.push(r);
+            }
+            got
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "one notification per detection: {requests:#?}"
+        );
+        let all = requests.join("\n----\n");
+        assert!(
+            all.contains("Bird at Pond camera"),
+            "the labelled source is named:\n{all}"
+        );
+        // The counterpart: an unlabelled camera is named by its host, and its
+        // URL's password never reaches a phone.
+        assert!(
+            all.contains("Bird at gatecam.lan"),
+            "the host names an unlabelled camera:\n{all}"
+        );
+        assert!(
+            !all.contains("s3cret"),
+            "a stream's credentials must not be sent:\n{all}"
+        );
+
+        let mut sources = Vec::new();
+        while let Ok(event) = live.try_recv() {
+            let event: serde_json::Value = serde_json::from_str(&event).expect("json");
+            sources.push(event["source"].clone());
+        }
+        assert_eq!(
+            sources,
+            vec![
+                serde_json::json!("Pond camera"),
+                serde_json::json!("gatecam.lan:554")
+            ],
+            "the live event says which source heard it"
+        );
     }
 
     /// The watchlist the settings form asks for — common names — must let the

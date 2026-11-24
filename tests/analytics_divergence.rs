@@ -671,6 +671,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
         Option<i32>,
         Option<f64>,
         Option<i64>,
+        Option<String>,
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -718,6 +719,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
                 file_name: "rec.wav",
                 detected_at_utc: instant,
                 run_id: None,
+                source: Some("cam1"),
             })
             .expect("live insert");
         })
@@ -728,7 +730,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
             .with_analytics(|adb| {
                 adb.conn()
                     .query_row(
-                        "SELECT Lat, Lon, Cutoff, Week, Sens, detected_at_utc \
+                        "SELECT Lat, Lon, Cutoff, Week, Sens, detected_at_utc, Source \
                          FROM detections WHERE Sci_Name = 'Turdus merula'",
                         [],
                         |r| {
@@ -739,6 +741,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
                                 r.get(3)?,
                                 r.get(4)?,
                                 r.get(5)?,
+                                r.get(6)?,
                             ))
                         },
                     )
@@ -753,7 +756,8 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
             && live.2.is_some()
             && live.3.is_some()
             && live.4.is_some()
-            && live.5.is_some(),
+            && live.5.is_some()
+            && live.6.is_some(),
         "the live path dropped columns the bulk path writes: {live:?}"
     );
 
@@ -762,9 +766,10 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
         .with_db(|conn| {
             conn.execute(
                 "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence,
-                                         Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
+                                         Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name,
+                                         Source)
                  VALUES ('2026-03-01','06:15:00','Turdus merula','Eurasian Blackbird',0.9,
-                         51.5074,-0.1278,0.7,9,1.25,0.0,'rec.wav')",
+                         51.5074,-0.1278,0.7,9,1.25,0.0,'rec.wav','cam1')",
                 [],
             )
         })

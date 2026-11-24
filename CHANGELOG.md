@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Which source heard a bird, in the live feed and in notifications (WP-06 of the 2026-11 audit, MSC-19).** The
+  `/api/v2/ws/detections` event carries `source`, and notification templates gain `$source`: the source's label,
+  its device, or a camera's host and port, as the public pages name it, never a stream address's password.
+- **The analytics copy knows each detection's source (MSC-06).** The DuckDB `detections` table gains `Source`,
+  written by the live insert and the sync. The sessions, funnel, assembly, sequence, next- and previous-species
+  and who-answers-whom queries take an optional source filter and a per-source partition, and their ten API routes
+  accept `?source=`. Defaults stay pooled, as before. **The first start after upgrading back-fills the column:** the
+  drift repair sees every day with a known source as changed and rebuilds it, as one full analytics rebuild on a
+  station with more than 60 such days.
 - **Today says what the first screen used to hide (WP-14 of the 2026-11 audit).** A standing notice under
   the hero when the station has no location ("Your station does not know where it is"), and another when the
   system reports its clock is not synchronised with a time server; both stay for as long as their cause does,
