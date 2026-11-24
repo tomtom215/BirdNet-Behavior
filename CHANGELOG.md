@@ -126,6 +126,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quarantined detection of one species in one second is kept, and an approved one names its source. A comment
   belongs to one detection; a comment written before this, on a second two sources share, is shown on both
   and marked. A station downgraded past migration 61 quarantines nothing: take a backup before upgrading.
+  The comments API takes an optional `file_name`; a comment that does not name it is placed on the one
+  detection of that date, time and species, refused with 409 when there are several, and 404 when there
+  is none (it was stored against the second).
 
 - **Kept raw audio leaves out speech.** With `RAW_AUDIO_KEEP_EVERY` set, a segment in which the human-sound
   rule masked speech is drained without a copy being kept, so the share kept can fall a little under one in N.
