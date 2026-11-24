@@ -350,11 +350,10 @@ fn render_body(f: &DataFacts) -> String {
         )
     };
 
-    const UNREAD: &str = "on a schedule that could not be read";
     let backups_every = match f.policy.map(|p| p.backup) {
         Some(birdnet_db::sqlite::BackupSchedule::Weekly) => "every 7 days",
         Some(birdnet_db::sqlite::BackupSchedule::Daily) => "every day",
-        None => UNREAD,
+        None => "on a schedule that could not be read",
     };
 
     // ── Stat strip — all four measured ────────────────────────────────────
