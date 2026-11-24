@@ -109,40 +109,13 @@ fn log_schedule(cli: &Cli, schedule_config: &ScheduleConfig) {
     }
 }
 
-/// Start the supervised audio-capture subsystem.
-///
-/// Returns a [`CaptureHandle`] that keeps recording alive until dropped, or
-/// `None` when no capture source is configured. Each source is supervised
-/// independently: a dead subprocess is restarted with exponential backoff,
-/// and a recording schedule (solar / fixed window) pauses and resumes capture
-/// instead of merely logging that it should.
-///
-/// ## Source resolution (O-13)
-///
-/// When `state` is `Some(_)`, an empty `audio_sources` table is first seeded
-/// from the CLI/config sources (see [`sources::seed_sources_from_config`]) so
-/// the table becomes the single source of truth — for the daemon and the web
-/// surface (live `/stream`, Listen, `/admin/audio`). Then:
-///
-/// 1. **Database-driven** (the normal path): the non-disabled `audio_sources`
-///    rows — what the admin UI's CRUD manages — are the source of truth.
-/// 2. **CLI/config fallback**: only when there is no `state` (a headless
-///    capture-only invocation) or the table is still empty (seeding found
-///    nothing / failed) does the BirdNET-Pi-style `--rtsp-url` /
-///    `--alsa-device` / `--pipewire-device` resolution drive capture directly.
-///
-/// A single info-level log line announces which path won, so the operator can
-/// diagnose "why is my CLI arg being ignored" from the first lines of the
-/// journal.
-pub fn start_capture_manager(
+/// Which sources capture records from: the seeding and the choice described
+/// under "Source resolution" on [`start_capture_manager`].
+fn capture_sources(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: Option<&birdnet_web::state::AppState>,
-    metrics: SharedMetrics,
-    status: CaptureStatusHandle,
-    control: CaptureControlHandle,
-    live_audio: Option<&LiveAudioHubHandle>,
-) -> Option<CaptureHandle> {
+) -> Vec<ResolvedSource> {
     // O-13: seed an empty audio_sources table from CLI/config first, so the
     // table is the single source of truth for capture and the web surface.
     if let Some(state) = state {
@@ -154,14 +127,21 @@ pub fn start_capture_manager(
             );
         }
     }
-    let sources: Vec<ResolvedSource> = if let Some(state) = state
+    if let Some(state) = state
         && let Some(db_sources) = resolve_sources_from_db(state)
-        && !db_sources.is_empty()
     {
-        tracing::info!(
-            count = db_sources.len(),
-            "capture sources resolved from audio_sources table (O-13)"
-        );
+        if db_sources.is_empty() {
+            tracing::warn!(
+                "every audio source has been removed on the Audio page, so nothing is recorded; \
+                 add one there to record again (the configuration file's sources are not used \
+                 once the page has held one)"
+            );
+        } else {
+            tracing::info!(
+                count = db_sources.len(),
+                "capture sources resolved from audio_sources table (O-13)"
+            );
+        }
         db_sources
     } else {
         let cli_sources = resolve_sources(cli, config);
@@ -183,7 +163,46 @@ pub fn start_capture_manager(
                 quiet: None,
             })
             .collect()
-    };
+    }
+}
+
+/// Start the supervised audio-capture subsystem.
+///
+/// Returns a [`CaptureHandle`] that keeps recording alive until dropped, or
+/// `None` when no capture source is configured. Each source is supervised
+/// independently: a dead subprocess is restarted with exponential backoff,
+/// and a recording schedule (solar / fixed window) pauses and resumes capture
+/// instead of merely logging that it should.
+///
+/// ## Source resolution (O-13)
+///
+/// When `state` is `Some(_)`, an `audio_sources` table that has never held a row is first seeded
+/// from the CLI/config sources (see [`sources::seed_sources_from_config`]) so
+/// the table becomes the single source of truth — for the daemon and the web
+/// surface (live `/stream`, Listen, `/admin/audio`). Then:
+///
+/// 1. **Database-driven** (the normal path): the non-disabled `audio_sources`
+///    rows — what the admin UI's CRUD manages — are the source of truth.
+/// 2. **CLI/config fallback**: only when there is no `state` (a headless
+///    capture-only invocation), the table has never held a row (seeding found
+///    nothing / failed) or it could not be read does the BirdNET-Pi-style
+///    `--rtsp-url` / `--alsa-device` / `--pipewire-device` resolution drive
+///    capture directly. A table whose rows were all removed records nothing
+///    (MSC-12).
+///
+/// A single info-level log line announces which path won, so the operator can
+/// diagnose "why is my CLI arg being ignored" from the first lines of the
+/// journal.
+pub fn start_capture_manager(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: Option<&birdnet_web::state::AppState>,
+    metrics: SharedMetrics,
+    status: CaptureStatusHandle,
+    control: CaptureControlHandle,
+    live_audio: Option<&LiveAudioHubHandle>,
+) -> Option<CaptureHandle> {
+    let sources = capture_sources(cli, config, state);
     if sources.is_empty() {
         return None;
     }
@@ -308,4 +327,58 @@ pub fn start_capture_manager(
         stop_signal,
         thread: Some(thread),
     })
+}
+
+#[cfg(test)]
+mod source_choice_tests {
+    use super::capture_sources;
+    use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
+    use clap::Parser as _;
+
+    /// A station whose config names a microphone and whose owner added one
+    /// source on the Audio page and then removed it.
+    fn station_with_every_source_removed() -> birdnet_web::state::AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = birdnet_web::state::AppState::from_connection(conn, ":memory:".into());
+        state
+            .with_db(|c| {
+                c.insert(&NewAudioSource::defaults(
+                    "src_cam",
+                    SourceKind::Rtsp,
+                    "rtsp://cam/live",
+                ))?;
+                c.soft_delete("src_cam")
+            })
+            .unwrap();
+        state
+    }
+
+    /// MSC-12: with every row removed, the list read as empty, so the config's
+    /// microphone was seeded again (or, the seed id taken, capture fell back to
+    /// the config under a legacy label): "I removed it" and it recorded again.
+    #[test]
+    fn removing_every_source_stops_capture() {
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        let cfg = birdnet_core::config::Config::parse("ALSA_CARD=plughw:2,0").unwrap();
+        let state = station_with_every_source_removed();
+        let chosen = capture_sources(&cli, Some(&cfg), Some(&state));
+        assert!(chosen.is_empty(), "{} source(s) resurrected", chosen.len());
+        let rows = state
+            .with_db(birdnet_db::audio_sources::AudioSourceStore::list)
+            .unwrap();
+        assert!(rows.is_empty(), "the config was seeded again: {rows:?}");
+    }
+
+    /// The counterpart: a table that has never held a row is still seeded
+    /// from the config, and capture records from it.
+    #[test]
+    fn a_new_station_is_seeded_from_its_config() {
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        let cfg = birdnet_core::config::Config::parse("ALSA_CARD=plughw:2,0").unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = birdnet_web::state::AppState::from_connection(conn, ":memory:".into());
+        assert_eq!(capture_sources(&cli, Some(&cfg), Some(&state)).len(), 1);
+    }
 }

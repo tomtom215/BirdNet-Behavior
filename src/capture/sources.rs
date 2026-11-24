@@ -240,7 +240,11 @@ pub(super) fn resolve_sources_from_db(
         .filter(|s| s.disabled_at.is_none())
         .collect();
     if active.is_empty() {
-        return None;
+        // Rows that were all removed are an instruction: record nothing. Only
+        // a table that never held a row hands capture to the CLI/config
+        // (MSC-12): falling back here brought a removed camera back at the
+        // next restart, under a legacy label no Audio-page row carries.
+        return (table_has_held_a_row(state) == Some(true)).then(Vec::new);
     }
 
     // Group by kind so we can apply the same `stream_id` "single-mic
@@ -467,19 +471,32 @@ pub(super) fn resolve_sources(
 /// (including one migration 15 seeded from a legacy `settings.audio_source`),
 /// so an operator's later edits or deletions through the admin UI are never
 /// re-seeded on the next start. Returns the number of rows seeded.
+/// Whether `audio_sources` has ever held a row, counting removed ones; `None`
+/// when it could not be read.
+fn table_has_held_a_row(state: &birdnet_web::state::AppState) -> Option<bool> {
+    state
+        .with_db(|conn| {
+            conn.query_row("SELECT EXISTS(SELECT 1 FROM audio_sources)", [], |r| {
+                r.get::<_, bool>(0)
+            })
+        })
+        .map_err(|e| tracing::warn!(error = %e, "audio_sources could not be read"))
+        .ok()
+}
+
 pub(super) fn seed_sources_from_config(
     state: &birdnet_web::state::AppState,
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) -> usize {
     use birdnet_db::audio_sources::AudioSourceStore;
-    // Only ever seed a completely empty table. A read error is treated as
-    // "already populated" so a transient failure can't double-seed — the
-    // CLI/config fallback in `start_capture_manager` still drives capture.
-    if !matches!(
-        state.with_db(|conn| AudioSourceStore::list(conn).map(|rows| rows.is_empty())),
-        Ok(true)
-    ) {
+    // Only ever seed a table that has never held a row, removed ones included:
+    // `list()` leaves out removed rows, so "every source removed" read as
+    // empty and the config's sources came back (MSC-12). A read error is
+    // treated as "already populated" so a transient failure can't
+    // double-seed — the CLI/config fallback in `start_capture_manager` still
+    // drives capture.
+    if table_has_held_a_row(state) != Some(false) {
         return 0;
     }
     let mut seeded = 0_usize;
