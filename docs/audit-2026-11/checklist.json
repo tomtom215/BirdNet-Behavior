@@ -126,8 +126,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:25",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae: Shedder alternates per source (stream id from the file name) with a count that outlives the sweep. Gate shedding_is_fair_across_sources red with the old per-sweep split restored (\"src_a had 10 of 10 segments analysed under shedding: [10, 0]\"); the conjecture held. The old split also never shed a lone source settling one segment per sweep: shedding_one_source_alone_sheds_every_second_segment red on it ([10] vs [5]). Per-source shed counts (birdnet_segments_shed_total{source}) not added."
   },
   {
    "id": "MSC-02",
@@ -162,8 +162,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:58",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "7bef7b7: migration 61 keys quarantine by (date, time, sci_name, COALESCE(file_name,'')) and adds source; all four QuarantineRecord sites write it; approve_quarantine copies it to detections.Source. Gate two_sources_quarantined_in_one_second_are_two_rows_and_keep_their_source (src/daemon/processor.rs) red on the unfixed code (1 row, not 2). Remaining: an approved detection still has no clip, because quarantine stores the tmpfs segment path the stream drain deletes after 600 s; keeping one needs a retention rule for rejected, deleted and pruned rows. Rows quarantined before migration 61 approve with Source NULL (never recorded)."
   },
   {
    "id": "MSC-05",
@@ -174,8 +174,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:70",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "0052bbf: migration 62 adds detection_comments.file_name, backfilled only where the triple names one clip; list/insert take the clip; an unnamed clip is resolved only when one detection is meant (else 404/409); legacy ambiguous comments are listed on each detection of the second with a note. Gate a_comment_on_one_sources_detection_is_not_listed_on_the_others (crates/birdnet-web/tests/a_comment_names_one_detection.rs) red on the unfixed code."
   },
   {
    "id": "MSC-06",
@@ -234,8 +234,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:119",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "5be0ece + 88528c3: birdnet_db::audio_sources::device_identity (ALSA plugin:card,dev and CARD=/DEV= forms, card names via /proc/asound/cards; URL credentials, port 554, host case, trailing slash); the Capture tab's create and update and the setup wizard's add_source all check; a failed read refuses on the Capture tab. Gates the_same_device_under_another_spelling_is_refused and an_edit_cannot_make_two_sources_one_device red with string equality restored; the_wizard_does_not_add_one_device_twice red on the unfixed wizard (4 rows, not 2). Not done: a USB mic added once as ALSA and once as the PipeWire default is not detected (no card mapping for PipeWire names). The field outcome (EBUSY vs doubled audio) was not probed."
   },
   {
    "id": "MSC-11",
@@ -246,8 +246,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:131",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae + 5be0ece + 017e0a5 (edit-panel layout): Channels analysed on the add and edit forms; PipeWire and network sources carry channel_pick and ffmpeg pan=mono|c0=c0/c1 ahead of the -af chain; the detail line prints RECORDED_BIT_DEPTH (16) and NETWORK_SAMPLE_RATE (48 kHz) for streams. Gates the_channel_picked_on_the_form_is_stored, a_picked_channel_reaches_the_ffmpeg_command and the_summary_line_states_the_audio_recorded red with each fix removed. bit_depth is kept as a column and no longer shown; the \"both, analysed separately\" option is not built. No real stereo device or camera was run."
   },
   {
    "id": "MSC-12",
@@ -258,8 +258,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:140",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae: seed only a table that has never held a row; rows existing with none active records nothing (warning in the journal); source choice moved to choose_capture_sources. Gate removed_sources_stay_removed_across_a_restart red with the old rule restored; counterpart a_never_used_table_is_still_seeded_from_config green both ways."
   },
   {
    "id": "MSC-13",
@@ -270,8 +270,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:149",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "5be0ece: re-adding a device that matches a removed row reinstates that row under its own id (AudioSourceStore::reinstate). Gate re_adding_a_removed_device_restores_its_source red with reinstatement off (new id). Remaining: editing an existing source's device_id still continues one id across two places; the proposed confirmation and audio_source_history table are not built."
   },
   {
    "id": "MSC-14",
@@ -318,8 +318,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:185",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d3cfae: filename_matches_stream and build_extraction_filename take the id as everything up to the final -HH:MM:SS. Gates filename_matcher_is_not_fooled_by_a_dashed_sibling_id and extraction_filename_keeps_a_dashed_source_id_whole red on the old code."
   },
   {
    "id": "MSC-18",
@@ -354,8 +354,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:212",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "5be0ece: a failed corroboration read renders an inline fault note in place of the card. Gate a_failed_read_of_the_other_sources_is_reported_as_a_failure (crates/birdnet-web/tests/also_heard_by_says_when_it_could_not_check.rs) red with unwrap_or_default restored. Remaining: the window is still a fixed 30 s; deriving it needs MSC-14's measured inter-source skew."
   },
   {
    "id": "MSC-21",
@@ -2420,6 +2420,18 @@
    "source": "docs/book/guide/reviews.md:16 (ACC-21, added 2026-11-23 by the WP-03 session)",
    "status": "done",
    "evidence": "54859c7: the 'What it holds' cell listed only detections that failed a stricter per-species threshold, while the night-time and unset-clock reasons already wrote rows; the table now says 'held back from the log, each with its reason', and a paragraph below it names the five reasons, including the new 'Unlikely here' (a list in the cell made a column several screens tall on a phone, seen in a 390x844 screenshot). Found while correcting the page for ACC-01; documentation only, no gate."
+  },
+  {
+   "id": "MSC-22",
+   "title": "Relabelling a detection leaves its comments under the old species name",
+   "severity": "low",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "WP-04",
+   "phase": 1,
+   "source": "docs/TECH_DEBT.md TD-9 (narrowed by 0052bbf); found while fixing MSC-05",
+   "status": "open",
+   "evidence": "Reviews follow a relabel through a trigger; detection_comments has none, so a comment keyed by (date, time, sci_name, file_name) is orphaned when sci_name changes. Read, not tested."
   }
  ]
 }
