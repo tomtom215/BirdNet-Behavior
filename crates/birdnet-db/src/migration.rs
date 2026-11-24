@@ -2694,6 +2694,49 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
         CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
     },
+    Migration {
+        version: 62,
+        description: "A comment names one detection, by its clip; comments that name more than one stay on the second",
+        // MSC-05. `detection_comments` (migration 49) named its detection by
+        // `(date, time, sci_name)`. Two sources that hear one bird in one second
+        // write two detections that differ only in their clip, so a note written
+        // on the garden microphone's row ("the neighbour's dog, not a tawny owl")
+        // appeared on the camera's row, which may be a real owl. Migration 59
+        // moved reviews to the clip; this does the same for comments.
+        //
+        // `file_name` holds the detection's `COALESCE(File_Name, '')`, the way
+        // `detection_reviews.file_name` and `DetectionKey` compare: `''` is a
+        // detection with no clip. NULL is a third state and means "written before
+        // comments named a clip, and its clip cannot be told". A legacy comment is
+        // given its clip only where its triple names exactly one detection
+        // (counted by distinct clip, as migration 59 counts). Where it names more
+        // than one, there is no telling which the writer meant; it stays NULL and
+        // is listed on every detection of that second, marked as possibly about
+        // another source's, rather than hidden or guessed. Where it names none,
+        // its detection was deleted or relabelled, and it stays NULL as well.
+        //
+        // No row is deleted and no text changes, so this is not a history rewrite.
+        // The append-only trigger is recreated with `file_name` among the columns
+        // it locks, after the backfill: a comment must not be moved to another
+        // detection after it is written, any more than its text rewritten.
+        up_sql: "ALTER TABLE detection_comments ADD COLUMN file_name TEXT;
+        UPDATE detection_comments
+           SET file_name = (SELECT MIN(COALESCE(d.File_Name, '')) FROM detections d
+                             WHERE d.Date = detection_comments.date
+                               AND d.Time = detection_comments.time
+                               AND d.Sci_Name = detection_comments.sci_name)
+         WHERE (SELECT COUNT(DISTINCT COALESCE(d.File_Name, '')) FROM detections d
+                 WHERE d.Date = detection_comments.date
+                   AND d.Time = detection_comments.time
+                   AND d.Sci_Name = detection_comments.sci_name) = 1;
+        DROP TRIGGER IF EXISTS detection_comments_are_append_only;
+        CREATE TRIGGER detection_comments_are_append_only
+            BEFORE UPDATE OF id, date, time, sci_name, file_name, author, body, at
+            ON detection_comments
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -4593,6 +4636,66 @@ mod tests {
             insert("/tmp/a.wav").is_err(),
             "the same recording of the same second is still one row"
         );
+    }
+
+    /// Migration 62 gives a legacy comment its clip only where its date, time
+    /// and species name exactly one detection; a comment on a second two
+    /// sources share, or on a detection that is gone, keeps no clip. After it,
+    /// a comment's clip is as locked as its text.
+    #[test]
+    fn migration_62_attaches_a_comment_only_to_the_one_detection_it_can_mean() {
+        let conn = memory_db_at_version(61);
+        for (time, file) in [
+            ("06:00:00", Some("only.wav")),
+            ("06:00:03", None),
+            ("06:00:06", Some("garden.wav")),
+            ("06:00:06", Some("camera.wav")),
+        ] {
+            conn.execute(
+                "INSERT INTO detections
+                    (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-05-01', ?1, 'Strix aluco', 'Tawny Owl', 0.9, ?2, 0)",
+                rusqlite::params![time, file],
+            )
+            .unwrap();
+        }
+        for time in ["06:00:00", "06:00:03", "06:00:06", "06:00:09"] {
+            conn.execute(
+                "INSERT INTO detection_comments (date, time, sci_name, author, body)
+                 VALUES ('2026-05-01', ?1, 'Strix aluco', 'ada', 'a note')",
+                [time],
+            )
+            .unwrap();
+        }
+
+        let m62 = MIGRATIONS.iter().find(|m| m.version == 62).unwrap();
+        conn.execute_batch(m62.up_sql).unwrap();
+
+        let clips: Vec<(String, Option<String>)> = conn
+            .prepare("SELECT time, file_name FROM detection_comments ORDER BY time")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            clips,
+            [
+                ("06:00:00".to_owned(), Some("only.wav".to_owned())),
+                ("06:00:03".to_owned(), Some(String::new())),
+                ("06:00:06".to_owned(), None),
+                ("06:00:09".to_owned(), None),
+            ],
+            "one detection: its clip ('' for none); two: none; none: none"
+        );
+
+        let err = conn
+            .execute(
+                "UPDATE detection_comments SET file_name = 'camera.wav' WHERE time = '06:00:06'",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{err}");
     }
 
     fn verdict_at(conn: &Connection, time: &str) -> Option<String> {

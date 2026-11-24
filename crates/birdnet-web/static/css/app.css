@@ -4326,6 +4326,9 @@ a.dr-row-name  { font-weight: var(--fw-semibold); color: var(--fg); }
    cannot push the card wider than the phone it is read on. */
 .dc-body        { margin: 0.25rem 0 0; white-space: pre-wrap; overflow-wrap: break-word; }
 .dc-empty       { margin: 0.75rem 0 0; }
+/* A comment written before comments named one recording, on a second two
+   sources share: shown on each, and says so. */
+.dc-legacy      { margin: 0.25rem 0 0; font-size: var(--fs-md); }
 .dc-problem     { margin: 0.75rem 0 0; color: var(--danger); }
 .dc-form        { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; align-items: flex-start; }
 .dc-form textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 0.5rem;

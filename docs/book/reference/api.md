@@ -504,6 +504,17 @@ curl "http://localhost:8502/api/v2/detections/comments?date=2026-09-03&time=06:1
   -H "Authorization: Bearer $BNB_API_TOKEN"
 ```
 
+A comment is about one detection, named as the lock and review endpoints name it:
+date, time, scientific name and `file_name` (`""` for a detection with no clip).
+Two sources that hear one bird in the same second make two detections that
+differ only in `file_name`, and each has its own thread. A `POST` without
+`file_name` is accepted when the date, time and name leave one detection, and
+answered `409` when they leave more (`404` when none). A `GET` with `file_name`
+lists that detection's thread; without it, every comment on that second. A
+comment whose `file_name` is `null` was written before comments named a clip, on
+a second more than one detection shares; it is listed on each of them, since
+which one it was about cannot be told.
+
 ### Batches
 
 One round trip instead of forty, for the case that actually comes up: triaging
