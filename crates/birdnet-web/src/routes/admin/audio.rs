@@ -28,8 +28,8 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 
 use birdnet_db::audio_sources::{
-    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
-    PipelineFlags, RtspMediaMode, RtspTransport, SourceKind,
+    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, Channels, NewAudioSource,
+    PipelineFlags, RtspMediaMode, RtspTransport, SourceKind, device_identity,
 };
 
 use birdnet_core::audio::eq::EqChain;
@@ -292,6 +292,10 @@ struct CreateForm {
     label: Option<String>,
     #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
     sample_rate: Option<u32>,
+    /// `mono`, `left`, `right` or `stereo`: which of the device's channels
+    /// are analysed (MSC-11).
+    #[serde(default, deserialize_with = "crate::routes::form::blank_is_none")]
+    channels: Option<String>,
     #[serde(default)]
     rtsp_transport: Option<String>,
     /// `full` or `audio`: which of a camera's tracks to request.
@@ -519,16 +523,42 @@ async fn create(
             // enforces uniqueness on the synthetic `id` (freshly generated here), so
             // without this an operator who can't tell the save registered just clicks
             // "Save" again and silently ends up with the same mic/stream listed twice.
-            let already_configured = state
-                .with_read_db(AudioSourceStore::list)
-                .unwrap_or_default()
+            // Compared as devices, not strings (MSC-10): `hw:1,0` and `plughw:1,0`
+            // are one card, and a camera URL with its password is the same camera.
+            // A failed read refuses rather than assuming there is nothing to clash
+            // with.
+            let rows = match state.with_read_db(AudioSourceStore::list_including_removed) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::error!(error = %e, "audio sources could not be read");
+                    return internal_response(
+                        "Could not check the sources already configured; nothing was added.",
+                    );
+                }
+            };
+            let cards = alsa_cards();
+            let identity = device_identity(kind, &device_id, cards.as_deref());
+            let same_device = |s: &&AudioSource| {
+                s.kind == kind
+                    && device_identity(s.kind, &s.device_id, cards.as_deref()) == identity
+            };
+            if let Some(existing) = rows
                 .iter()
-                .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
-            if already_configured {
+                .filter(|s| s.disabled_at.is_none())
+                .find(same_device)
+            {
                 return validation_response(&format!(
-                    "“{device_id}” is already configured — see the list below."
+                    "That device is already configured as “{}” — see the list below.",
+                    public_name(existing)
                 ));
             }
+            // A removed source of this device comes back under its own id, so its
+            // detections, classifier route and filters continue (MSC-13).
+            let removed = rows
+                .iter()
+                .filter(|s| s.disabled_at.is_some())
+                .rfind(same_device)
+                .map(|s| s.id.clone());
 
             let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
             new.label = form.label.and_then(|s| {
@@ -542,6 +572,12 @@ async fn create(
             if let Some(rate) = form.sample_rate {
                 // Constrained by the SQL CHECK; the form select limits it to safe values.
                 new.sample_rate = rate;
+            }
+            if let Some(channels) = form.channels.as_deref() {
+                match channels.parse::<Channels>() {
+                    Ok(c) => new.channels = c,
+                    Err(_) => return validation_response("Unknown channel setting."),
+                }
             }
             if let Some(transport) = form.rtsp_transport.as_deref() {
                 match transport.parse::<RtspTransport>() {
@@ -576,7 +612,11 @@ async fn create(
                 Err(msg) => return validation_response(&msg),
             }
 
-            let result = state.with_db(|conn| conn.insert(&new));
+            let result = state.with_db(|conn| {
+                removed
+                    .as_deref()
+                    .map_or_else(|| conn.insert(&new), |id| conn.reinstate(id, &new))
+            });
             match result {
                 Ok(row) => {
                     // The device id, not the label: a label is cosmetic and a device
@@ -848,6 +888,29 @@ async fn update(
                         if let Err(msg) = check_stream_url(row.kind, &device_id) {
                             return validation_response(&msg);
                         }
+                        // The same rule as adding one (MSC-10): an edit cannot
+                        // point this source at another active source's device.
+                        let others = match state.with_read_db(AudioSourceStore::list) {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                tracing::error!(error = %e, "audio sources could not be read");
+                                return internal_response(
+                                    "Could not check the sources already configured; nothing was saved.",
+                                );
+                            }
+                        };
+                        let cards = alsa_cards();
+                        let identity = device_identity(row.kind, &device_id, cards.as_deref());
+                        if let Some(other) = others.iter().find(|s| {
+                            s.id != row.id
+                                && s.kind == row.kind
+                                && device_identity(s.kind, &s.device_id, cards.as_deref()) == identity
+                        }) {
+                            return validation_response(&format!(
+                                "That device is already configured as “{}”.",
+                                public_name(other)
+                            ));
+                        }
                     }
                     Ok(None) => return not_found_row(&id),
                     Err(err) => {
@@ -870,6 +933,12 @@ async fn update(
             }
             if let Some(rate) = form.sample_rate {
                 patch.sample_rate = Some(rate);
+            }
+            if let Some(channels) = form.channels.as_deref() {
+                match channels.parse::<Channels>() {
+                    Ok(c) => patch.channels = Some(c),
+                    Err(_) => return validation_response("Unknown channel setting."),
+                }
             }
             if let Some(transport) = form.rtsp_transport.as_deref() {
                 match transport.parse::<RtspTransport>() {
@@ -1158,6 +1227,7 @@ fn render_body(
     // "Add stream" form lived inside the hidden RTSP section, so it was
     // unreachable. The counts below are refreshed in place via `count_oobs`.
     PAGE_TPL
+        .replace("{{channel_hint}}", CHANNEL_HINT)
         .replace("{{rows_local}}", &rows_local)
         .replace("{{rows_rtsp}}", &rows_rtsp)
         .replace(
@@ -1321,6 +1391,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         <code>sunrise-15</code>) follows the season, which is usually what you mean.
         Leave both blank for none.</p>
     </div>
+    {channel_field}
     {rtsp_fields}
     <div class="aud-edit-pipeline">
       <input type="hidden" name="pipeline_present" value="1">
@@ -1376,12 +1447,44 @@ fn render_edit_form(row: &AudioSource) -> String {
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
         eq_chain = escape_html(&row.eq_chain),
+        channel_field = render_channel_field(row),
         high_pass_checked = high_pass_checked,
         dc_removal_checked = dc_removal_checked,
         agc_checked = agc_checked,
         rtsp_keepalive_checked = rtsp_keepalive_checked,
     )
 }
+
+/// The edit form's channel choice (MSC-11). Stored before it was settable:
+/// the start-up warning told an operator to pick Left or Right, and no form
+/// offered either.
+fn render_channel_field(row: &AudioSource) -> String {
+    let sel = |on: bool| if on { " selected" } else { "" };
+    format!(
+        r#"<div class="aud-edit-channels">
+      <span class="aud-edit-pair">
+        <label for="ch-{id}">Channels analysed</label>
+        <select id="ch-{id}" name="channels">
+          <option value="mono"{mono}>Mono</option>
+          <option value="left"{left}>Left channel only</option>
+          <option value="right"{right}>Right channel only</option>
+          <option value="stereo"{stereo}>Both, averaged</option>
+        </select>
+      </span>
+      <p class="hint">{CHANNEL_HINT}</p>
+    </div>"#,
+        id = escape_html(&row.id),
+        mono = sel(row.channels == Channels::Mono),
+        left = sel(row.channels == Channels::Left),
+        right = sel(row.channels == Channels::Right),
+        stereo = sel(row.channels == Channels::Stereo),
+    )
+}
+
+/// What the channel choice does, said once for the add and edit forms.
+const CHANNEL_HINT: &str = "For a stereo microphone or camera. Left or Right analyses that \
+    channel alone. Both, averaged mixes them, which on a pair of microphones set apart \
+    cancels some of each call; pick one side unless the two capsules sit together.";
 
 /// The camera-stream controls of an RTSP row's edit form: transport and media
 /// mode. Both were settable only when the stream was added — the update
@@ -1425,13 +1528,21 @@ fn render_rtsp_fields(row: &AudioSource) -> String {
 ///
 /// `pub(crate)` for the same reason as [`kind_label`] — the onboarding
 /// wizard shows the operator's real capture settings rather than a
-/// plausible-looking constant.
+/// plausible-looking constant. So the rate and depth are what capture
+/// records, not what the row stores: a network stream is always resampled
+/// to [`birdnet_core::audio::capture::NETWORK_SAMPLE_RATE`], and every source is recorded at
+/// [`birdnet_core::audio::capture::RECORDED_BIT_DEPTH`] whatever `bit_depth` holds (MSC-11).
 pub(crate) fn detail_for(s: &AudioSource) -> String {
-    let rate_khz = f64::from(s.sample_rate) / 1000.0;
+    use birdnet_core::audio::capture::{NETWORK_SAMPLE_RATE, RECORDED_BIT_DEPTH};
+    let rate = if s.kind == SourceKind::Rtsp {
+        NETWORK_SAMPLE_RATE
+    } else {
+        s.sample_rate
+    };
+    let rate_khz = f64::from(rate) / 1000.0;
     let mut out = format!(
-        "{rate_khz:.1} kHz · {channels} · {bit}-bit",
+        "{rate_khz:.1} kHz · {channels} · {RECORDED_BIT_DEPTH}-bit",
         channels = s.channels.as_str(),
-        bit = s.bit_depth,
     );
     // Stereo is the one channel setting that can quietly cost detections, so
     // it says so where the operator chose it. Both channels are kept and the
@@ -1482,6 +1593,13 @@ fn meta_for(s: &AudioSource) -> String {
         || format!("added {}", s.created_at),
         |ts| format!("disabled {ts}"),
     )
+}
+
+/// The text of `/proc/asound/cards`, for resolving a card name to its index
+/// when two ALSA spellings are compared. `None` off Linux or without ALSA, in
+/// which case a card name only equals the same name.
+fn alsa_cards() -> Option<String> {
+    std::fs::read_to_string("/proc/asound/cards").ok()
 }
 
 pub(crate) fn synth_id(kind: SourceKind) -> String {
@@ -1667,6 +1785,7 @@ mod tests {
             device_id: device.to_string(),
             label: None,
             sample_rate: None,
+            channels: None,
             rtsp_transport: None,
             media_mode: None,
             quiet_start: None,
@@ -2098,6 +2217,7 @@ mod tests {
             device_id: "plughw:2,0".to_string(),
             label: None,
             sample_rate: None,
+            channels: None,
             rtsp_transport: None,
             media_mode: None,
             quiet_start: None,
@@ -2192,6 +2312,7 @@ mod tests {
             device_id: "plughw:1,0".to_string(),
             label: None,
             sample_rate: None,
+            channels: None,
             rtsp_transport: None,
             media_mode: None,
             quiet_start: None,
@@ -2204,6 +2325,213 @@ mod tests {
         assert_refused(&second);
         let count = state.with_db(AudioSourceStore::list).unwrap().len();
         assert_eq!(count, 1, "only one row persisted");
+    }
+
+    /// Send a form to this module's router as the seed admin, the way the
+    /// page's htmx does.
+    async fn send_form(state: &AppState, method: &str, uri: &str, body: &str) -> Response {
+        use tower::ServiceExt as _;
+        let req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("hx-request", "true")
+            .extension(actor(state))
+            .body(axum::body::Body::from(body.to_owned()))
+            .expect("request");
+        router()
+            .with_state(state.clone())
+            .oneshot(req)
+            .await
+            .expect("router responds")
+    }
+
+    fn active_devices(state: &AppState) -> Vec<String> {
+        state
+            .with_db(AudioSourceStore::list)
+            .expect("list")
+            .into_iter()
+            .map(|s| s.device_id)
+            .collect()
+    }
+
+    /// MSC-10. One physical device under another spelling is still one device:
+    /// `hw:` and `plughw:` name the same card and device, and a camera URL
+    /// with credentials, the default port or a trailing slash is the same
+    /// camera.
+    #[tokio::test]
+    async fn the_same_device_under_another_spelling_is_refused() {
+        let (_d, state) = fixture();
+        let ok = send_form(
+            &state,
+            "POST",
+            "/admin/audio/sources",
+            "kind=usb-alsa&device_id=plughw%3A1%2C0",
+        )
+        .await;
+        assert_eq!(ok.status(), StatusCode::OK);
+        let again = send_form(
+            &state,
+            "POST",
+            "/admin/audio/sources",
+            "kind=usb-alsa&device_id=hw%3A1%2C0",
+        )
+        .await;
+        assert_refused(&again);
+        let cam = send_form(
+            &state,
+            "POST",
+            "/admin/audio/sources",
+            "kind=rtsp&device_id=rtsp%3A%2F%2Fcam.local%2Flive",
+        )
+        .await;
+        assert_eq!(cam.status(), StatusCode::OK);
+        let cam_again = send_form(
+            &state,
+            "POST",
+            "/admin/audio/sources",
+            "kind=rtsp&device_id=rtsp%3A%2F%2Fuser%3Apw%40CAM.local%3A554%2Flive%2F",
+        )
+        .await;
+        assert_refused(&cam_again);
+        assert_eq!(
+            active_devices(&state).len(),
+            2,
+            "{:?}",
+            active_devices(&state)
+        );
+    }
+
+    /// MSC-10. An edit cannot point one source at another source's device.
+    #[tokio::test]
+    async fn an_edit_cannot_make_two_sources_one_device() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_a", SourceKind::Rtsp, "rtsp://cam-a.local/live");
+        insert_one(&state, "src_b", SourceKind::Rtsp, "rtsp://cam-b.local/live");
+        let res = send_form(
+            &state,
+            "PATCH",
+            "/admin/audio/sources/src_b",
+            "kind=rtsp&device_id=rtsp%3A%2F%2Fcam-a.local%2Flive",
+        )
+        .await;
+        assert_refused(&res);
+        let b = state.with_db(|c| c.get("src_b")).unwrap().unwrap();
+        assert_eq!(b.device_id, "rtsp://cam-b.local/live");
+    }
+
+    /// MSC-10, counterpart. Different devices are still both accepted, and an
+    /// edit that keeps a source's own device is not refused as a duplicate
+    /// of itself.
+    #[tokio::test]
+    async fn different_devices_and_a_self_edit_are_accepted() {
+        let (_d, state) = fixture();
+        for body in [
+            "kind=usb-alsa&device_id=plughw%3A1%2C0",
+            "kind=usb-alsa&device_id=plughw%3A2%2C0",
+            "kind=usb-alsa&device_id=plughw%3A1%2C1",
+            "kind=rtsp&device_id=rtsp%3A%2F%2Fcam.local%2Flive",
+            "kind=rtsp&device_id=rtsp%3A%2F%2Fcam.local%2Fsub",
+            "kind=rtsp&device_id=rtsp%3A%2F%2Fcam.local%3A8554%2Flive",
+        ] {
+            let res = send_form(&state, "POST", "/admin/audio/sources", body).await;
+            assert!(
+                res.headers().get("hx-reswap").is_none(),
+                "{body} was refused"
+            );
+        }
+        assert_eq!(active_devices(&state).len(), 6);
+        let id = state
+            .with_db(AudioSourceStore::list)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.device_id == "plughw:1,0")
+            .expect("the first microphone")
+            .id;
+        let res = send_form(
+            &state,
+            "PATCH",
+            &format!("/admin/audio/sources/{id}"),
+            "kind=usb-alsa&device_id=hw%3A1%2C0&label=Garden",
+        )
+        .await;
+        assert!(
+            res.headers().get("hx-reswap").is_none(),
+            "a self-edit was refused"
+        );
+    }
+
+    /// MSC-13. Removing a microphone and adding it again brings back the
+    /// same source, so its history, classifier route and filters continue.
+    #[tokio::test]
+    async fn re_adding_a_removed_device_restores_its_source() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_usb_1", SourceKind::UsbAlsa, "plughw:2,0");
+        state.with_db(|c| c.soft_delete("src_usb_1")).unwrap();
+        let res = send_form(
+            &state,
+            "POST",
+            "/admin/audio/sources",
+            "kind=usb-alsa&device_id=plughw%3A2%2C0",
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let active = state.with_db(AudioSourceStore::list).unwrap();
+        assert_eq!(
+            active.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["src_usb_1"],
+            "a re-added device was given a new identity"
+        );
+    }
+
+    /// MSC-11. The channel an operator picks on the form is stored, on create
+    /// and on edit.
+    #[tokio::test]
+    async fn the_channel_picked_on_the_form_is_stored() {
+        let (_d, state) = fixture();
+        let res = send_form(
+            &state,
+            "POST",
+            "/admin/audio/sources",
+            "kind=usb-alsa&device_id=plughw%3A1%2C0&channels=left",
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let row = state.with_db(AudioSourceStore::list).unwrap().remove(0);
+        assert_eq!(row.channels, birdnet_db::audio_sources::Channels::Left);
+        let res = send_form(
+            &state,
+            "PATCH",
+            &format!("/admin/audio/sources/{}", row.id),
+            "kind=usb-alsa&device_id=plughw%3A1%2C0&channels=right",
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let row = state.with_db(|c| c.get(&row.id)).unwrap().unwrap();
+        assert_eq!(row.channels, birdnet_db::audio_sources::Channels::Right);
+    }
+
+    /// MSC-11. The summary line states the audio that is recorded: capture
+    /// writes 16-bit samples whatever `bit_depth` holds, and a network stream
+    /// is resampled to 48 kHz whatever rate its row holds.
+    #[test]
+    fn the_summary_line_states_the_audio_recorded() {
+        let (_d, state) = fixture();
+        let mic = insert_one(&state, "src_m", SourceKind::UsbAlsa, "plughw:1,0");
+        assert_eq!(mic.bit_depth, 24, "precondition: the stored default");
+        let detail = detail_for(&mic);
+        assert!(
+            detail.contains("16-bit") && !detail.contains("24-bit"),
+            "{detail}"
+        );
+        let mut cam = insert_one(&state, "src_c", SourceKind::Rtsp, "rtsp://cam.local/live");
+        cam.sample_rate = 44_100;
+        let detail = detail_for(&cam);
+        assert!(detail.contains("48.0 kHz"), "{detail}");
+        // Counterpart: a microphone is opened at its own row's rate.
+        let mut mic = mic;
+        mic.sample_rate = 44_100;
+        assert!(detail_for(&mic).contains("44.1 kHz"));
     }
 
     #[tokio::test]
