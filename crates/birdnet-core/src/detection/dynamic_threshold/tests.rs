@@ -480,3 +480,21 @@ fn the_handle_delivers_requests_once_in_order() {
     );
     assert!(h.drain().is_empty(), "a request was delivered twice");
 }
+
+/// Audit ACC-05: switched on and otherwise left at its defaults, three
+/// confirmations a cooldown apart — half an hour of a repeating sound the
+/// classifier maps to one plausible species — must not take a 0.70 station
+/// below 0.5. The default floor was 0.25, a V2.4 logit of −1.46 at the default
+/// sensitivity, with no precision evidence behind it.
+#[test]
+fn half_an_hour_of_confirmations_leaves_a_default_station_at_or_above_one_half() {
+    let mut d = DynamicThresholds::new(DynamicThresholdConfig {
+        enabled: true,
+        ..DynamicThresholdConfig::default()
+    });
+    for i in 0..3 {
+        d.observe("Pica pica", 0.85, i * LEARN_COOLDOWN_MS);
+    }
+    let t = d.effective_threshold("Pica pica", 0.70, 2 * LEARN_COOLDOWN_MS + 1);
+    assert!(t >= 0.5, "the effective threshold fell to {t}");
+}

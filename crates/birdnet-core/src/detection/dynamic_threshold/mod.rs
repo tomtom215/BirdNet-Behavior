@@ -41,7 +41,8 @@
 //! | 3 | 0.25 | 0.175 |
 //!
 //! floored at [`DynamicThresholdConfig::min`], which is a hard floor and not a
-//! suggestion.
+//! suggestion. With the default floor of 0.50, a 0.70 base stops at 0.50 from
+//! level 2.
 //!
 //! # Why one song cannot reach level 3
 //!
@@ -49,7 +50,7 @@
 //! overlapping windows. Without a guard, that one song would advance the
 //! species three levels in under a second — a station would reach the floor on
 //! its first bird and stay there. [`LEARN_COOLDOWN_MS`] is the guard: a species
-//! can advance at most once per cooldown, so reaching the floor takes three
+//! can advance at most once per cooldown, so reaching level 3 takes three
 //! separate confirmations spread across the day rather than one bird.
 //!
 //! # It expires
@@ -124,17 +125,23 @@ impl Default for DynamicThresholdConfig {
     /// Off, with the values a station would get if it switched this on and
     /// changed nothing else.
     ///
-    /// `trigger` at 0.80 is well above a 0.70 global threshold (BirdNET-Pi's default;
-    /// this station's is 0.75), so a
-    /// confirmation means the model was confident rather than merely willing.
-    /// `min` at 0.25 is the floor a 0.70 base reaches at level 3 anyway, so the
-    /// default floor binds only for a station that has *raised* its global
-    /// threshold — which is exactly the station that meant it.
+    /// `trigger` at 0.80 is well above the 0.70 global threshold (BirdNET-Pi's
+    /// default, and this station's), so a confirmation means the model was
+    /// confident rather than merely willing.
+    ///
+    /// `min` at 0.50 binds from level 2 on a 0.70 base (0.70 × 0.50 = 0.35).
+    /// It was 0.25, which three confirmations a cooldown apart reach in half an
+    /// hour — a logit of −1.46 on V2.4 at the default sensitivity, with no
+    /// precision evidence behind it — and a repeating non-bird sound that the
+    /// classifier maps to a locally plausible species (`birdnet-db`'s
+    /// `phantoms.rs`) survives
+    /// every gate that guards a confirmation (audit ACC-05). The floor is what
+    /// bounds that, so it is set where the score still says more yes than no.
     fn default() -> Self {
         Self {
             enabled: false,
             trigger: 0.80,
-            min: 0.25,
+            min: 0.50,
             valid_hours: 24,
         }
     }
