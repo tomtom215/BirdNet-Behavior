@@ -1297,7 +1297,7 @@ async fn mic_test(HtmxForm(form): HtmxForm<MicTestForm>) -> Response {
             "ok": true,
             "rms_dbfs": (level.rms_dbfs * 10.0).round() / 10.0,
             "peak_dbfs": (level.peak_dbfs * 10.0).round() / 10.0,
-            "message": level_message(level.rms_dbfs),
+            "message": level_message(level.rms_dbfs, level.peak_dbfs),
         }),
         Ok(Err(message)) => serde_json::json!({ "ok": false, "message": message }),
         Err(e) => {
@@ -1323,11 +1323,22 @@ struct MicTestForm {
     device: String,
 }
 
-/// What a level means, in a sentence. The cut-offs are judgement, not
+/// A peak at or above this, in dBFS, is graded as clipping. One dB short of full
+/// scale rather than at it, because a 16-bit sample's positive limit is 32 767
+/// (a hair under 0 dBFS) and a converter driven into its rails often stops a
+/// fraction short of them; a recording that reaches -1 dBFS is in any case one
+/// louder call away from losing samples for good.
+const CLIPPING_PEAK_DBFS: f64 = -1.0;
+
+/// What a level means, in a sentence. The RMS cut-offs are judgement, not
 /// calibration: they separate "nothing arrived" from "something did", and say
-/// nothing about whether the microphone is good.
-fn level_message(rms_dbfs: f64) -> &'static str {
-    if rms_dbfs <= -80.0 {
+/// nothing about whether the microphone is good. The peak is judged first:
+/// a clipped sample cannot be recovered by any later setting, whatever the
+/// average level was.
+fn level_message(rms_dbfs: f64, peak_dbfs: f64) -> &'static str {
+    if peak_dbfs >= CLIPPING_PEAK_DBFS {
+        "Clipping — turn the gain down. The loudest sound reached full scale, and a clipped recording cannot be repaired."
+    } else if rms_dbfs <= -80.0 {
         "Silent. Check the microphone is plugged in and not muted."
     } else if rms_dbfs <= -60.0 {
         "Very quiet. Normal in a quiet room; it is picking something up."
@@ -2347,6 +2358,38 @@ static ONBOARDING_DONE_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A peak at or above -1 dBFS is clipping, whatever the RMS says (OOB-05): the
+    /// test computed the peak and never judged it, so a microphone driven into
+    /// full scale was told "Loud" or "Picking up sound".
+    #[test]
+    fn a_peak_at_full_scale_is_called_clipping() {
+        for (rms, peak) in [(-20.0, 0.0), (-45.0, -0.5), (-35.0, -1.0), (-70.0, 0.0)] {
+            let message = level_message(rms, peak);
+            assert!(
+                message.starts_with("Clipping — turn the gain down"),
+                "rms {rms} dBFS, peak {peak} dBFS: {message}"
+            );
+        }
+    }
+
+    /// The counterpart: a peak under -1 dBFS is not clipping, and the RMS grades
+    /// are what they were.
+    #[test]
+    fn a_peak_under_minus_one_dbfs_is_graded_by_its_rms() {
+        for (rms, peak, expected) in [
+            (-20.0, -6.0, "Loud"),
+            (-40.0, -1.1, "Picking up sound."),
+            (-65.0, -30.0, "Very quiet"),
+            (-95.0, -90.0, "Silent"),
+        ] {
+            let message = level_message(rms, peak);
+            assert!(
+                message.starts_with(expected) && !message.contains("lipping"),
+                "rms {rms} dBFS, peak {peak} dBFS: {message}"
+            );
+        }
+    }
 
     /// The microphone test records only from a card the station listed: a device
     /// string that is not in the list is refused (nothing reaches `arecord`), one
