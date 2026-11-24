@@ -458,6 +458,48 @@ async function livePlayButtons(page) {
   check('live feed: ▶ plays the clip', plays === 1, `play() called ${plays} time(s)`);
 }
 
+/** On Recordings, ▶ is there before the pointer is (UIR-10).
+ *
+ * The row's actions faded in on `:hover` wherever the device can hover, so at a
+ * desktop width the page called "Listen in" showed no way to listen until the
+ * pointer happened to cross a row; every `Play …` button reported
+ * `checkVisibility() === false` at rest. Play is the row's primary action and is
+ * always drawn; the secondary ones may wait for hover or focus. Graded at 1280
+ * with the pointer never moved over the list, as painted: `checkVisibility` with
+ * the opacity and visibility properties, and the opacity of every ancestor.
+ */
+async function recordingsPlayAtRest(page) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${BASE}/recordings`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.rc-row', { timeout: 8000 }).catch(() => {});
+  const seen = (sel) => page.evaluate((sel) => {
+    const row = document.querySelector('.rc-row');
+    const el = row && row.querySelector(sel);
+    if (!el) return { found: false };
+    let opacity = 1;
+    for (let n = el; n; n = n.parentElement) opacity *= parseFloat(getComputedStyle(n).opacity);
+    const r = el.getBoundingClientRect();
+    return {
+      found: true,
+      visible: el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && opacity > 0.5 && r.width > 0 && r.height > 0,
+      opacity: opacity.toFixed(2),
+      label: el.getAttribute('aria-label'),
+    };
+  }, sel);
+  const play = await seen('button[aria-label^="Play"]');
+  check('recordings: the first row has a Play button', play.found, 'no button[aria-label^="Play"] in the first .rc-row');
+  if (!play.found) return;
+  check('recordings: Play is visible with no pointer over the row', play.visible, `"${play.label}" paints at opacity ${play.opacity}`);
+  // Counterpart: the row is still the one a pointer reaches, and hovering it keeps Play
+  // and brings the secondary actions in, so the check above is not passing on a row the
+  // page never draws its actions in at all.
+  await page.hover('.rc-row');
+  await page.waitForTimeout(400);
+  const playHover = await seen('button[aria-label^="Play"]');
+  const del = await seen('button[aria-label^="Download"], a[aria-label^="Download"]');
+  check('recordings: hovering the row keeps Play and shows Download', playHover.visible && del.found && del.visible, `Play ${playHover.opacity}, Download ${del.found ? del.opacity : 'missing'}`);
+}
+
 /** Enter in Today's search filters in place instead of reloading the page. */
 async function todaySearchEnter(page) {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
@@ -1086,6 +1128,7 @@ async function main() {
     ['search address bar', searchAddressBar],
     ['search bulk apply', searchBulkApply],
     ['live feed play', livePlayButtons],
+    ['recordings play at rest', recordingsPlayAtRest],
     ['today search enter', todaySearchEnter],
     ['load more', loadMoreAppends],
     ['live signal', liveSignal],
