@@ -47,7 +47,8 @@ pub use live::{
 };
 pub use manager::CaptureManager;
 pub use process::{
-    is_tool_available, network_input_options, start_microphone_capture, start_rtsp_capture,
+    NETWORK_SAMPLE_RATE, RECORDED_BIT_DEPTH, is_tool_available, network_input_options,
+    start_microphone_capture, start_rtsp_capture,
 };
 pub use status::{
     CaptureStatus, CaptureStatusHandle, FLAP_THRESHOLD, FLAP_WINDOW, SourceState, SourceStatus,

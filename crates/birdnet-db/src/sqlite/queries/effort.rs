@@ -1,10 +1,10 @@
 //! Recording-effort queries.
 //!
 //! `recording_effort` (migration 27) accumulates seconds of audio, keyed
-//! `(local date, source)`. Until migration 61 `src/integrations/effort.rs`
-//! credited it on a timer while a source's capture was up; from migration 61 it
+//! `(local date, source)`. Until migration 63 `src/integrations/effort.rs`
+//! credited it on a timer while a source's capture was up; from migration 63 it
 //! is credited with the audio the detection pipeline analysed, to the date the
-//! audio was recorded on (RES-01). `recording_effort_hourly` (migration 61) holds
+//! audio was recorded on (RES-01). `recording_effort_hourly` (migration 63) holds
 //! the analysed seconds by local hour, beside the seconds each source was up.
 
 use rusqlite::Connection;
@@ -49,7 +49,7 @@ pub fn total_recording_seconds(conn: &Connection) -> Result<Option<u64>, DbError
     //
     // Time *up*, not audio analysed: a station whose classifier analyses nothing
     // is exactly what the deadman is for, and it accumulates no analysed audio.
-    // `recording_effort` held uptime until migration 61 and analysed audio after
+    // `recording_effort` held uptime until migration 63 and analysed audio after
     // it, and every analysed second after it is also in the hourly table's
     // `seconds_analysed`; so the old ledger, less the analysed audio the hourly
     // table repeats, plus the hourly uptime, is uptime throughout.
@@ -133,9 +133,9 @@ pub struct Occasion {
 /// An occasion is surveyed when one source analysed at least `min_seconds` of it,
 /// by the effort ledger: the best-covered source, not the sum, so two
 /// microphones that each heard half an hour do not make a surveyed hour. Effort
-/// by the hour exists from migration 61, so an hourly history of earlier dates
+/// by the hour exists from migration 63, so an hourly history of earlier dates
 /// is all not-surveyed; a daily one reads `recording_effort`, which held capture
-/// uptime before migration 61. Ranges are capped at 366 days by the caller.
+/// uptime before migration 63. Ranges are capped at 366 days by the caller.
 ///
 /// # Errors
 ///

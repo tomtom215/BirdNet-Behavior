@@ -32,7 +32,7 @@
 //! would otherwise be credited to the wrong hour. A segment that crosses an
 //! hour is credited to the hour it started in, an error of at most one segment.
 //!
-//! Until migration 61 the ledger sampled the capture supervisor's liveness
+//! Until migration 63 the ledger sampled the capture supervisor's liveness
 //! gauge instead and credited [`POLL_EVERY`] to every source that read "up",
 //! which counted shed and dropped audio as listening. That sample is still
 //! taken, and kept as `seconds_up` by hour beside `seconds_analysed`: the time

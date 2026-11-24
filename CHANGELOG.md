@@ -154,13 +154,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shedding no longer silences one source (MSC-01, WP-04 of the 2026-11 audit).** While inference is behind or
+  the board is hot, the daemon analyses one segment in two. It used to alternate over each sweep's list sorted by
+  name, so on a two-microphone station the second source lost every segment while the first lost none, and a lone
+  source that settled one segment per sweep was never shed at all. The alternation is now kept per source across
+  sweeps.
+- **A quarantined detection belongs to one recording and keeps its source (MSC-04).** Two sources holding back
+  one species in the same second were one quarantine row, the second dropped without a word, and an approved
+  row was stored with no source. Migration 61 keys `quarantine` by recording and adds `source`; approval copies
+  it. Rows quarantined before the upgrade still approve without a source. An approved detection still has no
+  playable clip once the stream directory has dropped its segment.
+- **A comment is about one detection (MSC-05).** Comments were keyed by date, time and species, so a note on one
+  microphone's detection appeared on another's of the same second. Migration 62 adds the clip; an older comment
+  that could mean more than one detection is shown on each, marked as possibly about another source's.
+- **One device cannot be two sources (MSC-10).** The Capture page compared device strings, so `hw:1,0` beside
+  `plughw:1,0`, or a camera address with and without its password, were accepted as two sources, and an edit
+  was not checked at all. Spellings of one card and device, and of one camera, are now compared as one, on add and
+  on edit; a failed read refuses instead of assuming no clash.
+- **Channels can be chosen, and a pick reaches PipeWire and cameras (MSC-11).** *Channels analysed* (mono, left,
+  right, both averaged) is on the add and edit forms; it was settable only in SQLite, while the start-up warning
+  told operators to set it. A PipeWire source or a camera set to one channel now keeps that channel through
+  ffmpeg's `pan` filter instead of averaging both. A source's detail line shows 16-bit, which is what every
+  source is recorded at, not the stored 24, and 48 kHz for a network stream, which is what it is resampled to.
+- **Removed sources stay removed (MSC-12).** Removing every source and restarting re-created one from the config
+  file's `ALSA_CARD` or `RTSP_URL`, or recorded from it under a label no row had. Once the source table has held a
+  row, it alone decides what is recorded; with none active, nothing is, and the journal says why.
+- **Re-adding a removed device brings back its source (MSC-13, in part).** It used to get a new id, splitting its
+  detections and losing its classifier route. Changing an existing source's device still continues the same
+  history under the same id.
+- **A source id containing `-` (MSC-17).** The stall check let `cam` claim `cam-2`'s recordings, and clip names
+  cut such an id at its first dash.
+- **"Also heard by" says when it could not check (MSC-20).** A failed read of the other sources' detections
+  showed no card, which reads as "no other source heard it"; it now shows that the read failed.
 - **Listening effort is the audio the station analysed (RES-01, MSC-16, WP-05 of the 2026-11 audit).** The ledger
   every rate divides by credited five minutes to each source whose capture was up, so audio shed under a
   thermal limit or left in a backlog counted as listening, and it was stamped with the clock's date. It now
   credits each analysed recording's length to the date and hour the audio was recorded in. Days before the
   upgrade keep the uptime they were credited with. Uptime is still sampled, by the hour, beside it, and the
   detection deadman still measures uptime.
-- **Effort by the hour, and a detection history (RES-02).** Migration 61 adds `recording_effort_hourly`.
+- **Effort by the hour, and a detection history (RES-02).** Migration 63 adds `recording_effort_hourly`.
   `GET /api/v2/effort/export` downloads it, and `GET /api/v2/detections/export/history` gives one species' history
   by hour or day: `1`, `0`, or `NA` where the station did not listen, so an outage is never written as an
   absence.

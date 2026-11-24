@@ -2626,6 +2626,119 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 61,
+        description: "Key quarantine by clip, as detections are, and record which source heard it",
+        // MSC-04. `quarantine` was `UNIQUE(date, time, sci_name)` and written with
+        // `ON CONFLICT(date, time, sci_name) DO NOTHING`. Two sources holding back
+        // one bird in one second are two detections that differ only in their
+        // recording, so the second was absorbed without an error and nothing was
+        // logged. And the table had no source, so `approve_quarantine` wrote the
+        // admitted detection with `Source` NULL, which every per-source filter and
+        // the "Also heard by" card read as "unknown or imported".
+        //
+        // The key becomes the one `detections` has used since migration 23, less
+        // `chunk_offset_secs`, which quarantine does not record:
+        // `(date, time, sci_name, COALESCE(file_name, ''))`. It is a unique index
+        // rather than a table constraint because a constraint cannot hold the
+        // `COALESCE`, and the table is rebuilt because the old table-level UNIQUE
+        // cannot be dropped any other way (the same reason migrations 36 and 40
+        // rebuilt it). Every row under the old key is unique under the finer new
+        // one, so the copy loses nothing.
+        //
+        // `source` is NULL for a row quarantined before this migration: the label
+        // was never recorded, and a guess parsed from a path in SQL would be
+        // indistinguishable from a recorded one. Such a row, approved, still
+        // gets `Source` NULL, as it always did.
+        //
+        // The copy names its columns, as migration 40's does, so a column on one
+        // side and not the other fails here instead of shifting values along.
+        up_sql: "CREATE TABLE quarantine_v61 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sf_probability REAL,
+            reason TEXT NOT NULL CHECK(reason IN
+                ('below_sf_thresh','low_confidence','implausible_hour',
+                 'implausible_clock','manual')),
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            approved INTEGER NOT NULL DEFAULT 0,
+            file_name TEXT,
+            lat REAL,
+            lon REAL,
+            week INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            run_id INTEGER REFERENCES analysis_runs(id),
+            cutoff REAL,
+            sens REAL,
+            overlap REAL,
+            source TEXT
+        );
+
+        INSERT INTO quarantine_v61
+            (id, date, time, sci_name, com_name, confidence, sf_probability,
+             reason, reviewed, approved, file_name, lat, lon, week, created_at,
+             run_id, cutoff, sens, overlap)
+        SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
+               reason, reviewed, approved, file_name, lat, lon, week, created_at,
+               run_id, cutoff, sens, overlap
+          FROM quarantine;
+
+        DROP TABLE quarantine;
+        ALTER TABLE quarantine_v61 RENAME TO quarantine;
+
+        CREATE UNIQUE INDEX idx_quarantine_detection
+            ON quarantine(date, time, sci_name, COALESCE(file_name, ''));
+        CREATE INDEX IF NOT EXISTS idx_quarantine_reviewed ON quarantine(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
+    },
+    Migration {
+        version: 62,
+        description: "A comment names one detection, by its clip; comments that name more than one stay on the second",
+        // MSC-05. `detection_comments` (migration 49) named its detection by
+        // `(date, time, sci_name)`. Two sources that hear one bird in one second
+        // write two detections that differ only in their clip, so a note written
+        // on the garden microphone's row ("the neighbour's dog, not a tawny owl")
+        // appeared on the camera's row, which may be a real owl. Migration 59
+        // moved reviews to the clip; this does the same for comments.
+        //
+        // `file_name` holds the detection's `COALESCE(File_Name, '')`, the way
+        // `detection_reviews.file_name` and `DetectionKey` compare: `''` is a
+        // detection with no clip. NULL is a third state and means "written before
+        // comments named a clip, and its clip cannot be told". A legacy comment is
+        // given its clip only where its triple names exactly one detection
+        // (counted by distinct clip, as migration 59 counts). Where it names more
+        // than one, there is no telling which the writer meant; it stays NULL and
+        // is listed on every detection of that second, marked as possibly about
+        // another source's, rather than hidden or guessed. Where it names none,
+        // its detection was deleted or relabelled, and it stays NULL as well.
+        //
+        // No row is deleted and no text changes, so this is not a history rewrite.
+        // The append-only trigger is recreated with `file_name` among the columns
+        // it locks, after the backfill: a comment must not be moved to another
+        // detection after it is written, any more than its text rewritten.
+        up_sql: "ALTER TABLE detection_comments ADD COLUMN file_name TEXT;
+        UPDATE detection_comments
+           SET file_name = (SELECT MIN(COALESCE(d.File_Name, '')) FROM detections d
+                             WHERE d.Date = detection_comments.date
+                               AND d.Time = detection_comments.time
+                               AND d.Sci_Name = detection_comments.sci_name)
+         WHERE (SELECT COUNT(DISTINCT COALESCE(d.File_Name, '')) FROM detections d
+                 WHERE d.Date = detection_comments.date
+                   AND d.Time = detection_comments.time
+                   AND d.Sci_Name = detection_comments.sci_name) = 1;
+        DROP TRIGGER IF EXISTS detection_comments_are_append_only;
+        CREATE TRIGGER detection_comments_are_append_only
+            BEFORE UPDATE OF id, date, time, sci_name, file_name, author, body, at
+            ON detection_comments
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
+        END;",
+    },
+    Migration {
+        version: 63,
         description: "Effort by the hour: audio analysed, and the time each source was up",
         // RES-01 / RES-02. `recording_effort` (migration 27) was credited five
         // minutes for every source whose liveness gauge read "up", so a station
@@ -4315,6 +4428,7 @@ mod tests {
                 cutoff: None,
                 sensitivity: None,
                 overlap: None,
+                source: None,
             };
             crate::sqlite::insert_quarantine(&conn, &record).unwrap();
 
@@ -4488,6 +4602,123 @@ mod tests {
             .unwrap();
         }
         conn
+    }
+
+    /// Migration 61 rebuilds `quarantine`; every row and every value it held
+    /// before survives, the old key's duplicates-by-second become legal, and a
+    /// row whose recording repeats is still refused.
+    #[test]
+    fn migration_61_keeps_every_quarantine_row_and_keys_by_recording() {
+        let conn = memory_db_at_version(60);
+        conn.execute(
+            "INSERT INTO quarantine
+                 (date, time, sci_name, com_name, confidence, sf_probability, reason,
+                  reviewed, approved, file_name, lat, lon, week, cutoff, sens, overlap)
+             VALUES ('2026-03-27', '07:15:30', 'Upupa epops', 'Eurasian Hoopoe', 0.42, 0.61,
+                     'low_confidence', 1, 0, '/tmp/a.wav', 51.5, -0.12, 13, 0.8, 1.25, 0.5)",
+            [],
+        )
+        .unwrap();
+        let before: Vec<String> = conn
+            .prepare("SELECT quote(id)||quote(date)||quote(time)||quote(sci_name)||quote(com_name)||quote(confidence)||quote(sf_probability)||quote(reason)||quote(reviewed)||quote(approved)||quote(file_name)||quote(lat)||quote(lon)||quote(week)||quote(created_at)||quote(run_id)||quote(cutoff)||quote(sens)||quote(overlap) FROM quarantine")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        let m61 = MIGRATIONS.iter().find(|m| m.version == 61).unwrap();
+        conn.execute_batch(m61.up_sql).unwrap();
+
+        let after: Vec<String> = conn
+            .prepare("SELECT quote(id)||quote(date)||quote(time)||quote(sci_name)||quote(com_name)||quote(confidence)||quote(sf_probability)||quote(reason)||quote(reviewed)||quote(approved)||quote(file_name)||quote(lat)||quote(lon)||quote(week)||quote(created_at)||quote(run_id)||quote(cutoff)||quote(sens)||quote(overlap) FROM quarantine")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(before, after, "every value survives the rebuild");
+        let source: Option<String> = conn
+            .query_row("SELECT source FROM quarantine", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            source, None,
+            "a row from before is not given a guessed source"
+        );
+
+        let insert = |file: &str| {
+            conn.execute(
+                "INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, file_name)
+                 VALUES ('2026-03-27', '07:15:30', 'Upupa epops', 'Eurasian Hoopoe', 0.4,
+                         'low_confidence', ?1)",
+                [file],
+            )
+        };
+        insert("/tmp/b.wav").expect("another recording of the same second is its own row");
+        assert!(
+            insert("/tmp/a.wav").is_err(),
+            "the same recording of the same second is still one row"
+        );
+    }
+
+    /// Migration 62 gives a legacy comment its clip only where its date, time
+    /// and species name exactly one detection; a comment on a second two
+    /// sources share, or on a detection that is gone, keeps no clip. After it,
+    /// a comment's clip is as locked as its text.
+    #[test]
+    fn migration_62_attaches_a_comment_only_to_the_one_detection_it_can_mean() {
+        let conn = memory_db_at_version(61);
+        for (time, file) in [
+            ("06:00:00", Some("only.wav")),
+            ("06:00:03", None),
+            ("06:00:06", Some("garden.wav")),
+            ("06:00:06", Some("camera.wav")),
+        ] {
+            conn.execute(
+                "INSERT INTO detections
+                    (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-05-01', ?1, 'Strix aluco', 'Tawny Owl', 0.9, ?2, 0)",
+                rusqlite::params![time, file],
+            )
+            .unwrap();
+        }
+        for time in ["06:00:00", "06:00:03", "06:00:06", "06:00:09"] {
+            conn.execute(
+                "INSERT INTO detection_comments (date, time, sci_name, author, body)
+                 VALUES ('2026-05-01', ?1, 'Strix aluco', 'ada', 'a note')",
+                [time],
+            )
+            .unwrap();
+        }
+
+        let m62 = MIGRATIONS.iter().find(|m| m.version == 62).unwrap();
+        conn.execute_batch(m62.up_sql).unwrap();
+
+        let clips: Vec<(String, Option<String>)> = conn
+            .prepare("SELECT time, file_name FROM detection_comments ORDER BY time")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            clips,
+            [
+                ("06:00:00".to_owned(), Some("only.wav".to_owned())),
+                ("06:00:03".to_owned(), Some(String::new())),
+                ("06:00:06".to_owned(), None),
+                ("06:00:09".to_owned(), None),
+            ],
+            "one detection: its clip ('' for none); two: none; none: none"
+        );
+
+        let err = conn
+            .execute(
+                "UPDATE detection_comments SET file_name = 'camera.wav' WHERE time = '06:00:06'",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{err}");
     }
 
     fn verdict_at(conn: &Connection, time: &str) -> Option<String> {

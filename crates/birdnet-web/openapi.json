@@ -7208,7 +7208,7 @@
           "export"
         ],
         "summary": "Export one species' detection history",
-        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when the species was detected, `0` when the station listened and did not detect it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 61. The range is at most 366 days.",
+        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when the species was detected, `0` when the station listened and did not detect it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 63. The range is at most 366 days.",
         "operationId": "exportDetectionHistory",
         "parameters": [
           {
@@ -7286,7 +7286,7 @@
           "export"
         ],
         "summary": "Export the hourly effort ledger",
-        "description": "Per local date, hour and source: the seconds of audio the detection pipeline analysed (`Seconds_Analysed`) and the seconds the source's capture was up (`Seconds_Up`), as CSV (`Date`, `Hour`, `Source`, `Seconds_Analysed`, `Seconds_Up`). Hours are recorded from the upgrade that added the hourly ledger (migration 61) on. The range is at most 366 days.",
+        "description": "Per local date, hour and source: the seconds of audio the detection pipeline analysed (`Seconds_Analysed`) and the seconds the source's capture was up (`Seconds_Up`), as CSV (`Date`, `Hour`, `Source`, `Seconds_Analysed`, `Seconds_Up`). Hours are recorded from the upgrade that added the hourly ledger (migration 63) on. The range is at most 366 days.",
         "operationId": "exportEffortByHour",
         "parameters": [
           {

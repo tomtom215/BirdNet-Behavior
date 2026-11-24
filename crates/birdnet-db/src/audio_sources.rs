@@ -495,6 +495,115 @@ fn validate_hhmm(s: &str) -> Result<(), AudioSourceError> {
     Ok(())
 }
 
+/// One physical device's identity, for telling whether two rows of the same
+/// kind are the same microphone or camera however each was spelled (MSC-10).
+///
+/// * ALSA: `hw:1,0`, `plughw:1,0`, `hw:1`, `dsnoop:CARD=USB,DEV=0` and the
+///   other `plugin:card,device` spellings all name card and device; a card
+///   name is resolved to its index through `alsa_cards` (the text of
+///   `/proc/asound/cards`) when it is listed there. `dsnoop` is included on
+///   purpose: opening a shared device twice records the same audio twice.
+/// * RTSP and other URLs: the scheme and host are case-folded, credentials,
+///   RTSP's default port 554 and a trailing `/` are dropped. The path and
+///   query are kept as written: a camera's `/live` and `/sub` are different
+///   streams.
+/// * `PipeWire`: the source name, with an empty one meaning `default`.
+///
+/// Rows of different kinds are never compared: a USB microphone added once
+/// through ALSA and once as the `PipeWire` default is not detected.
+#[must_use]
+pub fn device_identity(kind: SourceKind, device_id: &str, alsa_cards: Option<&str>) -> String {
+    let device_id = device_id.trim();
+    match kind {
+        SourceKind::UsbAlsa => alsa_identity(device_id, alsa_cards),
+        SourceKind::Rtsp => url_identity(device_id),
+        SourceKind::PipeWire => {
+            if device_id.is_empty() {
+                "default".to_owned()
+            } else {
+                device_id.to_owned()
+            }
+        }
+    }
+}
+
+fn alsa_identity(device_id: &str, alsa_cards: Option<&str>) -> String {
+    let Some((_plugin, args)) = device_id.split_once(':') else {
+        return device_id.to_owned();
+    };
+    let mut card = None;
+    let mut dev = None;
+    for (i, arg) in args.split(',').map(str::trim).enumerate() {
+        match arg.split_once('=') {
+            Some((key, value)) if key.eq_ignore_ascii_case("CARD") => card = Some(value),
+            Some((key, value)) if key.eq_ignore_ascii_case("DEV") => dev = Some(value),
+            None if i == 0 => card = Some(arg),
+            None if i == 1 => dev = Some(arg),
+            _ => {}
+        }
+    }
+    let Some(card) = card.filter(|c| !c.is_empty()) else {
+        return device_id.to_owned();
+    };
+    let card = if card.bytes().all(|b| b.is_ascii_digit()) {
+        card.trim_start_matches('0').to_owned()
+    } else {
+        alsa_cards
+            .and_then(|cards| alsa_card_index(cards, card))
+            .unwrap_or_else(|| card.to_owned())
+    };
+    let card = if card.is_empty() {
+        "0".to_owned()
+    } else {
+        card
+    };
+    let dev = dev.and_then(|d| d.parse::<u32>().ok()).unwrap_or(0);
+    format!("alsa:{card},{dev}")
+}
+
+/// The index `/proc/asound/cards` gives the card whose id is `name`. Each
+/// card's first line reads ` 1 [USB            ]: USB-Audio - …`.
+fn alsa_card_index(cards: &str, name: &str) -> Option<String> {
+    cards.lines().find_map(|line| {
+        let (index, rest) = line.trim_start().split_once(' ')?;
+        if !index.bytes().all(|b| b.is_ascii_digit()) || index.is_empty() {
+            return None;
+        }
+        let id = rest
+            .trim_start()
+            .strip_prefix('[')?
+            .split(']')
+            .next()?
+            .trim();
+        (id == name).then(|| index.to_owned())
+    })
+}
+
+fn url_identity(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    let (authority, path) = rest
+        .find(['/', '?'])
+        .map_or((rest, ""), |i| (&rest[..i], &rest[i..]));
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let mut host_port = host_port.to_ascii_lowercase();
+    if scheme == "rtsp"
+        && let Some(host) = host_port.strip_suffix(":554")
+    {
+        host_port = host.to_owned();
+    }
+    let (path, query) = path
+        .split_once('?')
+        .map_or((path, None), |(p, q)| (p, Some(q)));
+    let path = path.trim_end_matches('/');
+    query.map_or_else(
+        || format!("{scheme}://{host_port}{path}"),
+        |q| format!("{scheme}://{host_port}{path}?{q}"),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Store trait
 // ---------------------------------------------------------------------------
@@ -544,6 +653,26 @@ pub trait AudioSourceStore {
     /// Returns [`AudioSourceError::NotFound`] if no such row exists, and
     /// [`AudioSourceError::Sqlite`] for underlying database failure.
     fn soft_delete(&self, id: &str) -> Result<(), AudioSourceError>;
+
+    /// Every source, removed ones included, in `created_at ASC` order. For
+    /// questions about a device's history rather than what is recording now:
+    /// whether a device being added was configured before (MSC-13).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioSourceError::Sqlite`] on database failure.
+    fn list_including_removed(&self) -> Result<Vec<AudioSource>, AudioSourceError>;
+
+    /// Bring back the removed row `id` with `new`'s settings, keeping its id
+    /// and `created_at`, so a device removed and added again continues under
+    /// the same source label (MSC-13). `new.id` is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioSourceError::NotFound`] if no removed row has that id,
+    /// [`AudioSourceError::Invalid`] on a malformed quiet window, and
+    /// [`AudioSourceError::Sqlite`] for underlying database failure.
+    fn reinstate(&self, id: &str, new: &NewAudioSource) -> Result<AudioSource, AudioSourceError>;
 }
 
 impl AudioSourceStore for Connection {
@@ -729,6 +858,69 @@ impl AudioSourceStore for Connection {
         let params_dyn: Vec<&dyn rusqlite::ToSql> =
             bindings.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         self.execute(&sql, params_dyn.as_slice())?;
+        self.get(id)?
+            .ok_or_else(|| AudioSourceError::NotFound(format!("source id={id}")))
+    }
+
+    fn list_including_removed(&self) -> Result<Vec<AudioSource>, AudioSourceError> {
+        let mut stmt = self.prepare(
+            "SELECT id, kind, device_id, label, sample_rate, channels, bit_depth,
+                    gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
+                    pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
+                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
+                    eq_chain, media_mode
+             FROM audio_sources
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map([], row_to_source)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn reinstate(&self, id: &str, new: &NewAudioSource) -> Result<AudioSource, AudioSourceError> {
+        if let Some((s, e)) = new.schedule_quiet.as_ref() {
+            validate_hhmm(s)?;
+            validate_hhmm(e)?;
+        }
+        let (q_start, q_end) = match new.schedule_quiet.as_ref() {
+            Some((s, e)) => (Some(s.as_str()), Some(e.as_str())),
+            None => (None, None),
+        };
+        let n = self.execute(
+            "UPDATE audio_sources SET
+                kind = ?2, device_id = ?3, label = ?4, sample_rate = ?5, channels = ?6,
+                bit_depth = ?7, gain_db = ?8, rtsp_transport = ?9,
+                schedule_quiet_start = ?10, schedule_quiet_end = ?11,
+                pipeline_high_pass = ?12, pipeline_dc_removal = ?13, pipeline_agc = ?14,
+                pipeline_rtsp_keepalive = ?15, eq_chain = ?16, media_mode = ?17,
+                disabled_at = NULL, updated_at = datetime('now')
+             WHERE id = ?1 AND disabled_at IS NOT NULL",
+            params![
+                id,
+                new.kind.as_str(),
+                new.device_id,
+                new.label,
+                new.sample_rate,
+                new.channels.as_str(),
+                new.bit_depth,
+                f64::from(new.gain_db),
+                new.rtsp_transport.as_str(),
+                q_start,
+                q_end,
+                i32::from(new.pipeline.high_pass),
+                i32::from(new.pipeline.dc_removal),
+                i32::from(new.pipeline.agc),
+                i32::from(new.pipeline.rtsp_keepalive),
+                new.eq_chain,
+                new.media_mode.as_str(),
+            ],
+        )?;
+        if n == 0 {
+            return Err(AudioSourceError::NotFound(format!(
+                "removed source id={id}"
+            )));
+        }
         self.get(id)?
             .ok_or_else(|| AudioSourceError::NotFound(format!("source id={id}")))
     }
@@ -943,6 +1135,71 @@ mod tests {
             assert_eq!(k.as_str().parse::<SourceKind>().unwrap(), k);
         }
         assert!("nope".parse::<SourceKind>().is_err());
+    }
+
+    #[test]
+    fn device_identity_folds_the_spellings_of_one_device() {
+        let cards = " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n                      vc4-hdmi-0\n 1 [USB            ]: USB-Audio - USB Sound Device\n";
+        let alsa = |d| device_identity(SourceKind::UsbAlsa, d, Some(cards));
+        for same in [
+            "hw:1,0",
+            "plughw:1,0",
+            "hw:1",
+            "plughw:CARD=USB,DEV=0",
+            "dsnoop:CARD=1",
+            " hw:01,0 ",
+        ] {
+            assert_eq!(alsa(same), alsa("plughw:1,0"), "{same}");
+        }
+        for other in ["hw:1,1", "hw:2,0", "plughw:CARD=Other,DEV=0", "default"] {
+            assert_ne!(alsa(other), alsa("plughw:1,0"), "{other}");
+        }
+        let url = |u| device_identity(SourceKind::Rtsp, u, None);
+        for same in [
+            "rtsp://user:pw@CAM.local:554/live/",
+            "RTSP://cam.local/live",
+            "rtsp://cam.local:554/live",
+        ] {
+            assert_eq!(url(same), url("rtsp://cam.local/live"), "{same}");
+        }
+        for other in [
+            "rtsp://cam.local/sub",
+            "rtsp://cam.local:8554/live",
+            "rtsp://cam2.local/live",
+            "rtsp://cam.local/Live",
+        ] {
+            assert_ne!(url(other), url("rtsp://cam.local/live"), "{other}");
+        }
+        assert_eq!(
+            device_identity(SourceKind::PipeWire, "", None),
+            device_identity(SourceKind::PipeWire, "default", None)
+        );
+    }
+
+    #[test]
+    fn a_removed_source_is_reinstated_under_its_own_id() {
+        let conn = open_db();
+        conn.insert(&NewAudioSource::defaults(
+            "src_a",
+            SourceKind::UsbAlsa,
+            "plughw:2,0",
+        ))
+        .unwrap();
+        conn.soft_delete("src_a").unwrap();
+        assert!(conn.list().unwrap().is_empty());
+        assert_eq!(conn.list_including_removed().unwrap().len(), 1);
+        let mut again = NewAudioSource::defaults("ignored", SourceKind::UsbAlsa, "hw:2,0");
+        again.label = Some("Garden".into());
+        let row = conn.reinstate("src_a", &again).unwrap();
+        assert_eq!(row.id, "src_a");
+        assert_eq!(row.device_id, "hw:2,0");
+        assert_eq!(row.label.as_deref(), Some("Garden"));
+        assert!(row.disabled_at.is_none());
+        // Only a removed row can be reinstated.
+        assert!(matches!(
+            conn.reinstate("src_a", &again),
+            Err(AudioSourceError::NotFound(_))
+        ));
     }
 
     #[test]

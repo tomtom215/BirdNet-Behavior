@@ -6,7 +6,7 @@
 //! its microphone was down, and heard nothing because it was not there. A chart that
 //! draws both as a zero tells the owner their yard was silent on the day the power
 //! failed. The `recording_effort` ledger (migration 27) is the station's own account
-//! of how many seconds of audio it analysed (captured, before migration 61), per local
+//! of how many seconds of audio it analysed (captured, before migration 63), per local
 //! date and source, so it can say which.
 //!
 //! The charts use it to *add* a statement ("not listening"). Two summaries also divide
