@@ -894,8 +894,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:148",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "5a26271: standing notice on Today and a Location checklist row; gate a_station_without_a_location_says_so_on_today_after_its_first_detection. The proposed redirect change was not made: the wizard is behind the admin sign-in once a password exists, so redirecting a station with detections would lock visitors out of the public dashboard."
   },
   {
    "id": "OOB-03",
@@ -918,8 +918,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:200",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ef5051b: settings hint and generated config say local time (scheduler: ScheduleClock::Local for windows)."
   },
   {
    "id": "OOB-05",
@@ -930,8 +930,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:219",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "cf9d1ee (Advice::TooLow in the doctor; clipping at peak >= -1 dBFS in the wizard test), fa46ae2 (\"Silent\" on the first-run checklist from audio_levels). The proposed mains-hum verdict was not built."
   },
   {
    "id": "OOB-06",
@@ -942,8 +942,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:250",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "f4eb5bf (and 6a625b2: the message prints the position to one decimal, for the support bundle): doctor and installer compare the UTC offset with longitude/15, warn beyond 3.5 h (the audit's 2 h against round(lon/15) flags correct zones such as Asia/Shanghai in Urumqi). No Today banner."
   },
   {
    "id": "OOB-07",
@@ -954,8 +954,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:271",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started. Needs the maintainer: the proposal moves the first password from the installer to the browser behind a setup code, which changes the security model. Question: should a fresh install set no password and let the first browser with a printed setup code claim the station? The --reset-admin-password command could be done alone."
   },
   {
    "id": "OOB-08",
@@ -1002,8 +1002,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:340",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ef5051b: installation.md, first-steps.md, hardware.md and the 70-station.sh comment corrected."
   },
   {
    "id": "OOB-12",
@@ -1014,8 +1014,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:364",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "f05111e: DEFAULT_NOTIFY_TRIGGER = new-species read by daemon, form and wizard. Stations that never saved a trigger change from each to new-species on upgrade (CHANGELOG says so)."
   },
   {
    "id": "OOB-13",
@@ -1026,8 +1026,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:381",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear?"
   },
   {
    "id": "OOB-14",
@@ -1050,8 +1050,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:413",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ef5051b (installer, summary, Today model row), d461077 (wizard device-name wording). The installer still accepts a typed ALSA name; it no longer advertises one."
   },
   {
    "id": "OOB-16",
@@ -1062,8 +1062,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:437",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ef5051b: \"Device or resource busy\" maps to a plain sentence. The conjectured precondition (the test hits a busy card on a running Pi) was not probed: no Pi here."
   },
   {
    "id": "OOB-17",
@@ -1074,8 +1074,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:453",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Today banner done in 5a26271 (gate an_unsynchronised_clock_is_said_on_today). Left: marking detections recorded under an unsynchronised clock (a column or an analysis_runs flag), and the RTC advice in the hardware guide."
   },
   {
    "id": "OOB-18",
@@ -1098,8 +1098,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:483",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ef5051b (installer V2.4 step), d461077 (wizard Model step). No line for V3.0: its terms were not checked."
   },
   {
    "id": "OOB-20",
@@ -1110,8 +1110,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:493",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started. (a) installer/test/classifier-default.sh section 6 pins \"a classifier that cannot be installed stops the install\" on purpose; reversing it needs the maintainer. (b) an offline place list bundles ~1 MB of third-party data with its own licence; also the maintainer's."
   },
   {
    "id": "OOB-21",
@@ -1122,8 +1122,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:509",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Level target unified in ef5051b (hardware.md now gives -12 to -6 dB). Left: a tested-hardware shopping list, which needs microphones measured on a Pi, and a sound-check card."
   },
   {
    "id": "OOB-22",
@@ -1266,8 +1266,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:273",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "5a26271: CaptureState::Partial; pill, health line and checklist say \"1 of 3\"; gate one_source_of_three_up_is_not_called_recording."
   },
   {
    "id": "UIR-12",
@@ -1278,8 +1278,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:287",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ef5051b: the Unavailable phase occurs only without a model layout (a fixture); the sentence now points at Station health. 9bc929b underlines its link (axe)."
   },
   {
    "id": "UIR-13",
@@ -2420,6 +2420,42 @@
    "source": "docs/book/guide/reviews.md:16 (ACC-21, added 2026-11-23 by the WP-03 session)",
    "status": "done",
    "evidence": "54859c7: the 'What it holds' cell listed only detections that failed a stricter per-species threshold, while the night-time and unset-clock reasons already wrote rows; the table now says 'held back from the log, each with its reason', and a paragraph below it names the five reasons, including the new 'Unlikely here' (a list in the cell made a column several screens tall on a phone, seen in a 390x844 screenshot). Found while correcting the page for ACC-01; documentation only, no gate."
+  },
+  {
+   "id": "N14-01",
+   "title": "An unrecognised APPRISE_TRIGGER word parses as each (every detection), the chattiest mode, not the default",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-14.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+  },
+  {
+   "id": "N14-02",
+   "title": "The doctor's solar-window remedies print runs of spaces (string literals without \\ continuations, src/doctor/clock.rs)",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-14.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+  },
+  {
+   "id": "N14-03",
+   "title": "A capture control at ALSA's -inf dB parses as no dB and is graded by percentage only, so a card silenced by one control can pass beside another in range",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-14.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
   }
  ]
 }
