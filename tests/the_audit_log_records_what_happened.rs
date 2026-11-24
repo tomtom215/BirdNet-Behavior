@@ -578,6 +578,7 @@ async fn deciding_a_quarantined_detection_is_recorded() {
                     cutoff: Some(0.8),
                     sensitivity: Some(1.25),
                     overlap: Some(0.5),
+                    source: None,
                 },
             )
             .expect("quarantine a detection");

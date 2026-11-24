@@ -1,21 +1,9 @@
 //! HTMX page and partial routes.
 //!
-//! Split into focused sub-modules by concern:
-//!
-//! | Module                | Responsibility                                  |
-//! |-----------------------|-------------------------------------------------|
-//! | `dashboard`           | Main dashboard page and stats/detection partials|
-//! | `charts`              | SVG chart rendering helpers                     |
-//! | `health`              | Health badge and disk status partials           |
-//! | `species_pages`       | Species list, detail page, species partials     |
-//! | `behavioral`          | Behavioral analytics HTMX partials              |
-//! | `timeseries_dash`     | Time-series analytics page and partials         |
-//! | `heatmap`             | 24h × 7-day activity heatmap page               |
-//! | `correlation`         | Species co-occurrence correlation page          |
-//! | `quarantine`          | Rare-bird quarantine review page and actions    |
-//! | `life_list`           | Life list / birding journal page                |
-//! | `station_health`      | Station Health surface (public `/station` tab)  |
-//! | `notification_center` | Notification history and channel status          |
+//! One sub-module per page or family of partials, each saying in its own
+//! module comment which routes it serves. `homes` holds the tabbed top-level
+//! pages (Patterns, Reports and the Station tabs); `nav` is the primary
+//! navigation.
 
 pub mod atoms;
 pub mod audio_player;

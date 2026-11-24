@@ -1,7 +1,10 @@
 //! Audio quality assessment pipeline.
 //!
-//! Evaluates each audio chunk before ML inference to filter out
-//! low-quality recordings that would produce spurious detections.
+//! Scores a stretch of audio for signal-to-noise, tonality, noise floor and
+//! rain or wind. It is not on the detection path and filters nothing: its
+//! one caller is the acoustic-health sampler (`src/integrations/acoustic_health.rs`),
+//! which reads a recent segment now and then to report whether a source is
+//! still working.
 //!
 //! ## Pipeline
 //!

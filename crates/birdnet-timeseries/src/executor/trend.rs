@@ -11,7 +11,8 @@ use crate::types::{
 impl super::TimeSeriesDb<'_> {
     /// N-day trailing moving average of daily detections, over a zero-filled
     /// series of complete days — see [`MovingAverage`] for what that rules
-    /// out. `moving_avg_detections` is `None` where the window is incomplete.
+    /// out. `moving_avg_detections` is `None` where the window is incomplete
+    /// or holds a day the station did not listen to.
     ///
     /// # Errors
     ///
@@ -22,6 +23,7 @@ impl super::TimeSeriesDb<'_> {
             from_date: params.from_date.clone(),
             to_date: params.to_date.clone(),
             species: params.species.clone(),
+            has_effort_ledger: self.has_effort_ledger()?,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
@@ -32,6 +34,9 @@ impl super::TimeSeriesDb<'_> {
                 species_richness: 0,
                 moving_avg_detections: row.get(2)?,
                 moving_avg_species: None,
+                effort_hours: row.get(5)?,
+                listened: row.get(6)?,
+                partial_effort: row.get(7)?,
             })
         })?;
         rows.map(|r| r.map_err(Into::into)).collect()
@@ -49,6 +54,7 @@ impl super::TimeSeriesDb<'_> {
     ) -> Result<Vec<YearOverYearRow>, TimeSeriesError> {
         let q = YearOverYear {
             weeks: params.lookback_weeks,
+            has_effort_ledger: self.has_effort_ledger()?,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
@@ -60,6 +66,11 @@ impl super::TimeSeriesDb<'_> {
                 yoy_delta: row.get(3)?,
                 current_year_species: row.get(4)?,
                 prior_year_species: row.get(5)?,
+                current_listened_days: row.get(6)?,
+                prior_listened_days: row.get(7)?,
+                current_per_listened_day: row.get(8)?,
+                prior_per_listened_day: row.get(9)?,
+                per_listened_day_delta: row.get(10)?,
             })
         })?;
         rows.map(|r| r.map_err(Into::into)).collect()
@@ -76,6 +87,7 @@ impl super::TimeSeriesDb<'_> {
             z_threshold: params.z_threshold,
             window_days: params.window_days,
             lookback_days: params.lookback_days,
+            has_effort_ledger: self.has_effort_ledger()?,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
@@ -87,6 +99,9 @@ impl super::TimeSeriesDb<'_> {
                 rolling_stddev: row.get(3)?,
                 z_score: row.get(4)?,
                 anomaly_flag: row.get(5)?,
+                effort_hours: row.get(6)?,
+                listened: row.get(7)?,
+                partial_effort: row.get(8)?,
             })
         })?;
         rows.map(|r| r.map_err(Into::into)).collect()

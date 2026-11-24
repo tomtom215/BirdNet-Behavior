@@ -42,6 +42,10 @@ pub enum CaptureSource {
         sample_rate: u32,
         /// Number of channels.
         channels: u16,
+        /// Which channel of a stereo source to keep, if the operator asked
+        /// for one: ffmpeg's `pan` filter selects it and the segments are
+        /// written mono (MSC-11).
+        channel_pick: Option<super::tee::ChannelPick>,
         /// Stream identifier for filenames and metrics when more than one
         /// local microphone is configured. `None` for a lone local mic.
         stream_id: Option<String>,
@@ -56,6 +60,9 @@ pub enum CaptureSource {
         transport: RtspTransport,
         /// Which of the camera's tracks to set up.
         media_mode: RtspMediaMode,
+        /// Which channel of a stereo stream to keep, if the operator asked
+        /// for one; `None` lets ffmpeg average the stream to mono (MSC-11).
+        channel_pick: Option<super::tee::ChannelPick>,
     },
 }
 
@@ -83,12 +90,14 @@ impl std::fmt::Debug for CaptureSource {
                 device,
                 sample_rate,
                 channels,
+                channel_pick,
                 stream_id,
             } => f
                 .debug_struct("PipeWire")
                 .field("device", device)
                 .field("sample_rate", sample_rate)
                 .field("channels", channels)
+                .field("channel_pick", channel_pick)
                 .field("stream_id", stream_id)
                 .finish(),
             Self::Rtsp {
@@ -96,12 +105,14 @@ impl std::fmt::Debug for CaptureSource {
                 stream_id,
                 transport,
                 media_mode,
+                channel_pick,
             } => f
                 .debug_struct("Rtsp")
                 .field("url", &crate::config::redact::redact_url_credentials(url))
                 .field("stream_id", stream_id)
                 .field("transport", transport)
                 .field("media_mode", media_mode)
+                .field("channel_pick", channel_pick)
                 .finish(),
         }
     }
@@ -469,17 +480,24 @@ pub(crate) fn filename_matches_stream(name: &str, stream_id: Option<&str>, ext: 
     let Some(stem) = name.strip_suffix(ext).and_then(|s| s.strip_suffix('.')) else {
         return false;
     };
+    let is_time = |rest: &[u8]| rest.len() == 8 && rest[2] == b':' && rest[5] == b':';
     stream_id.map_or_else(
         // "…-birdnet-HH:MM:SS": what follows the marker must be a bare time,
         // otherwise this is some other stream's id-carrying file.
         || {
-            stem.rfind("-birdnet-").is_some_and(|idx| {
-                let rest = &stem.as_bytes()[idx + "-birdnet-".len()..];
-                rest.len() == 8 && rest[2] == b':' && rest[5] == b':'
+            stem.rfind("-birdnet-")
+                .is_some_and(|idx| is_time(&stem.as_bytes()[idx + "-birdnet-".len()..]))
+        },
+        // "…-birdnet-{id}-HH:MM:SS": the id is everything up to the time, so
+        // `cam` does not claim `cam-2`'s files (MSC-17).
+        |id| {
+            stem.find("-birdnet-").is_some_and(|idx| {
+                stem[idx + "-birdnet-".len()..]
+                    .strip_prefix(id)
+                    .and_then(|rest| rest.strip_prefix('-'))
+                    .is_some_and(|time| is_time(time.as_bytes()))
             })
         },
-        // "…-birdnet-{id}-HH:MM:SS"
-        |id| stem.contains(&format!("-birdnet-{id}-")),
     )
 }
 
@@ -494,6 +512,7 @@ mod tests {
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
             media_mode: RtspMediaMode::AudioOnly,
+            channel_pick: None,
         };
         let shown = format!("{src:?}");
         assert!(!shown.contains("hunter2"), "{shown}");
@@ -550,6 +569,20 @@ mod tests {
         assert!(!filename_matches_stream(name, Some("RTSP_1"), "wav"));
         // Wrong extension never matches.
         assert!(!filename_matches_stream(name, None, "flac"));
+    }
+
+    /// MSC-17. An id that is a prefix of another id ending in `-…` does not
+    /// claim that source's files, so a stalled `cam` is not kept alive by
+    /// `cam-2`'s segments.
+    #[test]
+    fn filename_matcher_is_not_fooled_by_a_dashed_sibling_id() {
+        let sibling = "2026-01-01-birdnet-cam-2-06:00:00.wav";
+        assert!(!filename_matches_stream(sibling, Some("cam"), "wav"));
+        assert!(filename_matches_stream(sibling, Some("cam-2"), "wav"));
+        // Counterpart: `cam`'s own file is still its own.
+        let own = "2026-01-01-birdnet-cam-06:00:00.wav";
+        assert!(filename_matches_stream(own, Some("cam"), "wav"));
+        assert!(!filename_matches_stream(own, Some("cam-2"), "wav"));
     }
 
     #[test]
@@ -702,6 +735,7 @@ mod tests {
             sample_rate: 48_000,
             channels: 1,
             stream_id: Some("src_pw".into()),
+            channel_pick: None,
         };
         assert_eq!(pw.label(), "src_pw");
 
@@ -710,6 +744,7 @@ mod tests {
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
             media_mode: RtspMediaMode::Full,
+            channel_pick: None,
         };
         assert_eq!(rtsp.label(), "RTSP_1");
     }
@@ -800,8 +835,13 @@ mod tests {
 #[allow(clippy::struct_excessive_bools)]
 pub struct AudioPipeline {
     /// Attenuate below [`HIGH_PASS_CUTOFF_HZ`] to cut wind rumble and handling
-    /// noise before inference. Nothing `BirdNET` classifies lives down there:
-    /// the model's mel bank starts well above it.
+    /// noise before inference. It is not free: energy below the corner does
+    /// reach the classifier (see [`HIGH_PASS_CUTOFF_HZ`]), so the lowest
+    /// vocalisers — a bittern's boom, pigeons, large owls — are attenuated.
+    /// It also moves the model's scores for everything else: on the bundled
+    /// magpie recording, V2.4's top-10 logits moved a median of 1.2 from
+    /// BirdNET-Pi's with this on, against at most 0.08 with both filters off (see
+    /// `docs/book/guides/parity.md`). On by default; parity needs it off.
     pub high_pass: bool,
     /// Remove any constant offset the capture chain adds. A DC-offset signal
     /// wastes headroom and biases every frame-energy measurement the quality

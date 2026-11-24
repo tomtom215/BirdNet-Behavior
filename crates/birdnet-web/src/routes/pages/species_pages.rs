@@ -1340,7 +1340,7 @@ async fn species_companions_partial(
                 );
             }
             let mut html = String::from(
-                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
+                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Days heard together</th></tr></thead><tbody>",
             );
             for c in &companions {
                 let enc = simple_url_encode(&c.companion);

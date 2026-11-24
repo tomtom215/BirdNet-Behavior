@@ -88,7 +88,7 @@ pub fn scan(dir: &Path) -> Option<FolderScan> {
 #[must_use]
 pub fn capture_note(dir: Option<&Path>) -> String {
     let place = dir.map_or_else(
-        || "The station's watch folder".to_owned(),
+        || "Recordings are read from the station's watch folder.".to_owned(),
         |d| {
             format!(
                 "Recordings are read from <code>{}</code>.",
@@ -164,7 +164,9 @@ mod tests {
         );
         let unknown = capture_note(None);
         assert!(
-            unknown.contains(EXPECTED_NAME) && !unknown.contains("are read from"),
+            unknown.contains(EXPECTED_NAME)
+                && unknown.contains("the station's watch folder. The station takes")
+                && !unknown.contains("<code>/"),
             "{unknown}"
         );
     }

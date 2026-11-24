@@ -44,6 +44,7 @@ fn state_with_quarantine(reason: QuarantineReason) -> AppState {
         cutoff: None,
         sensitivity: None,
         overlap: None,
+        source: None,
     };
     insert_quarantine(&conn, &record).unwrap();
 

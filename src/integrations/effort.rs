@@ -20,22 +20,26 @@
 //!
 //! # How effort is measured here
 //!
-//! By sampling, not by integration. Every [`POLL_EVERY`] this task asks the
-//! capture supervisor's own per-source gauge — the same
-//! `birdnet_audio_source_up` the Station Health page reads — which sources are
-//! currently up, and credits each of them with that interval.
+//! As the audio the detection pipeline analysed (RES-01). Each analysed file's
+//! length is held, by the local date and hour in its name and its source, in
+//! the metrics registry ([`MetricsRegistry::add_effort_pending`]), and every
+//! [`POLL_EVERY`] this task writes what is held to `recording_effort` (by day)
+//! and `recording_effort_hourly` (by hour). A segment the shed policy skipped,
+//! one that vanished before it was read, and audio still waiting in a backlog
+//! are not effort: nothing was listening to them. The date and hour are the
+//! recording's, not the clock's at write time, because that is what the
+//! detections divided by them are stamped with, and a backlog analysed late
+//! would otherwise be credited to the wrong hour. A segment that crosses an
+//! hour is credited to the hour it started in, an error of at most one segment.
 //!
-//! Sampling rather than instrumenting the capture threads directly is a
-//! deliberate trade. It is accurate to ±[`POLL_EVERY`] per source per day
-//! (five minutes in ~1440, or 0.3 %), it cannot itself disturb capture, it
-//! survives a crash without losing more than one interval, and it needs no
-//! coordination with the audio path. An exact integration would be more precise
-//! than the question deserves: nobody is comparing abundances at a resolution
-//! where five minutes a day matters, and the alternative — trusting a counter
-//! that a hard power cut can leave mid-update — is less trustworthy, not more.
+//! Until migration 63 the ledger sampled the capture supervisor's liveness
+//! gauge instead and credited [`POLL_EVERY`] to every source that read "up",
+//! which counted shed and dropped audio as listening. That sample is still
+//! taken, and kept as `seconds_up` by hour beside `seconds_analysed`: the time
+//! a source was up is a fact about the station, and the gap between the two is
+//! audio captured and never analysed.
 //!
-//! Effort is credited to the **local** date, because that is the date the
-//! detections it will be divided by are stamped with.
+//! [`MetricsRegistry::add_effort_pending`]: birdnet_web::metrics::MetricsRegistry::add_effort_pending
 
 use std::time::Duration;
 
@@ -49,40 +53,110 @@ use birdnet_web::state::AppState;
 /// audio lives on tmpfs.
 const POLL_EVERY: Duration = Duration::from_secs(300);
 
-/// Credit `seconds` of listening to `source` on the station's local date.
+/// Write held analysed audio to both ledgers, in one transaction.
 ///
-/// Additive `UPSERT`: a restart mid-day resumes the same row rather than
-/// starting a second one, and a day that spans a restart still totals correctly.
-fn credit(conn: &rusqlite::Connection, source: &str, seconds: f64) -> Result<(), rusqlite::Error> {
+/// Additive `UPSERT`s: a restart mid-day resumes the same rows rather than
+/// starting second ones.
+fn credit_analysed(
+    conn: &rusqlite::Connection,
+    credits: &std::collections::HashMap<birdnet_web::metrics::EffortKey, f64>,
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+    for ((date, hour, source), seconds) in credits {
+        tx.execute(
+            "INSERT INTO recording_effort (date, source, seconds) VALUES (?1, ?2, ?3)
+             ON CONFLICT(date, source) DO UPDATE SET seconds = seconds + excluded.seconds",
+            rusqlite::params![date, source, seconds],
+        )?;
+        tx.execute(
+            "INSERT INTO recording_effort_hourly (date, hour, source, seconds_analysed)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(date, hour, source)
+             DO UPDATE SET seconds_analysed = seconds_analysed + excluded.seconds_analysed",
+            rusqlite::params![date, hour, source, seconds],
+        )?;
+    }
+    tx.commit()
+}
+
+/// Credit `seconds` of being up to `source`, in the current local hour.
+fn credit_up(
+    conn: &rusqlite::Connection,
+    source: &str,
+    seconds: f64,
+) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO recording_effort (date, source, seconds)
-         VALUES (date('now','localtime'), ?1, ?2)
-         ON CONFLICT(date, source) DO UPDATE SET seconds = seconds + excluded.seconds",
+        "INSERT INTO recording_effort_hourly (date, hour, source, seconds_up)
+         VALUES (date('now','localtime'), CAST(strftime('%H','now','localtime') AS INTEGER), ?1, ?2)
+         ON CONFLICT(date, hour, source) DO UPDATE SET seconds_up = seconds_up + excluded.seconds_up",
         rusqlite::params![source, seconds],
     )?;
     Ok(())
 }
 
-/// Record one sample: credit every source the supervisor reports as up.
+/// Hold one analysed file's audio for the ledger, under the date and hour its
+/// name records and its source. A name that does not parse as a recording, or
+/// a file whose length cannot be read, holds nothing.
+pub fn note_analysed(state: &AppState, path: &std::path::Path, seconds: f64) {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let Some(recording) = birdnet_core::detection::types::RecordingFile::parse(name) else {
+        return;
+    };
+    let Some(hour) = recording.time.get(0..2).and_then(|h| h.parse::<u8>().ok()) else {
+        return;
+    };
+    let source = crate::daemon::disposition::derive_source_label(path);
+    state
+        .metrics()
+        .add_effort_pending(&recording.date, hour, &source, seconds);
+}
+
+/// Write the held analysed audio. Credits that could not be written are held
+/// again for the next tick. Returns whether anything was written.
+fn flush_analysed(state: &AppState) -> bool {
+    let credits = state.metrics().take_effort_pending();
+    if credits.is_empty() {
+        return false;
+    }
+    match state.with_db(|conn| credit_analysed(conn, &credits)) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "recording effort could not be written; holding it for the next tick");
+            for ((date, hour, source), seconds) in credits {
+                state
+                    .metrics()
+                    .add_effort_pending(&date, hour, &source, seconds);
+            }
+            false
+        }
+    }
+}
+
+/// Record one sample: credit every source the supervisor reports as up with
+/// `seconds` of being up, in the hourly ledger. Not effort: see the module doc.
 ///
-/// Returns how many sources were credited, for the log line and for tests.
+/// Returns how many sources were credited, for tests.
 fn sample_once(state: &AppState, seconds: f64) -> usize {
-    let sources = state.with_db(|conn| {
+    let sources = match state.with_db(|conn| {
         use birdnet_db::audio_sources::AudioSourceStore;
-        AudioSourceStore::list(conn).unwrap_or_default()
-    });
+        AudioSourceStore::list(conn)
+    }) {
+        Ok(sources) => sources,
+        Err(e) => {
+            tracing::debug!(error = %e, "audio sources could not be read; no uptime sample this tick");
+            return 0;
+        }
+    };
     let mut credited = 0;
     for source in sources.iter().filter(|s| s.disabled_at.is_none()) {
         // `Some(true)` only. `None` means the supervisor has not reported on
-        // this source yet — at startup, or in web-only mode — and crediting an
-        // unknown as listening would inflate the denominator, which understates
-        // abundance. Understating listening is the safe direction: it
-        // overstates abundance, which is visible; overstating listening hides a
-        // real signal, which is not.
+        // this source yet — at startup, or in web-only mode.
         if state.metrics().source_up(&source.id) == Some(true) {
             let id = source.id.clone();
-            if let Err(e) = state.with_db(|conn| credit(conn, &id, seconds)) {
-                tracing::debug!(error = %e, source = %id, "recording-effort credit failed");
+            if let Err(e) = state.with_db(|conn| credit_up(conn, &id, seconds)) {
+                tracing::debug!(error = %e, source = %id, "uptime sample failed");
             } else {
                 credited += 1;
             }
@@ -106,6 +180,14 @@ fn mirror_to_analytics(state: &AppState) {
 #[cfg(not(feature = "analytics"))]
 const fn mirror_to_analytics(_state: &AppState) {}
 
+/// One tick of the recorder: what happens every [`POLL_EVERY`].
+pub fn tick(state: &AppState, seconds: f64) {
+    sample_once(state, seconds);
+    if flush_analysed(state) {
+        mirror_to_analytics(state);
+    }
+}
+
 /// Spawn the recording-effort recorder.
 ///
 /// Skipped in web-only mode by the caller: a station that is not capturing has
@@ -118,20 +200,15 @@ pub fn spawn_effort_recorder(state: AppState) {
             "recording-effort recorder started"
         );
         let seconds = POLL_EVERY.as_secs_f64();
-        let mut tick = tokio::time::interval(POLL_EVERY);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut interval = tokio::time::interval(POLL_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Skip the immediate first tick: at t=0 no source has reported yet, so
         // it would credit nothing and only add a wakeup.
-        tick.tick().await;
+        interval.tick().await;
         loop {
-            tick.tick().await;
+            interval.tick().await;
             let probe = state.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                if sample_once(&probe, seconds) > 0 {
-                    mirror_to_analytics(&probe);
-                }
-            })
-            .await;
+            let _ = tokio::task::spawn_blocking(move || tick(&probe, seconds)).await;
         }
     });
 }
@@ -167,42 +244,58 @@ mod tests {
         .unwrap_or(0.0)
     }
 
+    fn credits(
+        entries: &[(&str, u8, &str, f64)],
+    ) -> std::collections::HashMap<birdnet_web::metrics::EffortKey, f64> {
+        entries
+            .iter()
+            .map(|(d, h, s, secs)| (((*d).to_owned(), *h, (*s).to_owned()), *secs))
+            .collect()
+    }
+
     #[test]
     fn credit_accumulates_within_a_day() {
         let c = conn();
-        credit(&c, "local", 300.0).unwrap();
-        credit(&c, "local", 300.0).unwrap();
-        // Two samples must add, not replace — otherwise a day's effort is
-        // whatever the last sample happened to be.
+        credit_analysed(&c, &credits(&[("2026-05-19", 9, "local", 300.0)])).unwrap();
+        credit_analysed(&c, &credits(&[("2026-05-19", 10, "local", 300.0)])).unwrap();
+        // Two credits must add, not replace — otherwise a day's effort is
+        // whatever the last one happened to be.
         assert_seconds(seconds_for(&c, "local"), 600.0);
     }
 
     #[test]
     fn sources_are_credited_independently() {
         let c = conn();
-        credit(&c, "cam1", 300.0).unwrap();
-        credit(&c, "cam2", 900.0).unwrap();
+        credit_analysed(
+            &c,
+            &credits(&[
+                ("2026-05-19", 9, "cam1", 300.0),
+                ("2026-05-19", 9, "cam2", 900.0),
+            ]),
+        )
+        .unwrap();
         assert_seconds(seconds_for(&c, "cam1"), 300.0);
         assert_seconds(seconds_for(&c, "cam2"), 900.0);
     }
 
-    /// Effort is stamped with the *local* date.
-    ///
-    /// It is divided into detection counts, and those carry local civil dates
-    /// (see `birdnet_db::clock`). Effort on a UTC date would misalign with its
-    /// own numerator near midnight — worse than no correction, because the
-    /// result still looks like a rate.
+    /// The uptime sample is stamped with the *local* date and hour, as the
+    /// detections it sits beside are (see `birdnet_db::clock`).
     #[test]
-    fn effort_is_stamped_with_the_local_date() {
+    fn uptime_is_stamped_with_the_local_date_and_hour() {
         let c = conn();
-        credit(&c, "local", 300.0).unwrap();
-        let (stored, local): (String, String) = c
+        credit_up(&c, "local", 300.0).unwrap();
+        let (stored, local, hour, local_hour): (String, String, i64, i64) = c
             .query_row(
-                "SELECT (SELECT date FROM recording_effort LIMIT 1), date('now','localtime')",
+                "SELECT date, date('now','localtime'), hour,
+                        CAST(strftime('%H','now','localtime') AS INTEGER)
+                   FROM recording_effort_hourly LIMIT 1",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
         assert_eq!(stored, local);
+        assert_eq!(hour, local_hour);
+        // An uptime sample is not effort.
+        assert_seconds(seconds_for(&c, "local"), 0.0);
     }
 }

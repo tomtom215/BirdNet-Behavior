@@ -4,7 +4,7 @@
 //!
 //! | Module     | Home        | Folds                                                  |
 //! |------------|-------------|--------------------------------------------------------|
-//! | `patterns` | /patterns   | heatmap · dawn chorus · migration · co-occurrence · time series · behavioral |
+//! | `patterns` | /patterns   | seven tabs: when active · dawn chorus · trends · who sings together · migration · visits · sequences |
 //! | `reports`  | /reports    | weekly report · year in review · history               |
 //! | `station`  | /station    | system health (public) + the admin task groups         |
 //!

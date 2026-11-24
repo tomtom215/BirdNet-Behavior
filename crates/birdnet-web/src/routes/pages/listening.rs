@@ -6,11 +6,13 @@
 //! its microphone was down, and heard nothing because it was not there. A chart that
 //! draws both as a zero tells the owner their yard was silent on the day the power
 //! failed. The `recording_effort` ledger (migration 27) is the station's own account
-//! of how many seconds of audio it captured, per local date and source, so it can say
-//! which.
+//! of how many seconds of audio it analysed (captured, before migration 63), per local
+//! date and source, so it can say which.
 //!
-//! It is only ever used to *add* a statement ("not listening"), never to scale or
-//! correct a count, and only where the ledger holds something for the period at all:
+//! The charts use it to *add* a statement ("not listening"). Two summaries also divide
+//! by the days it counts: Year in review's daily average (UIC-01) and the weekly
+//! report's comparison with the week before (UIR-08). Either way it is used only where
+//! the ledger holds something for the period at all:
 //! a station imported from BirdNET-Pi has no ledger, and a chart claiming it was "off"
 //! every day would be a lie of the opposite kind. No rows in the period means unknown,
 //! and unknown draws nothing.
@@ -43,6 +45,12 @@ pub fn effort_by_date(
         Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
     })?;
     rows.collect()
+}
+
+/// How many days of `effort` the station listened on, or `None` when the ledger has no
+/// row (unknown, so nothing is claimed).
+pub fn listened_day_count(effort: &BTreeMap<String, f64>) -> Option<usize> {
+    (!effort.is_empty()).then(|| effort.values().filter(|s| **s >= MIN_LISTENED_SECS).count())
 }
 
 /// For each of the `days` ending on `end` (oldest first): was the station listening?

@@ -360,7 +360,7 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         config_key: "BACKUP_SCHEDULE",
         group: Group::Backups,
         label: "Back up the database",
-        help: "How often the station makes a copy of its database. Copies beside the database protect against a damaged file, not against losing the card or the whole device; copying them elsewhere is on the Data tab.",
+        help: "How often the station makes a copy of its database. Copies beside the database protect against a damaged file, not against losing the card or the whole device; for that, download a full backup and keep it somewhere else.",
         kind: Kind::Choice(&[
             ("", "Weekly (the default)"),
             ("weekly", "Weekly"),

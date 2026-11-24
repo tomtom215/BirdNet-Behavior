@@ -56,6 +56,7 @@ fn parity_dump() {
             confidence_threshold: 0.0,
             top_n: 10,
             num_threads: 2,
+            output_scale: None,
         },
     )
     .unwrap();
@@ -64,7 +65,6 @@ fn parity_dump() {
         raw_audio_input: model.expects_raw_audio(),
         chunk_duration_secs: model.recommended_chunk_secs(),
         chunk_overlap_secs: overlap,
-        confidence_threshold: 0.0,
         ..PipelineConfig::default()
     };
     eprintln!(

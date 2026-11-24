@@ -7,6 +7,7 @@
 //! parser only knows the "Keep a Changelog" shape we already use — if the
 //! file ever drifts, the page renders the raw markdown in a `<pre>` block.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use axum::Router;
@@ -105,17 +106,26 @@ async fn latest_partial() -> Html<String> {
 pub struct Release<'a> {
     pub version: String,
     pub date: Option<String>,
-    pub sections: Vec<(String, Vec<&'a str>)>,
+    /// Each bullet whole: `CHANGELOG.md` wraps a bullet over several indented
+    /// lines, which are joined here with single spaces (UIR-07).
+    pub sections: Vec<(String, Vec<Cow<'a, str>>)>,
 }
 
 #[must_use]
 pub fn parse_changelog(input: &str) -> Vec<Release<'_>> {
     let mut out: Vec<Release<'_>> = Vec::new();
     let mut current: Option<Release<'_>> = None;
-    let mut current_section: Option<(String, Vec<&str>)> = None;
+    let mut current_section: Option<(String, Vec<Cow<'_, str>>)> = None;
+    // Whether the next indented line continues the last bullet: a blank line
+    // or a heading ends a bullet.
+    let mut in_bullet = false;
 
     for raw in input.lines() {
         let line = raw.trim_end();
+        if line.is_empty() {
+            in_bullet = false;
+            continue;
+        }
 
         if let Some((ver, date)) = parse_release_heading(line) {
             if let Some(sec) = current_section.take()
@@ -131,6 +141,7 @@ pub fn parse_changelog(input: &str) -> Vec<Release<'_>> {
                 date,
                 sections: Vec::new(),
             });
+            in_bullet = false;
             continue;
         }
 
@@ -141,13 +152,23 @@ pub fn parse_changelog(input: &str) -> Vec<Release<'_>> {
                 r.sections.push(sec);
             }
             current_section = Some((section_name, Vec::new()));
+            in_bullet = false;
             continue;
         }
 
-        if let Some(bullet) = parse_bullet(raw)
-            && let Some((_, bullets)) = current_section.as_mut()
+        let Some((_, bullets)) = current_section.as_mut() else {
+            continue;
+        };
+        if let Some(bullet) = parse_bullet(raw) {
+            bullets.push(Cow::Borrowed(bullet));
+            in_bullet = true;
+        } else if in_bullet
+            && raw.starts_with(char::is_whitespace)
+            && let Some(last) = bullets.last_mut()
         {
-            bullets.push(bullet);
+            let joined = last.to_mut();
+            joined.push(' ');
+            joined.push_str(line.trim_start());
         }
     }
 
@@ -235,14 +256,22 @@ fn render_release(out: &mut String, r: &Release<'_>) {
     out.push_str("</article>");
 }
 
-/// Tiny inline-md renderer: backticks → `<code>`, `[label](href)` → `<a>`, escape
-/// the rest. Used for changelog bullets — does **not** support all of `CommonMark`.
+/// Tiny inline-md renderer: backticks → `<code>`, `[label](href)` → `<a>`,
+/// `**strong**` and `*emphasis*`, escape the rest. Used for changelog bullets —
+/// does **not** support all of `CommonMark`.
 fn render_inline_md(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i];
+        if c == b'*'
+            && let Some((tag, inner, next)) = emphasis_at(input, i)
+        {
+            let _ = write!(out, "<{tag}>{}</{tag}>", render_inline_md(inner));
+            i = next;
+            continue;
+        }
         if c == b'`' {
             // find closing backtick
             if let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'`') {
@@ -270,17 +299,40 @@ fn render_inline_md(input: &str) -> String {
                 continue;
             }
         }
-        // Default: escape character.
-        match c {
-            b'<' => out.push_str("&lt;"),
-            b'>' => out.push_str("&gt;"),
-            b'&' => out.push_str("&amp;"),
-            b'"' => out.push_str("&quot;"),
-            _ => out.push(c as char),
+        // Default: escape one character. A character, not a byte: pushing
+        // `bytes[i] as char` turned every letter outside ASCII into two or
+        // three wrong ones (UIR-07).
+        let ch = input[i..].chars().next().unwrap_or('\u{fffd}');
+        match ch {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
         }
-        i += 1;
+        i += ch.len_utf8().max(1);
     }
     out
+}
+
+/// A `**strong**` or `*emphasis*` span starting at byte `i` (an asterisk):
+/// the tag, the text inside, and the byte after the closing marker. `None`
+/// when the asterisk opens nothing — no closing marker, nothing between them,
+/// or white space just inside one, as in `a * b`.
+fn emphasis_at(input: &str, i: usize) -> Option<(&'static str, &str, usize)> {
+    let (tag, marker) = if input[i..].starts_with("**") {
+        ("strong", "**")
+    } else {
+        ("em", "*")
+    };
+    let open = i + marker.len();
+    let close = open + input[open..].find(marker)?;
+    let inner = &input[open..close];
+    let padded = inner.starts_with(char::is_whitespace) || inner.ends_with(char::is_whitespace);
+    if inner.is_empty() || padded {
+        return None;
+    }
+    Some((tag, inner, close + marker.len()))
 }
 
 /// "1.5.0" → "1-5-0"
@@ -299,7 +351,7 @@ fn anchor(version: &str) -> String {
 
 fn first_bullet_summary(r: &Release<'_>) -> String {
     // Combine up to three Added bullets, separated by " · " — caps at ~120 chars.
-    let pool: Vec<&&str> = r
+    let pool: Vec<&Cow<'_, str>> = r
         .sections
         .iter()
         .find(|(h, _)| h.eq_ignore_ascii_case("Added"))
@@ -327,7 +379,21 @@ fn first_bullet_summary(r: &Release<'_>) -> String {
             break;
         }
     }
-    out
+    banner_text(&out)
+}
+
+/// The banner's summary as plain text: the emphasis markers dropped (the
+/// banner escapes what it is given), and cut at a word near 140 characters,
+/// now that a bullet is its whole paragraph rather than its first line.
+fn banner_text(summary: &str) -> String {
+    const MAX: usize = 140;
+    let plain: String = summary.chars().filter(|&c| c != '*').collect();
+    if plain.chars().count() <= MAX {
+        return plain;
+    }
+    let cut: String = plain.chars().take(MAX).collect();
+    let at_word = cut.rfind(' ').map_or(cut.as_str(), |sp| &cut[..sp]);
+    format!("{}…", at_word.trim_end_matches([',', ';', ':', ' ']))
 }
 
 fn strip_lead_tag(s: &str) -> &str {
@@ -407,5 +473,48 @@ mod tests {
         assert!(s.contains("Themed confirmation modal"));
         assert!(s.contains("polar plot"));
         assert!(!s.starts_with("[O-")); // tag stripped
+    }
+
+    /// UIR-07: every bullet in `CHANGELOG.md` wraps at about 110 columns, and
+    /// the page read one line per bullet, so each entry stopped mid-sentence;
+    /// `**bold**` printed as asterisks.
+    #[test]
+    fn a_wrapped_bold_bullet_renders_whole_and_bold() {
+        let md = "## [9.9.9] - 2026-11-24\n\n### Added\n\
+                  - **Which classifiers heard it.** A detection's page shows a\n  \
+                  *Who heard it* card listing every model.\n\
+                  - Second bullet.\n";
+        let releases = parse_changelog(md);
+        let mut html = String::new();
+        render_release(&mut html, &releases[0]);
+        assert!(
+            html.contains("<strong>Which classifiers heard it.</strong>"),
+            "bold must render: {html}"
+        );
+        assert!(
+            html.contains("<em>Who heard it</em> card listing every model."),
+            "the continuation line must stay in its bullet: {html}"
+        );
+        assert!(!html.contains("**"), "{html}");
+        assert_eq!(html.matches("<li>").count(), 2, "{html}");
+    }
+
+    /// The same renderer pushed each UTF-8 *byte* as a `char`, so any letter
+    /// outside ASCII came out as two or three wrong ones ("é" as "Ã©").
+    #[test]
+    fn non_ascii_text_survives_rendering() {
+        assert_eq!(
+            render_inline_md("Perch’s 14 795 classes — café"),
+            "Perch’s 14 795 classes — café"
+        );
+    }
+
+    /// Counterparts: a lone asterisk and `a * b` are not emphasis, and code
+    /// keeps its asterisks.
+    #[test]
+    fn an_unpaired_asterisk_is_text() {
+        assert_eq!(render_inline_md("a * b"), "a * b");
+        assert_eq!(render_inline_md("5*"), "5*");
+        assert!(render_inline_md("`a**b**`").contains("<code class=\"mono\">a**b**</code>"));
     }
 }

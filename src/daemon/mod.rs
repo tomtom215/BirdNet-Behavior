@@ -99,6 +99,26 @@ fn is_enabled_but_inert(
     config.enabled && !config.is_effective_at(global_confidence)
 }
 
+/// `(loaded, floor)`: the threshold the classifiers are loaded with, and the
+/// floor they run at.
+///
+/// `loaded` becomes each classifier's "own bar" when it has no
+/// `MODEL_n_THRESHOLD`, and it is the station's: the merge ranks "cleared"
+/// detections by it, the Models board shows it, an answer's "below its own
+/// bar" is judged against it, and acceptance uses the station's too. It was the
+/// dynamic floor, so all three disagreed with acceptance (audit MMP-07).
+/// `floor` is lower with dynamic thresholds on; the processor publishes it as
+/// the [`ThresholdFloor`] and the inference loop lowers every classifier to it
+/// before each file, so the model still runs where a learned species can reach.
+///
+/// [`ThresholdFloor`]: birdnet_core::detection::daemon::ThresholdFloor
+const fn classifier_thresholds(
+    dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig,
+    station: f32,
+) -> (f32, f32) {
+    (station, dynamic.model_floor(station))
+}
+
 /// What the daemon reports about its own throughput (OB-12, PR-1, PR-2),
 /// mapped onto the metrics registry. The source label is derived here
 /// because `derive_source_label` is the one place that knows the convention.
@@ -106,14 +126,18 @@ fn throughput_observer(
     state: &birdnet_web::state::AppState,
 ) -> birdnet_core::detection::daemon::ThroughputObserver {
     birdnet_core::detection::daemon::ThroughputObserver::new({
-                let metrics = state.metrics();
+                let state = state.clone();
                 move |path| {
+                    let metrics = state.metrics();
                     let source = crate::daemon::disposition::derive_source_label(path);
                     metrics.inc_file_analysed(&source);
                     // From the header, not by decoding again: the file is
                     // still claimed here, and this is the data rate.
                     if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
                         metrics.add_audio_analysed(&source, secs);
+                        // And the effort ledger's numerator's denominator:
+                        // only audio analysed is listening (RES-01).
+                        crate::integrations::effort::note_analysed(&state, path, secs);
                     }
                 }
             })
@@ -259,6 +283,7 @@ fn split_plan(
         labels_path: labels_path.to_path_buf(),
         threshold: None,
         sample_rate: None,
+        output_scale: None,
     });
     (primary, specs.collect(), thresholds)
 }
@@ -334,7 +359,7 @@ pub fn start_detection_daemon(
     // feature would be on, configured, and reach zero detections, because the
     // ones it exists to recover were discarded inside the model.
     let dynamic_config = crate::daemon::config::resolve_dynamic_threshold(config);
-    let model_confidence = dynamic_config.model_floor(confidence);
+    let (load_confidence, model_confidence) = classifier_thresholds(dynamic_config, confidence);
     if is_enabled_but_inert(dynamic_config, confidence) {
         tracing::warn!(
             floor = dynamic_config.min,
@@ -530,14 +555,15 @@ pub fn start_detection_daemon(
         model_path,
         labels_path,
         // The primary is built by the daemon from `model_path`/`labels_path`
-        // above and the plan's three settings for it below.
+        // above and the plan's four settings for it below.
         extra_models,
         primary_id: primary.id,
         primary_threshold: primary.threshold,
         primary_sample_rate: primary.sample_rate,
+        primary_output_scale: primary.output_scale,
         model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
-        model: build_model_config(sensitivity, model_confidence),
+        model: build_model_config(sensitivity, load_confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
         metadata_labels_path,
@@ -638,7 +664,11 @@ pub fn start_detection_daemon(
                         dynamic_config,
                     ),
                     provenance,
-                    Some((threshold_floor, model_confidence)),
+                    Some(processor::PublishedFloor {
+                        floor: threshold_floor,
+                        model: model_confidence,
+                        station: global_confidence,
+                    }),
                 );
             });
             Some(handle)
@@ -751,6 +781,106 @@ mod liveness_mirror_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A 15 s, 48 kHz mono silent WAV at `path`.
+    fn write_segment(path: &std::path::Path) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for _ in 0..(15 * 48_000) {
+            w.write_sample(0_i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    /// RES-01 / MSC-16. Effort is the audio the pipeline analysed, credited to
+    /// the hour it was recorded in, not the time a source's gauge read "up".
+    /// Twenty 15 s segments, half shed under a thermal limit, in one five-minute
+    /// tick with the source up the whole time: 150 s of effort, not 300.
+    #[test]
+    fn effort_is_the_audio_analysed_not_the_time_a_source_was_up() {
+        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        state
+            .with_db(|c| {
+                c.insert(&NewAudioSource::defaults(
+                    "src_a",
+                    SourceKind::UsbAlsa,
+                    "hw:1,0",
+                ))
+            })
+            .unwrap();
+        state.metrics().set_source_up("src_a", true);
+        let observer = super::throughput_observer(&state);
+        for i in 0..20 {
+            let path = tmp.path().join(format!(
+                "2026-05-19-birdnet-src_a-09:{:02}:{:02}.wav",
+                i / 4,
+                (i % 4) * 15
+            ));
+            write_segment(&path);
+            if i % 2 == 0 {
+                observer.analysed(&path);
+            } else {
+                observer.shed(&path, birdnet_core::detection::daemon::ShedReason::Thermal);
+            }
+        }
+        crate::integrations::effort::tick(&state, 300.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (total - 150.0).abs() < 1e-6,
+            "effort credited {total} s for 150 s of analysed audio (300 s of capture, half shed)"
+        );
+        let day: String = state.with_db(|c| {
+            c.query_row(
+                "SELECT date FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            day, "2026-05-19",
+            "effort belongs to the day the audio was recorded"
+        );
+        // RES-02: the same audio by the hour it was recorded in. The uptime sample
+        // is the clock's: it lands in the hour the tick ran in, not 09:00.
+        let (hour, analysed): (i64, f64) = state.with_db(|c| {
+            c.query_row(
+                "SELECT hour, seconds_analysed FROM recording_effort_hourly
+                  WHERE date = '2026-05-19' AND source = 'src_a'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        });
+        assert_eq!(hour, 9);
+        assert!((analysed - 150.0).abs() < 1e-6, "{analysed}");
+        let up: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds_up), 0) FROM recording_effort_hourly WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (up - 300.0).abs() < 1e-6,
+            "the five-minute sample still records the source as up: {up}"
+        );
+    }
+
     /// ACC-02's exposition gate: a file whose privacy rule masked windows and
     /// removed detections reaches `birdnet_detections_dropped_total` and
     /// `birdnet_windows_masked_total` under `reason="privacy"`, and the day's
@@ -850,6 +980,27 @@ mod tests {
         assert!(thermal_limit_reached(Some(line + 10.0), false));
         assert!(thermal_limit_reached(None, true));
         assert!(thermal_limit_reached(Some(line - 20.0), true));
+    }
+
+    /// Audit MMP-07: with dynamic thresholds on (floor 0.3) under a 0.7
+    /// station, a classifier without a threshold of its own is loaded with the
+    /// station's 0.7, so its "own bar" is the one acceptance applies. The floor
+    /// still reaches the model at run time through `ThresholdFloor`; that half
+    /// is held by `a_lowered_threshold_reaches_a_model_loaded_above_it`
+    /// (`tests/a_lowered_species_threshold_reaches_the_model.rs`).
+    #[test]
+    fn classifiers_are_loaded_at_the_station_bar_not_the_dynamic_floor() {
+        use birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig;
+        let on = DynamicThresholdConfig {
+            enabled: true,
+            trigger: 0.8,
+            min: 0.3,
+            valid_hours: 24,
+        };
+        let (loaded, floor) = classifier_thresholds(on, 0.7);
+        assert!((loaded - 0.7).abs() < f32::EPSILON, "loaded at {loaded}");
+        // Counterpart: the floor the processor publishes is still the low one.
+        assert!((floor - 0.3).abs() < f32::EPSILON, "floor {floor}");
     }
 
     /// The full truth table for the "enabled but inert" warning.

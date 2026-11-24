@@ -181,7 +181,7 @@ fn alsa_devices_of(rows: &[birdnet_db::audio_sources::AudioSource]) -> Vec<Strin
 /// Every source the station's database holds that has not been removed, read
 /// the way capture reads them. `None` when the table cannot be consulted (see
 /// `effective_alsa_devices`).
-fn database_sources(
+pub(super) fn database_sources(
     config: Option<&Config>,
 ) -> Option<Vec<birdnet_db::audio_sources::AudioSource>> {
     use birdnet_db::audio_sources::AudioSourceStore;
@@ -198,6 +198,35 @@ fn database_sources(
     )
     .ok()?;
     conn.list().ok()
+}
+
+/// Whether each local source's capture rate can carry the band the primary
+/// classifier listens to (ACC-14): one warning per source that cannot.
+///
+/// Local sources only (USB and PipeWire microphones), whose rate is the row's.
+/// A network stream's rate is the camera's, which nothing knows until ffmpeg
+/// opens the stream; the capture log reports it then. Judged against the
+/// primary, which hears every source no `MODEL_ROUTES` entry names; a source
+/// below 12 kHz of band is narrower than any classifier this project ships.
+/// Nothing is said for a source that passes: no news is the common case.
+pub(super) fn source_band_checks(
+    rows: &[birdnet_db::audio_sources::AudioSource],
+    model_rate_hz: u32,
+) -> Vec<Check> {
+    use birdnet_db::audio_sources::SourceKind;
+    rows.iter()
+        .filter(|row| row.disabled_at.is_none())
+        .filter(|row| matches!(row.kind, SourceKind::UsbAlsa | SourceKind::PipeWire))
+        .filter_map(|row| {
+            let warning = birdnet_core::audio::band::band_warning(row.sample_rate, model_rate_hz)?;
+            Some(Check::warn(
+                "Audio source band",
+                format!("source `{}`: {warning}", row.id),
+                "if the device supports 32 or 48 kHz, remove the source and add it again at \
+                 that rate under Settings \u{2192} Capture (a source's rate is set when it is added)",
+            ))
+        })
+        .collect()
 }
 
 /// "1 USB microphone", "2 network streams", "1 USB microphone and 1 network
@@ -535,6 +564,56 @@ mod tests {
     use crate::cli::Cli;
     use crate::doctor::Status;
     use clap::Parser as _;
+
+    fn source(
+        id: &str,
+        kind: birdnet_db::audio_sources::SourceKind,
+        rate: u32,
+    ) -> birdnet_db::audio_sources::AudioSource {
+        use birdnet_db::audio_sources::{
+            AudioSource, Channels, PipelineFlags, RtspMediaMode, RtspTransport,
+        };
+        AudioSource {
+            id: id.to_owned(),
+            kind,
+            device_id: "plughw:1,0".to_owned(),
+            label: None,
+            sample_rate: rate,
+            channels: Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::Full,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            eq_chain: String::new(),
+            disabled_at: None,
+            created_at: "2026-05-01".to_owned(),
+            updated_at: "2026-05-01".to_owned(),
+        }
+    }
+
+    /// ACC-14 in `--doctor`: a 16 kHz microphone warns against a 48 kHz
+    /// primary, naming its source; a 48 kHz one, a disabled one, and a network
+    /// stream (whose row rate is not the camera's) do not.
+    #[test]
+    fn a_microphone_too_narrow_for_the_classifier_is_named() {
+        use birdnet_db::audio_sources::SourceKind;
+        let mut disabled = source("old", SourceKind::UsbAlsa, 8_000);
+        disabled.disabled_at = Some("2026-06-01".to_owned());
+        let rows = [
+            source("garden", SourceKind::UsbAlsa, 16_000),
+            source("porch", SourceKind::PipeWire, 48_000),
+            source("cam", SourceKind::Rtsp, 8_000),
+            disabled,
+        ];
+        let checks = super::source_band_checks(&rows, 48_000);
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert_eq!(checks[0].status, Status::Warn);
+        assert!(checks[0].message.contains("`garden`"), "{checks:?}");
+        assert!(checks[0].message.contains("16000 Hz"), "{checks:?}");
+        assert!(super::source_band_checks(&rows[1..2], 48_000).is_empty());
+    }
 
     #[test]
     fn check_audio_source_none_configured_warns() {

@@ -38,11 +38,12 @@ pub use queries::imports::{
     imported_detection_count, list_import_batches, remove_import_batch,
 };
 pub use queries::maintenance::{
-    AUDIT_RETENTION_DAYS, BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS,
-    DueReason, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_OFFSITE_BACKUP,
-    JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT, JOBS, JobSpec,
-    JobStatus, NOTIFICATION_RETENTION_DAYS, QUARANTINE_RETENTION_DAYS, SOUND_LEVEL_RETENTION_DAYS,
-    due_state, job_statuses, last_run_result, last_run_unix, record_run, record_run_result,
+    AUDIT_RETENTION_DAYS, BACKUP_RETENTION, BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule,
+    DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION,
+    JOB_OFFSITE_BACKUP, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
+    JOBS, JobSpec, JobStatus, NOTIFICATION_RETENTION_DAYS, QUARANTINE_RETENTION_DAYS,
+    SOUND_LEVEL_RETENTION_DAYS, due_state, job_statuses, last_run_result, last_run_unix,
+    record_run, record_run_result,
 };
 pub use queries::model_scores::{
     DetectionModelScore, DetectionModelSummary, ModelLead, ModelScore, ModelScoreState,
@@ -51,8 +52,8 @@ pub use queries::model_scores::{
 };
 pub use queries::{
     ALL_QUARANTINE_REASONS, AnalysisRun, BulkOutcome, CLIP_AVAILABLE, DateRange, DetectionFilter,
-    DetectionKey, DiscardRow, HourWindow, ImageBlacklist, LockFilter, ModelVsReviewRow,
-    NewAnalysisRun, QualitySummary, QuarantineFilter, QuarantineReason, QuarantineRecord,
+    DetectionKey, DiscardRow, EffortHour, HourWindow, ImageBlacklist, LockFilter, ModelVsReviewRow,
+    NewAnalysisRun, Occasion, QualitySummary, QuarantineFilter, QuarantineReason, QuarantineRecord,
     QuarantineRow, QuarantineStats, RecordingsFilter, ReviewVerdictDay, RunModel, SearchTerm,
     SortOrder, SpeciesHeard, SpeciesInterval, SpeciesThreshold, SpeciesUsage, TodayFilter,
     VerdictFilter, add_discards, add_image_blacklist, analysis_run, analytic_detection_count,
@@ -63,10 +64,10 @@ pub use queries::{
     count_quarantine, daily_counts, delete_detection, delete_detection_at, delete_quarantine,
     delete_species_detections, delete_species_interval, delete_species_threshold,
     detected_at_utc_for, detection_at, detection_count, detection_count_for_date,
-    detection_count_for_species_date, detection_counts_by_run, detection_dates,
+    detection_count_for_species_date, detection_counts_by_run, detection_dates, detection_history,
     detection_quality_by_hour, detection_with_clip, detections_by_date, detections_by_species,
-    detections_for_clip, detections_per_day, discards_on, distinct_detection_dates, get_quarantine,
-    get_species_interval_map, get_species_intervals, get_species_threshold_map,
+    detections_for_clip, detections_per_day, discards_on, distinct_detection_dates, effort_hours,
+    get_quarantine, get_species_interval_map, get_species_intervals, get_species_threshold_map,
     get_species_thresholds, hourly_activity, hourly_totals, insert_analysis_run, insert_detection,
     insert_quarantine, is_detection_locked, is_detection_locked_at, is_image_blacklisted,
     known_sources, last_hour_count, latest_analysis_run, latest_detection, latest_detection_full,

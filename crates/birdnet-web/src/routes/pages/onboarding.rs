@@ -59,7 +59,9 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 
 use birdnet_core::audio::capture::alsa::CaptureDevice;
-use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, NewAudioSource, SourceKind};
+use birdnet_db::audio_sources::{
+    AudioSource, AudioSourceStore, NewAudioSource, SourceKind, device_identity,
+};
 use birdnet_db::settings::{self, SettingsCategory};
 
 use crate::routes::admin::audio::{detail_for, kind_label};
@@ -1243,10 +1245,12 @@ fn add_source(conn: &rusqlite::Connection, kind: SourceKind, device: &str, label
             return;
         }
     };
-    if existing
-        .iter()
-        .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device)
-    {
+    // Compared as devices, as the Capture tab compares them (MSC-10).
+    let cards = crate::routes::admin::audio::alsa_cards();
+    let identity = device_identity(kind, device, cards.as_deref());
+    if existing.iter().any(|s| {
+        s.kind == kind && device_identity(s.kind, &s.device_id, cards.as_deref()) == identity
+    }) {
         return;
     }
     let mut new =
@@ -2391,6 +2395,32 @@ mod tests {
                 "rms {rms} dBFS, peak {peak} dBFS: {message}"
             );
         }
+    }
+
+    /// MSC-10, the wizard's path. A device the station already has, under
+    /// another spelling, is not added a second time; a different device is.
+    #[test]
+    fn the_wizard_does_not_add_one_device_twice() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        add_source(&conn, SourceKind::UsbAlsa, "plughw:1,0", None);
+        add_source(&conn, SourceKind::UsbAlsa, "hw:1,0", None);
+        add_source(&conn, SourceKind::Rtsp, "rtsp://cam.local/live", None);
+        add_source(
+            &conn,
+            SourceKind::Rtsp,
+            "rtsp://user:pw@cam.local:554/live/",
+            None,
+        );
+        let devices: Vec<String> = AudioSourceStore::list(&conn)
+            .expect("list")
+            .into_iter()
+            .map(|s| s.device_id)
+            .collect();
+        assert_eq!(devices.len(), 2, "{devices:?}");
+        // Counterpart: another card is another source.
+        add_source(&conn, SourceKind::UsbAlsa, "plughw:2,0", None);
+        assert_eq!(AudioSourceStore::list(&conn).expect("list").len(), 3);
     }
 
     /// The microphone test records only from a card the station listed: a device

@@ -197,8 +197,8 @@ GET /api/v2/analytics/assembly             → how many voices have joined, in o
 GET /api/v2/analytics/answers              → who is heard within a minute after whom
 GET /api/v2/analytics/next-species          → "what's coming next" prediction
 GET /api/v2/analytics/previous-species      → what is heard just before a species
-GET /api/v2/analytics/abundance             → effort-corrected abundance
-GET /api/v2/analytics/phenology             → effort-corrected phenology
+GET /api/v2/analytics/abundance             → detection rate per listened hour, with a Poisson interval
+GET /api/v2/analytics/phenology             → arrival and departure dates, with an effort-gap flag
 GET /api/v2/analytics/status                → engine availability
 ```
 

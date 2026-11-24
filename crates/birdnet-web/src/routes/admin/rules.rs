@@ -1321,7 +1321,7 @@ pub(crate) fn rules_body() -> String {
         <div>
           <label for="action_type">Action</label>
           <select id="action_type" name="action_type">
-            <option value="log">Log (structured INFO entry)</option>
+            <option value="log">Write it to the station log</option>
             <option value="webhook">Webhook (HTTP request)</option>
             <option value="suppress">Suppress (block all notifications)</option>
           </select>
