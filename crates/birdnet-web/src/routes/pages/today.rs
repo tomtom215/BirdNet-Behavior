@@ -105,24 +105,39 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
         let password_set = matches!(counts, Ok((0, _)))
             && crate::auth_middleware::admin_password_configured(&state_for_query);
         let has_location = station_has_location(&state_for_query);
+        // Likewise read only for the checklist: what the microphone is hearing.
+        let heard_dbfs = if matches!(counts, Ok((0, _))) {
+            recent_noise_floor_dbfs(&state_for_query)
+        } else {
+            None
+        };
         counts.map(|(total, sources)| {
-            Some((total, sources, disk_pct, password_set, layout, has_location))
+            Some((
+                total,
+                sources,
+                disk_pct,
+                password_set,
+                layout,
+                has_location,
+                heard_dbfs,
+            ))
         })
     })
     .await;
 
-    let (total_ever, sources, disk_pct, password_set, layout, has_location) = match loaded {
-        Ok(Ok(Some(v))) => v,
-        Ok(Ok(None)) => return Redirect::to("/onboarding").into_response(),
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "today: station totals could not be read");
-            return today_error_page(&headers);
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "today: task failed");
-            return today_error_page(&headers);
-        }
-    };
+    let (total_ever, sources, disk_pct, password_set, layout, has_location, heard_dbfs) =
+        match loaded {
+            Ok(Ok(Some(v))) => v,
+            Ok(Ok(None)) => return Redirect::to("/onboarding").into_response(),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "today: station totals could not be read");
+                return today_error_page(&headers);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "today: task failed");
+                return today_error_page(&headers);
+            }
+        };
 
     let firstrun = total_ever == 0;
     let enabled: Vec<_> = sources.iter().filter(|s| s.disabled_at.is_none()).collect();
@@ -144,6 +159,7 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
             password_set,
             model_loaded,
             has_location,
+            heard_dbfs,
         )
     } else {
         signal_card(&super::listen::source_options(&sources), enabled.first())
@@ -292,6 +308,64 @@ fn signal_card(
 /// The model row states what is bundled, not that inference has succeeded, and
 /// is worded accordingly — the page has no runtime signal for that, and an
 /// unearned "loaded ✓" is the same defect as the other two.
+/// A measured noise floor at or below this, in dBFS, is a microphone that hears
+/// nothing.
+///
+/// One least-significant bit of a 16-bit sample is -90.3 dBFS, so a floor here
+/// is a converter putting out zeros or its last bit: a capture switched off, a
+/// gain at the bottom, an input with nothing plugged in. The sampler reports
+/// digital silence as -96 (`birdnet_core::audio::quality`), and a real room,
+/// even a quiet one at night, sits tens of dB above this.
+const SILENT_FLOOR_DBFS: f64 = -90.0;
+
+/// The loudest noise floor any source reported in the station's current or
+/// previous local hour, from `audio_levels` (the acoustic-health sampler's
+/// table, written every five minutes by the daemon). `None` when there is no
+/// such reading: a web-only process, a station that has just started, or a
+/// failed read, which is logged and claims nothing.
+fn recent_noise_floor_dbfs(state: &AppState) -> Option<f64> {
+    let rows = state.with_read_db(|conn| birdnet_db::audio_levels::recent_hours(conn, 48));
+    let rows = rows
+        .inspect_err(|e| tracing::warn!(error = %e, "today: audio levels unreadable"))
+        .ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    loudest_recent_floor(&rows, now + birdnet_db::clock::local_utc_offset_secs())
+}
+
+/// The newest bucket of each source within the hour of `now_local_secs` (local
+/// wall-clock seconds) and the hour before it, and of those the loudest floor.
+///
+/// The loudest, so "silent" is said only when every measured source is; the
+/// last two hours, so a reading left from an earlier run is not taken for this
+/// one. `rows` is newest first, as `recent_hours` returns it.
+fn loudest_recent_floor(
+    rows: &[birdnet_db::audio_levels::HourlyLevel],
+    now_local_secs: i64,
+) -> Option<f64> {
+    let key = |secs: i64| {
+        let c = birdnet_core::civil::civil_from_unix_secs(secs);
+        (
+            format!("{:04}-{:02}-{:02}", c.year, c.month, c.day),
+            u8::try_from(c.hour).unwrap_or(0),
+        )
+    };
+    let recent = [key(now_local_secs), key(now_local_secs - 3600)];
+    let mut seen: Vec<&str> = Vec::new();
+    let mut loudest: Option<f64> = None;
+    for row in rows {
+        if seen.contains(&row.source.as_str())
+            || !recent.iter().any(|(d, h)| *d == row.date && *h == row.hour)
+        {
+            continue;
+        }
+        seen.push(&row.source);
+        loudest = Some(loudest.map_or(row.noise_floor_dbfs, |l| l.max(row.noise_floor_dbfs)));
+    }
+    loudest
+}
+
 fn firstrun_checklist(
     enabled: &[&birdnet_db::audio_sources::AudioSource],
     disk_pct: Option<f64>,
@@ -299,6 +373,7 @@ fn firstrun_checklist(
     password_set: bool,
     model_loaded: bool,
     has_location: bool,
+    heard_dbfs: Option<f64>,
 ) -> String {
     // Every configured source counts, not only the first: one live
     // microphone beside two dead cameras ticked "Microphone recording" under
@@ -378,7 +453,22 @@ fn firstrun_checklist(
                     format!("{up} of {of}"),
                 );
             }
+            let silent = heard_dbfs.filter(|d| *d <= SILENT_FLOOR_DBFS);
             match capturing {
+                // The process is up, and the sampler says the audio carries
+                // nothing (OOB-05): a muted capture switch or a gain at zero
+                // looked exactly like a working microphone here.
+                Some(true) if silent.is_some() => (
+                    "fail",
+                    "Silent — check the microphone isn't muted".to_string(),
+                    format!(
+                        "{source} — recording, but the audio carries nothing: a capture switch \
+                         off, a gain at zero, or nothing plugged in. Check it under \
+                         <a href=\"/station/capture\">Settings → Capture</a>"
+                    ),
+                    silent.map_or_else(String::new, |d| format!("{d:.0} dBFS")),
+                ),
+                // Configured *and* the supervisor reports it up.
                 // Configured *and* the supervisor reports it up.
                 Some(true) => (
                     "done",
@@ -445,7 +535,8 @@ fn firstrun_checklist(
     // The station listens only when the two rows that make it listen pass. A
     // live "Listening for the first call…" under "Microphone not recording"
     // promised what the rows above had just withdrawn.
-    let listening_row = if (mic_mark == "done" || up > 0) && model_loaded {
+    let partial = up > 0 && up < enabled.len();
+    let listening_row = if (mic_mark == "done" || partial) && model_loaded {
         r#"<div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>"#
     } else {
         r#"<div class="x-check-row"><span class="mk wait"><span class="bnb-dot"></span></span><div class="c"><div class="t">Not listening yet</div><div class="d">starts once the microphone and detector above are ready</div></div><span class="v">—</span></div>"#
@@ -1691,7 +1782,7 @@ mod tests {
     /// station may name.
     #[test]
     fn firstrun_checklist_has_a_location_row() {
-        let missing = firstrun_checklist(&[], Some(12.0), &[], true, true, false);
+        let missing = firstrun_checklist(&[], Some(12.0), &[], true, true, false, None);
         let row = missing
             .split("<div class=\"x-check-row\">")
             .find(|r| r.contains("Location"))
@@ -1703,7 +1794,7 @@ mod tests {
         );
         assert!(row.contains("/station/capture#set-location"), "{row}");
 
-        let set = firstrun_checklist(&[], Some(12.0), &[], true, true, true);
+        let set = firstrun_checklist(&[], Some(12.0), &[], true, true, true, None);
         let row = set
             .split("<div class=\"x-check-row\">")
             .find(|r| r.contains("Location"))
@@ -1796,6 +1887,7 @@ mod tests {
             true,
             true,
             true,
+            None,
         );
         let row = html
             .split("<div class=\"x-check-row\">")
@@ -1817,11 +1909,140 @@ mod tests {
             true,
             true,
             true,
+            None,
         );
         assert!(
             html.contains("Microphone recording") && html.contains("mk done"),
             "{html}"
         );
+    }
+
+    /// The gauge says the capture process is up, and the sampler says the audio
+    /// carries nothing (OOB-05): a muted or zero-gain microphone ticked
+    /// "Microphone recording" and promised "Listening for the first call…".
+    #[test]
+    fn firstrun_checklist_says_silent_for_a_recording_microphone_that_hears_nothing() {
+        let s = src("src_1");
+        for heard in [-96.0, -90.0] {
+            let html = firstrun_checklist(
+                &[&s],
+                Some(38.0),
+                &[Some(true)],
+                true,
+                true,
+                true,
+                Some(heard),
+            );
+            assert!(
+                html.contains("Silent — check the microphone isn't muted"),
+                "{heard} dBFS: {html}"
+            );
+            assert!(html.contains("mk down"), "{heard} dBFS: not a tick");
+            assert!(
+                !html.contains("Listening for the first call"),
+                "{heard} dBFS: {html}"
+            );
+        }
+    }
+
+    /// The counterpart: a room's floor, a floor just above the line, or no
+    /// reading at all is not "Silent", and a gauge that is down says so first.
+    #[test]
+    fn firstrun_checklist_is_not_silent_for_a_microphone_that_hears_a_room() {
+        let s = src("src_1");
+        for heard in [Some(-40.0), Some(-89.9), None] {
+            let html =
+                firstrun_checklist(&[&s], Some(38.0), &[Some(true)], true, true, true, heard);
+            assert!(html.contains("Microphone recording"), "{heard:?}: {html}");
+            assert!(!html.contains("Silent"), "{heard:?}: {html}");
+            assert!(html.contains("Listening for the first call"), "{heard:?}");
+        }
+        let down = firstrun_checklist(
+            &[&s],
+            Some(38.0),
+            &[Some(false)],
+            true,
+            true,
+            true,
+            Some(-96.0),
+        );
+        assert!(down.contains("Microphone not recording"), "{down}");
+        assert!(!down.contains("Silent"), "{down}");
+    }
+
+    fn level(
+        date: &str,
+        hour: u8,
+        source: &str,
+        floor: f64,
+    ) -> birdnet_db::audio_levels::HourlyLevel {
+        birdnet_db::audio_levels::HourlyLevel {
+            date: date.to_owned(),
+            hour,
+            source: source.to_owned(),
+            samples: 3,
+            noise_floor_dbfs: floor,
+            noise_floor_min_dbfs: floor,
+            snr_db: 0.0,
+            spectral_flatness: 0.5,
+            rain_samples: 0,
+        }
+    }
+
+    /// The reading is the newest bucket per source in this hour or the last,
+    /// and the loudest of those. 2026-11-01 00:30 local, so the hour before is
+    /// on the previous day (and month).
+    #[test]
+    fn the_recent_floor_is_the_loudest_source_in_this_hour_or_the_last() {
+        // 2026-11-01T00:30:00 as local wall-clock seconds.
+        let now = 1_793_493_000;
+        let c = birdnet_core::civil::civil_from_unix_secs(now);
+        assert_eq!(
+            (c.year, c.month, c.day, c.hour),
+            (2026, 11, 1, 0),
+            "the fixture's clock"
+        );
+
+        assert_eq!(loudest_recent_floor(&[], now), None);
+        let silent = [level("2026-11-01", 0, "local", -96.0)];
+        assert_eq!(loudest_recent_floor(&silent, now), Some(-96.0));
+        let last_hour = [level("2026-10-31", 23, "local", -96.0)];
+        assert_eq!(
+            loudest_recent_floor(&last_hour, now),
+            Some(-96.0),
+            "the hour before, across midnight and a month"
+        );
+        let stale = [level("2026-10-31", 22, "local", -96.0)];
+        assert_eq!(
+            loudest_recent_floor(&stale, now),
+            None,
+            "two hours ago is stale"
+        );
+        let older_run = [level("2026-10-01", 0, "local", -96.0)];
+        assert_eq!(
+            loudest_recent_floor(&older_run, now),
+            None,
+            "same hour, other day"
+        );
+
+        // Newest first: this hour's room floor wins over last hour's silence.
+        let recovered = [
+            level("2026-11-01", 0, "local", -48.0),
+            level("2026-10-31", 23, "local", -96.0),
+        ];
+        assert_eq!(loudest_recent_floor(&recovered, now), Some(-48.0));
+        let newly_muted = [
+            level("2026-11-01", 0, "local", -96.0),
+            level("2026-10-31", 23, "local", -48.0),
+        ];
+        assert_eq!(loudest_recent_floor(&newly_muted, now), Some(-96.0));
+
+        // Two sources, one silent: not silent.
+        let two = [
+            level("2026-11-01", 0, "RTSP_1", -55.0),
+            level("2026-11-01", 0, "local", -96.0),
+        ];
+        assert_eq!(loudest_recent_floor(&two, now), Some(-55.0));
     }
 
     #[test]
@@ -1870,21 +2091,21 @@ mod tests {
     /// DD-14: the first screen says when the station is open to anyone.
     #[test]
     fn firstrun_checklist_says_when_there_is_no_admin_password() {
-        let open = firstrun_checklist(&[], Some(12.0), &[], false, true, true);
+        let open = firstrun_checklist(&[], Some(12.0), &[], false, true, true, None);
         assert!(open.contains("No admin password"), "{open}");
         assert!(open.contains(r#"href="/onboarding""#), "{open}");
         assert!(
             open.contains("mk down"),
             "an open station is a fault mark, not a tick"
         );
-        let owned = firstrun_checklist(&[], Some(12.0), &[], true, true, true);
+        let owned = firstrun_checklist(&[], Some(12.0), &[], true, true, true, None);
         assert!(owned.contains("Admin password"), "{owned}");
         assert!(!owned.contains("No admin password"), "{owned}");
     }
 
     #[test]
     fn firstrun_checklist_reflects_missing_microphone() {
-        let html = firstrun_checklist(&[], Some(38.0), &[], true, true, true);
+        let html = firstrun_checklist(&[], Some(38.0), &[], true, true, true, None);
         assert!(html.contains("Waiting for a microphone"));
         assert!(html.contains("38% used"));
         // Honest waiting mark, not a fake checkmark.
@@ -1918,7 +2139,7 @@ mod tests {
     #[test]
     fn firstrun_checklist_flags_a_configured_but_silent_microphone() {
         let s = src("src_1");
-        let html = firstrun_checklist(&[&s], Some(38.0), &[Some(false)], true, true, true);
+        let html = firstrun_checklist(&[&s], Some(38.0), &[Some(false)], true, true, true, None);
         assert!(html.contains("Microphone not recording"), "{html}");
         assert!(html.contains("mk down"), "must not show a pass mark");
         assert!(
@@ -1934,16 +2155,16 @@ mod tests {
     fn firstrun_checklist_listens_only_when_the_microphone_and_detector_are_up() {
         let s = src("src_1");
         for (capturing, model) in [(Some(false), true), (None, true), (Some(true), false)] {
-            let html = firstrun_checklist(&[&s], Some(38.0), &[capturing], true, model, true);
+            let html = firstrun_checklist(&[&s], Some(38.0), &[capturing], true, model, true, None);
             assert!(
                 !html.contains("bnb-dot live") && !html.contains("Listening for the first call"),
                 "capturing={capturing:?} model={model}: {html}"
             );
         }
-        let none = firstrun_checklist(&[], Some(38.0), &[], true, true, true);
+        let none = firstrun_checklist(&[], Some(38.0), &[], true, true, true, None);
         assert!(!none.contains("bnb-dot live"), "no microphone: {none}");
 
-        let html = firstrun_checklist(&[&s], Some(38.0), &[Some(true)], true, true, true);
+        let html = firstrun_checklist(&[&s], Some(38.0), &[Some(true)], true, true, true, None);
         assert!(html.contains("Listening for the first call"), "{html}");
         assert!(html.contains("bnb-dot live"), "{html}");
     }
@@ -1951,7 +2172,7 @@ mod tests {
     #[test]
     fn firstrun_checklist_ticks_a_microphone_that_is_actually_recording() {
         let s = src("src_1");
-        let html = firstrun_checklist(&[&s], Some(38.0), &[Some(true)], true, true, true);
+        let html = firstrun_checklist(&[&s], Some(38.0), &[Some(true)], true, true, true, None);
         assert!(html.contains("Microphone recording"));
         assert!(html.contains("mk done"));
     }
@@ -1961,7 +2182,7 @@ mod tests {
         // No gauge published is "not known", not "broken" — the supervisor may
         // simply not have reconciled the source yet.
         let s = src("src_1");
-        let html = firstrun_checklist(&[&s], Some(38.0), &[None], true, true, true);
+        let html = firstrun_checklist(&[&s], Some(38.0), &[None], true, true, true, None);
         assert!(html.contains("Microphone starting…"), "{html}");
         assert!(!html.contains("mk down"));
     }
@@ -1970,7 +2191,7 @@ mod tests {
     /// "Room to record ✓ — nearly full". A green mark reads as "fine".
     #[test]
     fn firstrun_checklist_does_not_tick_a_nearly_full_disk() {
-        let html = firstrun_checklist(&[], Some(97.0), &[], true, true, true);
+        let html = firstrun_checklist(&[], Some(97.0), &[], true, true, true, None);
         assert!(html.contains("97% used"));
         assert!(html.contains("nearly full"), "{html}");
         let disk_row = html
@@ -1988,7 +2209,7 @@ mod tests {
 
     #[test]
     fn firstrun_checklist_ticks_a_healthy_disk() {
-        let html = firstrun_checklist(&[], Some(12.0), &[], true, true, true);
+        let html = firstrun_checklist(&[], Some(12.0), &[], true, true, true, None);
         assert!(html.contains("plenty of space"));
         assert!(html.contains("12% used"));
     }
@@ -2001,12 +2222,12 @@ mod tests {
     /// hard-coded tick stated as a requirement.
     #[test]
     fn firstrun_checklist_reports_the_detector_not_a_bundled_claim() {
-        let stopped = firstrun_checklist(&[], Some(12.0), &[], true, false, true);
+        let stopped = firstrun_checklist(&[], Some(12.0), &[], true, false, true, None);
         assert!(stopped.contains("Detector not running"), "{stopped}");
         assert!(stopped.contains(r#"href="/admin/doctor""#), "{stopped}");
         assert!(!stopped.contains("Model loaded"), "{stopped}");
         assert!(!stopped.contains("Model bundled"), "{stopped}");
-        let running = firstrun_checklist(&[], Some(12.0), &[], true, true, true);
+        let running = firstrun_checklist(&[], Some(12.0), &[], true, true, true, None);
         assert!(running.contains("Model loaded"), "{running}");
         assert!(!running.contains("Detector not running"), "{running}");
     }
