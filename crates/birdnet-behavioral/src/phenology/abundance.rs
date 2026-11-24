@@ -1,19 +1,26 @@
-//! SQL query builders for species abundance analytics.
+//! SQL query builders for seasonal activity: weekly and monthly detection
+//! counts, and the effort-corrected detection rate.
 //!
-//! Generates SQL for weekly, monthly, and seasonal abundance indices.
-//! All queries normalise detection counts to produce relative abundance
-//! values in \[0.0, 1.0\] where 1.0 represents the peak detection week.
+//! Nothing here measures abundance — how many birds there are. Every query
+//! counts detections, and a detection count moves with a species' numbers,
+//! its call rate, its loudness, the model's skill with it and the station's
+//! listening, all at once.
+//! The functions keep their historical `abundance` names for compatibility.
 //!
-//! ## Relative abundance
+//! ## Relative index (no effort correction)
 //!
-//! Raw detection counts are influenced by recording effort (number of
-//! recording hours per week).  The relative abundance index corrects for
-//! this by dividing each week's count by the maximum weekly count for that
-//! species in that year.
+//! [`weekly_abundance_sql`] divides each week's detection count by the
+//! species' peak weekly count that year, giving an index in \[0.0, 1.0\]. It
+//! does **not** correct for recording effort: a week with half the listening
+//! reads as half as active. It is the shape of a season at a station that
+//! listened evenly, nothing more.
 //!
-//! For effort-corrected abundance (detections per recording hour), use
-//! [`effort_corrected_abundance_sql`] which requires an `effort_hours`
-//! column in the data.
+//! ## Detection rate (effort-corrected)
+//!
+//! [`effort_corrected_abundance_sql`] divides detections by the hours the
+//! station recorded listening (`recording_effort`), giving detections per
+//! listened hour with a 95 % Poisson interval, and reports a listened week
+//! with no detections as a rate of zero rather than leaving it out.
 
 use crate::phenology::types::AbundanceParams;
 
@@ -102,7 +109,10 @@ fn species_condition(species: &str, column: &str) -> String {
 // Weekly abundance
 // ---------------------------------------------------------------------------
 
-/// Build SQL for weekly relative abundance per species.
+/// Build SQL for the weekly relative detection index per species.
+///
+/// Not effort-corrected (see the module docs): for a rate per listened hour,
+/// use [`effort_corrected_abundance_sql`].
 ///
 /// Returns one row per (species, year, `iso_week`) with:
 /// - `detection_count` — raw count for the week
@@ -248,29 +258,67 @@ pub fn weekly_richness_sql(year: u32) -> String {
     )
 }
 
-/// Build SQL for effort-corrected abundance (`DuckDB` only).
+/// Build SQL for the effort-corrected **detection rate** (`DuckDB` only):
+/// detections per listened hour, per species per ISO week, with a 95 %
+/// Poisson interval.
 ///
-/// When recording effort data is available (e.g., from a separate
-/// `recording_effort` table with `date` and `seconds` columns), this
-/// query normalises detection counts per recording hour to remove
-/// effort bias.
+/// This is a vocal-activity rate, not an abundance: one bird singing all
+/// morning and ten birds calling once each can give the same rate, and a
+/// species' detectability (loudness, call rate, the model's skill with it)
+/// sets its level as much as its numbers do. Compare a species with itself
+/// across weeks and years, not with another species. The function keeps its
+/// name for compatibility.
 ///
 /// **Requires:** A `recording_effort` table with columns `date` (TEXT
 /// `YYYY-MM-DD`, local civil date), `source` and `seconds` (REAL).
 ///
-/// Columns: `species`, `iso_week`, `raw_count` (every detection that week),
-/// `effort_count` (those on days with recorded effort — the numerator),
-/// `effort_hours`, `detections_per_hour`. Species-weeks with fewer than
-/// `min_weekly_count` detections are left out.
+/// Columns, in this order: `species`, `iso_week`, `raw_count` (every
+/// detection that week), `effort_count` (those on days with recorded effort —
+/// the numerator), `effort_hours`, `detections_per_hour`, `rate_ci_lower`,
+/// `rate_ci_upper`.
+///
+/// # Which rows there are
+///
+/// A row for every species-week with a detection, and a **zero** row
+/// (`raw_count` 0, `detections_per_hour` 0) for every week with recorded
+/// listening in which the species was not detected. "Listened and not heard"
+/// is an observation; it used to be a missing row, which a chart drew as a
+/// line straight across the silence and a reader could not tell from "not
+/// listened". The species filled in are the one named by `species`, whether
+/// or not it was detected that year, or else every species detected in that
+/// ISO year. A week with neither listening nor a detection has no row, and a
+/// week with detections but no listening keeps its row with NULL hours, rate
+/// and interval.
+///
+/// `min_weekly_count` above 1 drops every row whose `raw_count` is under it,
+/// zero rows included; at 0 or 1 nothing is dropped.
+///
+/// # The interval
+///
+/// `rate_ci_lower` and `rate_ci_upper` are the exact two-sided 95 % Poisson
+/// (Garwood) interval for `effort_count`, divided by `effort_hours`: for `k`
+/// detections the bounds on the expected count are `χ²(0.025; 2k) / 2` and
+/// `χ²(0.975; 2k + 2) / 2`. They are tabulated exactly for `k` up to
+/// [`EXACT_POISSON_LIMIT`] and taken from Byar's approximation (the
+/// Wilson–Hilferty cube-root form of those quantiles) above it, where its
+/// error is far below the four decimals the rate is rounded to. A zero week
+/// has a lower bound of 0 and an upper bound of `−ln(0.025) ≈ 3.69`
+/// detections over its hours, which is what makes a short silent week
+/// distinguishable from a long one.
+///
+/// The Poisson interval is the narrowest honest one: detections of one bird
+/// are clustered (a singing bird is detected in run after run), so the real
+/// variance is larger and the true interval wider. Read it as a floor on the
+/// uncertainty, not as the whole of it.
 ///
 /// # What is divided by what
 ///
 /// The rate divides the detections made *on days with recorded effort* by the
-/// listening recorded on those days, summed over sources. It divided every detection of the ISO
-/// week by whatever effort the week had, so a week whose sampler ran on two
-/// days of seven had seven days of detections over two days of listening —
-/// and every week before the sampler existed, or with any day it was not
-/// running, was inflated the same way.
+/// listening recorded on those days, summed over sources. It divided every
+/// detection of the ISO week by whatever effort the week had, so a week whose
+/// sampler ran on two days of seven had seven days of detections over two
+/// days of listening — and every week before the sampler existed, or with any
+/// day it was not running, was inflated the same way.
 ///
 /// A day's listening time is the **sum** of every source's seconds, so the
 /// rate is detections per *source-hour*. Detections are per source: a station
@@ -278,12 +326,12 @@ pub fn weekly_richness_sql(year: u32) -> String {
 /// it (`birdnet-db` migration 18: a detection's unique key includes its clip's
 /// file name, which carries the stream id, and no cross-stream collapse
 /// exists), so the numerator counts every source's rows and the denominator
-/// must count every source's listening. Two co-located
-/// microphones that each log one Robin in an hour give two detections over
-/// two source-hours, 1.0 an hour, the same as one microphone logging it once.
-/// This used to take the day's **longest** single source, on the belief that
-/// detections were not per source, and so read 2.0 for that station: twice a
-/// one-microphone station's rate for the same birds.
+/// must count every source's listening. Two co-located microphones that each
+/// log one Robin in an hour give two detections over two source-hours, 1.0 an
+/// hour, the same as one microphone logging it once. This used to take the
+/// day's **longest** single source, on the belief that detections were not
+/// per source, and so read 2.0 for that station: twice a one-microphone
+/// station's rate for the same birds.
 ///
 /// The rate is pooled across sources, not reported per source: the analytics
 /// copy of the detections has no source column yet, so a per-source rate cannot
@@ -318,11 +366,18 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
             params.year
         )),
     ]);
+    // The species a zero row can be written for: the one asked about, even if
+    // it was never detected that year, or every species detected in it.
+    let species_list = params.species.as_deref().map_or_else(
+        || "SELECT DISTINCT species FROM weekly".to_string(),
+        |s| format!("SELECT '{}' AS species", s.replace('\'', "''")),
+    );
     let min_clause = if params.min_weekly_count > 1 {
-        format!("HAVING COUNT(*) >= {}", params.min_weekly_count)
+        format!("WHERE f.raw_count >= {}", params.min_weekly_count)
     } else {
         String::new()
     };
+    let z = POISSON_Z_975;
 
     format!(
         "WITH effort_days AS (
@@ -352,23 +407,142 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
             LEFT JOIN effort_days e ON e.day = d.detection_date
             {where_sql}
             GROUP BY species, iso_week
+        ),
+        species_list AS (
+            {species_list}
+        ),
+        -- Listened weeks with no detection of the species: rate 0, not absent.
+        filled AS (
+            SELECT species, iso_week, raw_count, effort_count FROM weekly
+            UNION ALL
+            SELECT s.species, e.iso_week, 0, 0
+            FROM species_list s
+            CROSS JOIN effort e
+            WHERE NOT EXISTS (
+                SELECT 1 FROM weekly w
+                WHERE w.species = s.species AND w.iso_week = e.iso_week
+            )
+        ),
+        -- Exact 95 % Garwood bounds on the expected count, k = 0..={limit}.
+        poisson_exact (k, lo, hi) AS (
+            VALUES {exact}
+        ),
+        bounded AS (
+            SELECT
+                f.species,
+                f.iso_week,
+                f.raw_count,
+                f.effort_count,
+                e.hours,
+                COALESCE(
+                    p.lo,
+                    f.effort_count * POWER(
+                        1 - 1 / (9.0 * f.effort_count)
+                          - {z} / (3 * SQRT(f.effort_count)), 3)
+                ) AS count_lo,
+                COALESCE(
+                    p.hi,
+                    (f.effort_count + 1) * POWER(
+                        1 - 1 / (9.0 * (f.effort_count + 1))
+                          + {z} / (3 * SQRT(f.effort_count + 1)), 3)
+                ) AS count_hi
+            FROM filled f
+            LEFT JOIN effort e ON f.iso_week = e.iso_week
+            LEFT JOIN poisson_exact p ON p.k = f.effort_count
             {min_clause}
         )
         SELECT
-            w.species,
-            w.iso_week,
-            w.raw_count,
-            w.effort_count,
-            e.hours                                             AS effort_hours,
+            species,
+            iso_week,
+            raw_count,
+            effort_count,
+            hours                                               AS effort_hours,
             ROUND(
-                CAST(w.effort_count AS REAL) / NULLIF(e.hours, 0),
+                CAST(effort_count AS REAL) / NULLIF(hours, 0),
                 4
-            )                                                   AS detections_per_hour
-        FROM weekly w
-        LEFT JOIN effort e ON w.iso_week = e.iso_week
-        ORDER BY w.species, w.iso_week",
+            )                                                   AS detections_per_hour,
+            ROUND(count_lo / NULLIF(hours, 0), 4)               AS rate_ci_lower,
+            ROUND(count_hi / NULLIF(hours, 0), 4)               AS rate_ci_upper
+        FROM bounded
+        ORDER BY species, iso_week",
         year = params.year,
+        limit = EXACT_POISSON_LIMIT,
+        exact = exact_poisson_values(),
     )
+}
+
+/// The largest count whose 95 % Poisson interval is tabulated exactly in
+/// [`effort_corrected_abundance_sql`]; Byar's approximation covers the rest.
+pub const EXACT_POISSON_LIMIT: u32 = 100;
+
+/// The standard normal 97.5th percentile, for Byar's approximation.
+const POISSON_Z_975: f64 = 1.959_963_984_540_054;
+
+/// One minus the interval's coverage, split equally between the two tails.
+const POISSON_TAIL: f64 = 0.025;
+
+/// `P(X <= k)` for `X ~ Poisson(mu)`, summed term by term.
+///
+/// Fine in `f64` for the range used here: at `k = 100` the upper bound is
+/// about 122, and `exp(-122)` is far above the smallest normal double.
+fn poisson_cdf(k: u32, mu: f64) -> f64 {
+    let mut term = (-mu).exp();
+    let mut sum = term;
+    for i in 1..=k {
+        term *= mu / f64::from(i);
+        sum += term;
+    }
+    sum
+}
+
+/// Bisect for the `mu` at which the decreasing function `f` falls to `target`.
+fn bisect_decreasing(f: impl Fn(f64) -> f64, target: f64, mut lo: f64, mut hi: f64) -> f64 {
+    for _ in 0..200 {
+        let mid = f64::midpoint(lo, hi);
+        if f(mid) > target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    f64::midpoint(lo, hi)
+}
+
+/// The exact (Garwood) two-sided 95 % interval for a Poisson mean.
+///
+/// Given `k` observed events: the `mu` with `P(X >= k) = 0.025` and the `mu`
+/// with `P(X <= k) = 0.025`, which are `χ²(0.025; 2k) / 2` and
+/// `χ²(0.975; 2k + 2) / 2`.
+#[must_use]
+pub fn poisson_interval_exact(k: u32) -> (f64, f64) {
+    let ceiling = 4.0f64.mul_add(f64::from(k + 1).sqrt(), f64::from(k)) + 10.0;
+    let upper = bisect_decreasing(|mu| poisson_cdf(k, mu), POISSON_TAIL, 0.0, ceiling);
+    let lower = if k == 0 {
+        0.0
+    } else {
+        // P(X >= k) = 1 - P(X <= k - 1) rises with mu, so P(X <= k - 1) falls.
+        bisect_decreasing(
+            |mu| poisson_cdf(k - 1, mu),
+            1.0 - POISSON_TAIL,
+            0.0,
+            f64::from(k),
+        )
+    };
+    (lower, upper)
+}
+
+/// The `VALUES` rows of the exact interval table, computed once.
+fn exact_poisson_values() -> &'static str {
+    static VALUES: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VALUES.get_or_init(|| {
+        (0..=EXACT_POISSON_LIMIT)
+            .map(|k| {
+                let (lo, hi) = poisson_interval_exact(k);
+                format!("({k}, {lo:.6}, {hi:.6})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 #[cfg(test)]
@@ -447,6 +621,38 @@ mod tests {
             !sql.contains("FROM recordings"),
             "the fictional table must not come back"
         );
+    }
+
+    /// The exact interval against Garwood bounds (two-sided 95 %), as
+    /// tabulated and as recomputed independently in log space (`lgamma`,
+    /// compensated summation) rather than by this module's running product.
+    #[test]
+    fn poisson_interval_matches_published_values() {
+        for (k, lo, hi) in [
+            (0, 0.0, 3.688_879),
+            (1, 0.025_318, 5.571_643),
+            (5, 1.623_486, 11.668_332),
+            (10, 4.795_389, 18.390_356),
+            // χ²(0.025; 200) = 162.728, χ²(0.975; 202) = 243.254.
+            (100, 81.363_991, 121.626_794),
+        ] {
+            let (l, h) = poisson_interval_exact(k);
+            assert!((l - lo).abs() < 1e-4, "k={k}: lower {l} != {lo}");
+            assert!((h - hi).abs() < 1e-4, "k={k}: upper {h} != {hi}");
+        }
+    }
+
+    /// Above the table Byar's approximation takes over; at the seam it agrees
+    /// with the exact bound to well under the rate's rounding.
+    #[test]
+    fn byar_continues_the_exact_table() {
+        let k = f64::from(EXACT_POISSON_LIMIT + 1);
+        let lo = k * (1.0 - 1.0 / (9.0 * k) - POISSON_Z_975 / (3.0 * k.sqrt())).powi(3);
+        let hi = (k + 1.0)
+            * (1.0 - 1.0 / (9.0 * (k + 1.0)) + POISSON_Z_975 / (3.0 * (k + 1.0).sqrt())).powi(3);
+        let (l, h) = poisson_interval_exact(EXACT_POISSON_LIMIT + 1);
+        assert!((lo - l).abs() / l < 1e-3, "lower: Byar {lo} vs exact {l}");
+        assert!((hi - h).abs() / h < 1e-3, "upper: Byar {hi} vs exact {h}");
     }
 
     #[test]

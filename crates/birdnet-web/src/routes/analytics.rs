@@ -946,7 +946,12 @@ async fn previous_species(
 /// "the analytics dashboards are broken" could not be told apart from a healthy
 /// one here, which is why that report arrived with no detail attached. The
 /// fields below are the ones that differ.
-/// Detections per hour of listening, per species per week.
+/// Detection rate: detections per listened hour, per species per week, with a
+/// 95 % Poisson interval (`rate_ci_lower`, `rate_ci_upper`).
+///
+/// A vocal-activity rate, not an abundance: the route keeps the name it
+/// shipped with. A week the station listened to without detecting a species
+/// is a row with a rate of zero, not a missing row.
 ///
 /// The analytic a raw count cannot substitute for. A detection count is a
 /// numerator over a denominator nobody was recording: a solar window is six
