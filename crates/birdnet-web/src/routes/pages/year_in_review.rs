@@ -83,6 +83,61 @@ pub(super) async fn content(state: AppState) -> String {
     )
 }
 
+/// What the days the year is counted over are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Days {
+    /// Days the station listened to, from its ledger (and every day something was heard).
+    Listened,
+    /// Days with a detection: what a station without a ledger can count.
+    WithADetection,
+}
+
+impl Days {
+    /// "days of listening", "day with a detection", … for `n` of them.
+    const fn words(self, n: usize) -> &'static str {
+        match (self, n == 1) {
+            (Self::Listened, false) => "days of listening",
+            (Self::Listened, true) => "day of listening",
+            (Self::WithADetection, false) => "days with a detection",
+            (Self::WithADetection, true) => "day with a detection",
+        }
+    }
+}
+
+/// How many days from 1 January to `today` the station listened on: the days its ledger says
+/// it listened to (`listening::listened_days`), and every day something was heard, since a
+/// detection is audio heard (a ledger that began with an upgrade in March does not make
+/// January's birds days of nothing). Today counts, as it does in the calendar.
+///
+/// `None` when the ledger holds nothing for the year (an imported station, or a ledger that
+/// could not be read): unknown, so the page counts what it can, the days with a detection.
+fn listening_days(
+    today: &str,
+    daily: &[birdnet_db::sqlite::DailyCount],
+    effort: Option<&std::collections::BTreeMap<String, f64>>,
+) -> Option<usize> {
+    let effort = effort?;
+    let span = super::viz::kit::epoch_day(today)? - super::viz::kit::epoch_day(&year_start(today))?;
+    let listened = super::listening::listened_days(effort, today, usize::try_from(span).ok()? + 1)?;
+    let heard: std::collections::BTreeSet<&str> = daily
+        .iter()
+        .filter(|d| d.count > 0)
+        .map(|d| d.date.as_str())
+        .collect();
+    Some(
+        listened
+            .iter()
+            .enumerate()
+            .filter(|&(i, on)| {
+                *on || super::viz::kit::shift_date(today, i64::try_from(i).unwrap_or(0) - span)
+                    .is_some_and(|(y, m, d)| {
+                        heard.contains(format!("{y:04}-{m:02}-{d:02}").as_str())
+                    })
+            })
+            .count(),
+    )
+}
+
 /// `YYYY-01-01` for the year `today` falls in.
 fn year_start(today: &str) -> String {
     format!("{}-01-01", today.get(0..4).unwrap_or("1970"))
@@ -106,7 +161,18 @@ fn render_content(
     let year = today.get(0..4).unwrap_or("----");
     let total: i64 = daily.iter().map(|d| d.count).sum();
     let species = top.len();
-    let active_days = daily.len();
+    // The days the average is over, and what they are: the days the station listened, when its
+    // ledger says; else the days something was heard, said as such. (Both used to be the days
+    // with a detection, called "days of listening".)
+    let (days, day_kind) = listening_days(today, daily, effort).map_or_else(
+        || {
+            (
+                daily.iter().filter(|d| d.count > 0).count(),
+                Days::WithADetection,
+            )
+        },
+        |n| (n, Days::Listened),
+    );
 
     // Busiest day: the first of any tie, so the answer does not depend on
     // which of two equal days the iterator met last.
@@ -125,8 +191,8 @@ fn render_content(
     let help_link = super::help::help_link(super::help::Topic::Reports);
     let busiest_count = busiest.map_or(0, |d| d.count);
     let new_this_year = new.len();
-    let per_day = if active_days > 0 {
-        total / i64::try_from(active_days).unwrap_or(1).max(1)
+    let per_day = if days > 0 {
+        total / i64::try_from(days).unwrap_or(1).max(1)
     } else {
         0
     };
@@ -158,12 +224,13 @@ fn render_content(
     let _ = write!(
         html,
         r#"<div class="rp-stats">
-  <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} a day</div></div>
+  <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} a {one_day}</div></div>
   <div class="rp-stat"><div class="v">{species}</div><div class="l">species heard</div><div class="d">this year</div></div>
   <div class="rp-stat"><div class="v rare">{new_this_year}</div><div class="l">new to your list</div></div>
   <div class="rp-stat"><div class="v">{busy}</div><div class="l">busiest day</div><div class="d">{busy_date}</div></div>
 </div>"#,
         det = group_thousands(total),
+        one_day = day_kind.words(1),
         busy = group_thousands(busiest_count),
         busy_date = busiest.map_or_else(|| "—".to_string(), |d| escape_html(&d.date)),
     );
@@ -287,12 +354,12 @@ fn render_content(
         html,
         r#"<div class="bnb-card pad yir-close">
   <div class="bnb-eyebrow">The tally</div>
-  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} days of listening in {year}.</p>
+  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} {kind} in {year}.</p>
   <p class="bnb-meta">Here's to next year's first dawn chorus.</p>
 </div>"#,
         species = species,
         total = group_thousands(total),
-        days = active_days,
+        kind = day_kind.words(days),
     );
 
     html
@@ -626,6 +693,98 @@ mod tests {
             html.contains("Thu 21 May 2026&#10;Listened all day and heard none"),
             "{html}"
         );
+    }
+
+    /// Ten days the ledger says were listened to (1–10 March), six of them with detections,
+    /// 60 in all: the year was ten days of listening, and the average is over those ten.
+    fn ten_listened_six_heard() -> (
+        Vec<birdnet_db::sqlite::DailyCount>,
+        std::collections::BTreeMap<String, f64>,
+    ) {
+        let daily = [1, 2, 4, 5, 7, 9]
+            .iter()
+            .map(|d| birdnet_db::sqlite::DailyCount {
+                date: format!("2026-03-{d:02}"),
+                count: 10,
+            })
+            .collect();
+        let effort = (1..=10)
+            .map(|d| (format!("2026-03-{d:02}"), 86_400.0))
+            .collect();
+        (daily, effort)
+    }
+
+    /// The closing line's "days of listening" and the "a day" under the count: both were days
+    /// with a detection, so a station that listened ten days and heard birds on six said "6 days
+    /// of listening" and "≈ 10 a day".
+    #[test]
+    fn days_of_listening_are_the_days_the_ledger_says_were_listened_to() {
+        let (daily, effort) = ten_listened_six_heard();
+        let html = render_content(
+            "2026-03-10",
+            &daily,
+            &[],
+            &[],
+            Some(&effort),
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(
+            html.contains("detections across 10 days of listening in 2026"),
+            "{html}"
+        );
+        assert!(html.contains("≈ 6 a day of listening"), "{html}");
+    }
+
+    /// The counterpart: a station with no ledger (imported from BirdNET-Pi) cannot say how many
+    /// days it listened, so it says what it can count, and divides by that.
+    #[test]
+    fn without_a_ledger_the_days_are_the_days_with_a_detection_and_say_so() {
+        let (daily, _) = ten_listened_six_heard();
+        let html = render_content(
+            "2026-03-10",
+            &daily,
+            &[],
+            &[],
+            None,
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(
+            html.contains("detections across 6 days with a detection in 2026"),
+            "{html}"
+        );
+        assert!(html.contains("≈ 10 a day with a detection"), "{html}");
+        assert!(!html.contains("days of listening"), "{html}");
+    }
+
+    /// A day with a detection was listened to whatever the ledger says: a ledger that starts
+    /// in March (it arrived with an upgrade) does not make January's birds days of nothing.
+    #[test]
+    fn a_day_with_a_detection_is_a_day_of_listening_before_the_ledger_began() {
+        let (mut daily, effort) = ten_listened_six_heard();
+        daily.insert(
+            0,
+            birdnet_db::sqlite::DailyCount {
+                date: "2026-01-15".into(),
+                count: 10,
+            },
+        );
+        let html = render_content(
+            "2026-03-10",
+            &daily,
+            &[],
+            &[],
+            Some(&effort),
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(
+            html.contains("detections across 11 days of listening in 2026"),
+            "{html}"
+        );
+        // 70 over 11 days.
+        assert!(html.contains("≈ 6 a day of listening"), "{html}");
     }
 
     /// Two equal days: the busiest is the first, whatever order a fold meets

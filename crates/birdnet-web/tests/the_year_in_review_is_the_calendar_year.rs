@@ -99,9 +99,11 @@ async fn last_years_birds_are_not_this_years() {
         html.contains(&format!("{jan} · the first day heard in {y}")),
         "the first voice is this year's"
     );
+    // The fixture has no listening ledger, so the page counts the days something was heard,
+    // and says so (it used to call them "days of listening").
     assert!(
-        html.contains("across 1 days of listening in"),
-        "days of listening are this year's"
+        html.contains("across 1 day with a detection in"),
+        "the days counted are this year's"
     );
 }
 

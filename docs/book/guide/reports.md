@@ -23,7 +23,7 @@ period and nothing earlier; on New Year's Day it starts again from nothing.
 - the year's species leaderboard with banding-code avatars,
 - **who led, and when it changed** — a rank-over-time chart of the year's eight most-heard birds, one line each, with a month scrubber and a leaderboard beside it for the month you choose. The lines are *ranks* (1st at the top), which hide how far ahead a bird was, so the bars show the true counts from zero, on one scale for the whole year. A month with none is a gap in the line, never a drop to last place, and a month that has not happened is marked "not yet". Press **Play** to step through the months; Play is not offered when your device asks for reduced motion,
 - a milestones strip (first voice of the year, most-heard species, busiest day, newest arrival),
-- and a closing tally.
+- and a closing tally. Its "days of listening", and the "a day" under the detections tile, count the days the station listened (from its listening record, and every day something was heard); a station without that record (imported from BirdNET-Pi) counts and says "days with a detection" instead.
 
 ## History calendar
 

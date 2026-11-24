@@ -10,8 +10,10 @@
 //! source (since migration 61; before it, how long each source's capture was up), so
 //! it can say which.
 //!
-//! It is only ever used to *add* a statement ("not listening"), never to scale or
-//! correct a count, and only where the ledger holds something for the period at all:
+//! It is used to *add* a statement ("not listening") and to count the days an average
+//! is taken over (a day's average is over the days the station listened, not over the
+//! days something was heard), never to scale a count by the seconds recorded, and only
+//! where the ledger holds something for the period at all:
 //! a station imported from BirdNET-Pi has no ledger, and a chart claiming it was "off"
 //! every day would be a lie of the opposite kind. No rows in the period means unknown,
 //! and unknown draws nothing.
