@@ -4,21 +4,33 @@
 //! surface longer-range patterns — useful for understanding whether
 //! bird activity is increasing, decreasing, or unusual.
 
-use super::QueryPlan;
+use super::{PARTIAL_EFFORT_FRACTION, QueryPlan, effort_ctes, effort_seconds_sql, listened_sql};
 
 /// N-day trailing moving average of daily detections.
 ///
 /// Each day's average is over that day and the `window_days - 1` days before
 /// it, and is only reported when all of those days are ones the station was
-/// running — otherwise it is `NULL`, never an average over whichever days
-/// happened to be in reach.
+/// listening on — otherwise it is `NULL`, never an average over whichever days
+/// happened to be in reach, and never an average that counts a day the station
+/// was off as a day it heard nothing.
 ///
-/// Three things this used to get wrong, each of which moved the line:
+/// "Listening" is the recording-effort ledger's answer (see
+/// [`super::MIN_LISTENED_SECS`]): a day it covers with less than that is not
+/// listened, so its average, and the average of every window that reaches it,
+/// is `NULL`. A day the ledger cannot speak for — before its first row, or on a
+/// station without one — counts as listened, and inside the station's run that
+/// means a zero for a day without detections. The count itself
+/// (`daily_detections`) is reported for every day either way.
+///
+/// Four things this used to get wrong, each of which moved the line:
 ///
 /// * **Silent days.** It grouped the days that had detections and averaged
 ///   those, so a day the station heard nothing was not a zero — it was not
 ///   there, and the window stepped over it to a busier day further out. The
 ///   days are now a zero-filled spine from the station's first detection.
+/// * **Days it was off.** That spine counted every day after the first
+///   detection as one the station ran, so a week of downtime averaged in as a
+///   week of silence and read as a collapse (RES-14).
 /// * **Today.** A day a few hours old was averaged in as if complete, pulling
 ///   the newest points down every morning. The series ends yesterday.
 /// * **The edges.** A centred `RANGE` frame at the newest end had no days
@@ -42,8 +54,11 @@ pub struct MovingAverage {
     pub to_date: Option<String>,
     /// Optional species filter (single-quote-escaped before interpolation).
     /// The spine still starts at the *station's* first detection, so a
-    /// species' days of absence while the station ran are zeros.
+    /// species' days of absence while the station listened are zeros.
     pub species: Option<String>,
+    /// Whether the connection holds the `recording_effort` ledger. Without it
+    /// every day counts as listened, as before the ledger existed.
+    pub effort_ledger: bool,
 }
 
 impl Default for MovingAverage {
@@ -53,6 +68,7 @@ impl Default for MovingAverage {
             from_date: Some("CURRENT_DATE - INTERVAL 90 DAYS".into()),
             to_date: None,
             species: None,
+            effort_ledger: true,
         }
     }
 }
@@ -87,10 +103,13 @@ impl QueryPlan for MovingAverage {
         let species = self.species.as_ref().map_or_else(String::new, |sp| {
             format!("AND Com_Name = '{}'", sp.replace('\'', "''"))
         });
+        let effort = effort_ctes(self.effort_ledger);
+        let listened = listened_sql("s.detection_date");
         format!(
             "WITH bounds AS (
     SELECT {spine_start} AS spine_start, {spine_end} AS spine_end, {shown_from} AS shown_from
 ),
+{effort},
 spine AS (
     SELECT CAST(range AS DATE) AS detection_date
     FROM range(
@@ -108,16 +127,24 @@ counts AS (
     GROUP BY detection_date
 ),
 daily AS (
-    SELECT s.detection_date, COALESCE(c.n, 0) AS daily_detections
-    FROM spine s LEFT JOIN counts c USING (detection_date)
+    SELECT
+        s.detection_date,
+        COALESCE(c.n, 0) AS daily_detections,
+        CASE WHEN {listened} THEN 1 ELSE 0 END AS listened
+    FROM spine s
+    LEFT JOIN counts c ON c.detection_date = s.detection_date
+    LEFT JOIN effort_days e ON e.day = s.detection_date
+    CROSS JOIN ledger l
 ),
 smoothed AS (
     SELECT
         detection_date,
         daily_detections,
-        CASE WHEN COUNT(*) OVER w = {n} THEN AVG(daily_detections) OVER w END AS moving_avg,
-        CASE WHEN COUNT(*) OVER w = {n} THEN MIN(daily_detections) OVER w END AS rolling_min,
-        CASE WHEN COUNT(*) OVER w = {n} THEN MAX(daily_detections) OVER w END AS rolling_max
+        -- A full window, every day of it listened: `SUM` of the 0/1 flag equals
+        -- the window width only then.
+        CASE WHEN SUM(listened) OVER w = {n} THEN AVG(daily_detections) OVER w END AS moving_avg,
+        CASE WHEN SUM(listened) OVER w = {n} THEN MIN(daily_detections) OVER w END AS rolling_min,
+        CASE WHEN SUM(listened) OVER w = {n} THEN MAX(daily_detections) OVER w END AS rolling_max
     FROM daily
     WINDOW w AS (ORDER BY detection_date ROWS BETWEEN {lead} PRECEDING AND CURRENT ROW)
 )
@@ -136,15 +163,30 @@ ORDER BY detection_date"
 
 /// Year-over-year comparison: each recent week against the same days of the
 /// week 52 weeks earlier.
+///
+/// Both years are counted over the same days, and only over days the station
+/// was listening on in *both*: a day of this week whose counterpart 52 weeks
+/// earlier was an outage, or the other way round, is left out of both counts,
+/// and `compared_days` says how many days are left. A three-day outage used to
+/// read as a three-day decline. Days the recording-effort ledger cannot speak
+/// for count as listened (see [`super::MIN_LISTENED_SECS`]), so a station
+/// without a ledger compares every day, as before. A week with no day left to
+/// compare has no prior count and no delta.
 #[derive(Debug, Clone)]
 pub struct YearOverYear {
     /// Number of weeks to compare, the running week included (default: 52).
     pub weeks: u32,
+    /// Whether the connection holds the `recording_effort` ledger. Without it
+    /// every day is compared, as before the ledger existed.
+    pub effort_ledger: bool,
 }
 
 impl Default for YearOverYear {
     fn default() -> Self {
-        Self { weeks: 52 }
+        Self {
+            weeks: 52,
+            effort_ledger: true,
+        }
     }
 }
 
@@ -165,8 +207,14 @@ impl QueryPlan for YearOverYear {
         // have detections. A span that ends before the station's first
         // detection has no count at all, so a year the station did not exist
         // still has no delta (rather than a delta against zero).
+        //
+        // The days compared are the `paired` ones: inside the span, and
+        // listened on both this year and 52 weeks earlier (RES-14).
+        let effort = effort_ctes(self.effort_ledger);
+        let listened = listened_sql("days.d");
         format!(
-            "WITH station AS (
+            "WITH {effort},
+station AS (
     SELECT MIN(detection_date)::TIMESTAMP AS first_day FROM detections_ts
 ),
 weeks AS (
@@ -187,6 +235,27 @@ spans AS (
         week_end - INTERVAL 52 WEEK   AS prior_end
     FROM weeks
 ),
+days AS (
+    SELECT CAST(range AS DATE) AS d
+    FROM range(
+        (SELECT MIN(prior_start) FROM spans),
+        CURRENT_DATE::TIMESTAMP,
+        INTERVAL 1 DAY
+    )
+),
+heard AS (
+    SELECT days.d, {listened} AS listened
+    FROM days
+    LEFT JOIN effort_days e ON e.day = days.d
+    CROSS JOIN ledger l
+),
+paired AS (
+    SELECT s.week_start, cur.d AS cur_day, pri.d AS pri_day
+    FROM spans s
+    JOIN heard cur ON cur.d >= s.week_start AND cur.d < s.week_end
+    JOIN heard pri ON pri.d = CAST(cur.d - INTERVAL 52 WEEK AS DATE)
+    WHERE cur.listened AND pri.listened
+),
 daily AS (
     SELECT detection_date, Com_Name, COUNT(*) AS n
     FROM detections_ts
@@ -194,16 +263,19 @@ daily AS (
     GROUP BY detection_date, Com_Name
 ),
 cur AS (
-    SELECT s.week_start, SUM(d.n) AS n, COUNT(DISTINCT d.Com_Name) AS sp
-    FROM spans s
-    JOIN daily d ON d.detection_date >= s.week_start AND d.detection_date < s.week_end
-    GROUP BY s.week_start
+    SELECT p.week_start, SUM(d.n) AS n, COUNT(DISTINCT d.Com_Name) AS sp
+    FROM paired p
+    JOIN daily d ON d.detection_date = p.cur_day
+    GROUP BY p.week_start
 ),
 pri AS (
-    SELECT s.week_start, SUM(d.n) AS n, COUNT(DISTINCT d.Com_Name) AS sp
-    FROM spans s
-    JOIN daily d ON d.detection_date >= s.prior_start AND d.detection_date < s.prior_end
-    GROUP BY s.week_start
+    SELECT p.week_start, SUM(d.n) AS n, COUNT(DISTINCT d.Com_Name) AS sp
+    FROM paired p
+    JOIN daily d ON d.detection_date = p.pri_day
+    GROUP BY p.week_start
+),
+compared AS (
+    SELECT week_start, COUNT(*) AS days FROM paired GROUP BY week_start
 ),
 counted AS (
     SELECT
@@ -213,16 +285,18 @@ counted AS (
         COALESCE(cur.n, 0)::BIGINT  AS cur_n,
         COALESCE(cur.sp, 0)::BIGINT AS cur_sp,
         COALESCE(pri.n, 0)::BIGINT  AS pri_n,
-        COALESCE(pri.sp, 0)::BIGINT AS pri_sp
+        COALESCE(pri.sp, 0)::BIGINT AS pri_sp,
+        COALESCE(compared.days, 0)::BIGINT AS compared_days
     FROM spans s
     LEFT JOIN cur USING (week_start)
     LEFT JOIN pri USING (week_start)
+    LEFT JOIN compared USING (week_start)
 ),
 judged AS (
     SELECT
         c.*,
         c.week_end > st.first_day  AS cur_ran,
-        c.prior_end > st.first_day AS pri_ran
+        c.prior_end > st.first_day AND c.compared_days > 0 AS pri_ran
     FROM counted c, station st
 )
 SELECT
@@ -231,7 +305,8 @@ SELECT
     CASE WHEN pri_ran THEN pri_n END AS prior_year_count,
     CASE WHEN pri_ran THEN cur_n - pri_n END AS yoy_delta,
     cur_sp AS current_year_species,
-    CASE WHEN pri_ran THEN pri_sp END AS prior_year_species
+    CASE WHEN pri_ran THEN pri_sp END AS prior_year_species,
+    compared_days
 FROM judged
 WHERE cur_ran
 ORDER BY week_start"
@@ -249,6 +324,25 @@ pub const MIN_BASELINE_DAYS: u32 = 7;
 /// A day with fewer than [`MIN_BASELINE_DAYS`] earlier days in its window, or
 /// whose earlier days all had the same count, is `normal`: there is no
 /// baseline to be anomalous against.
+///
+/// Only days the station listened through are judged, and only they make up
+/// the baseline (UIC-03). The recording-effort ledger decides, and the day gets
+/// one of two labels instead of a judgement:
+///
+/// * `not_listening` — the ledger covers the day with less than
+///   [`super::MIN_LISTENED_SECS`]: the station was off, or its microphones were.
+///   An outage used to be a day of zero detections, flagged `low`, and then held
+///   in the baseline for the next month, widening its deviation until a
+///   genuinely thin day passed as `normal`.
+/// * `partial` — the station listened for less than
+///   [`PARTIAL_EFFORT_FRACTION`] of its typical day, the median effort of the
+///   listened days in the window before it. Its count is a fraction of a day's,
+///   so a `low` would be a statement about the station.
+///
+/// Neither kind of day enters any later day's baseline, and neither has a
+/// z-score. A day the ledger cannot speak for (before its first row, or on a
+/// station without one) is judged as before. `anomaly_flag` is therefore one
+/// of `high`, `low`, `normal`, `partial`, `not_listening`.
 #[derive(Debug, Clone)]
 pub struct AnomalyDetection {
     /// Z-score threshold for flagging a day as anomalous (default: 2.0).
@@ -257,6 +351,9 @@ pub struct AnomalyDetection {
     pub window_days: u32,
     /// Look back this many days total (default: 180).
     pub lookback_days: u32,
+    /// Whether the connection holds the `recording_effort` ledger. Without it
+    /// every day is judged, as before the ledger existed.
+    pub effort_ledger: bool,
 }
 
 impl Default for AnomalyDetection {
@@ -265,6 +362,7 @@ impl Default for AnomalyDetection {
             z_threshold: 2.0,
             window_days: 30,
             lookback_days: 180,
+            effort_ledger: true,
         }
     }
 }
@@ -282,8 +380,13 @@ impl QueryPlan for AnomalyDetection {
         // deviation of zero, an undefined z, and flagged any change at all as
         // `high` beside a blank z-score.
         let min_history = window.clamp(1, MIN_BASELINE_DAYS);
+        let effort = effort_ctes(self.effort_ledger);
+        let seconds = effort_seconds_sql("s.detection_date");
+        let floor = super::MIN_LISTENED_SECS;
+        let partial = PARTIAL_EFFORT_FRACTION;
         format!(
-            "WITH counts AS (
+            "WITH {effort},
+counts AS (
     SELECT detection_date, COUNT(*) AS n
     FROM detections_ts
     WHERE detection_date >= CURRENT_DATE - INTERVAL {lookback} DAYS
@@ -299,17 +402,47 @@ spine AS (
     )
 ),
 daily AS (
-    SELECT s.detection_date, COALESCE(c.n, 0) AS detections
-    FROM spine s LEFT JOIN counts c USING (detection_date)
+    SELECT
+        s.detection_date,
+        COALESCE(c.n, 0) AS detections,
+        {seconds} AS effort_seconds
+    FROM spine s
+    LEFT JOIN counts c ON c.detection_date = s.detection_date
+    LEFT JOIN effort_days e ON e.day = s.detection_date
+    CROSS JOIN ledger l
+),
+typical AS (
+    SELECT
+        *,
+        MEDIAN(CASE WHEN effort_seconds >= {floor:.1} THEN effort_seconds END) OVER prior
+            AS typical_effort
+    FROM daily
+    WINDOW prior AS (
+        ORDER BY detection_date
+        RANGE BETWEEN INTERVAL {window} DAYS PRECEDING AND INTERVAL 1 DAY PRECEDING
+    )
+),
+listening AS (
+    SELECT
+        *,
+        CASE
+            WHEN effort_seconds IS NULL THEN 'full'
+            WHEN effort_seconds < {floor:.1} THEN 'none'
+            WHEN effort_seconds < {partial} * typical_effort THEN 'partial'
+            ELSE 'full'
+        END AS listening
+    FROM typical
 ),
 with_stats AS (
     SELECT
         detection_date,
         detections,
-        AVG(detections) OVER prior AS rolling_mean,
-        STDDEV_SAMP(detections) OVER prior AS rolling_stddev,
-        COUNT(*) OVER prior AS prior_days
-    FROM daily
+        listening,
+        AVG(CASE WHEN listening = 'full' THEN detections END) OVER prior AS rolling_mean,
+        STDDEV_SAMP(CASE WHEN listening = 'full' THEN detections END) OVER prior
+            AS rolling_stddev,
+        COUNT(CASE WHEN listening = 'full' THEN 1 END) OVER prior AS prior_days
+    FROM listening
     WINDOW prior AS (
         ORDER BY detection_date
         RANGE BETWEEN INTERVAL {window} DAYS PRECEDING AND INTERVAL 1 DAY PRECEDING
@@ -320,8 +453,11 @@ SELECT
     detections,
     rolling_mean,
     rolling_stddev,
-    (detections - rolling_mean) / NULLIF(rolling_stddev, 0) AS z_score,
+    CASE WHEN listening = 'full'
+        THEN (detections - rolling_mean) / NULLIF(rolling_stddev, 0) END AS z_score,
     CASE
+        WHEN listening = 'none' THEN 'not_listening'
+        WHEN listening = 'partial' THEN 'partial'
         WHEN prior_days < {min_history} THEN 'normal'
         WHEN rolling_stddev IS NULL OR rolling_stddev = 0 THEN 'normal'
         WHEN detections > rolling_mean + {z} * rolling_stddev THEN 'high'

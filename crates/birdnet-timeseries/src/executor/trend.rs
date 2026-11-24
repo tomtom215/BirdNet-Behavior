@@ -11,7 +11,8 @@ use crate::types::{
 impl super::TimeSeriesDb<'_> {
     /// N-day trailing moving average of daily detections, over a zero-filled
     /// series of complete days — see [`MovingAverage`] for what that rules
-    /// out. `moving_avg_detections` is `None` where the window is incomplete.
+    /// out. `moving_avg_detections` is `None` where the window is incomplete
+    /// or reaches a day the station was not listening on.
     ///
     /// # Errors
     ///
@@ -22,6 +23,7 @@ impl super::TimeSeriesDb<'_> {
             from_date: params.from_date.clone(),
             to_date: params.to_date.clone(),
             species: params.species.clone(),
+            effort_ledger: self.effort_ledger,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
@@ -49,6 +51,7 @@ impl super::TimeSeriesDb<'_> {
     ) -> Result<Vec<YearOverYearRow>, TimeSeriesError> {
         let q = YearOverYear {
             weeks: params.lookback_weeks,
+            effort_ledger: self.effort_ledger,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
@@ -60,13 +63,16 @@ impl super::TimeSeriesDb<'_> {
                 yoy_delta: row.get(3)?,
                 current_year_species: row.get(4)?,
                 prior_year_species: row.get(5)?,
+                compared_days: row.get(6)?,
             })
         })?;
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Anomaly detection: complete days with unusually high or low activity
-    /// against the days before them — see [`AnomalyDetection`].
+    /// Anomaly detection: complete days the station listened through with
+    /// unusually high or low activity against the listened days before them;
+    /// days it did not listen through are labelled, not judged — see
+    /// [`AnomalyDetection`].
     ///
     /// # Errors
     ///
@@ -76,6 +82,7 @@ impl super::TimeSeriesDb<'_> {
             z_threshold: params.z_threshold,
             window_days: params.window_days,
             lookback_days: params.lookback_days,
+            effort_ledger: self.effort_ledger,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;

@@ -523,9 +523,19 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
 
 #[cfg(feature = "analytics")]
 fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow]) -> String {
-    let anomalous: Vec<_> = rows.iter().filter(|r| r.anomaly_flag != "normal").collect();
+    // Only `high` and `low` are anomalies. `not_listening` and `partial` are days
+    // the detector did not judge, because the station was off or listened for
+    // less than usual (UIC-03); listing them here would print an outage as a
+    // bird event, which is what this card did when every day was judged.
+    let anomalous: Vec<_> = rows
+        .iter()
+        .filter(|r| r.anomaly_flag == "high" || r.anomaly_flag == "low")
+        .collect();
+    let unjudged = unjudged_note(rows);
     if anomalous.is_empty() {
-        return r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>"#.to_string();
+        return format!(
+            r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>{unjudged}"#
+        );
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>Z-Score</th><th>Type</th></tr></thead><tbody>",
@@ -548,7 +558,37 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
         );
     }
     html.push_str("</tbody></table>");
+    html.push_str(&unjudged);
     html
+}
+
+/// The sentence under the anomaly card naming the days it did not judge, or
+/// nothing when it judged them all.
+#[cfg(feature = "analytics")]
+fn unjudged_note(rows: &[birdnet_timeseries::types::results::AnomalyRow]) -> String {
+    let count = |flag: &str| rows.iter().filter(|r| r.anomaly_flag == flag).count();
+    let days = |n: usize| {
+        if n == 1 {
+            "1 day".to_string()
+        } else {
+            format!("{n} days")
+        }
+    };
+    let (off, partial) = (count("not_listening"), count("partial"));
+    let mut parts = Vec::new();
+    if off > 0 {
+        parts.push(format!("{} the station was not listening", days(off)));
+    }
+    if partial > 0 {
+        parts.push(format!("{} it listened for less than usual", days(partial)));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(
+        r#"<p class="tsd-muted">Not judged, and left out of the baseline: {}.</p>"#,
+        parts.join(", and ")
+    )
 }
 
 #[cfg(feature = "analytics")]
@@ -658,6 +698,47 @@ mod tests {
         // Counterparts: an ordinary value and a missing one are unchanged.
         assert_eq!(super::shannon_cell(Some(std::f64::consts::LN_2)), "0.693");
         assert_eq!(super::shannon_cell(None), "—");
+    }
+
+    fn anomaly(date: &str, flag: &str) -> birdnet_timeseries::types::results::AnomalyRow {
+        birdnet_timeseries::types::results::AnomalyRow {
+            date: date.into(),
+            detections: 0,
+            rolling_mean: Some(10.0),
+            rolling_stddev: Some(1.0),
+            z_score: None,
+            anomaly_flag: flag.into(),
+        }
+    }
+
+    /// UIC-03: a day the station was not listening, or listened to only in
+    /// part, is not an anomaly, and the card does not list it as one; it says
+    /// how many days it left unjudged instead.
+    #[test]
+    fn the_anomaly_card_does_not_list_an_outage() {
+        let html = super::render_anomaly_table(&[
+            anomaly("2026-05-01", "not_listening"),
+            anomaly("2026-05-02", "not_listening"),
+            anomaly("2026-05-03", "partial"),
+            anomaly("2026-05-04", "normal"),
+        ]);
+        assert!(!html.contains("2026-05-0"), "no day is listed: {html}");
+        assert!(html.contains("No anomalies"), "{html}");
+        assert!(
+            html.contains("2 days the station was not listening")
+                && html.contains("1 day it listened for less than usual"),
+            "{html}"
+        );
+        // Counterpart: a real anomaly beside them is still listed, and only it.
+        let html = super::render_anomaly_table(&[
+            anomaly("2026-05-01", "not_listening"),
+            anomaly("2026-05-05", "low"),
+        ]);
+        assert!(html.contains("2026-05-05"), "{html}");
+        assert!(!html.contains("2026-05-01"), "{html}");
+        // And a station whose ledger left nothing out says nothing about it.
+        let html = super::render_anomaly_table(&[anomaly("2026-05-04", "normal")]);
+        assert!(!html.contains("not listening"), "{html}");
     }
 
     /// ANA12: the sessions card shows the newest sessions, newest first.

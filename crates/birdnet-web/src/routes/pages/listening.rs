@@ -23,8 +23,10 @@ use std::collections::BTreeMap;
 use super::viz::kit;
 
 /// Seconds below which a day counts as not listened to: a station that was up for a
-/// minute before a power cut did not listen to that day.
-const MIN_LISTENED_SECS: f64 = 60.0;
+/// minute before a power cut did not listen to that day. The time-series analytics'
+/// own floor, so a "not listening" mark here and an average or anomaly left out
+/// there are always the same days.
+const MIN_LISTENED_SECS: f64 = birdnet_timeseries::queries::MIN_LISTENED_SECS;
 
 /// Seconds analysed per local date over `from..=to` (ISO dates), summed over sources.
 ///

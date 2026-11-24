@@ -35,6 +35,9 @@ birdnet-behavioral = { path = "../birdnet-behavioral", features = ["analytics"] 
 # is exactly how a date bug hides.
 birdnet-core.workspace = true
 duckdb.workspace = true
+# The effort gates write the station's own SQLite ledger and copy it across with
+# `AnalyticsDb::sync_recording_effort`, the path a running station takes.
+rusqlite.workspace = true
 tempfile.workspace = true
 
 [lints]

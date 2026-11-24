@@ -3,7 +3,9 @@
 //! Each sub-module produces a complete, runnable `DuckDB` SQL string
 //! targeted at a specific analytics question. All queries read from the
 //! `detections_ts` view (requires `birdnet-behavioral` to have set up
-//! the `DuckDB` database).
+//! the `DuckDB` database); the moving average, year-over-year, anomaly and
+//! quiet-day queries also read `recording_effort`, the analytics copy of the
+//! station's listening ledger, to tell a day it was off from a quiet one.
 //!
 //! Sub-modules are organised by *analytics goal*, not by window type:
 //!
@@ -121,6 +123,81 @@ pub(crate) fn last_days(days: u32) -> String {
 pub(crate) fn last_complete_days(days: u32) -> String {
     format!(
         "detection_date >= CURRENT_DATE - INTERVAL {days} DAYS AND detection_date < CURRENT_DATE"
+    )
+}
+
+/// Seconds of recorded listening below which a day counts as one the station
+/// was **not listening** on.
+///
+/// The same floor as the "not listening" marks the web charts draw from the
+/// same ledger (`birdnet-web`'s `pages::listening`, which reads this constant),
+/// so a chart and the analytics beside it never disagree about a day. It is a
+/// floor for *absent*, not a measure of a full day: the recorder credits five
+/// minutes per sample, so any day with one sample clears it. A day that cleared
+/// it with a fraction of its usual listening is told apart, where a query can
+/// say so, by [`PARTIAL_EFFORT_FRACTION`].
+///
+/// Why not half the scheduled recording window, as the audit suggested: the
+/// schedule (solar or fixed, per source) lives in `SQLite` settings and the
+/// scheduler crate, not in the analytics store these queries run in, and the
+/// station's own typical day — the median of the listened days before it — is
+/// available here and follows the seasons the same way.
+pub const MIN_LISTENED_SECS: f64 = 60.0;
+
+/// Fraction of its typical day below which a listened day is *partial*.
+///
+/// The typical day is the median effort of the listened days in the window
+/// before it; the anomaly detector labels a partial day rather than judging it.
+pub const PARTIAL_EFFORT_FRACTION: f64 = 0.5;
+
+/// The effort ledger as two CTEs, `effort_days (day, seconds)` and
+/// `ledger (first_day)`, for a query's `WITH` list.
+///
+/// Effort is the `DuckDB` copy of the station's `recording_effort` table
+/// (`AnalyticsDb::sync_recording_effort` at startup, then the last two days
+/// after every sample), **summed** over sources: detections are stored one row
+/// per source per detection, so the effort they are counted against is the
+/// listening of every source together.
+///
+/// `ledger = false` (no `recording_effort` table on this connection) yields an
+/// empty ledger, so every day is *unknown* — see [`listened_sql`].
+pub(crate) const fn effort_ctes(ledger: bool) -> &'static str {
+    if ledger {
+        "effort_days AS (
+    SELECT TRY_CAST(date AS DATE) AS day, SUM(seconds) AS seconds
+    FROM recording_effort
+    WHERE TRY_CAST(date AS DATE) IS NOT NULL
+    GROUP BY 1
+),
+ledger AS (SELECT MIN(day) AS first_day FROM effort_days)"
+    } else {
+        "effort_days AS (SELECT NULL::DATE AS day, NULL::DOUBLE AS seconds WHERE false),
+ledger AS (SELECT NULL::DATE AS first_day)"
+    }
+}
+
+/// SQL for the seconds the station listened on `day` (a `DATE` expression),
+/// `NULL` where the ledger cannot say: before its first row, or with no ledger
+/// at all — a station imported from BirdNET-Pi, or one that predates the
+/// recorder. Needs `effort_days` joined as `e` on `e.day = {day}` and `ledger`
+/// cross-joined as `l`.
+pub(crate) fn effort_seconds_sql(day: &str) -> String {
+    format!(
+        "CASE WHEN l.first_day IS NOT NULL AND {day} >= l.first_day \
+         THEN COALESCE(e.seconds, 0) END"
+    )
+}
+
+/// SQL true when the station was listening on `day`, or the ledger cannot say.
+///
+/// Unknown counts as listening, because that is what every query here assumed
+/// before it read the ledger: on a station without one, nothing changes. A day
+/// the ledger covers and credits with less than [`MIN_LISTENED_SECS`] is not
+/// listened. Same joins as [`effort_seconds_sql`].
+pub(crate) fn listened_sql(day: &str) -> String {
+    format!(
+        "COALESCE({} >= {MIN_LISTENED_SECS:.1}, TRUE)",
+        effort_seconds_sql(day)
     )
 }
 

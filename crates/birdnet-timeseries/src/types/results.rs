@@ -29,7 +29,8 @@ pub struct TrendRow {
     pub daily_detections: i64,
     /// Species richness for this day.
     pub species_richness: i64,
-    /// Smoothed moving average of detection count.
+    /// Smoothed moving average of detection count; `None` where the window is
+    /// incomplete or reaches a day the station was not listening on.
     pub moving_avg_detections: Option<f64>,
     /// Smoothed moving average of species richness.
     pub moving_avg_species: Option<f64>,
@@ -110,7 +111,9 @@ pub struct AnomalyRow {
     pub rolling_stddev: Option<f64>,
     /// Z-score: how many SDs above/below the mean.
     pub z_score: Option<f64>,
-    /// `"high"`, `"low"`, or `"normal"`.
+    /// `"high"`, `"low"` or `"normal"` for a day the station listened through;
+    /// `"partial"` or `"not_listening"` for one it did not, which is not judged
+    /// — see `queries::trend::AnomalyDetection`.
     pub anomaly_flag: String,
 }
 
@@ -119,17 +122,21 @@ pub struct AnomalyRow {
 pub struct YearOverYearRow {
     /// ISO week start date.
     pub week_start: String,
-    /// Detection count this year.
+    /// Detection count this year, over the `compared_days`.
     pub current_year_count: i64,
-    /// Detection count same week last year.
+    /// Detection count over the same days last year; `None` when the station
+    /// had not started by then, or no day is left to compare.
     pub prior_year_count: Option<i64>,
-    /// Absolute delta (current − prior); `None` when the same week last year
-    /// has no detections to compare against.
+    /// Absolute delta (current − prior); `None` when `prior_year_count` is.
     pub yoy_delta: Option<i64>,
     /// Species count this year.
     pub current_year_species: i64,
     /// Species count prior year.
     pub prior_year_species: Option<i64>,
+    /// Days of the week both counts are over: the complete days so far whose
+    /// counterpart 52 weeks earlier the station was also listening on (every
+    /// day, on a station without a recording-effort ledger).
+    pub compared_days: i64,
 }
 
 /// Inactivity gap within a day.

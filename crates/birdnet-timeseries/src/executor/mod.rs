@@ -30,6 +30,13 @@ use crate::types::results::WindowRow;
 #[derive(Debug)]
 pub struct TimeSeriesDb<'conn> {
     pub(super) conn: &'conn Connection,
+    /// Whether `recording_effort`, the analytics copy of the station's
+    /// listening ledger, is on this connection. It is created by the first
+    /// `AnalyticsDb::sync_recording_effort` — at startup, and after each effort
+    /// sample — so a store that has never synced one does not have it; the
+    /// effort-aware queries then treat every day as unknown, which is how they
+    /// behaved before they read it.
+    pub(super) effort_ledger: bool,
 }
 
 impl<'conn> TimeSeriesDb<'conn> {
@@ -71,7 +78,15 @@ impl<'conn> TimeSeriesDb<'conn> {
     pub fn new(conn: &'conn Connection) -> Result<Self, TimeSeriesError> {
         conn.prepare("SELECT 1 FROM detections_ts LIMIT 0")
             .map_err(|e| TimeSeriesError::MissingView(format!("detections_ts: {e}")))?;
-        Ok(Self { conn })
+        // Checked, not created, for the same reason as the view: constructing
+        // an executor is a read.
+        let effort_ledger = conn
+            .prepare("SELECT date, seconds FROM recording_effort LIMIT 0")
+            .is_ok();
+        Ok(Self {
+            conn,
+            effort_ledger,
+        })
     }
 
     /// Run a generic window query and collect `WindowRow` results.

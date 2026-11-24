@@ -3,13 +3,13 @@
 //! "Gap" queries identify stretches of time with no (or few) detections.
 //! They answer questions like:
 //! - "Were there any unexplained silent periods today?"
-//! - "What days had fewer than N detections?"
+//! - "What days did the station listen through and hear fewer than N detections?"
 //! - "How long was the longest gap between detections this week?"
 //!
 //! Implementation follows the session-window pattern: LAG over ordered
 //! timestamps, then filtering for rows where the gap exceeds a threshold.
 
-use super::QueryPlan;
+use super::{QueryPlan, effort_ctes, listened_sql};
 
 /// Detect inactivity gaps within a single day.
 ///
@@ -64,16 +64,25 @@ ORDER BY gap_start"
     }
 }
 
-/// Days with fewer than N detections (quiet days).
+/// Days the station listened through and heard at most N detections.
 ///
-/// Useful for identifying equipment outages, bad weather or genuine
-/// low-activity periods.
+/// Bad weather, a quiet season or a genuinely empty yard. **Not outages**: a
+/// day the recording-effort ledger says the station was not listening on (see
+/// [`super::MIN_LISTENED_SECS`]) is left out, because it was not quiet — it
+/// was not heard. This used to say it found equipment outages, and listed them
+/// as quiet days alongside the real ones (RES-14); the ledger, and the "not
+/// listening" marks drawn from it, are where outages are read. A day the
+/// ledger cannot speak for — before its first row, or with no ledger at all —
+/// is listed as before.
 #[derive(Debug, Clone)]
 pub struct QuietDays {
     /// Maximum detections threshold (days at or below this are returned; default: 5).
     pub max_detections: u32,
     /// Look back this many days (default: 90).
     pub lookback_days: u32,
+    /// Whether the connection holds the `recording_effort` ledger. Without it
+    /// no day is known to be an outage.
+    pub effort_ledger: bool,
 }
 
 impl Default for QuietDays {
@@ -81,6 +90,7 @@ impl Default for QuietDays {
         Self {
             max_detections: 5,
             lookback_days: 90,
+            effort_ledger: true,
         }
     }
 }
@@ -89,8 +99,11 @@ impl QueryPlan for QuietDays {
     fn sql(&self) -> String {
         let max_d = self.max_detections;
         let days = self.lookback_days;
+        let effort = effort_ctes(self.effort_ledger);
+        let listened = listened_sql("s.detection_date");
         format!(
-            "WITH counts AS (
+            "WITH {effort},
+counts AS (
     SELECT detection_date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS species
     FROM detections_ts
     WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
@@ -109,8 +122,12 @@ SELECT
     strftime(s.detection_date, '%Y-%m-%d') AS date,
     COALESCE(c.n, 0)       AS detection_count,
     COALESCE(c.species, 0) AS species_count
-FROM spine s LEFT JOIN counts c USING (detection_date)
+FROM spine s
+LEFT JOIN counts c ON c.detection_date = s.detection_date
+LEFT JOIN effort_days e ON e.day = s.detection_date
+CROSS JOIN ledger l
 WHERE COALESCE(c.n, 0) <= {max_d}
+  AND {listened}
 ORDER BY s.detection_date"
         )
     }
@@ -259,6 +276,7 @@ mod tests {
         let q = QuietDays {
             max_detections: 3,
             lookback_days: 14,
+            effort_ledger: true,
         };
         let sql = q.sql();
         // Against the zero-filled count, so a silent day qualifies (ANA13).

@@ -71,7 +71,8 @@ impl super::TimeSeriesDb<'_> {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Days with fewer than `max_detections` detections (quiet days).
+    /// Days the station listened through with at most `max_detections`
+    /// detections (quiet days). Outages are not quiet days — see [`QuietDays`].
     ///
     /// # Errors
     ///
@@ -84,6 +85,7 @@ impl super::TimeSeriesDb<'_> {
         let q = QuietDays {
             max_detections,
             lookback_days,
+            effort_ledger: self.effort_ledger,
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
