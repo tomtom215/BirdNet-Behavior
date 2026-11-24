@@ -126,7 +126,7 @@ pub(super) fn content(terrain: &str) -> String {
             topic: "Hour × weekday",
             title: "Activity grid",
             action: None,
-            note: "A stronger colour means more birds heard in that hour (the key under the grid runs from none to most). The bars at the right and along the bottom are the totals for each weekday and each hour.",
+            note: "A stronger colour means more birds heard in that hour (the key under the grid runs from none to most). The bars at the right are each weekday's detections per day the station listened, the unit the sentence above compares; the bars along the bottom are the totals for each hour.",
             body: "",
         },
         "heatmap-grid",

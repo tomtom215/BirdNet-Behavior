@@ -121,8 +121,9 @@ pub struct HourByWeekday<'a> {
     pub window_days: u32,
 }
 
-/// The activity grid: hour of day across, weekday down, a rounded cell each, with the
-/// totals for each weekday (right) and each hour (below) as small bars, the busiest cell
+/// The activity grid: hour of day across, weekday down, a rounded cell each, with each
+/// weekday's detections per listened day (right) and each hour's total (below) as small
+/// bars, the busiest cell
 /// ringed and named, and the colour scale printed under it.
 ///
 /// The colour is the *average per day* in that slot (the total divided by how many such
@@ -168,7 +169,8 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
 
     let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 28.0_f64);
     let marg_x = label_w + 24.0 * cw + 10.0;
-    let w = marg_x + 74.0;
+    // Room for the bar (34) and a label such as "40.2/day".
+    let w = marg_x + 96.0;
     let top = 20.0;
     let grid_h = 7.0 * ch;
     let col_y = top + grid_h + 8.0;
