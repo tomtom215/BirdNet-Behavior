@@ -672,6 +672,11 @@ pub(super) fn event_processor(
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
+        // Per-detection source/stream label parsed from the source filename: the
+        // RTSP stream id (e.g. `cam1`) or `local` for the on-board mic. Tags the
+        // row, quarantined or admitted, so multi-stream detections are
+        // attributable, and feeds the per-source liveness gauge below.
+        let source_label = derive_source_label(&event.source_file);
         // The floor for this detection: its classifier's own threshold where
         // one is set, the station's otherwise. Every classifier's threshold was
         // compared to the station's alone, so `MODEL_2_THRESHOLD=0.35` under a
@@ -736,6 +741,9 @@ pub(super) fn event_processor(
                     ),
                     sensitivity: Some(provenance.sensitivity),
                     overlap: Some(provenance.overlap),
+                    // Labelled as the detection row's `Source` is, so an
+                    // approval names the microphone that heard it (MSC-04).
+                    source: Some(&source_label),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -818,6 +826,9 @@ pub(super) fn event_processor(
                 ),
                 sensitivity: Some(provenance.sensitivity),
                 overlap: Some(provenance.overlap),
+                // Labelled as the detection row's `Source` is, so an approval
+                // names the microphone that heard it (MSC-04).
+                source: Some(&source_label),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -878,6 +889,9 @@ pub(super) fn event_processor(
                 ),
                 sensitivity: Some(provenance.sensitivity),
                 overlap: Some(provenance.overlap),
+                // Labelled as the detection row's `Source` is, so an approval
+                // names the microphone that heard it (MSC-04).
+                source: Some(&source_label),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -930,6 +944,9 @@ pub(super) fn event_processor(
                     cutoff: Some(threshold),
                     sensitivity: Some(provenance.sensitivity),
                     overlap: Some(provenance.overlap),
+                    // Labelled as the detection row's `Source` is, so an
+                    // approval names the microphone that heard it (MSC-04).
+                    source: Some(&source_label),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -962,7 +979,7 @@ pub(super) fn event_processor(
             crate::daemon::duplicate::detection_secs(&detection.date, &detection.time)
             && let crate::daemon::duplicate::DuplicateVerdict::Suppress { since_last_secs } =
                 duplicates.admit_from(
-                    &derive_source_label(&event.source_file),
+                    &source_label,
                     &detection.scientific_name,
                     at_secs,
                     species_intervals.get(&state, &detection.scientific_name),
@@ -984,11 +1001,6 @@ pub(super) fn event_processor(
         // INTEGER). Previously the daemon passed empty strings here,
         // which SQLite silently stored as TEXT and every subsequent
         // typed read returned "Invalid column type Text at index N".
-        // Per-detection source/stream label parsed from the source filename: the
-        // RTSP stream id (e.g. `cam1`) or `local` for the on-board mic. Tags the
-        // row (so multi-stream detections are attributable) and feeds the
-        // per-source liveness gauge below.
-        let source_label = derive_source_label(&event.source_file);
 
         // Extract the clip FIRST, so the DB row can reference the SAVED CLIP's
         // filename — the flat name the web serves recordings by (`File_Name`) —
@@ -5169,6 +5181,92 @@ mod tests {
             row.sensitivity.is_some() && row.overlap.is_some(),
             "the run's sensitivity and overlap must be on the row: {row:?}"
         );
+    }
+
+    /// The quarantine rows on the station, oldest first, approved one by one,
+    /// and the `Source` of every detection that approval produced.
+    ///
+    /// Plain SQL rather than the quarantine module's types, so the gates that
+    /// use it say the same thing about a schema with and without a `source`.
+    fn quarantine_then_approve_all(
+        state: &birdnet_web::state::AppState,
+    ) -> (usize, Vec<Option<String>>) {
+        state.with_db(|c| {
+            let ids: Vec<i64> = c
+                .prepare("SELECT id FROM quarantine ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            for id in &ids {
+                birdnet_db::sqlite::approve_quarantine(c, *id).unwrap();
+            }
+            let sources: Vec<Option<String>> = c
+                .prepare("SELECT Source FROM detections ORDER BY Source")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            (ids.len(), sources)
+        })
+    }
+
+    /// MSC-04: two microphones that hear one bird in one second, each under the
+    /// species' own bar, are two quarantined detections, and approving each
+    /// gives a detection that names its own microphone. The quarantine was
+    /// unique on date, time and species, so the second was dropped without a
+    /// word, and an approval wrote no `Source` at all.
+    #[tokio::test(flavor = "current_thread")]
+    async fn two_sources_quarantine_one_bird_in_one_second_as_two_detections() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let events = ["src_a", "src_b"]
+            .iter()
+            .map(|src| {
+                make_event(
+                    "Pica pica",
+                    "Eurasian Magpie",
+                    0.60,
+                    tmp.path()
+                        .join(format!("2026-05-19-birdnet-{src}-09:00:00.wav")),
+                    &format!("corr-{src}"),
+                )
+            })
+            .collect();
+
+        run_processor(&state, events, thresholds(&[("Pica pica", 0.80)]), 0.25).await;
+
+        // One assertion over both, so a failure shows the row count and the
+        // sources together.
+        assert_eq!(
+            quarantine_then_approve_all(&state),
+            (2, vec![Some("src_a".to_owned()), Some("src_b".to_owned())]),
+            "each source's quarantined detection must be kept, and an approved \
+             detection names the source that heard it: (quarantine rows, Source of \
+             each approved detection)"
+        );
+    }
+
+    /// The counterpart: the same recording offered twice is one quarantined
+    /// detection, as it always was. A key that took in something that differs
+    /// between two passes over one file would turn a re-run into a duplicate.
+    #[tokio::test(flavor = "current_thread")]
+    async fn one_source_offering_one_detection_twice_quarantines_it_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let file = tmp.path().join("2026-05-19-birdnet-src_a-09:00:00.wav");
+        let events = ["corr-1", "corr-2"]
+            .iter()
+            .map(|corr| make_event("Pica pica", "Eurasian Magpie", 0.60, file.clone(), corr))
+            .collect();
+
+        run_processor(&state, events, thresholds(&[("Pica pica", 0.80)]), 0.25).await;
+
+        let (quarantined, sources) = quarantine_then_approve_all(&state);
+        assert_eq!(quarantined, 1, "one detection offered twice is one row");
+        assert_eq!(sources.len(), 1, "{sources:?}");
     }
 
     #[tokio::test(flavor = "current_thread")]
