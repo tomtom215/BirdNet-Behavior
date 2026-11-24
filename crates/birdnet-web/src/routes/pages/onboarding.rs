@@ -658,7 +658,7 @@ fn render_mic_body(
         "manual",
         "⌨",
         "A microphone by its device name",
-        "For a sound card the list above does not show, written the way ALSA names it, like plughw:CARD=Device,DEV=0.",
+        "Only if your microphone is missing from the list above. Typing its name is for experts: it looks like plughw:CARD=Device,DEV=0.",
         false,
         None,
     ));
@@ -734,7 +734,7 @@ fn mic_notice(error: &str) -> Option<&'static str> {
             "That stream address was not accepted. It has to start with rtsp://, http://, https://, rtmp://, udp:// or srt://. Nothing was saved.",
         ),
         "mic-device" => Some(
-            "That device name was not accepted. A sound card is written like plughw:CARD=Device,DEV=0 or plughw:2,0. Nothing was saved.",
+            "That device name was not accepted, and nothing was saved. Pick the microphone from the list instead; a typed name looks like plughw:CARD=Device,DEV=0 or plughw:2,0.",
         ),
         _ => None,
     }
@@ -1705,6 +1705,7 @@ static ONBOARDING_HTML: crate::seal::Sealed = crate::seal::Sealed::new(
       <h1 class="ob-h">The bird-identifying model.</h1>
       <p class="ob-p ob-mb-18">This is the part that recognises songs and calls. It is a file the station downloads once, about 84&nbsp;MB, and checks against a fingerprint before using it. You can carry on with the other steps while it downloads.</p>
       <div class="bnb-card pad" data-cls-host>{{model_panel}}</div>
+      <p class="bnb-meta ob-mt-6">BirdNET is licensed CC BY-NC-SA 4.0: free to use, but not for commercial purposes.</p>
       {{setup_script}}
     </section>
 
