@@ -231,8 +231,8 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 |---|---|
 | `GET /api/v2/timeseries/daily` · `weekly` · `hourly` | Counts over time |
 | `GET /api/v2/timeseries/diversity` | Species diversity over time |
-| `GET /api/v2/timeseries/trend` · `year-over-year` | Trends and year-on-year comparison |
-| `GET /api/v2/timeseries/peak-windows` · `gaps` · `anomalies` | Peak activity, quiet gaps, outliers |
+| `GET /api/v2/timeseries/trend` · `year-over-year` | Trends and year-on-year comparison. A day the station recorded less than half its usual day of (the median of its days with any audio in the recording ledger, summed over its sources, so a station on a recording schedule is judged against its own window) is not listened: `trend` keeps its count but gives it, and every day whose window holds it, no `moving_avg_detections`. Each `trend` day carries `effort_hours`, `listened` and `partial_effort` (listened, under 95% of the usual day). `year-over-year` keeps the raw `yoy_delta` and adds `current_listened_days`, `prior_listened_days`, `current_per_listened_day`, `prior_per_listened_day` and `per_listened_day_delta`, detections per listened day. A day the ledger has no record for (a station older than the ledger, or imported history) counts as listened and has `effort_hours: null` |
+| `GET /api/v2/timeseries/peak-windows` · `gaps` · `anomalies` | Peak activity, quiet gaps, outliers. An `anomalies` day the station recorded less than half its usual day of has `anomaly_flag: "unlistened"` and no `z_score`, and is left out of every later day's baseline; days carry `effort_hours`, `listened` and `partial_effort` as `trend` does |
 | `GET /api/v2/timeseries/accumulation` | Life-list accumulation curve |
 | `GET /api/v2/timeseries/heatmap` · `sessions` | Hour×day heatmap, activity sessions |
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
@@ -241,6 +241,8 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/analytics/sequence-count` · `sequence-match-events` | The `sequence_count` and `sequence_match_events` variants of `patterns`, with the same parameters (`species`, `max_gap`, `hour_start`, `hour_end`) |
 | `GET /api/v2/analytics/assembly` | How fast the chorus comes together: for each morning since `since` (`YYYY-MM-DD`; 90 days back by default), the number of the leading voices of `species` that were heard in that order within each of `windows` (comma-separated minutes, strictly increasing, 1 to 1440, at most 24; the default ladder is 1, 2, 3, 5, 8, 12, 20, 30, 45, 60, 90, 120, 180, 300). `window_funnel`, one aggregate per window; the boundary is inclusive, a depth never falls as the window grows, and `0` means none of the voices was heard in `hour_start` to `hour_end`. Newest morning first, with `windows_minutes`, `species_sequence`, `since` and `total` |
 | `GET /api/v2/analytics/answers` | Who answers whom: for the `top` (2 to 12, default 8) most-heard species since `from` (`YYYY-MM-DD`; 30 days back by default), `exchanges[i][j]`, the number of times `species[i]` was heard and then `species[j]` within `within` minutes (default 1) on the same day, counted without overlap. `sequence_count` with a time constraint; not symmetric, and the diagonal is zero |
+| `GET /api/v2/analytics/abundance?year=&species=&min_detections=` | The detection rate — detections per listened hour — of each species in each ISO week of `year`, from the station's recorded listening, summed over every source. A week the station listened to without hearing a species is a rate of 0, not a missing row, and every rate carries a 95% Poisson interval (`rate_ci_lower`, `rate_ci_upper`). It counts detections, not birds: compare a species with itself across weeks and years, not with another species. |
+| `GET /api/v2/analytics/phenology?year=&species=&min_detections=&limit=` | Each species' first and last detection in each calendar year, with `arrival_q05` and `departure_q95`: the 5th and 95th percentiles of the days it was detected, which one stray detection does not move (with twenty or fewer detection days the 5th percentile is the first day). `effort_gap_before_arrival` is `true` when the station recorded no listening on some day in the 14 before `arrival_q05` — the arrival may only be the first day it could hear the bird — and `null` when its listening record starts later. |
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
 | `GET /api/v2/insights/dawn-chorus?period_days=&min_days=` | Each species' typical first song of the morning (mean and earliest first detection between 04:00 and 10:00), over species heard on at least `min_days` (default 3) of the last `period_days` (default 30, at most 365) days, earliest first. A value that is not a positive integer is a `400`; one over the limit is clamped, and both values applied are echoed. |
 | `GET /api/v2/insights/migration` | Species first heard in the last 14 days, and species with at least 5 detections and none in the last 14 days, with when and how often. |
@@ -383,6 +385,19 @@ page:
 CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
 
 For verification tools: `GET /api/v2/detections/export/raven?from=&to=` is a Raven selection table over every detection with a clip, in BirdNET-Analyzer's column layout with `Begin Path` naming the clip; `GET /api/v2/recordings/{clip}/raven.txt` is one clip's table and `GET /api/v2/recordings/{clip}/labels.txt` the same selections as an Audacity label track. All three read the reviewed set, so a rejected detection is in none of them; a clip no detection names is `404`. See [Export](../admin/backups.md#export) for how each selection is placed.
+
+Effort, for anyone dividing by it. `GET /api/v2/effort/export?from=&to=` is the
+hourly ledger as `effort-by-hour.csv`: per local date, hour and source, the seconds
+of audio the detection pipeline analysed and the seconds the source's capture was up
+(`Date`, `Hour`, `Source`, `Seconds_Analysed`, `Seconds_Up`). Hours are recorded from
+the upgrade that added this ledger on. `GET /api/v2/detections/export/history?sci_name=&from=&to=&grain=hour|day&min_seconds=`
+is one species' detection history, as `detection-history.csv`, one row per hour or
+day (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`). `Detected` is `1`
+when the species was detected, `0` when the station listened and did not detect it,
+and `NA` when no single source analysed at least `min_seconds` of the occasion (by
+default half of it). An hour or a day without effort is `NA`, not `0`. Hours before
+the hourly ledger existed are `NA`. Days read the daily ledger, which counted capture
+uptime until that upgrade. Both take a range of at most 366 days, and read the reviewed set.
 
 ## Changing a station
 

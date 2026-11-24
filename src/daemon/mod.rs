@@ -106,14 +106,18 @@ fn throughput_observer(
     state: &birdnet_web::state::AppState,
 ) -> birdnet_core::detection::daemon::ThroughputObserver {
     birdnet_core::detection::daemon::ThroughputObserver::new({
-                let metrics = state.metrics();
+                let state = state.clone();
                 move |path| {
+                    let metrics = state.metrics();
                     let source = crate::daemon::disposition::derive_source_label(path);
                     metrics.inc_file_analysed(&source);
                     // From the header, not by decoding again: the file is
                     // still claimed here, and this is the data rate.
                     if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
                         metrics.add_audio_analysed(&source, secs);
+                        // And the effort ledger's numerator's denominator:
+                        // only audio analysed is listening (RES-01).
+                        crate::integrations::effort::note_analysed(&state, path, secs);
                     }
                 }
             })
@@ -751,6 +755,106 @@ mod liveness_mirror_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A 15 s, 48 kHz mono silent WAV at `path`.
+    fn write_segment(path: &std::path::Path) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for _ in 0..(15 * 48_000) {
+            w.write_sample(0_i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    /// RES-01 / MSC-16. Effort is the audio the pipeline analysed, credited to
+    /// the hour it was recorded in, not the time a source's gauge read "up".
+    /// Twenty 15 s segments, half shed under a thermal limit, in one five-minute
+    /// tick with the source up the whole time: 150 s of effort, not 300.
+    #[test]
+    fn effort_is_the_audio_analysed_not_the_time_a_source_was_up() {
+        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        state
+            .with_db(|c| {
+                c.insert(&NewAudioSource::defaults(
+                    "src_a",
+                    SourceKind::UsbAlsa,
+                    "hw:1,0",
+                ))
+            })
+            .unwrap();
+        state.metrics().set_source_up("src_a", true);
+        let observer = super::throughput_observer(&state);
+        for i in 0..20 {
+            let path = tmp.path().join(format!(
+                "2026-05-19-birdnet-src_a-09:{:02}:{:02}.wav",
+                i / 4,
+                (i % 4) * 15
+            ));
+            write_segment(&path);
+            if i % 2 == 0 {
+                observer.analysed(&path);
+            } else {
+                observer.shed(&path, birdnet_core::detection::daemon::ShedReason::Thermal);
+            }
+        }
+        crate::integrations::effort::tick(&state, 300.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (total - 150.0).abs() < 1e-6,
+            "effort credited {total} s for 150 s of analysed audio (300 s of capture, half shed)"
+        );
+        let day: String = state.with_db(|c| {
+            c.query_row(
+                "SELECT date FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            day, "2026-05-19",
+            "effort belongs to the day the audio was recorded"
+        );
+        // RES-02: the same audio by the hour it was recorded in. The uptime sample
+        // is the clock's: it lands in the hour the tick ran in, not 09:00.
+        let (hour, analysed): (i64, f64) = state.with_db(|c| {
+            c.query_row(
+                "SELECT hour, seconds_analysed FROM recording_effort_hourly
+                  WHERE date = '2026-05-19' AND source = 'src_a'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        });
+        assert_eq!(hour, 9);
+        assert!((analysed - 150.0).abs() < 1e-6, "{analysed}");
+        let up: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds_up), 0) FROM recording_effort_hourly WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (up - 300.0).abs() < 1e-6,
+            "the five-minute sample still records the source as up: {up}"
+        );
+    }
+
     /// ACC-02's exposition gate: a file whose privacy rule masked windows and
     /// removed detections reaches `birdnet_detections_dropped_total` and
     /// `birdnet_windows_masked_total` under `reason="privacy"`, and the day's

@@ -150,8 +150,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "01-multi-source-capture.md:46",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "11c6f0d: the day's listening is SUM(seconds) over sources, so the rate is detections per source-hour. Gate a_bird_heard_on_two_microphones_is_one_an_hour_as_on_one red on MAX (left Some(2.0), right Some(1.0)). Two fixtures that encoded the MAX belief (two microphones of effort, one detection row) were changed to one row per microphone; their asserted rates are unchanged. Per-source rates wait for Source in DuckDB (MSC-06)."
   },
   {
    "id": "MSC-04",
@@ -306,8 +306,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "01-multi-source-capture.md:176",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b08a5ee: closed with RES-01 (same change and gate). The processor's set_source_up(true) on each detection is left in place: effort no longer reads the gauge."
   },
   {
    "id": "MSC-17",
@@ -1158,8 +1158,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "05-ui-rendered-walkthrough.md:154",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3228368: the margin draws detections per listened day, labelled /day. Gate the_weekday_the_sentence_names_has_the_longest_margin_bar red on the old margin (left \"Sat\", right \"Thu\"). 7451e67: rendering the page showed the new labels clipped and the caption still saying totals; both fixed and looked at again at 1280 and 390 px."
   },
   {
    "id": "UIR-03",
@@ -1230,8 +1230,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "05-ui-rendered-walkthrough.md:235",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3228368: per-listened-day comparison and the lost days named where either week lost days; \"partly heard\" below half. Gate an_outage_in_the_week_before_is_named_and_divided_out red with the ledger read removed."
   },
   {
    "id": "UIR-09",
@@ -1590,8 +1590,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:171",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3228368 + 7d73d1a: listened days from the ledger; \"days with a detection\" with no ledger. Gate the_days_of_listening_are_the_days_the_station_listened red on the old count. 7d73d1a: an existing test asserted the old no-ledger wording (\"1 days of listening\"); it now expects \"1 day with a detection\" (and the singular is fixed)."
   },
   {
    "id": "UIC-02",
@@ -1614,8 +1614,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:207",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "e2cc9b1 + 6d4d55c: closed with RES-14's trend part. Gate a_three_day_outage_is_not_a_low_anomaly red on the unfixed code (\"an outage day was flagged as a low anomaly\"); page gates an_unlistened_day_is_not_an_anomaly_row and a_partial_day_anomaly_is_labelled."
   },
   {
    "id": "UIC-04",
@@ -1998,8 +1998,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:151",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b08a5ee: each analysed file's length is held by the local date and hour in its name and its source, and written on the five-minute tick to recording_effort and recording_effort_hourly (migration 63; 61 before #298 merged); liveness is kept as seconds_up. Gate effort_is_the_audio_analysed_not_the_time_a_source_was_up red with the old crediting (\"effort credited 300 s for 150 s of analysed audio\"). The deadman reference now counts uptime throughout (the_deadman_reference_counts_uptime_when_nothing_is_analysed red on the old query). Privacy-suppressed and failed windows are not debited: a window masked is still audio analysed."
   },
   {
    "id": "RES-02",
@@ -2010,8 +2010,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:181",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b08a5ee: recording_effort_hourly (the audit's \"or RES-01's hourly table\"); GET /api/v2/effort/export and GET /api/v2/detections/export/history (1/0/NA by hour or day). Gates an_hour_without_effort_is_not_a_zero and a_detection_history_says_na_where_nobody_listened red with the NA rule removed. Sunrise-relative occasions are not offered. Both routes are in openapi.json (b94da56)."
   },
   {
    "id": "RES-03",
@@ -2022,8 +2022,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:200",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "11c6f0d: closed with MSC-03 (same change and gate)."
   },
   {
    "id": "RES-04",
@@ -2154,8 +2154,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:394",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "e2cc9b1 + 6d4d55c: moving average NULL over unlistened days, anomalies exclude them from flag and baseline, year-over-year adds per-listened-day fields, rows carry effort; the floor is half the station's median day with audio (6d4d55c, after the first version's 24-hour floor judged every day of a scheduled station unlistened: a_scheduled_station_is_judged_against_its_own_day red on it). Gate a_week_without_effort_has_no_average_and_no_low_anomaly red on the unfixed code. Remaining: richness, Shannon diversity and QuietDays (gap.rs) are not effort-aware."
   },
   {
    "id": "RES-15",
@@ -2166,8 +2166,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:411",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "34c335f: zero-rate rows for listened species-weeks, exact 95% Garwood interval (rate_ci_lower/upper; Byar above k=100), docs say \"detection rate\". Gate a_listened_week_with_no_detections_is_a_rate_of_zero_with_an_upper_bound red on the unfixed code. weekly_abundance_sql (the relative index) is still not effort-corrected; its doc says so."
   },
   {
    "id": "RES-16",
@@ -2214,8 +2214,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:476",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "58cdcce: arrival_q05/departure_q95 (quantile_disc of detection days) and effort_gap_before_arrival. Gate one_stray_detection_does_not_make_a_january_arrival red on the unfixed code. Confirmed-only or k-days-in-w rules not added."
   },
   {
    "id": "RES-20",
@@ -2432,6 +2432,18 @@
    "source": "docs/TECH_DEBT.md TD-9 (narrowed by 0052bbf); found while fixing MSC-05",
    "status": "open",
    "evidence": "Reviews follow a relabel through a trigger; detection_comments has none, so a comment keyed by (date, time, sci_name, file_name) is orphaned when sci_name changes. Read, not tested."
+  },
+  {
+   "id": "UIR-38",
+   "title": "At 390 px the anomaly table's Type column is cut off at the card edge",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-05",
+   "phase": 1,
+   "source": "seen in a render while fixing UIC-03",
+   "status": "open",
+   "evidence": "The table on the Trends page's anomaly card has no scroll wrapper; at 390 px the Type column's words are cut off at the card edge. Present before WP-05; the partial-day label widens the cell. Seen in a screenshot by the session that did UIC-03, not measured."
   }
  ]
 }

@@ -74,6 +74,25 @@ impl<'conn> TimeSeriesDb<'conn> {
         Ok(Self { conn })
     }
 
+    /// Whether this store holds the `recording_effort` ledger the trend
+    /// queries judge days by.
+    ///
+    /// The analytics copy of the ledger is created by its first sync
+    /// (`AnalyticsDb::sync_recording_effort`), so a store that has never been
+    /// synced has no such table, and a query naming it would not bind. Without
+    /// it every day is judged as listened, as before the ledger existed.
+    pub(super) fn has_effort_ledger(&self) -> Result<bool, TimeSeriesError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM duckdb_tables() \
+             WHERE table_name = 'recording_effort' \
+               AND database_name = current_database() \
+               AND schema_name = current_schema()",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Run a generic window query and collect `WindowRow` results.
     pub(super) fn run_window_query(&self, sql: &str) -> Result<Vec<WindowRow>, TimeSeriesError> {
         let mut stmt = self.conn.prepare(sql)?;

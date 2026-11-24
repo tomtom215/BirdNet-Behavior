@@ -2737,6 +2737,29 @@ pub const MIGRATIONS: &[Migration] = &[
             SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
         END;",
     },
+    Migration {
+        version: 63,
+        description: "Effort by the hour: audio analysed, and the time each source was up",
+        // RES-01 / RES-02. `recording_effort` (migration 27) was credited five
+        // minutes for every source whose liveness gauge read "up", so a station
+        // shedding one segment in two under a thermal limit reported full
+        // listening, and its resolution was one day, so no hour-of-day rate or
+        // detection history could be built. From this version `recording_effort`
+        // is credited with the audio the pipeline analysed, to the local date the
+        // audio was recorded on; rows written before it hold capture uptime, and
+        // are left as they are. This table holds the same analysed seconds by
+        // local hour, beside the time the source was up, so the two can be
+        // compared: `seconds_up` minus `seconds_analysed` is audio captured and
+        // not analysed (shed, dropped or still queued). Purely additive.
+        up_sql: "CREATE TABLE IF NOT EXISTS recording_effort_hourly (
+            date TEXT NOT NULL,
+            hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+            source TEXT NOT NULL,
+            seconds_analysed REAL NOT NULL DEFAULT 0,
+            seconds_up REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, hour, source)
+        );",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

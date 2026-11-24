@@ -204,7 +204,6 @@ handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or	tokio::tas
 handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or_else	birdnet_db::sqlite::seconds_since_last_detection(conn).unwrap_or_else(|e| { tracing::debug!(error = %e, "deadm
 handled	src/integrations/deadman.rs	spawn_detection_deadman	unwrap_or_else	birdnet_db::sqlite::total_recording_seconds(conn).unwrap_or_else(|e| { tracing::debug!(error = %e, "deadman ef
 cache	src/integrations/ebird.rs	poll_loop	ok	tokio::task::spawn_blocking(move || ebird::load(&path)) .await .ok()
-fail-closed	src/integrations/effort.rs	sample_once	unwrap_or_default	AudioSourceStore::list(conn).unwrap_or_default()
 setting-default	src/integrations/email.rs	create_email_notifier	ok	ensure_settings_table(conn).ok()
 setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_cooldown_secs", "300"), "300") .parse::<u64>() .unwrap_or(300)
 setting-default	src/integrations/email.rs	create_email_notifier	unwrap_or	s(get_or(conn, "email_min_confidence", "0.80"), "0.80") .parse::<f64>() .unwrap_or(0.80)
@@ -269,3 +268,5 @@ handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || { render_thread(&st, &date, &time, &sci_name, file_name.as_deref(), None) 
 handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	ok	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
 fail-closed	src/capture/sources.rs	table_ever_used	ok	state .with_db(|conn| { conn.query_row("SELECT EXISTS (SELECT 1 FROM audio_sources)", [], |r| { r.get::<_, boo
+handled	src/integrations/effort.rs	flush_analysed	match-err	match state.with_db(|conn| credit_analysed(conn, &credits)) { Err .. }
+handled	src/integrations/effort.rs	sample_once	match-err	match state.with_db(|conn| { use birdnet_db::audio_sources::AudioSourceStore; AudioSourceStore::list(conn) }) 

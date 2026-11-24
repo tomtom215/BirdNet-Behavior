@@ -13,7 +13,7 @@ mod apprise;
 mod birdweather;
 mod deadman;
 mod ebird;
-mod effort;
+pub mod effort;
 mod email;
 mod heartbeat;
 mod mqtt;
