@@ -130,9 +130,9 @@ fn render_content(
     // Counting only the days with a detection called 250 of 320 listened days "250 days of
     // listening", and left the silent days out of the average.
     let listened = effort.and_then(super::listening::listened_day_count);
-    let (days, days_are) = listened.map_or((active_days, "days with a detection"), |n| {
-        (n, "days of listening")
-    });
+    let (days, days_are) =
+        listened.map_or((active_days, "with a detection"), |n| (n, "of listening"));
+    let days_are = format!("{} {days_are}", if days == 1 { "day" } else { "days" });
     let per_day = if days > 0 {
         total / i64::try_from(days).unwrap_or(1).max(1)
     } else {
