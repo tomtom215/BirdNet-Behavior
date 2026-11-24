@@ -1598,7 +1598,7 @@ fn meta_for(s: &AudioSource) -> String {
 /// The text of `/proc/asound/cards`, for resolving a card name to its index
 /// when two ALSA spellings are compared. `None` off Linux or without ALSA, in
 /// which case a card name only equals the same name.
-fn alsa_cards() -> Option<String> {
+pub(crate) fn alsa_cards() -> Option<String> {
     std::fs::read_to_string("/proc/asound/cards").ok()
 }
 

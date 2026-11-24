@@ -1139,7 +1139,7 @@ mod tests {
 
     #[test]
     fn device_identity_folds_the_spellings_of_one_device() {
-        let cards = " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n                      vc4-hdmi-0\n 1 [USB            ]: USB-Audio - USB PnP Sound Device\n";
+        let cards = " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n                      vc4-hdmi-0\n 1 [USB            ]: USB-Audio - USB Sound Device\n";
         let alsa = |d| device_identity(SourceKind::UsbAlsa, d, Some(cards));
         for same in [
             "hw:1,0",
