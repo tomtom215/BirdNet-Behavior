@@ -2624,6 +2624,29 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (date, source, reason)
         );",
     },
+    Migration {
+        version: 61,
+        description: "Hourly analysis effort per source: audio analysed, segments shed and dropped",
+        // RES-01, RES-02, MSC-16 (audit 2026-11). `recording_effort` was
+        // credited from the capture supervisor's liveness gauge, so a segment
+        // the shed policy skipped under heat or backlog, or one that vanished
+        // before analysis, still counted as listening; and its grain was a
+        // day, which cannot say whether 06:00-07:00 was heard. This table is
+        // credited from what the pipeline actually analysed, by the local
+        // date and hour the audio was recorded (the stamp detections carry),
+        // per source; `recording_effort` is now credited from the same
+        // figures. Purely additive.
+        up_sql: "CREATE TABLE IF NOT EXISTS analysis_effort (
+            date TEXT NOT NULL,
+            hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+            source TEXT NOT NULL,
+            seconds_analysed REAL NOT NULL DEFAULT 0,
+            segments_analysed INTEGER NOT NULL DEFAULT 0,
+            segments_shed INTEGER NOT NULL DEFAULT 0,
+            segments_dropped INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, hour, source)
+        );",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

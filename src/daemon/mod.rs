@@ -102,7 +102,7 @@ fn is_enabled_but_inert(
 /// What the daemon reports about its own throughput (OB-12, PR-1, PR-2),
 /// mapped onto the metrics registry. The source label is derived here
 /// because `derive_source_label` is the one place that knows the convention.
-fn throughput_observer(
+pub fn throughput_observer(
     state: &birdnet_web::state::AppState,
 ) -> birdnet_core::detection::daemon::ThroughputObserver {
     birdnet_core::detection::daemon::ThroughputObserver::new({
@@ -114,6 +114,7 @@ fn throughput_observer(
                     // still claimed here, and this is the data rate.
                     if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
                         metrics.add_audio_analysed(&source, secs);
+                        crate::integrations::effort::pending().analysed(path, secs);
                     }
                 }
             })
@@ -125,6 +126,7 @@ fn throughput_observer(
                     metrics.inc_segment_dropped(&crate::daemon::disposition::derive_source_label(
                         path,
                     ));
+                    crate::integrations::effort::pending().dropped(path);
                 }
             })
             // The queue's depth and what the shed policy skipped (PR-2).
@@ -134,7 +136,10 @@ fn throughput_observer(
             })
             .with_shed({
                 let metrics = state.metrics();
-                move |_path, reason| metrics.inc_segment_shed(reason.as_str())
+                move |path, reason| {
+                    metrics.inc_segment_shed(reason.as_str());
+                    crate::integrations::effort::pending().shed(path);
+                }
             })
             // Each classifier's run of failed windows (`e853776`), for the
             // `classifiers` condition, the health endpoint and the exposition.

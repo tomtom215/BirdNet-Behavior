@@ -60,7 +60,7 @@ pub use detections::{
     unstamped_detection_count,
 };
 pub use discards::{DiscardRow, add_discards, discards_on};
-pub use effort::total_recording_seconds;
+pub use effort::{HourlyEffort, add_hourly_effort, hourly_effort, total_recording_seconds};
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{
     ImageBlacklist, add_image_blacklist, blacklisted_urls_for_species, is_image_blacklisted,
