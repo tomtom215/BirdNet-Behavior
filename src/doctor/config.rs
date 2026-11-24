@@ -516,6 +516,57 @@ pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> C
     )
 }
 
+/// Does overlapping analysis record one call as several rows (MSC-09)?
+///
+/// With OVERLAP above zero, consecutive windows share audio, so a call is
+/// heard in every window that covers it, and each of those windows that
+/// detects it is its own row with its own time: nothing merges detections
+/// across windows. The duplicate interval (`DUPLICATE_INTERVAL_SECS`) is
+/// what keeps one row per call, and it is off by default. This only says so:
+/// whether to merge or to change the default changes a station's counts, and
+/// is the operator's choice.
+///
+/// `None` when there is no overlap, or the interval is on. The interval is
+/// resolved as the daemon resolves it (the flag when it is not its default
+/// of 0, else the config file), and is on only above zero, as the daemon's
+/// gate reads it.
+pub(super) fn check_overlap_duplicates(cli: &Cli, config: Option<&Config>) -> Option<Check> {
+    const NAME: &str = "Overlapping windows";
+
+    let overlap = crate::daemon::resolve_f32_with_default(
+        cli.overlap,
+        0.0,
+        config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
+    );
+    let interval = if cli.duplicate_interval_secs == 0 {
+        config
+            .and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok())
+            .unwrap_or(0)
+    } else {
+        cli.duplicate_interval_secs
+    };
+    let chunk_secs = PipelineConfig::default().chunk_duration_secs;
+    if overlap <= 0.0 || interval > 0 || overlap >= chunk_secs {
+        return None;
+    }
+    // A short call is inside every window that starts within one window
+    // length of it, one every `chunk - overlap` seconds.
+    let windows = (chunk_secs / (chunk_secs - overlap)).ceil();
+    Some(Check::warn(
+        NAME,
+        format!(
+            "OVERLAP is {overlap}s and DUPLICATE_INTERVAL_SECS is off, so a call heard in \
+             overlapping windows is recorded as several detections, one per window that hears \
+             it (up to {windows:.0} for a short call), and every count is that much higher"
+        ),
+        format!(
+            "to keep one detection per call, set DUPLICATE_INTERVAL_SECS (or \
+             --duplicate-interval-secs) to at least the window length, {chunk_secs:.0}s; or set \
+             OVERLAP to 0. Either changes how many rows the station records from then on"
+        ),
+    ))
+}
+
 /// Coordinates as stored by the dashboard, read directly from SQLite.
 ///
 /// Returns `None` on any failure — absent database, missing table, unparseable

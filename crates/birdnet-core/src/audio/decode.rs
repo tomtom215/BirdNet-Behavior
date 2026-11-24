@@ -137,6 +137,27 @@ pub fn probe_duration_secs(path: &Path) -> Option<f64> {
     Some(num_frames as f64 / f64::from(sample_rate))
 }
 
+/// How many mono frames of silence stand in for a packet the decoder refused.
+///
+/// `dur` is the packet's duration in its track's time base
+/// (`time_base = numer / denom` seconds per unit); the answer is that span in
+/// frames at `sample_rate`, rounded to the nearest frame. With no time base the
+/// container's units cannot be trusted to be frames, so the answer is `None`
+/// and the caller counts the packet as lost rather than guessing its length.
+/// A zero duration is `None` too: the container did not say how long it was.
+#[must_use]
+fn lost_packet_frames(dur: u64, time_base: Option<(u32, u32)>, sample_rate: u32) -> Option<usize> {
+    let (numer, denom) = time_base?;
+    if dur == 0 || numer == 0 || denom == 0 {
+        return None;
+    }
+    let num = u128::from(dur) * u128::from(numer) * u128::from(sample_rate);
+    let den = u128::from(denom);
+    usize::try_from((num + den / 2) / den)
+        .ok()
+        .filter(|&n| n > 0)
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioData, DecodeError> {
     use symphonia::core::audio::GenericAudioBufferRef;
@@ -179,6 +200,7 @@ fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioDat
     let sample_rate = audio_params
         .sample_rate
         .ok_or_else(|| DecodeError::Format("unknown sample rate".into()))?;
+    let time_base = track.time_base.map(|tb| (tb.numer.get(), tb.denom.get()));
 
     // `make_audio_decoder` now takes the audio-specific codec params
     // (previously `make` accepted the whole CodecParameters struct).
@@ -188,6 +210,13 @@ fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioDat
 
     let mut samples = Vec::new();
     let mut interleaved: Vec<f32> = Vec::new();
+    // Packets the decoder refused: those replaced by silence of their own
+    // length, and those whose length the container did not give (dropped,
+    // so everything after them is early by an unknown amount). Reported in
+    // one warning per file after the loop.
+    let mut filled_packets = 0_usize;
+    let mut filled_frames = 0_usize;
+    let mut dropped_packets = 0_usize;
 
     // 0.6: `next_packet` returns `Result<Option<Packet>>` (EOF is now `None`
     // rather than a sentinel `UnexpectedEof` error).
@@ -221,30 +250,43 @@ fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioDat
             continue;
         }
 
-        let audio_buf: GenericAudioBufferRef<'_> = match decoder.decode(&packet) {
-            Ok(b) => b,
-            // Recoverable decode errors (typical at format edges) — skip
-            // this packet and continue.
-            Err(SymphoniaError::DecodeError(_)) => continue,
-            Err(e) => return Err(DecodeError::Format(e.to_string())),
-        };
+        match decoder.decode(&packet) {
+            Ok(audio_buf) => {
+                let audio_buf: GenericAudioBufferRef<'_> = audio_buf;
+                let num_channels = audio_buf.num_planes();
+                let num_frames = audio_buf.frames();
+                if num_channels == 0 || num_frames == 0 {
+                    continue;
+                }
 
-        let num_channels = audio_buf.num_planes();
-        let num_frames = audio_buf.frames();
-        if num_channels == 0 || num_frames == 0 {
-            continue;
-        }
+                interleaved.resize(audio_buf.samples_interleaved(), 0.0_f32);
+                audio_buf.copy_to_slice_interleaved(&mut interleaved[..]);
 
-        interleaved.resize(audio_buf.samples_interleaved(), 0.0_f32);
-        audio_buf.copy_to_slice_interleaved(&mut interleaved[..]);
-
-        // Mix to mono by averaging channels.
-        for frame in 0..num_frames {
-            let mut sum = 0.0_f32;
-            for ch in 0..num_channels {
-                sum += interleaved[frame * num_channels + ch];
+                // Mix to mono by averaging channels.
+                for frame in 0..num_frames {
+                    let mut sum = 0.0_f32;
+                    for ch in 0..num_channels {
+                        sum += interleaved[frame * num_channels + ch];
+                    }
+                    samples.push(sum / num_channels as f32);
+                }
             }
-            samples.push(sum / num_channels as f32);
+            // A damaged packet. Skipping it would move every later sample
+            // earlier, so detections after it would be stamped, clipped and
+            // corroborated a packet too early: put silence of the packet's
+            // own length in its place when the container says how long it
+            // is, and count it as dropped when it does not.
+            Err(SymphoniaError::DecodeError(_)) => {
+                let Some(frames) = lost_packet_frames(packet.dur.get(), time_base, sample_rate)
+                else {
+                    dropped_packets += 1;
+                    continue;
+                };
+                filled_packets += 1;
+                filled_frames += frames;
+                samples.resize(samples.len() + frames, 0.0);
+            }
+            Err(e) => return Err(DecodeError::Format(e.to_string())),
         }
 
         // Stop once the optional sample cap is reached. The spectrogram views
@@ -263,6 +305,19 @@ fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioDat
             );
             break;
         }
+    }
+
+    if filled_packets > 0 || dropped_packets > 0 {
+        tracing::warn!(
+            path = %path.display(),
+            filled_packets,
+            filled_frames,
+            dropped_packets,
+            "audio file has damaged packets the decoder could not read; \
+             each of known length is replaced by silence so later timestamps \
+             stay true, and any of unknown length is dropped, so audio after \
+             it is early by that packet's length"
+        );
     }
 
     Ok(AudioData {
@@ -383,6 +438,77 @@ mod tests {
         let pos = bytes.windows(4).position(|w| w == b"data").unwrap();
         std::fs::write(&path, &bytes[..pos + 8]).unwrap();
         assert!(decode_file(&path).is_err());
+    }
+
+    /// Samples per MPEG-1 Layer III frame.
+    const MP3_FRAME_SAMPLES: usize = 1152;
+
+    /// Write `frames` silent MPEG-1 Layer III frames (128 kbit/s, 48 kHz,
+    /// mono: 384 bytes each, all-zero side information and main data). When
+    /// `corrupt` names a frame, its first granule's `big_values` is set to
+    /// 511, which no valid stream carries (the limit is 288): the demuxer
+    /// still reads the packet, and the decoder refuses it with a
+    /// `DecodeError`, as a damaged frame in an uploaded MP3 would be.
+    fn write_silent_mp3(path: &Path, frames: usize, corrupt: Option<usize>) {
+        const FRAME_LEN: usize = 384;
+        let mut bytes = Vec::with_capacity(frames * FRAME_LEN);
+        for i in 0..frames {
+            let mut frame = [0_u8; FRAME_LEN];
+            frame[..4].copy_from_slice(&[0xFF, 0xFB, 0x94, 0xC0]);
+            if corrupt == Some(i) {
+                // Side information starts after the 4-byte header; for mono
+                // MPEG-1, `big_values` is bits 30..=38 of it.
+                frame[4 + 3] |= 0x03;
+                frame[4 + 4] |= 0xFE;
+            }
+            bytes.extend_from_slice(&frame);
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// The counterpart: the clean fixture decodes to every frame, so the
+    /// corrupted case below is measured against a length the decoder really
+    /// produces for this stream.
+    #[test]
+    fn decode_clean_mp3_fixture_yields_every_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clean.mp3");
+        write_silent_mp3(&path, 40, None);
+        let audio = decode_file(&path).expect("clean fixture decodes");
+        assert_eq!(audio.sample_rate, 48_000);
+        assert_eq!(audio.samples.len(), 40 * MP3_FRAME_SAMPLES);
+    }
+
+    /// ACC-13: a packet the decoder refuses must still occupy its time.
+    /// Dropping it moves every later sample earlier, so detections after the
+    /// damage are stamped, clipped and corroborated a packet too early.
+    #[test]
+    fn decode_mp3_with_a_corrupt_mid_file_frame_keeps_its_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("damaged.mp3");
+        write_silent_mp3(&path, 40, Some(20));
+        let audio = decode_file(&path).expect("one bad frame does not fail the file");
+        assert_eq!(
+            audio.samples.len(),
+            40 * MP3_FRAME_SAMPLES,
+            "a refused packet must be replaced by silence of its own length, \
+             not dropped"
+        );
+    }
+
+    /// The seam for containers that do not say how long a packet is: no time
+    /// base or a zero duration is `None` (counted as dropped, never guessed),
+    /// and a known duration converts through the time base to frames.
+    #[test]
+    fn lost_packet_frames_converts_known_durations_and_refuses_unknown_ones() {
+        assert_eq!(
+            lost_packet_frames(1152, Some((1, 48_000)), 48_000),
+            Some(1152)
+        );
+        // A millisecond time base: 24 ms at 48 kHz is 1152 frames.
+        assert_eq!(lost_packet_frames(24, Some((1, 1000)), 48_000), Some(1152));
+        assert_eq!(lost_packet_frames(1152, None, 48_000), None);
+        assert_eq!(lost_packet_frames(0, Some((1, 48_000)), 48_000), None);
     }
 
     #[test]

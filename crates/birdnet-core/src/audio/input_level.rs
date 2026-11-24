@@ -95,7 +95,9 @@ pub struct InputLevel {
     /// The position the tool prints. ALSA: percent of the control's raw range.
     /// Pulse: percent of the source's 100% (cubic), so it can exceed 100.
     pub percent: u32,
-    /// The gain the tool prints, in dB, where it knows one.
+    /// The gain the tool prints, in dB, where it knows one. ALSA's "minus
+    /// infinity" (`amixer` prints `-99999.99dB`) is `f32::NEG_INFINITY`: the
+    /// control passes nothing at all.
     pub db: Option<f32>,
     /// Pulse only: the gain on top of the hardware's own 0 dB point, that is the
     /// reported gain minus the source's base volume, where both are known.
@@ -125,6 +127,10 @@ pub enum Advice {
     /// its range: under [`FLOOR_PERCENT`], or under [`FLOOR_HARDWARE_DB`] of
     /// hardware gain. The remedy is to turn the gain up.
     TooLow,
+    /// Capture is switched on but the control is at minus infinity dB: it
+    /// passes nothing, and since a card's capture gains add, nothing reaches
+    /// the station whatever its other controls are set to.
+    Silent,
 }
 
 /// Why a tool's output could not be read as a level.
@@ -163,6 +169,9 @@ impl std::error::Error for ReadError {}
 pub fn assess(level: &InputLevel) -> Advice {
     if level.muted == Some(true) {
         return Advice::Muted;
+    }
+    if level.db == Some(f32::NEG_INFINITY) {
+        return Advice::Silent;
     }
     match level.backend {
         Backend::Alsa => {
@@ -379,11 +388,16 @@ fn capture_entry(line: &str) -> Option<CaptureEntry> {
             if let Some(p) = inner.strip_suffix('%') {
                 percent = p.parse::<u32>().ok();
             } else if let Some(d) = inner.strip_suffix("dB") {
-                // `-99999.99dB` is ALSA's "minus infinity".
-                db = d
-                    .parse::<f32>()
-                    .ok()
-                    .filter(|d| d.is_finite() && *d > -9_999.0);
+                // `-99999.99dB` is ALSA's "minus infinity"
+                // (`SND_CTL_TLV_DB_GAIN_MUTE`, -9 999 999 hundredths): a control
+                // there passes nothing, which is not the same as no reading.
+                db = d.parse::<f32>().ok().and_then(|d| {
+                    if d <= -9_999.0 || d == f32::NEG_INFINITY {
+                        Some(f32::NEG_INFINITY)
+                    } else {
+                        Some(d).filter(|d| d.is_finite())
+                    }
+                });
             } else if inner == "on" || inner == "off" {
                 on = Some(inner == "on");
             }

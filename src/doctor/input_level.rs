@@ -148,6 +148,7 @@ const fn severity(advice: Advice) -> u8 {
         Advice::AboveCap => 2,
         Advice::AtMaximum => 3,
         Advice::Muted => 4,
+        Advice::Silent => 5,
     }
 }
 
@@ -231,6 +232,19 @@ fn verdict(
             ),
             format!(
                 "switch capture on in `{mixer}` (or `amixer sset '<control>' cap`), then see {GUIDE}"
+            ),
+        ),
+        Advice::Silent => Check::warn(
+            NAME,
+            format!(
+                "{device}: {list}{note}: '{}' is at minus infinity dB, so nothing reaches the station \
+                 however the other controls are set",
+                worst.control
+            ),
+            format!(
+                "turn '{}' up in `{mixer}`, to no more than the cap of {CAP_PERCENT}% or \
+                 +{CAP_HARDWARE_DB:.0} dB, then check a recording's peak, see {GUIDE}",
+                worst.control
             ),
         ),
         Advice::TooLow => Check::warn(
@@ -392,6 +406,28 @@ mod tests {
             check.message.contains("near the bottom of its range"),
             "{}",
             check.message
+        );
+    }
+
+    /// N14-03: a control at ALSA's minus infinity (`amixer` prints
+    /// `-99999.99dB`, `SND_CTL_TLV_DB_GAIN_MUTE`) passes nothing, and the gains
+    /// add, so the card is silent however the other control is set. It is not
+    /// the harmless boost at its bottom step of the test above.
+    #[test]
+    fn a_control_at_minus_infinity_silences_the_card_beside_one_in_range() {
+        let silent = "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Limits: Capture 0 - 31\n  Front Left: Capture 0 [0%] [-99999.99dB] [on]\n";
+        let check = grade_alsa("plughw:1,0", "1", &format!("{USB}{silent}"));
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check.message.contains("'Capture' at 0% (-inf dB)")
+                && check.message.contains("nothing reaches the station"),
+            "{}",
+            check.message
+        );
+        let fix = check.remediation.expect("a remedy");
+        assert!(
+            fix.contains("'Capture'") || fix.contains("alsamixer"),
+            "{fix}"
         );
     }
 
