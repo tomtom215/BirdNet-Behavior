@@ -4727,7 +4727,7 @@
           "analytics"
         ],
         "summary": "Effort-corrected abundance",
-        "description": "Detections per hour of listening, per species per ISO week. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's station time is its longest single source, not the sum across sources, so a two-microphone station is not read as half a one-microphone station. Species-weeks with fewer than `min_detections` detections are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "description": "Detections per hour of listening, per species per ISO week. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's listening is the sum of every source's time, because detections are per source (each stream that hears a bird records it): the rate is detections per source-hour, so two co-located microphones that each log the same bird read the same rate as one microphone logging it once. Sources are pooled, not reported separately. Species-weeks with fewer than `min_detections` detections are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
         "operationId": "analyticsAbundance",
         "parameters": [
           {
@@ -4809,7 +4809,7 @@
                               "number",
                               "null"
                             ],
-                            "description": "Station time recorded on those days, in hours; null when the week has none."
+                            "description": "Listening recorded on those days, summed over sources, in hours; null when the week has none."
                           },
                           "detections_per_hour": {
                             "type": [

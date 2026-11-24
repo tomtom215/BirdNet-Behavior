@@ -49,7 +49,9 @@ fn keys_of(row: &Value) -> BTreeSet<String> {
 }
 
 /// A station with seven consecutive days of one species in 2026, mirrored into
-/// the analytics store.
+/// the analytics store. On the 3rd two microphones were listening and both
+/// logged the bird, so that day has two rows, as a multi-source station
+/// records it.
 fn station(dir: &std::path::Path) -> AppState {
     let sqlite = dir.join("birds.db");
     {
@@ -62,11 +64,17 @@ fn station(dir: &std::path::Path) -> AppState {
             )
             .expect("seed a detection");
         }
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-03', '06:00:00', 'Parus major', 'Great Tit', 0.9, 'tit-3-b.wav')",
+            [],
+        )
+        .expect("seed the second microphone's detection");
     }
     let state = AppState::new_with_analytics(sqlite, &dir.join("analytics.duckdb"))
         .expect("a state with the analytics store");
-    // Listening effort: an hour of station time on the 3rd (two microphones
-    // listening to the same garden are one hour) and an hour on the 4th.
+    // Listening effort: an hour from each of two microphones on the 3rd (two
+    // source-hours, matching the two rows each logged) and an hour on the 4th.
     state
         .with_analytics(|adb| {
             adb.conn()
@@ -114,7 +122,8 @@ async fn phenology_names_its_columns_and_returns_the_rows() {
     assert_eq!(rows.len(), 1, "one species was recorded: {body}");
     let row = &rows[0];
     assert_eq!(row["species"], "Great Tit", "{row}");
-    assert_eq!(row["detection_count"], 7, "{row}");
+    // Eight rows (the 3rd's bird was logged by both microphones) on seven days.
+    assert_eq!(row["detection_count"], 8, "{row}");
     assert_eq!(row["detected_days"], 7, "{row}");
     assert_eq!(row["first_detection"], "2026-03-03", "{row}");
     assert_eq!(row["last_detection"], "2026-03-09", "{row}");
@@ -138,8 +147,9 @@ async fn abundance_answers_instead_of_reporting_no_store() {
         "a configured store must not read as 'not configured': {body}"
     );
     let rows = body["abundance"].as_array().expect("an abundance array");
-    // 2026-03-03..=09 is Tuesday to Monday: six detections in ISO week 10 (the
-    // two days with effort among them) and one in week 11, which has none.
+    // 2026-03-03..=09 is Tuesday to Monday: seven detections in ISO week 10
+    // (three on the two days with effort among them, over three source-hours)
+    // and one in week 11, which has none.
     let week = |n: i64| {
         rows.iter()
             .find(|r| r["iso_week"] == n)
@@ -147,9 +157,9 @@ async fn abundance_answers_instead_of_reporting_no_store() {
     };
     let w10 = week(10);
     assert_eq!(w10["species"], "Great Tit", "{w10}");
-    assert_eq!(w10["raw_count"], 6, "{w10}");
-    assert_eq!(w10["effort_count"], 2, "{w10}");
-    assert_eq!(w10["effort_hours"], 2.0, "{w10}");
+    assert_eq!(w10["raw_count"], 7, "{w10}");
+    assert_eq!(w10["effort_count"], 3, "{w10}");
+    assert_eq!(w10["effort_hours"], 3.0, "{w10}");
     assert_eq!(w10["detections_per_hour"], 1.0, "{w10}");
     let w11 = week(11);
     assert_eq!(w11["raw_count"], 1, "{w11}");

@@ -266,20 +266,29 @@ pub fn weekly_richness_sql(year: u32) -> String {
 /// # What is divided by what
 ///
 /// The rate divides the detections made *on days with recorded effort* by the
-/// station time recorded on those days. It divided every detection of the ISO
+/// listening recorded on those days, summed over sources. It divided every detection of the ISO
 /// week by whatever effort the week had, so a week whose sampler ran on two
 /// days of seven had seven days of detections over two days of listening —
 /// and every week before the sampler existed, or with any day it was not
 /// running, was inflated the same way.
 ///
-/// A day's station time is its **longest** single source, not the sum across
-/// sources. Detections are not per source, so two microphones listening to
-/// the same garden for an hour are an hour of listening for the station's one
-/// list of detections; summed, they were two, and a two-microphone station's
-/// rate read half a one-microphone station's for the same birds. The longest
-/// source is a lower bound on the day's coverage — sources that ran at
-/// *different* times of one day are under-counted — and the per-day record
-/// cannot say more than that.
+/// A day's listening time is the **sum** of every source's seconds, so the
+/// rate is detections per *source-hour*. Detections are per source: a station
+/// with several streams records the same bird once for each stream that heard
+/// it (`birdnet-db` migration 18: a detection's unique key includes its clip's
+/// file name, which carries the stream id, and no cross-stream collapse
+/// exists), so the numerator counts every source's rows and the denominator
+/// must count every source's listening. Two co-located
+/// microphones that each log one Robin in an hour give two detections over
+/// two source-hours, 1.0 an hour, the same as one microphone logging it once.
+/// This used to take the day's **longest** single source, on the belief that
+/// detections were not per source, and so read 2.0 for that station: twice a
+/// one-microphone station's rate for the same birds.
+///
+/// The rate is pooled across sources, not reported per source: the analytics
+/// copy of the detections has no source column yet, so a per-source rate cannot
+/// be formed here. Sources pointed at different places therefore give the
+/// station's average rate per microphone-hour, not either site's.
 pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
     // `recording_effort.date` is TEXT (local civil date, matching the
     // detections it will be divided into), so it is cast here rather than read
@@ -319,11 +328,11 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
         "WITH effort_days AS (
             SELECT
                 TRY_CAST(date AS DATE)                  AS day,
-                MAX(seconds)                            AS seconds
+                SUM(seconds)                            AS seconds
             FROM recording_effort
             WHERE TRY_CAST(date AS DATE) IS NOT NULL
             GROUP BY day
-            HAVING MAX(seconds) > 0
+            HAVING SUM(seconds) > 0
         ),
         effort AS (
             SELECT
