@@ -138,8 +138,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:37",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs maintainer decision 1 (cross-source event grouping and its time tolerance, which README says must come from a measurement on a real two-source station)."
   },
   {
    "id": "MSC-03",
@@ -186,8 +186,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:79",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "ea663d1: Source in the DuckDB copy (schema, sync, live insert; back-filled by the drift repair at first start), source filter and partition on the behavioural builders, ?source= on ten analytics routes; gates the_sync_carries_each_detections_source, a_copy_from_before_the_source_column_gets_the_column_and_its_values, live_a_bird_on_one_source_does_not_answer_a_bird_on_another. Defaults stay pooled: which default a station gets is decision 2."
   },
   {
    "id": "MSC-07",
@@ -198,8 +198,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:88",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs maintainer decision 1 (cross-source event grouping and its time tolerance, which README says must come from a measurement on a real two-source station). BirdWeather would post one event per bird once events exist."
   },
   {
    "id": "MSC-08",
@@ -330,8 +330,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:194",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it."
   },
   {
    "id": "MSC-19",
@@ -342,8 +342,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:203",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "fb3e7db: source in the live event and $source in notifications, named as public pages name a source; gate a_notification_and_the_live_event_say_which_source_heard_the_bird."
   },
   {
    "id": "MSC-20",
@@ -1710,8 +1710,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:328",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: a filter bar (range, source, model, confidence) honoured by every Patterns partial is large (audit: L). The analytics side of a source filter now exists (MSC-06)."
   },
   {
    "id": "UIC-12",
@@ -2202,8 +2202,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "07-research-grade.md:463",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: needs maintainer decision 1 (cross-source event grouping and its time tolerance, which README says must come from a measurement on a real two-source station)."
   },
   {
    "id": "RES-19",
@@ -2420,6 +2420,30 @@
    "source": "docs/book/guide/reviews.md:16 (ACC-21, added 2026-11-23 by the WP-03 session)",
    "status": "done",
    "evidence": "54859c7: the 'What it holds' cell listed only detections that failed a stricter per-species threshold, while the night-time and unset-clock reasons already wrote rows; the table now says 'held back from the log, each with its reason', and a paragraph below it names the five reasons, including the new 'Unlikely here' (a list in the cell made a column several screens tall on a phone, seen in a 390x844 screenshot). Found while correcting the page for ACC-01; documentation only, no gate."
+  },
+  {
+   "id": "N06-01",
+   "title": "Approving a quarantined detection loses its Source (the quarantine table has none), and the DuckDB mirror of an approval writes cutoff, sens and overlap as NULL while SQLite copies them; the drift fingerprint does not cover those three",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-06.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading."
+  },
+  {
+   "id": "N06-02",
+   "title": "Co-occurrence (birdnet-timeseries, sqlite correlation.rs), phenology and retention still pool sources with no source filter",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-06.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading."
   }
  ]
 }
