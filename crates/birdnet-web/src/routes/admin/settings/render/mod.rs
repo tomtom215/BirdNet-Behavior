@@ -133,6 +133,7 @@ pub fn form_default(key: &str) -> String {
         }
         "sensitivity" => format!("{:.2}", birdnet_core::config::DEFAULT_SENSITIVITY),
         "privacy_rank" => birdnet_core::config::DEFAULT_PRIVACY_RANK.to_string(),
+        "notify_trigger" => birdnet_core::config::DEFAULT_NOTIFY_TRIGGER.to_owned(),
         other => fixed_form_default(other).to_owned(),
     }
 }
@@ -156,7 +157,6 @@ fn fixed_form_default(key: &str) -> &'static str {
         "extraction_length" => "6",
         "info_site" => "ebird",
         "night_inhibit" | "raw_spectrogram" => "false",
-        "notify_trigger" => "each",
         "overlap" | "privacy_threshold" => "0.0",
         "full_disk_action" => "purge",
         "purge_threshold" => "95",

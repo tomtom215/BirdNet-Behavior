@@ -162,14 +162,16 @@ impl Prefill {
                 // card that matches the stored value is chosen by comparing them.
                 &birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD.to_string(),
             )?,
-            notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER)?,
+            // The station's own default, which the card marked "recommended"
+            // offers: the wizard preselects what a station with no trigger
+            // already runs on (OOB-12).
+            notify_trigger: get(
+                "notify_trigger",
+                birdnet_core::config::DEFAULT_NOTIFY_TRIGGER,
+            )?,
         })
     }
 }
-
-/// The wizard's recommended notification trigger, used only when the station
-/// has none set.
-const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 
 async fn onboarding_page(State(state): State<AppState>, req: Request) -> Response {
     state
@@ -2716,6 +2718,45 @@ mod tests {
             "unknown key was dropped"
         );
     }
+    /// OOB-12: the card the wizard preselects for a station with no trigger
+    /// set is the trigger such a station runs on. The wizard preselected
+    /// `new-species` ("recommended") while the daemon's `--notify-trigger`
+    /// and the settings form fell back to `each`, so an installer-configured
+    /// station that never saw the wizard was sent every detection. The daemon
+    /// and the form read the shared constant (held to it by the root crate's
+    /// `every_form_default_is_what_the_station_runs_on` and
+    /// `the_notify_trigger_flag_defaults_to_the_shared_constant`); this holds
+    /// the wizard's rendered value to it, from a database with no row.
+    #[test]
+    fn the_wizards_preselected_trigger_is_the_stations_default() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let prefill = Prefill::load(&conn).expect("a fresh database prefills");
+        let html = render_page(&parts("", ""), &prefill, PasswordStep::default());
+        let marker = r#"id="ob-notify" value=""#;
+        let at = html
+            .find(marker)
+            .expect("the wizard renders its trigger field")
+            + marker.len();
+        let shown = &html[at..at + html[at..].find('"').expect("closing quote")];
+        assert_eq!(
+            shown,
+            birdnet_core::config::DEFAULT_NOTIFY_TRIGGER,
+            "the wizard preselects {shown:?} for a station with no trigger, which runs on \
+             {:?}",
+            birdnet_core::config::DEFAULT_NOTIFY_TRIGGER
+        );
+        // The preselected value is a card the page offers, and it is the one
+        // marked recommended.
+        let card = format!(r#"data-radio="notify" data-value="{shown}""#);
+        let card_at = html.find(&card).expect("the default is one of the cards");
+        let card_end = card_at + html[card_at..].find("</label>").unwrap();
+        assert!(
+            html[card_at..card_end].contains("recommended"),
+            "the default card is not the recommended one"
+        );
+    }
+
     /// A camera address is `rtsp://user:password@host/…`, and the wizard adds a
     /// stream without a label, so the address is the card's heading and the
     /// summary's name. Neither may print the password; both keep the host.

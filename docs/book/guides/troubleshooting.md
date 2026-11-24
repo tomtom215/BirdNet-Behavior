@@ -229,7 +229,7 @@ sudo -u "$SVC" birdnet-behavior --doctor 2>&1 | grep -i apprise
 The **Send Test Push Notification** button under **Settings → Alerts** uses the values saved on the Settings page, so a passing test means live detections will notify too. Common gotchas:
 
 - `BIRDNET_NOTIFY_CONFIDENCE` defaults to `0.8`; lower it to see anything during testing.
-- `BIRDNET_NOTIFY_TRIGGER` defaults to `each`. `new-species-daily` notifies on the first detection of each species per day, and `new-species` only while a species has fewer than 5 detections this week; use `each` while debugging.
+- `BIRDNET_NOTIFY_TRIGGER` defaults to `new-species`, which notifies only while a species has five or fewer detections in the last seven days, so a common bird stays quiet. `new-species-daily` notifies on the first detection of each species per day; use `each` while debugging.
 - The Apprise URL must be URL-encoded if it contains special characters.
 
 ## Non-Latin species names show as boxes
