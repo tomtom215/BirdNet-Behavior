@@ -544,6 +544,23 @@ pub trait AudioSourceStore {
     /// Returns [`AudioSourceError::NotFound`] if no such row exists, and
     /// [`AudioSourceError::Sqlite`] for underlying database failure.
     fn soft_delete(&self, id: &str) -> Result<(), AudioSourceError>;
+
+    /// The soft-deleted rows, newest removal first.
+    ///
+    /// # Errors
+    ///
+    /// [`AudioSourceError::Sqlite`] for underlying database failure.
+    fn list_removed(&self) -> Result<Vec<AudioSource>, AudioSourceError>;
+
+    /// Bring a soft-deleted row back (clears `disabled_at`), keeping its id,
+    /// so a device removed and added again carries on under the label its
+    /// detections and routes already use (MSC-13).
+    ///
+    /// # Errors
+    ///
+    /// [`AudioSourceError::NotFound`] if no removed row has that id, and
+    /// [`AudioSourceError::Sqlite`] for underlying database failure.
+    fn restore(&self, id: &str) -> Result<AudioSource, AudioSourceError>;
 }
 
 impl AudioSourceStore for Connection {
@@ -744,6 +761,39 @@ impl AudioSourceStore for Connection {
             return Err(AudioSourceError::NotFound(format!("source id={id}")));
         }
         Ok(())
+    }
+
+    fn list_removed(&self) -> Result<Vec<AudioSource>, AudioSourceError> {
+        let mut stmt = self.prepare(
+            "SELECT id, kind, device_id, label, sample_rate, channels, bit_depth,
+                    gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
+                    pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
+                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
+                    eq_chain, media_mode
+             FROM audio_sources
+             WHERE disabled_at IS NOT NULL
+             ORDER BY disabled_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], row_to_source)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn restore(&self, id: &str) -> Result<AudioSource, AudioSourceError> {
+        let n = self.execute(
+            "UPDATE audio_sources
+             SET disabled_at = NULL, updated_at = datetime('now')
+             WHERE id = ?1 AND disabled_at IS NOT NULL",
+            params![id],
+        )?;
+        if n == 0 {
+            return Err(AudioSourceError::NotFound(format!(
+                "removed source id={id}"
+            )));
+        }
+        self.get(id)?
+            .ok_or_else(|| AudioSourceError::NotFound(format!("source id={id}")))
     }
 }
 

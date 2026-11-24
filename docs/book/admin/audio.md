@@ -12,6 +12,8 @@ You can run **several sources at once** — one or more USB/ALSA mics, a PipeWir
 
 The list is the station's whole answer to "what do I record from". The microphone or camera named in `birdnet.conf` only fills it on the very first start; after that, removing a source stops it for good, and removing every source stops recording (the start-up log says so) rather than going back to the configuration file.
 
+One device is one source. The page refuses a second row for a microphone or camera it already lists, however the address is written: `hw:1,0`, `plughw:1,0` and `plughw:CARD=USB,DEV=0` are one microphone, and a camera is the same camera with its password in the address, its default port written out or a slash at the end. Adding back a device you removed brings back its old row, with its earlier settings, so its detections stay under the same source name.
+
 ## Independent supervision (built for the field)
 
 Every source is supervised on its own, which is what makes a multi-camera station survivable when nobody is on site:

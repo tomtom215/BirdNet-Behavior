@@ -1241,9 +1241,10 @@ fn add_source(conn: &rusqlite::Connection, kind: SourceKind, device: &str, label
             return;
         }
     };
-    if existing
-        .iter()
-        .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device)
+    // As devices, not as text (MSC-10), the rule the Capture tab uses.
+    let cards = crate::routes::admin::device_identity::sound_cards();
+    if crate::routes::admin::device_identity::duplicate_of(&existing, kind, device, &cards, None)
+        .is_some()
     {
         return;
     }

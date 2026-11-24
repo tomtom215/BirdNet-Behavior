@@ -36,6 +36,7 @@ pub mod backup;
 pub mod backup_recovery;
 pub mod classifier;
 pub mod data_source_test;
+pub mod device_identity;
 pub mod doctor;
 pub mod eq_curve;
 pub mod https;

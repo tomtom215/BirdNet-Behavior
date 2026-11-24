@@ -158,10 +158,16 @@ pub(crate) fn public_name(s: &AudioSource) -> String {
 /// page. A save that sends the masked address back keeps the stored one
 /// ([`restore_device`]).
 fn shown_device(s: &AudioSource) -> String {
-    if s.kind == SourceKind::Rtsp {
-        birdnet_core::config::redact::redact_value(&s.device_id)
+    shown_device_text(s.kind, &s.device_id)
+}
+
+/// [`shown_device`] for an address not yet stored, such as one a refusal
+/// names back to the person who typed it.
+fn shown_device_text(kind: SourceKind, device_id: &str) -> String {
+    if kind == SourceKind::Rtsp {
+        birdnet_core::config::redact::redact_value(device_id)
     } else {
-        s.device_id.clone()
+        device_id.to_owned()
     }
 }
 
@@ -519,15 +525,71 @@ async fn create(
             // enforces uniqueness on the synthetic `id` (freshly generated here), so
             // without this an operator who can't tell the save registered just clicks
             // "Save" again and silently ends up with the same mic/stream listed twice.
-            let already_configured = state
-                .with_read_db(AudioSourceStore::list)
-                .unwrap_or_default()
-                .iter()
-                .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
-            if already_configured {
+            // Compared as devices, not as text (MSC-10): `hw:1,0` is the
+            // `plughw:1,0` already listed, and a camera is the same camera
+            // with its password in the address or a slash at the end. A list
+            // that cannot be read refuses the add (TD-4): defaulted to empty,
+            // it let any device through.
+            let cards = super::device_identity::sound_cards();
+            let (active, removed) = match state.with_read_db(|conn| {
+                Ok::<_, AudioSourceError>((conn.list()?, conn.list_removed()?))
+            }) {
+                Ok(lists) => lists,
+                Err(e) => {
+                    tracing::error!(error = %e, "audio sources could not be read");
+                    return internal_response(
+                        "Could not read the sources already configured, so this one could not \
+                         be checked against them; nothing was added.",
+                    );
+                }
+            };
+            if let Some(existing) =
+                super::device_identity::duplicate_of(&active, kind, &device_id, &cards, None)
+            {
                 return validation_response(&format!(
-                    "“{device_id}” is already configured — see the list below."
+                    "“{}” is the same device as “{}”, which is already configured — see the list below.",
+                    shown_device_text(kind, &device_id),
+                    shown_device(existing),
                 ));
+            }
+            // A device that was removed comes back under its own id (MSC-13):
+            // a new id gave its detections a new `Source`, split its history
+            // and dropped its classifier route.
+            if let Some(old) =
+                super::device_identity::duplicate_of(&removed, kind, &device_id, &cards, None)
+            {
+                return match state.with_db(|conn| conn.restore(&old.id)) {
+                    Ok(row) => {
+                        crate::audit::audit(
+                            state,
+                            Some(&request_user),
+                            "audio.source.create",
+                            Some(&row.device_id),
+                            Some(&format!("kind={} restored={}", row.kind, row.id)),
+                        );
+                        let mut body = render_row(
+                            &row,
+                            daemon_status(&row, state),
+                            &listen_default_id(state),
+                        );
+                        body.push_str(&count_oobs(state));
+                        body.push_str(
+                            &Toast::success(format!(
+                                "Brought back {}, which was removed earlier, with its earlier \
+                                 settings, so its detections stay under the same source. Edit it \
+                                 to change them.",
+                                row.label.as_deref().unwrap_or(&shown_device(&row))
+                            ))
+                            .with_action("/admin/system/restart", "Restart to apply")
+                            .render_oob(),
+                        );
+                        Html(body).into_response()
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "audio source restore failed");
+                        internal_response("Could not bring back the source removed earlier.")
+                    }
+                };
             }
 
             let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
@@ -847,6 +909,32 @@ async fn update(
                         };
                         if let Err(msg) = check_stream_url(row.kind, &device_id) {
                             return validation_response(&msg);
+                        }
+                        // The same rule as an add (MSC-10): an edit that points
+                        // one source at another's device is the duplicate by
+                        // another door.
+                        let others = match state.with_read_db(AudioSourceStore::list) {
+                            Ok(rows) => rows,
+                            Err(err) => {
+                                tracing::error!(error = %err, "audio sources could not be read");
+                                return internal_response(
+                                    "Could not read the other sources, so the new address could \
+                                     not be checked against them; nothing was saved.",
+                                );
+                            }
+                        };
+                        let cards = super::device_identity::sound_cards();
+                        if let Some(existing) = super::device_identity::duplicate_of(
+                            &others,
+                            row.kind,
+                            &device_id,
+                            &cards,
+                            Some(&row.id),
+                        ) {
+                            return validation_response(&format!(
+                                "That is the same device as “{}”, which is already configured.",
+                                shown_device(existing)
+                            ));
                         }
                     }
                     Ok(None) => return not_found_row(&id),
@@ -2204,6 +2292,105 @@ mod tests {
         assert_refused(&second);
         let count = state.with_db(AudioSourceStore::list).unwrap().len();
         assert_eq!(count, 1, "only one row persisted");
+    }
+
+    fn add_form(kind: &str, device_id: &str) -> CreateForm {
+        CreateForm {
+            high_pass: None,
+            dc_removal: None,
+            agc: None,
+            rtsp_keepalive: None,
+            pipeline_present: None,
+            eq_chain: None,
+            scope: String::new(),
+            kind: kind.to_string(),
+            device_id: device_id.to_string(),
+            label: None,
+            sample_rate: None,
+            rtsp_transport: None,
+            media_mode: None,
+            quiet_start: None,
+            quiet_end: None,
+        }
+    }
+
+    /// MSC-10: the duplicate check compared the address as typed, so one
+    /// microphone as `plughw:1,0` and `hw:1,0`, or one camera with and without
+    /// its credentials or a trailing slash, was two sources: either one flaps
+    /// for ever on a busy device, or every detection is recorded twice.
+    #[tokio::test]
+    async fn the_same_device_spelled_differently_is_refused() {
+        let (_d, state) = fixture();
+        let add = |kind: &'static str, dev: &'static str| {
+            let state = state.clone();
+            async move {
+                create(
+                    State(state.clone()),
+                    actor(&state),
+                    HtmxForm(add_form(kind, dev)),
+                )
+                .await
+            }
+        };
+        assert_eq!(add("usb-alsa", "plughw:1,0").await.status(), StatusCode::OK);
+        assert_refused(&add("usb-alsa", "hw:1,0").await);
+        assert_eq!(
+            add("rtsp", "rtsp://cam.local/live").await.status(),
+            StatusCode::OK
+        );
+        assert_refused(&add("rtsp", "rtsp://user:pw@CAM.local:554/live/").await);
+        let rows = state.with_db(AudioSourceStore::list).unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+
+        // An edit that points one camera at another's address is the same
+        // duplicate by another door.
+        add("rtsp", "rtsp://other.local/live").await;
+        let other = state
+            .with_db(AudioSourceStore::list)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.device_id.contains("other.local"))
+            .unwrap();
+        let mut edit = add_form("rtsp", "rtsp://cam.local/live");
+        edit.kind = String::new();
+        assert_refused(
+            &update(
+                State(state.clone()),
+                actor(&state),
+                Path(other.id.clone()),
+                HtmxForm(edit),
+            )
+            .await,
+        );
+        let after = state.with_db(|c| c.get(&other.id)).unwrap().unwrap();
+        assert_eq!(after.device_id, "rtsp://other.local/live");
+    }
+
+    /// MSC-13: removing a microphone and adding it back minted a new id, so its
+    /// detections carried a new `Source` and its classifier route stopped
+    /// applying. The removed row comes back instead, under its own id.
+    #[tokio::test]
+    async fn a_removed_device_added_again_keeps_its_id() {
+        let (_d, state) = fixture();
+        let first = create(
+            State(state.clone()),
+            actor(&state),
+            HtmxForm(add_form("usb-alsa", "plughw:2,0")),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+        let id = state.with_db(AudioSourceStore::list).unwrap()[0].id.clone();
+        state.with_db(|c| c.soft_delete(&id)).unwrap();
+        let again = create(
+            State(state.clone()),
+            actor(&state),
+            HtmxForm(add_form("usb-alsa", "plughw:2,0")),
+        )
+        .await;
+        assert_eq!(again.status(), StatusCode::OK);
+        let rows = state.with_db(AudioSourceStore::list).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].id, id, "a new id split the device's history");
     }
 
     #[tokio::test]
