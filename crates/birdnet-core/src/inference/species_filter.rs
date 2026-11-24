@@ -693,6 +693,76 @@ impl SpeciesFilter {
         Ok(Some(scores))
     }
 
+    /// [`Self::occurrence_scores`] for the vocabulary known as `id`: every
+    /// species of that classifier the occurrence model scores here this week,
+    /// each with whether [`Self::filter_species_of`] admits it (MMP-25).
+    ///
+    /// `None` when no metadata model is loaded. The model is read through the
+    /// same alignment `filter_species_of` builds and keeps for this
+    /// vocabulary, so the verdicts are that function's.
+    ///
+    /// # Errors
+    ///
+    /// [`InferenceError::Shape`] for an `id` [`Self::know_vocabulary`] was
+    /// never given, and whatever the metadata model fails with.
+    pub fn occurrence_scores_of(
+        &mut self,
+        id: &str,
+        location: (f64, f64),
+        week: u32,
+    ) -> Result<Option<Vec<OccurrenceScore>>, InferenceError> {
+        let Some(at) = self.vocabularies.iter().position(|v| v.id == id) else {
+            return Err(InferenceError::Shape(format!(
+                "the occurrence filter was not told about classifier `{id}`"
+            )));
+        };
+        let (Some(session), Some(meta)) = (self.session.as_mut(), self.meta_vocabulary.as_ref())
+        else {
+            return Ok(None);
+        };
+        let vocabulary = &mut self.vocabularies[at];
+        if vocabulary.alignment.is_none() {
+            vocabulary.alignment = Some(Alignment::build(meta, &vocabulary.labels, &self.aliases));
+        }
+        let (lat, lon) = location;
+        let probabilities = occurrence_probabilities(
+            session,
+            lat,
+            lon,
+            week,
+            self.expected_width,
+            self.alignment.is_some(),
+        )?;
+        let vocabulary = &self.vocabularies[at];
+        let admitted = self.passing_species(
+            &probabilities,
+            &vocabulary.labels,
+            vocabulary.alignment.as_ref(),
+        );
+        let mut scores: Vec<OccurrenceScore> = named_scores(
+            &probabilities,
+            &vocabulary.labels,
+            vocabulary.alignment.as_ref(),
+        )
+        .into_iter()
+        .map(|(scientific_name, probability)| OccurrenceScore {
+            admitted: admitted.contains(&scientific_name),
+            common_name: vocabulary
+                .labels
+                .find_by_scientific_name(&scientific_name)
+                .map_or_else(|| scientific_name.clone(), |l| l.common_name.clone()),
+            scientific_name,
+            probability,
+        })
+        .collect();
+        scores.sort_by(|a, b| {
+            b.probability
+                .total_cmp(&a.probability)
+                .then_with(|| a.scientific_name.cmp(&b.scientific_name))
+        });
+        Ok(Some(scores))
+    }
+
     /// The species the metadata model's scores let through, after the whitelist
     /// and the operator's lists: what [`Self::filter_species`] returns, from the
     /// probabilities alone. Separate so the order of those three steps can be
