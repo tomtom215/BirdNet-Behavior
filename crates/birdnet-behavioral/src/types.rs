@@ -23,6 +23,11 @@ pub struct ActivitySession {
     pub end_time: String,
     /// Session duration in seconds.
     pub duration_secs: u64,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Species retention data (output of `retention`).
@@ -112,6 +117,11 @@ pub struct ChorusFunnel {
     pub total_steps: u32,
     /// Species sequence that was matched.
     pub matched_species: Vec<String>,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Dawn chorus funnel step timings (output of `window_funnel_events`, v0.8.0).
@@ -129,6 +139,11 @@ pub struct ChorusFunnelEvents {
     /// The expected species sequence; pair `species_sequence[i]` with
     /// `step_times[i]` for the completed steps.
     pub species_sequence: Vec<String>,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Sequence pattern match result (output of `sequence_match`).
@@ -140,6 +155,11 @@ pub struct PatternMatch {
     pub matched: bool,
     /// Species involved in the pattern.
     pub species_sequence: Vec<String>,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Sequence pattern occurrence count (output of `sequence_count`, v0.8.0).
@@ -154,6 +174,11 @@ pub struct PatternCount {
     pub count: u64,
     /// Species involved in the pattern.
     pub species_sequence: Vec<String>,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// The windows, in minutes, the chorus is looked at through.
@@ -176,6 +201,10 @@ pub struct AssemblyParams {
     pub hour_end: u32,
     /// The first date to count, `YYYY-MM-DD`.
     pub since: String,
+    /// Which capture sources to read and whether to keep them apart. The
+    /// default pools every source, as every query did before the analytics
+    /// copy carried `Source`.
+    pub scope: SourceScope,
 }
 
 /// How far the chorus got on one morning, through each window (output of `window_funnel`).
@@ -193,6 +222,11 @@ pub struct Assembly {
     pub date: String,
     /// The depth reached within each window, in the order of the windows asked for.
     pub depths: Vec<u32>,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Who is heard shortly after whom (output of `sequence_count` with a time constraint).
@@ -233,6 +267,11 @@ pub struct PatternMatchEvents {
     pub step_times: Vec<String>,
     /// Species involved in the pattern.
     pub species_sequence: Vec<String>,
+    /// The capture source the row is about when the query was asked with
+    /// [`SourceScope::partition_by_source`]; absent (and not serialised) when
+    /// sources were pooled, which is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Next species prediction (output of `sequence_next_node`).
@@ -264,6 +303,33 @@ pub struct PreviousSpeciesPrediction {
     pub probability: f64,
 }
 
+/// Which capture sources a behavioural query reads, and whether it keeps them
+/// apart (MSC-06).
+///
+/// A station with several microphones or cameras records each detection with
+/// its source (`detections.Source`: an RTSP stream id, or `local`; NULL where
+/// unknown, as in imported BirdNET-Pi history). Pooled, a robin on one
+/// microphone and a wren on another 200 m away are one soundscape: the wren
+/// "answers" the robin, and one bird heard by two microphones is two events at
+/// one instant inside one session.
+///
+/// The default is pooled and unfiltered, which is what every query answered
+/// before the analytics copy carried the column, so a caller that does not ask
+/// gets the same rows it always did. Which default a station *should* get
+/// depends on whether its sources overhear one another, which is not decided
+/// here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceScope {
+    /// Read only detections from this source. `None` reads every source,
+    /// including rows of unknown source.
+    pub source: Option<String>,
+    /// Sessionise and sequence each source on its own: a detection on one
+    /// source never continues a session, completes a sequence or answers a
+    /// detection on another. Rows of unknown source form one group of their
+    /// own. Per-day and per-session results then carry their source.
+    pub partition_by_source: bool,
+}
+
 /// Parameters for a sessionize query.
 #[derive(Debug, Clone)]
 pub struct SessionizeParams {
@@ -273,6 +339,10 @@ pub struct SessionizeParams {
     pub gap_minutes: u32,
     /// Maximum number of sessions to return.
     pub limit: u32,
+    /// Which capture sources to read and whether to keep them apart. The
+    /// default pools every source, as every query did before the analytics
+    /// copy carried `Source`.
+    pub scope: SourceScope,
 }
 
 impl Default for SessionizeParams {
@@ -281,6 +351,7 @@ impl Default for SessionizeParams {
             species: None,
             gap_minutes: 30,
             limit: 100,
+            scope: SourceScope::default(),
         }
     }
 }
@@ -318,6 +389,10 @@ pub struct FunnelParams {
     pub hour_start: u32,
     /// End hour.
     pub hour_end: u32,
+    /// Which capture sources to read and whether to keep them apart. The
+    /// default pools every source, as every query did before the analytics
+    /// copy carried `Source`.
+    pub scope: SourceScope,
 }
 
 impl Default for FunnelParams {
@@ -333,6 +408,7 @@ impl Default for FunnelParams {
             window_minutes: 120,
             hour_start: 4,
             hour_end: 8,
+            scope: SourceScope::default(),
         }
     }
 }
@@ -348,6 +424,10 @@ pub struct PatternParams {
     pub hour_start: u32,
     /// Last hour of day to consider (inclusive).
     pub hour_end: u32,
+    /// Which capture sources to read and whether to keep them apart. The
+    /// default pools every source, as every query did before the analytics
+    /// copy carried `Source`.
+    pub scope: SourceScope,
 }
 
 impl Default for PatternParams {
@@ -361,6 +441,7 @@ impl Default for PatternParams {
             max_gap_minutes: None,
             hour_start: 4,
             hour_end: 8,
+            scope: SourceScope::default(),
         }
     }
 }

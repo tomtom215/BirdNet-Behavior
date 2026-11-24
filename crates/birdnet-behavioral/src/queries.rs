@@ -21,7 +21,7 @@
 use std::fmt::Write as _;
 
 use crate::types::{
-    AssemblyParams, FunnelParams, PatternParams, RetentionParams, SessionizeParams,
+    AssemblyParams, FunnelParams, PatternParams, RetentionParams, SessionizeParams, SourceScope,
 };
 
 /// SQL to create the timestamp view for behavioral queries.
@@ -224,6 +224,44 @@ pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM du
 ///   measured. Omitted rather than fabricated.
 const ORDERABLE: &str = "detection_instant IS NOT NULL";
 
+/// `AND Source = '…'` when `scope` names one source, nothing otherwise.
+fn source_filter(scope: &SourceScope) -> String {
+    scope.source.as_ref().map_or_else(String::new, |s| {
+        format!("AND Source = '{}'", s.replace('\'', "''"))
+    })
+}
+
+/// `, Source`, appended to a `GROUP BY` or `PARTITION BY` when `scope` keeps
+/// sources apart; nothing when it pools them, so a pooled query groups exactly
+/// as it did before the copy carried the column.
+const fn by_source(scope: &SourceScope) -> &'static str {
+    if scope.partition_by_source {
+        ", Source"
+    } else {
+        ""
+    }
+}
+
+/// The `source` column a per-day or per-session result carries: the row's
+/// `Source` when partitioned, NULL when pooled (there is no one source to name).
+const fn source_column(scope: &SourceScope) -> &'static str {
+    if scope.partition_by_source {
+        "Source AS source"
+    } else {
+        "CAST(NULL AS VARCHAR) AS source"
+    }
+}
+
+/// `, source`, appended to an `ORDER BY` of per-day rows when partitioned, so
+/// one day's sources come out in a stable order.
+const fn then_source(scope: &SourceScope) -> &'static str {
+    if scope.partition_by_source {
+        ", source"
+    } else {
+        ""
+    }
+}
+
 /// Build SQL for activity sessionization.
 ///
 /// `sessionize()` is a window function that assigns a session id per detection,
@@ -231,10 +269,20 @@ const ORDERABLE: &str = "detection_instant IS NOT NULL";
 /// detection exceeds `gap_minutes`. A window expression cannot appear in
 /// `GROUP BY`, so the id is materialised in an inner query and the outer query
 /// aggregates each session.
+///
+/// With [`SourceScope::partition_by_source`] each source is sessionised on its
+/// own, so a detection on one microphone never extends a session on another,
+/// and each session carries its source (the seventh column, NULL when pooled).
 pub fn sessionize_sql(params: &SessionizeParams) -> String {
     let species_filter = params.species.as_ref().map_or_else(String::new, |s| {
         format!("AND Com_Name = '{}'", s.replace('\'', "''"))
     });
+    let scope = &params.scope;
+    let (inner_source, outer_source, group_source) = if scope.partition_by_source {
+        ("Source AS source,", "source", ", source")
+    } else {
+        ("", "CAST(NULL AS VARCHAR) AS source", "")
+    };
 
     format!(
         "SELECT
@@ -243,24 +291,29 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
             COUNT(*) AS detection_count,
             CAST(MIN(detection_timestamp) AS VARCHAR) AS start_time,
             CAST(MAX(detection_timestamp) AS VARCHAR) AS end_time,
-            DATEDIFF('second', MIN(detection_instant), MAX(detection_instant)) AS duration_secs
+            DATEDIFF('second', MIN(detection_instant), MAX(detection_instant)) AS duration_secs,
+            {outer_source}
         FROM (
             SELECT
                 Com_Name AS species,
+                {inner_source}
                 detection_timestamp,
                 detection_instant,
                 sessionize(detection_instant, INTERVAL '{gap} MINUTE')
-                    OVER (PARTITION BY Sci_Name ORDER BY detection_instant)
+                    OVER (PARTITION BY Sci_Name{by} ORDER BY detection_instant)
                     AS session_id
             FROM detections_ts
             WHERE {ORDERABLE}
             {species_filter}
+            {sources}
         )
-        GROUP BY species, session_id
+        GROUP BY species, session_id{group_source}
         ORDER BY start_time DESC
         LIMIT {limit}",
         gap = params.gap_minutes,
         limit = params.limit,
+        by = by_source(scope),
+        sources = source_filter(scope),
     )
 }
 
@@ -366,6 +419,7 @@ pub fn retention_sql(params: &RetentionParams) -> String {
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn funnel_sql(params: &FunnelParams) -> String {
     let conditions = species_conditions(&params.species_sequence);
+    let scope = &params.scope;
 
     format!(
         "SELECT
@@ -375,15 +429,21 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
                 {FUNNEL_MODE},
                 detection_instant,
                 {conditions}
-            ) AS steps_completed
+            ) AS steps_completed,
+            {source}
         FROM detections_ts
         WHERE {ORDERABLE}
           AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-        GROUP BY CAST(detection_timestamp AS DATE)
-        ORDER BY date DESC",
+          {sources}
+        GROUP BY CAST(detection_timestamp AS DATE){by}
+        ORDER BY date DESC{then}",
         window = params.window_minutes,
         start = params.hour_start,
         end = params.hour_end,
+        source = source_column(scope),
+        sources = source_filter(scope),
+        by = by_source(scope),
+        then = then_source(scope),
     )
 }
 
@@ -416,29 +476,35 @@ const FUNNEL_MODE: &str = "'strict_increase'";
 /// heard at 03:30 read `02:30`, a time that never happened there.
 ///
 /// A day whose list is empty keeps its row with an empty list.
+///
+/// `per_day` also yields a `source` column (NULL when sources are pooled), and
+/// a day is a `(date, source)` pair: partitioned, each source's steps stay on
+/// its own row; pooled, every row has the same NULL and a day is a date, as
+/// before.
 fn wall_clock_steps(per_day: &str) -> String {
     format!(
         "WITH per_day AS (
             {per_day}
         ),
         steps AS (
-            SELECT date, generate_subscripts(ev, 1) AS i, ev FROM per_day
+            SELECT date, source, generate_subscripts(ev, 1) AS i, ev FROM per_day
         ),
         walls AS (
-            SELECT s.date, s.i, MIN(d.detection_timestamp) AS wall
+            SELECT s.date, s.source, s.i, MIN(d.detection_timestamp) AS wall
             FROM steps s
             JOIN detections_ts d ON d.detection_instant = s.ev[s.i]
-            GROUP BY s.date, s.i
+            GROUP BY s.date, s.source, s.i
         )
         SELECT p.date,
                COALESCE(
                    list(CAST(w.wall AS VARCHAR) ORDER BY w.i) FILTER (WHERE w.i IS NOT NULL),
                    []
-               ) AS step_times
+               ) AS step_times,
+               p.source
         FROM per_day p
-        LEFT JOIN walls w ON w.date = p.date
-        GROUP BY p.date
-        ORDER BY p.date DESC"
+        LEFT JOIN walls w ON w.date = p.date AND w.source IS NOT DISTINCT FROM p.source
+        GROUP BY p.date, p.source
+        ORDER BY p.date DESC, p.source"
     )
 }
 
@@ -470,18 +536,25 @@ pub fn assembly_sql(params: &AssemblyParams) -> String {
                 ) AS w{i}"
         );
     }
+    let scope = &params.scope;
     format!(
         "SELECT
-                CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date{columns}
+                CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date{columns},
+                {source}
             FROM detections_ts
             WHERE {ORDERABLE}
               AND CAST(detection_timestamp AS DATE) >= DATE '{since}'
               AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-            GROUP BY CAST(detection_timestamp AS DATE)
-            ORDER BY date DESC",
+              {sources}
+            GROUP BY CAST(detection_timestamp AS DATE){by}
+            ORDER BY date DESC{then}",
         since = params.since,
         start = params.hour_start,
         end = params.hour_end,
+        source = source_column(scope),
+        sources = source_filter(scope),
+        by = by_source(scope),
+        then = then_source(scope),
     )
 }
 
@@ -495,6 +568,7 @@ pub fn assembly_sql(params: &AssemblyParams) -> String {
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn funnel_events_sql(params: &FunnelParams) -> String {
     let conditions = species_conditions(&params.species_sequence);
+    let scope = &params.scope;
 
     wall_clock_steps(&format!(
         "SELECT
@@ -504,14 +578,19 @@ pub fn funnel_events_sql(params: &FunnelParams) -> String {
                     {FUNNEL_MODE},
                     detection_instant,
                     {conditions}
-                ) AS ev
+                ) AS ev,
+                {source}
             FROM detections_ts
             WHERE {ORDERABLE}
               AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-            GROUP BY CAST(detection_timestamp AS DATE)",
+              {sources}
+            GROUP BY CAST(detection_timestamp AS DATE){by}",
         window = params.window_minutes,
         start = params.hour_start,
         end = params.hour_end,
+        source = source_column(scope),
+        sources = source_filter(scope),
+        by = by_source(scope),
     ))
 }
 
@@ -527,19 +606,27 @@ pub fn sequence_match_sql(params: &PatternParams) -> String {
     let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
     let conditions = species_conditions(&params.species_sequence);
 
+    let scope = &params.scope;
+
     format!(
         "SELECT
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
             sequence_match('{pattern}', detection_instant,
                 {conditions}
-            ) AS matched
+            ) AS matched,
+            {source}
         FROM detections_ts
         WHERE {ORDERABLE}
           AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-        GROUP BY CAST(detection_timestamp AS DATE)
-        ORDER BY date DESC",
+          {sources}
+        GROUP BY CAST(detection_timestamp AS DATE){by}
+        ORDER BY date DESC{then}",
         start = params.hour_start,
         end = params.hour_end,
+        source = source_column(scope),
+        sources = source_filter(scope),
+        by = by_source(scope),
+        then = then_source(scope),
     )
 }
 
@@ -556,19 +643,27 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
     let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
     let conditions = species_conditions(&params.species_sequence);
 
+    let scope = &params.scope;
+
     format!(
         "SELECT
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
             sequence_count('{pattern}', detection_instant,
                 {conditions}
-            ) AS match_count
+            ) AS match_count,
+            {source}
         FROM detections_ts
         WHERE {ORDERABLE}
           AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-        GROUP BY CAST(detection_timestamp AS DATE)
-        ORDER BY date DESC",
+          {sources}
+        GROUP BY CAST(detection_timestamp AS DATE){by}
+        ORDER BY date DESC{then}",
         start = params.hour_start,
         end = params.hour_end,
+        source = source_column(scope),
+        sources = source_filter(scope),
+        by = by_source(scope),
+        then = then_source(scope),
     )
 }
 
@@ -587,18 +682,25 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
     let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
     let conditions = species_conditions(&params.species_sequence);
 
+    let scope = &params.scope;
+
     wall_clock_steps(&format!(
         "SELECT
                 CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
                 sequence_match_events('{pattern}', detection_instant,
                     {conditions}
-                ) AS ev
+                ) AS ev,
+                {source}
             FROM detections_ts
             WHERE {ORDERABLE}
               AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-            GROUP BY CAST(detection_timestamp AS DATE)",
+              {sources}
+            GROUP BY CAST(detection_timestamp AS DATE){by}",
         start = params.hour_start,
         end = params.hour_end,
+        source = source_column(scope),
+        sources = source_filter(scope),
+        by = by_source(scope),
     ))
 }
 
@@ -610,8 +712,23 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
 /// distribution of what typically follows the trigger. The trigger itself can
 /// be its own follower — the same bird calling again — which the page labels
 /// rather than drops. See `adjacent_species_sql` for the shared shape.
-pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
-    adjacent_species_sql(Adjacent::Next, trigger_species, window_minutes, limit)
+///
+/// With [`SourceScope::partition_by_source`] each source's timeline is
+/// sessionised on its own, so the follower is always heard on the trigger's
+/// own source; the counts are then summed over every source's sessions.
+pub fn next_species_sql(
+    trigger_species: &str,
+    window_minutes: u32,
+    limit: u32,
+    scope: &SourceScope,
+) -> String {
+    adjacent_species_sql(
+        Adjacent::Next,
+        trigger_species,
+        window_minutes,
+        limit,
+        scope,
+    )
 }
 
 /// Build SQL for previous-species prediction: what is heard immediately
@@ -621,8 +738,20 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
 /// Anchored on the trigger's first detection in the session, so the trigger
 /// can never be its own predecessor; a session the trigger opens has none and
 /// is not counted. See `adjacent_species_sql`.
-pub fn previous_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
-    adjacent_species_sql(Adjacent::Previous, trigger_species, window_minutes, limit)
+/// The scope reads as it does for [`next_species_sql`].
+pub fn previous_species_sql(
+    trigger_species: &str,
+    window_minutes: u32,
+    limit: u32,
+    scope: &SourceScope,
+) -> String {
+    adjacent_species_sql(
+        Adjacent::Previous,
+        trigger_species,
+        window_minutes,
+        limit,
+        scope,
+    )
 }
 
 /// Which neighbour of the trigger [`adjacent_species_sql`] reports.
@@ -660,24 +789,34 @@ fn adjacent_species_sql(
     trigger_species: &str,
     window_minutes: u32,
     limit: u32,
+    scope: &SourceScope,
 ) -> String {
     let escaped = trigger_species.replace('\'', "''");
     let (dir, side) = match direction {
         Adjacent::Next => ("forward", ">"),
         Adjacent::Previous => ("backward", "<"),
     };
+    // `src` is the session's source when partitioned and NULL when pooled, so
+    // a pooled query's sessions, and its DISTINCT, are exactly as before.
+    let (src, over) = if scope.partition_by_source {
+        ("Source", "PARTITION BY Source ")
+    } else {
+        ("CAST(NULL AS VARCHAR)", "")
+    };
+    let sources = source_filter(scope);
     format!(
         "WITH sessioned AS (
-            SELECT DISTINCT detection_instant, Com_Name,
+            SELECT DISTINCT detection_instant, Com_Name, {src} AS src,
                    sessionize(detection_instant, INTERVAL '{window_minutes} MINUTE')
-                       OVER (ORDER BY detection_instant) AS sid
+                       OVER ({over}ORDER BY detection_instant) AS sid
             FROM detections_ts
             WHERE {ORDERABLE}
+            {sources}
         ),
         anchored AS (
             SELECT *,
                    MIN(detection_instant) FILTER (WHERE Com_Name = '{escaped}')
-                       OVER (PARTITION BY sid) AS first_trigger
+                       OVER (PARTITION BY src, sid) AS first_trigger
             FROM sessioned
         ),
         per_session AS (
@@ -687,7 +826,7 @@ fn adjacent_species_sql(
             FROM anchored
             WHERE detection_instant {side} first_trigger
                OR (detection_instant = first_trigger AND Com_Name = '{escaped}')
-            GROUP BY sid
+            GROUP BY src, sid
         )
         SELECT predicted AS predicted_species, COUNT(*) AS frequency,
                SUM(COUNT(*)) OVER () AS sessions
@@ -715,19 +854,25 @@ pub const ANSWERS_MAX_SPECIES: usize = 12;
 
 /// SQL for which species are heard most since `from` (an ISO date): `Com_Name` and a count, most
 /// heard first, ties by name. `from` must already be a validated `YYYY-MM-DD`.
-pub fn answers_species_sql(from: &str, top: usize) -> String {
+///
+/// Only the source `scope` names, if it names one; a count is a count however sources are grouped.
+pub fn answers_species_sql(from: &str, top: usize, scope: &SourceScope) -> String {
+    let sources = source_filter(scope);
     format!(
         "SELECT Com_Name, COUNT(*) AS heard
          FROM detections_ts
          WHERE {ORDERABLE} AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
+           {sources}
          GROUP BY Com_Name
          ORDER BY heard DESC, Com_Name ASC
          LIMIT {top}"
     )
 }
 
-/// SQL for how many days since `from` any of `species` was heard.
-pub fn answers_days_sql(species: &[String], from: &str) -> String {
+/// SQL for how many days since `from` any of `species` was heard (on the source `scope` names,
+/// if it names one).
+pub fn answers_days_sql(species: &[String], from: &str, scope: &SourceScope) -> String {
+    let sources = source_filter(scope);
     let list = species
         .iter()
         .map(|s| format!("'{}'", s.replace('\'', "''")))
@@ -736,7 +881,8 @@ pub fn answers_days_sql(species: &[String], from: &str) -> String {
     format!(
         "SELECT COUNT(DISTINCT CAST(detection_timestamp AS DATE)) FROM detections_ts
          WHERE {ORDERABLE} AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
-           AND Com_Name IN ({list})"
+           AND Com_Name IN ({list})
+           {sources}"
     )
 }
 
@@ -749,7 +895,15 @@ pub fn answers_days_sql(species: &[String], from: &str) -> String {
 /// The pattern is the one every ordered query here uses (`ordered_pattern`, a private helper): `(?t>0)` keeps two
 /// birds heard in one audio chunk from answering each other in both directions, and the gap is
 /// measured from the first bird's event. A day is a group, so a reply never spans midnight.
-pub fn answers_sql(species: &[String], from: &str, within_minutes: u32) -> String {
+///
+/// With [`SourceScope::partition_by_source`] a group is a day on one source, so a bird on one
+/// microphone never answers a bird on another; the counts are then summed over every source.
+pub fn answers_sql(
+    species: &[String],
+    from: &str,
+    within_minutes: u32,
+    scope: &SourceScope,
+) -> String {
     let pattern = ordered_pattern(2, Some(within_minutes));
     let cond = |s: &str| format!("Com_Name = '{}'", s.replace('\'', "''"));
     let mut pairs = Vec::new();
@@ -786,8 +940,11 @@ pub fn answers_sql(species: &[String], from: &str, within_minutes: u32) -> Strin
             WHERE {ORDERABLE}
               AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
               AND Com_Name IN ({list})
-            GROUP BY CAST(detection_timestamp AS DATE)
-         )"
+              {sources}
+            GROUP BY CAST(detection_timestamp AS DATE){by}
+         )",
+        sources = source_filter(scope),
+        by = by_source(scope),
     )
 }
 
@@ -829,7 +986,7 @@ mod tests {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        let sql = answers_sql(&species, "2026-10-01", 1);
+        let sql = answers_sql(&species, "2026-10-01", 1, &SourceScope::default());
         assert_eq!(
             sql.matches("sequence_count(").count(),
             6,
@@ -849,8 +1006,11 @@ mod tests {
         );
         assert!(!sql.contains("O'Brien"), "a bare quote survives: {sql}");
         assert!(sql.contains("DATE '2026-10-01'"), "{sql}");
-        assert!(answers_species_sql("2026-10-01", 8).contains("LIMIT 8"));
-        assert!(answers_days_sql(&species, "2026-10-01").contains("O''Brien''s Wren"));
+        assert!(answers_species_sql("2026-10-01", 8, &SourceScope::default()).contains("LIMIT 8"));
+        assert!(
+            answers_days_sql(&species, "2026-10-01", &SourceScope::default())
+                .contains("O''Brien''s Wren")
+        );
     }
 
     #[test]
@@ -865,6 +1025,7 @@ mod tests {
             hour_start: 4,
             hour_end: 8,
             since: "2026-08-01".into(),
+            scope: SourceScope::default(),
         });
         assert_eq!(sql.matches("window_funnel(").count(), 3, "{sql}");
         for (i, w) in [1, 10, 60].iter().enumerate() {
@@ -880,6 +1041,62 @@ mod tests {
             !sql.contains("window_funnel_events"),
             "the step times are not used: {sql}"
         );
+    }
+
+    /// Every builder that orders or sessionises reads no `Source` filter and no per-source
+    /// grouping unless asked, and escapes a named source.
+    #[test]
+    fn a_source_is_read_only_when_asked_and_is_escaped() {
+        let named = SourceScope {
+            source: Some("cam'1".into()),
+            partition_by_source: true,
+        };
+        let species: Vec<String> = vec!["Robin".into(), "Wren".into()];
+        let build = |scope: &SourceScope| -> Vec<String> {
+            let funnel = FunnelParams {
+                scope: scope.clone(),
+                ..FunnelParams::default()
+            };
+            let pattern = PatternParams {
+                scope: scope.clone(),
+                ..PatternParams::default()
+            };
+            vec![
+                sessionize_sql(&SessionizeParams {
+                    scope: scope.clone(),
+                    ..SessionizeParams::default()
+                }),
+                funnel_sql(&funnel),
+                funnel_events_sql(&funnel),
+                assembly_sql(&AssemblyParams {
+                    species_sequence: species.clone(),
+                    windows_minutes: vec![1],
+                    hour_start: 4,
+                    hour_end: 8,
+                    since: "2026-08-01".into(),
+                    scope: scope.clone(),
+                }),
+                sequence_match_sql(&pattern),
+                sequence_count_sql(&pattern),
+                sequence_match_events_sql(&pattern),
+                next_species_sql("Robin", 30, 5, scope),
+                previous_species_sql("Robin", 30, 5, scope),
+                answers_sql(&species, "2026-08-01", 1, scope),
+            ]
+        };
+        for sql in build(&SourceScope::default()) {
+            assert!(!sql.contains("Source ="), "{sql}");
+            assert!(!sql.contains(", Source"), "{sql}");
+            assert!(!sql.contains("PARTITION BY Source"), "{sql}");
+        }
+        for sql in build(&named) {
+            assert!(sql.contains("AND Source = 'cam''1'"), "{sql}");
+            assert!(!sql.contains("cam'1"), "a bare quote survives: {sql}");
+            assert!(
+                sql.contains(", Source") || sql.contains("PARTITION BY Source"),
+                "kept apart: {sql}"
+            );
+        }
     }
 
     #[test]
@@ -900,6 +1117,7 @@ mod tests {
             species: Some("European Robin".into()),
             gap_minutes: 15,
             limit: 50,
+            scope: SourceScope::default(),
         };
         let sql = sessionize_sql(&params);
         assert!(sql.contains("AND Com_Name = 'European Robin'"));
@@ -1005,7 +1223,7 @@ mod tests {
 
     #[test]
     fn next_species_sql_uses_real_signature_and_escapes() {
-        let sql = next_species_sql("O'Brien's Warbler", 60, 10);
+        let sql = next_species_sql("O'Brien's Warbler", 60, 10, &SourceScope::default());
         assert!(sql.contains("sequence_next_node('forward', 'first_match'"));
         assert!(sql.contains("Com_Name = 'O''Brien''s Warbler', TRUE)"));
         assert!(sql.contains("INTERVAL '60 MINUTE'"));
@@ -1015,7 +1233,7 @@ mod tests {
 
     #[test]
     fn previous_species_sql_runs_backward_from_the_first_trigger() {
-        let sql = previous_species_sql("O'Brien's Warbler", 60, 10);
+        let sql = previous_species_sql("O'Brien's Warbler", 60, 10, &SourceScope::default());
         assert!(sql.contains("sequence_next_node('backward', 'first_match'"));
         assert!(sql.contains("Com_Name = 'O''Brien''s Warbler', TRUE)"));
         assert!(sql.contains("detection_instant < first_trigger"));
@@ -1084,8 +1302,14 @@ mod tests {
                 "sequence_match_events",
                 sequence_match_events_sql(&pattern_params),
             ),
-            ("next_species", next_species_sql("Robin", 30, 5)),
-            ("previous_species", previous_species_sql("Robin", 30, 5)),
+            (
+                "next_species",
+                next_species_sql("Robin", 30, 5, &SourceScope::default()),
+            ),
+            (
+                "previous_species",
+                previous_species_sql("Robin", 30, 5, &SourceScope::default()),
+            ),
         ];
         for (name, sql) in &all {
             for marker in ELAPSED {

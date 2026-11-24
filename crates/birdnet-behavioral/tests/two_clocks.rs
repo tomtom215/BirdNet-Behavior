@@ -198,6 +198,7 @@ fn a_step_time_is_shown_on_the_wall_clock() {
             window_minutes: 60,
             hour_start: 3,
             hour_end: 10,
+            scope: birdnet_behavioral::types::SourceScope::default(),
         })
         .expect("funnel events");
     assert_eq!(
@@ -215,6 +216,7 @@ fn a_step_time_is_shown_on_the_wall_clock() {
             max_gap_minutes: None,
             hour_start: 3,
             hour_end: 10,
+            scope: birdnet_behavioral::types::SourceScope::default(),
         })
         .expect("sequence events");
     assert_eq!(

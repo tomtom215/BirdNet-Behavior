@@ -1245,7 +1245,7 @@ pub(super) fn event_processor(
 
         // Also insert into DuckDB analytics (if enabled).
         //
-        // The same twelve columns the bulk sync copies, from the same `record`
+        // The columns the bulk sync copies, from the same `record`
         // that went to SQLite. This used to write six and leave Lat, Lon,
         // Cutoff, Week, Sens and Overlap NULL, so a row written live and the
         // same row rebuilt by a resync were different — including after the
@@ -1270,6 +1270,9 @@ pub(super) fn event_processor(
                 // daylight-saving boundary that fell between the writes.
                 detected_at_utc: record.detected_at_utc,
                 run_id: record.run_id,
+                // The capture source the SQLite row carries, so a behavioural
+                // query can keep this microphone apart from the others (MSC-06).
+                source: record.source,
             };
             let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {

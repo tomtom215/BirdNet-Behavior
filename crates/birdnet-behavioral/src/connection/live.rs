@@ -154,6 +154,7 @@ fn live_window_funnel() {
         window_minutes: 120,
         hour_start: 4,
         hour_end: 8,
+        scope: types::SourceScope::default(),
     };
     let funnel = db.funnel(&params).unwrap();
     eprintln!("[live] funnel: {funnel:?}");
@@ -184,6 +185,7 @@ fn live_sequence_match() {
         max_gap_minutes: None,
         hour_start: 4,
         hour_end: 8,
+        scope: types::SourceScope::default(),
     };
     let results = db.sequence_match(&params).unwrap();
     eprintln!("[live] sequence_match: {results:?}");
@@ -214,6 +216,7 @@ fn live_sequence_count() {
         max_gap_minutes: None,
         hour_start: 4,
         hour_end: 8,
+        scope: types::SourceScope::default(),
     };
     let results = db.sequence_count(&params).unwrap();
     eprintln!("[live] sequence_count: {results:?}");
@@ -325,6 +328,7 @@ fn live_funnel_events() {
         window_minutes: 120,
         hour_start: 4,
         hour_end: 8,
+        scope: types::SourceScope::default(),
     };
     let results = db.funnel_events(&params).unwrap();
     eprintln!("[live] funnel_events: {results:?}");
@@ -368,6 +372,7 @@ fn live_sequence_match_events() {
         max_gap_minutes: None,
         hour_start: 4,
         hour_end: 8,
+        scope: types::SourceScope::default(),
     };
     let results = db.sequence_match_events(&params).unwrap();
     eprintln!("[live] sequence_match_events: {results:?}");
@@ -524,7 +529,7 @@ fn live_raw_queries_execute() {
         queries::funnel_sql(&types::FunnelParams::default()),
         queries::sequence_match_sql(&types::PatternParams::default()),
         queries::sequence_match_events_sql(&types::PatternParams::default()),
-        queries::next_species_sql("European Robin", 60, 10),
+        queries::next_species_sql("European Robin", 60, 10, &types::SourceScope::default()),
     ] {
         // execute_batch runs the SELECT to completion and surfaces any
         // unknown-function / type / syntax error from the real engine.
@@ -871,12 +876,14 @@ fn live_step_times_survive_a_clock_change() {
         window_minutes: 300,
         hour_start: 0,
         hour_end: 23,
+        scope: types::SourceScope::default(),
     };
     let pattern = types::PatternParams {
         species_sequence: pair,
         max_gap_minutes: None,
         hour_start: 0,
         hour_end: 23,
+        scope: types::SourceScope::default(),
     };
     let want = ["2026-03-29 01:30:00", "2026-03-29 03:30:00"];
     let f = db.funnel_events(&funnel).unwrap();
@@ -1023,6 +1030,7 @@ fn live_assembly() {
             hour_start: 4,
             hour_end: 8,
             since: "2024-05-01".into(),
+            scope: types::SourceScope::default(),
         })
         .expect("assembly");
     eprintln!("[live] assembly: {got:?}");
@@ -1067,4 +1075,195 @@ fn live_assembly() {
     sorted.sort_unstable_by(|a, b| b.cmp(a));
     assert_eq!(dates, sorted);
     assert_eq!(got.len(), 8);
+}
+
+/// Two microphones, one morning (MSC-06). A Robin on `local` at 05:00:00 and a Wren on `cam1` 30 s
+/// later; then a Robin and a Wren 20 s apart, both on `cam1`.
+fn seed_two_sources(db: &AnalyticsDb) {
+    let rows = [
+        ("05:00:00", "Erithacus rubecula", "European Robin", "local"),
+        (
+            "05:00:30",
+            "Troglodytes troglodytes",
+            "Eurasian Wren",
+            "cam1",
+        ),
+        ("05:10:00", "Erithacus rubecula", "European Robin", "cam1"),
+        (
+            "05:10:20",
+            "Troglodytes troglodytes",
+            "Eurasian Wren",
+            "cam1",
+        ),
+    ];
+    let values: Vec<String> = rows
+        .iter()
+        .map(|(t, s, c, src)| {
+            format!(
+                "('2024-05-01', '{t}', '{s}', '{c}', 0.9, epoch(TIMESTAMP '2024-05-01 {t}'), '{src}')"
+            )
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc, \
+             Source) VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed insert");
+}
+
+/// The gate: kept apart, a bird on one microphone does not answer a bird on another; the answer
+/// heard on one microphone still counts. Pooled — the default, and what every caller gets unless
+/// it asks — the cross-source "answer" is still reported, so no page's output moves.
+#[test]
+fn live_a_bird_on_one_source_does_not_answer_a_bird_on_another() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed_two_sources(&db);
+
+    let pooled = db.answers("2024-01-01", 1, 2).unwrap();
+    assert_eq!(pooled.species, ["Eurasian Wren", "European Robin"]);
+    // Row Robin (1), column Wren (0): the Robin, then the Wren within a minute.
+    assert_eq!(
+        pooled.exchanges[1][0], 2,
+        "pooled, the default: the cross-source pair counts, as it always did"
+    );
+    assert_eq!(
+        db.answers_in("2024-01-01", 1, 2, &types::SourceScope::default())
+            .unwrap(),
+        pooled,
+        "the default scope is the pooled query"
+    );
+
+    let apart = types::SourceScope {
+        source: None,
+        partition_by_source: true,
+    };
+    let partitioned = db.answers_in("2024-01-01", 1, 2, &apart).unwrap();
+    assert_eq!(
+        partitioned.exchanges[1][0], 1,
+        "kept apart: only the answer heard on cam1 is an answer"
+    );
+    assert_eq!(partitioned.heard, pooled.heard, "a count is a count");
+
+    let cam1 = types::SourceScope {
+        source: Some("cam1".into()),
+        partition_by_source: false,
+    };
+    let only = db.answers_in("2024-01-01", 1, 2, &cam1).unwrap();
+    assert_eq!(only.heard, [2, 1], "cam1 heard two Wrens and one Robin");
+    assert_eq!(only.exchanges[1][0], 1);
+}
+
+/// The other builders that order or sessionise, kept apart: a sequence completed across two
+/// microphones is not a sequence, a session does not continue on another microphone, and each
+/// per-day row names its source. Pooled, each answers as it did before.
+#[test]
+fn live_sequences_and_sessions_keep_sources_apart_only_when_asked() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed_two_sources(&db);
+    let apart = types::SourceScope {
+        source: None,
+        partition_by_source: true,
+    };
+    let pattern = |scope: types::SourceScope| types::PatternParams {
+        species_sequence: vec!["European Robin".into(), "Eurasian Wren".into()],
+        max_gap_minutes: Some(1),
+        hour_start: 4,
+        hour_end: 8,
+        scope,
+    };
+
+    let pooled = db
+        .sequence_count(&pattern(types::SourceScope::default()))
+        .unwrap();
+    assert_eq!(pooled.len(), 1);
+    assert_eq!((pooled[0].count, pooled[0].source.as_deref()), (2, None));
+
+    let mut kept = db.sequence_count(&pattern(apart.clone())).unwrap();
+    kept.sort_by(|a, b| a.source.cmp(&b.source));
+    let kept: Vec<(Option<&str>, u64)> = kept
+        .iter()
+        .map(|p| (p.source.as_deref(), p.count))
+        .collect();
+    assert_eq!(kept, [(Some("cam1"), 1), (Some("local"), 0)]);
+
+    let events = db.sequence_match_events(&pattern(apart.clone())).unwrap();
+    let cam1 = events
+        .iter()
+        .find(|e| e.source.as_deref() == Some("cam1"))
+        .expect("a cam1 row");
+    assert_eq!(
+        cam1.step_times,
+        ["2024-05-01 05:10:00", "2024-05-01 05:10:20"],
+        "cam1's own Robin and Wren, not local's Robin"
+    );
+
+    // Pooled, the morning's first Robin opens it, so nothing comes before it. Kept apart, cam1's
+    // first Robin (05:10) follows cam1's Wren (05:00:30).
+    let before = |window: u32, scope: &types::SourceScope| -> Vec<(String, u64)> {
+        db.previous_species_in("European Robin", window, 5, scope)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.predicted_species, p.frequency))
+            .collect()
+    };
+    assert_eq!(before(60, &types::SourceScope::default()), []);
+    assert_eq!(before(60, &apart), [("Eurasian Wren".to_string(), 1)]);
+    // A Blackbird on `local` at 05:05 keeps the pooled timeline within five minutes throughout;
+    // cam1 itself is silent from 05:00:30 to 05:10, so kept apart its Robin opens a new session
+    // and has nothing before it. Sessions are cut per source, not cut pooled and then split.
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc, \
+             Source) VALUES ('2024-05-01', '05:05:00', 'Turdus merula', 'Eurasian Blackbird', \
+             0.9, epoch(TIMESTAMP '2024-05-01 05:05:00'), 'local');",
+        )
+        .expect("seed insert");
+    assert_eq!(before(5, &apart), []);
+
+    // A third Robin, on `local` at 05:35. Pooled, 05:00, 05:10 and 05:35 are one session at a
+    // 30-minute gap; kept apart, `local` heard nothing for 35 minutes and has two sessions, and
+    // grouping the pooled session by source afterwards would have given it one.
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc, \
+             Source) VALUES ('2024-05-01', '05:35:00', 'Erithacus rubecula', 'European Robin', \
+             0.9, epoch(TIMESTAMP '2024-05-01 05:35:00'), 'local');",
+        )
+        .expect("seed insert");
+    let robin = |scope: types::SourceScope| types::SessionizeParams {
+        species: Some("European Robin".into()),
+        gap_minutes: 30,
+        limit: 10,
+        scope,
+    };
+    let pooled = db
+        .sessionize(&robin(types::SourceScope::default()))
+        .unwrap();
+    assert_eq!(
+        pooled.len(),
+        1,
+        "pooled: one session across the microphones"
+    );
+    assert_eq!(pooled[0].detection_count, 3);
+    assert_eq!(pooled[0].source, None);
+    let mut kept = db.sessionize(&robin(apart)).unwrap();
+    kept.sort_by(|a, b| a.source.cmp(&b.source));
+    let kept: Vec<(Option<&str>, u32)> = kept
+        .iter()
+        .map(|s| (s.source.as_deref(), s.detection_count))
+        .collect();
+    assert_eq!(
+        kept,
+        [(Some("cam1"), 1), (Some("local"), 1), (Some("local"), 1)]
+    );
+
+    // Pooled JSON is what it was: no `source` key.
+    let json = serde_json::to_value(&pooled[0]).unwrap();
+    assert!(json.get("source").is_none(), "{json}");
 }

@@ -895,6 +895,7 @@ pub(super) async fn analytics_assembly_partial(
             hour_start: DAWN_HOUR_START,
             hour_end: DAWN_HOUR_END,
             since: since.clone(),
+            scope: birdnet_behavioral::types::SourceScope::default(),
         };
         state
             .with_analytics_read(|adb| {
@@ -998,12 +999,14 @@ pub(super) async fn analytics_dawn_sequence_partial(
             max_gap_minutes: None,
             hour_start: DAWN_HOUR_START,
             hour_end: DAWN_HOUR_END,
+            scope: birdnet_behavioral::types::SourceScope::default(),
         };
         let funnel_params = birdnet_behavioral::types::FunnelParams {
             species_sequence: sequence.clone(),
             window_minutes: DAWN_FUNNEL_WINDOW_MINUTES,
             hour_start: DAWN_HOUR_START,
             hour_end: DAWN_HOUR_END,
+            scope: birdnet_behavioral::types::SourceScope::default(),
         };
         state
             .with_analytics_read(|adb| {
@@ -1602,6 +1605,7 @@ mod tests {
             steps_completed,
             total_steps: 3,
             matched_species: Vec::new(),
+            source: None,
         }
     }
 
@@ -1631,6 +1635,7 @@ mod tests {
             start_time: "2026-05-01 05:00:00".into(),
             end_time: "2026-05-01 05:10:00".into(),
             duration_secs: 600,
+            source: None,
         }
     }
 

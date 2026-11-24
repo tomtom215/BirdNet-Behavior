@@ -64,6 +64,9 @@ struct SessionsQuery {
     species: Option<String>,
     gap: Option<u32>,
     limit: Option<u32>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +82,9 @@ struct FunnelQuery {
     window: Option<u32>,
     hour_start: Option<u32>,
     hour_end: Option<u32>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +99,9 @@ struct AssemblyQuery {
     hour_start: Option<u32>,
     #[serde(default, deserialize_with = "super::form::blank_is_none")]
     hour_end: Option<u32>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -101,6 +110,9 @@ struct AnswersQuery {
     from: Option<String>,
     within: Option<u32>,
     top: Option<usize>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +121,9 @@ struct NextSpeciesQuery {
     after: Option<String>,
     window: Option<u32>,
     limit: Option<u32>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +132,9 @@ struct PreviousSpeciesQuery {
     before: Option<String>,
     window: Option<u32>,
     limit: Option<u32>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +144,9 @@ struct PatternsQuery {
     max_gap: Option<u32>,
     hour_start: Option<u32>,
     hour_end: Option<u32>,
+    /// `?source=`: one capture source only (see `source_scope`).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
 }
 
 // -- Parameter clamps --
@@ -162,6 +183,22 @@ fn parse_species_sequence(raw: Option<String>, default: Vec<String>) -> Vec<Stri
     })
 }
 
+/// The capture sources a behavioural query reads, from `?source=` (MSC-06).
+///
+/// Named, only that source's detections are read (`local`, or a stream id such
+/// as `cam1`); absent or blank, every source is read and pooled into one
+/// timeline, which is what these routes answered before the analytics copy
+/// carried `Source`. Keeping several sources apart in one answer
+/// (`SourceScope::partition_by_source`) is not offered here: which default a
+/// station should get depends on whether its sources overhear one another.
+#[cfg(feature = "analytics")]
+const fn source_scope(source: Option<String>) -> birdnet_behavioral::types::SourceScope {
+    birdnet_behavioral::types::SourceScope {
+        source,
+        partition_by_source: false,
+    }
+}
+
 // -- Handler implementations --
 
 #[cfg(feature = "analytics")]
@@ -177,6 +214,7 @@ async fn sessions(
         species: query.species,
         gap_minutes: query.gap.unwrap_or(30),
         limit: query.limit.unwrap_or(100).min(MAX_SESSIONS_LIMIT),
+        scope: source_scope(query.source),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -306,6 +344,7 @@ async fn funnel(
         window_minutes: query.window.unwrap_or(default.window_minutes),
         hour_start: query.hour_start.unwrap_or(default.hour_start),
         hour_end: query.hour_end.unwrap_or(default.hour_end),
+        scope: source_scope(query.source),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -365,6 +404,7 @@ async fn funnel_events(
         window_minutes: query.window.unwrap_or(default.window_minutes),
         hour_start: query.hour_start.unwrap_or(default.hour_start),
         hour_end: query.hour_end.unwrap_or(default.hour_end),
+        scope: source_scope(query.source),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -475,6 +515,7 @@ async fn assembly(
         hour_start: query.hour_start.unwrap_or(default.hour_start),
         hour_end: query.hour_end.unwrap_or(default.hour_end),
         since,
+        scope: source_scope(query.source),
     };
     let echo = params.clone();
 
@@ -548,10 +589,11 @@ async fn answers(
     };
     let within = query.within.unwrap_or(1);
     let top = query.top.unwrap_or(8);
+    let scope = source_scope(query.source);
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.answers(&from, within, top))
+            .with_analytics_read(|adb| adb.answers_in(&from, within, top, &scope))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -614,6 +656,7 @@ async fn patterns(
         max_gap_minutes: query.max_gap,
         hour_start: query.hour_start.unwrap_or(default.hour_start),
         hour_end: query.hour_end.unwrap_or(default.hour_end),
+        scope: source_scope(query.source),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -676,6 +719,7 @@ async fn sequence_count(
         max_gap_minutes: query.max_gap,
         hour_start: query.hour_start.unwrap_or(default.hour_start),
         hour_end: query.hour_end.unwrap_or(default.hour_end),
+        scope: source_scope(query.source),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -745,6 +789,7 @@ async fn sequence_match_events(
         max_gap_minutes: query.max_gap,
         hour_start: query.hour_start.unwrap_or(default.hour_start),
         hour_end: query.hour_end.unwrap_or(default.hour_end),
+        scope: source_scope(query.source),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -832,10 +877,11 @@ async fn next_species(
 
     let window = query.window.unwrap_or(60);
     let limit = query.limit.unwrap_or(10).min(MAX_NEXT_SPECIES_LIMIT);
+    let scope = source_scope(query.source);
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.next_species(&trigger, window, limit))
+            .with_analytics_read(|adb| adb.next_species_in(&trigger, window, limit, &scope))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -895,10 +941,11 @@ async fn previous_species(
     };
     let window = query.window.unwrap_or(60);
     let limit = query.limit.unwrap_or(10).min(MAX_NEXT_SPECIES_LIMIT);
+    let scope = source_scope(query.source);
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.previous_species(&trigger, window, limit))
+            .with_analytics_read(|adb| adb.previous_species_in(&trigger, window, limit, &scope))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -1346,6 +1393,7 @@ mod json_value_tests {
                 before: Some("European Robin".into()),
                 window: None,
                 limit: None,
+                source: None,
             }),
         )
         .await;
@@ -1355,12 +1403,28 @@ mod json_value_tests {
         assert_eq!(p["before_species"], json!("European Robin"), "{}", body.0);
         assert_eq!(p["predicted_species"], json!("Eurasian Wren"), "{}", body.0);
 
+        // `?source=` reads one capture source only: these rows name none, so
+        // `cam1` heard nothing (MSC-06).
+        let (status, body) = previous_species(
+            State(state.clone()),
+            Query(PreviousSpeciesQuery {
+                before: Some("European Robin".into()),
+                window: None,
+                limit: None,
+                source: Some("cam1".into()),
+            }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{}", body.0);
+        assert_eq!(body.0["total"], json!(0), "{}", body.0);
+
         let (status, _) = previous_species(
             State(state),
             Query(PreviousSpeciesQuery {
                 before: None,
                 window: None,
                 limit: None,
+                source: None,
             }),
         )
         .await;

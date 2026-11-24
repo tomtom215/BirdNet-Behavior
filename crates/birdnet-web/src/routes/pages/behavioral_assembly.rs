@@ -257,6 +257,7 @@ mod tests {
             .map(|(i, d)| Assembly {
                 date: format!("2026-05-{:02}", 20 - i),
                 depths: d.to_vec(),
+                source: None,
             })
             .collect()
     }

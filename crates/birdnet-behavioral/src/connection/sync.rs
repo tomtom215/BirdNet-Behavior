@@ -42,6 +42,15 @@ const INSTANT_COL: &str = "detected_at_utc";
 /// [`PROVENANCE_COL`].
 const RUN_COL: &str = "run_id";
 
+/// Capture-source column (`SQLite` migration 18): the RTSP stream id, or
+/// `local` for the on-board microphone, NULL where unknown (imported history).
+/// Detected for the same reason as [`PROVENANCE_COL`].
+///
+/// Without it every behavioural analytic pooled the station's sources: a robin
+/// on one microphone and a wren on another 200 m away were one soundscape, and
+/// one bird heard by two microphones was two events at one instant (MSC-06).
+const SOURCE_COL: &str = "Source";
+
 /// Whether `detections` in this `SQLite` database carries `column`.
 fn has_column(conn: &rusqlite::Connection, column: &str) -> bool {
     conn.prepare("SELECT 1 FROM pragma_table_info('detections') WHERE name = ?1")
@@ -121,6 +130,10 @@ pub struct LiveDetection<'a> {
     /// The `analysis_runs` row of the daemon start that produced it (migration
     /// 43). The live path always has one; `None` is a row no run made.
     pub run_id: Option<i64>,
+    /// The capture source the `SQLite` row carries (`Source`, migration 18):
+    /// the stream id, or `local`. `None` where that row has none, so the two
+    /// stores agree and the day fingerprint does not see drift.
+    pub source: Option<&'a str>,
 }
 
 /// Which `SQLite` rows a stream reads.
@@ -139,9 +152,17 @@ enum RowFilter<'a> {
 ///
 /// `digest` is an order-independent sum of per-row FNV-1a hashes over the
 /// columns both stores carry and every analytic reads — `Time`, `Sci_Name`,
-/// `Confidence`, `review_verdict`, `detected_at_utc` — so a delete paired with
-/// a back-dated insert, which leaves every count the startup check compares
-/// exactly where it was, moves the digest of the day it happened on.
+/// `Confidence`, `review_verdict`, `detected_at_utc`, `Source` — so a delete
+/// paired with a back-dated insert, which leaves every count the startup check
+/// compares exactly where it was, moves the digest of the day it happened on.
+///
+/// `Source` is here for a second reason: it is how a copy written before the
+/// column existed gets it. Such a copy holds NULL for every row it already had,
+/// and the incremental sync only re-reads its latest second, so every day with
+/// a known source differs and the startup drift repair rebuilds it — by day,
+/// or in full when more than 60 days differ, which on a
+/// station that has been recording for a while is a one-off full rebuild at the
+/// first start after the upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DayFingerprint {
     /// Rows on the day.
@@ -159,6 +180,7 @@ impl DayFingerprint {
         confidence: f64,
         verdict: Option<&str>,
         instant: Option<i64>,
+        source: Option<&str>,
     ) {
         let mut h = Fnv1a::new();
         h.write(time.as_bytes());
@@ -170,6 +192,8 @@ impl DayFingerprint {
         h.write(verdict.unwrap_or("\0").as_bytes());
         h.write(b"\x1f");
         h.write(&instant.map_or([0xff; 8], i64::to_le_bytes));
+        h.write(b"\x1f");
+        h.write(source.unwrap_or("\0").as_bytes());
         self.rows += 1;
         self.digest = self.digest.wrapping_add(h.finish());
     }
@@ -204,8 +228,8 @@ const FULL_REBUILD_ABOVE_DAYS: usize = 60;
 impl AnalyticsDb {
     /// Per-day fingerprints of the `SQLite` side, read from the source of
     /// truth. Columns the source predates (`review_verdict`,
-    /// `detected_at_utc`) fold in as absent, which is what the copy holds for
-    /// them too.
+    /// `detected_at_utc`, `Source`) fold in as absent, which is what the copy
+    /// holds for them too.
     ///
     /// # Errors
     ///
@@ -225,8 +249,14 @@ impl AnalyticsDb {
         } else {
             "NULL"
         };
+        let source_col = if has_column(sqlite_conn, SOURCE_COL) {
+            SOURCE_COL
+        } else {
+            "NULL"
+        };
         let sql = format!(
-            "SELECT Date, Time, Sci_Name, Confidence, {verdict_col}, {instant_col} FROM detections"
+            "SELECT Date, Time, Sci_Name, Confidence, {verdict_col}, {instant_col}, {source_col} \
+             FROM detections"
         );
         let mut stmt = sqlite_conn.prepare(&sql).map_err(read_err)?;
         let mut rows = stmt.query([]).map_err(read_err)?;
@@ -238,9 +268,15 @@ impl AnalyticsDb {
             let confidence: f64 = row.get(3).map_err(read_err)?;
             let verdict: Option<String> = row.get(4).map_err(read_err)?;
             let instant: Option<i64> = row.get(5).map_err(read_err)?;
-            out.entry(date)
-                .or_default()
-                .add(&time, &sci, confidence, verdict.as_deref(), instant);
+            let source: Option<String> = row.get(6).map_err(read_err)?;
+            out.entry(date).or_default().add(
+                &time,
+                &sci,
+                confidence,
+                verdict.as_deref(),
+                instant,
+                source.as_deref(),
+            );
         }
         Ok(out)
     }
@@ -252,7 +288,7 @@ impl AnalyticsDb {
     /// Returns an error if the read fails.
     pub fn day_fingerprints(&self) -> Result<DayFingerprints, AnalyticsError> {
         let mut stmt = self.conn.prepare(
-            "SELECT Date, Time, Sci_Name, Confidence, review_verdict, detected_at_utc \
+            "SELECT Date, Time, Sci_Name, Confidence, review_verdict, detected_at_utc, Source \
              FROM detections",
         )?;
         let mut rows = stmt.query([])?;
@@ -264,9 +300,15 @@ impl AnalyticsDb {
             let confidence: f64 = row.get(3)?;
             let verdict: Option<String> = row.get(4)?;
             let instant: Option<i64> = row.get(5)?;
-            out.entry(date)
-                .or_default()
-                .add(&time, &sci, confidence, verdict.as_deref(), instant);
+            let source: Option<String> = row.get(6)?;
+            out.entry(date).or_default().add(
+                &time,
+                &sci,
+                confidence,
+                verdict.as_deref(),
+                instant,
+                source.as_deref(),
+            );
         }
         Ok(out)
     }
@@ -530,21 +572,28 @@ impl AnalyticsDb {
         // read indices below are derived rather than hand-counted; the previous
         // shape (`row.get(if provenance { 13 } else { 12 })`) had one more term
         // to get wrong with every column added.
-        let optional: Vec<&str> = [PROVENANCE_COL, VERDICT_COL, INSTANT_COL, RUN_COL]
-            .into_iter()
-            .filter(|c| has_column(sqlite_conn, c))
-            .collect();
+        let optional: Vec<&str> = [
+            PROVENANCE_COL,
+            VERDICT_COL,
+            INSTANT_COL,
+            RUN_COL,
+            SOURCE_COL,
+        ]
+        .into_iter()
+        .filter(|c| has_column(sqlite_conn, c))
+        .collect();
         let index_of = |col: &str| {
             optional
                 .iter()
                 .position(|c| *c == col)
                 .map(|i| SYNC_COL_COUNT + i)
         };
-        let (provenance, verdict, instant, run) = (
+        let (provenance, verdict, instant, run, source_at) = (
             index_of(PROVENANCE_COL),
             index_of(VERDICT_COL),
             index_of(INSTANT_COL),
             index_of(RUN_COL),
+            index_of(SOURCE_COL),
         );
         let mut cols = SYNC_COLS.to_owned();
         for col in &optional {
@@ -618,6 +667,12 @@ impl AnalyticsDb {
                 Some(i) => row.get(i).map_err(read_err)?,
                 None => None,
             };
+            // The capture source (migration 18). NULL for a source predating
+            // it and for rows whose source is unknown (imported history).
+            let source: Option<String> = match source_at {
+                Some(i) => row.get(i).map_err(read_err)?,
+                None => None,
+            };
 
             appender.append_row(params![
                 date,
@@ -636,6 +691,7 @@ impl AnalyticsDb {
                 review_verdict,
                 detected_at_utc,
                 run_id,
+                source,
             ])?;
 
             total += 1;
@@ -668,8 +724,8 @@ impl AnalyticsDb {
         self.conn.execute(
             "INSERT INTO detections
                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
-                 Cutoff, Week, Sens, Overlap, File_Name, detected_at_utc, run_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 Cutoff, Week, Sens, Overlap, File_Name, detected_at_utc, run_id, Source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 d.date,
                 d.time,
@@ -684,7 +740,8 @@ impl AnalyticsDb {
                 d.overlap,
                 d.file_name,
                 d.detected_at_utc,
-                d.run_id
+                d.run_id,
+                d.source
             ],
         )?;
         Ok(())
@@ -1908,5 +1965,142 @@ mod tests {
         );
         db.repair_drift(&sc).unwrap();
         assert_eq!(db.rejected_detection_count().unwrap(), 1);
+    }
+
+    /// A `SQLite` store with the station's `Source` column (migration 18) and
+    /// three detections in two seconds: one bird heard by two microphones at
+    /// 06:00:00, and a row of unknown source (an imported BirdNET-Pi row).
+    fn two_source_sqlite() -> rusqlite::Connection {
+        let sc = rusqlite::Connection::open_in_memory().unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT, \
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER, Sens REAL, \
+             Overlap REAL, File_Name TEXT, Source TEXT);",
+        )
+        .unwrap();
+        for (time, src, clip) in [
+            ("06:00:00", Some("local"), "a.wav"),
+            ("06:00:00", Some("cam1"), "b.wav"),
+            ("06:00:05", None, "c.wav"),
+        ] {
+            sc.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, \
+                 Source) VALUES ('2026-03-11', ?1, 'Turdus merula', 'Blackbird', 0.85, ?2, ?3)",
+                rusqlite::params![time, clip, src],
+            )
+            .unwrap();
+        }
+        sc
+    }
+
+    /// How many distinct sources the copy holds, or the error that asking gave.
+    fn distinct_sources(db: &AnalyticsDb) -> Result<i64, String> {
+        db.conn
+            .query_row("SELECT COUNT(DISTINCT Source) FROM detections", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// MSC-06: every behavioural analytic reads this copy, so a copy without
+    /// `Source` pools two microphones into one soundscape and no query can ask
+    /// for one of them. The sync carries the value, and NULL stays NULL.
+    #[test]
+    fn the_sync_carries_each_detections_source() {
+        let (db, _tmp) = make_db();
+        let sc = two_source_sqlite();
+        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 3);
+        assert_eq!(
+            distinct_sources(&db),
+            Ok(2),
+            "two microphones went in; the copy must still tell them apart"
+        );
+        let unknown: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Source IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unknown, 1, "a row of unknown source stays unknown");
+
+        // The full rebuild streams through a staging table; same answer.
+        assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 3);
+        assert_eq!(distinct_sources(&db), Ok(2));
+    }
+
+    /// The live path writes the source too, and the row it writes is the one a
+    /// resync would: the day fingerprints of the two stores agree, so the next
+    /// start rebuilds nothing.
+    #[test]
+    fn a_live_row_carries_its_source_and_agrees_with_the_sync() {
+        let (db, _tmp) = make_db();
+        let sc = two_source_sqlite();
+        for (time, source, clip) in [
+            ("06:00:00", Some("local"), "a.wav"),
+            ("06:00:00", Some("cam1"), "b.wav"),
+            ("06:00:05", None, "c.wav"),
+        ] {
+            db.insert_detection(&LiveDetection {
+                source,
+                ..live("2026-03-11", time, "Turdus merula", "Blackbird", 0.85, clip)
+            })
+            .unwrap();
+        }
+        assert_eq!(distinct_sources(&db), Ok(2));
+        assert_eq!(
+            db.days_out_of_step(&sc).unwrap(),
+            Vec::<String>::new(),
+            "a live row and the same row synced must not differ"
+        );
+    }
+
+    /// A copy written before the column existed holds every row with no source,
+    /// and the incremental sync only ever re-reads its latest second. Opening it
+    /// adds the column; the startup drift repair is what fills it, because the
+    /// source is part of what the day fingerprint compares.
+    #[test]
+    fn a_copy_from_before_the_source_column_gets_the_column_and_its_values() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("analytics.duckdb");
+        {
+            // The schema every release before this one created, holding the
+            // fixture's rows as such a release synced them.
+            let old = duckdb::Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE detections (Date TEXT NOT NULL, Time TEXT NOT NULL, \
+                 Sci_Name TEXT NOT NULL, Com_Name TEXT NOT NULL, Confidence DOUBLE NOT NULL, \
+                 Lat DOUBLE, Lon DOUBLE, Cutoff DOUBLE, Week INTEGER, Sens DOUBLE, \
+                 Overlap DOUBLE, File_Name TEXT, import_batch_id BIGINT, review_verdict TEXT, \
+                 detected_at_utc BIGINT, run_id BIGINT);
+                 INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-03-11', '06:00:00', 'Turdus merula', 'Blackbird', 0.85, 'a.wav'),
+                        ('2026-03-11', '06:00:00', 'Turdus merula', 'Blackbird', 0.85, 'b.wav'),
+                        ('2026-03-11', '06:00:05', 'Turdus merula', 'Blackbird', 0.85, 'c.wav');",
+            )
+            .unwrap();
+        }
+        let db = AnalyticsDb::open(&path).unwrap();
+        let sc = two_source_sqlite();
+        // What a start does: the incremental sync, then the drift repair.
+        db.sync_from_sqlite(&sc).unwrap();
+        db.repair_drift(&sc).unwrap();
+        assert_eq!(db.detection_count().unwrap(), 3, "no row doubled");
+        assert_eq!(
+            distinct_sources(&db),
+            Ok(2),
+            "an upgraded copy must carry the sources of the rows it already held"
+        );
+        // And the view every analytic reads sees the column.
+        let via_view: Result<i64, String> = db
+            .conn
+            .query_row(
+                "SELECT COUNT(DISTINCT Source) FROM detections_ts",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string());
+        assert_eq!(via_view, Ok(2));
     }
 }
