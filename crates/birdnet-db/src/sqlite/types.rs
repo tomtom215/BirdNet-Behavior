@@ -199,6 +199,26 @@ pub struct DetectionRow {
     /// answered". They are not the same, and neither is zero.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_agreement: Option<i64>,
+    /// Where the analysed chunk started inside its source recording, seconds
+    /// (migration 11). Part of the detection's key: two chunks of one
+    /// recording that both heard the species are two detections. `None` only
+    /// on a row built outside the database.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_offset_secs: Option<f64>,
+    /// When retention removed the clip's audio, Unix seconds (migration 22).
+    /// `None` while the clip is still kept. The row and its `file_name`
+    /// survive; the audio does not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_pruned_at: Option<i64>,
+    /// The import batch the row came from (`import_batches.id`, migration 25),
+    /// or `None`
+    /// for a row this station recorded itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_batch_id: Option<i64>,
+    /// The `BirdWeather` soundscape the detection was uploaded against
+    /// (migration 45), when it was uploaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birdweather_soundscape_id: Option<i64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -319,6 +339,10 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         detection_secs: row.get(19)?,
         model_id: row.get(20)?,
         model_agreement: row.get(21)?,
+        chunk_offset_secs: row.get(22)?,
+        clip_pruned_at: row.get(23)?,
+        import_batch_id: row.get(24)?,
+        birdweather_soundscape_id: row.get(25)?,
     })
 }
 
@@ -359,13 +383,17 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "detection_secs",
     "model_id",
     "model_agreement",
+    "chunk_offset_secs",
+    "Clip_Pruned_At",
+    "import_batch_id",
+    "birdweather_soundscape_id",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs, model_id, model_agreement";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs, model_id, model_agreement, chunk_offset_secs, Clip_Pruned_At, import_batch_id, birdweather_soundscape_id";
 
 #[cfg(test)]
 mod drift_gate_tests {

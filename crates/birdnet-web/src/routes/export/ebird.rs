@@ -28,9 +28,16 @@
 //! * **No header row**: eBird's Record Format is rejected with one.
 //! * Rows are read from `detections_analytic`, so a detection the reviewer
 //!   rejected, or an imported batch the operator excluded, never reaches the
-//!   checklist.
+//!   checklist. `verdict=confirmed` narrows it to detections a reviewer
+//!   confirmed; the default is every detection not rejected, which includes
+//!   unreviewed ones. Whether eBird accepts unreviewed recorder detections is
+//!   the submitter's question, not one this export has checked.
+//! * **The comment says it is an automated acoustic detection**, names the
+//!   model (the run's model file and SHA-256 prefix, or that the station did
+//!   not record it) and says how many of the hour's detections a reviewer
+//!   confirmed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 
 use axum::extract::{Query, State};
@@ -73,6 +80,9 @@ pub(super) struct EbirdQuery {
     country: Option<String>,
     /// Whether every species heard is reported (`Y`); defaults to `N`.
     complete: Option<bool>,
+    /// `confirmed` to claim only detections a reviewer confirmed; `any` (the
+    /// default) for every detection not rejected.
+    verdict: Option<String>,
 }
 
 /// The per-checklist facts the caller supplies, resolved against the station's
@@ -151,6 +161,12 @@ pub(super) async fn export_ebird(
         return bad_request("protocol must be one word, e.g. Stationary or Traveling");
     }
 
+    let confirmed_only = match query.verdict.as_deref() {
+        None | Some("any") => false,
+        Some("confirmed") => true,
+        Some(_) => return bad_request("verdict must be confirmed or any"),
+    };
+
     let query_coords = (query.lat, query.lon);
     let permit = state.heavy_read_permit().await;
 
@@ -178,12 +194,14 @@ pub(super) async fn export_ebird(
                 min_confidence,
                 MAX_EXPORT_ROWS,
             )?;
-            Ok::<_, birdnet_db::sqlite::DbError>((configured, station_name, rows))
+            // The model each row was made with, to name in the comment.
+            let runs = birdnet_db::sqlite::run_models(conn)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((configured, station_name, rows, runs))
         })
     })
     .await;
 
-    let (configured, station_name, (detections, truncated)) = match result {
+    let (configured, station_name, (mut detections, truncated), runs) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             return (
@@ -204,6 +222,9 @@ pub(super) async fn export_ebird(
     };
     if truncated {
         return export_too_large();
+    }
+    if confirmed_only {
+        detections.retain(|r| r.review_verdict.as_deref() == Some("confirmed"));
     }
 
     let (lat, lon) = match resolve_coordinates(query_coords, configured) {
@@ -226,7 +247,7 @@ pub(super) async fn export_ebird(
         complete: query.complete.unwrap_or(false),
     };
 
-    let csv = detections_to_ebird_csv(&detections, &effort);
+    let csv = detections_to_ebird_csv(&detections, &runs, &effort);
     let filename = date_for_filename.as_deref().unwrap_or("all");
     (
         StatusCode::OK,
@@ -275,15 +296,52 @@ fn format_coordinate(value: Option<f64>) -> String {
     value.map_or_default(|v| v.to_string())
 }
 
+/// The model a row was made with, as the comment names it: the model file's
+/// name and the start of its SHA-256 from the row's analysis run, or a plain
+/// statement that the station did not record it (imported history, rows older
+/// than the run table). Commas and quotes are dropped, as in the comment.
+fn model_of(
+    row: &birdnet_db::sqlite::DetectionRow,
+    runs: &HashMap<i64, birdnet_db::sqlite::RunModel>,
+) -> String {
+    row.run_id.and_then(|id| runs.get(&id)).map_or_else(
+        || "a model this station did not record".to_owned(),
+        |m| {
+            let name: String = m
+                .model_name
+                .chars()
+                .filter(|c| *c != ',' && *c != '"')
+                .collect();
+            let sha = m.model_sha256.get(..12).unwrap_or(&m.model_sha256);
+            format!("{name} (sha256 {sha})")
+        },
+    )
+}
+
+/// What one checklist record aggregates.
+#[derive(Default)]
+struct HourTally {
+    detections: usize,
+    max_confidence: f64,
+    confirmed: usize,
+    models: BTreeSet<String>,
+}
+
 /// One checklist record per species per hour, in eBird Record Format column
 /// order, with no header row.
+///
+/// The comment says what the record is: an automated acoustic detection, by
+/// which model, how many detections and how many of them a person confirmed
+/// (RES-27). eBird's reviewers read the comment; a record that does not say
+/// it came from a classifier reads as a sighting.
 fn detections_to_ebird_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
+    runs: &HashMap<i64, birdnet_db::sqlite::RunModel>,
     effort: &ChecklistEffort,
 ) -> String {
     // Keyed (date, hour, common name, scientific name) so the output order is
     // the order a person reading the checklist expects, and stable.
-    let mut groups: BTreeMap<(String, String, String, String), (usize, f64)> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String, String, String), HourTally> = BTreeMap::new();
     for row in rows {
         let entry = groups
             .entry((
@@ -292,9 +350,13 @@ fn detections_to_ebird_csv(
                 row.com_name.clone(),
                 row.sci_name.clone(),
             ))
-            .or_insert((0, 0.0));
-        entry.0 += 1;
-        entry.1 = entry.1.max(row.confidence);
+            .or_default();
+        entry.detections += 1;
+        entry.max_confidence = entry.max_confidence.max(row.confidence);
+        if row.review_verdict.as_deref() == Some("confirmed") {
+            entry.confirmed += 1;
+        }
+        entry.models.insert(model_of(row, runs));
     }
 
     let lat = format_coordinate(effort.lat);
@@ -302,7 +364,7 @@ fn detections_to_ebird_csv(
     let complete = if effort.complete { "Y" } else { "N" };
 
     let mut csv = String::with_capacity(groups.len() * 200);
-    for ((date, hour, com_name, sci_name), (count, max_conf)) in &groups {
+    for ((date, hour, com_name, sci_name), tally) in &groups {
         let (genus, species) = sci_name.split_once(' ').unwrap_or((sci_name, "sp."));
         let start_time = if hour.len() == 2 {
             format!("{hour}:00")
@@ -312,10 +374,15 @@ fn detections_to_ebird_csv(
         // No comma and no quote in the comment: eBird's guidance asks for
         // neither, and a quoted field is one more thing for its importer to
         // trip on.
+        let models: Vec<&str> = tally.models.iter().map(String::as_str).collect();
         let comment = format!(
-            "BirdNET: {count} detection{} this hour; highest confidence {:.0}%",
-            if *count == 1 { "" } else { "s" },
-            max_conf * 100.0
+            "Automated acoustic detection (recorder and classifier): {} \
+             detection{} this hour by model {}; highest confidence {:.0}%; {} confirmed by a reviewer",
+            tally.detections,
+            if tally.detections == 1 { "" } else { "s" },
+            models.join(" and "),
+            tally.max_confidence * 100.0,
+            tally.confirmed,
         );
         let _ = writeln!(
             csv,
