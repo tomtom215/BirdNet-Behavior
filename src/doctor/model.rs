@@ -47,11 +47,20 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
                 )),
             }
             out.push(check_identity(&p, &db_path_from_config(config)));
-            out.push(check_model_loads(
+            let (loads, derived_rate) = load_and_check_model(
                 &p,
                 labels_path.as_deref(),
                 crate::helpers::models::primary_output_scale(config),
-            ));
+            );
+            out.push(loads);
+            // ACC-14: the primary's rate, declared or derived, against each
+            // local source's.
+            if let (Some(rate), Some(rows)) = (
+                crate::helpers::models::primary_sample_rate(config).or(derived_rate),
+                super::audio::database_sources(config),
+            ) {
+                out.extend(super::audio::source_band_checks(&rows, rate));
+            }
             if let Some(labels) = labels_path.as_deref() {
                 out.extend(check_classifiers(
                     config,
@@ -115,21 +124,27 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 /// `output_scale` is the primary's declared `MODEL_OUTPUT_SCALE`, so the load
 /// here is the daemon's: a model whose shape needs one loads when it is set,
 /// and is refused, naming the key, when it is not (MMP-11).
-fn check_model_loads(
+///
+/// Also returns the sample rate the loaded model's shape implies (`None` when
+/// it did not load), for the source band check (ACC-14).
+fn load_and_check_model(
     model: &Path,
     labels: Option<&Path>,
     output_scale: Option<birdnet_core::inference::model::OutputScale>,
-) -> Check {
+) -> (Check, Option<u32>) {
     const NAME: &str = "Model integrity";
     let label_set = match labels {
         Some(path) if path.exists() => {
             match birdnet_core::inference::labels::LabelSet::load(path) {
                 Ok(set) => Some(set),
                 Err(e) => {
-                    return Check::fail(
-                        NAME,
-                        format!("{} could not be read as a labels file: {e}", path.display()),
-                        "the labels file ships alongside the model; re-run `install.sh`",
+                    return (
+                        Check::fail(
+                            NAME,
+                            format!("{} could not be read as a labels file: {e}", path.display()),
+                            "the labels file ships alongside the model; re-run `install.sh`",
+                        ),
+                        None,
                     );
                 }
             }
@@ -152,29 +167,36 @@ fn check_model_loads(
     let loaded = match loaded {
         Ok(m) => m,
         Err(e @ birdnet_core::inference::model::InferenceError::UndeclaredOutputScale(_)) => {
-            return Check::fail(
-                NAME,
-                format!(
-                    "{} loads, and the detection daemon will refuse it: {e}",
-                    model.display()
-                ),
-                "set MODEL_OUTPUT_SCALE to the scale the model's documentation gives \
+            return (
+                Check::fail(
+                    NAME,
+                    format!(
+                        "{} loads, and the detection daemon will refuse it: {e}",
+                        model.display()
+                    ),
+                    "set MODEL_OUTPUT_SCALE to the scale the model's documentation gives \
                  (logit, probability or softmax), or install a model this station knows",
+                ),
+                None,
             );
         }
         Err(e) => {
-            return Check::fail(
-                NAME,
-                format!(
-                    "{} is not a model ONNX Runtime can load ({e}); a truncated or corrupt \
-                     download passes the size check and fails here",
-                    model.display()
+            return (
+                Check::fail(
+                    NAME,
+                    format!(
+                        "{} is not a model ONNX Runtime can load ({e}); a truncated or corrupt \
+                         download passes the size check and fails here",
+                        model.display()
+                    ),
+                    "delete the file and let the entrypoint or `install.sh` download it again",
                 ),
-                "delete the file and let the entrypoint or `install.sh` download it again",
+                None,
             );
         }
     };
-    match (loaded.output_dimension(), label_count) {
+    let rate = loaded.infer_sample_rate();
+    let check = match (loaded.output_dimension(), label_count) {
         (Some(width), Some(labels)) if width != labels => Check::fail(
             NAME,
             format!(
@@ -199,7 +221,18 @@ fn check_model_loads(
             "nothing, unless detections carry unexpected names; the daemon warns once at \
              the first inference if the widths disagree",
         ),
-    }
+    };
+    (check, Some(rate))
+}
+
+/// [`load_and_check_model`]'s check alone, as the tests read it.
+#[cfg(test)]
+fn check_model_loads(
+    model: &Path,
+    labels: Option<&Path>,
+    output_scale: Option<birdnet_core::inference::model::OutputScale>,
+) -> Check {
+    load_and_check_model(model, labels, output_scale).0
 }
 
 /// Every classifier the detection daemon would load, and its routes (MMP-02).

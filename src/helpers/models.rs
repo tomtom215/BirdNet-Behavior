@@ -180,6 +180,18 @@ fn setting(config: Option<&Config>, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// The primary classifier's declared sample rate (`MODEL_SAMPLE_RATE`), read
+/// as [`plan`] reads it, for `--doctor`'s source band check. A value that is
+/// not a rate is `None` here; [`plan`] is what notes it.
+#[must_use]
+pub fn primary_sample_rate(config: Option<&Config>) -> Option<u32> {
+    model_sample_rate(
+        &|key: &str| setting(config, key),
+        "MODEL_SAMPLE_RATE",
+        &mut Vec::new(),
+    )
+}
+
 /// The primary classifier's declared output scale (`MODEL_OUTPUT_SCALE`), read
 /// as [`plan`] reads it, for `--doctor`'s load of the primary alone. A value
 /// that is not a scale is `None` here; [`plan`] is what notes it.

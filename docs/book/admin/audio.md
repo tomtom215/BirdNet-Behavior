@@ -59,6 +59,8 @@ Open a source's **edit** panel to change:
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
+**A source that cannot carry the birds' band is reported, not refused.** A source sampled below 24 kHz carries nothing above half its rate, and resampling it to the 48 or 32 kHz a classifier wants adds samples, not sound: an 8 or 16 kHz network camera gives the classifier nothing above 4 or 8 kHz, so high-pitched songs (many warblers, goldcrests and kinglets) are never detected from it while everything else looks healthy. The journal warns once per source when a source's band stops below 12 kHz and below the classifier's: for a network camera when ffmpeg opens the stream and states its rate, and for any source at its first analysed recording. `--doctor` warns for a microphone whose stored rate is that low; a camera's rate is not known until the stream is opened. The 12 kHz line is a judgement, not a cited figure: many passerine songs reach 8 to 12 kHz. If the camera or device offers 32 or 48 kHz audio, use it.
+
 > Aim for the loudest calls to peak between about −12 and −6 dB below full scale (Cornell Lab's recording guidance says −12 dB; the Audacity manual says −6 dB for general recording). Gain set too high clips the loudest calls for good. [Input Level](../field/input-level.md) says how to read the microphone's level from the operating system, why 100% is never a neutral setting, and what the doctor checks.
 
 ## The equaliser

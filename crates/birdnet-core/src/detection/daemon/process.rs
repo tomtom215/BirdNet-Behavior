@@ -393,7 +393,7 @@ pub fn process_and_infer_filtered(
 ) -> Result<super::FilteredFile, DaemonError> {
     let start = Instant::now();
 
-    let chunks = pipeline::process_file(path, pipeline_config)?;
+    let (chunks, source_rate_hz) = pipeline::process_file_with_source_rate(path, pipeline_config)?;
     let pipeline_elapsed = start.elapsed();
 
     tracing::debug!(
@@ -575,7 +575,11 @@ pub fn process_and_infer_filtered(
         "filtered file processing complete"
     );
 
-    Ok(super::FilteredFile { events, tally })
+    Ok(super::FilteredFile {
+        events,
+        tally,
+        source_rate_hz,
+    })
 }
 
 #[cfg(test)]

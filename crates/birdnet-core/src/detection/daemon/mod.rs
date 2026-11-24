@@ -957,6 +957,9 @@ pub struct FilteredFile {
     pub events: Vec<DetectionEvent>,
     /// The discards, by reason.
     pub tally: crate::detection::FilterTally,
+    /// The sample rate the recording was decoded at, before any resampling:
+    /// the band its source carried (ACC-14).
+    pub source_rate_hz: u32,
 }
 
 /// Handle for controlling a running daemon.

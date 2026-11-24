@@ -201,6 +201,79 @@ fn capture_log_line(line: &str) -> String {
     crate::config::redact::redact_credentials_in_text(line)
 }
 
+/// The rate ffmpeg resamples an RTSP stream to before writing its segments.
+///
+/// Every classifier this project ships listens at 48 or 32 kHz, at or below
+/// this, so judging a camera's band against it (ACC-14) gives the verdict
+/// judging it against the classifier would: the two differ only for a
+/// classifier below 24 kHz.
+const RTSP_CAPTURE_RATE: u32 = 48_000;
+
+/// Reads the sample rate of the first audio stream of ffmpeg's *input* from
+/// the banner it writes to stderr when it opens a stream:
+///
+/// ```text
+/// Input #0, rtsp, from 'rtsp://…':
+///   Stream #0:1: Audio: aac (LC), 16000 Hz, mono, fltp
+/// Stream mapping:
+/// Output #0, segment, to '…':
+///   Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono, s16, 768 kb/s
+/// ```
+///
+/// It is the only place a camera's own rate appears: the segment ffmpeg writes
+/// is resampled to [`RTSP_CAPTURE_RATE`], so its recordings decode at 48 kHz
+/// whatever the camera sends. The output section, which names that 48 kHz, is
+/// not read.
+#[derive(Debug, Default)]
+struct InputBanner {
+    in_input: bool,
+    read: bool,
+}
+
+impl InputBanner {
+    /// The input audio stream's rate, the first time a line states it.
+    fn observe(&mut self, line: &str) -> Option<u32> {
+        let line = line.trim_start();
+        if line.starts_with("Input #") {
+            self.in_input = true;
+            return None;
+        }
+        if line.starts_with("Output #") || line.starts_with("Stream mapping") {
+            self.in_input = false;
+            return None;
+        }
+        if self.read || !self.in_input || !line.starts_with("Stream #") {
+            return None;
+        }
+        let (_, audio) = line.split_once("Audio:")?;
+        let rate = audio
+            .split(',')
+            .find_map(|part| part.trim().strip_suffix(" Hz")?.trim().parse::<u32>().ok())?;
+        self.read = true;
+        Some(rate)
+    }
+}
+
+/// Cameras already judged, by stream id and rate, so a stream that ffmpeg is
+/// restarted for is reported once and not at every restart.
+fn rtsp_band_watch() -> &'static std::sync::Mutex<crate::audio::band::BandWatch> {
+    static WATCH: std::sync::OnceLock<std::sync::Mutex<crate::audio::band::BandWatch>> =
+        std::sync::OnceLock::new();
+    WATCH.get_or_init(Default::default)
+}
+
+/// ACC-14 for an RTSP stream: the band warning one stderr line gives, if it is
+/// the banner line naming the camera's rate and the camera is too narrow.
+fn rtsp_band_report(
+    banner: &mut InputBanner,
+    watch: &mut crate::audio::band::BandWatch,
+    source: &str,
+    line: &str,
+) -> Option<crate::audio::band::BandWarning> {
+    let rate = banner.observe(line)?;
+    watch.first_look(source, rate, RTSP_CAPTURE_RATE)
+}
+
 /// Drain a capture subprocess's stderr into the log, line by line.
 ///
 /// `arecord` / `ffmpeg` write diagnostics (ALSA xruns, RTSP reconnects, fatal
@@ -214,12 +287,15 @@ fn capture_log_line(line: &str) -> String {
 /// killed on stop/drop — so it needs no explicit join.
 ///
 /// Lines matching [`is_capture_failure`] are logged at `warn`; everything else
-/// stays at `debug`.
-fn drain_capture_stderr(child: &mut Child, source: &str) {
+/// stays at `debug`. With `read_input_rate` (an RTSP stream), the banner line
+/// naming the camera's sample rate is checked against the band the station
+/// listens to ([`rtsp_band_report`]), once per stream and rate.
+fn drain_capture_stderr(child: &mut Child, source: &str, read_input_rate: bool) {
     let Some(stderr) = child.stderr.take() else {
         return;
     };
     let source = source.to_owned();
+    let mut banner = read_input_rate.then(InputBanner::default);
     if let Err(e) = std::thread::Builder::new()
         .name("capture-stderr".to_owned())
         .spawn(move || {
@@ -227,6 +303,25 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
             for line in BufReader::new(stderr).lines() {
                 match line {
                     Ok(line) if !line.trim().is_empty() => {
+                        if let Some(banner) = banner.as_mut() {
+                            let mut watch = rtsp_band_watch()
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if let Some(w) = rtsp_band_report(banner, &mut watch, &source, &line) {
+                                tracing::warn!(
+                                    source = %source,
+                                    "network stream sends audio at {} Hz, so it carries nothing \
+                                     above {:.1} kHz; it is resampled to {} Hz for analysis, which \
+                                     adds no sound, and birds singing above {:.1} kHz (many \
+                                     warblers, goldcrests and kinglets) cannot be detected from \
+                                     it. Set the camera's audio to 32 or 48 kHz if it offers it",
+                                    w.source_rate_hz,
+                                    f64::from(w.source_nyquist_hz()) / 1000.0,
+                                    RTSP_CAPTURE_RATE,
+                                    f64::from(w.source_nyquist_hz()) / 1000.0,
+                                );
+                            }
+                        }
                         let line = capture_log_line(&line);
                         // Routine chatter (ALSA xruns, RTSP reconnect notices)
                         // stays at debug so a busy station does not spam the
@@ -530,7 +625,7 @@ fn start_teed_alsa_microphone(
     let mut cmd = arecord_raw_command(device, capture_spec);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
-    drain_capture_stderr(&mut child, device);
+    drain_capture_stderr(&mut child, device, false);
 
     let Some(stdout) = child.stdout.take() else {
         // Unreachable with `Stdio::piped()`, but the alternative to handling it
@@ -629,7 +724,7 @@ fn start_avfoundation_microphone(
         .stderr(Stdio::piped());
 
     let mut child = cmd.spawn()?;
-    drain_capture_stderr(&mut child, device);
+    drain_capture_stderr(&mut child, device, false);
     tracing::info!(
         device,
         gain_db = config.gain_db,
@@ -706,7 +801,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
-    drain_capture_stderr(&mut child, pulse_device);
+    drain_capture_stderr(&mut child, pulse_device, false);
 
     tracing::info!(
         device = pulse_device,
@@ -728,7 +823,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
 pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
     let (mut cmd, stream_id, url) = rtsp_command(config)?;
     let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
-    drain_capture_stderr(&mut child, stream_id);
+    drain_capture_stderr(&mut child, stream_id, true);
 
     tracing::info!(
         stream_id = stream_id,
@@ -782,7 +877,7 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
     .arg("-acodec")
     .arg("pcm_s16le")
     .arg("-ar")
-    .arg("48000")
+    .arg(RTSP_CAPTURE_RATE.to_string())
     .arg("-ac")
     .arg("1");
     apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
@@ -911,6 +1006,60 @@ mod tests {
     use super::*;
     use crate::audio::capture::types::AudioPipeline;
     use std::path::PathBuf;
+
+    /// ffmpeg's banner for a 16 kHz AAC input written out at 48 kHz, as
+    /// ffmpeg 6 prints it for the arguments `rtsp_command` builds (captured
+    /// from a local file; an RTSP input differs only in the `Input #0` line).
+    const BANNER_16K: &[&str] = &[
+        "Input #0, rtsp, from 'rtsp://cam/stream':",
+        "  Stream #0:0: Video: h264 (Main), yuv420p, 1920x1080, 25 fps",
+        "  Stream #0:1[0x1](und): Audio: aac (LC) (mp4a / 0x6134706D), 16000 Hz, mono, fltp, 46 kb/s (default)",
+        "Stream mapping:",
+        "  Stream #0:1 -> #0:0 (aac (native) -> pcm_s16le (native))",
+        "Output #0, segment, to 'out-%03d.wav':",
+        "  Stream #0:0(und): Audio: pcm_s16le, 48000 Hz, mono, s16, 768 kb/s (default)",
+    ];
+
+    /// ACC-14 for a camera: the input's rate is read from the banner, the
+    /// output's 48 kHz is not, and a 16 kHz camera is reported once.
+    #[test]
+    fn a_narrow_camera_is_reported_from_ffmpegs_banner_once() {
+        let mut watch = crate::audio::band::BandWatch::default();
+        let mut reports = Vec::new();
+        for _restart in 0..2 {
+            let mut banner = InputBanner::default();
+            for line in BANNER_16K {
+                if let Some(w) = rtsp_band_report(&mut banner, &mut watch, "cam1", line) {
+                    reports.push(w);
+                }
+            }
+        }
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert_eq!(reports[0].source_rate_hz, 16_000);
+    }
+
+    /// The counterpart: a 48 kHz camera is read and not reported, and the
+    /// output section alone is never read as the input.
+    #[test]
+    fn a_wide_camera_and_the_output_section_are_not_reported() {
+        let mut banner = InputBanner::default();
+        let rates: Vec<u32> = BANNER_16K
+            .iter()
+            .map(|l| l.replace("16000 Hz", "48000 Hz"))
+            .filter_map(|l| banner.observe(&l))
+            .collect();
+        assert_eq!(rates, [48_000]);
+
+        let mut banner = InputBanner::default();
+        // An input with no audio stream, then the output section: the output's
+        // rate must not be taken for the input's.
+        let output_only: Vec<u32> = [BANNER_16K[0], BANNER_16K[1], BANNER_16K[5], BANNER_16K[6]]
+            .iter()
+            .map(|l| l.replace("48000 Hz", "8000 Hz"))
+            .filter_map(|l| banner.observe(&l))
+            .collect();
+        assert!(output_only.is_empty(), "{output_only:?}");
+    }
 
     #[test]
     fn is_audio_file_wav() {
