@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Hourly listening effort and a species' detection history (WP-05 of the 2026-11 audit, RES-02).** A new
+  table, `analysis_effort` (migration 61), holds per source and local hour the seconds of audio the pipeline
+  analysed and the segments it analysed, shed and lost. `GET /api/v2/effort?from&to&grain=day|hour` serves it,
+  and `GET /api/v2/effort/history?sci_name&from&to` gives one row per hour: 1 (detected), 0 (audio analysed,
+  not detected) or null (nothing analysed, so nothing can be said). Hours before migration 61 are null.
 - **A ledger of what the filters discard (WP-03 of the 2026-11 audit).** The human-sound rule, the noise
   filter, corroboration, the range filter and the operator's species lists each count what they remove:
   `birdnet_detections_dropped_total` gains the reasons `privacy`, `noise`, `corroboration`, `occurrence` and
@@ -112,6 +117,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Listening effort is the audio the pipeline analysed (RES-01, MSC-16).** `recording_effort` was credited
+  every five minutes with the whole interval for each source whose liveness gauge was up, so segments the shed
+  policy skipped under heat or backlog, and segments lost before analysis, counted as listening. It is now
+  credited from the pipeline's own throughput, to the local hour the audio was recorded in. Rates, the
+  "not listening" marks and the detection deadman's listening total all read the new figure.
+- **The detection rate reports its zeros and an interval (RES-15).** `/analytics/abundance` returns a zero for
+  every week the station listened in which a reported species went undetected, and an exact 95 % Poisson
+  (Garwood) interval on each weekly rate, as `detections_per_hour_lower95` and `detections_per_hour_upper95`. Its
+  documentation calls the number a detection rate per listened hour, and no longer claims the peak-normalised
+  index corrects for effort. The interval assumes independent detections, which they are not, so it understates
+  the uncertainty; the docs say so. The denominator across several sources is unchanged (MSC-03, still open).
+- **Arrival and departure are runs, not single detections (RES-19).** `/analytics/phenology` adds
+  `arrival_date` and `departure_date`, the ends of the first and last run of three detection days within seven,
+  so one false positive no longer moves them, and flags either when the station did not listen on every one of
+  the fourteen days beside it.
+- **The analytics read the effort ledger (RES-14, UIC-03, UIC-01, UIR-02, UIR-08).** The Trends seven-day
+  average is blank across days the station was not listening; anomaly detection labels those days
+  `not_listening` (or `partial`) instead of `low` and keeps them out of its baseline; year-over-year compares
+  weeks over the days listened in both (`compared_days`); quiet days no longer include outages. Year in review
+  counts its days of listening and its daily average from the ledger, or says "days with a detection" without
+  one. The weekday margin on Patterns draws the average per listened day the sentence names. The weekly report
+  compares per listened day when a week lost days, says which, and calls a week "hard to compare" when the gap is
+  more than a fifth of the days.
 - **Kept raw audio leaves out speech.** With `RAW_AUDIO_KEEP_EVERY` set, a segment in which the human-sound
   rule masked speech is drained without a copy being kept, so the share kept can fall a little under one in N.
   A segment drained before it was analysed, or any segment with the rule off, is kept as before.

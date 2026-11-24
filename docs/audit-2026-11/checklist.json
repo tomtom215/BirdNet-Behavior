@@ -150,8 +150,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "01-multi-source-capture.md:46",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: per-source rates need Source in the DuckDB copy (MSC-06, WP-06), and counting events instead needs maintainer decisions 1 and 2."
   },
   {
    "id": "MSC-04",
@@ -306,8 +306,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "01-multi-source-capture.md:176",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "57f733d: the ledger no longer reads the liveness gauge; gate a_live_gauge_alone_is_not_listening_and_full_analysis_is_credited_in_full. The processor still sets the gauge on a detection (WP-04 territory), which no longer feeds effort."
   },
   {
    "id": "MSC-17",
@@ -1158,8 +1158,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "05-ui-rendered-walkthrough.md:154",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b2d2c80: the weekday margin draws the average per listened day with day counts; gate the_weekday_the_sentence_names_is_the_one_the_margin_draws_busiest."
   },
   {
    "id": "UIR-03",
@@ -1230,8 +1230,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "05-ui-rendered-walkthrough.md:235",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "9bca7bc: per listened day when a week lost days, names the gap, \"hard to compare\" beyond a fifth; gates in tests/a_week_is_compared_per_day_the_station_listened.rs."
   },
   {
    "id": "UIR-09",
@@ -1590,8 +1590,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:171",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "3c8f528: days of listening and the daily average from the ledger, else \"days with a detection\"; gate days_of_listening_are_the_days_the_ledger_says_were_listened_to."
   },
   {
    "id": "UIC-02",
@@ -1602,8 +1602,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:189",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: the rate view would draw the per-listening-hour rate, which MSC-03 shows is wrong on a station with more than one source."
   },
   {
    "id": "UIC-03",
@@ -1614,8 +1614,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:207",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "6d1c00f: outage days are not_listening (or partial), unjudged and out of the baseline; gate an_outage_is_not_an_anomaly_and_not_a_baseline."
   },
   {
    "id": "UIC-04",
@@ -1998,8 +1998,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:151",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "57f733d: effort is credited from what the pipeline analysed (shed and dropped segments counted, not credited), hourly in analysis_effort (migration 61); gate effort_is_what_the_pipeline_analysed_not_how_long_the_source_was_up."
   },
   {
    "id": "RES-02",
@@ -2010,8 +2010,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:181",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "17d5ce1: hourly ledger, GET /api/v2/effort and /api/v2/effort/history (1/0/null per hour); gate the_history_is_null_for_hours_the_station_did_not_analyse. Not done: a CSV form and sunrise-relative occasions."
   },
   {
    "id": "RES-03",
@@ -2022,8 +2022,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:200",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: per-source rates need Source in the DuckDB copy (MSC-06, WP-06), and counting events instead needs maintainer decisions 1 and 2."
   },
   {
    "id": "RES-04",
@@ -2154,8 +2154,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:394",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "6d1c00f: moving average, year-over-year (compared_days), quiet days and anomalies read the ledger; gate a_dark_week_has_no_moving_average. Left: richness and Shannon diversity, and returning effort_hours and a rate from each builder."
   },
   {
    "id": "RES-15",
@@ -2166,8 +2166,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:411",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "d90e7a2: zero rows over listened weeks, exact Garwood 95 % interval, docs renamed to detection rate; gate tests/a_listened_week_without_the_species_is_a_zero.rs. The MAX(seconds) denominator is MSC-03's."
   },
   {
    "id": "RES-16",
@@ -2214,8 +2214,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:476",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "8430b4e: arrival/departure are the ends of the first/last run of 3 detection days in 7, with an effort-gap flag; gate tests/an_arrival_is_a_run_not_a_stray.rs. Left: the live first-of-season badge (species_tracking.rs), which classifies each detection on its day, and migration_window_sql."
   },
   {
    "id": "RES-20",
@@ -2298,8 +2298,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:562",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started: partial days need each day's scheduled window and a third state through the 16 callers of listening.rs. The anomaly detector labels partial days (6d1c00f) against the median of the previous 30."
   },
   {
    "id": "RES-27",
@@ -2420,6 +2420,54 @@
    "source": "docs/book/guide/reviews.md:16 (ACC-21, added 2026-11-23 by the WP-03 session)",
    "status": "done",
    "evidence": "54859c7: the 'What it holds' cell listed only detections that failed a stricter per-species threshold, while the night-time and unset-clock reasons already wrote rows; the table now says 'held back from the log, each with its reason', and a paragraph below it names the five reasons, including the new 'Unlikely here' (a list in the cell made a column several screens tall on a phone, seen in a 390x844 screenshot). Found while correcting the page for ACC-01; documentation only, no gate."
+  },
+  {
+   "id": "N05-01",
+   "title": "The Trends anomaly table is cut off on the right on a 390 px phone",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-05, by the session that worked on the area; not re-checked beyond that reading."
+  },
+  {
+   "id": "N05-02",
+   "title": "Migration's \"Earliest vs last year\" is built from first detections: one false positive moves it, and it is effort-blind but for a partly-recorded check",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-05, by the session that worked on the area; not re-checked beyond that reading."
+  },
+  {
+   "id": "N05-03",
+   "title": "templates/migration.html calls a weekly count ridgeline \"weekly per-species abundance\", and docs/architecture 07, 08 and 13 still say \"effort-corrected abundance\" / \"abundance index\"",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-05, by the session that worked on the area; not re-checked beyond that reading."
+  },
+  {
+   "id": "N05-04",
+   "title": "The Patterns weekday sentence ignores weekdays with fewer than 3 listened days while the margin draws them, so the two can still disagree after an outage-heavy month",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "open",
+   "evidence": "Found while implementing WP-05, by the session that worked on the area; not re-checked beyond that reading."
   }
  ]
 }
