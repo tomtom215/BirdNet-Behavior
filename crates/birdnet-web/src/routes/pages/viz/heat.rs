@@ -159,7 +159,11 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     let col_tot: Vec<i64> = (0..24)
         .map(|h| (0..7).map(|d| o.counts[d][h]).sum())
         .collect();
-    let row_max = row_tot.iter().copied().max().unwrap_or(1).max(1);
+    // Per listened day of each name, as `insight::weekday_sentence` averages them.
+    let row_avg: Vec<f64> = (0..7)
+        .map(|d| row_tot[d] as f64 / f64::from(o.occurrences[d].max(1)))
+        .collect();
+    let row_max = row_avg.iter().copied().fold(0.0_f64, f64::max);
     let col_max = col_tot.iter().copied().max().unwrap_or(1).max(1);
 
     let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 28.0_f64);
@@ -181,7 +185,7 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     );
     svg.push_str(&svg_a11y(
         "Activity by hour and day of the week",
-        "A grid of the average detections in each hour of each day of the week, with the total for each day and each hour beside it.",
+        "A grid of the average detections in each hour of each day of the week, with each weekday's average a day and each hour's total beside it.",
     ));
     if o.occurrences.contains(&0) {
         let _ = write!(svg, "<defs>{}</defs>", kit::nodata_pattern(&g));
@@ -281,8 +285,15 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
                 r#"<rect class="ck-hit" x="{x0:.1}" y="{y0:.1}" width="{cw:.1}" height="{ch:.1}" data-ck-i="{idx}" data-tip="{tip}"/>"#,
             );
         }
-        // The weekday's total, as a bar and a number.
-        let bw = row_tot[d] as f64 / row_max as f64 * 34.0;
+        // The weekday's detections per listened day of that name, as a bar and a number:
+        // the unit the sentence above the chart compares (UIR-02). The period's total drew
+        // Saturday longest beside a sentence naming Thursday, because Saturday occurred
+        // five times in the window and Thursday four.
+        let bw = if row_max > 0.0 {
+            row_avg[d] / row_max * 34.0
+        } else {
+            0.0
+        };
         if row_tot[d] > 0 {
             let _ = write!(
                 svg,
@@ -298,7 +309,7 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             t = if o.occurrences[d] == 0 && o.coverage_known {
                 "off".to_string()
             } else {
-                kit::compact(row_tot[d] as f64)
+                format!("{}/day", kit::compact(row_avg[d]))
             },
         );
     }
@@ -592,6 +603,51 @@ mod tests {
             window_days: 7,
             now: None,
         }
+    }
+
+    /// UIR-02. The weekday the sentence names is the one whose margin bar is
+    /// longest: the margin draws detections per listened day of that name, the
+    /// unit the sentence uses, not the period's total. The audit's own render:
+    /// Saturday's total is largest, but it occurred five times to Thursday's four.
+    #[test]
+    fn the_weekday_the_sentence_names_has_the_longest_margin_bar() {
+        let totals = [145_i64, 81, 99, 147, 159, 156, 163];
+        let mut g = grid();
+        g.counts = [[0; 24]; 7];
+        for (d, t) in totals.iter().enumerate() {
+            g.counts[d][8] = *t;
+        }
+        g.occurrences = [4, 4, 4, 4, 4, 4, 5];
+        g.window_days = 30;
+        let sentence =
+            crate::routes::pages::insight::weekday_sentence(&g.counts, g.occurrences, 30)
+                .expect("a sentence");
+        let named = kit::WEEKDAYS
+            .iter()
+            .position(|w| {
+                sentence.contains(&format!("busiest, {w}"))
+                    || sentence.starts_with(&format!("{w}s"))
+            })
+            .expect("the sentence names a weekday");
+        let svg = hour_by_weekday(&g);
+        // The margin's seven numbers, one per weekday, in order.
+        let drawn: Vec<f64> = svg
+            .split(r#"class="mono ck-annot""#)
+            .skip(1)
+            .filter_map(|s| {
+                let text = s.split('>').nth(1)?.split('<').next()?;
+                text.trim_end_matches("/day").parse::<f64>().ok()
+            })
+            .collect();
+        assert_eq!(drawn.len(), 7, "{svg}");
+        let longest = (0..7)
+            .max_by(|&a, &b| drawn[a].total_cmp(&drawn[b]))
+            .expect("seven bars");
+        assert_eq!(
+            kit::WEEKDAYS[longest],
+            kit::WEEKDAYS[named],
+            "the sentence says {sentence:?}; the margin draws {drawn:?}"
+        );
     }
 
     #[test]
