@@ -755,7 +755,7 @@ mod nearby_tests {
         }
     }
 
-    /// The detail page for a mic_a detection, on a station where mic_b's row
+    /// The detail page for a `mic_a` detection, on a station where `mic_b`'s row
     /// of the same bird in the same second carries a confidence that is not a
     /// number, so the "also heard by" read fails and the page's own does not.
     async fn page_with_a_failing_corroboration_read() -> String {

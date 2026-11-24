@@ -20,7 +20,7 @@ routes/admin/accounts.rs :: remove_user  1  DELETE /admin/accounts/users/{id}
 routes/admin/accounts.rs :: set_password  2  POST /admin/accounts/users/{id}
 routes/admin/accounts.rs :: revoke_session_handler  1  DELETE /admin/accounts/sessions/{id}
 routes/admin/accounts.rs :: revoke_others_handler  1  POST /admin/accounts/sessions/revoke-others
-routes/admin/audio.rs :: create  1  POST /admin/audio/sources
+routes/admin/audio.rs :: create  2  POST /admin/audio/sources (inserts a source, or restores a removed one: MSC-13)
 routes/admin/audio.rs :: remove  1  DELETE /admin/audio/sources/{id}
 routes/admin/audio.rs :: listen_default  1  POST /admin/audio/sources/{id}/listen-default (stores a setting)
 routes/admin/audio.rs :: update  1  PATCH /admin/audio/sources/{id}

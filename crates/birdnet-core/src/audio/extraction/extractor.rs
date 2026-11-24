@@ -402,8 +402,7 @@ pub(super) fn build_extraction_filename(detection: &Detection, format: &str) -> 
         // detection pipeline parses it, splitting at the *last* dash: taking
         // the fifth `-`-separated field cut an id like `cam-2` short (MSC-17).
         .and_then(|f| crate::detection::types::RecordingFile::parse(f)?.rtsp_id)
-        .map(|id| format!("{id}-"))
-        .unwrap_or_default();
+        .map_or_default(|id| format!("{id}-"));
 
     format!("{name_safe}-{conf_pct}-{date}-birdnet-{rtsp_part}{time}.{format}")
 }

@@ -608,12 +608,6 @@ fn wait_for_event(
     }
 }
 
-/// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
-#[allow(
-    clippy::needless_pass_by_value,
-    clippy::too_many_arguments,
-    clippy::too_many_lines
-)]
 /// The clip a held-back detection keeps, so it can be heard and, approved,
 /// played: extracted as an admitted detection's is, named by its base name
 /// (what `/api/v2/recordings/{name}` serves). The quarantine used to keep the
@@ -640,6 +634,12 @@ fn held_clip(
     }
 }
 
+/// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 pub(super) fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
     state: birdnet_web::state::AppState,
@@ -5204,7 +5204,7 @@ mod tests {
         );
     }
 
-    /// MSC-04: the quarantine was UNIQUE(date, time, sci_name), so a second
+    /// MSC-04: the quarantine was `UNIQUE(date, time, sci_name)`, so a second
     /// source's detection of the same species in the same second was silently
     /// not stored; and an approved row had no `Source` and, its `file_name`
     /// being the raw segment the stream drain deletes, no audio.
