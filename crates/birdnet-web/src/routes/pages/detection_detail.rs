@@ -87,8 +87,12 @@ async fn detection_detail_page(
             // Multi-stream corroboration: other sources that heard this species
             // near the same time. Only meaningful for rows with a known source
             // (historical / imported rows are NULL → no corroboration shown).
-            let corroboration = det.source.as_deref().map_or_else(Vec::new, |src| {
-                birdnet_db::sqlite::concurrent_detections_from_other_sources(
+            // A failed read is kept as `None` and said on the page: defaulted,
+            // it read as "no other source heard it", which a reviewer takes as
+            // evidence (MSC-20).
+            let corroboration = det.source.as_deref().map_or_else(
+                || Some(Vec::new()),
+                |src| match birdnet_db::sqlite::concurrent_detections_from_other_sources(
                     conn,
                     &det.date,
                     &det.time,
@@ -96,9 +100,14 @@ async fn detection_detail_page(
                     src,
                     30.0,
                     8,
-                )
-                .unwrap_or_default()
-            });
+                ) {
+                    Ok(hits) => Some(hits),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "detection detail: the other sources could not be read");
+                        None
+                    }
+                },
+            );
             let floor = super::confidence::station_floor(conn);
             // What each classifier said. Unlike the corroboration list this is a
             // claim about the detection, so a failed read is kept as `None` and
@@ -141,7 +150,7 @@ async fn detection_detail_page(
     Ok(render_detail_page(
         &det,
         verdict.as_deref(),
-        &corroboration,
+        corroboration.as_deref(),
         nearby.as_deref(),
         &headers,
         &names,
@@ -181,7 +190,7 @@ fn find_detection(
 fn render_detail_page(
     det: &birdnet_db::sqlite::DetectionRow,
     verdict: Option<&str>,
-    corroboration: &[birdnet_db::sqlite::ConcurrentDetection],
+    corroboration: Option<&[birdnet_db::sqlite::ConcurrentDetection]>,
     nearby: Option<&birdnet_integrations::ebird::Snapshot>,
     headers: &HeaderMap,
     names: &birdnet_core::i18n::NameLocalizer,
@@ -313,7 +322,17 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
 /// than noise. Returns an empty string (no card) when nothing corroborates, so
 /// single-mic stations never see it. Non-destructive: it only *reads* rows that
 /// are already stored, and reuses the page's existing card vocabulary.
-fn build_corroboration_section(hits: &[birdnet_db::sqlite::ConcurrentDetection]) -> String {
+///
+/// `None` is a read that failed: the card says the check could not be made,
+/// rather than showing nothing, which means "nobody else heard it".
+fn build_corroboration_section(hits: Option<&[birdnet_db::sqlite::ConcurrentDetection]>) -> String {
+    let Some(hits) = hits else {
+        return r#"<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Multi-stream</div><h2 class="sh-h">Also heard by</h2></div></div>
+  <p class="bnb-meta">The station could not check the other sources for this bird just now, so this page cannot say whether another microphone or camera heard it too.</p>
+</div>"#
+            .to_owned();
+    };
     if hits.is_empty() {
         return String::new();
     }
@@ -497,7 +516,7 @@ mod tests {
 
     #[test]
     fn corroboration_section_empty_when_no_hits() {
-        assert_eq!(build_corroboration_section(&[]), "");
+        assert_eq!(build_corroboration_section(Some(&[])), "");
     }
 
     #[test]
@@ -507,7 +526,7 @@ mod tests {
             time: "06:00:05".into(),
             confidence: 0.85,
         }];
-        let html = build_corroboration_section(&hits);
+        let html = build_corroboration_section(Some(&hits));
         assert!(html.contains("Also heard by"), "should render the card");
         assert!(
             html.contains("cam2"),
@@ -730,5 +749,53 @@ mod nearby_tests {
             assert!(html.contains("It was reported"), "{how_many:?}: {html}");
             assert!(!html.contains("0 were"), "{how_many:?}: {html}");
         }
+    }
+
+    /// The detail page for a mic_a detection, on a station where mic_b's row
+    /// of the same bird in the same second carries a confidence that is not a
+    /// number, so the "also heard by" read fails and the page's own does not.
+    async fn page_with_a_failing_corroboration_read() -> String {
+        use tower::ServiceExt as _;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, Source)
+               VALUES ('2026-05-01', '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'a.wav', 'mic_a');
+             INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, Source)
+               VALUES ('2026-05-01', '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 'not-a-number', 'b.wav', 'mic_b');",
+        )
+        .unwrap();
+        let state = crate::state::AppState::from_connection(conn, ":memory:".into());
+        let resp = super::router()
+            .with_state(state)
+            .oneshot(
+                axum::http::Request::get(
+                    "/detections/detail?date=2026-05-01&time=06:00:00&name=Eurasian%20Blackbird&file=a.wav",
+                )
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    /// MSC-20: the corroboration read was `.unwrap_or_default()`, so a failed
+    /// read rendered as "no other source heard it", which a reviewer reads as
+    /// evidence. The page must say the check could not be made.
+    #[tokio::test]
+    async fn a_failed_corroboration_read_says_so() {
+        let html = page_with_a_failing_corroboration_read().await;
+        assert!(
+            html.contains("Eurasian Blackbird"),
+            "the page renders: {html}"
+        );
+        assert!(
+            html.contains("could not check the other sources"),
+            "a failed read was shown as nobody else hearing it"
+        );
     }
 }
