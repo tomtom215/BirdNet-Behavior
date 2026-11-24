@@ -41,6 +41,10 @@ use crate::state::AppState;
 /// The header BirdNET-Analyzer writes, column for column.
 pub const RAVEN_HEADER: &str = "Selection\tView\tChannel\tBegin Time (s)\tEnd Time (s)\tLow Freq (Hz)\tHigh Freq (Hz)\tCommon Name\tSpecies Code\tConfidence\tBegin Path\tFile Offset (s)";
 
+/// The response header that counts the detections left out of a combined
+/// table because retention had already removed their clip's audio.
+pub const OMITTED_PRUNED_HEADER: &str = "x-omitted-pruned-clips";
+
 /// The band the model listens to, as BirdNET-Analyzer's `SIG_FMIN` /
 /// `SIG_FMAX` (v2.0.0 `config.py`) put on every selection: the model's band,
 /// not a measured one, and the same number the reference tool writes.
@@ -181,6 +185,14 @@ pub(super) async fn export_raven(
             if truncated {
                 return export_too_large().into_response();
             }
+            // A row whose clip retention removed has nothing for Raven to
+            // open: a multi-file table naming a missing file fails to load,
+            // or loses the selection without saying so (RES-09). Left out,
+            // and counted in a header so a short table is not read as a quiet
+            // season.
+            let before = rows.len();
+            rows.retain(|r| r.clip_pruned_at.is_none());
+            let omitted = before - rows.len();
             // The read comes newest first; a selection table reads in time
             // order, clip by clip.
             rows.sort_by(|a, b| {
@@ -190,7 +202,12 @@ pub(super) async fn export_raven(
                     .then(a.time.cmp(&b.time))
             });
             let table = selection_table(&rows, |sci| state.ebird_species_code(sci));
-            attachment(table, "detections.raven.txt")
+            let mut response = attachment(table, "detections.raven.txt");
+            response.headers_mut().insert(
+                OMITTED_PRUNED_HEADER,
+                axum::http::HeaderValue::from(omitted),
+            );
+            response
         }
         Ok(Err(e)) => db_error(&e.to_string()),
         Err(e) => db_error(&e.to_string()),
@@ -232,6 +249,18 @@ async fn rows_for_clip(
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "application/json")],
                 json!({ "error": "no detection names this clip" }).to_string(),
+            )
+                .into_response(),
+        ));
+    }
+    // Every detection on the clip says its audio was removed by retention:
+    // there is no file for a table to point at (RES-09).
+    if rows.iter().all(|r| r.clip_pruned_at.is_some()) {
+        return Err(Box::new(
+            (
+                StatusCode::GONE,
+                [(header::CONTENT_TYPE, "application/json")],
+                json!({ "error": "this clip's audio was removed by retention" }).to_string(),
             )
                 .into_response(),
         ));
