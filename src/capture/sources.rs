@@ -239,7 +239,10 @@ pub(super) fn resolve_sources_from_db(
         .into_iter()
         .filter(|s| s.disabled_at.is_none())
         .collect();
-    if active.is_empty() {
+    // A table that has never held a row has not been used, so the caller may
+    // fall back to the config file. One whose rows were all removed has been:
+    // its answer is "record nothing", not the config file's devices (MSC-12).
+    if active.is_empty() && !table_ever_used(state)? {
         return None;
     }
 
@@ -293,8 +296,9 @@ fn audio_source_to_capture_source(
     use birdnet_db::audio_sources::{Channels, SourceKind};
     // Left and Right used to collapse into Mono here and were never
     // distinguished again, so the Audio page offered three options that all
-    // did the same thing. They now select the channel they name: the device is
-    // opened with both, and the tee keeps the requested half, so the segments
+    // did the same thing. They now select the channel they name: a microphone
+    // is opened with both and the tee keeps the requested half; a `PipeWire`
+    // or network source has ffmpeg's `pan` keep it. Either way the segments
     // written to disk are the mono stream that half produced.
     //
     // That is worth having rather than cosmetic. `Stereo` keeps both channels
@@ -323,8 +327,8 @@ fn audio_source_to_capture_source(
             device = %row.device_id,
             "source is configured Stereo: both channels are averaged to mono for analysis, \
              which on a spaced microphone pair cancels signal at frequencies where the two \
-             capsules disagree. Set the source to Left or Right to analyse one channel \
-             instead, unless the capsules are coincident"
+             capsules disagree. Set its channels to Left or Right under Settings → Capture to \
+             analyse one channel instead, unless the capsules are coincident"
         );
     }
     match row.kind {
@@ -339,6 +343,7 @@ fn audio_source_to_capture_source(
             device: row.device_id.clone(),
             sample_rate: row.sample_rate,
             channels,
+            channel_pick,
             stream_id: Some(row.id.clone()),
         },
         SourceKind::Rtsp => CaptureSource::Rtsp {
@@ -349,6 +354,7 @@ fn audio_source_to_capture_source(
             // camera could never be captured.
             transport: map_rtsp_transport(row.rtsp_transport),
             media_mode: map_media_mode(row.media_mode),
+            channel_pick,
         },
     }
 }
@@ -414,6 +420,7 @@ pub(super) fn resolve_sources(
                     // admin UI is where TCP/UDP is chosen per source.
                     transport: RtspTransport::Auto,
                     media_mode: RtspMediaMode::Full,
+                    channel_pick: None,
                 }
             })
             .collect()
@@ -428,6 +435,7 @@ pub(super) fn resolve_sources(
             device,
             channels: 1,
             stream_id: None,
+            channel_pick: None,
         }];
         srcs.extend(rtsp_sources(rtsp_urls, true));
         srcs
@@ -459,14 +467,84 @@ pub(super) fn resolve_sources(
     }
 }
 
+/// Which sources capture records: the `audio_sources` rows when the table
+/// drives capture, otherwise the CLI/config sources. Seeds an empty table
+/// from CLI/config first. See [`super::start_capture_manager`].
+pub(super) fn choose_capture_sources(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: Option<&birdnet_web::state::AppState>,
+) -> Vec<ResolvedSource> {
+    // O-13: seed an empty audio_sources table from CLI/config first, so the
+    // table is the single source of truth for capture and the web surface.
+    if let Some(state) = state {
+        let seeded = seed_sources_from_config(state, cli, config);
+        if seeded > 0 {
+            tracing::info!(
+                count = seeded,
+                "seeded audio_sources from CLI/config (O-13)"
+            );
+        }
+    }
+    if let Some(state) = state
+        && let Some(db_sources) = resolve_sources_from_db(state)
+    {
+        if db_sources.is_empty() {
+            tracing::warn!(
+                "every audio source has been removed under Settings → Capture, so nothing is recorded; \
+                 the devices in the config file (ALSA_CARD, RTSP_URL) are not used once \
+                 sources are managed there. Add a source there to record again"
+            );
+        } else {
+            tracing::info!(
+                count = db_sources.len(),
+                "capture sources resolved from audio_sources table (O-13)"
+            );
+        }
+        db_sources
+    } else {
+        let cli_sources = resolve_sources(cli, config);
+        if !cli_sources.is_empty() {
+            tracing::info!(
+                count = cli_sources.len(),
+                "capture sources resolved from CLI/config (no audio_sources rows)"
+            );
+        }
+        // The bare CLI/config flags carry no gain or quiet window — those are
+        // admin-UI / audio_sources concepts — so resolve to unity gain, none.
+        cli_sources
+            .into_iter()
+            .map(|source| ResolvedSource {
+                source,
+                gain_db: 0.0,
+                pipeline: birdnet_core::audio::capture::AudioPipeline::none(),
+                eq_chain: birdnet_core::audio::eq::EqChain::default(),
+                quiet: None,
+            })
+            .collect()
+    }
+}
+
+/// Whether `audio_sources` has ever held a row, removed ones included. `None`
+/// when the table cannot be read.
+fn table_ever_used(state: &birdnet_web::state::AppState) -> Option<bool> {
+    state
+        .with_db(|conn| {
+            conn.query_row("SELECT EXISTS (SELECT 1 FROM audio_sources)", [], |r| {
+                r.get::<_, bool>(0)
+            })
+        })
+        .ok()
+}
+
 /// O-13: seed the `audio_sources` table from CLI/config when it is empty.
 ///
 /// Makes the table the single source of truth for both the capture daemon and
 /// the web surface (live `/stream`, the Listen page, the `/admin/audio` pills).
-/// Idempotent — it inserts nothing when the table already holds a row
-/// (including one migration 15 seeded from a legacy `settings.audio_source`),
-/// so an operator's later edits or deletions through the admin UI are never
-/// re-seeded on the next start. Returns the number of rows seeded.
+/// Idempotent — it inserts nothing when the table has ever held a row, a
+/// removed one included (as is one migration 15 seeded from a legacy
+/// `settings.audio_source`), so an operator's later edits or deletions through
+/// the admin UI are never re-seeded on the next start. Returns the number of rows seeded.
 pub(super) fn seed_sources_from_config(
     state: &birdnet_web::state::AppState,
     cli: &Cli,
@@ -476,10 +554,9 @@ pub(super) fn seed_sources_from_config(
     // Only ever seed a completely empty table. A read error is treated as
     // "already populated" so a transient failure can't double-seed — the
     // CLI/config fallback in `start_capture_manager` still drives capture.
-    if !matches!(
-        state.with_db(|conn| AudioSourceStore::list(conn).map(|rows| rows.is_empty())),
-        Ok(true)
-    ) {
+    // Removed rows count: a station whose operator removed every source on
+    // `/admin/audio` is not re-seeded from the config file (MSC-12).
+    if table_ever_used(state) != Some(false) {
         return 0;
     }
     let mut seeded = 0_usize;
@@ -1159,6 +1236,51 @@ mod tests {
         let rows = state.with_db(AudioSourceStore::list).expect("list");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "src_existing");
+    }
+
+    /// MSC-12. A station whose every source was removed on `/admin/audio`
+    /// records nothing, even with `ALSA_CARD` still in the config file: no
+    /// re-seed, and no fallback to the config's devices under legacy labels.
+    #[test]
+    fn removed_sources_stay_removed_across_a_restart() {
+        use birdnet_db::audio_sources::AudioSourceStore;
+        let state = fresh_state();
+        insert_row(
+            &state,
+            "src_seed_1",
+            SourceKind::UsbAlsa,
+            "plughw:1,0",
+            true,
+        );
+        let mut c = cli();
+        c.alsa_device = Some("plughw:1,0".to_string());
+        let chosen = choose_capture_sources(&c, None, Some(&state));
+        assert!(
+            chosen.is_empty(),
+            "a removed source was resurrected: {:?}",
+            chosen.iter().map(|r| &r.source).collect::<Vec<_>>()
+        );
+        let active = state.with_db(AudioSourceStore::list).expect("list");
+        assert!(active.is_empty(), "re-seeded: {active:?}");
+    }
+
+    /// MSC-12, counterpart. A station that has never had a row is still
+    /// seeded from the config file and records from it.
+    #[test]
+    fn a_never_used_table_is_still_seeded_from_config() {
+        let state = fresh_state();
+        let mut c = cli();
+        c.alsa_device = Some("plughw:1,0".to_string());
+        let chosen = choose_capture_sources(&c, None, Some(&state));
+        assert_eq!(chosen.len(), 1);
+        assert!(
+            matches!(
+                &chosen[0].source,
+                CaptureSource::Microphone { stream_id: Some(id), .. } if id == "src_seed_1"
+            ),
+            "{:?}",
+            chosen[0].source
+        );
     }
 
     #[test]
