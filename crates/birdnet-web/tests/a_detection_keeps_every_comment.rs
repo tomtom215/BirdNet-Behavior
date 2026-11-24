@@ -20,6 +20,13 @@ const DATE: &str = "2026-05-01";
 const TIME: &str = "06:00:00";
 const SCI: &str = "Dryobates villosus";
 const TOKEN: &str = "test-token-for-detection-comments-0123456789";
+/// The fixture's detection.
+const X_WAV: birdnet_db::sqlite::DetectionKey<'static> = birdnet_db::sqlite::DetectionKey {
+    date: DATE,
+    time: TIME,
+    sci_name: SCI,
+    file_name: Some("x.wav"),
+};
 
 fn state() -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -94,6 +101,7 @@ async fn two_comments_on_one_detection_both_survive_and_the_page_shows_both() {
                     date: DATE,
                     time: TIME,
                     sci_name: SCI,
+                    file_name: Some("x.wav"),
                     user_id: None,
                     author,
                     body,
@@ -289,7 +297,7 @@ async fn the_pages_write_endpoints_exist_and_need_a_sign_in() {
 
     assert!(
         state
-            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI))
+            .with_db(|conn| birdnet_db::detection_comments::list(conn, &X_WAV))
             .expect("list")
             .is_empty(),
         "and nothing was written"
@@ -324,9 +332,130 @@ async fn the_api_write_path_is_not_open() {
 
     assert!(
         state
-            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI))
+            .with_db(|conn| birdnet_db::detection_comments::list(conn, &X_WAV))
             .expect("list")
             .is_empty(),
         "and must not have written one"
     );
+}
+
+/// A second source's detection of the same bird in the same second: the
+/// fixture's detection has clip `x.wav`; this one has `y.wav`.
+fn second_source(state: &AppState) {
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
+                  File_Name, chunk_offset_secs)
+             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.8, 0.7, 18, 1.25, 0.0, 'y.wav', 0)",
+            rusqlite::params![DATE, TIME, SCI],
+        )
+        .expect("insert the second source's detection");
+    });
+}
+
+/// The comments the API lists for the detection whose clip is `file`.
+async fn api_thread(state: &AppState, file: &str) -> Vec<serde_json::Value> {
+    let (status, listed) = api(
+        state,
+        "GET",
+        &format!(
+            "/api/v2/detections/comments?date={DATE}&time={TIME}&sci_name=Dryobates%20villosus&file_name={file}"
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    listed["comments"].as_array().expect("array").clone()
+}
+
+/// Write the comment both gates below are about, on the `x.wav` detection.
+async fn comment_on_x(state: &AppState) {
+    let (status, created) = api(
+        state,
+        "POST",
+        "/api/v2/detections/comments",
+        Some(serde_json::json!({
+            "date": DATE, "time": TIME, "sci_name": SCI, "file_name": "x.wav",
+            "body": "This one is the neighbour's dog."
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+}
+
+/// MSC-05: two sources heard one bird in one second, so two detections share
+/// the date, time and species and differ only in their clip. A comment written
+/// on one is that detection's; the other's thread is empty, through the API and
+/// on the page.
+#[tokio::test]
+async fn a_comment_on_one_sources_detection_is_not_on_the_others() {
+    let (_dir, state) = state();
+    let state = state.with_api_token(ApiToken::new(TOKEN).expect("long enough"));
+    second_source(&state);
+    comment_on_x(&state).await;
+
+    let other = api_thread(&state, "y.wav").await;
+    assert!(
+        other.is_empty(),
+        "the other source's detection must not carry the comment: {other:?}"
+    );
+    let page = get_text(
+        &state,
+        &format!(
+            "/pages/detection-comments?date={DATE}&time={TIME}&sci_name=Dryobates%20villosus&file=y.wav"
+        ),
+    )
+    .await;
+    assert!(
+        !page.contains("neighbour") && page.contains("No comments yet"),
+        "nor its thread on the page: {page}"
+    );
+}
+
+/// The counterpart: the detection that was commented on lists it, through the
+/// API and on the page. Without this, a thread that showed nothing to anyone
+/// would pass the gate above.
+#[tokio::test]
+async fn a_comment_stays_on_the_detection_it_was_written_on() {
+    let (_dir, state) = state();
+    let state = state.with_api_token(ApiToken::new(TOKEN).expect("long enough"));
+    second_source(&state);
+    comment_on_x(&state).await;
+
+    let own = api_thread(&state, "x.wav").await;
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(own[0]["body"], "This one is the neighbour's dog.");
+    let page = get_text(
+        &state,
+        &format!(
+            "/pages/detection-comments?date={DATE}&time={TIME}&sci_name=Dryobates%20villosus&file=x.wav"
+        ),
+    )
+    .await;
+    assert!(page.contains("neighbour"), "{page}");
+}
+
+/// A comment that names a date, time and species two detections share, and not
+/// which, is refused and nothing is written: filing it under either would be a
+/// guess. With one detection the same request is accepted, as
+/// `the_api_writes_what_the_page_reads` shows.
+#[tokio::test]
+async fn a_comment_that_does_not_say_which_of_two_detections_is_refused() {
+    let (_dir, state) = state();
+    let state = state.with_api_token(ApiToken::new(TOKEN).expect("long enough"));
+    second_source(&state);
+
+    let (status, body) = api(
+        &state,
+        "POST",
+        "/api/v2/detections/comments",
+        Some(serde_json::json!({
+            "date": DATE, "time": TIME, "sci_name": SCI, "body": "which one?"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(api_thread(&state, "x.wav").await.is_empty());
+    assert!(api_thread(&state, "y.wav").await.is_empty());
 }

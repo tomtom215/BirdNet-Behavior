@@ -70,6 +70,7 @@ task-panic	crates/birdnet-web/src/routes/admin/system_controls/service.rs	servic
 legit-zero	crates/birdnet-web/src/routes/analysis_runs.rs	get_run	unwrap_or	birdnet_db::sqlite::detection_counts_by_run(conn)? .get(&id) .copied() .unwrap_or(0)
 task-panic	crates/birdnet-web/src/routes/analytics.rs	analytics_status	unwrap_or_else	tokio::task::spawn_blocking(move || { state.with_analytics_read(|db| {
 handled	crates/birdnet-web/src/routes/api_write.rs	delete	match-err	match state.delete_detection(&key.row()) { Err .. }
+handled	crates/birdnet-web/src/routes/api_write.rs	comment_clip	match-err	match crate::state::review_clip(conn, row) { Err .. }
 handled	crates/birdnet-web/src/routes/api_write.rs	delete_comment	match-err	match state.with_db(|conn| birdnet_db::detection_comments::delete(conn, key.id)) { Err .. }
 handled	crates/birdnet-web/src/routes/api_write.rs	read_settings	match-err	match crate::routes::admin::settings::handler::load_all_settings(state) { Err .. }
 handled	crates/birdnet-web/src/routes/api_write.rs	system_network	match-err	match tokio::task::spawn_blocking(crate::system_info::network_interfaces).await { Err .. }
@@ -113,8 +114,10 @@ decoration	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	species_lis
 decoration	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	top_species_partial	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default()
 decoration	crates/birdnet-web/src/routes/pages/dashboard/stats.rs	stats_partial	unwrap_or_default	birdnet_db::sqlite::daily_counts(conn, 12).unwrap_or_default()
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	delete_comment	match-err	match state.with_db(|conn| detection_comments::delete(conn, id)) { Err .. }
-handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	match-err	match state.with_read_db(|conn| detection_comments::list(conn, date, time, sci_name)) { Err .. }
-handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || render_thread(&st, &date, &time, &sci_name, None)) .await .unwrap_or_else(
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	add_comment	match-err	match thread_clip(conn, &row) { Err .. }
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	match-err	match thread_clip(conn, row).map_err(|e| e.to_string())? { Err .. }
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_clip	match-err	match crate::state::review_clip(conn, row)? { Err .. }
+handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || render_thread(&st, &row, None)) .await .unwrap_or_else(|_| render_error("T
 decoration	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	unwrap_or_default	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
 handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	match-err	match super::model_evidence::read(conn, &key) { Err .. }
 task-panic	crates/birdnet-web/src/routes/pages/health.rs	station_health_line_partial	unwrap_or_default	tokio::task::spawn_blocking(move || {

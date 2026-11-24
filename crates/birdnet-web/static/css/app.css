@@ -4320,6 +4320,7 @@ a.dr-row-name  { font-weight: var(--fw-semibold); color: var(--fg); }
 .dc-head        { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
 .dc-author      { font-weight: var(--fw-semibold); }
 .dc-at          { font-size: var(--fs-md); }
+.dc-shared      { display: block; margin: 0.25rem 0 0; font-size: var(--fs-sm); }
 .dc-del         { margin-left: auto; }
 .dc-del-btn     { font-size: var(--fs-sm); padding: 0.1rem 0.45rem; }
 /* pre-wrap so a reviewer's line breaks survive; break-word so a pasted URL

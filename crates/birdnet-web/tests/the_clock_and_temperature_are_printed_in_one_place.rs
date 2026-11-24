@@ -170,7 +170,7 @@ const EXEMPT: &[(&str, &str, &str)] = &[
     ),
     (
         "routes/pages/detection_comments.rs",
-        "escape_html(time)",
+        "escape_html(&row.time)",
         "an identity carried in a form field, not shown",
     ),
     (

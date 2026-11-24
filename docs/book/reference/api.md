@@ -504,6 +504,15 @@ curl "http://localhost:8502/api/v2/detections/comments?date=2026-09-03&time=06:1
   -H "Authorization: Bearer $BNB_API_TOKEN"
 ```
 
+A thread is one detection's. Both calls take an optional `file_name`, the
+detection's clip (`""` for one without a clip), as the review endpoint does:
+when two sources heard the bird in the same second, the date, time and name
+match both, and a call without `file_name` is refused with `409` rather than
+filed under a guess. Without it, a call that matches no detection is a `404`.
+Each comment carries its `file_name`; it is `null` for a comment written before
+threads were kept per clip on a second several detections share, and such a
+comment is listed on each of them.
+
 ### Batches
 
 One round trip instead of forty, for the case that actually comes up: triaging

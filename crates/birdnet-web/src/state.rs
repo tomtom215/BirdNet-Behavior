@@ -2281,7 +2281,10 @@ impl RowRef {
     }
 
     /// The database key for this row with `file` as its clip.
-    fn key_with<'a>(&'a self, file: Option<&'a str>) -> birdnet_db::sqlite::DetectionKey<'a> {
+    pub(crate) fn key_with<'a>(
+        &'a self,
+        file: Option<&'a str>,
+    ) -> birdnet_db::sqlite::DetectionKey<'a> {
         birdnet_db::sqlite::DetectionKey {
             date: &self.date,
             time: &self.time,
@@ -2314,7 +2317,9 @@ pub enum ReviewOutcome {
 
 /// The clip of the detection `row` is about: as the caller named it, or the one
 /// clip its date, time and species leave. `Err` says why it cannot be told.
-fn review_clip(
+///
+/// Reviews and comments both name a detection this way.
+pub(crate) fn review_clip(
     conn: &Connection,
     row: &RowRef,
 ) -> Result<Result<Option<String>, ReviewOutcome>, birdnet_db::sqlite::DbError> {

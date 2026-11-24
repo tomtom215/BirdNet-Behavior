@@ -20,13 +20,23 @@
 //!
 //! # Identity
 //!
-//! A detection is the `(date, time, sci_name)` triple, the same key
-//! `detection_reviews` and the detail page already use. `detections` has no
-//! primary key of its own to point at.
+//! A detection is its [`DetectionKey`]: date, time, species and clip, the key
+//! `detection_reviews` has used since migration 59. `detections` has no primary
+//! key of its own to point at, and the date, time and species alone name one
+//! detection *per source* that heard the bird in that second, so a comment
+//! keyed on them was listed on every microphone's detection (MSC-05).
+//!
+//! A comment written before migration 62 whose date, time and species named
+//! more than one detection (or none) has no clip (`file_name` NULL). Which
+//! detection its author meant cannot be known, so it is listed on every
+//! detection of that second, as it always was; [`DetectionComment::file_name`]
+//! says so, and a reader can show it.
 
 use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension as _, params};
+
+use crate::sqlite::DetectionKey;
 
 /// The longest comment accepted, in characters.
 ///
@@ -81,6 +91,11 @@ pub struct DetectionComment {
     pub time: String,
     /// The detection's scientific name.
     pub sci_name: String,
+    /// The detection's clip, compared as `DetectionKey` compares it: `""` for a
+    /// detection that has no clip. `None` for a comment written before comments
+    /// named a clip (migration 62) on a second more than one detection shares:
+    /// it is listed on each of them.
+    pub file_name: Option<String>,
     /// The account that wrote it, or `None` once that account is deleted.
     pub user_id: Option<i64>,
     /// The author's name **as it was when the comment was written**, which is
@@ -101,6 +116,10 @@ pub struct NewComment<'a> {
     pub time: &'a str,
     /// The detection's scientific name.
     pub sci_name: &'a str,
+    /// The detection's clip, as in [`DetectionKey`]: `None` for a detection
+    /// that has no clip. Two sources that heard one bird in one second differ
+    /// only in this.
+    pub file_name: Option<&'a str>,
     /// The account writing it, if there is one.
     pub user_id: Option<i64>,
     /// The name to record against it.
@@ -148,12 +167,13 @@ pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionCommen
     }
 
     conn.execute(
-        "INSERT INTO detection_comments (date, time, sci_name, user_id, author, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO detection_comments (date, time, sci_name, file_name, user_id, author, body)
+         VALUES (?1, ?2, ?3, COALESCE(?4, ''), ?5, ?6, ?7)",
         params![
             new.date.trim(),
             new.time.trim(),
             new.sci_name.trim(),
+            new.file_name,
             new.user_id,
             author,
             body
@@ -172,7 +192,7 @@ pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionCommen
 /// [`CommentError::Sqlite`] if the query fails.
 pub fn get(conn: &Connection, id: i64) -> Result<Option<DetectionComment>, CommentError> {
     conn.query_row(
-        "SELECT id, date, time, sci_name, user_id, author, body, at
+        "SELECT id, date, time, sci_name, file_name, user_id, author, body, at
          FROM detection_comments WHERE id = ?1",
         params![id],
         row_to_comment,
@@ -186,25 +206,32 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<DetectionComment>, Comme
 /// A thread reads forward: the reply has to come after the thing it answers, or
 /// the disagreement the table exists to record is unreadable.
 ///
+/// The detection is `key`, clip included: a comment on another source's
+/// detection of the same bird in the same second is not listed. A legacy
+/// comment that names no clip (see the module docs) is listed on every
+/// detection of its second, with `file_name: None`.
+///
 /// # Errors
 ///
 /// [`CommentError::Sqlite`] if the query fails.
 pub fn list(
     conn: &Connection,
-    date: &str,
-    time: &str,
-    sci_name: &str,
+    key: &DetectionKey<'_>,
 ) -> Result<Vec<DetectionComment>, CommentError> {
     let mut stmt = conn.prepare(
-        "SELECT id, date, time, sci_name, user_id, author, body, at
+        "SELECT id, date, time, sci_name, file_name, user_id, author, body, at
          FROM detection_comments
          WHERE date = ?1 AND time = ?2 AND sci_name = ?3
+           AND (file_name = COALESCE(?4, '') OR file_name IS NULL)
          ORDER BY id ASC",
     )?;
     // `at` is whole seconds, so two comments posted in the same second share
     // it; `id` is the only monotonic ordering the table has.
     let rows = stmt
-        .query_map(params![date, time, sci_name], row_to_comment)?
+        .query_map(
+            params![key.date, key.time, key.sci_name, key.file_name],
+            row_to_comment,
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -232,10 +259,11 @@ fn row_to_comment(row: &rusqlite::Row<'_>) -> rusqlite::Result<DetectionComment>
         date: row.get(1)?,
         time: row.get(2)?,
         sci_name: row.get(3)?,
-        user_id: row.get(4)?,
-        author: row.get(5)?,
-        body: row.get(6)?,
-        at: row.get(7)?,
+        file_name: row.get(4)?,
+        user_id: row.get(5)?,
+        author: row.get(6)?,
+        body: row.get(7)?,
+        at: row.get(8)?,
     })
 }
 
@@ -257,6 +285,26 @@ mod tests {
         conn
     }
 
+    /// The key of the detection `write` comments on: clip `a.wav`.
+    const fn key<'a>(date: &'a str, time: &'a str, sci_name: &'a str) -> DetectionKey<'a> {
+        DetectionKey {
+            date,
+            time,
+            sci_name,
+            file_name: Some("a.wav"),
+        }
+    }
+
+    /// The same second and species as `key`, with clip `clip`.
+    const fn clip_key(clip: Option<&str>) -> DetectionKey<'_> {
+        DetectionKey {
+            date: "2026-05-01",
+            time: "06:00:00",
+            sci_name: "Dryobates villosus",
+            file_name: clip,
+        }
+    }
+
     fn write(conn: &Connection, author: &str, body: &str) -> DetectionComment {
         insert(
             conn,
@@ -264,6 +312,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some("a.wav"),
                 user_id: None,
                 author,
                 body,
@@ -291,7 +340,7 @@ mod tests {
             "Agreed on length, but the spectrogram is Hairy.",
         );
 
-        let all = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let all = list(&conn, &key("2026-05-01", "06:00:00", "Dryobates villosus")).expect("list");
         assert_eq!(all.len(), 2, "both must survive: {all:?}");
         assert_eq!(
             all[0].author, "ada",
@@ -320,6 +369,7 @@ mod tests {
             ("date", "2020-01-01"),
             ("time", "23:59:59"),
             ("sci_name", "Strix varia"),
+            ("file_name", "b.wav"),
             ("at", "2020-01-01 00:00:00"),
             ("id", "999"),
         ] {
@@ -353,7 +403,7 @@ mod tests {
         assert_eq!(removed.id, c.id);
         assert!(get(&conn, c.id).expect("get").is_none());
         assert!(
-            list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus")
+            list(&conn, &key("2026-05-01", "06:00:00", "Dryobates villosus"))
                 .expect("list")
                 .is_empty()
         );
@@ -384,6 +434,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some("a.wav"),
                 user_id: Some(uid),
                 author: "ada",
                 body: "confirmed against the reference recording",
@@ -414,6 +465,7 @@ mod tests {
                     date: "2026-05-01",
                     time: "06:00:00",
                     sci_name: "Dryobates villosus",
+                    file_name: Some("a.wav"),
                     user_id: None,
                     author: "ada",
                     body,
@@ -437,6 +489,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some("a.wav"),
                 user_id: None,
                 author: "ada",
                 body: &over,
@@ -478,6 +531,7 @@ mod tests {
                     date,
                     time,
                     sci_name,
+                    file_name: Some("a.wav"),
                     user_id: None,
                     author,
                     body: "a real comment",
@@ -504,6 +558,7 @@ mod tests {
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Strix varia",
+                file_name: Some("a.wav"),
                 user_id: None,
                 author: "ada",
                 body: "on the owl",
@@ -516,6 +571,7 @@ mod tests {
                 date: "2026-05-02",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
+                file_name: Some("a.wav"),
                 user_id: None,
                 author: "ada",
                 body: "next day, same bird",
@@ -523,16 +579,57 @@ mod tests {
         )
         .expect("insert");
 
-        let here = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let here = list(&conn, &key("2026-05-01", "06:00:00", "Dryobates villosus")).expect("list");
         assert_eq!(here.len(), 1, "{here:?}");
         assert_eq!(here[0].body, "on the woodpecker");
 
         assert!(
-            list(&conn, "2026-05-01", "07:00:00", "Dryobates villosus")
+            list(&conn, &key("2026-05-01", "07:00:00", "Dryobates villosus"))
                 .expect("list")
                 .is_empty(),
             "a different time is a different detection"
         );
+    }
+
+    /// MSC-05 at the table: two sources heard one bird in one second, so two
+    /// detections share the date, time and species and differ in their clip. A
+    /// comment on one is not listed on the other, and is on its own.
+    #[test]
+    fn a_comment_on_one_clip_is_not_listed_on_another_clip_of_the_same_second() {
+        let conn = db();
+        write(&conn, "ada", "the garden mic: a dog");
+        assert!(
+            list(&conn, &clip_key(Some("b.wav")))
+                .expect("list")
+                .is_empty(),
+            "the other clip's thread is empty"
+        );
+        let own = list(&conn, &clip_key(Some("a.wav"))).expect("list");
+        assert_eq!(own.len(), 1, "{own:?}");
+        assert_eq!(own[0].file_name.as_deref(), Some("a.wav"));
+        assert!(
+            list(&conn, &clip_key(None)).expect("list").is_empty(),
+            "nor is a detection with no clip the same as one with a clip"
+        );
+    }
+
+    /// A comment from before migration 62 that could not be given one detection
+    /// keeps NULL, and is listed on every detection of its second, as it was,
+    /// marked as such.
+    #[test]
+    fn a_legacy_comment_without_a_clip_is_listed_on_every_detection_of_its_second() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO detection_comments (date, time, sci_name, file_name, author, body)
+             VALUES ('2026-05-01', '06:00:00', 'Dryobates villosus', NULL, 'ada', 'old note')",
+            [],
+        )
+        .expect("legacy row");
+        for clip in [Some("a.wav"), Some("b.wav"), None] {
+            let listed = list(&conn, &clip_key(clip)).expect("list");
+            assert_eq!(listed.len(), 1, "{clip:?}: {listed:?}");
+            assert_eq!(listed[0].file_name, None, "and says it names no clip");
+        }
     }
 
     /// The body is stored trimmed, so the rendered thread does not carry a
@@ -544,7 +641,7 @@ mod tests {
             write(&conn, "  ada  ", "  spaced out \n").body,
             "spaced out"
         );
-        let c = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let c = list(&conn, &key("2026-05-01", "06:00:00", "Dryobates villosus")).expect("list");
         assert_eq!(c[0].author, "ada");
     }
 }

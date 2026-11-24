@@ -2714,6 +2714,65 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
         CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
     },
+    Migration {
+        version: 62,
+        description: "A comment names one detection, by its clip; comments that name more than one stay on all of them",
+        // ## Why (MSC-05)
+        //
+        // `detection_comments` (migration 49) named a detection by date, time
+        // and species. Two sources that hear one bird in one second write two
+        // detections that differ only in their clip, so a note written on one —
+        // "this is the neighbour's dog" on the garden microphone's row — was
+        // listed on the other, which may be a real owl. Reviews had the same
+        // shape and migration 59 moved them to the clip; this does the same for
+        // comments.
+        //
+        // ## The key
+        //
+        // `file_name` is the detection's clip as `DetectionKey` compares it:
+        // `COALESCE(File_Name, '')`, so `''` is a detection that has no clip.
+        // NULL means something else: a comment written before this migration
+        // that cannot be given to one detection.
+        //
+        // ## What a legacy comment becomes
+        //
+        // Counted by distinct clip, as migration 59 counts reviews:
+        //
+        // * **exactly one** detection has its date, time and species: the
+        //   comment is that detection's, and is given its clip;
+        // * **more than one**, or **none**: it keeps NULL and is listed on every
+        //   detection of that second, exactly as it was before. Which one its
+        //   author meant cannot be known, and a comment, unlike a verdict,
+        //   changes no count, so showing it where it always was is the honest
+        //   state rather than a guess or a deletion.
+        //
+        // No comment is deleted, no body or author changes, and no other table
+        // is touched, so this is not a history rewrite and takes no backup.
+        //
+        // ## The trigger
+        //
+        // Dropped and recreated around the backfill so that `file_name` joins
+        // the columns a comment can never have rewritten: a comment moved to
+        // another detection is as much a rewrite as an edited body. `user_id`
+        // stays out of the list for the reason migration 49 gives.
+        up_sql: "DROP TRIGGER IF EXISTS detection_comments_are_append_only;
+        ALTER TABLE detection_comments ADD COLUMN file_name TEXT;
+        UPDATE detection_comments
+           SET file_name = (SELECT MIN(COALESCE(d.File_Name, '')) FROM detections d
+                             WHERE d.Date = detection_comments.date
+                               AND d.Time = detection_comments.time
+                               AND d.Sci_Name = detection_comments.sci_name)
+         WHERE (SELECT COUNT(DISTINCT COALESCE(d.File_Name, '')) FROM detections d
+                 WHERE d.Date = detection_comments.date
+                   AND d.Time = detection_comments.time
+                   AND d.Sci_Name = detection_comments.sci_name) = 1;
+        CREATE TRIGGER detection_comments_are_append_only
+            BEFORE UPDATE OF id, date, time, sci_name, file_name, author, body, at
+            ON detection_comments
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -4559,6 +4618,64 @@ mod tests {
         };
         assert_eq!(insert("/tmp/b.wav"), 1, "another recording is another row");
         assert_eq!(insert("/tmp/a.wav"), 0, "the same recording is not");
+    }
+
+    /// Migration 62's backfill: a legacy comment whose date, time and species
+    /// name one detection is given that detection's clip; one whose triple
+    /// names two keeps NULL, and so stays on both, as before; one whose
+    /// detection has no clip gets the empty clip the key compares it by.
+    #[test]
+    fn migration_62_keys_a_comment_only_where_one_detection_is_named() {
+        let conn = memory_db_at_version(61);
+        for (time, clip) in [
+            ("06:00:00", Some("a.wav")),
+            ("07:00:00", Some("b.wav")),
+            ("07:00:00", Some("c.wav")),
+            ("08:00:00", None),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-09-08', ?1, 'Strix aluco', 'Tawny Owl', 0.9, ?2)",
+                rusqlite::params![time, clip],
+            )
+            .unwrap();
+        }
+        for time in ["06:00:00", "07:00:00", "08:00:00", "09:00:00"] {
+            conn.execute(
+                "INSERT INTO detection_comments (date, time, sci_name, author, body)
+                 VALUES ('2026-09-08', ?1, 'Strix aluco', 'ada', 'a note')",
+                [time],
+            )
+            .unwrap();
+        }
+
+        migrate(&conn).unwrap();
+
+        let keyed: Vec<(String, Option<String>)> = conn
+            .prepare("SELECT time, file_name FROM detection_comments ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            keyed,
+            [
+                ("06:00:00".to_owned(), Some("a.wav".to_owned())),
+                ("07:00:00".to_owned(), None),
+                ("08:00:00".to_owned(), Some(String::new())),
+                ("09:00:00".to_owned(), None),
+            ],
+            "one detection: its clip; two: NULL, not a guess; a detection without a \
+             clip: ''; no detection: NULL"
+        );
+        let err = conn
+            .execute(
+                "UPDATE detection_comments SET file_name = 'b.wav' WHERE time = '07:00:00'",
+                [],
+            )
+            .expect_err("the recreated trigger covers the new column");
+        assert!(err.to_string().contains("append-only"), "{err}");
     }
 
     /// Backups sitting beside `dir`'s database.

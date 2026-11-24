@@ -116,6 +116,13 @@ Two things follow from that, and both are deliberate:
   comment deleted because of what it said must not survive in the log that
   recorded its deletion.
 
+A thread belongs to one detection, clip and all. When two microphones hear the
+same bird in the same second the station keeps two detections, and a note on one
+("that's the neighbour's dog") does not appear on the other. A comment written
+before threads were kept per clip is attached to its detection on upgrade when
+only one detection matches it; where several do, which one was meant cannot be
+known, so it is still shown on each of them, marked as such.
+
 Comments are up to 2 000 characters, and writing one needs an admin sign-in —
 the same gate as confirming or rejecting. Anyone who can see the detection can
 read the thread.

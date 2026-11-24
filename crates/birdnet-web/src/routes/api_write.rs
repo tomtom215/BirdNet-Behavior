@@ -218,7 +218,42 @@ struct CommentBody {
     date: String,
     time: String,
     sci_name: String,
+    /// The detection's clip, as on the review endpoint: absent when the caller
+    /// does not say (accepted only if the date, time and name leave one
+    /// detection), `""` for a detection with no clip.
+    #[serde(default)]
+    file_name: Option<String>,
     body: String,
+}
+
+impl CommentBody {
+    fn row(&self) -> crate::state::RowRef {
+        crate::state::RowRef {
+            date: self.date.clone(),
+            time: self.time.clone(),
+            sci_name: self.sci_name.clone(),
+            file_name: self.file_name.clone(),
+        }
+    }
+}
+
+/// The clip of the detection a comment request names, or the refusal to send.
+///
+/// A comment names one detection (MSC-05): another source's detection of the
+/// same bird in the same second is not the same thread, so a request that
+/// leaves more than one is refused rather than filed under a guess.
+fn comment_clip(
+    conn: &rusqlite::Connection,
+    row: &crate::state::RowRef,
+) -> Result<Option<String>, (StatusCode, Json<Value>)> {
+    match crate::state::review_clip(conn, row) {
+        Ok(Ok(clip)) => Ok(clip),
+        Ok(Err(crate::state::ReviewOutcome::Ambiguous { detections })) => {
+            Err(ambiguous(detections))
+        }
+        Ok(Err(_)) => Err(not_found()),
+        Err(e) => Err(server_error(&e)),
+    }
 }
 
 /// The comment to remove.
@@ -239,8 +274,11 @@ async fn list_comments(
             if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
                 return e;
             }
+            let row = key.row();
             let comments = state.with_read_db(|conn| {
-                birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
+                let clip = comment_clip(conn, &row)?;
+                birdnet_db::detection_comments::list(conn, &row.key_with(clip.as_deref()))
+                    .map_err(|e| comment_error(&e))
             });
             match comments {
                 Ok(comments) => (
@@ -250,7 +288,7 @@ async fn list_comments(
                         "comments": comments.iter().map(comment_json).collect::<Vec<_>>(),
                     })),
                 ),
-                Err(e) => comment_error(&e),
+                Err(refused) => refused,
             }
         })
         .await
@@ -265,18 +303,22 @@ async fn add_comment(
             if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
                 return e;
             }
+            let row = body.row();
             let written = state.with_db(|conn| {
+                let clip = comment_clip(conn, &row)?;
                 birdnet_db::detection_comments::insert(
                     conn,
                     &birdnet_db::detection_comments::NewComment {
                         date: &body.date,
                         time: &body.time,
                         sci_name: &body.sci_name,
+                        file_name: clip.as_deref(),
                         user_id: None,
                         author: API_AUTHOR,
                         body: &body.body,
                     },
                 )
+                .map_err(|e| comment_error(&e))
             });
             match written {
                 Ok(comment) => {
@@ -289,7 +331,7 @@ async fn add_comment(
                     );
                     (StatusCode::CREATED, Json(comment_json(&comment)))
                 }
-                Err(e) => comment_error(&e),
+                Err(refused) => refused,
             }
         })
         .await
@@ -336,6 +378,9 @@ fn comment_json(c: &birdnet_db::detection_comments::DetectionComment) -> Value {
         "date": c.date,
         "time": c.time,
         "sci_name": c.sci_name,
+        // `null` for a comment written before comments named a clip, on a
+        // second more than one detection shares: it is on each of them.
+        "file_name": c.file_name,
         "author": c.author,
         "body": c.body,
         "at": c.at,

@@ -96,7 +96,10 @@ async fn a_feed_that_could_not_read_is_unavailable_not_empty() {
 
 #[tokio::test]
 async fn a_detections_comments_that_could_not_be_read_are_not_none() {
-    let uri = "/pages/detection-comments?date=2026-05-01&time=06:10:00&sci_name=Turdus+merula";
+    // With its clip, as the detail page asks: the fixture holds no detection
+    // for the thread to be resolved against, and the read is what is tested.
+    let uri =
+        "/pages/detection-comments?date=2026-05-01&time=06:10:00&sci_name=Turdus+merula&file=a.wav";
     let (_, body) = call(&station(&["detection_comments"]), Method::GET, uri).await;
     assert!(!body.contains("No comments yet"), "{body}");
     assert!(body.contains("couldn't load"), "{body}");
