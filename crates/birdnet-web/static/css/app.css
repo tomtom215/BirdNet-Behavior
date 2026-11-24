@@ -3871,7 +3871,9 @@ a.spp-inherit    { color: inherit; }
 .sp-table td { padding: 9px var(--space-10); border-bottom: var(--bw) solid var(--hairline); vertical-align: middle; }
 .sp-table tbody tr { cursor: pointer; }
 .sp-table tbody tr:hover { background: var(--surface-2); }
-.sp-rank { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-4); width: 30px; }
+/* A rank is one number on one line: 30px less the cell's padding left 10px, and "10" broke into
+   "1" over "0" on a desktop (UIR-06; layout.mjs's `wrap` check). */
+.sp-rank { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-4); width: auto; min-width: 3ch; white-space: nowrap; text-align: right; }
 .sp-cell { display: flex; align-items: center; gap: 11px; min-width: 0; text-decoration: none; color: inherit; }
 .sp-cell-tx { min-width: 0; display: flex; flex-direction: column; }
 .sp-nm { font-weight: var(--fw-medium); font-size: var(--fs-base); }
@@ -5347,11 +5349,14 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .rc-iact:hover { background: var(--surface-2); color: var(--fg); }
 .rc-lock.on { color: var(--moss-ink); }
 .rc-del:hover { color: var(--rare); }
+/* Play is the row's primary action and is always drawn: the whole set used to fade in on hover,
+   so on a desktop the page called "Listen in" showed no way to listen until the pointer crossed
+   a row (UIR-10; interactions.mjs). The secondary actions still wait for hover or focus. */
 @media (hover: hover) {
-  .rc-acts { opacity: 0; transition: opacity var(--dur-fast); }
-  .rc-row:hover .rc-acts, .rc-row:focus-within .rc-acts { opacity: 1; }
+  .rc-acts > :not(.rc-play) { opacity: 0; transition: opacity var(--dur-fast); }
+  .rc-row:hover .rc-acts > *, .rc-row:focus-within .rc-acts > * { opacity: 1; }
 }
-@media (prefers-reduced-motion: reduce) { .rc-acts { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .rc-acts > * { transition: none; } }
 
 /* Now-playing dock — a head card that floats up to a fixed bar on scroll */
 .rc-hp { background: var(--surface); border: var(--bw) solid var(--border-2); border-radius: var(--r-lg); box-shadow: var(--shadow-md); padding: var(--space-14) var(--space-16); }
@@ -6275,7 +6280,18 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .rt-bar i { display: block; height: 100%; background: var(--seq-moss-5); border-radius: var(--r-pill); }
 .rt-wk { font-size: var(--fs-xs); color: var(--fg-2); }
 .rt-cell { min-width: 36px; text-align: center; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--c, var(--chart-track)); border-radius: var(--r-xs); }
-.rt-table td.rt-cell { text-align: center; }
+/* `.rt-table td { background: none }` above is (0,1,1) and beat `.rt-cell`'s fill (0,1,0), so every
+   cell painted transparent under a seven-step key nothing used (UIR-03). The fill is set at the
+   table's own specificity. tokens.mjs grades it as painted, in both themes. */
+.rt-table td.rt-cell { text-align: center; background: var(--c, var(--chart-track)); }
+/* The fill runs from the card to the ink, so no one text colour reads on every step: --fg was
+   1.95:1 on the strongest step in light and 1.30:1 in dark (and 4.24:1 on the middle one). A
+   light fill takes the far ink (--sp-ink), a dark fill the page's ground (--bg); which steps are
+   dark differs by theme. tokens.mjs holds every step to 4.5:1. */
+.rt-table td.rt-cell:is(.ck-m1, .ck-m2, .ck-m3, .ck-m4, .ck-m5) { color: var(--sp-ink); }
+.rt-table td.rt-cell:is(.ck-m6, .ck-m7) { color: var(--bg); }
+:root[data-theme="dark"] .rt-table td.rt-cell:is(.ck-m1, .ck-m2, .ck-m3) { color: var(--sp-ink); }
+:root[data-theme="dark"] .rt-table td.rt-cell:is(.ck-m4, .ck-m5, .ck-m6, .ck-m7) { color: var(--bg); }
 .rt-zero { background: var(--chart-track); color: var(--fg-3); }
 .rt-none { color: var(--fg-3); }
 .rt-key { margin-top: var(--space-10); }
@@ -6468,6 +6484,11 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
    ("Remov"); below 520px such a table is a table again and its cells wrap. */
 @media (max-width: 520px) {
   table[data-fits-phone] { display: table; white-space: normal; }
+  /* Trends' full dashboard: four short columns (Unusual days, Peak 15-minute windows) that cut
+     their last column at the card's edge on a 390px phone (UIR-38; layout.mjs's DISCLOSED). */
+  .tsh-row table { display: table; white-space: normal; }
+  .tsh-row th, .tsh-row td { padding-left: var(--space-4); padding-right: var(--space-4); }
+  .tsh-row th { letter-spacing: 0; }
 }
 
 /* ── fixD1: the Data page on a phone ────────────────────────────────────────

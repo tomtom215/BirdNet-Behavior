@@ -24,6 +24,9 @@
 //             `.hint`, the original defect, must not widen the page at all, which
 //             is the stylesheet's job and fails on the CSS before the fix.
 //
+//   wrap      a number in a box too narrow for it, broken over two lines, is reported; the same
+//             number in a box it fits, and prose that wraps, are not.
+//
 //   escape    (second form) a control wider than the `overflow: hidden` box around it is
 //             reported; the same control in a box that scrolls, or one that fits, is not.
 //
@@ -185,6 +188,36 @@ await fresh();
 await plant(boxed('hidden', '150px'));
 const fits = await escaped();
 check(fits.length === 0, `a control that fits its clipping box is not reported (${fits.join(' | ') || 'none'})`);
+
+// wrap: a number broken over two lines (UIR-06, the species list's "1" over "0"). Counterparts:
+// the same number in a box it fits is not reported, and neither is prose that wraps. Planted at
+// the top of `main`, not the end: text below the first screen of a scrolling box is not painted
+// and the gate rightly does not read it.
+const wrapped = async () => (await page.evaluate(inPage)).wrap;
+const plantTop = (text, width) =>
+  page.evaluate(([t, w]) => {
+    const el = document.createElement('p');
+    el.id = 'zz-num';
+    el.textContent = t;
+    Object.assign(el.style, { width: w, overflowWrap: 'anywhere', margin: '0' });
+    document.querySelector('main').prepend(el);
+  }, [text, width]).then(() => page.waitForTimeout(1200)); // `main > *` rises in from opacity 0
+await fresh();
+check((await wrapped()).length === 0, 'precondition: the fresh Today page has no number broken over two lines');
+await plantTop('2026', '12px');
+const broken = await wrapped();
+check(
+  broken.length === 1 && broken[0].includes('p#zz-num') && broken[0].includes('"2026"'),
+  `a number broken over two lines is reported and named (${broken.join(' | ') || 'none'})`,
+);
+await fresh();
+await plantTop('2026', '120px');
+const whole = await wrapped();
+check(whole.length === 0, `the same number in a box it fits is not reported (${whole.join(' | ') || 'none'})`);
+await fresh();
+await plantTop('a sentence long enough to wrap over several lines in a narrow box', '80px');
+const prose = await wrapped();
+check(prose.length === 0, `prose that wraps is not a broken number (${prose.join(' | ') || 'none'})`);
 
 await browser.close();
 if (failed) process.exit(1);

@@ -8,7 +8,7 @@
 // of those shipped, in both themes, with every other gate green, and was found
 // by looking at a rendered page. This reads the same facts from the DOM.
 //
-// Six checks, per route x theme x viewport:
+// Seven checks, per route x theme x viewport:
 //
 //   overlap   two text boxes (not nested, not in a closed <details>, not under
 //             the fixed tab bar) that intersect by more than 3px horizontally
@@ -39,6 +39,13 @@
 //             the labels' real ones: getBBox through the screen transform, so a
 //             name written along a tilted arc is a tilted rectangle, not the
 //             larger upright box that would flag every pair of neighbours.
+//   fit       (DISCLOSED routes only) a table that must be read whole at this width
+//             needs a sideways scroll. See DISCLOSED below.
+//   wrap      a text node that is only digits ("12", "2026", "140") set over more
+//             than one line. A number broken in the middle reads as two numbers:
+//             the species list's ranks 10 to 15 printed as "1" over "0" in a 30px
+//             column at desktop width (UIR-06), and none of the checks above
+//             measures a node against itself.
 //
 // Env:
 //   BASE      base url                       (default http://127.0.0.1:8502)
@@ -77,9 +84,39 @@ const ONLY = process.env.ONLY || '';
 const MIN_ROUTES = Number(process.env.MIN_ROUTES || 30);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Runs in the page. Returns { overlap, squeeze, escape, tiny, svgtext, widen } arrays of strings.
+// Content a reader reaches by opening a disclosure, which `ROUTES` grades closed. Each entry is
+// loaded, every `open` disclosure is opened (its htmx partials load on `toggle`), and the page is
+// graded with all the checks above, plus `fit`: every table matching `mustFit` is read whole at
+// this width, without a sideways scroll in the table or in the box that clips it. Trends' "full
+// analytics dashboard" held two four-column tables that cut their last column at the card's edge
+// on a 390px phone ("How unusual (", and no Busier-or-quieter at all), as a sideways scroll with
+// nothing to say it was there (UIR-38 / N05-01); no route ever opened the disclosure.
+const DISCLOSED = [
+  { name: 'patterns-trends-dashboard', route: '/patterns?tab=trends', open: 'details.pt-disc', mustFit: 'details.pt-disc table' },
+];
+
+// Runs in the page: the tables matching `sel` that need a sideways scroll to be read.
+function unfitTables(sel) {
+  const clipper = (el) => {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (getComputedStyle(p).overflowX !== 'visible') return p;
+    }
+    return document.documentElement;
+  };
+  const tables = [...document.querySelectorAll(sel)].filter((t) => t.getBoundingClientRect().width > 0);
+  const out = [];
+  for (const t of tables) {
+    const head = (t.querySelector('thead') || t).textContent.trim().replace(/\s+/g, ' ').slice(0, 40);
+    const c = clipper(t);
+    if (t.scrollWidth > t.clientWidth + 1) out.push(`table "${head}" needs ${t.scrollWidth}px in ${t.clientWidth}px`);
+    else if (c.scrollWidth > c.clientWidth + 1) out.push(`table "${head}" in ${c.className || c.tagName} needs ${c.scrollWidth}px in ${c.clientWidth}px`);
+  }
+  return { count: tables.length, out };
+}
+
+// Runs in the page. Returns { overlap, squeeze, escape, tiny, svgtext, widen, wrap } arrays of strings.
 function inPage() {
-  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [], widen: [] };
+  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [], widen: [], wrap: [] };
   const sel = (el) =>
     el.tagName.toLowerCase() +
     (el.id ? '#' + el.id : '') +
@@ -127,6 +164,18 @@ function inPage() {
     const rects = visible(el, [...rg.getClientRects()]).filter((r) => r.width > 1 && r.height > 1);
     if (!rects.length) continue;
     items.push({ el, rects, txt: n.nodeValue.trim().slice(0, 36), size: parseFloat(getComputedStyle(el).fontSize) });
+  }
+
+  // wrap: a number broken over two lines. The node's line boxes are its client rects; two
+  // rects whose vertical centres differ by more than half a line are two lines.
+  for (const t of items) {
+    if (res.wrap.length >= 10) break;
+    if (!/^\d+$/.test(t.txt) || t.txt.length < 2) continue;
+    const mids = t.rects.map((r) => (r.top + r.bottom) / 2).sort((a, b) => a - b);
+    const lh = Math.min(...t.rects.map((r) => r.height));
+    let lines = 1;
+    for (let i = 1; i < mids.length; i++) if (mids[i] - mids[i - 1] > lh / 2) lines++;
+    if (lines > 1) res.wrap.push(`${sel(t.el)} "${t.txt}" is set over ${lines} lines in a ${Math.round(t.el.getBoundingClientRect().width)}px box`);
   }
 
   // overlap
@@ -387,6 +436,33 @@ async function main() {
           problems.push(`${key}  error: ${String(err).slice(0, 160)}`);
         }
       }
+      for (const d of DISCLOSED) {
+        if (ONLY && !d.name.includes(ONLY)) continue;
+        const key = `${d.name}__${theme}__${vp}`;
+        try {
+          await page.goto(BASE + d.route, { waitUntil: 'domcontentloaded', timeout: 25000 });
+          await page.waitForLoadState('networkidle', { timeout: 9000 }).catch(() => {});
+          const opened = await page.evaluate((sel) => {
+            const all = [...document.querySelectorAll(sel)];
+            for (const el of all) el.open = true;
+            return all.length;
+          }, d.open);
+          await page.waitForLoadState('networkidle', { timeout: 9000 }).catch(() => {});
+          await sleep(1500);
+          const found = await page.evaluate(inPage);
+          const fit = await page.evaluate(unfitTables, d.mustFit);
+          found.fit = fit.out;
+          // A disclosure that is not there, or that loaded no table, graded nothing.
+          if (!opened || !fit.count) found.fit.push(`opened ${opened} disclosure(s) and found ${fit.count} table(s) matching ${d.mustFit}`);
+          graded++;
+          for (const kind of Object.keys(found)) {
+            for (const f of found[kind]) problems.push(`${key}  ${kind}: ${f}`);
+          }
+          process.stdout.write(`${Object.values(found).some((a) => a.length) ? '! ' : '. '}${key}\n`);
+        } catch (err) {
+          problems.push(`${key}  error: ${String(err).slice(0, 160)}`);
+        }
+      }
       await context.close();
     }
   }
@@ -401,7 +477,7 @@ async function main() {
     for (const p of problems) console.error('  ' + p);
     process.exitCode = 1;
   } else {
-    console.log('layout: no overlaps, squeezed columns, escaping controls, sub-9px text, colliding chart labels or page wider than the screen.');
+    console.log('layout: no overlaps, squeezed columns, escaping controls, sub-9px text, colliding chart labels, numbers broken over two lines or page wider than the screen.');
   }
 }
 
