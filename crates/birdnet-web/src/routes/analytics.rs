@@ -985,6 +985,13 @@ async fn abundance(
 /// an occupancy, which is why `detected_days` (the distinct days with a
 /// detection) comes beside it.
 ///
+/// The first and last detection are the extremes, which one stray detection
+/// moves. `arrival_q05` and `departure_q95` are the 5th and 95th percentiles
+/// of the detection days, and `effort_gap_before_arrival` says whether the
+/// station failed to record listening on any of the 14 days before that
+/// arrival (null when its listening record starts later); see
+/// `phenology_timing_sql`.
+///
 /// A resident or overwintering species reads "arrived 1 January, departed
 /// 31 December" in a calendar-year window; the query that flags those
 /// (`year_crossing`) is `migration_window_sql`, which this route does not call.

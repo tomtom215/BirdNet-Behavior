@@ -4871,7 +4871,7 @@
           "analytics"
         ],
         "summary": "Species phenology: first and last detection per year",
-        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. `first_detection` and `last_detection` are the extremes, so one stray (or false) detection moves them; `arrival_q05` and `departure_q95` are the 5th and 95th percentiles of the distinct days the species was detected that year (an actual detection day; with twenty or fewer detection days the 5th percentile is the first day, and with nineteen or fewer the 95th is the last). `effort_gap_before_arrival` is true when any of the 14 days before `arrival_q05` has no recorded listening, false when all of them have some, and null when the station's listening record begins after it. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
         "operationId": "analyticsPhenology",
         "parameters": [
           {
@@ -4943,7 +4943,12 @@
                           "first_doy",
                           "last_doy",
                           "presence_days",
-                          "detected_days"
+                          "detected_days",
+                          "arrival_q05",
+                          "arrival_q05_doy",
+                          "departure_q95",
+                          "departure_q95_doy",
+                          "effort_gap_before_arrival"
                         ],
                         "properties": {
                           "species": {
@@ -4983,6 +4988,35 @@
                           "detected_days": {
                             "type": "integer",
                             "description": "Distinct days it was detected."
+                          },
+                          "arrival_q05": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "5th percentile of the distinct days it was detected that year: an arrival a single stray detection does not move."
+                          },
+                          "arrival_q05_doy": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `arrival_q05` falls on."
+                          },
+                          "departure_q95": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "95th percentile of the distinct days it was detected that year."
+                          },
+                          "departure_q95_doy": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "Day of the common 365-day year `departure_q95` falls on."
+                          },
+                          "effort_gap_before_arrival": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "Whether a day in the 14 before `arrival_q05` has no recorded listening, so the arrival may only be the first day the station could hear it; null when the listening record begins after `arrival_q05`."
                           }
                         }
                       }
