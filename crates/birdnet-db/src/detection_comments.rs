@@ -20,9 +20,13 @@
 //!
 //! # Identity
 //!
-//! A detection is the `(date, time, sci_name)` triple, the same key
-//! `detection_reviews` and the detail page already use. `detections` has no
-//! primary key of its own to point at.
+//! A detection is `(date, time, sci_name, file_name)`, the key
+//! `detection_reviews` uses: two sources that heard one species in one second
+//! are two detections, and a comment on one is not on the other (MSC-05,
+//! migration 61). `file_name` is `''` for a detection with no clip. A comment
+//! from before migration 61 whose second named more than one detection has
+//! `file_name` NULL: it is listed with every detection of that second, and
+//! [`DetectionComment::file_name`] lets the page say so.
 
 use std::fmt;
 
@@ -81,6 +85,10 @@ pub struct DetectionComment {
     pub time: String,
     /// The detection's scientific name.
     pub sci_name: String,
+    /// The detection's clip (`""` for one with none), or `None` for a comment
+    /// written before comments were kept per recording on a second that
+    /// several detections share.
+    pub file_name: Option<String>,
     /// The account that wrote it, or `None` once that account is deleted.
     pub user_id: Option<i64>,
     /// The author's name **as it was when the comment was written**, which is
@@ -101,6 +109,9 @@ pub struct NewComment<'a> {
     pub time: &'a str,
     /// The detection's scientific name.
     pub sci_name: &'a str,
+    /// The detection's clip (`""` for one with none). `None` leaves the comment
+    /// on every detection of that second; callers resolve it first.
+    pub file_name: Option<&'a str>,
     /// The account writing it, if there is one.
     pub user_id: Option<i64>,
     /// The name to record against it.
@@ -148,12 +159,13 @@ pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionCommen
     }
 
     conn.execute(
-        "INSERT INTO detection_comments (date, time, sci_name, user_id, author, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO detection_comments (date, time, sci_name, file_name, user_id, author, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             new.date.trim(),
             new.time.trim(),
             new.sci_name.trim(),
+            new.file_name,
             new.user_id,
             author,
             body
@@ -172,7 +184,7 @@ pub fn insert(conn: &Connection, new: &NewComment<'_>) -> Result<DetectionCommen
 /// [`CommentError::Sqlite`] if the query fails.
 pub fn get(conn: &Connection, id: i64) -> Result<Option<DetectionComment>, CommentError> {
     conn.query_row(
-        "SELECT id, date, time, sci_name, user_id, author, body, at
+        "SELECT id, date, time, sci_name, user_id, author, body, at, file_name
          FROM detection_comments WHERE id = ?1",
         params![id],
         row_to_comment,
@@ -186,6 +198,9 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<DetectionComment>, Comme
 /// A thread reads forward: the reply has to come after the thing it answers, or
 /// the disagreement the table exists to record is unreadable.
 ///
+/// With `file_name`, the comments on that recording and the unattached ones
+/// from before migration 61; without it, every comment on that second.
+///
 /// # Errors
 ///
 /// [`CommentError::Sqlite`] if the query fails.
@@ -194,17 +209,19 @@ pub fn list(
     date: &str,
     time: &str,
     sci_name: &str,
+    file_name: Option<&str>,
 ) -> Result<Vec<DetectionComment>, CommentError> {
     let mut stmt = conn.prepare(
-        "SELECT id, date, time, sci_name, user_id, author, body, at
+        "SELECT id, date, time, sci_name, user_id, author, body, at, file_name
          FROM detection_comments
          WHERE date = ?1 AND time = ?2 AND sci_name = ?3
+           AND (?4 IS NULL OR file_name IS NULL OR file_name = ?4)
          ORDER BY id ASC",
     )?;
     // `at` is whole seconds, so two comments posted in the same second share
     // it; `id` is the only monotonic ordering the table has.
     let rows = stmt
-        .query_map(params![date, time, sci_name], row_to_comment)?
+        .query_map(params![date, time, sci_name, file_name], row_to_comment)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -236,6 +253,7 @@ fn row_to_comment(row: &rusqlite::Row<'_>) -> rusqlite::Result<DetectionComment>
         author: row.get(5)?,
         body: row.get(6)?,
         at: row.get(7)?,
+        file_name: row.get(8)?,
     })
 }
 
@@ -261,6 +279,7 @@ mod tests {
         insert(
             conn,
             &NewComment {
+                file_name: None,
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
@@ -291,7 +310,7 @@ mod tests {
             "Agreed on length, but the spectrogram is Hairy.",
         );
 
-        let all = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let all = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus", None).expect("list");
         assert_eq!(all.len(), 2, "both must survive: {all:?}");
         assert_eq!(
             all[0].author, "ada",
@@ -353,7 +372,7 @@ mod tests {
         assert_eq!(removed.id, c.id);
         assert!(get(&conn, c.id).expect("get").is_none());
         assert!(
-            list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus")
+            list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus", None)
                 .expect("list")
                 .is_empty()
         );
@@ -381,6 +400,7 @@ mod tests {
         let c = insert(
             &conn,
             &NewComment {
+                file_name: None,
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
@@ -411,6 +431,7 @@ mod tests {
             let err = insert(
                 &conn,
                 &NewComment {
+                    file_name: None,
                     date: "2026-05-01",
                     time: "06:00:00",
                     sci_name: "Dryobates villosus",
@@ -434,6 +455,7 @@ mod tests {
         let err = insert(
             &conn,
             &NewComment {
+                file_name: None,
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
@@ -475,6 +497,7 @@ mod tests {
             let outcome = insert(
                 &conn,
                 &NewComment {
+                    file_name: None,
                     date,
                     time,
                     sci_name,
@@ -501,6 +524,7 @@ mod tests {
         insert(
             &conn,
             &NewComment {
+                file_name: None,
                 date: "2026-05-01",
                 time: "06:00:00",
                 sci_name: "Strix varia",
@@ -513,6 +537,7 @@ mod tests {
         insert(
             &conn,
             &NewComment {
+                file_name: None,
                 date: "2026-05-02",
                 time: "06:00:00",
                 sci_name: "Dryobates villosus",
@@ -523,12 +548,12 @@ mod tests {
         )
         .expect("insert");
 
-        let here = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let here = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus", None).expect("list");
         assert_eq!(here.len(), 1, "{here:?}");
         assert_eq!(here[0].body, "on the woodpecker");
 
         assert!(
-            list(&conn, "2026-05-01", "07:00:00", "Dryobates villosus")
+            list(&conn, "2026-05-01", "07:00:00", "Dryobates villosus", None)
                 .expect("list")
                 .is_empty(),
             "a different time is a different detection"
@@ -544,7 +569,7 @@ mod tests {
             write(&conn, "  ada  ", "  spaced out \n").body,
             "spaced out"
         );
-        let c = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus").expect("list");
+        let c = list(&conn, "2026-05-01", "06:00:00", "Dryobates villosus", None).expect("list");
         assert_eq!(c[0].author, "ada");
     }
 }

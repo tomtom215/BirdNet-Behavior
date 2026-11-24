@@ -504,6 +504,14 @@ curl "http://localhost:8502/api/v2/detections/comments?date=2026-09-03&time=06:1
   -H "Authorization: Bearer $BNB_API_TOKEN"
 ```
 
+A comment belongs to one recording, like a review. Two sources that heard the same
+species in the same second are two detections, so send `file_name` (`""` for a
+detection with no clip) with the POST and the GET. Without it, a POST on a second
+that names one detection lands on that one, and one on a second that names several
+is refused with `409` and the number of detections; a GET returns every comment on
+that second. Comments written before this existed, on a second several sources
+shared, could not be told apart: they are listed with each of those detections.
+
 ### Batches
 
 One round trip instead of forty, for the case that actually comes up: triaging

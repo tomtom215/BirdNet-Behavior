@@ -218,7 +218,30 @@ struct CommentBody {
     date: String,
     time: String,
     sci_name: String,
+    /// The detection's clip (`""` for one with none). Without it, a second that
+    /// names one detection takes that one's, and a second that names several is
+    /// refused, as a review is (MSC-05).
+    #[serde(default)]
+    file_name: Option<String>,
     body: String,
+}
+
+/// The clip of every detection of `sci_name` at `date` `time` (`""` for one
+/// with none): one entry names the detection, several mean the caller has to.
+fn clips_of_second(
+    conn: &rusqlite::Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<Vec<String>, birdnet_db::sqlite::DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(File_Name, '') FROM detections
+          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+    )?;
+    let clips = stmt
+        .query_map(rusqlite::params![date, time, sci_name], |r| r.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(clips)
 }
 
 /// The comment to remove.
@@ -240,7 +263,13 @@ async fn list_comments(
                 return e;
             }
             let comments = state.with_read_db(|conn| {
-                birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
+                birdnet_db::detection_comments::list(
+                    conn,
+                    &key.date,
+                    &key.time,
+                    &key.sci_name,
+                    key.file_name.as_deref(),
+                )
             });
             match comments {
                 Ok(comments) => (
@@ -265,6 +294,16 @@ async fn add_comment(
             if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
                 return e;
             }
+            let file_name = match &body.file_name {
+                Some(f) => Some(f.clone()),
+                None => match state.with_read_db(|conn| {
+                    clips_of_second(conn, &body.date, &body.time, &body.sci_name)
+                }) {
+                    Ok(clips) if clips.len() > 1 => return ambiguous(clips.len()),
+                    Ok(clips) => clips.into_iter().next(),
+                    Err(e) => return server_error(&e),
+                },
+            };
             let written = state.with_db(|conn| {
                 birdnet_db::detection_comments::insert(
                     conn,
@@ -272,6 +311,7 @@ async fn add_comment(
                         date: &body.date,
                         time: &body.time,
                         sci_name: &body.sci_name,
+                        file_name: file_name.as_deref(),
                         user_id: None,
                         author: API_AUTHOR,
                         body: &body.body,

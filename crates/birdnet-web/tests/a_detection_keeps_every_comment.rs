@@ -91,6 +91,7 @@ async fn two_comments_on_one_detection_both_survive_and_the_page_shows_both() {
             birdnet_db::detection_comments::insert(
                 conn,
                 &birdnet_db::detection_comments::NewComment {
+                    file_name: Some("x.wav"),
                     date: DATE,
                     time: TIME,
                     sci_name: SCI,
@@ -289,7 +290,7 @@ async fn the_pages_write_endpoints_exist_and_need_a_sign_in() {
 
     assert!(
         state
-            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI))
+            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI, None))
             .expect("list")
             .is_empty(),
         "and nothing was written"
@@ -324,9 +325,100 @@ async fn the_api_write_path_is_not_open() {
 
     assert!(
         state
-            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI))
+            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI, None))
             .expect("list")
             .is_empty(),
         "and must not have written one"
     );
+}
+
+/// MSC-05: comments were keyed by date, time and species alone, so a note on
+/// the garden microphone's detection ("the neighbour's dog, not an owl")
+/// appeared on the camera's detection of the same species in the same second,
+/// which may be a real owl.
+#[tokio::test]
+async fn a_comment_stays_on_the_recording_it_was_written_on() {
+    let (_dir, state) = state();
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
+                  File_Name, chunk_offset_secs, Source)
+             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.8, 0.7, 18, 1.25, 0.0, 'y.wav', 0, 'cam')",
+            rusqlite::params![DATE, TIME, SCI],
+        )
+        .expect("a second source's detection in the same second");
+    });
+    let state = state.with_api_token(ApiToken::new(TOKEN).expect("long enough"));
+
+    let (status, created) = api(
+        &state,
+        "POST",
+        "/api/v2/detections/comments",
+        Some(serde_json::json!({
+            "date": DATE, "time": TIME, "sci_name": SCI, "file_name": "x.wav",
+            "body": "The neighbour's dog, not a woodpecker."
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let listed = |file: &'static str| {
+        let state = state.clone();
+        async move {
+            api(
+                &state,
+                "GET",
+                &format!(
+                    "/api/v2/detections/comments?date={DATE}&time={TIME}&sci_name=Dryobates%20villosus&file_name={file}"
+                ),
+                None,
+            )
+            .await
+        }
+    };
+    let (status, other) = listed("y.wav").await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+    assert_eq!(
+        other["comments"].as_array().map(Vec::len),
+        Some(0),
+        "the other source's detection carries the comment: {other}"
+    );
+    // The counterpart: the detection it was written on keeps it.
+    let (_, own) = listed("x.wav").await;
+    assert_eq!(own["comments"].as_array().map(Vec::len), Some(1), "{own}");
+}
+
+/// A comment through the API that does not say which recording, on a second
+/// two sources share, is refused rather than guessed onto one; on a second
+/// with one detection it lands on that one.
+#[tokio::test]
+async fn an_api_comment_on_a_shared_second_must_name_its_recording() {
+    let (_dir, state) = state();
+    let state = state.with_api_token(ApiToken::new(TOKEN).expect("long enough"));
+    let post = || {
+        api(
+            &state,
+            "POST",
+            "/api/v2/detections/comments",
+            Some(serde_json::json!({
+                "date": DATE, "time": TIME, "sci_name": SCI, "body": "Which one?"
+            })),
+        )
+    };
+    let (status, one) = post().await;
+    assert_eq!(status, StatusCode::CREATED, "one detection: {one}");
+
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
+                  File_Name, chunk_offset_secs, Source)
+             VALUES (?1, ?2, ?3, 'Hairy Woodpecker', 0.8, 0.7, 18, 1.25, 0.0, 'y.wav', 0, 'cam')",
+            rusqlite::params![DATE, TIME, SCI],
+        )
+        .expect("a second source's detection");
+    });
+    let (status, two) = post().await;
+    assert_eq!(status, StatusCode::CONFLICT, "two detections: {two}");
 }

@@ -2624,6 +2624,40 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (date, source, reason)
         );",
     },
+    Migration {
+        version: 61,
+        description: "Key detection comments by the recording, as reviews are",
+        // MSC-05: a comment was keyed by (date, time, sci_name), so two
+        // sources that heard one species in one second shared every comment:
+        // a note on the garden microphone's row appeared on the camera's.
+        // Reviews moved to a per-clip key in migration 23; comments did not.
+        //
+        // A comment whose second names exactly one detection takes that
+        // detection's clip (`''` for one with none, as reviews store it). One
+        // whose second names several, or none, keeps `file_name` NULL: it
+        // cannot be told which recording it was about, and is shown on every
+        // detection of that second, said to be unattached. The append-only
+        // trigger is rebuilt to cover the new column once it is filled.
+        up_sql: "ALTER TABLE detection_comments ADD COLUMN file_name TEXT;
+        UPDATE detection_comments
+           SET file_name = (SELECT COALESCE(d.File_Name, '') FROM detections d
+                             WHERE d.Date = detection_comments.date
+                               AND d.Time = detection_comments.time
+                               AND d.Sci_Name = detection_comments.sci_name)
+         WHERE (SELECT COUNT(*) FROM detections d
+                 WHERE d.Date = detection_comments.date
+                   AND d.Time = detection_comments.time
+                   AND d.Sci_Name = detection_comments.sci_name) = 1;
+        DROP TRIGGER IF EXISTS detection_comments_are_append_only;
+        CREATE TRIGGER detection_comments_are_append_only
+            BEFORE UPDATE OF id, date, time, sci_name, file_name, author, body, at
+            ON detection_comments
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
+        END;
+        CREATE INDEX IF NOT EXISTS idx_detection_comments_on_clip
+            ON detection_comments(date, time, sci_name, file_name, id);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -4949,5 +4983,46 @@ mod tests {
             .query_row(rewrite.affects_sql, [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 2, "one detection gets a verdict, one review is re-keyed");
+    }
+
+    // ── migration 61: a comment names its recording ─────────────────────
+
+    /// MSC-05. A comment whose second names one detection takes its clip; one
+    /// whose second names two stays unattached (NULL), shown on both, rather
+    /// than guessed onto one. And the new column joins the append-only trigger.
+    #[test]
+    fn migration_61_attaches_a_comment_only_where_its_second_is_unambiguous() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_version_table(&conn).unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 61) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+               VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.9, 'mic.wav'),
+                      ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.8, 'cam.wav'),
+                      ('2026-05-01', '07:00:00', 'Strix aluco', 'Tawny Owl', 0.9, NULL);
+             INSERT INTO detection_comments (date, time, sci_name, author, body)
+               VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'ada', 'shared second'),
+                      ('2026-05-01', '07:00:00', 'Strix aluco', 'ada', 'one detection, no clip');",
+        )
+        .unwrap();
+        let m61 = MIGRATIONS.iter().find(|m| m.version == 61).unwrap();
+        conn.execute_batch(m61.up_sql).unwrap();
+        let file_of = |body: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT file_name FROM detection_comments WHERE body = ?1",
+                [body],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(file_of("shared second"), None);
+        assert_eq!(file_of("one detection, no clip").as_deref(), Some(""));
+        assert!(
+            conn.execute("UPDATE detection_comments SET file_name = 'x.wav'", [])
+                .is_err(),
+            "file_name must be append-only like the rest of the comment"
+        );
     }
 }

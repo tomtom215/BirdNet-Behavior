@@ -55,6 +55,9 @@ pub(super) struct ThreadQuery {
     date: Option<String>,
     time: Option<String>,
     sci_name: Option<String>,
+    /// The detection's clip (`""` for none): two sources that heard one bird
+    /// in one second are two detections, each with its own thread (MSC-05).
+    file: Option<String>,
 }
 
 /// A comment being written.
@@ -63,6 +66,8 @@ pub(super) struct AddForm {
     date: String,
     time: String,
     sci_name: String,
+    #[serde(default)]
+    file: Option<String>,
     body: String,
 }
 
@@ -72,6 +77,8 @@ pub(super) struct DeleteForm {
     date: String,
     time: String,
     sci_name: String,
+    #[serde(default)]
+    file: Option<String>,
     id: i64,
 }
 
@@ -83,10 +90,11 @@ async fn thread_partial(
         return html(render_error("No detection specified."));
     };
     let st = state.clone();
-    let rendered =
-        tokio::task::spawn_blocking(move || render_thread(&st, &date, &time, &sci_name, None))
-            .await
-            .unwrap_or_else(|_| render_error("The comments could not be loaded."));
+    let rendered = tokio::task::spawn_blocking(move || {
+        render_thread(&st, &date, &time, &sci_name, q.file.as_deref(), None)
+    })
+    .await
+    .unwrap_or_else(|_| render_error("The comments could not be loaded."));
     html(rendered)
 }
 
@@ -110,6 +118,7 @@ async fn add_comment(
                         date: &form.date,
                         time: &form.time,
                         sci_name: &form.sci_name,
+                        file_name: form.file.as_deref(),
                         user_id,
                         author: &author,
                         body: &form.body,
@@ -140,6 +149,7 @@ async fn add_comment(
                 &form.date,
                 &form.time,
                 &form.sci_name,
+                form.file.as_deref(),
                 problem.as_deref(),
             )
         })
@@ -182,6 +192,7 @@ async fn delete_comment(
                 &form.date,
                 &form.time,
                 &form.sci_name,
+                form.file.as_deref(),
                 problem.as_deref(),
             )
         })
@@ -215,25 +226,34 @@ pub(super) fn render_thread(
     date: &str,
     time: &str,
     sci_name: &str,
+    file: Option<&str>,
     problem: Option<&str>,
 ) -> String {
     // A failed read is said, not shown as "No comments yet" — which invites
     // someone to write again the note that is already there.
-    let comments =
-        match state.with_read_db(|conn| detection_comments::list(conn, date, time, sci_name)) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(error = %e, "detection comments could not be read");
-                return format!(
-                    r#"<div id="{ANCHOR}" class="bnb-card pad">{}</div>"#,
-                    super::error_states::inline("the comments on this detection")
-                );
-            }
-        };
+    let comments = match state
+        .with_read_db(|conn| detection_comments::list(conn, date, time, sci_name, file))
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "detection comments could not be read");
+            return format!(
+                r#"<div id="{ANCHOR}" class="bnb-card pad">{}</div>"#,
+                super::error_states::inline("the comments on this detection")
+            );
+        }
+    };
 
     let date_e = escape_html(date);
     let time_e = escape_html(time);
     let sci_e = escape_html(sci_name);
+    // Carried by both forms so a write lands on, and re-reads, this recording.
+    let file_input = file.map_or_else(String::new, |f| {
+        format!(
+            r#"<input type="hidden" name="file" value="{}">"#,
+            escape_html(f)
+        )
+    });
 
     let mut items = String::new();
     for c in &comments {
@@ -243,13 +263,20 @@ pub(super) fn render_thread(
         // visitor less, not more.
         let remove = {
             format!(
-                r##"<form hx-post="/pages/detection-comments/delete" hx-target="#{ANCHOR}" hx-swap="outerHTML" class="dc-del"><input type="hidden" name="date" value="{date_e}"><input type="hidden" name="time" value="{time_e}"><input type="hidden" name="sci_name" value="{sci_e}"><input type="hidden" name="id" value="{id}"><button type="submit" class="bnb-btn ghost dc-del-btn" title="Remove this comment">Remove</button></form>"##,
+                r##"<form hx-post="/pages/detection-comments/delete" hx-target="#{ANCHOR}" hx-swap="outerHTML" class="dc-del"><input type="hidden" name="date" value="{date_e}"><input type="hidden" name="time" value="{time_e}"><input type="hidden" name="sci_name" value="{sci_e}">{file_input}<input type="hidden" name="id" value="{id}"><button type="submit" class="bnb-btn ghost dc-del-btn" title="Remove this comment">Remove</button></form>"##,
                 id = c.id,
             )
         };
+        // A comment from before migration 61 on a second several detections
+        // share cannot be told which recording it was about.
+        let unattached = if file.is_some() && c.file_name.is_none() {
+            r#"<p class="bnb-meta">Written before comments were kept per recording, on a second when more than one source heard this species; it may be about another source's detection.</p>"#
+        } else {
+            ""
+        };
         let _ = write!(
             items,
-            r#"<li class="dc-item"><div class="dc-head"><span class="dc-author">{author}</span><span class="bnb-meta dc-at">{at}</span>{remove}</div><p class="dc-body">{body}</p></li>"#,
+            r#"<li class="dc-item"><div class="dc-head"><span class="dc-author">{author}</span><span class="bnb-meta dc-at">{at}</span>{remove}</div><p class="dc-body">{body}</p>{unattached}</li>"#,
             author = escape_html(&c.author),
             at = escape_html(&c.at),
             body = escape_html(&c.body),
@@ -271,7 +298,7 @@ pub(super) fn render_thread(
 
     let form = {
         format!(
-            r##"<form hx-post="/pages/detection-comments/add" hx-target="#{ANCHOR}" hx-swap="outerHTML" class="dc-form"><input type="hidden" name="date" value="{date_e}"><input type="hidden" name="time" value="{time_e}"><input type="hidden" name="sci_name" value="{sci_e}"><label class="bnb-meta" for="dc-body">Add a comment</label><textarea id="dc-body" name="body" rows="3" maxlength="{MAX_BODY_CHARS}" placeholder="Why this identification is right, or wrong…"></textarea><button type="submit" class="bnb-btn">Post</button></form>"##
+            r##"<form hx-post="/pages/detection-comments/add" hx-target="#{ANCHOR}" hx-swap="outerHTML" class="dc-form"><input type="hidden" name="date" value="{date_e}"><input type="hidden" name="time" value="{time_e}"><input type="hidden" name="sci_name" value="{sci_e}">{file_input}<label class="bnb-meta" for="dc-body">Add a comment</label><textarea id="dc-body" name="body" rows="3" maxlength="{MAX_BODY_CHARS}" placeholder="Why this identification is right, or wrong…"></textarea><button type="submit" class="bnb-btn">Post</button></form>"##
         )
     };
 
@@ -286,11 +313,12 @@ pub(super) fn render_thread(
 /// The thread is a database read the page does not need to block on, and the
 /// detail page already loads its other panels this way.
 #[must_use]
-pub(super) fn thread_placeholder(date: &str, time: &str, sci_name: &str) -> String {
+pub(super) fn thread_placeholder(date: &str, time: &str, sci_name: &str, file: &str) -> String {
     format!(
-        r#"<div id="{ANCHOR}" class="bnb-card pad" hx-get="/pages/detection-comments?date={d}&amp;time={t}&amp;sci_name={s}" hx-trigger="load" hx-swap="outerHTML"><p class="bnb-meta">Loading comments…</p></div>"#,
+        r#"<div id="{ANCHOR}" class="bnb-card pad" hx-get="/pages/detection-comments?date={d}&amp;time={t}&amp;sci_name={s}&amp;file={f}" hx-trigger="load" hx-swap="outerHTML"><p class="bnb-meta">Loading comments…</p></div>"#,
         d = simple_url_encode(date),
         t = simple_url_encode(time),
         s = simple_url_encode(sci_name),
+        f = simple_url_encode(file),
     )
 }
