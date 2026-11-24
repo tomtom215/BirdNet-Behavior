@@ -4,7 +4,7 @@ BirdNet-Behavior turns your data into editorial recaps you'd actually want to re
 
 ## Weekly
 
-The **Weekly** tab (`/reports`) is a Sunday-paper recap of the week — total detections, species count, new arrivals, a daily-activity chart and the week's leaderboard. Navigate between weeks with the prev/next controls.
+The **Weekly** tab (`/reports`) is a Sunday-paper recap of the week — total detections, species count, new arrivals, a daily-activity chart and the week's leaderboard. The headline holds the week against the same days of the week before (a week still under way, Monday to yesterday). When the station was off for some of those days in either week, the comparison is per day it listened and the sentence says which days were lost ("last week the station was off for 2 of those 6 days"); when the two weeks' listened days differ by more than a fifth of the days compared, the headline says the week is "hard to compare" rather than calling it loud or quieter. A station without a listening record (imported from BirdNET-Pi) compares the totals. Navigate between weeks with the prev/next controls.
 
 ![The weekly report](../images/weekly-report.png)
 

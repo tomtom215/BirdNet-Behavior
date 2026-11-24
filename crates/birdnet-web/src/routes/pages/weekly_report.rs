@@ -82,18 +82,28 @@ async fn weekly_partial(
                 None
             } else {
                 let last = i64::from(compared_days) - 1;
+                let (this_end, before_end) =
+                    (add_days(&week_start, last), add_days(&prev_week_c, last));
+                // Which of those days the station listened on, so a week held against one it was
+                // partly off for is compared per listened day and says so. Read, not defaulted: a
+                // ledger that cannot be read is a fault, and the totals in its place are the claim
+                // this was written to stop making.
+                let effort = super::listening::effort_by_date(conn, &prev_week_c, &this_end)?;
+                let before_daily =
+                    birdnet_db::sqlite::range_daily_counts(conn, &prev_week_c, &before_end)?;
+                let this_listened =
+                    listened_count(&effort, &daily, &week_start, compared_days, &today);
+                let before_listened =
+                    listened_count(&effort, &before_daily, &prev_week_c, compared_days, &today);
                 Some(Comparison {
                     days: compared_days,
-                    this: birdnet_db::sqlite::weekly_detection_count(
-                        conn,
-                        &week_start,
-                        &add_days(&week_start, last),
-                    )?,
+                    this: birdnet_db::sqlite::weekly_detection_count(conn, &week_start, &this_end)?,
                     before: birdnet_db::sqlite::weekly_detection_count(
                         conn,
                         &prev_week_c,
-                        &add_days(&prev_week_c, last),
+                        &before_end,
                     )?,
+                    listened: this_listened.zip(before_listened),
                 })
             };
             Ok::<_, birdnet_db::sqlite::DbError>((total, top, new, daily, compare))
@@ -410,6 +420,59 @@ pub(super) struct Comparison {
     pub(super) this: i64,
     /// Detections in the same days of the week before.
     pub(super) before: i64,
+    /// How many of those days the station listened on, `(this week, the week before)`; `None`
+    /// when its ledger holds nothing for the two weeks (an imported station), which claims
+    /// nothing either way.
+    pub(super) listened: Option<(u32, u32)>,
+}
+
+/// Listened days that make an adjective unsafe: the two weeks' listened days may differ by at
+/// most a fifth of the days compared (one day in a whole week) before "loud" or "quieter" is
+/// withheld.
+///
+/// A per-listened-day rate assumes the missing days would have been like the heard ones. They
+/// need not be: day-to-day counts swing with weather and weekday by far more than the 10% the
+/// adjective is drawn at, so a rate stretched over more than a fifth of the span can cross that
+/// line on the missing days alone. One lost day in seven is the most that still leaves six to
+/// stand for it; two in six (the audit's week) is a third of the span, and is not.
+const MAX_UNEVEN_SHARE: f64 = 0.2;
+
+/// How many of the `days` from `start` the station listened on: a day its ledger says it
+/// listened to (`listening::listened_on`), or a day something was heard, since a detection is
+/// audio heard. `None` when the ledger has nothing for the period.
+fn listened_count(
+    effort: &std::collections::BTreeMap<String, f64>,
+    daily: &[birdnet_db::sqlite::DailyCount],
+    start: &str,
+    days: u32,
+    today: &str,
+) -> Option<u32> {
+    let dates: Vec<String> = (0..i64::from(days)).map(|i| add_days(start, i)).collect();
+    let on = super::listening::listened_on(effort, &dates, today)?;
+    let n = dates
+        .iter()
+        .zip(on)
+        .filter(|(d, on)| *on || daily.iter().any(|c| &c.date == *d && c.count > 0))
+        .count();
+    u32::try_from(n).ok()
+}
+
+/// "last week the station was off for 2 of those 6 days", for each week that lost days.
+fn gap_words(days: u32, (this, before): (u32, u32)) -> Option<String> {
+    let off = |listened: u32, when: &str| {
+        (listened < days).then(|| match days {
+            1 => format!("{when} the station was off that day"),
+            _ => format!(
+                "{when} the station was off for {} of those {days} days",
+                days - listened
+            ),
+        })
+    };
+    match (off(this, "this week"), off(before, "last week")) {
+        (None, None) => None,
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (Some(a), Some(b)) => Some(format!("{a}, and {b}")),
+    }
 }
 
 /// How many of the week's days are over, and so fair to compare.
@@ -449,10 +512,33 @@ pub(super) fn week_words(
     is_current: bool,
 ) -> WeekWords {
     let so_far = if is_current { " so far" } else { "" };
+    // Listened days, only when a week lost some: two whole weeks compare in total, as before.
+    let gaps = compare.and_then(|c| {
+        c.listened
+            .filter(|&(a, b)| a < c.days || b < c.days)
+            .map(|l| (c.days, l))
+    });
+    let per_listened_day = gaps.is_some();
     let delta = compare
-        .filter(|c| c.before > 0)
-        .map(|c| (c.this - c.before) as f64 / c.before as f64 * 100.0)
+        .and_then(|c| match gaps {
+            // Per listened day: what each week heard a day it was on.
+            Some((_, (a, b))) if a > 0 && b > 0 && c.before > 0 => {
+                let (now, then) = (c.this as f64 / f64::from(a), c.before as f64 / f64::from(b));
+                Some((now - then) / then * 100.0)
+            }
+            Some(_) => None,
+            None => (c.before > 0).then(|| (c.this - c.before) as f64 / c.before as f64 * 100.0),
+        })
         .map(|d| d.round() as i64);
+    // Too few days in common to call the week anything.
+    let uneven = gaps.is_some_and(|(days, (a, b))| {
+        f64::from(a.abs_diff(b)) > MAX_UNEVEN_SHARE * f64::from(days) || a == 0 || b == 0
+    });
+    let unit = if per_listened_day {
+        " per listened day"
+    } else {
+        ""
+    };
     let against = compare.map_or_else(String::new, |c| match c.days {
         7 => "the week before".to_owned(),
         1 => "the same day last week".to_owned(),
@@ -462,6 +548,8 @@ pub(super) fn week_words(
         "A <em>silent</em> week.".to_owned()
     } else if compare.is_none() && is_current {
         "A week just <em>beginning</em>.".to_owned()
+    } else if uneven {
+        format!("A week <em>hard to compare</em>{so_far}.")
     } else {
         match delta {
             Some(d) if d >= 10 => format!("A <em>loud</em> week{so_far}."),
@@ -472,7 +560,10 @@ pub(super) fn week_words(
     let mut lead = format!("<b>{total} detections</b> from <b>{species} species</b>{so_far}");
     if let Some(d) = delta.filter(|d| *d != 0) {
         let word = if d > 0 { "busier" } else { "quieter" };
-        let _ = write!(lead, " — {}% {word} than {against}", d.abs());
+        let _ = write!(lead, " — {}% {word}{unit} than {against}", d.abs());
+    }
+    if let Some(gap) = gaps.and_then(|(days, l)| gap_words(days, l)) {
+        let _ = write!(lead, " ({gap})");
     }
     if new_species > 0 {
         let plural = if new_species == 1 { "bird" } else { "birds" };
@@ -482,8 +573,9 @@ pub(super) fn week_words(
     let detail = match delta {
         Some(d) => {
             let arrow = if d >= 0 { "↑" } else { "↓" };
-            format!("{arrow} {}% vs {against}", d.abs())
+            format!("{arrow} {}%{unit} vs {against}", d.abs())
         }
+        None if per_listened_day => "no listened days to compare".to_owned(),
         None if is_current => "week in progress".to_owned(),
         None => "first full week".to_owned(),
     };
@@ -688,6 +780,7 @@ mod tests {
             days: 2,
             this: 70,
             before: 75,
+            listened: None,
         };
         let w = week_words(107, 13, 0, Some(&c), true);
         assert_eq!(
@@ -715,6 +808,7 @@ mod tests {
             days: 3,
             this: 40,
             before: 100,
+            listened: None,
         };
         let w = week_words(55, 9, 1, Some(&c), true);
         assert_eq!(w.headline, "A <em>quieter</em> week so far.");
@@ -737,6 +831,7 @@ mod tests {
             days: 7,
             this: 300,
             before: 200,
+            listened: None,
         };
         let w = week_words(300, 20, 0, Some(&c), false);
         assert_eq!(w.headline, "A <em>loud</em> week.");
@@ -763,6 +858,7 @@ mod tests {
             days: 7,
             this: 30,
             before: 0,
+            listened: None,
         };
         let w = week_words(30, 5, 0, Some(&c), false);
         assert_eq!(w.headline, "A <em>steady</em> week.");
@@ -775,6 +871,7 @@ mod tests {
             days: 7,
             this: 0,
             before: 80,
+            listened: None,
         };
         assert_eq!(
             week_words(0, 0, 0, Some(&c), false).headline,
