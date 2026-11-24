@@ -2658,6 +2658,63 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_detection_comments_on_clip
             ON detection_comments(date, time, sci_name, file_name, id);",
     },
+    Migration {
+        version: 62,
+        description: "Key held-back detections by source, and keep the source",
+        // MSC-04: the table was UNIQUE(date, time, sci_name), and the daemon
+        // inserts with ON CONFLICT DO NOTHING, so a second source's detection
+        // of the same species in the same second was silently not stored. The
+        // row had no source either, so an approved one entered `detections`
+        // with Source NULL, which every per-source view reads as imported.
+        //
+        // The identity is now per source. Not per clip: a file analysed twice
+        // has its clip saved under a new name the second time, and the
+        // conflict exists to absorb exactly that. Rows from before have no
+        // source (NULL) and keep the identity they had. The copy names its
+        // columns, as migration 40's did.
+        up_sql: "CREATE TABLE quarantine_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sf_probability REAL,
+            reason TEXT NOT NULL CHECK(reason IN
+                ('below_sf_thresh','low_confidence','implausible_hour',
+                 'implausible_clock','manual')),
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            approved INTEGER NOT NULL DEFAULT 0,
+            file_name TEXT,
+            lat REAL,
+            lon REAL,
+            week INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            run_id INTEGER REFERENCES analysis_runs(id),
+            cutoff REAL,
+            sens REAL,
+            overlap REAL,
+            source TEXT
+        );
+
+        INSERT INTO quarantine_new
+            (id, date, time, sci_name, com_name, confidence, sf_probability,
+             reason, reviewed, approved, file_name, lat, lon, week, created_at,
+             run_id, cutoff, sens, overlap)
+        SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
+               reason, reviewed, approved, file_name, lat, lon, week, created_at,
+               run_id, cutoff, sens, overlap
+          FROM quarantine;
+
+        DROP TABLE quarantine;
+        ALTER TABLE quarantine_new RENAME TO quarantine;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_identity
+            ON quarantine(date, time, sci_name, COALESCE(source, ''));
+        CREATE INDEX IF NOT EXISTS idx_quarantine_reviewed ON quarantine(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -4326,6 +4383,7 @@ mod tests {
                 cutoff: None,
                 sensitivity: None,
                 overlap: None,
+                source: None,
             };
             crate::sqlite::insert_quarantine(&conn, &record).unwrap();
 

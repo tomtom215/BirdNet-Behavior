@@ -614,6 +614,32 @@ fn wait_for_event(
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
+/// The clip a held-back detection keeps, so it can be heard and, approved,
+/// played: extracted as an admitted detection's is, named by its base name
+/// (what `/api/v2/recordings/{name}` serves). The quarantine used to keep the
+/// raw segment's path, which the stream drain deletes after ten minutes, so an
+/// approved detection had no audio (MSC-04). On a failed extraction, the
+/// segment's path, as before.
+fn held_clip(
+    extractor: &Extractor,
+    event: &birdnet_core::detection::daemon::DetectionEvent,
+) -> String {
+    match extractor.extract_detection_clip(&event.source_file, &event.detection) {
+        Ok(clip) => clip.path.file_name().map_or_else(
+            || event.source_file.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                species = %event.detection.common_name,
+                "audio clip extraction failed for a held-back detection"
+            );
+            event.source_file.to_string_lossy().into_owned()
+        }
+    }
+}
+
 pub(super) fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
     state: birdnet_web::state::AppState,
@@ -671,6 +697,9 @@ pub(super) fn event_processor(
         let now_ms = crate::daemon::disposition::epoch_ms();
 
         let detection = &event.detection;
+        // The source that heard it, from its segment name: `Source` on a stored
+        // detection and part of a held-back one's identity (MSC-04).
+        let source_label = derive_source_label(&event.source_file);
         let correlation_id = event.correlation_id.as_str();
         // The floor for this detection: its classifier's own threshold where
         // one is set, the station's otherwise. Every classifier's threshold was
@@ -706,7 +735,7 @@ pub(super) fn event_processor(
         if let Some(sf_probability) = event.out_of_range {
             if !matches!(disposition, DispositionDecision::DropBelowGlobal) {
                 let week_str = detection.week.to_string();
-                let file_str = event.source_file.to_string_lossy();
+                let file_str = held_clip(&extractor, &event);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
                     date: &detection.date,
                     time: &detection.time,
@@ -736,6 +765,7 @@ pub(super) fn event_processor(
                     ),
                     sensitivity: Some(provenance.sensitivity),
                     overlap: Some(provenance.overlap),
+                    source: Some(&source_label),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -788,7 +818,7 @@ pub(super) fn event_processor(
                  the system clock was not set when this was captured"
             );
             let week_str = detection.week.to_string();
-            let file_str = event.source_file.to_string_lossy();
+            let file_str = held_clip(&extractor, &event);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
                 date: &detection.date,
                 time: &detection.time,
@@ -818,6 +848,7 @@ pub(super) fn event_processor(
                 ),
                 sensitivity: Some(provenance.sensitivity),
                 overlap: Some(provenance.overlap),
+                source: Some(&source_label),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -848,7 +879,7 @@ pub(super) fn event_processor(
                 "quarantining a day bird heard in the middle of the night"
             );
             let week_str = detection.week.to_string();
-            let file_str = event.source_file.to_string_lossy();
+            let file_str = held_clip(&extractor, &event);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
                 date: &detection.date,
                 time: &detection.time,
@@ -878,6 +909,7 @@ pub(super) fn event_processor(
                 ),
                 sensitivity: Some(provenance.sensitivity),
                 overlap: Some(provenance.overlap),
+                source: Some(&source_label),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -907,7 +939,7 @@ pub(super) fn event_processor(
                     "detection below per-species threshold — quarantining for review"
                 );
                 let week_str = detection.week.to_string();
-                let file_str = event.source_file.to_string_lossy();
+                let file_str = held_clip(&extractor, &event);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
                     date: &detection.date,
                     time: &detection.time,
@@ -930,6 +962,7 @@ pub(super) fn event_processor(
                     cutoff: Some(threshold),
                     sensitivity: Some(provenance.sensitivity),
                     overlap: Some(provenance.overlap),
+                    source: Some(&source_label),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -988,7 +1021,7 @@ pub(super) fn event_processor(
         // RTSP stream id (e.g. `cam1`) or `local` for the on-board mic. Tags the
         // row (so multi-stream detections are attributable) and feeds the
         // per-source liveness gauge below.
-        let source_label = derive_source_label(&event.source_file);
+        // `source_label` is read at the top of the loop: the quarantine paths above use it too.
 
         // Extract the clip FIRST, so the DB row can reference the SAVED CLIP's
         // filename — the flat name the web serves recordings by (`File_Name`) —
@@ -5169,6 +5202,101 @@ mod tests {
             row.sensitivity.is_some() && row.overlap.is_some(),
             "the run's sensitivity and overlap must be on the row: {row:?}"
         );
+    }
+
+    /// MSC-04: the quarantine was UNIQUE(date, time, sci_name), so a second
+    /// source's detection of the same species in the same second was silently
+    /// not stored; and an approved row had no `Source` and, its `file_name`
+    /// being the raw segment the stream drain deletes, no audio.
+    #[tokio::test(flavor = "current_thread")]
+    async fn two_sources_quarantined_in_one_second_are_two_rows_each_approved_with_its_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let clips = tmp.path().join("clips");
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: clips.clone(),
+            ..ExtractionConfig::default()
+        });
+        let events = ["mic_a", "cam_b"]
+            .iter()
+            .map(|src| {
+                let seg = tmp
+                    .path()
+                    .join(format!("2026-05-19-birdnet-{src}-09:00:00.wav"));
+                silent_wav(&seg, 15);
+                make_event(
+                    "Pica pica",
+                    "Eurasian Magpie",
+                    0.60,
+                    seg,
+                    &format!("corr-{src}"),
+                )
+            })
+            .collect();
+
+        run_processor_integrated(
+            &state,
+            events,
+            thresholds(&[("Pica pica", 0.80)]),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            test_provenance(&state),
+            None,
+            extractor,
+        )
+        .await;
+
+        let rows = state.with_db(|c| {
+            birdnet_db::sqlite::list_quarantine(
+                c,
+                birdnet_db::sqlite::QuarantineFilter::Pending,
+                10,
+                0,
+            )
+            .unwrap()
+        });
+        assert_eq!(rows.len(), 2, "one source's row was discarded: {rows:?}");
+        for row in &rows {
+            state
+                .with_db(|c| birdnet_db::sqlite::approve_quarantine(c, row.id))
+                .unwrap();
+        }
+        let approved: Vec<(Option<String>, String)> = state.with_db(|c| {
+            let mut st = c
+                .prepare("SELECT Source, File_Name FROM detections ORDER BY Source")
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        });
+        let sources: Vec<_> = approved.iter().map(|(s, _)| s.as_deref()).collect();
+        assert_eq!(sources, vec![Some("cam_b"), Some("mic_a")], "{approved:?}");
+        // Each approved detection names a clip that exists, as an admitted one
+        // does, not the raw segment the stream drain deletes.
+        for (_, file) in &approved {
+            let found = walk_files(&clips)
+                .iter()
+                .any(|p| p.file_name().is_some_and(|n| n.to_string_lossy() == *file));
+            assert!(found, "no clip named {file} under {}", clips.display());
+        }
+    }
+
+    fn walk_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(walk_files(&path));
+            } else {
+                out.push(path);
+            }
+        }
+        out
     }
 
     #[tokio::test(flavor = "current_thread")]

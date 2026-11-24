@@ -141,6 +141,9 @@ pub struct QuarantineRecord<'a> {
     pub sensitivity: Option<f64>,
     /// The run's analysis-window overlap in seconds; `Overlap` on approval.
     pub overlap: Option<f64>,
+    /// The source that heard it, as `detections.Source` names it; part of the
+    /// row's identity (migration 62) and `Source` on approval.
+    pub source: Option<&'a str>,
 }
 
 /// A quarantine row read from the database.
@@ -227,14 +230,15 @@ pub enum QuarantineFilter {
 /// executes.
 pub(crate) const INSERT_QUARANTINE_SQL: &str = "INSERT INTO quarantine
             (date, time, sci_name, com_name, confidence, sf_probability,
-             reason, file_name, lat, lon, week, run_id, cutoff, sens, overlap)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT(date, time, sci_name) DO NOTHING";
+             reason, file_name, lat, lon, week, run_id, cutoff, sens, overlap, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         ON CONFLICT(date, time, sci_name, COALESCE(source, '')) DO NOTHING";
 
 /// Insert a new quarantine entry.
 ///
-/// Duplicate entries (same `date`, `time`, `sci_name`) are silently ignored so that
-/// re-processing a recording does not create duplicate quarantine rows.
+/// Duplicate entries (same `date`, `time`, `sci_name` and source) are silently
+/// ignored so that re-processing a recording does not create duplicate
+/// quarantine rows. Two sources are two rows (MSC-04).
 ///
 /// # Errors
 ///
@@ -265,6 +269,7 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
             record.cutoff,
             record.sensitivity,
             record.overlap,
+            record.source,
         ],
     )?;
     Ok(())
@@ -294,9 +299,10 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     let inserted = tx.execute(
         "INSERT INTO detections
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
-             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id)
+             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id, Source)
          SELECT date, time, sci_name, com_name, confidence,
-                lat, lon, cutoff, week, sens, overlap, file_name, 0, 'confirmed', run_id
+                lat, lon, cutoff, week, sens, overlap, file_name, 0, 'confirmed', run_id,
+                source
          FROM quarantine WHERE id = ?1
          ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
@@ -574,6 +580,7 @@ mod tests {
             cutoff: Some(0.8),
             sensitivity: Some(1.25),
             overlap: Some(0.5),
+            source: Some("mic_a"),
         }
     }
 
@@ -849,6 +856,7 @@ mod tests {
             None::<f64>,
             None::<f64>,
             None::<f64>,
+            None::<&str>,
         ];
         assert_eq!(conn.execute(super::INSERT_QUARANTINE_SQL, args).unwrap(), 1);
         assert_eq!(
@@ -884,6 +892,7 @@ mod tests {
                     None::<f64>,
                     None::<f64>,
                     None::<f64>,
+                    None::<&str>,
                 ],
             )
             .expect_err("an unknown reason must not be silently discarded");
@@ -917,6 +926,7 @@ mod tests {
                     None::<f64>,
                     None::<f64>,
                     None::<f64>,
+                    None::<&str>,
                 ],
             )
             .expect_err("a NULL in a NOT NULL column must not be silently discarded");
