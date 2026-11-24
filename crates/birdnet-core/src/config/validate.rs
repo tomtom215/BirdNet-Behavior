@@ -943,17 +943,35 @@ pub fn unknown_trigger_words(raw: &str) -> Vec<String> {
 }
 
 /// A trigger word nothing reads is skipped, and a list of nothing but such
-/// words notifies on every detection, which is not what a typo meant.
+/// words runs on the default, [`super::DEFAULT_NOTIFY_TRIGGER`]: not what the
+/// typo meant either, so it is reported. (It used to notify on every
+/// detection, N14-01.) A warning, never an error: an error would make the
+/// file unusable and revert the station to its last good configuration over
+/// a notification setting.
 fn check_notify_trigger(config: &Config, out: &mut Vec<Finding>) {
     let Some(raw) = value_of(config, "APPRISE_TRIGGER") else {
         return;
     };
     let unknown = unknown_trigger_words(raw);
     if !unknown.is_empty() {
+        let known = raw
+            .split([',', '+', ' ', ';'])
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .count()
+            > unknown.len();
+        let effect = if known {
+            "they are ignored and the rest are used".to_owned()
+        } else {
+            format!(
+                "no word names a rule, so the station notifies on its default, {}",
+                super::DEFAULT_NOTIFY_TRIGGER
+            )
+        };
         out.push(Finding::warn(
             "APPRISE_TRIGGER",
             format!(
-                "APPRISE_TRIGGER has words nothing reads: {}",
+                "APPRISE_TRIGGER has words nothing reads: {}; {effect}",
                 unknown.join(", ")
             ),
             "use each, new-species, new-species-daily, or off; several may be listed, \
@@ -1855,6 +1873,21 @@ mod tests {
             .expect("a finding");
         assert_eq!(f.severity, Severity::Warning);
         assert!(f.message.contains("sometimes"), "{}", f.message);
+        assert!(f.message.contains("the rest are used"), "{}", f.message);
+
+        // N14-01: all unknown runs on the default, and the finding says which.
+        let cfg = Config::parse("APPRISE_TRIGGER=nwe-species").unwrap();
+        let findings = validate(&cfg);
+        let f = findings
+            .iter()
+            .find(|f| f.key == "APPRISE_TRIGGER")
+            .expect("a finding");
+        assert_eq!(f.severity, Severity::Warning);
+        assert!(
+            f.message.contains("its default, new-species"),
+            "{}",
+            f.message
+        );
     }
 
     /// A key BirdNET-Pi writes is told where it went, or that it went nowhere:

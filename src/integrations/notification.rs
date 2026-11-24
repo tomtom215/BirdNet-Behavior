@@ -26,6 +26,9 @@ pub fn create_notification_filter(
     if let Some(notice) = trigger_off_notice(&trigger_str, &trigger) {
         tracing::warn!("{notice}");
     }
+    if let Some(notice) = trigger_unknown_notice(&trigger_str, &trigger) {
+        tracing::warn!("{notice}");
+    }
 
     // These two flags have no clap default, so `Some` already means the
     // operator supplied one; the config carries the admin-UI value otherwise.
@@ -71,6 +74,28 @@ fn trigger_off_notice(
             raw.trim()
         )
     })
+}
+
+/// The warning for trigger words that name no rule (N14-01).
+///
+/// Such a word is skipped. When no word names a rule, the station runs on its
+/// documented default rather than on every detection, which is what an
+/// unknown word used to mean. Said once at start-up, in the journal.
+fn trigger_unknown_notice(
+    raw: &str,
+    trigger: &birdnet_integrations::notification::TriggerMode,
+) -> Option<String> {
+    let unknown = birdnet_core::config::validate::unknown_trigger_words(raw);
+    if unknown.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "APPRISE_TRIGGER={:?}: {} names no notification rule and is ignored, so \
+         notifications are sent on: {trigger}. The rules are each, new-species, \
+         new-species-daily and off",
+        raw.trim(),
+        unknown.join(", "),
+    ))
 }
 
 /// Create a notification template from CLI flags and/or config.
@@ -475,9 +500,48 @@ mod tests {
         assert!(title.contains("Eurasian Magpie"));
     }
 
+    /// N14-01: a misspelt trigger, from the flag or the settings, runs the
+    /// station on its documented default, not on every detection.
+    #[test]
+    fn a_misspelt_trigger_runs_on_the_default_not_every_detection() {
+        use birdnet_integrations::notification::TriggerMode;
+        let mut cli = default_cli();
+        cli.notify_trigger = "nwe-species".to_owned();
+        assert_eq!(
+            create_notification_filter(&cli, None).trigger,
+            TriggerMode::NewSpecies
+        );
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_TRIGGER", "new-specie")]);
+        assert_eq!(
+            create_notification_filter(&cli, Some(&cfg)).trigger,
+            TriggerMode::NewSpecies
+        );
+    }
+
+    /// The journal names a word that is no rule and what is sent instead; a
+    /// value whose words are all rules says nothing.
+    #[test]
+    fn a_trigger_word_that_is_no_rule_is_reported() {
+        use super::trigger_unknown_notice;
+        use birdnet_integrations::notification::TriggerMode;
+        let notice = trigger_unknown_notice("nwe-species", &TriggerMode::parse("nwe-species"))
+            .expect("a typo is reported");
+        assert!(
+            notice.contains("nwe-species") && notice.contains("sent on: new-species"),
+            "{notice}"
+        );
+        for word in ["each", "new-species,new-species-daily", "off", ""] {
+            assert!(
+                trigger_unknown_notice(word, &TriggerMode::parse(word)).is_none(),
+                "{word:?} was reported"
+            );
+        }
+    }
+
     /// M3: `off`, `none` and `never` silence notifications and the journal says
     /// so; the counterparts (a real rule, an unknown word that falls back to
-    /// "each") say nothing.
+    /// the default) say nothing.
     #[test]
     fn a_trigger_that_silences_notifications_is_announced() {
         use super::trigger_off_notice;
