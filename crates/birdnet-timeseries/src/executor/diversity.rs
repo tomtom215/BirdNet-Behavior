@@ -16,6 +16,11 @@ impl super::TimeSeriesDb<'_> {
     /// When `params.include_shannon` is `true`, also returns H and Pielou
     /// evenness alongside the raw richness count.
     ///
+    /// One row per day from the station's first detection to today, less the
+    /// days the station did not listen to (judged by the `recording_effort`
+    /// ledger as the trend queries judge them): a listened day with no
+    /// detections is zero species, an unlistened one is absent, not zero.
+    ///
     /// # Errors
     ///
     /// Returns an error if the DuckDB query fails.
@@ -26,6 +31,7 @@ impl super::TimeSeriesDb<'_> {
         if params.include_shannon {
             let q = DailyShannon {
                 lookback_days: params.lookback_days,
+                has_effort_ledger: self.has_effort_ledger()?,
             };
             let sql = q.sql();
             let mut stmt = self.conn.prepare(&sql)?;
@@ -42,6 +48,7 @@ impl super::TimeSeriesDb<'_> {
         } else {
             let q = DailyRichness {
                 lookback_days: params.lookback_days,
+                has_effort_ledger: self.has_effort_ledger()?,
             };
             let sql = q.sql();
             let mut stmt = self.conn.prepare(&sql)?;

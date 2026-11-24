@@ -43,7 +43,7 @@ pub const FULL_DAY_SHARE: f64 = 0.95;
 /// `has_ledger` false (the analytics store has no `recording_effort` table —
 /// it is created by the first effort sync) both are empty, so the queries
 /// still bind and every day is judged as it was before the ledger existed.
-const fn effort_ctes(has_ledger: bool) -> &'static str {
+pub(super) const fn effort_ctes(has_ledger: bool) -> &'static str {
     if has_ledger {
         "effort AS (
     SELECT TRY_CAST(date AS DATE) AS day, SUM(seconds) AS seconds
@@ -74,7 +74,7 @@ ledger AS (
 /// Unknown is not zero. A station imported from BirdNET-Pi, or one that ran
 /// before the ledger was added, has years of days nobody measured; reading
 /// them as unlistened would blank its whole history.
-fn effort_seconds(day: &str) -> String {
+pub(super) fn effort_seconds(day: &str) -> String {
     format!(
         "CASE WHEN l.first_day IS NOT NULL AND {day} >= l.first_day \
          THEN COALESCE(e.seconds, 0) END"
@@ -84,7 +84,7 @@ fn effort_seconds(day: &str) -> String {
 /// `seconds` (a column holding [`effort_seconds`]) is a day the station
 /// listened to: unknown, or at least [`EFFORT_FLOOR_SHARE`] of the typical day
 /// (`typical`, the `ledger` CTE's column of that name).
-fn listened(seconds: &str, typical: &str) -> String {
+pub(super) fn listened(seconds: &str, typical: &str) -> String {
     format!("({seconds} IS NULL OR COALESCE({seconds} >= {EFFORT_FLOOR_SHARE} * {typical}, false))")
 }
 
