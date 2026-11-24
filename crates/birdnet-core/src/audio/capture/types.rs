@@ -478,8 +478,17 @@ pub(crate) fn filename_matches_stream(name: &str, stream_id: Option<&str>, ext: 
                 rest.len() == 8 && rest[2] == b':' && rest[5] == b':'
             })
         },
-        // "…-birdnet-{id}-HH:MM:SS"
-        |id| stem.contains(&format!("-birdnet-{id}-")),
+        // "…-birdnet-{id}-HH:MM:SS", the id whole: ids may contain `-`, so a
+        // substring match let `cam` claim `cam-2`'s files (MSC-17).
+        |id| {
+            stem.split_once("-birdnet-")
+                .and_then(|(_, rest)| rest.strip_prefix(id))
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|time| {
+                    let t = time.as_bytes();
+                    t.len() == 8 && t[2] == b':' && t[5] == b':'
+                })
+        },
     )
 }
 
@@ -563,6 +572,18 @@ mod tests {
         let row = "2026-06-10-birdnet-back-garden-cam-07:15:00.wav";
         assert!(filename_matches_stream(row, Some("back-garden-cam"), "wav"));
         assert!(!filename_matches_stream(row, None, "wav"));
+    }
+
+    /// Audit MSC-17: an id is matched whole, not as a prefix. `cam`'s stall
+    /// probe claimed `cam-2`'s files, so a stalled `cam` looked alive while
+    /// `cam-2` recorded.
+    #[test]
+    fn filename_matcher_does_not_take_a_longer_id_for_a_shorter_one() {
+        let cam2 = "2026-01-01-birdnet-cam-2-06:00:00.wav";
+        assert!(!filename_matches_stream(cam2, Some("cam"), "wav"));
+        assert!(!filename_matches_stream(cam2, Some("2"), "wav"));
+        // Counterpart: the file is still `cam-2`'s.
+        assert!(filename_matches_stream(cam2, Some("cam-2"), "wav"));
     }
 
     #[test]

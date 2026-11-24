@@ -401,16 +401,14 @@ pub(super) fn build_extraction_filename(detection: &Detection, format: &str) -> 
         .and_then(|f| {
             // Attempt to extract RTSP ID from the source filename pattern.
             let base = f.rsplit('/').next().unwrap_or(f);
-            // Pattern: YYYY-MM-DD-birdnet-RTSP_ID-HH:MM:SS.ext
-            let parts: Vec<&str> = base.splitn(6, '-').collect();
-            if parts.len() >= 6 {
-                // parts[4] could be RTSP ID
-                let candidate = parts[4];
-                if !candidate.contains(':') {
-                    return Some(format!("{candidate}-"));
-                }
-            }
-            None
+            // Pattern: YYYY-MM-DD-birdnet-RTSP_ID-HH:MM:SS.ext. The id is
+            // everything between the marker and the last `-`, as
+            // `RecordingFile::parse` reads it: ids may contain `-` (MSC-17).
+            let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
+            let (_, rest) = stem.split_once("-birdnet-")?;
+            let (candidate, time) = rest.rsplit_once('-')?;
+            (time.len() == 8 && time.contains(':') && !candidate.is_empty())
+                .then(|| format!("{candidate}-"))
         })
         .unwrap_or_default();
 
@@ -1085,6 +1083,18 @@ mod tests {
         let d = det_named("Pica pica", "Eurasian Magpie", 0.93);
         let name = build_extraction_filename(&d, "wav");
         assert_eq!(name, "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.wav");
+    }
+
+    /// Audit MSC-17: a source id with a dash survives whole into the clip's
+    /// name; the fifth dash-separated field was `cam` for source `cam-2`.
+    #[test]
+    fn extraction_filename_keeps_a_dashed_source_id_whole() {
+        let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        d.file_name_extr = Some("/var/lib/birdnet/2026-05-19-birdnet-cam-2-09:00:00.wav".into());
+        assert_eq!(
+            build_extraction_filename(&d, "wav"),
+            "Eurasian_Magpie-93-2026-05-19-birdnet-cam-2-09:00:00.wav"
+        );
     }
 
     #[test]
