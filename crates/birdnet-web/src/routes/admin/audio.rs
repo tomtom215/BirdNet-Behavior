@@ -523,7 +523,13 @@ async fn create(
                 return refusal;
             }
 
-            let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
+            let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id.clone());
+            // What the form actually set, for a re-enabled row (MSC-13): a field
+            // it left alone keeps the removed row's stored value.
+            let mut patch = AudioSourcePatch {
+                device_id: Some(device_id),
+                ..AudioSourcePatch::default()
+            };
             new.label = form.label.and_then(|s| {
                 let trimmed = s.trim().to_string();
                 if trimmed.is_empty() {
@@ -532,19 +538,29 @@ async fn create(
                     Some(trimmed)
                 }
             });
+            if new.label.is_some() {
+                patch.label = Some(new.label.clone());
+            }
             if let Some(rate) = form.sample_rate {
                 // Constrained by the SQL CHECK; the form select limits it to safe values.
                 new.sample_rate = rate;
+                patch.sample_rate = Some(rate);
             }
             if let Some(transport) = form.rtsp_transport.as_deref() {
                 match transport.parse::<RtspTransport>() {
-                    Ok(t) => new.rtsp_transport = t,
+                    Ok(t) => {
+                        new.rtsp_transport = t;
+                        patch.rtsp_transport = Some(t);
+                    }
                     Err(_) => return validation_response("Unknown RTSP transport."),
                 }
             }
             if let Some(mode) = form.media_mode.as_deref() {
                 match mode.parse::<RtspMediaMode>() {
-                    Ok(m) => new.media_mode = m,
+                    Ok(m) => {
+                        new.media_mode = m;
+                        patch.media_mode = Some(m);
+                    }
                     Err(_) => return validation_response("Unknown RTSP media mode."),
                 }
             }
@@ -556,17 +572,47 @@ async fn create(
                 form.rtsp_keepalive.as_deref(),
             ) {
                 new.pipeline = toggles.into_flags();
+                patch.pipeline = Some(new.pipeline);
             }
             match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
-                Ok(QuietChoice::Set(a, b)) => new.schedule_quiet = Some((a, b)),
+                Ok(QuietChoice::Set(a, b)) => {
+                    new.schedule_quiet = Some((a.clone(), b.clone()));
+                    patch.schedule_quiet = Some(Some((a, b)));
+                }
                 Ok(QuietChoice::Absent | QuietChoice::Clear) => {}
                 Err(msg) => return validation_response(msg),
             }
-            // After `sample_rate`, which the check depends on.
-            match parse_eq_field(form.eq_chain.as_deref(), new.sample_rate) {
-                Ok(Some(spec)) => new.eq_chain = spec,
+
+            // MSC-13: the same device as a removed source brings that source
+            // back, under its id, rather than starting a new one.
+            let removed = match removed_source_for(state, kind, &new.device_id) {
+                Ok(removed) => removed,
+                Err(e) => {
+                    tracing::error!(error = %e, "audio_sources list_all failed before an add");
+                    return internal_response(
+                        "Could not read the removed sources to check whether this one is \
+                         coming back, so nothing was saved.",
+                    );
+                }
+            };
+
+            // After `sample_rate`, which the check depends on — and, for a
+            // re-enabled row the form gave no rate, the rate it already has.
+            let effective_rate = match (&removed, form.sample_rate) {
+                (Some(row), None) => row.sample_rate,
+                _ => new.sample_rate,
+            };
+            match parse_eq_field(form.eq_chain.as_deref(), effective_rate) {
+                Ok(Some(spec)) => {
+                    new.eq_chain.clone_from(&spec);
+                    patch.eq_chain = Some(spec);
+                }
                 Ok(None) => {}
                 Err(msg) => return validation_response(&msg),
+            }
+
+            if let Some(row) = removed {
+                return reenable_removed(state, &request_user, &row, &patch);
             }
 
             let result = state.with_db(|conn| conn.insert(&new));
@@ -608,6 +654,72 @@ async fn create(
             }
         })
         .await
+}
+
+/// The most recently created removed source naming the same physical device
+/// as `device_id` (MSC-13), or `None` when there is none.
+///
+/// A failed read is an error, which the caller refuses on, rather than `None`:
+/// `None` mints a new id, which is the very split this exists to prevent.
+fn removed_source_for(
+    state: &AppState,
+    kind: SourceKind,
+    device_id: &str,
+) -> Result<Option<AudioSource>, AudioSourceError> {
+    let all = state.with_read_db(AudioSourceStore::list_all)?;
+    // Newest first: before re-enabling existed, each re-add minted a row, and
+    // the latest of them is the one whose routes and filters were last in use.
+    let removed: Vec<AudioSource> = all
+        .into_iter()
+        .rev()
+        .filter(|s| s.disabled_at.is_some())
+        .collect();
+    Ok(same_device(&removed, kind, device_id, None, &asound_cards()).cloned())
+}
+
+/// Bring a removed source back under its own id, with what the add form set
+/// laid over what it had.
+fn reenable_removed(
+    state: &AppState,
+    request_user: &crate::auth_middleware::RequestUser,
+    removed: &AudioSource,
+    patch: &AudioSourcePatch,
+) -> Response {
+    let result = state.with_db(|conn| -> Result<AudioSource, AudioSourceError> {
+        let tx = conn.unchecked_transaction()?;
+        tx.reenable(&removed.id)?;
+        let row = tx.update(&removed.id, patch)?;
+        tx.commit()?;
+        Ok(row)
+    });
+    match result {
+        Ok(row) => {
+            crate::audit::audit(
+                state,
+                Some(request_user),
+                "audio.source.reenable",
+                Some(&row.id),
+                Some(&format!("kind={}", row.kind)),
+            );
+            let mut body = render_row(&row, daemon_status(&row, state), &listen_default_id(state));
+            body.push_str(&count_oobs(state));
+            body.push_str(
+                &Toast::success(format!(
+                    "{} was removed earlier and is back, under the same source, so its \
+                     history and settings carry on.",
+                    row.label.clone().unwrap_or_else(|| shown_device(&row))
+                ))
+                .with_action("/admin/system/restart", "Restart to apply")
+                .render_oob(),
+            );
+            Html(body).into_response()
+        }
+        Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
+        Err(e) => {
+            tracing::error!(error = %e, id = %removed.id, "re-enabling an audio source failed");
+            internal_response("Could not bring the removed source back; nothing was changed.")
+        }
+    }
 }
 
 async fn remove(
@@ -2316,6 +2428,63 @@ mod tests {
             .map(|s| s.device_id)
             .collect();
         assert_eq!(devices, ["plughw:1,0", "rtsp://cam.local/live"]);
+    }
+
+    /// MSC-13: removing a microphone and adding it back re-enables the row it
+    /// had, so its detections, routes and filters continue under one id
+    /// instead of starting again under a new one.
+    #[tokio::test]
+    async fn re_adding_a_removed_device_re_enables_its_row() {
+        let (_d, state) = fixture();
+        let mut first = eq_form("usb-alsa", "plughw:2,0");
+        first.label = Some("Feeder".to_string());
+        let ok = create(State(state.clone()), actor(&state), HtmxForm(first)).await;
+        assert!(ok.headers().get("hx-reswap").is_none(), "added");
+        let id = state.with_db(AudioSourceStore::list).unwrap()[0].id.clone();
+        let gone = remove(State(state.clone()), actor(&state), Path(id.clone())).await;
+        assert!(gone.headers().get("hx-reswap").is_none(), "removed");
+        assert!(state.with_db(AudioSourceStore::list).unwrap().is_empty());
+
+        let again = create(
+            State(state.clone()),
+            actor(&state),
+            HtmxForm(eq_form("usb-alsa", "hw:2,0")),
+        )
+        .await;
+        assert!(again.headers().get("hx-reswap").is_none(), "re-added");
+        let active = state.with_db(AudioSourceStore::list).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, id, "the same id, re-enabled");
+        assert!(active[0].disabled_at.is_none());
+        assert_eq!(
+            active[0].label.as_deref(),
+            Some("Feeder"),
+            "what the form left blank keeps its stored value"
+        );
+        let rows: i64 = state
+            .with_db(|c| c.query_row("SELECT COUNT(*) FROM audio_sources", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(rows, 1, "no second row was minted");
+    }
+
+    /// The counterpart: a removed device does not capture a different one.
+    #[tokio::test]
+    async fn adding_another_device_after_a_removal_is_a_new_source() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_old", SourceKind::UsbAlsa, "plughw:2,0");
+        state.with_db(|c| c.soft_delete("src_old")).unwrap();
+        let res = create(
+            State(state.clone()),
+            actor(&state),
+            HtmxForm(eq_form("usb-alsa", "plughw:3,0")),
+        )
+        .await;
+        assert!(res.headers().get("hx-reswap").is_none(), "added");
+        let active = state.with_db(AudioSourceStore::list).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_ne!(active[0].id, "src_old");
+        let old = state.with_db(|c| c.get("src_old")).unwrap().unwrap();
+        assert!(old.disabled_at.is_some(), "the removed row stays removed");
     }
 
     /// The counterpart: genuinely different hardware is still accepted.

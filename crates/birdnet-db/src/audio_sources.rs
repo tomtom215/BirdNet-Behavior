@@ -508,6 +508,24 @@ pub trait AudioSourceStore {
     /// Returns [`AudioSourceError::Sqlite`] on database failure.
     fn list(&self) -> Result<Vec<AudioSource>, AudioSourceError>;
 
+    /// Return every row, soft-deleted ones included, in `created_at ASC`
+    /// order. What a removed source's device was is how adding it back finds
+    /// the row to re-enable (MSC-13).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioSourceError::Sqlite`] on database failure.
+    fn list_all(&self) -> Result<Vec<AudioSource>, AudioSourceError>;
+
+    /// Clear `disabled_at` on a soft-deleted row, keeping its id — and so its
+    /// detections, classifier routes and per-source filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioSourceError::NotFound`] if no soft-deleted row has that
+    /// id, and [`AudioSourceError::Sqlite`] for underlying database failure.
+    fn reenable(&self, id: &str) -> Result<(), AudioSourceError>;
+
     /// Fetch one source by id (returns `None` for unknown id; soft-deleted
     /// rows do return).
     ///
@@ -562,6 +580,37 @@ impl AudioSourceStore for Connection {
             .query_map([], row_to_source)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    fn list_all(&self) -> Result<Vec<AudioSource>, AudioSourceError> {
+        let mut stmt = self.prepare(
+            "SELECT id, kind, device_id, label, sample_rate, channels, bit_depth,
+                    gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
+                    pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
+                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
+                    eq_chain, media_mode
+             FROM audio_sources
+             ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt
+            .query_map([], row_to_source)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn reenable(&self, id: &str) -> Result<(), AudioSourceError> {
+        let n = self.execute(
+            "UPDATE audio_sources
+             SET disabled_at = NULL, updated_at = datetime('now')
+             WHERE id = ?1 AND disabled_at IS NOT NULL",
+            params![id],
+        )?;
+        if n == 0 {
+            return Err(AudioSourceError::NotFound(format!(
+                "soft-deleted source id={id}"
+            )));
+        }
+        Ok(())
     }
 
     fn get(&self, id: &str) -> Result<Option<AudioSource>, AudioSourceError> {
@@ -935,6 +984,32 @@ mod tests {
             conn.soft_delete("src_u"),
             Err(AudioSourceError::NotFound(_))
         ));
+    }
+
+    /// MSC-13: a removed row is still listed by `list_all`, and `reenable`
+    /// brings it back under the same id; re-enabling an active or unknown row
+    /// is refused rather than reported as done.
+    #[test]
+    fn a_removed_row_can_be_listed_and_re_enabled() {
+        let conn = open_db();
+        conn.insert(&sample_new("src_a", SourceKind::UsbAlsa, "hw:1,0"))
+            .unwrap();
+        conn.insert(&sample_new("src_b", SourceKind::UsbAlsa, "hw:2,0"))
+            .unwrap();
+        conn.soft_delete("src_a").unwrap();
+        let all: Vec<String> = conn.list_all().unwrap().into_iter().map(|s| s.id).collect();
+        assert_eq!(all, ["src_a", "src_b"]);
+        assert!(matches!(
+            conn.reenable("src_b"),
+            Err(AudioSourceError::NotFound(_))
+        ));
+        assert!(matches!(
+            conn.reenable("nope"),
+            Err(AudioSourceError::NotFound(_))
+        ));
+        conn.reenable("src_a").unwrap();
+        assert_eq!(conn.list().unwrap().len(), 2);
+        assert!(conn.get("src_a").unwrap().unwrap().disabled_at.is_none());
     }
 
     #[test]

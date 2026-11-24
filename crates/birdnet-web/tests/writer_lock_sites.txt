@@ -24,6 +24,7 @@ routes/admin/audio.rs :: create  1  POST /admin/audio/sources
 routes/admin/audio.rs :: remove  1  DELETE /admin/audio/sources/{id}
 routes/admin/audio.rs :: listen_default  1  POST /admin/audio/sources/{id}/listen-default (stores a setting)
 routes/admin/audio.rs :: update  1  PATCH /admin/audio/sources/{id}
+routes/admin/audio.rs :: reenable_removed  1  POST /admin/audio/sources, re-adding a removed device (clears disabled_at, applies the form)
 routes/admin/images.rs :: add_blacklist  1  POST /admin/images/blacklist
 routes/admin/images.rs :: remove_blacklist  1  DELETE /admin/images/blacklist/{id}
 routes/admin/migration.rs :: delete_batch_handler  1  POST /admin/migrate/batches/delete

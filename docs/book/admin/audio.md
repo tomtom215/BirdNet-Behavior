@@ -10,6 +10,8 @@ Every input the station listens on appears in the source list — USB sound card
 
 You can run **several sources at once** — one or more USB/ALSA mics, a PipeWire source, and any number of RTSP streams, in any combination (this is the headline gap in the original BirdNET-Pi). Each source captures into its own subprocess, tags its recordings with its own stream label, and gets its own health gauge, so detections stay attributable to the source that heard them.
 
+One device is one source. Adding a microphone or camera that is already in the list is refused, and so is editing a source onto another source's device, whichever way the device is written: `hw:1,0` and `plughw:1,0` are the same card (and `plughw:CARD=PRO,DEV=0` is too, when card 1 is `PRO`), and a camera address is the same camera with or without its `user:pass@`, an explicit `:554`, or a trailing `/`. Adding back a device you removed brings back the source it was — the same source id, so its detection history, classifier route and settings carry on — rather than starting a new one.
+
 ## Independent supervision (built for the field)
 
 Every source is supervised on its own, which is what makes a multi-camera station survivable when nobody is on site:

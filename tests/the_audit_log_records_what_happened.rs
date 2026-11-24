@@ -760,6 +760,7 @@ const ACTIONS: &[&str] = &[
     "audio.source.create",
     "audio.source.delete",
     "audio.source.listen_default",
+    "audio.source.reenable",
     "audio.source.restart",
     "audio.source.update",
     "auth.login.fail",
