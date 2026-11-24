@@ -327,8 +327,8 @@ fn audio_source_to_capture_source(
             device = %row.device_id,
             "source is configured Stereo: both channels are averaged to mono for analysis, \
              which on a spaced microphone pair cancels signal at frequencies where the two \
-             capsules disagree. Set the source to Left or Right to analyse one channel \
-             instead, unless the capsules are coincident"
+             capsules disagree. Choose left or right under Channels to analyse on the \
+             Capture tab to analyse one channel instead, unless the capsules are coincident"
         );
     }
     match row.kind {
@@ -344,6 +344,7 @@ fn audio_source_to_capture_source(
             sample_rate: row.sample_rate,
             channels,
             stream_id: Some(row.id.clone()),
+            channel_pick,
         },
         SourceKind::Rtsp => CaptureSource::Rtsp {
             url: row.device_id.clone(),
@@ -353,6 +354,9 @@ fn audio_source_to_capture_source(
             // camera could never be captured.
             transport: map_rtsp_transport(row.rtsp_transport),
             media_mode: map_media_mode(row.media_mode),
+            // A camera is always written as one channel at 48 kHz; Left or
+            // Right says which one (MSC-11), anything else mixes as before.
+            channel_pick,
         },
     }
 }
@@ -418,6 +422,7 @@ pub(super) fn resolve_sources(
                     // admin UI is where TCP/UDP is chosen per source.
                     transport: RtspTransport::Auto,
                     media_mode: RtspMediaMode::Full,
+                    channel_pick: None,
                 }
             })
             .collect()
@@ -431,6 +436,7 @@ pub(super) fn resolve_sources(
             sample_rate: DEFAULT_CAPTURE_RATE,
             device,
             channels: 1,
+            channel_pick: None,
             stream_id: None,
         }];
         srcs.extend(rtsp_sources(rtsp_urls, true));

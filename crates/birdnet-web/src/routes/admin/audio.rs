@@ -28,7 +28,7 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 
 use birdnet_db::audio_sources::{
-    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
+    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, Channels, NewAudioSource,
     PipelineFlags, RtspMediaMode, RtspTransport, SourceKind,
 };
 
@@ -303,6 +303,9 @@ struct CreateForm {
     /// `full` or `audio`: which of a camera's tracks to request.
     #[serde(default)]
     media_mode: Option<String>,
+    /// `mono`, `left`, `right` or `stereo`: which channels to analyse.
+    #[serde(default)]
+    channels: Option<String>,
     /// Start of the per-source quiet window, `HH:MM` in the station's **local**
     /// time. Empty (with `quiet_end` also empty) clears the window.
     #[serde(default)]
@@ -615,6 +618,12 @@ async fn create(
                 match mode.parse::<RtspMediaMode>() {
                     Ok(m) => new.media_mode = m,
                     Err(_) => return validation_response("Unknown RTSP media mode."),
+                }
+            }
+            if let Some(ch) = form.channels.as_deref().filter(|c| !c.is_empty()) {
+                match ch.parse::<Channels>() {
+                    Ok(c) => new.channels = c,
+                    Err(_) => return validation_response("Unknown channel choice."),
                 }
             }
             if let Some(toggles) = ToggleSet::from_form(
@@ -969,6 +978,12 @@ async fn update(
                 match mode.parse::<RtspMediaMode>() {
                     Ok(m) => patch.media_mode = Some(m),
                     Err(_) => return validation_response("Unknown RTSP media mode."),
+                }
+            }
+            if let Some(ch) = form.channels.as_deref().filter(|c| !c.is_empty()) {
+                match ch.parse::<Channels>() {
+                    Ok(c) => patch.channels = Some(c),
+                    Err(_) => return validation_response("Unknown channel choice."),
                 }
             }
             if let Some(toggles) = ToggleSet::from_form(
@@ -1352,6 +1367,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         .schedule_quiet
         .as_ref()
         .map_or(("", ""), |(a, b)| (a.as_str(), b.as_str()));
+    let channels_field = render_channels_field(row);
     let rtsp_fields = if speaks_rtsp(row) {
         render_rtsp_fields(row)
     } else {
@@ -1409,6 +1425,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         <code>sunrise-15</code>) follows the season, which is usually what you mean.
         Leave both blank for none.</p>
     </div>
+    {channels_field}
     {rtsp_fields}
     <div class="aud-edit-pipeline">
       <input type="hidden" name="pipeline_present" value="1">
@@ -1474,6 +1491,46 @@ fn render_edit_form(row: &AudioSource) -> String {
 /// The camera-stream controls of an RTSP row's edit form: transport and media
 /// mode. Both were settable only when the stream was added — the update
 /// handler took them, and no form offered them afterwards.
+/// The channel to analyse (MSC-11). The start-up warning for a Stereo source
+/// tells the operator to choose Left or Right, and this is where they can.
+fn render_channels_field(row: &AudioSource) -> String {
+    let id = escape_html(&row.id);
+    let mut options = String::new();
+    let choices: &[(Channels, &str)] = if row.kind == SourceKind::Rtsp {
+        &[
+            (Channels::Mono, "both, mixed (as cameras always were)"),
+            (Channels::Left, "left only"),
+            (Channels::Right, "right only"),
+        ]
+    } else {
+        &[
+            (Channels::Mono, "mono"),
+            (Channels::Left, "left only (of a stereo microphone)"),
+            (Channels::Right, "right only (of a stereo microphone)"),
+            (Channels::Stereo, "both, averaged"),
+        ]
+    };
+    for (value, label) in choices {
+        let selected = if row.channels == *value {
+            " selected"
+        } else {
+            ""
+        };
+        let _ = write!(
+            options,
+            r#"<option value="{v}"{selected}>{label}</option>"#,
+            v = value.as_str()
+        );
+    }
+    format!(
+        r#"<div class="aud-edit-channels">
+      <label class="bnb-eyebrow" for="src-channels-{id}">Channels to analyse</label>
+      <select id="src-channels-{id}" name="channels">{options}</select>
+      <p class="hint">On a pair of microphones a few centimetres apart, averaging the two cancels some pitches; choose one side.</p>
+    </div>"#
+    )
+}
+
 fn render_rtsp_fields(row: &AudioSource) -> String {
     let sel = |on: bool| if on { " selected" } else { "" };
     format!(
@@ -1514,12 +1571,21 @@ fn render_rtsp_fields(row: &AudioSource) -> String {
 /// `pub(crate)` for the same reason as [`kind_label`] — the onboarding
 /// wizard shows the operator's real capture settings rather than a
 /// plausible-looking constant.
+///
+/// What is recorded, not what the row stores (MSC-11): every capture path
+/// writes 16-bit samples (`arecord -f S16_LE`, ffmpeg's `pcm_s16le`), whatever
+/// `bit_depth` says (24 by default), and a camera is always resampled to
+/// 48 kHz, whatever its row's rate.
 pub(crate) fn detail_for(s: &AudioSource) -> String {
-    let rate_khz = f64::from(s.sample_rate) / 1000.0;
+    let rate = if s.kind == SourceKind::Rtsp {
+        48_000
+    } else {
+        s.sample_rate
+    };
+    let rate_khz = f64::from(rate) / 1000.0;
     let mut out = format!(
-        "{rate_khz:.1} kHz · {channels} · {bit}-bit",
+        "{rate_khz:.1} kHz · {channels} · 16-bit",
         channels = s.channels.as_str(),
-        bit = s.bit_depth,
     );
     // Stereo is the one channel setting that can quietly cost detections, so
     // it says so where the operator chose it. Both channels are kept and the
@@ -1644,7 +1710,7 @@ fn not_found_row(id: &str) -> Response {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
-    use birdnet_db::audio_sources::{Channels, PipelineFlags};
+    use birdnet_db::audio_sources::PipelineFlags;
     use tempfile::TempDir;
 
     /// A refusal the page can show: `200`, nothing swapped, a toast out of
@@ -1757,6 +1823,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         }
@@ -2188,6 +2255,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         };
@@ -2282,6 +2350,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         };
@@ -2309,6 +2378,7 @@ mod tests {
             sample_rate: None,
             rtsp_transport: None,
             media_mode: None,
+            channels: None,
             quiet_start: None,
             quiet_end: None,
         }
@@ -2364,6 +2434,58 @@ mod tests {
         );
         let after = state.with_db(|c| c.get(&other.id)).unwrap().unwrap();
         assert_eq!(after.device_id, "rtsp://other.local/live");
+    }
+
+    /// MSC-11: the detail line printed the row's stored `bit_depth` (24 by
+    /// default) for audio every capture path writes as 16-bit, and a camera's
+    /// stored rate though it is always resampled to 48 kHz.
+    #[test]
+    fn the_detail_line_says_what_is_recorded() {
+        let (_d, state) = fixture();
+        let mut cam = insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam.local/live");
+        cam.sample_rate = 44_100;
+        cam.bit_depth = 24;
+        let line = detail_for(&cam);
+        assert!(line.starts_with("48.0 kHz"), "{line}");
+        assert!(
+            line.contains("16-bit") && !line.contains("24-bit"),
+            "{line}"
+        );
+        // A microphone's rate is its own.
+        let mut mic = insert_one(&state, "src_mic", SourceKind::UsbAlsa, "hw:4,0");
+        mic.sample_rate = 44_100;
+        assert!(
+            detail_for(&mic).starts_with("44.1 kHz"),
+            "{}",
+            detail_for(&mic)
+        );
+    }
+
+    /// MSC-11: the start-up warning told the operator to "set the source to
+    /// Left or Right", and neither the add nor the edit form had a control for
+    /// it: only editing SQLite could.
+    #[tokio::test]
+    async fn the_channel_to_analyse_can_be_chosen_from_the_page() {
+        let (_d, state) = fixture();
+        let mut form = add_form("usb-alsa", "plughw:3,0");
+        form.channels = Some("left".to_owned());
+        let added = create(State(state.clone()), actor(&state), HtmxForm(form)).await;
+        assert_eq!(added.status(), StatusCode::OK);
+        let row = state.with_db(AudioSourceStore::list).unwrap().remove(0);
+        assert_eq!(row.channels, Channels::Left, "the add ignored the choice");
+
+        let mut edit = add_form("", "");
+        edit.channels = Some("right".to_owned());
+        let edited = update(
+            State(state.clone()),
+            actor(&state),
+            Path(row.id.clone()),
+            HtmxForm(edit),
+        )
+        .await;
+        assert_eq!(edited.status(), StatusCode::OK);
+        let row = state.with_db(|c| c.get(&row.id)).unwrap().unwrap();
+        assert_eq!(row.channels, Channels::Right, "the edit ignored the choice");
     }
 
     /// MSC-13: removing a microphone and adding it back minted a new id, so its
