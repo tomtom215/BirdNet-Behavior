@@ -1097,6 +1097,25 @@ mod tests {
         );
     }
 
+    /// The counterpart: a last field that is not `HH:MM:SS` names no source,
+    /// whatever precedes it. Each case on its own let one of the parse's
+    /// conditions go untested (mutation testing on the MSC-17 change).
+    #[test]
+    fn extraction_filename_names_no_source_without_a_trailing_time() {
+        for source in [
+            "/var/lib/birdnet/2026-05-19-birdnet-cam-take2.wav",
+            "/var/lib/birdnet/2026-05-19-birdnet-cam-9:00:00.wav",
+        ] {
+            let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+            d.file_name_extr = Some(source.into());
+            assert_eq!(
+                build_extraction_filename(&d, "wav"),
+                "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.wav",
+                "{source}"
+            );
+        }
+    }
+
     #[test]
     fn extraction_filename_includes_rtsp_id_when_present() {
         let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
