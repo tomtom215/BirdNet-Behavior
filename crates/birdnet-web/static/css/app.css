@@ -4416,9 +4416,12 @@ input.aud-edit-device { font-size: var(--fs-sm); padding: var(--space-6) var(--s
   margin-top: var(--space-4);
 }
 .aud-edit-quiet .hint { flex-basis: 100%; margin: var(--space-2) 0 0; }
-/* An RTSP row's transport and media mode, on a row of their own like the
-   quiet window. */
-.aud-edit-rtsp {
+/* An RTSP row's transport and media mode, and any row's channel choice, each on
+   a row of their own like the quiet window. Without `grid-column` the channel
+   block was auto-placed in the first column and widened it, which squeezed the
+   label and device fields above to nothing. */
+.aud-edit-rtsp,
+.aud-edit-channels {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
@@ -4426,7 +4429,8 @@ input.aud-edit-device { font-size: var(--fs-sm); padding: var(--space-6) var(--s
   gap: var(--space-8);
   margin-top: var(--space-4);
 }
-.aud-edit-rtsp .hint { flex-basis: 100%; margin: var(--space-2) 0 0; }
+.aud-edit-rtsp .hint,
+.aud-edit-channels .hint { flex-basis: 100%; margin: var(--space-2) 0 0; }
 .aud-edit-pair { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); max-width: 100%; }
 .aud-edit-pair select { max-width: 100%; min-width: 0; }
 input.aud-edit-time {
