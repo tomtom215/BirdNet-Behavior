@@ -433,6 +433,6 @@ Not every change is a setting. These pages change things that are not one value 
 
 ## Things that are not settings
 
-* **The station's clock and time zone** belong to the operating system. The setup wizard records the zone it finds so Diagnostics can tell you when the system's disagrees, and says the one command that fixes it; the program cannot change them (it does not run as root).
+* **The station's clock and time zone** belong to the operating system. The setup wizard records the zone it finds so Diagnostics can tell you when the system's disagrees, and says the one command that fixes it. Without a zone from the wizard (a location typed at the installer prompt or into the config file), Diagnostics and the installer compare the system's UTC offset with the station's longitude instead, and warn when they are more than 3½ hours apart: enough to catch a machine on another continent's zone, not one an hour or two out. The program cannot change either (it does not run as root).
 * **Units and the clock face** are settings: the temperature unit (Celsius or Fahrenheit) and the 12- or 24-hour clock are under Settings → General → System & Display (`temperature_unit`, `time_format`), and each browser can also choose its own in Display preferences.
 * **Forgetting the admin password** is recovered from the device itself: the reset link is printed on the station's own console, so that someone who can only reach the page cannot take the station.

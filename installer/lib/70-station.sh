@@ -132,6 +132,83 @@ parse_coords() {
         }'
 }
 
+# Compare the machine's UTC offset with the one the station's longitude implies
+# (longitude / 15 hours), and print a warning when they are more than 3.5 hours
+# apart (exit 0), or nothing (exit 1).
+#
+#   timezone_location_mismatch <lat> <lon> <offset as date +%z prints it> <zone name>
+#
+# The installer never reads or sets the time zone, and capture names every
+# recording from the machine's local time — so a Pi left on Raspberry Pi OS's
+# default Europe/London (or UTC) in Ohio files its dawn chorus at noon, and
+# every hour-of-day chart is wrong without a word said. A location typed here
+# gives the wizard nothing to look a zone up from, so this prompt is the one
+# place that can notice.
+#
+# The margin is the doctor's (SOLAR_OFFSET_TOLERANCE_HOURS in
+# src/doctor/clock.rs, which says why): some correct zones sit 3 hours from the
+# sun with summer time on top — western Alaska, western China on Beijing time,
+# Galicia on Central European time — and those must not be told they are
+# wrong. Half-hour zones need no special case against the unrounded offset,
+# and the gap is taken the short way round the clock, so Kiribati's UTC+14 at
+# 157 W is 0.5 hours out, not 24.5.
+timezone_location_mismatch() {
+    awk -v lat="$1" -v lon="$2" -v off="$3" -v zone="$4" '
+        function rnd(x) { return x < 0 ? -int(-x + 0.5) : int(x + 0.5) }
+        function label(h,   s, a, m) {
+            s = h < 0 ? "-" : "+"; a = h < 0 ? -h : h
+            m = rnd((a - int(a)) * 60)
+            return m ? sprintf("UTC%s%d:%02d", s, int(a), m) : sprintf("UTC%s%d", s, int(a))
+        }
+        BEGIN {
+            if (off !~ /^[-+][0-9][0-9][0-9][0-9]$/) exit 1
+            if (lon !~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ || lon + 0 < -180 || lon + 0 > 180) exit 1
+            clock = (substr(off, 2, 2) + substr(off, 4, 2) / 60) * (substr(off, 1, 1) == "-" ? -1 : 1)
+            gap = (clock - lon / 15) % 24
+            if (gap < 0) gap += 24
+            if (gap > 12) gap -= 24
+            if (gap <= 3.5 && gap >= -3.5) exit 1
+            hours = rnd(gap < 0 ? -gap : gap)
+            # Not inline in the printf: a bare > there is output redirection.
+            way = gap > 0 ? "ahead of" : "behind"
+            printf "This machine'"'"'s clock is set to %s (%s), but the location %s, %s is near %s.\n", \
+                zone, label(clock), lat, lon, label(rnd(lon / 15))
+            printf "  The clock runs about %d hours %s the station'"'"'s day, so detections would be filed at the wrong hours.\n", \
+                hours, way
+            print "  Fix: sudo timedatectl set-timezone <Area/City>   (timedatectl list-timezones lists them),"
+            print "  then sudo systemctl restart birdnet-behavior. A station kept on UTC on purpose can ignore this."
+            exit 0
+        }'
+}
+
+# The machine's time-zone name, for the warning above: what timedatectl says,
+# else /etc/timezone, else the /etc/localtime link; "UTC" when none says.
+host_timezone_name() {
+    local tz=""
+    if command -v timedatectl >/dev/null 2>&1; then
+        tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+    fi
+    if [ -z "${tz}" ] && [ -r /etc/timezone ]; then
+        tz="$(head -n 1 /etc/timezone 2>/dev/null || true)"
+    fi
+    if [ -z "${tz}" ] && [ -L /etc/localtime ]; then
+        tz="$(readlink /etc/localtime 2>/dev/null || true)"
+        tz="${tz##*/zoneinfo/}"
+    fi
+    echo "${tz:-UTC}"
+}
+
+# Warn (never stop) when this machine's time zone is far from the coordinates
+# just entered. A warning only: the station works, its times are shifted, and
+# only the operator knows which of the two is wrong.
+warn_if_timezone_mismatches_location() {
+    local msg line
+    msg="$(timezone_location_mismatch "$1" "$2" "$(date +%z)" "$(host_timezone_name)")" || return 0
+    while IFS= read -r line; do
+        warn "${line}"
+    done <<<"${msg}"
+}
+
 # Generate a strong, shell/URL-friendly random password.
 #
 # Neither branch may end in a consumer that stops reading early. The fallback
@@ -290,6 +367,7 @@ prompt_station_settings() {
                 LATITUDE_VALUE="${coords%% *}"
                 LONGITUDE_VALUE="${coords##* }"
                 success "Location: ${LATITUDE_VALUE}, ${LONGITUDE_VALUE}"
+                warn_if_timezone_mismatches_location "${LATITUDE_VALUE}" "${LONGITUDE_VALUE}"
                 break
                 ;;
             *)

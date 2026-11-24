@@ -60,6 +60,8 @@ pub(super) fn check_clock(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
         system_timezone(),
         detected_timezone(config),
         zoneinfo_version().as_deref(),
+        station_coords(cli, config),
+        birdnet_db::clock::local_utc_offset_secs(),
     ));
     if let Some(check) = solar_window_check(cli, config) {
         out.push(check);
@@ -211,10 +213,18 @@ fn solar_window_verdict(
 ///
 /// A warning, never an error: the station works, its timestamps are just
 /// shifted, and only the operator can say which is right.
+///
+/// Without a zone from the wizard — always the case for a station whose
+/// location was typed at the installer prompt or into the config file — the
+/// machine's current UTC offset (`offset_secs`, daylight saving included) is
+/// compared with the station's longitude instead (OOB-06); see
+/// [`location_offset_check`].
 fn timezone_mismatch_check(
     system: Option<String>,
     detected: Option<String>,
     zoneinfo: Option<&str>,
+    location: Option<(f64, f64)>,
+    offset_secs: i64,
 ) -> Check {
     use birdnet_web::routes::pages::onboarding::plausible_timezone;
     let zoneinfo = zoneinfo.map_or_else(
@@ -254,11 +264,29 @@ fn timezone_mismatch_check(
     // Mars/Olympus". A row that is not a zone is reported as that, and never
     // compared against.
     let Some(detected) = detected else {
+        if let Some(check) =
+            location.and_then(|(lat, lon)| location_offset_check(&system, offset_secs, lat, lon))
+        {
+            return check;
+        }
+        if let Some((_, lon)) = location {
+            return Check::pass(
+                "Timezone",
+                format!(
+                    "{system} (this machine's clock, {zoneinfo}, now {now}) is within \
+                     {SOLAR_OFFSET_TOLERANCE_HOURS} hours of the station's longitude \
+                     ({lon:.2}); the setup wizard has not recorded the station's zone, so \
+                     a wrong zone closer than that cannot be seen",
+                    now = utc_offset_label(offset_secs),
+                ),
+            );
+        }
         return Check::pass(
             "Timezone",
             format!(
                 "{system} (this machine's clock, {zoneinfo}); the setup wizard has not \
-                 recorded the station's zone, so there is nothing to compare it against"
+                 recorded the station's zone and no coordinates are set, so there is nothing \
+                 to compare it against"
             ),
         );
     };
@@ -294,6 +322,113 @@ fn timezone_mismatch_check(
              then sudo systemctl restart birdnet-behavior"
         ),
     )
+}
+
+/// The furthest, in hours, the machine's UTC offset may sit from the station's
+/// solar offset (`longitude / 15`) before [`location_offset_check`] warns.
+///
+/// The audit proposed "more than 2 h" against `round(lon / 15)`. That flags
+/// real stations on their correct zone, because some legal zones sit well away
+/// from the sun, and daylight saving adds an hour on top (the comparison uses
+/// the offset in force *now*, so it has to allow for summer time):
+///
+/// * western Alaska: Nome on `America/Anchorage` in summer (UTC−8 at 165.4° W,
+///   solar −11.0) is 3.0 h out; Adak on `America/Adak` in summer 2.8 h;
+/// * China on one zone: Kashgar on `Asia/Shanghai` (UTC+8 at 76° E, solar
+///   +5.1) is 2.9 h, the country's western edge 3.1 h; Urumqi 2.2 h;
+/// * Spain on Central European time: Madrid in summer 2.2 h, Galicia 2.6 h;
+/// * Argentina on UTC−3: Mendoza 1.6 h; Chile's Easter Island in summer 2.3 h;
+///   Nuuk in summer 2.5 h.
+///
+/// So the margin is 3.5 h against the unrounded solar offset: half an hour
+/// clear of the furthest legal case found (3.1 h), and it needs no special
+/// case for half-hour and 45-minute zones (India, Nepal, Chatham), which a
+/// rounded comparison would misjudge by up to half an hour. What it still
+/// catches is the mistake it is for: a machine on another continent's zone —
+/// Raspberry Pi OS's default `Europe/London` (or UTC) in the Americas, Asia
+/// or Australia is five hours or more out. What it cannot catch is a wrong
+/// zone within about three hours of the right one (UTC on a station in
+/// Germany or Moscow); only the wizard's looked-up zone can say that, and the
+/// comparison above makes it when there is one.
+const SOLAR_OFFSET_TOLERANCE_HOURS: f64 = 3.5;
+
+/// How far, in hours, a UTC offset of `offset_secs` is from the solar offset
+/// at `longitude`, wrapped into −12..=12 so that a zone across the date line
+/// from its longitude (Kiribati's UTC+14 at 157° W, Samoa's UTC+13 at 172° W)
+/// is measured the short way round, which is the true difference in local
+/// time of day. Positive: the clock is ahead of the sun.
+fn solar_offset_gap_hours(offset_secs: i64, longitude: f64) -> f64 {
+    // Real offsets are within ±14 h, so this conversion is exact; anything
+    // outside i32 is not an offset and is treated as UTC.
+    let clock = f64::from(i32::try_from(offset_secs).unwrap_or(0)) / 3600.0;
+    let gap = (clock - longitude / 15.0).rem_euclid(24.0);
+    if gap > 12.0 { gap - 24.0 } else { gap }
+}
+
+/// `UTC+5`, `UTC-3:30`, `UTC+0` — an offset in whole or part hours.
+fn utc_offset_label(offset_secs: i64) -> String {
+    let sign = if offset_secs < 0 { '-' } else { '+' };
+    let (h, m) = (offset_secs.abs() / 3600, (offset_secs.abs() % 3600) / 60);
+    if m == 0 {
+        format!("UTC{sign}{h}")
+    } else {
+        format!("UTC{sign}{h}:{m:02}")
+    }
+}
+
+/// Compare the machine's UTC offset with the station's longitude (pure, for
+/// testing): `None` when they agree within [`SOLAR_OFFSET_TOLERANCE_HOURS`] or
+/// the coordinates are not a position, else the warning (OOB-06).
+///
+/// `offset_secs` is the machine's offset at the moment of the check, so the
+/// caller's clock is the "now" this is judged at; tests pass the offset a zone
+/// has on a chosen date.
+fn location_offset_check(
+    system: &str,
+    offset_secs: i64,
+    latitude: f64,
+    longitude: f64,
+) -> Option<Check> {
+    if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+        return None;
+    }
+    let gap = solar_offset_gap_hours(offset_secs, longitude);
+    if gap.abs() <= SOLAR_OFFSET_TOLERANCE_HOURS {
+        return None;
+    }
+    // Rounded to the nearest whole hour for the reader; the margin above makes
+    // this at least 4.
+    #[allow(clippy::cast_possible_truncation)]
+    let hours = gap.abs().round() as i64;
+    #[allow(clippy::cast_possible_truncation)]
+    let solar = (longitude / 15.0).round() as i64 * 3600;
+    let direction = if gap > 0.0 { "ahead of" } else { "behind" };
+    Some(Check::warn(
+        "Timezone",
+        format!(
+            "this machine's clock is set to {system} ({now}), but the station's location \
+             ({latitude:.2}, {longitude:.2}) is near {solar}: the clock runs about {hours} \
+             hours {direction} the station's day, so every detection is filed at the wrong \
+             hour",
+            now = utc_offset_label(offset_secs),
+            solar = utc_offset_label(solar),
+        ),
+        "Detection times follow this machine's time zone. If the coordinates are right, set \
+         the machine to the station's zone (timedatectl list-timezones lists them): on the \
+         machine itself, sudo timedatectl set-timezone <Area/City>, then sudo systemctl \
+         restart birdnet-behavior; in a container, TZ=<Area/City> in .env, then restart the \
+         container. If the coordinates are wrong, correct them under Settings. A station kept \
+         on UTC on purpose can ignore this",
+    ))
+}
+
+/// The station's coordinates: the flag or config file, else the dashboard's
+/// settings table (`--doctor` runs before the overlay merges it).
+fn station_coords(cli: &Cli, config: Option<&Config>) -> Option<(f64, f64)> {
+    match crate::daemon::resolve_station_coords(cli, config) {
+        (Some(lat), Some(lon)) => Some((lat, lon)),
+        _ => super::config::location_from_settings(config),
+    }
 }
 
 /// The version of the zoneinfo the machine keeps local time with, from the
@@ -661,7 +796,13 @@ mod tests {
 
     #[test]
     fn mismatched_timezone_warns_with_the_exact_fix() {
-        let check = timezone_mismatch_check(Some("UTC".into()), Some("Europe/Berlin".into()), None);
+        let check = timezone_mismatch_check(
+            Some("UTC".into()),
+            Some("Europe/Berlin".into()),
+            None,
+            None,
+            0,
+        );
         assert_eq!(check.status, Status::Warn);
         assert!(check.message.contains("UTC"), "{}", check.message);
         assert!(check.message.contains("Europe/Berlin"));
@@ -688,6 +829,8 @@ mod tests {
             Some("Europe/Berlin".into()),
             Some("Europe/Berlin".into()),
             Some("2025b"),
+            None,
+            0,
         );
         assert_eq!(check.status, Status::Pass);
         assert!(
@@ -704,13 +847,14 @@ mod tests {
     #[test]
     fn no_timezone_on_the_machine_is_a_warning_not_silence() {
         for detected in [None, Some("Europe/Berlin".to_owned())] {
-            let check = timezone_mismatch_check(None, detected, None);
+            let check = timezone_mismatch_check(None, detected, None, None, 0);
             assert_eq!(check.status, Status::Warn, "{check:?}");
             assert!(check.message.contains("UTC hours"), "{}", check.message);
             let fix = check.remediation.expect("a fix");
             assert!(fix.contains("TZ=") && fix.contains("timedatectl"), "{fix}");
         }
-        let check = timezone_mismatch_check(Some("Nowhere/Fake".into()), None, Some("2025b"));
+        let check =
+            timezone_mismatch_check(Some("Nowhere/Fake".into()), None, Some("2025b"), None, 0);
         assert_eq!(check.status, Status::Warn, "{check:?}");
         assert!(
             check.message.contains("not a known zone"),
@@ -725,7 +869,7 @@ mod tests {
         // A known host zone with no recorded station zone is reported as a
         // pass naming the zone (ON-8), which is information, not a nag.
         assert_eq!(
-            timezone_mismatch_check(Some("UTC".into()), None, None).status,
+            timezone_mismatch_check(Some("UTC".into()), None, None, None, 0).status,
             Status::Pass
         );
     }
@@ -792,6 +936,8 @@ mod tests {
             Some("Europe/Berlin".into()),
             Some("Mars/Olympus".into()),
             None,
+            None,
+            0,
         );
         assert_eq!(check.status, crate::doctor::Status::Warn, "{check:?}");
         assert!(check.message.contains("not a known zone"), "{check:?}");
@@ -804,9 +950,129 @@ mod tests {
             "the bogus zone must not become the fix: {check:?}"
         );
 
-        let check = timezone_mismatch_check(Some("Europe/Berlin".into()), None, None);
+        let check = timezone_mismatch_check(Some("Europe/Berlin".into()), None, None, None, 0);
         assert_eq!(check.status, crate::doctor::Status::Pass, "{check:?}");
         assert!(check.message.contains("Europe/Berlin"), "{check:?}");
         assert!(check.message.contains("not recorded"), "{check:?}");
+    }
+
+    // ── time zone against the station's longitude (OOB-06) ──────────────
+    //
+    // Offsets are the ones each zone has on the date named, from tzdata; the
+    // check is handed the offset in force "now", so a test picks its "now" by
+    // picking the offset.
+
+    const OHIO: (f64, f64) = (40.0, -83.0);
+    const HOUR: i64 = 3600;
+
+    /// The gate. A Pi left on Raspberry Pi OS's `Europe/London` in Ohio, with
+    /// coordinates typed at the installer prompt (so no wizard zone): this was
+    /// a plain pass, "nothing to compare it against", while every detection
+    /// was filed five hours late.
+    #[test]
+    fn a_london_clock_on_an_ohio_station_warns_without_a_wizard_zone() {
+        // 2026-01-15 (GMT, UTC+0) and 2026-07-15 (BST, UTC+1).
+        for offset in [0, HOUR] {
+            let check = timezone_mismatch_check(
+                Some("Europe/London".into()),
+                None,
+                Some("2025b"),
+                Some(OHIO),
+                offset,
+            );
+            assert_eq!(check.status, Status::Warn, "offset {offset}: {check:?}");
+            assert!(
+                check.message.contains("Europe/London") && check.message.contains("UTC-6"),
+                "the reader needs the zone it is on and the offset the location implies: {}",
+                check.message
+            );
+            assert!(check.message.contains("wrong hour"), "{}", check.message);
+            let fix = check.remediation.expect("a warning carries a fix");
+            assert!(
+                fix.contains("sudo timedatectl set-timezone")
+                    && fix.contains("TZ=")
+                    && fix.contains(".env"),
+                "both fixes, host and container: {fix}"
+            );
+        }
+    }
+
+    /// Counterpart: the right zone for the same coordinates passes, in winter
+    /// (EST, UTC-5) and in summer (EDT, UTC-4), and says what it compared.
+    #[test]
+    fn a_new_york_clock_on_an_ohio_station_passes() {
+        for offset in [-5 * HOUR, -4 * HOUR] {
+            let check = timezone_mismatch_check(
+                Some("America/New_York".into()),
+                None,
+                None,
+                Some(OHIO),
+                offset,
+            );
+            assert_eq!(check.status, Status::Pass, "offset {offset}: {check:?}");
+            assert!(check.message.contains("longitude"), "{}", check.message);
+        }
+    }
+
+    /// The zones that sit far from the sun on purpose must not be told they
+    /// are wrong. Each is a case named in [`SOLAR_OFFSET_TOLERANCE_HOURS`]'s
+    /// doc, at its summer offset where it has one.
+    #[test]
+    fn zones_legally_far_from_their_solar_offset_do_not_warn() {
+        let cases: &[(&str, f64, f64, i64)] = &[
+            ("Asia/Shanghai", 43.8, 87.6, 8 * HOUR),   // Urumqi, 2.2 h
+            ("Asia/Shanghai", 39.47, 75.99, 8 * HOUR), // Kashgar, 2.9 h
+            ("Europe/Madrid", 40.42, -3.70, 2 * HOUR), // Madrid in CEST, 2.2 h
+            ("Europe/Madrid", 42.88, -8.54, 2 * HOUR), // Santiago de Compostela, 2.6 h
+            ("America/Argentina/Mendoza", -32.89, -68.83, -3 * HOUR),
+            ("America/Anchorage", 64.50, -165.41, -8 * HOUR), // Nome in AKDT, 3.0 h
+            ("America/Adak", 51.88, -176.66, -9 * HOUR),
+            ("Pacific/Kiritimati", 1.87, -157.43, 14 * HOUR), // across the date line
+            ("Pacific/Apia", -13.83, -171.76, 13 * HOUR),
+            ("Asia/Kolkata", 23.02, 72.57, 5 * HOUR + 1800), // half-hour zone
+            ("Asia/Kathmandu", 27.72, 85.32, 5 * HOUR + 2700),
+        ];
+        for &(zone, lat, lon, offset) in cases {
+            assert!(
+                location_offset_check(zone, offset, lat, lon).is_none(),
+                "{zone} at ({lat}, {lon}) is a correct zone and must not warn"
+            );
+        }
+    }
+
+    /// The common wrong states the check is for, and the wrap the right way
+    /// round: Kiribati's own zone passes above, a London clock there does not.
+    #[test]
+    fn another_continents_zone_warns() {
+        let cases: &[(&str, f64, f64, i64)] = &[
+            ("UTC", -33.87, 151.21, 0),              // Sydney on UTC
+            ("Europe/London", 28.61, 77.21, 0),      // Delhi on GMT
+            ("Europe/London", 47.61, -122.33, HOUR), // Seattle on BST
+            ("America/New_York", 52.52, 13.40, -5 * HOUR),
+            ("Europe/London", 1.87, -157.43, 0),
+        ];
+        for &(zone, lat, lon, offset) in cases {
+            assert!(
+                location_offset_check(zone, offset, lat, lon)
+                    .is_some_and(|c| c.status == Status::Warn),
+                "{zone} at ({lat}, {lon}) is another continent's zone and must warn"
+            );
+        }
+    }
+
+    /// The wizard's looked-up zone, when there is one, is the better witness
+    /// and still decides; coordinates that are not a position decide nothing.
+    #[test]
+    fn a_wizard_zone_outranks_the_longitude_and_nonsense_coordinates_are_ignored() {
+        let check = timezone_mismatch_check(
+            Some("America/New_York".into()),
+            Some("America/New_York".into()),
+            None,
+            Some((40.0, 13.4)),
+            -5 * HOUR,
+        );
+        assert_eq!(check.status, Status::Pass, "{check:?}");
+        assert!(location_offset_check("UTC", 0, 40.0, -500.0).is_none());
+        assert!(location_offset_check("UTC", 0, 95.0, -83.0).is_none());
     }
 }
