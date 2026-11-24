@@ -125,8 +125,16 @@ fn render_content(
     let help_link = super::help::help_link(super::help::Topic::Reports);
     let busiest_count = busiest.map_or(0, |d| d.count);
     let new_this_year = new.len();
-    let per_day = if active_days > 0 {
-        total / i64::try_from(active_days).unwrap_or(1).max(1)
+    // The days the average and the closing line count: the days the station listened, from
+    // the ledger, or where there is none the days something was heard, said as such (UIC-01).
+    // Counting only the days with a detection called 250 of 320 listened days "250 days of
+    // listening", and left the silent days out of the average.
+    let listened = effort.and_then(super::listening::listened_day_count);
+    let (days, days_are) =
+        listened.map_or((active_days, "with a detection"), |n| (n, "of listening"));
+    let days_are = format!("{} {days_are}", if days == 1 { "day" } else { "days" });
+    let per_day = if days > 0 {
+        total / i64::try_from(days).unwrap_or(1).max(1)
     } else {
         0
     };
@@ -158,12 +166,17 @@ fn render_content(
     let _ = write!(
         html,
         r#"<div class="rp-stats">
-  <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} a day</div></div>
+  <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} {per_what}</div></div>
   <div class="rp-stat"><div class="v">{species}</div><div class="l">species heard</div><div class="d">this year</div></div>
   <div class="rp-stat"><div class="v rare">{new_this_year}</div><div class="l">new to your list</div></div>
   <div class="rp-stat"><div class="v">{busy}</div><div class="l">busiest day</div><div class="d">{busy_date}</div></div>
 </div>"#,
         det = group_thousands(total),
+        per_what = if listened.is_some() {
+            "a day"
+        } else {
+            "a day with a detection"
+        },
         busy = group_thousands(busiest_count),
         busy_date = busiest.map_or_else(|| "—".to_string(), |d| escape_html(&d.date)),
     );
@@ -287,12 +300,11 @@ fn render_content(
         html,
         r#"<div class="bnb-card pad yir-close">
   <div class="bnb-eyebrow">The tally</div>
-  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} days of listening in {year}.</p>
+  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} {days_are} in {year}.</p>
   <p class="bnb-meta">Here's to next year's first dawn chorus.</p>
 </div>"#,
         species = species,
         total = group_thousands(total),
-        days = active_days,
     );
 
     html
@@ -626,6 +638,47 @@ mod tests {
             html.contains("Thu 21 May 2026&#10;Listened all day and heard none"),
             "{html}"
         );
+    }
+
+    /// UIC-01. The days of listening come from the ledger, not from the days
+    /// something was detected, and the daily average divides by them. Ten
+    /// listened days, six with ten detections each: "10 days of listening" and
+    /// "≈ 6 a day". Counterpart: with no ledger it says what it can count.
+    #[test]
+    fn the_days_of_listening_are_the_days_the_station_listened() {
+        let daily: Vec<_> = (1..=6)
+            .map(|d| birdnet_db::sqlite::DailyCount {
+                date: format!("2026-05-{d:02}"),
+                count: 10,
+            })
+            .collect();
+        let effort: std::collections::BTreeMap<String, f64> = (1..=10)
+            .map(|d| (format!("2026-05-{d:02}"), 86_400.0))
+            .collect();
+        let render = |effort| {
+            render_content(
+                "2026-05-22",
+                &daily,
+                &[],
+                &[],
+                effort,
+                &[],
+                &birdnet_core::i18n::NameLocalizer::english(),
+            )
+        };
+        let html = render(Some(&effort));
+        assert!(
+            html.contains("across 10 days of listening in 2026"),
+            "{html}"
+        );
+        assert!(html.contains("≈ 6 a day"), "{html}");
+
+        let html = render(None);
+        assert!(
+            html.contains("across 6 days with a detection in 2026"),
+            "{html}"
+        );
+        assert!(!html.contains("days of listening"), "{html}");
     }
 
     /// Two equal days: the busiest is the first, whatever order a fold meets

@@ -9,10 +9,12 @@
 //! | `ebird`   | eBird-compatible CSV export               |
 //! | `birddb`  | BirdNET-Pi BirdDB.txt legacy export       |
 //! | `model_scores` | Each classifier's own score per detection |
+//! | `effort`  | The hourly effort ledger, and a species' detection history |
 
 mod birddb;
 mod csv;
 mod ebird;
+mod effort;
 mod model_scores;
 mod raven;
 
@@ -36,6 +38,8 @@ pub fn router() -> Router<AppState> {
         .route("/detections/export", get(csv::export_detections))
         .route("/species/export", get(csv::export_species))
         .route("/detections/export/ebird", get(ebird::export_ebird))
+        .route("/detections/export/history", get(effort::export_history))
+        .route("/effort/export", get(effort::export_effort))
         .route("/detections/export/birddb", get(birddb::export_birddb))
         .route("/detections/export/raven", get(raven::export_raven))
         .route(

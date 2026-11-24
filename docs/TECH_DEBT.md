@@ -43,29 +43,24 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   (`Option<i64>`) and `record`'s comparison, which want their own compatibility
   tests against journals written by earlier versions.
 
-## TD-4 The Capture tab's duplicate guard reads an unreadable source list as empty; the wizard logs it and says nothing
+## TD-4 The setup wizard logs a failed source read and says nothing
 
-* **Where:** `crates/birdnet-web/src/routes/admin/audio.rs` (`create`: the check
-  that refuses to add the same source twice, `.with_read_db(AudioSourceStore::list)
-  .unwrap_or_default()`) and `crates/birdnet-web/src/routes/pages/onboarding.rs`
-  (`add_source`).
-* **What it does:** `create` reads the list with `.unwrap_or_default()`, so a list
-  that could not be read passes the "already configured" check and the insert is
-  attempted; on a database that cannot be read the insert fails too, so the cost is
-  a duplicate only if the read fails and the write succeeds. The wizard no longer
-  treats the list as empty: `add_source` matches on the read, logs "could not read
-  the audio sources; the microphone was not added" at `error` and returns, but it
-  returns `()`, so the page the person sees does not say that nothing was added.
-  The other sites this entry first listed (`sources_body`, `listen_default`,
-  `count_oobs`, `listen_default_id`) were rewritten by the setup-wizard change and no
-  longer default their errors.
-* **Evidence:** read at the cited places on 2026-10-21; the rows of class
-  `tracked:TD-4` in `tests/data/read_default_sweep.tsv` (lines 33 and 134 to 137)
-  are what the sweep still reports, and I did not re-classify the four wizard rows
-  after the rewrite.
-* **Why it is open:** the guard's cost is a duplicate row in a corner case, and the
-  wizard's fix is a message on a page that has just been rewritten; neither was part
-  of the change that found them.
+* **Where:** `crates/birdnet-web/src/routes/pages/onboarding.rs` (`add_source`).
+* **What it does:** `add_source` matches on the read of the source list, logs
+  "could not read the audio sources; the microphone was not added" at `error` and
+  returns, but it returns `()`, so the page the person sees does not say that
+  nothing was added. The Capture tab's own duplicate guard, which this entry also
+  covered, read the list with `.unwrap_or_default()` until WP-04 of the 2026-11
+  audit (MSC-10); it now refuses when the read fails. The other sites this entry
+  first listed (`sources_body`, `listen_default`, `count_oobs`,
+  `listen_default_id`) were rewritten by the setup-wizard change and no longer
+  default their errors.
+* **Evidence:** read at the cited places on 2026-10-21 and the Capture tab re-read
+  on 2026-11-24; the rows of class `tracked:TD-4` in
+  `tests/data/read_default_sweep.tsv` are what the sweep still reports, and I did
+  not re-classify the four wizard rows after the rewrite.
+* **Why it is open:** the wizard's fix is a message on a page that has just been
+  rewritten, and was not part of the change that found it.
 
 ## TD-5 RTSP credentials are on ffmpeg's command line
 
@@ -151,21 +146,15 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   decision first: whether a probe that can never answer is "unchecked" or simply "not
   applicable here", and how the API says which.
 
-## TD-9 A detection's comments are addressed by date, time and species
+## TD-9 A relabelled detection leaves its comments under the old name
 
-* **Where:** `crates/birdnet-db/src/detection_comments.rs` (`list` selects `WHERE date = ?1 AND time
-  = ?2 AND sci_name = ?3`, line 201; `detection_comments` has no clip column, migration 38) and
-  `crates/birdnet-web/src/routes/pages/detection_comments.rs` (`thread_placeholder(date, time,
-  sci_name)`).
-* **What it does:** the thread on a detection's page is the thread of every detection that shares
-  its date, time and species. Two microphones that heard one bird in the same second have two
-  detections, and a comment on the one is shown under the other. A relabel leaves a thread under
-  the old name. This is the shape reviews had until migration 59, with a smaller consequence: a
-  comment withdraws nothing from any count.
-* **Evidence:** read at the two places above; not reproduced with a test.
-* **Why it is open:** the reviews change (migration 59) was already a table rebuild, a data
-  decision about legacy rows and a change to every form that posts a verdict; comments are
-  append-only records whose deletion is audited one by one, so re-keying them wants its own
-  decision about what a comment on an ambiguous legacy triple becomes. The same key
-  (`DetectionKey`: date, time, species, clip) is the one to use.
-
+* **Where:** `crates/birdnet-db/src/detection_comments.rs` (`list` selects by date, time, species
+  and clip). Comments now name one detection by its clip (migration 62), so two sources' detections
+  of one second have their own threads; what remains is relabelling.
+* **What it does:** a comment names its detection's species, and nothing moves it when the
+  detection's `Sci_Name` changes, so the relabelled detection's thread is empty and the old thread
+  is on no detection's page (the API still lists it by the old name). Reviews handle the same case with a trigger
+  (`detections_relabel_detaches_review`, migration 59).
+* **Evidence:** read at the place above; not reproduced with a test. **PLAUSIBLE**.
+* **Why it is open:** a comment is about what was heard, and whether it should follow the new name,
+  stay as history, or be shown on both is a decision about meaning, not a key change.

@@ -94,6 +94,7 @@ async fn two_comments_on_one_detection_both_survive_and_the_page_shows_both() {
                     date: DATE,
                     time: TIME,
                     sci_name: SCI,
+                    file_name: Some("x.wav"),
                     user_id: None,
                     author,
                     body,
@@ -137,6 +138,11 @@ async fn the_detail_page_loads_the_thread() {
     assert!(
         page.contains("Dryobates%20villosus"),
         "keyed on the scientific name: {page}"
+    );
+    assert!(
+        page.contains("file_name=x.wav"),
+        "and on the detection's clip, so another source's detection of the same \
+         second has its own thread: {page}"
     );
 }
 
@@ -289,7 +295,7 @@ async fn the_pages_write_endpoints_exist_and_need_a_sign_in() {
 
     assert!(
         state
-            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI))
+            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI, None))
             .expect("list")
             .is_empty(),
         "and nothing was written"
@@ -324,7 +330,7 @@ async fn the_api_write_path_is_not_open() {
 
     assert!(
         state
-            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI))
+            .with_db(|conn| birdnet_db::detection_comments::list(conn, DATE, TIME, SCI, None))
             .expect("list")
             .is_empty(),
         "and must not have written one"

@@ -116,6 +116,12 @@ Two things follow from that, and both are deliberate:
   comment deleted because of what it said must not survive in the log that
   recorded its deletion.
 
+A comment belongs to the one detection it was written on. When two microphones
+hear the same bird in the same second, each detection has its own thread. A
+comment written before comments were kept per recording, on such a second, is
+shown under each of them with a line saying it may be about the other source's
+detection, since which one it meant cannot be told.
+
 Comments are up to 2 000 characters, and writing one needs an admin sign-in —
 the same gate as confirming or rejecting. Anyone who can see the detection can
 read the thread.

@@ -141,6 +141,10 @@ pub struct QuarantineRecord<'a> {
     pub sensitivity: Option<f64>,
     /// The run's analysis-window overlap in seconds; `Overlap` on approval.
     pub overlap: Option<f64>,
+    /// The audio source that heard it (the stream id, or `local`), as
+    /// `detections.Source` records it (migration 61). Becomes the detection's
+    /// `Source` on approval; `None` only for a row no live source wrote.
+    pub source: Option<&'a str>,
 }
 
 /// A quarantine row read from the database.
@@ -186,6 +190,9 @@ pub struct QuarantineRow {
     pub sensitivity: Option<f64>,
     /// The run's overlap in seconds (migration 46).
     pub overlap: Option<f64>,
+    /// The audio source that heard it (migration 61); `None` for a row
+    /// quarantined before the source was recorded.
+    pub source: Option<String>,
 }
 
 /// Aggregate counts for the quarantine queue.
@@ -227,14 +234,17 @@ pub enum QuarantineFilter {
 /// executes.
 pub(crate) const INSERT_QUARANTINE_SQL: &str = "INSERT INTO quarantine
             (date, time, sci_name, com_name, confidence, sf_probability,
-             reason, file_name, lat, lon, week, run_id, cutoff, sens, overlap)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT(date, time, sci_name) DO NOTHING";
+             reason, file_name, lat, lon, week, run_id, cutoff, sens, overlap, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         ON CONFLICT(date, time, sci_name, COALESCE(file_name, '')) DO NOTHING";
 
 /// Insert a new quarantine entry.
 ///
-/// Duplicate entries (same `date`, `time`, `sci_name`) are silently ignored so that
-/// re-processing a recording does not create duplicate quarantine rows.
+/// Duplicate entries (same `date`, `time`, `sci_name` and recording) are
+/// silently ignored so that re-processing a recording does not create
+/// duplicate quarantine rows. The recording is part of the key (migration 61),
+/// as it is for `detections`: two sources holding back one bird in one second
+/// are two entries, not one entry and a discarded one.
 ///
 /// # Errors
 ///
@@ -265,6 +275,7 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
             record.cutoff,
             record.sensitivity,
             record.overlap,
+            record.source,
         ],
     )?;
     Ok(())
@@ -294,9 +305,10 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     let inserted = tx.execute(
         "INSERT INTO detections
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
-             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id)
+             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id, Source)
          SELECT date, time, sci_name, com_name, confidence,
-                lat, lon, cutoff, week, sens, overlap, file_name, 0, 'confirmed', run_id
+                lat, lon, cutoff, week, sens, overlap, file_name, 0, 'confirmed', run_id,
+                source
          FROM quarantine WHERE id = ?1
          ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
@@ -383,7 +395,7 @@ pub fn get_quarantine(conn: &Connection, id: i64) -> Result<Option<QuarantineRow
     let mut stmt = conn.prepare(
         "SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
                 reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id,
-                cutoff, sens, overlap
+                cutoff, sens, overlap, source
          FROM quarantine WHERE id = ?1",
     )?;
 
@@ -417,7 +429,7 @@ pub fn list_quarantine(
     let sql = format!(
         "SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
                 reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id,
-                cutoff, sens, overlap
+                cutoff, sens, overlap, source
          FROM quarantine
          {where_clause}
          ORDER BY created_at DESC
@@ -524,6 +536,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuarantineRow> {
         cutoff: row.get(16)?,
         sensitivity: row.get(17)?,
         overlap: row.get(18)?,
+        source: row.get(19)?,
     })
 }
 
@@ -574,6 +587,7 @@ mod tests {
             cutoff: Some(0.8),
             sensitivity: Some(1.25),
             overlap: Some(0.5),
+            source: Some("cam1"),
         }
     }
 
@@ -600,6 +614,53 @@ mod tests {
         insert_quarantine(&conn, &rec).unwrap(); // duplicate
         let rows = list_quarantine(&conn, QuarantineFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 1, "duplicate should be ignored");
+    }
+
+    /// MSC-04, at the query layer: the same species in the same second from
+    /// two recordings is two entries, and approving each admits a detection
+    /// that keeps its own source and clip. `insert_ignores_duplicate` above is
+    /// the counterpart: the same recording offered twice is still one entry.
+    #[test]
+    fn two_recordings_of_one_second_are_two_entries_that_keep_their_source() {
+        let conn = open();
+        let pond = QuarantineRecord {
+            file_name: Some("2026-03-27-birdnet-pond-07:15:30.wav"),
+            source: Some("pond"),
+            ..sample(QuarantineReason::LowConfidence)
+        };
+        let lake = QuarantineRecord {
+            file_name: Some("2026-03-27-birdnet-lake-07:15:30.wav"),
+            source: Some("lake"),
+            ..sample(QuarantineReason::LowConfidence)
+        };
+        insert_quarantine(&conn, &pond).unwrap();
+        insert_quarantine(&conn, &lake).unwrap();
+        let rows = list_quarantine(&conn, QuarantineFilter::All, 10, 0).unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        for row in &rows {
+            assert!(approve_quarantine(&conn, row.id).unwrap());
+        }
+        let mut admitted: Vec<(Option<String>, Option<String>)> = conn
+            .prepare("SELECT Source, File_Name FROM detections")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        admitted.sort();
+        assert_eq!(
+            admitted,
+            [
+                (
+                    Some("lake".to_owned()),
+                    Some("2026-03-27-birdnet-lake-07:15:30.wav".to_owned())
+                ),
+                (
+                    Some("pond".to_owned()),
+                    Some("2026-03-27-birdnet-pond-07:15:30.wav".to_owned())
+                ),
+            ]
+        );
     }
 
     /// A human approving a quarantined detection is a review with a verdict.
@@ -849,6 +910,7 @@ mod tests {
             None::<f64>,
             None::<f64>,
             None::<f64>,
+            None::<&str>,
         ];
         assert_eq!(conn.execute(super::INSERT_QUARANTINE_SQL, args).unwrap(), 1);
         assert_eq!(
@@ -884,6 +946,7 @@ mod tests {
                     None::<f64>,
                     None::<f64>,
                     None::<f64>,
+                    None::<&str>,
                 ],
             )
             .expect_err("an unknown reason must not be silently discarded");
@@ -917,6 +980,7 @@ mod tests {
                     None::<f64>,
                     None::<f64>,
                     None::<f64>,
+                    None::<&str>,
                 ],
             )
             .expect_err("a NULL in a NOT NULL column must not be silently discarded");

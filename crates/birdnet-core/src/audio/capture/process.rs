@@ -201,14 +201,6 @@ fn capture_log_line(line: &str) -> String {
     crate::config::redact::redact_credentials_in_text(line)
 }
 
-/// The rate ffmpeg resamples an RTSP stream to before writing its segments.
-///
-/// Every classifier this project ships listens at 48 or 32 kHz, at or below
-/// this, so judging a camera's band against it (ACC-14) gives the verdict
-/// judging it against the classifier would: the two differ only for a
-/// classifier below 24 kHz.
-const RTSP_CAPTURE_RATE: u32 = 48_000;
-
 /// Reads the sample rate of the first audio stream of ffmpeg's *input* from
 /// the banner it writes to stderr when it opens a stream:
 ///
@@ -221,7 +213,7 @@ const RTSP_CAPTURE_RATE: u32 = 48_000;
 /// ```
 ///
 /// It is the only place a camera's own rate appears: the segment ffmpeg writes
-/// is resampled to [`RTSP_CAPTURE_RATE`], so its recordings decode at 48 kHz
+/// is resampled to [`NETWORK_SAMPLE_RATE`], so its recordings decode at 48 kHz
 /// whatever the camera sends. The output section, which names that 48 kHz, is
 /// not read.
 #[derive(Debug, Default)]
@@ -271,7 +263,7 @@ fn rtsp_band_report(
     line: &str,
 ) -> Option<crate::audio::band::BandWarning> {
     let rate = banner.observe(line)?;
-    watch.first_look(source, rate, RTSP_CAPTURE_RATE)
+    watch.first_look(source, rate, NETWORK_SAMPLE_RATE)
 }
 
 /// Drain a capture subprocess's stderr into the log, line by line.
@@ -317,7 +309,7 @@ fn drain_capture_stderr(child: &mut Child, source: &str, read_input_rate: bool) 
                                      it. Set the camera's audio to 32 or 48 kHz if it offers it",
                                     w.source_rate_hz,
                                     f64::from(w.source_nyquist_hz()) / 1000.0,
-                                    RTSP_CAPTURE_RATE,
+                                    NETWORK_SAMPLE_RATE,
                                     f64::from(w.source_nyquist_hz()) / 1000.0,
                                 );
                             }
@@ -503,7 +495,28 @@ fn apply_audio_filters(
     pipeline: crate::audio::capture::types::AudioPipeline,
     eq: &crate::audio::eq::EqChain,
 ) {
-    if let Some(chain) = audio_filter_chain(gain_db, pipeline, eq) {
+    apply_audio_filters_picking(cmd, None, gain_db, pipeline, eq);
+}
+
+/// [`apply_audio_filters`], first keeping only the channel `pick` names of a
+/// stereo input (MSC-11). One `-af`: ffmpeg keeps only the last of several.
+fn apply_audio_filters_picking(
+    cmd: &mut Command,
+    pick: Option<tee::ChannelPick>,
+    gain_db: f32,
+    pipeline: crate::audio::capture::types::AudioPipeline,
+    eq: &crate::audio::eq::EqChain,
+) {
+    let pan = pick.map(|pick| match pick {
+        tee::ChannelPick::Left => "pan=mono|c0=c0",
+        tee::ChannelPick::Right => "pan=mono|c0=c1",
+    });
+    let chain = match (pan, audio_filter_chain(gain_db, pipeline, eq)) {
+        (Some(pan), Some(rest)) => Some(format!("{pan},{rest}")),
+        (Some(pan), None) => Some(pan.to_owned()),
+        (None, rest) => rest,
+    };
+    if let Some(chain) = chain {
         cmd.arg("-af").arg(chain);
     }
 }
@@ -759,10 +772,31 @@ pub fn detect_pipewire_or_pulseaudio() -> bool {
 ///
 /// Returns `CaptureError` if `ffmpeg` cannot be started.
 pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
+    let (mut cmd, pulse_device) = pipewire_command(config)?;
+    let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
+    drain_capture_stderr(&mut child, &pulse_device, false);
+
+    tracing::info!(
+        device = %pulse_device,
+        gain_db = config.gain_db,
+        "started PipeWire/PulseAudio capture via ffmpeg pulse"
+    );
+    Ok(CaptureProcess {
+        child,
+        source: config.source.clone(),
+        tee: None,
+    })
+}
+
+/// The ffmpeg command a `PipeWire` source is captured with, and the pulse
+/// device it opens — built apart from the spawn so the argument list can be
+/// checked.
+fn pipewire_command(config: &RecordingConfig) -> Result<(Command, String), CaptureError> {
     let CaptureSource::PipeWire {
         ref device,
         sample_rate,
         channels,
+        channel_pick,
         ref stream_id,
     } = config.source
     else {
@@ -781,38 +815,32 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
     let output_path = config.output_dir.join(&filename_pattern);
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-f")
-        .arg("pulse")
-        .arg("-i")
+    cmd.arg("-f").arg("pulse");
+    if channel_pick.is_some() {
+        // A pick needs both channels from the server; the pan keeps one.
+        cmd.arg("-channels").arg("2");
+    }
+    cmd.arg("-i")
         .arg(pulse_device)
         .arg("-ar")
         .arg(sample_rate.to_string())
         .arg("-ac")
-        .arg(channels.to_string());
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
-    let mut child = cmd
-        .arg("-f")
+        .arg(if channel_pick.is_some() { 1 } else { channels }.to_string());
+    apply_audio_filters_picking(
+        &mut cmd,
+        channel_pick,
+        config.gain_db,
+        config.pipeline,
+        &config.eq_chain,
+    );
+    cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
         .arg(config.segment_duration_secs.to_string())
         .arg("-strftime")
         .arg("1")
-        .arg(output_path.to_string_lossy().as_ref())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    drain_capture_stderr(&mut child, pulse_device, false);
-
-    tracing::info!(
-        device = pulse_device,
-        gain_db = config.gain_db,
-        "started PipeWire/PulseAudio capture via ffmpeg pulse"
-    );
-    Ok(CaptureProcess {
-        child,
-        source: config.source.clone(),
-        tee: None,
-    })
+        .arg(output_path.to_string_lossy().as_ref());
+    Ok((cmd, pulse_device.to_owned()))
 }
 
 /// Start an audio capture process for an RTSP stream via `ffmpeg`.
@@ -846,6 +874,7 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
         ref stream_id,
         transport,
         media_mode,
+        channel_pick,
     } = config.source
     else {
         return Err(CaptureError::Config("expected RTSP source".into()));
@@ -877,10 +906,18 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
     .arg("-acodec")
     .arg("pcm_s16le")
     .arg("-ar")
-    .arg(RTSP_CAPTURE_RATE.to_string())
+    .arg(NETWORK_SAMPLE_RATE.to_string())
     .arg("-ac")
     .arg("1");
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
+    // Without a pick `-ac 1` averages a stereo stream; with one, the pan
+    // keeps the channel asked for and `-ac 1` has nothing left to mix.
+    apply_audio_filters_picking(
+        &mut cmd,
+        channel_pick,
+        config.gain_db,
+        config.pipeline,
+        &config.eq_chain,
+    );
     cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
@@ -890,6 +927,19 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
         .arg(output_path.to_string_lossy().as_ref());
     Ok((cmd, stream_id.as_str(), url.as_str()))
 }
+
+/// The rate every network stream is resampled to, whatever its row holds.
+///
+/// Every classifier this project ships listens at 48 or 32 kHz, at or below
+/// this, so judging a camera's band against it (ACC-14) gives the verdict
+/// judging it against the classifier would: the two differ only for a
+/// classifier below 24 kHz.
+pub const NETWORK_SAMPLE_RATE: u32 = 48_000;
+
+/// The sample depth every source is recorded at: `arecord -f S16_LE` for a
+/// microphone, and ffmpeg's 16-bit PCM for `PipeWire` and network streams.
+/// A row's `bit_depth` is not read by capture.
+pub const RECORDED_BIT_DEPTH: u8 = 16;
 
 /// Spawn the appropriate capture process based on the source type.
 ///
@@ -1112,6 +1162,7 @@ mod tests {
                     stream_id: "RTSP_1".into(),
                     transport: RtspTransport::Auto,
                     media_mode: mode,
+                    channel_pick: None,
                 },
                 output_dir: std::env::temp_dir(),
                 segment_duration_secs: 15,
@@ -1146,6 +1197,97 @@ mod tests {
         );
     }
 
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn config_for(source: CaptureSource, gain_db: f32) -> RecordingConfig {
+        RecordingConfig {
+            source,
+            output_dir: std::env::temp_dir(),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+            gain_db,
+            pipeline: crate::audio::capture::types::AudioPipeline::none(),
+            eq_chain: crate::audio::eq::EqChain::default(),
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
+        }
+    }
+
+    fn filter_of(args: &[String]) -> Option<&str> {
+        assert!(
+            args.iter().filter(|a| *a == "-af").count() <= 1,
+            "ffmpeg keeps only the last -af: {args:?}"
+        );
+        let at = args.iter().position(|a| a == "-af")?;
+        Some(args[at + 1].as_str())
+    }
+
+    /// MSC-11. A camera or `PipeWire` source set to one channel is captured
+    /// as that channel, not as the average of both.
+    #[test]
+    fn a_picked_channel_reaches_the_ffmpeg_command() {
+        let rtsp = |pick| {
+            config_for(
+                CaptureSource::Rtsp {
+                    url: "rtsp://cam.local/live".into(),
+                    stream_id: "src_cam".into(),
+                    transport: RtspTransport::Auto,
+                    media_mode: RtspMediaMode::Full,
+                    channel_pick: pick,
+                },
+                6.0,
+            )
+        };
+        let right = args_of(
+            &rtsp_command(&rtsp(Some(tee::ChannelPick::Right)))
+                .expect("command")
+                .0,
+        );
+        let chain = filter_of(&right).expect("a filter");
+        assert!(chain.starts_with("pan=mono|c0=c1,"), "{chain}");
+        assert!(chain.contains("volume="), "the gain stage is kept: {chain}");
+
+        let pipewire = |pick, channels| {
+            config_for(
+                CaptureSource::PipeWire {
+                    device: String::new(),
+                    sample_rate: 48_000,
+                    channels,
+                    channel_pick: pick,
+                    stream_id: Some("src_pw".into()),
+                },
+                0.0,
+            )
+        };
+        let left = args_of(
+            &pipewire_command(&pipewire(Some(tee::ChannelPick::Left), 2))
+                .expect("command")
+                .0,
+        );
+        assert_eq!(filter_of(&left), Some("pan=mono|c0=c0"));
+        let ac = left.iter().position(|a| a == "-ac").expect("-ac");
+        assert_eq!(
+            left[ac + 1],
+            "1",
+            "a picked channel is written mono: {left:?}"
+        );
+
+        // Counterpart: without a pick nothing is panned.
+        let plain = args_of(&rtsp_command(&rtsp(None)).expect("command").0);
+        assert!(
+            !filter_of(&plain).unwrap_or("").contains("pan="),
+            "{plain:?}"
+        );
+        let stereo = args_of(&pipewire_command(&pipewire(None, 2)).expect("command").0);
+        assert_eq!(filter_of(&stereo), None);
+        let ac = stereo.iter().position(|a| a == "-ac").expect("-ac");
+        assert_eq!(stereo[ac + 1], "2");
+    }
+
     /// The capture command for a stream at `url`, with the stall timeout on.
     fn stream_args(url: &str) -> Vec<String> {
         let config = RecordingConfig {
@@ -1154,6 +1296,7 @@ mod tests {
                 stream_id: "RTSP_1".into(),
                 transport: RtspTransport::Udp,
                 media_mode: RtspMediaMode::AudioOnly,
+                channel_pick: None,
             },
             output_dir: std::env::temp_dir(),
             segment_duration_secs: 15,
@@ -1243,6 +1386,7 @@ mod tests {
             stream_id: "cam1".into(),
             transport: RtspTransport::Auto,
             media_mode: RtspMediaMode::Full,
+            channel_pick: None,
         };
         assert_eq!(required_tool(&src), "ffmpeg");
     }
