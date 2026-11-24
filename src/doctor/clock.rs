@@ -181,12 +181,16 @@ fn solar_window_verdict(
         0 => Check::fail(
             "Recording schedule (solar)",
             format!("the solar window allows NO recording today — {window}"),
-            "this station would record nothing at all. Set RECORDING_SCHEDULE=all-day to keep              capturing while this is investigated, and report the station's latitude/longitude              with this message",
+            "this station would record nothing at all. Set RECORDING_SCHEDULE=all-day to keep \
+             capturing while this is investigated, and report the station's latitude/longitude \
+             with this message",
         ),
         1440 => Check::warn(
             "Recording schedule (solar)",
             format!("the solar window allows the whole day — {window}"),
-            "a solar schedule that never inhibits is either a polar summer or a gate that has              stopped gating. If this station is not inside a polar circle, set              RECORDING_SCHEDULE=all-day so the intent is explicit and report this message",
+            "a solar schedule that never inhibits is either a polar summer or a gate that has \
+             stopped gating. If this station is not inside a polar circle, set \
+             RECORDING_SCHEDULE=all-day so the intent is explicit and report this message",
         ),
         _ => Check::pass(
             "Recording schedule (solar)",
@@ -707,6 +711,26 @@ mod tests {
                 .is_some_and(|r| r.contains("all-day")),
             "must say what to do about it"
         );
+    }
+
+    /// N14-02: the solar verdicts' remedies are one sentence each in the
+    /// terminal, not a sentence with fourteen-space holes where the source
+    /// wrapped without a `\` continuation.
+    #[test]
+    fn solar_window_remedies_read_as_plain_sentences() {
+        for minutes in [0, 1440, 600] {
+            let check = solar_window_verdict(minutes, None, 0);
+            let printed = check.to_string();
+            // `Check`'s own layout indents the remedy line; the text after
+            // its arrow is the remedy as written.
+            for line in printed.lines() {
+                let text = line.trim_start().trim_start_matches("→ ");
+                assert!(
+                    !text.contains("  "),
+                    "a run of spaces in the doctor's output for {minutes} minutes: {line:?}"
+                );
+            }
+        }
     }
 
     /// The counterpart. A gate that has stopped gating looks like success from
