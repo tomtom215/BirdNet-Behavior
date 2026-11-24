@@ -12,6 +12,8 @@ You can run **several sources at once** — one or more USB/ALSA mics, a PipeWir
 
 One device is one source. Adding a microphone or camera that is already in the list is refused, and so is editing a source onto another source's device, whichever way the device is written: `hw:1,0` and `plughw:1,0` are the same card (and `plughw:CARD=PRO,DEV=0` is too, when card 1 is `PRO`), and a camera address is the same camera with or without its `user:pass@`, an explicit `:554`, or a trailing `/`. Adding back a device you removed brings back the source it was — the same source id, so its detection history, classifier route and settings carry on — rather than starting a new one.
 
+The config file's `ALSA_CARD` / `ALSA_CARDS` / `RTSP_URL` only fill this list at the station's very first start. Once any source has been configured here, the list is the only thing capture reads: removing every source stops recording (the journal says so at the next start), and the config file's devices do not come back.
+
 ## Independent supervision (built for the field)
 
 Every source is supervised on its own, which is what makes a multi-camera station survivable when nobody is on site:

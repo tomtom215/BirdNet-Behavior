@@ -218,29 +218,25 @@ enum SolarEvent {
     Sunset,
 }
 
-/// Resolve capture sources from the `audio_sources` SQLite table.
+/// Resolve capture sources from the active rows of the `audio_sources` table.
 ///
-/// Returns `None` when the DB read errors (the caller treats that as
-/// "fall back to CLI/config"); returns `Some(empty)` when the table is
-/// present but every row is disabled (the caller also falls back); and
-/// `Some(non-empty)` only when at least one row is active. Each resolved
-/// source carries the row's `gain_db` and (parsed) `schedule_quiet`, so the
-/// admin-UI per-source gain and quiet window actually take effect.
-///
-/// O-13 stage 1 — additive layer over the existing CLI/config path.
-/// Subsequent stages will retire the legacy path once every deployed
-/// station has migrated its sources into the table.
+/// An empty vector when no row is active; an error when the table cannot be
+/// read, which the caller reports rather than taking for "no rows" (it used
+/// to be `.ok()`, which made a failed read fall back to the config file).
+/// Each resolved source carries the row's `gain_db` and (parsed)
+/// `schedule_quiet`, so the admin-UI per-source gain and quiet window take
+/// effect.
 pub(super) fn resolve_sources_from_db(
     state: &birdnet_web::state::AppState,
-) -> Option<Vec<ResolvedSource>> {
+) -> Result<Vec<ResolvedSource>, birdnet_db::audio_sources::AudioSourceError> {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let rows = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
+    let rows = state.with_db(AudioSourceStore::list)?;
     let active: Vec<_> = rows
         .into_iter()
         .filter(|s| s.disabled_at.is_none())
         .collect();
     if active.is_empty() {
-        return None;
+        return Ok(Vec::new());
     }
 
     // Group by kind so we can apply the same `stream_id` "single-mic
@@ -268,7 +264,7 @@ pub(super) fn resolve_sources_from_db(
             quiet: parse_quiet_window(row.schedule_quiet.as_ref()),
         });
     }
-    Some(out)
+    Ok(out)
 }
 
 /// Translate one [`birdnet_db::audio_sources::AudioSource`] row to a
@@ -459,27 +455,137 @@ pub(super) fn resolve_sources(
     }
 }
 
-/// O-13: seed the `audio_sources` table from CLI/config when it is empty.
+/// The sources capture records from, given the CLI, the config file and (in
+/// the daemon) the web state that holds the `audio_sources` table.
+///
+/// The table is the authority once it has ever held a row (MSC-12):
+///
+/// * **Never used** (no row, removed rows included): seed it from the
+///   CLI/config sources, then capture what was seeded. If seeding could not
+///   store every source, capture from CLI/config directly for this run — the
+///   table has still never been used, so the config file is still the
+///   station's word.
+/// * **Used, some row active**: capture the active rows.
+/// * **Used, none active**: every source was removed on `/admin/audio`, so
+///   capture nothing, and say so in the journal. This used to fall back to
+///   the config file's sources under legacy labels (`local`, `RTSP_n`) that no
+///   row on the page matched, and with no effort credited to them.
+/// * **Unreadable**: capture nothing and log the error; the config file is
+///   not consulted, because nothing says the table is unused.
+///
+/// With no `state` (a headless capture-only invocation) there is no table,
+/// and the CLI/config sources are captured.
+pub(super) fn capture_sources(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: Option<&birdnet_web::state::AppState>,
+) -> Vec<ResolvedSource> {
+    use birdnet_db::audio_sources::AudioSourceStore;
+    let Some(state) = state else {
+        return cli_capture_sources(cli, config);
+    };
+    match state.with_db(AudioSourceStore::count_all) {
+        Ok(0) => {
+            let wanted = resolve_sources(cli, config).len();
+            let seeded = seed_sources_from_config(state, cli, config);
+            if seeded > 0 {
+                tracing::info!(
+                    count = seeded,
+                    "seeded audio_sources from CLI/config (O-13)"
+                );
+            }
+            if seeded < wanted {
+                tracing::warn!(
+                    seeded,
+                    wanted,
+                    "could not store every CLI/config source in audio_sources; \
+                     capturing from CLI/config for this run"
+                );
+                return cli_capture_sources(cli, config);
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "audio_sources could not be read, so no capture source is started; \
+                 the config file's sources are not used once the table exists"
+            );
+            return Vec::new();
+        }
+    }
+    match resolve_sources_from_db(state) {
+        Ok(sources) if sources.is_empty() => {
+            tracing::warn!(
+                "every audio source has been removed on the Audio page, so nothing is being \
+                 recorded. Add a source there (adding a removed device back restores it) and \
+                 restart the service; ALSA_CARD / RTSP_URL in the config file are not used \
+                 once a source has been configured there"
+            );
+            sources
+        }
+        Ok(sources) => {
+            tracing::info!(
+                count = sources.len(),
+                "capture sources resolved from audio_sources table (O-13)"
+            );
+            sources
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "audio_sources could not be read, so no capture source is started"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// The CLI/config sources as capture sources, for a station with no
+/// `audio_sources` table to read, or one that has never held a row.
+fn cli_capture_sources(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Vec<ResolvedSource> {
+    let cli_sources = resolve_sources(cli, config);
+    if !cli_sources.is_empty() {
+        tracing::info!(
+            count = cli_sources.len(),
+            "capture sources resolved from CLI/config (no audio_sources rows)"
+        );
+    }
+    // The bare CLI/config flags carry no gain or quiet window — those are
+    // admin-UI / audio_sources concepts — so resolve to unity gain, none.
+    cli_sources
+        .into_iter()
+        .map(|source| ResolvedSource {
+            source,
+            gain_db: 0.0,
+            pipeline: birdnet_core::audio::capture::AudioPipeline::none(),
+            eq_chain: birdnet_core::audio::eq::EqChain::default(),
+            quiet: None,
+        })
+        .collect()
+}
+
+/// O-13: seed the `audio_sources` table from CLI/config when it has never
+/// held a row.
 ///
 /// Makes the table the single source of truth for both the capture daemon and
 /// the web surface (live `/stream`, the Listen page, the `/admin/audio` pills).
-/// Idempotent — it inserts nothing when the table already holds a row
-/// (including one migration 15 seeded from a legacy `settings.audio_source`),
-/// so an operator's later edits or deletions through the admin UI are never
-/// re-seeded on the next start. Returns the number of rows seeded.
+/// Idempotent — it inserts nothing when the table holds any row, a removed one
+/// included (MSC-12: it used to count only active rows, so removing every
+/// source re-seeded the config file's on the next start). Returns the number
+/// of rows seeded.
 pub(super) fn seed_sources_from_config(
     state: &birdnet_web::state::AppState,
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) -> usize {
     use birdnet_db::audio_sources::AudioSourceStore;
-    // Only ever seed a completely empty table. A read error is treated as
-    // "already populated" so a transient failure can't double-seed — the
-    // CLI/config fallback in `start_capture_manager` still drives capture.
-    if !matches!(
-        state.with_db(|conn| AudioSourceStore::list(conn).map(|rows| rows.is_empty())),
-        Ok(true)
-    ) {
+    // Only ever seed a table that has never held a row. A read error is
+    // treated as "already used" so a transient failure can't double-seed.
+    if !matches!(state.with_db(AudioSourceStore::count_all), Ok(0)) {
         return 0;
     }
     let mut seeded = 0_usize;
@@ -1037,7 +1143,7 @@ mod tests {
                 .unwrap_or(0)
         });
         assert_eq!(count, 0, "audio_sources should be empty on a fresh state");
-        assert!(resolve_sources_from_db(&state).is_none());
+        assert!(resolve_sources_from_db(&state).unwrap().is_empty());
     }
 
     #[test]
@@ -1159,6 +1265,43 @@ mod tests {
         let rows = state.with_db(AudioSourceStore::list).expect("list");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "src_existing");
+    }
+
+    /// MSC-12: a station whose every source was removed on `/admin/audio`
+    /// records nothing — not the config file's microphone, under a label that
+    /// matches no row on the page.
+    #[test]
+    fn a_table_whose_sources_were_all_removed_captures_nothing() {
+        use birdnet_core::config::Config;
+        use birdnet_db::audio_sources::AudioSourceStore;
+        let state = fresh_state();
+        insert_row(&state, "src_gone", SourceKind::UsbAlsa, "plughw:2,0", true);
+        let cfg = Config::parse("ALSA_CARD=plughw:2,0").unwrap();
+        assert_eq!(
+            resolve_sources(&cli(), Some(&cfg)).len(),
+            1,
+            "precondition: the config names a microphone"
+        );
+
+        let resolved = capture_sources(&cli(), Some(&cfg), Some(&state));
+        let labels: Vec<String> = resolved.iter().map(|r| r.source.label()).collect();
+        assert!(labels.is_empty(), "captured {labels:?}");
+        assert!(
+            state.with_db(AudioSourceStore::list).unwrap().is_empty(),
+            "and nothing was seeded back"
+        );
+    }
+
+    /// The counterpart: a table that has never held a row is still seeded
+    /// from the config file, and capture records what was seeded.
+    #[test]
+    fn a_table_that_never_held_a_row_is_seeded_from_config() {
+        use birdnet_core::config::Config;
+        let state = fresh_state();
+        let cfg = Config::parse("ALSA_CARD=plughw:2,0").unwrap();
+        let resolved = capture_sources(&cli(), Some(&cfg), Some(&state));
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].source.label(), "src_seed_1");
     }
 
     #[test]

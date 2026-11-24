@@ -183,7 +183,7 @@ setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or_else	bi
 handled	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { birdnet_integrations::auto_update::check_for_update(current_versio
 not-a-read	src/app.rs	serve	ok	conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0)) .ok()
 task-panic	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { integrations::with_persisted_blur_seed(client, data_dir.as_deref()
-handled	src/capture/sources.rs	resolve_sources_from_db	ok	AudioSourceStore::list(conn).ok()
+handled	src/capture/sources.rs	capture_sources	match-err	match state.with_db(AudioSourceStore::count_all) { Err .. }
 handled	src/capture/sources.rs	seed_sources_from_config	match-err	match state.with_db(|conn| conn.insert(&new)) { Err .. }
 handled	src/daemon/duplicate.rs	reread	match-err	match state.with_db(birdnet_db::sqlite::get_species_interval_map) { Err .. }
 fail-closed	src/daemon/processor.rs	before_this_one	map_or	self.state .with_db(|conn| { birdnet_db::sqlite::species_detection_count_between(conn, sci_name, from, self.da

@@ -4,9 +4,11 @@
 //! entity that the admin UI manipulates through CRUD endpoints. Each row
 //! is one microphone or one RTSP stream.
 //!
-//! The capture pipeline reads from this table when non-empty
-//! (`src/capture.rs::resolve_sources_from_db`), with the legacy CLI/config
-//! path as a fallback for stations that haven't migrated yet. The
+//! The capture pipeline reads from this table
+//! (`src/capture/sources.rs::capture_sources`). A table that has never held
+//! a row is seeded from the legacy CLI/config sources; once it has, it is the
+//! only authority, and a table whose rows were all removed captures nothing
+//! (MSC-12). The
 //! remaining O-13 follow-up is on `probe(id)` (still synthetic) — see
 //! `birdnet-web/src/routes/admin/audio.rs` for the per-source daemon-
 //! metrics handle that the real `probe(id)` will read.
@@ -517,6 +519,17 @@ pub trait AudioSourceStore {
     /// Returns [`AudioSourceError::Sqlite`] on database failure.
     fn list_all(&self) -> Result<Vec<AudioSource>, AudioSourceError>;
 
+    /// How many rows the table holds, soft-deleted ones included.
+    ///
+    /// Zero means the table has never been used, which is the only state in
+    /// which the daemon seeds it from the config file (MSC-12): a table whose
+    /// rows were all removed is an operator's decision, not an empty table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioSourceError::Sqlite`] on database failure.
+    fn count_all(&self) -> Result<u64, AudioSourceError>;
+
     /// Clear `disabled_at` on a soft-deleted row, keeping its id — and so its
     /// detections, classifier routes and per-source filters.
     ///
@@ -596,6 +609,11 @@ impl AudioSourceStore for Connection {
             .query_map([], row_to_source)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    fn count_all(&self) -> Result<u64, AudioSourceError> {
+        let n: i64 = self.query_row("SELECT COUNT(*) FROM audio_sources", [], |r| r.get(0))?;
+        u64::try_from(n).map_err(|_| AudioSourceError::Invalid(format!("row count {n}")))
     }
 
     fn reenable(&self, id: &str) -> Result<(), AudioSourceError> {
@@ -1007,6 +1025,7 @@ mod tests {
             conn.reenable("nope"),
             Err(AudioSourceError::NotFound(_))
         ));
+        assert_eq!(conn.count_all().unwrap(), 2, "the removed row counts");
         conn.reenable("src_a").unwrap();
         assert_eq!(conn.list().unwrap().len(), 2);
         assert!(conn.get("src_a").unwrap().unwrap().disabled_at.is_none());

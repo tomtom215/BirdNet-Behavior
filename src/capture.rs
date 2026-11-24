@@ -50,7 +50,7 @@ mod uptime;
 pub mod watchdog;
 
 use runloop::run_supervisor;
-use sources::{ResolvedSource, resolve_sources, resolve_sources_from_db, seed_sources_from_config};
+use sources::{ResolvedSource, capture_sources};
 use supervisor::{Source, Supervisor, source_gauge_label};
 
 /// Bridge the real [`CaptureManager`] into the supervisor's `Source`
@@ -119,21 +119,25 @@ fn log_schedule(cli: &Cli, schedule_config: &ScheduleConfig) {
 ///
 /// ## Source resolution (O-13)
 ///
-/// When `state` is `Some(_)`, an empty `audio_sources` table is first seeded
-/// from the CLI/config sources (see [`sources::seed_sources_from_config`]) so
-/// the table becomes the single source of truth — for the daemon and the web
-/// surface (live `/stream`, Listen, `/admin/audio`). Then:
+/// When `state` is `Some(_)`, an `audio_sources` table that has never held a
+/// row is first seeded from the CLI/config sources (see
+/// [`sources::seed_sources_from_config`]) so the table becomes the single
+/// source of truth — for the daemon and the web surface (live `/stream`,
+/// Listen, `/admin/audio`). Then:
 ///
 /// 1. **Database-driven** (the normal path): the non-disabled `audio_sources`
-///    rows — what the admin UI's CRUD manages — are the source of truth.
+///    rows — what the admin UI's CRUD manages — are the source of truth. A
+///    table whose rows have all been removed captures **nothing** (MSC-12),
+///    with a warning in the journal; it does not fall back to the config file.
 /// 2. **CLI/config fallback**: only when there is no `state` (a headless
-///    capture-only invocation) or the table is still empty (seeding found
-///    nothing / failed) does the BirdNET-Pi-style `--rtsp-url` /
-///    `--alsa-device` / `--pipewire-device` resolution drive capture directly.
+///    capture-only invocation) or the table has never held a row and seeding
+///    could not store the configured sources does the BirdNET-Pi-style
+///    `--rtsp-url` / `--alsa-device` / `--pipewire-device` resolution drive
+///    capture directly.
 ///
-/// A single info-level log line announces which path won, so the operator can
-/// diagnose "why is my CLI arg being ignored" from the first lines of the
-/// journal.
+/// See [`sources::capture_sources`] for the rules. A single log line announces
+/// which path won, so the operator can diagnose "why is my CLI arg being
+/// ignored" from the first lines of the journal.
 pub fn start_capture_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -143,47 +147,7 @@ pub fn start_capture_manager(
     control: CaptureControlHandle,
     live_audio: Option<&LiveAudioHubHandle>,
 ) -> Option<CaptureHandle> {
-    // O-13: seed an empty audio_sources table from CLI/config first, so the
-    // table is the single source of truth for capture and the web surface.
-    if let Some(state) = state {
-        let seeded = seed_sources_from_config(state, cli, config);
-        if seeded > 0 {
-            tracing::info!(
-                count = seeded,
-                "seeded audio_sources from CLI/config (O-13)"
-            );
-        }
-    }
-    let sources: Vec<ResolvedSource> = if let Some(state) = state
-        && let Some(db_sources) = resolve_sources_from_db(state)
-        && !db_sources.is_empty()
-    {
-        tracing::info!(
-            count = db_sources.len(),
-            "capture sources resolved from audio_sources table (O-13)"
-        );
-        db_sources
-    } else {
-        let cli_sources = resolve_sources(cli, config);
-        if !cli_sources.is_empty() {
-            tracing::info!(
-                count = cli_sources.len(),
-                "capture sources resolved from CLI/config (no audio_sources rows)"
-            );
-        }
-        // The bare CLI/config flags carry no gain or quiet window — those are
-        // admin-UI / audio_sources concepts — so resolve to unity gain, none.
-        cli_sources
-            .into_iter()
-            .map(|source| ResolvedSource {
-                source,
-                gain_db: 0.0,
-                pipeline: birdnet_core::audio::capture::AudioPipeline::none(),
-                eq_chain: birdnet_core::audio::eq::EqChain::default(),
-                quiet: None,
-            })
-            .collect()
-    };
+    let sources = capture_sources(cli, config, state);
     if sources.is_empty() {
         return None;
     }
