@@ -24,7 +24,7 @@ Any of these work — the goal is a clean signal, not an expensive one.
 What matters more than the mic:
 
 - **Placement** — outside, off a hard wall (which echoes), with a simple foam windscreen. Wind is the number-one source of false positives.
-- **Levels** — aim for peaks near −6 dB on the [Audio settings](../admin/audio.md) level meter. Too hot clips the loudest calls; too quiet buries the faint ones.
+- **Levels** — aim for the loudest calls to peak between −12 and −6 dB ([Input level](../field/input-level.md) says where that range comes from). The setup wizard's microphone **Test** button listens for two seconds and reports the level. Too hot clips the loudest calls; too quiet buries the faint ones.
 
 ## RTSP cameras (no microphone hardware)
 
@@ -36,7 +36,7 @@ BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
 BIRDNET_RTSP_URLS=rtsp://cam1.lan/stream,rtsp://cam2.lan/stream
 ```
 
-RTSP capture needs **`ffmpeg`** on the host. When your config already has an `RTSP_URL`, the bare-metal installer (`install`/`repair`) installs it for you via apt, or prints the exact command if it can't; the Docker image bundles it. Add the camera under [Cameras and streams](../admin/audio.md#adding-a-camera-or-stream) on the Capture tab — which also takes HTTP/Icecast, HLS, RTMP, UDP and SRT streams — and prefer **TCP** transport on busy Wi-Fi. `--doctor` checks that the address resolves and its port answers.
+RTSP capture needs **`ffmpeg`** on the host. The bare-metal installer (`install`/`repair`) installs it on every station via apt (live listening needs it too), or prints the exact command if it can't; the Docker image bundles it. Add the camera under [Cameras and streams](../admin/audio.md#adding-a-camera-or-stream) on the Capture tab — which also takes HTTP/Icecast, HLS, RTMP, UDP and SRT streams — and prefer **TCP** transport on busy Wi-Fi. `--doctor` checks that the address resolves and its port answers.
 
 ## "Watch a folder" mode
 

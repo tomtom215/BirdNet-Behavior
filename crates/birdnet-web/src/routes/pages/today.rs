@@ -319,7 +319,7 @@ fn firstrun_checklist(
     let location_row = if has_location {
         r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Location set</div><div class="d">used for sunrise, sunset and the birds expected near you</div></div><span class="v">set</span></div>"#
     } else {
-        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">Location not set</div><div class="d">the station may name birds that don't live near you — set it under <a href="/station/settings#set-location">Settings → Location</a></div></div><span class="v">unset</span></div>"#
+        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">Location not set</div><div class="d">the station may name birds that don't live near you — set it under <a href="/station/capture#set-location">Settings → Capture</a></div></div><span class="v">unset</span></div>"#
     };
     // The model row used to be a hard-coded tick (ON-10): "Model bundled …
     // included" on a process with no model at all. The detection daemon's
@@ -328,7 +328,7 @@ fn firstrun_checklist(
     let model_row = if model_loaded {
         r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model loaded</div><div class="d">the detector is running</div></div><span class="v">running</span></div>"#
     } else {
-        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">Detector not running</div><div class="d">no model is loaded — this process runs without the detector, or the model files are missing; see <a href="/admin/doctor">the doctor</a></div></div><span class="v">stopped</span></div>"#
+        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">Detector not running</div><div class="d">the bird-identifying model isn't running — <a href="/admin/doctor">Diagnostics</a> says why</div></div><span class="v">stopped</span></div>"#
     };
     // The one row that is about who can change the station rather than
     // whether it hears anything (DD-14). Until a password exists every
@@ -504,7 +504,7 @@ fn standing_notices(has_location: bool, clock_synced: Option<bool>) -> String {
     let mut out = String::new();
     if !has_location {
         out.push_str(
-            r#"<div class="x-nudge" data-screen-label="Location banner" data-announce="This station does not know where it is."><span class="ico">⚠</span><div class="txt"><b>Your station does not know where it is,</b> so it may name birds that don't live near you.</div><a class="bnb-btn primary" href="/station/settings#set-location">Set your location →</a></div>"#,
+            r#"<div class="x-nudge" data-screen-label="Location banner" data-announce="This station does not know where it is."><span class="ico">⚠</span><div class="txt"><b>Your station does not know where it is,</b> so it may name birds that don't live near you.</div><a class="bnb-btn primary" href="/station/capture#set-location">Set your location →</a></div>"#,
         );
     }
     if clock_synced == Some(false) {
@@ -1674,7 +1674,7 @@ mod tests {
         .await;
         assert!(
             html.contains("does not know where it is")
-                && html.contains("/station/settings#set-location"),
+                && html.contains("/station/capture#set-location"),
             "no location, one detection: {html}"
         );
 
@@ -1701,7 +1701,7 @@ mod tests {
             !row.contains("mk done"),
             "an unset location is not a pass: {row}"
         );
-        assert!(row.contains("/station/settings#set-location"), "{row}");
+        assert!(row.contains("/station/capture#set-location"), "{row}");
 
         let set = firstrun_checklist(&[], Some(12.0), &[], true, true, true);
         let row = set

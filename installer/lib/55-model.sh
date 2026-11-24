@@ -391,6 +391,7 @@ download_model_v24() {
 
     info "Installing the BirdNET V2.4 model (${MODEL_SIZE_HINT} FP32 ONNX) + labels with ${BINARY_NAME} --install-model…"
     info "  The binary checks each file's sha256 and size before it keeps it."
+    info "  BirdNET is licensed CC BY-NC-SA 4.0: free to use, but not for commercial purposes."
 
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 

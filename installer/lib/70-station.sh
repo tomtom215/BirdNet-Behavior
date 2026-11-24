@@ -186,7 +186,8 @@ ensure_admin_password() {
 # interactive we ask the operator directly (so a non-technical user gets a
 # working station without hand-editing a file); otherwise we keep the historical
 # behaviour — silently auto-detect ALSA and leave location for the config file.
-# The config file always remains editable and is the source of truth afterwards.
+# The config file always remains editable, but once the station has started, a
+# setting saved in the web UI takes precedence over the same key in the file.
 prompt_station_settings() {
     # Re-install / upgrade: the config already exists and is the user's own —
     # never re-prompt or overwrite their settings.
@@ -209,14 +210,22 @@ prompt_station_settings() {
     printf '\n  Audio source\n' >/dev/tty
     if [ -n "${candidate}" ]; then
         arecord -l 2>/dev/null | grep '^card' | sed 's/^/    /' >/dev/tty || true
-        yesno "  Use detected ALSA device '${candidate}'?" y && ALSA_CARD_VALUE="${candidate}"
+        # Ask by the name on the box (`arecord -l` prints it in brackets), not
+        # by the ALSA address the station stores. The id is the part between
+        # `CARD=` and the comma of what detect_first_audio_device returns.
+        local card_id card_name
+        card_id="${candidate#plughw:CARD=}"
+        card_id="${card_id%%,*}"
+        card_name="$(arecord -l 2>/dev/null \
+            | sed -n "/^card [0-9]*: ${card_id} \[/{s/^card [0-9]*: ${card_id} \[\([^]]*\)\].*/\1/p;q;}" || true)"
+        yesno "  Use the microphone '${card_name:-${candidate}}'?" y && ALSA_CARD_VALUE="${candidate}"
     else
-        printf '  No ALSA capture device detected.\n' >/dev/tty
+        printf '  No microphone found.\n' >/dev/tty
     fi
     if [ -z "${ALSA_CARD_VALUE}" ]; then
         local audio_in
         while :; do
-            audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
+            audio_in="$(ask "  Paste a camera's stream address (starts with rtsp://), or press Enter and choose a microphone in the browser later" "")"
             case "${audio_in}" in
                 '')
                     break ;;
@@ -240,7 +249,7 @@ prompt_station_settings() {
     elif [ -n "${RTSP_URL_VALUE}" ]; then
         success "Audio source: RTSP ${RTSP_URL_VALUE}"
     else
-        warn "No audio source set — add ALSA_CARD or RTSP_URL to ${CONFIG_FILE} later."
+        warn "No microphone chosen yet — choose one in the dashboard under Settings → Capture."
     fi
 
     # ---- Station location ----
@@ -250,7 +259,7 @@ prompt_station_settings() {
     # single [WARN] line that scrolled away behind the model download —
     # the operator answered the question, the station recorded no location, and
     # nothing said so again until the species filter silently stayed off.
-    printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty
+    printf '\n  Where is the microphone? (so the station names only birds that live near you)\n' >/dev/tty
     printf '  Tip: right-click your spot on https://openstreetmap.org and read off the coordinates.\n' >/dev/tty
     printf '  Paste both at once (49.4521, 8.6724) or enter them one at a time.\n' >/dev/tty
     printf '  A decimal comma (49,4521) is fine.\n' >/dev/tty
@@ -294,7 +303,7 @@ prompt_station_settings() {
     printf '  The dashboard is reachable from other devices on your network. Viewing is\n' >/dev/tty
     printf '  open; the admin panel (settings, software update) is protected by a password.\n' >/dev/tty
     local pw1 pw2
-    pw1="$(ask_secret "  Set an admin password now (Enter to auto-generate one)")"
+    pw1="$(ask_secret "  Choose a password for changing settings (or press Enter to have one made for you)")"
     if [ -n "${pw1}" ]; then
         pw2="$(ask_secret "  Confirm password")"
         if [ "${pw1}" = "${pw2}" ]; then

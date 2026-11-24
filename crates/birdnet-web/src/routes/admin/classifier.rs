@@ -235,8 +235,9 @@ fn words(snap: &Snapshot) -> (&'static str, &'static str, String, String) {
         Phase::Unavailable => (
             "muted",
             "Not available",
-            "Classifier status is not available in this process".to_owned(),
-            String::new(),
+            "The model's status cannot be read on this page".to_owned(),
+            r#"<a href="/station">Station health</a> lists the models the detector last reported."#
+                .to_owned(),
         ),
         Phase::Missing => (
             "warn",

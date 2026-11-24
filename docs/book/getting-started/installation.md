@@ -54,7 +54,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 2. Checks disk space and that port 8502 is free.
 3. Creates `~/birdnet-behavior/` for your `.env` and compose files.
 4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL.
-5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipwho.is over TLS: it sees the station's public IP address).
+5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co over HTTPS: it sees the station's public IP address).
 6. (DuckDB behavioral analytics is built into every image and on by default — nothing to choose.)
 7. Writes a short `.env` with only your chosen values and a generated admin password (the file is readable by you alone).
 8. Starts the container with the matching compose overlay.
@@ -75,7 +75,7 @@ That address always serves the newest published release's `install.sh`, the same
 
 The installer runs pre-flight checks (required tools, free disk, glibc version), detects your architecture, downloads the pre-built binary, installs the classifier (BirdNET V2.4 and its range filter unless you chose otherwise, above), creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately. When it finishes it runs post-install validation — the binary runs, `systemd-analyze verify` passes, directory ownership and config are correct, the doctor preflight is clean, and the port is listening.
 
-The dashboard binds to all interfaces (`0.0.0.0:8502`) so it is reachable across your LAN right away. Viewing is open; everything that *changes* something — the `/admin` panel, and deleting, relabelling, reviewing or locking a detection — is gated by a strong **admin password the installer auto-generates** (username `admin`) — it is printed once in the post-install summary and stored as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. Save it. If you answer "restrict to this device" in the interactive prompts (or set `BIRDNET_LISTEN=127.0.0.1:8502`), the dashboard is reachable only from the Pi itself. If your config has an `RTSP_URL`, the installer also installs `ffmpeg` (required for RTSP capture) via apt, or prints the exact command if it can't.
+The dashboard binds to all interfaces (`0.0.0.0:8502`) so it is reachable across your LAN right away. Viewing is open; everything that *changes* something — the `/admin` panel, and deleting, relabelling, reviewing or locking a detection — is gated by a strong **admin password the installer auto-generates** (username `admin`) — it is printed once in the post-install summary and stored as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. Save it. If you set `BIRDNET_LISTEN=127.0.0.1:8502` (deliberately not an installer question), the dashboard is reachable only from the Pi itself. The installer also installs `ffmpeg` on every station (live listening needs it, and so does RTSP capture) via apt, or prints the exact command if it can't.
 
 ```bash
 # Install a specific release (defaults to the latest). The `-s --` passes the
