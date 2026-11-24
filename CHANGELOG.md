@@ -172,6 +172,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mono camera set to "left only" or "right only" recorded silence (MSC-11 follow-up).** The channel pick
+  reached ffmpeg as `pan=mono|c0=c1`, which on a one-channel stream names a channel that does not exist and
+  writes silence (−91 dB on ffmpeg 6.1) without an error. A camera's channel count is not known until its
+  stream is open, so the pick now lays the input out as stereo first, and a mono stream is heard by either
+  pick.
 - **A second classifier could quarantine what the first accepted (MMP-06).** A per-species threshold judged
   whichever classifier won the merge, on that classifier's scale. When the winner's score is not accepted,
   another classifier's own answer that is accepted now becomes the detection, with its score.
