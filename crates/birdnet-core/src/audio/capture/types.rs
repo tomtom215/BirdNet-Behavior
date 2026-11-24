@@ -478,14 +478,49 @@ pub(crate) fn filename_matches_stream(name: &str, stream_id: Option<&str>, ext: 
                 rest.len() == 8 && rest[2] == b':' && rest[5] == b':'
             })
         },
-        // "…-birdnet-{id}-HH:MM:SS"
-        |id| stem.contains(&format!("-birdnet-{id}-")),
+        // "…-birdnet-{id}-HH:MM:SS", the id whole: `contains` let `cam`
+        // claim `cam-2`'s files (MSC-17). Everything between the marker and
+        // the final "-HH:MM:SS" is the id.
+        |id| {
+            stem.find("-birdnet-").is_some_and(|idx| {
+                let rest = &stem[idx + "-birdnet-".len()..];
+                rest.strip_prefix(id)
+                    .and_then(|r| r.strip_prefix('-'))
+                    .is_some_and(|t| {
+                        let t = t.as_bytes();
+                        t.len() == 8 && t[2] == b':' && t[5] == b':'
+                    })
+            })
+        },
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MSC-17: the stall probe matched `-birdnet-{id}-` anywhere, so source
+    /// `cam` also claimed `cam-2`'s files, and a stalled `cam` looked alive
+    /// while `cam-2` recorded.
+    #[test]
+    fn a_source_id_is_not_matched_as_a_prefix_of_another() {
+        assert!(!filename_matches_stream(
+            "2026-01-01-birdnet-cam-2-06:00:00.wav",
+            Some("cam"),
+            "wav"
+        ));
+        // Counterparts: each file is still its own source's.
+        assert!(filename_matches_stream(
+            "2026-01-01-birdnet-cam-2-06:00:00.wav",
+            Some("cam-2"),
+            "wav"
+        ));
+        assert!(filename_matches_stream(
+            "2026-01-01-birdnet-cam-06:00:00.wav",
+            Some("cam"),
+            "wav"
+        ));
+    }
 
     #[test]
     fn debug_keeps_the_camera_and_drops_its_password() {

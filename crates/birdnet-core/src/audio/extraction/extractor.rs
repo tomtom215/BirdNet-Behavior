@@ -398,20 +398,11 @@ pub(super) fn build_extraction_filename(detection: &Detection, format: &str) -> 
     let rtsp_part = detection
         .file_name_extr
         .as_deref()
-        .and_then(|f| {
-            // Attempt to extract RTSP ID from the source filename pattern.
-            let base = f.rsplit('/').next().unwrap_or(f);
-            // Pattern: YYYY-MM-DD-birdnet-RTSP_ID-HH:MM:SS.ext
-            let parts: Vec<&str> = base.splitn(6, '-').collect();
-            if parts.len() >= 6 {
-                // parts[4] could be RTSP ID
-                let candidate = parts[4];
-                if !candidate.contains(':') {
-                    return Some(format!("{candidate}-"));
-                }
-            }
-            None
-        })
+        // Pattern: YYYY-MM-DD-birdnet-RTSP_ID-HH:MM:SS.ext. Parsed as the
+        // detection pipeline parses it, splitting at the *last* dash: taking
+        // the fifth `-`-separated field cut an id like `cam-2` short (MSC-17).
+        .and_then(|f| crate::detection::types::RecordingFile::parse(f)?.rtsp_id)
+        .map(|id| format!("{id}-"))
         .unwrap_or_default();
 
     format!("{name_safe}-{conf_pct}-{date}-birdnet-{rtsp_part}{time}.{format}")
@@ -1095,6 +1086,19 @@ mod tests {
         assert_eq!(
             name,
             "Eurasian_Magpie-93-2026-05-19-birdnet-RTSP_2-09:00:00.flac"
+        );
+    }
+
+    /// MSC-17: the source was read as the fifth `-`-separated field, so an id
+    /// with a dash in it (`cam-2`, which `validate_id` allows) was cut short
+    /// and the clip filed under another source's name.
+    #[test]
+    fn extraction_filename_keeps_a_source_id_with_a_dash() {
+        let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        d.file_name_extr = Some("/var/lib/birdnet/2026-05-19-birdnet-cam-2-09:00:00.wav".into());
+        assert_eq!(
+            build_extraction_filename(&d, "flac"),
+            "Eurasian_Magpie-93-2026-05-19-birdnet-cam-2-09:00:00.flac"
         );
     }
 
